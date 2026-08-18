@@ -60,7 +60,19 @@ export const workspaces = sqliteTable(
     classificationReason: text('classification_reason'),
     classifiedAt: integer('classified_at', { mode: 'timestamp' }),
   },
-  (table) => [index('idx_workspaces_expires_at').on(table.expiresAt)],
+  (table) => [
+    index('idx_workspaces_expires_at').on(table.expiresAt),
+    check(
+      'workspaces_usage_classification_source_check',
+      sql`(
+        (${table.usageClassification} = 'unknown' AND ${table.classificationSource} = 'unclassified')
+        OR (
+          ${table.usageClassification} IN ('internal', 'external')
+          AND ${table.classificationSource} IN ('creator', 'operator')
+        )
+      )`,
+    ),
+  ],
 );
 
 // ============================================

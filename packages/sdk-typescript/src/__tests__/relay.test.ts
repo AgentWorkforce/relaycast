@@ -1143,7 +1143,7 @@ describe('RelayCast', () => {
       );
 
       await RelayCast.createWorkspace('CI', {
-        provenance: { source: 'ci', origin_id: 'github:AgentWorkforce/relay/actions/runs/123', classification: 'internal' },
+        provenance: { source: 'ci', originId: 'github:AgentWorkforce/relay/actions/runs/123', classification: 'internal' },
       });
 
       const [, init] = mockFetch.mock.calls[0]!;

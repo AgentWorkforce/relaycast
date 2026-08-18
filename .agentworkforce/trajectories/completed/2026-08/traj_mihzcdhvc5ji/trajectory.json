@@ -2,7 +2,7 @@
   "id": "traj_mihzcdhvc5ji",
   "version": 1,
   "task": {
-    "title": "Add Relaycast workspace usage attribution and hosted usage reporting",
+    "title": "Add Relaycast workspace usage attribution contract",
     "source": {
       "system": "plain",
       "id": "relaycast#337"
@@ -77,31 +77,31 @@
         {
           "ts": 1787048182770,
           "type": "decision",
-          "content": "Stack attribution migration 0037 after workspace lifecycle migration 0036: Stack attribution migration 0037 after workspace lifecycle migration 0036",
+          "content": "Place attribution migration 0038 after workspace lifecycle migrations: Place attribution migration 0038 after workspace lifecycle migrations",
           "raw": {
-            "question": "Stack attribution migration 0037 after workspace lifecycle migration 0036",
-            "chosen": "Stack attribution migration 0037 after workspace lifecycle migration 0036",
+            "question": "Place attribution migration 0038 after workspace lifecycle migrations",
+            "chosen": "Place attribution migration 0038 after workspace lifecycle migrations",
             "alternatives": [],
-            "reasoning": "Lifecycle PR #338 claimed 0036 first; preserving filename order prevents a D1 migration collision and keeps the hosted copies byte-identical."
+            "reasoning": "Lifecycle PR #338 landed migrations 0036 and 0037 first; attribution must use 0038 to preserve production migration ordering."
           },
           "significance": "high"
         },
         {
           "ts": 1787048183034,
           "type": "decision",
-          "content": "Ship creator contract and hosted view now; track broker and relayflow population separately: Ship creator contract and hosted view now; track broker and relayflow population separately",
+          "content": "Ship the portable creator contract here; track hosted and cross-repo work separately: Ship the portable creator contract here; track hosted and cross-repo work separately",
           "raw": {
-            "question": "Ship creator contract and hosted view now; track broker and relayflow population separately",
-            "chosen": "Ship creator contract and hosted view now; track broker and relayflow population separately",
+            "question": "Ship the portable creator contract here; track hosted and cross-repo work separately",
+            "chosen": "Ship the portable creator contract here; track hosted and cross-repo work separately",
             "alternatives": [],
-            "reasoning": "Relaycast owns the API/SDK/MCP contract and first-party E2E population. Relay and Cloud need context-specific internal/external decisions, tracked in relay#1569 and cloud#3076 rather than hard-coded guesses."
+            "reasoning": "Relaycast owns the portable API/SDK/MCP contract. Hosted aggregation and other repositories need their own evidence and context-specific decisions."
           },
           "significance": "high"
         },
         {
           "ts": 1787048183299,
           "type": "reflection",
-          "content": "Portable creation attribution, first-party E2E population, hosted usage aggregation, and operator classification are verified. Historical rows remain unknown; cross-repo high-volume creator coverage is explicitly tracked.",
+          "content": "This trajectory records implementation of the portable creation-attribution contract and first-party E2E population. It contains no run, test, or proof events, so it does not establish verification. The hosted usage view belongs to a companion relaycast-cloud change and was not exercised here.",
           "raw": {
             "focalPoints": [
               "coverage",
@@ -109,7 +109,7 @@
               "backfill",
               "rollout"
             ],
-            "confidence": 0.9
+            "confidence": 0.65
           },
           "significance": "high",
           "tags": [
@@ -117,38 +117,32 @@
             "focal:cost",
             "focal:backfill",
             "focal:rollout",
-            "confidence:0.9"
+            "confidence:0.65"
           ]
         }
       ]
     }
   ],
   "retrospective": {
-    "summary": "Added workspace creation provenance, explicit usage classification, first-party CI population, and a hosted internal per-workspace usage view with honest legacy handling and no message-path writes.",
+    "summary": "Implemented portable workspace creation provenance, explicit usage classification, and first-party CI population. Hosted aggregation belongs to a companion relaycast-cloud change and was not verified by this trajectory.",
     "approach": "Standard approach",
-    "confidence": 0.9
+    "confidence": 0.65
   },
   "commits": [
-    "db5fac7",
-    "c1bb456"
+    "9cb6d5180966deafa4b268fbfbd4696f8a66d528"
   ],
   "filesChanged": [
-    ".agentworkforce/trajectories/active/traj_mihzcdhvc5ji/trajectory.json",
-    ".agentworkforce/trajectories/completed/2026-08/traj_mm69pbtiruw8/summary.md",
-    ".agentworkforce/trajectories/completed/2026-08/traj_mm69pbtiruw8/trajectory.json",
+    ".agentworkforce/trajectories/completed/2026-08/traj_mihzcdhvc5ji/summary.md",
+    ".agentworkforce/trajectories/completed/2026-08/traj_mihzcdhvc5ji/trajectory.json",
     "CHANGELOG.md",
     "README.md",
     "docs/workspace-usage-attribution.md",
     "openapi.yaml",
     "packages/engine/CHANGELOG.md",
     "packages/engine/src/__tests__/conformance/workspaceAttribution.test.ts",
-    "packages/engine/src/__tests__/conformance/workspaceLifecycle.test.ts",
-    "packages/engine/src/adapters/node/index.ts",
-    "packages/engine/src/db/migrations/0036_workspace_expiry.sql",
-    "packages/engine/src/db/migrations/0037_workspace_usage_attribution.sql",
+    "packages/engine/src/db/migrations/0038_workspace_usage_attribution.sql",
     "packages/engine/src/db/schema.ts",
     "packages/engine/src/engine/workspace.ts",
-    "packages/engine/src/index.ts",
     "packages/engine/src/lib/workspaceProvenance.ts",
     "packages/engine/src/routes/workspace.ts",
     "packages/mcp/src/__tests__/integration.test.ts",
@@ -174,8 +168,8 @@
   "projectId": "AgentWorkforce/relaycast",
   "tags": [],
   "_trace": {
-    "startRef": "3374966534c408d3656c0a8701dd98d82216576b",
-    "endRef": "db5fac70cddcb5be4c2ca461ab8de9747ae67211",
+    "startRef": "4e62ef43fbc38c25553d08a425abc4dde47ae706",
+    "endRef": "9cb6d5180966deafa4b268fbfbd4696f8a66d528",
     "traceId": "5caa3a45-c2dc-44d5-80c9-e8eb251650be"
   }
 }

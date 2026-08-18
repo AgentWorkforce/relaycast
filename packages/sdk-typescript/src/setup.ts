@@ -25,6 +25,7 @@ import type {
   WorkspaceInfo,
 } from './setup-types.js';
 import type { WorkspaceLookup } from './types.js';
+import { toWorkspaceProvenanceInput } from './workspace-provenance.js';
 
 const DEFAULT_CLOUD_BASE_URL = 'https://cast.agentrelay.com';
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
@@ -269,7 +270,7 @@ export class RelaycastSetup {
         ...(options.expiresInSeconds !== undefined
           ? { expires_in_seconds: options.expiresInSeconds }
           : {}),
-        provenance: options.provenance ?? { source: 'sdk' },
+        provenance: toWorkspaceProvenanceInput(options.provenance),
       },
       requireApiKey: true,
     });

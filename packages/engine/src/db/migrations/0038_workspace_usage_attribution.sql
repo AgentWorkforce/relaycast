@@ -7,7 +7,7 @@ ALTER TABLE workspaces ADD COLUMN provenance TEXT;
 ALTER TABLE workspaces ADD COLUMN usage_classification TEXT NOT NULL DEFAULT 'unknown'
   CHECK (usage_classification IN ('internal', 'external', 'unknown'));
 ALTER TABLE workspaces ADD COLUMN classification_source TEXT NOT NULL DEFAULT 'unclassified'
-  CHECK (
+  CONSTRAINT workspaces_usage_classification_source_check CHECK (
     classification_source IN ('creator', 'operator', 'unclassified')
     AND (
       (usage_classification = 'unknown' AND classification_source = 'unclassified')

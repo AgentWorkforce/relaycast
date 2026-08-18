@@ -14,7 +14,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
-- Workspace creation sends `source: "sdk"` provenance by default, with `create_workspace_with_provenance` for explicit CI, CLI, relayflow, dashboard, and other creation contexts.
+- `RelayCast::create_workspace` now requires explicit provenance, preventing CLI bootstrap workspaces from being mislabeled as SDK-created.
 
 ## [4.2.0] - 2026-06-24
 

@@ -33,7 +33,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{RelayError, Result};
-use crate::{CreateAgentRequest, RelayCast, RelayCastOptions};
+use crate::{
+    CreateAgentRequest, RelayCast, RelayCastOptions, WorkspaceCreationSource, WorkspaceProvenance,
+};
 
 /// Cached agent credentials persisted to disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -373,7 +375,16 @@ pub async fn bootstrap_session(
 
 async fn create_fresh_workspace(base_url: Option<&str>) -> Result<(String, Option<String>)> {
     let ws_name = format!("relay-{}", uuid_v4_short());
-    let result = RelayCast::create_workspace(&ws_name, base_url).await?;
+    let result = RelayCast::create_workspace(
+        &ws_name,
+        base_url,
+        WorkspaceProvenance {
+            source: WorkspaceCreationSource::Cli,
+            origin_id: None,
+            classification: None,
+        },
+    )
+    .await?;
     Ok((result.api_key, Some(result.workspace_id)))
 }
 
@@ -541,6 +552,31 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.is_conflict());
+    }
+
+    #[tokio::test]
+    async fn fresh_workspace_declares_cli_provenance() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/workspaces"))
+            .and(body_string_contains("\"source\":\"cli\""))
+            .respond_with(ok(json!({
+                "workspace_id": "ws_cli",
+                "api_key": "rk_live_cli",
+                "created_at": "2026-01-01T00:00:00.000Z"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let result = create_fresh_workspace(Some(&server.uri()))
+            .await
+            .expect("fresh workspace creation should succeed");
+
+        assert_eq!(
+            result,
+            ("rk_live_cli".to_string(), Some("ws_cli".to_string()))
+        );
     }
 
     #[tokio::test]

@@ -6,10 +6,11 @@ use relaycast::{
     EmitSessionEventRequest, FailDeliveryRequest, HttpClient, HttpPushNodeDelivery,
     ListDeliveriesOptions, ListSessionEventsQuery, MessageInjectionMode, MessageListQuery,
     MonitorCertificationRequest, NodeDeliveryAuth, NodeDeliveryConfig, NodeListQuery,
-    ObserverScope, ObserverTokenFilters, RateDirectoryAgentRequest, RegisterA2aOptions, RegisterActionRequest,
-    RelayCast, RelayCastOptions, ReleaseAgentRequest, RouteFeedbackRequest, SearchDirectoryQuery,
-    SpawnAgentRequest, SubmitCertificationRequest, UpdateObserverTokenRequest,
-    UpdateRoutingConfigRequest, WebhookTriggerRequest, WsClient, WsClientOptions, WsEvent,
+    ObserverScope, ObserverTokenFilters, RateDirectoryAgentRequest, RegisterA2aOptions,
+    RegisterActionRequest, RelayCast, RelayCastOptions, ReleaseAgentRequest, RouteFeedbackRequest,
+    SearchDirectoryQuery, SpawnAgentRequest, SubmitCertificationRequest,
+    UpdateObserverTokenRequest, UpdateRoutingConfigRequest, WebhookTriggerRequest,
+    WorkspaceProvenance, WsClient, WsClientOptions, WsEvent,
 };
 use serde_json::json;
 use std::net::TcpListener;
@@ -471,9 +472,13 @@ async fn create_workspace_sends_origin_headers() {
         .mount(&server)
         .await;
 
-    let created = RelayCast::create_workspace("Parity Test", Some(&server.uri()))
-        .await
-        .expect("create_workspace failed");
+    let created = RelayCast::create_workspace(
+        "Parity Test",
+        Some(&server.uri()),
+        WorkspaceProvenance::sdk(),
+    )
+    .await
+    .expect("create_workspace failed");
 
     assert_eq!(created.workspace_id, "ws_123");
 }

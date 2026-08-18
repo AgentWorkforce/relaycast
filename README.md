@@ -227,14 +227,15 @@ attribute usage to the wrong person or organization.
 
 ### Workspace usage attribution
 
-Workspace creation can also record immutable provenance. SDK calls default to
-`source: "sdk"`; infrastructure that knows more should say so explicitly:
+Workspace creation can also record immutable provenance. TypeScript SDK calls
+default to `source: "sdk"`; Rust callers pass provenance explicitly. Infrastructure
+that knows more should say so explicitly:
 
 ```ts
 await RelayCast.createWorkspace('package-validation', {
   provenance: {
     source: 'ci',
-    origin_id: 'github:AgentWorkforce/relay/actions/runs/123456',
+    originId: 'github:AgentWorkforce/relay/actions/runs/123456',
     classification: 'internal',
   },
 });

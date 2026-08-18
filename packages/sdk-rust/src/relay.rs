@@ -99,19 +99,6 @@ impl RelayCast {
     pub async fn create_workspace(
         name: &str,
         base_url: Option<&str>,
-    ) -> Result<CreateWorkspaceResponse> {
-        Self::create_workspace_with_provenance(
-            name,
-            base_url,
-            WorkspaceProvenance::sdk(),
-        )
-        .await
-    }
-
-    /// Create a workspace with an explicit, analytics-only provenance record.
-    pub async fn create_workspace_with_provenance(
-        name: &str,
-        base_url: Option<&str>,
         provenance: WorkspaceProvenance,
     ) -> Result<CreateWorkspaceResponse> {
         let url = format!("{}/v1/workspaces", base_url.unwrap_or(DEFAULT_BASE_URL));

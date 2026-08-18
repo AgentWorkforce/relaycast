@@ -105,4 +105,33 @@ describe('workspace creation attribution', () => {
       error: { code: 'invalid_request' },
     });
   });
+
+  it('requires classification provenance at the database boundary', async () => {
+    const response = await stack.app.request('/v1/workspaces', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'classification-constraint' }),
+    });
+    expect(response.status).toBe(201);
+    const created = await response.json() as { data: { workspace_id: string } };
+    const sqlite = stack.runtime.handle.sqlite;
+
+    expect(() => sqlite.prepare(`
+      UPDATE workspaces
+      SET usage_classification = 'internal'
+      WHERE id = ?
+    `).run(created.data.workspace_id)).toThrow(/workspaces_usage_classification_source_check/);
+
+    expect(() => sqlite.prepare(`
+      UPDATE workspaces
+      SET classification_source = 'operator'
+      WHERE id = ?
+    `).run(created.data.workspace_id)).toThrow(/workspaces_usage_classification_source_check/);
+
+    expect(() => sqlite.prepare(`
+      UPDATE workspaces
+      SET usage_classification = 'external', classification_source = 'operator'
+      WHERE id = ?
+    `).run(created.data.workspace_id)).not.toThrow();
+  });
 });
