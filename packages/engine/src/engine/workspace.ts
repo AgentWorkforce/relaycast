@@ -4,8 +4,20 @@ import { workspaces, channels } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
 import { codedError } from '../lib/httpError.js';
+import { D1WriteRetryExhaustedError, retryD1Write } from '../lib/d1Retry.js';
+import { runAtomicWrites } from '../ports/database.js';
 
 type Db = ReturnType<typeof getDb>;
+
+type WorkspaceWriteResult = [
+  Array<typeof workspaces.$inferSelect>,
+  Array<typeof channels.$inferSelect>,
+];
+
+type CommittedWorkspacePairRead =
+  | { status: 'match'; value: WorkspaceWriteResult }
+  | { status: 'mismatch' }
+  | { status: 'unavailable' };
 
 type CreateWorkspaceOptions =
   | string
@@ -27,6 +39,94 @@ function buildWorkspaceResponse(
     ...(apiKey ? { api_key: apiKey } : {}),
     created_at: workspace.createdAt.toISOString(),
   };
+}
+
+function isExpectedWorkspacePair(
+  writeResult: WorkspaceWriteResult,
+  expected: {
+    workspaceId: string;
+    name: string;
+    apiKeyHash: string;
+    channelId: string;
+  },
+): boolean {
+  const [workspaceRows, channelRows] = writeResult;
+  const createdWorkspace = workspaceRows[0];
+  const createdChannel = channelRows[0];
+  return Boolean(
+    createdWorkspace &&
+    createdWorkspace.id === expected.workspaceId &&
+    createdWorkspace.name === expected.name &&
+    createdWorkspace.apiKeyHash === expected.apiKeyHash &&
+    createdChannel &&
+    createdChannel.id === expected.channelId &&
+    createdChannel.workspaceId === expected.workspaceId &&
+    createdChannel.name === 'general'
+  );
+}
+
+async function readCommittedWorkspacePair(
+  db: Db,
+  expected: {
+    workspaceId: string;
+    name: string;
+    apiKeyHash: string;
+    channelId: string;
+  },
+): Promise<CommittedWorkspacePairRead> {
+  try {
+    const [workspaceRows, channelRows] = await Promise.all([
+      db.select().from(workspaces).where(eq(workspaces.id, expected.workspaceId)),
+      db.select().from(channels).where(eq(channels.id, expected.channelId)),
+    ]);
+    const result: WorkspaceWriteResult = [workspaceRows, channelRows];
+    return isExpectedWorkspacePair(result, expected)
+      ? { status: 'match', value: result }
+      : { status: 'mismatch' };
+  } catch {
+    return { status: 'unavailable' };
+  }
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  let current: unknown = error;
+  const seen = new Set<unknown>();
+
+  for (let depth = 0; current !== undefined && depth < 6 && !seen.has(current); depth += 1) {
+    seen.add(current);
+    if (typeof current === 'string') {
+      const message = current.toLowerCase();
+      if (
+        message.startsWith('d1_error:') &&
+        (message.includes('unique constraint failed') || message.includes('sqlite_constraint_unique'))
+      ) {
+        return true;
+      }
+      break;
+    }
+    if (!current || typeof current !== 'object') break;
+
+    const candidate = current as { code?: unknown; message?: unknown; cause?: unknown };
+    const code = typeof candidate.code === 'string' ? candidate.code : '';
+    const message = typeof candidate.message === 'string' ? candidate.message.toLowerCase() : '';
+    if (
+      code === 'SQLITE_CONSTRAINT_UNIQUE' ||
+      code === 'SQLITE_CONSTRAINT_PRIMARYKEY' ||
+      (
+        code === 'SQLITE_CONSTRAINT' &&
+        (message.includes('unique constraint failed') || message.includes('sqlite_constraint_unique'))
+      ) ||
+      (
+        message.startsWith('d1_error:') &&
+        (message.includes('unique constraint failed') || message.includes('sqlite_constraint_unique'))
+      )
+    ) {
+      return true;
+    }
+    current = candidate.cause;
+  }
+
+  return false;
 }
 
 export async function createWorkspace(
@@ -64,23 +164,80 @@ export async function createWorkspace(
   const apiKey = `rk_live_${randomHex(16)}`;
   const apiKeyHash = await hashApiKey(apiKey);
 
-  const [createdWorkspace] = await db
-    .insert(workspaces)
-    .values({
-      id: workspaceId,
-      name,
-      apiKeyHash,
-    })
-    .returning();
-
-  // Auto-create #general channel
   const channelId = generateId();
-  await db.insert(channels).values({
-    id: channelId,
-    workspaceId,
-    name: 'general',
-    topic: 'General discussion',
-  });
+  const expected = { workspaceId, name, apiKeyHash, channelId };
+  let writeResult: WorkspaceWriteResult;
+  try {
+    writeResult = await retryD1Write(async () => {
+      try {
+        return await runAtomicWrites(
+          db,
+          (writeDb) => [
+            writeDb
+              .insert(workspaces)
+              .values({ id: workspaceId, name, apiKeyHash })
+              .returning(),
+            writeDb
+              .insert(channels)
+              .values({
+                id: channelId,
+                workspaceId,
+                name: 'general',
+                topic: 'General discussion',
+              })
+              .returning(),
+          ],
+          { requireAtomic: true },
+        ) as WorkspaceWriteResult;
+      } catch (cause) {
+        if (!isUniqueConstraintError(cause)) throw cause;
+
+        // A prior attempt may have committed before its response was lost.
+        // Accept only that exact generated pair; mismatched IDs fail closed.
+        const committed = await readCommittedWorkspacePair(db, expected);
+        if (committed.status === 'match') return committed.value;
+        if (committed.status === 'unavailable') {
+          const error = codedError(
+            'Workspace storage temporarily unavailable',
+            'workspace_storage_unavailable',
+            503,
+          );
+          error.diagnostics = {
+            operation: 'workspace.create',
+            storage_error: 'readback_unavailable',
+          };
+          throw error;
+        }
+        throw codedError('Generated workspace identifier collision', 'workspace_id_collision', 500);
+      }
+    });
+  } catch (cause) {
+    if (!(cause instanceof D1WriteRetryExhaustedError)) throw cause;
+    const committed = await readCommittedWorkspacePair(db, expected);
+    if (committed.status === 'match') {
+      writeResult = committed.value;
+    } else {
+      const error = codedError(
+        'Workspace storage temporarily unavailable',
+        'workspace_storage_unavailable',
+        503,
+      );
+      error.diagnostics = {
+        attempts: cause.attempts,
+        operation: 'workspace.create',
+        storage_error: cause.storageError,
+      };
+      throw error;
+    }
+  }
+
+  const [workspaceRows] = writeResult;
+  const createdWorkspace = workspaceRows[0];
+
+  // A conflict can only be an idempotent replay of this exact generated pair.
+  if (!isExpectedWorkspacePair(writeResult, expected) || !createdWorkspace) {
+    throw codedError('Generated workspace identifier collision', 'workspace_id_collision', 500);
+  }
 
   const workspace = buildWorkspaceResponse(createdWorkspace, apiKey);
   return {

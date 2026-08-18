@@ -7,7 +7,7 @@ import type { EngineDeps } from './ports/index.js';
 import { engineContext } from './middleware/engine-context.js';
 import { loggerMiddleware } from './middleware/logger.js';
 import { getRequestLogger, toErrorDetails } from './lib/logger.js';
-import { asCodedError } from './lib/httpError.js';
+import { asCodedError, safeClientErrorMessage } from './lib/httpError.js';
 import { jsonError, jsonMalformedBody, jsonNotFound } from './lib/httpResponse.js';
 import { requiredOriginInfo } from './lib/origin.js';
 import { emitServerEvent } from './lib/serverTelemetry.js';
@@ -245,7 +245,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     return jsonError(
       c,
       error.code || 'internal_error',
-      error.message || 'Internal server error',
+      safeClientErrorMessage(error),
       status as ContentfulStatusCode,
     );
   });

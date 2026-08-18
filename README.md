@@ -97,6 +97,13 @@ return 400; already-claimed, non-offline, or concurrently changed records return
 
 Workspace names are not globally unique. Workspace creation is idempotent for the same workspace name and API key: repeating that combination returns the existing workspace instead of creating another one.
 
+If workspace storage remains unavailable after its transient retries and the
+server cannot confirm the committed workspace/channel pair, creation returns
+`503 workspace_storage_unavailable`. The outcome is indeterminate: callers
+must not assume that no workspace committed, especially when retrying without
+a known workspace key. Database statements and bound parameters are never
+included in this or other uncoded infrastructure error responses.
+
 If you want an explicit SDK helper that tells you whether setup returned an existing workspace or created a new one, use `ensureWorkspace()`:
 
 ```ts
