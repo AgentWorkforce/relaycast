@@ -463,7 +463,7 @@ components:
             not be presented as replayable.
         reason:
           type: string
-          enum: [outside_retention_window, boundary_unavailable, workspace_unknown, session_not_found, query_failed, pre_migration_history_unknown]
+          enum: [outside_retention_window, boundary_unavailable, workspace_unknown, session_not_found, query_failed, response_invalid, pre_migration_history_unknown]
         retention:
           $ref: '#/components/schemas/EffectiveMessageRetention'
         session_started_at:

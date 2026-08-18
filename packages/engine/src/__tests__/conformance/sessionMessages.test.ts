@@ -1,10 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
-import { getMessagesBySessionRef, sessionRefFromMetadata } from '../../engine/sessionMessages.js';
+import {
+  getMessagesBySessionRef,
+  SessionRefSchema,
+  sessionRefFromMetadata,
+} from '../../engine/sessionMessages.js';
 import { triggerIntegrationMessage } from '../../engine/inboundWebhook.js';
 import { snowflakeIdLowerBound } from '../../engine/snowflake.js';
 import { getWorkspace } from '../../engine/workspace.js';
+import { sha256Hex } from '../../lib/crypto.js';
+import { runIdempotent } from '../../middleware/idempotency.js';
 import type { EngineDb } from '../../ports/database.js';
 
 const SESSION_REF = '1c4cb581-7ce7-4fbe-9fd4-39f61f8a6b6d';
@@ -126,6 +132,20 @@ describe('session_ref message lookup and effective retention', () => {
     expect(body.data.messages).toEqual([
       expect.objectContaining({ text: 'cold-storage message' }),
     ]);
+  });
+
+  it('does not require a valid clock for a never-prune workspace', async () => {
+    const { workspaceId } = await seedSessionMessage(null, 'clock-independent cold storage');
+
+    const result = await getMessagesBySessionRef(
+      stack.runtime.handle.db,
+      workspaceId,
+      SESSION_REF,
+      { now: new Date(Number.NaN) },
+    );
+
+    expect(result.availability).toBe('retained');
+    expect(result.retention.policy).toBe('never_prune');
   });
 
   it('reports partial coverage when a session crosses the live boundary', async () => {
@@ -387,6 +407,51 @@ describe('session_ref message lookup and effective retention', () => {
     );
   });
 
+  it('replays a group-DM record written with the pre-canonical fingerprint', async () => {
+    const { workspaceId, workspaceKey } = await createWorkspace(stack.app, 'legacy-group-idempotency');
+    const sender = await registerAgent(stack.app, workspaceKey, 'legacy-group-sender');
+    const recipient = await registerAgent(stack.app, workspaceKey, 'legacy-group-recipient');
+    const createGroup = await stack.app.request('/v1/dm/group', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${sender.token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ participants: [recipient.name] }),
+    });
+    const group = await createGroup.json() as { data: { id: string } };
+    const data = { session_ref: SESSION_REF, nested: { z: 2, a: 1 } };
+    const text = 'legacy fingerprint replay';
+    const legacyFingerprint = JSON.stringify({
+      conversationId: group.data.id,
+      text,
+      data_sha256: await sha256Hex(JSON.stringify(data)),
+    });
+    await runIdempotent({
+      workspaceId,
+      actorId: sender.agentId,
+      scope: `dm-group-message:${group.data.id}`,
+      key: 'legacy-group-fingerprint',
+      status: 201,
+      fingerprint: legacyFingerprint,
+      kv: stack.runtime.deps.kv,
+      operation: async () => ({ id: 'legacy-result' }),
+    });
+
+    const response = await stack.app.request(`/v1/dm/${group.data.id}/messages`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${sender.token}`,
+        'content-type': 'application/json',
+        'idempotency-key': 'legacy-group-fingerprint',
+      },
+      body: JSON.stringify({ text, data }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(response.headers.get('idempotency-replayed')).toBe('true');
+  });
+
   it('does not silently drop retained messages with missing relational display rows', async () => {
     const { workspaceId, agent } = await seedSessionMessage(30, 'orphaned display rows');
     stack.runtime.handle.sqlite.exec('PRAGMA foreign_keys = OFF');
@@ -555,5 +620,12 @@ describe('session_ref message lookup and effective retention', () => {
     const accepted = '😀'.repeat(255);
     expect(sessionRefFromMetadata({ session_ref: accepted })).toBe(accepted);
     expect(sessionRefFromMetadata({ session_ref: `${accepted}😀` })).toBeNull();
+    const empty = SessionRefSchema.safeParse('');
+    expect(empty.success).toBe(false);
+    if (!empty.success) {
+      expect(empty.error.issues[0]?.message).toBe(
+        'session_ref must contain at least 1 character',
+      );
+    }
   });
 });

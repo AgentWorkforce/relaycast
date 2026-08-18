@@ -279,7 +279,10 @@ describe('DurableEventQueue', () => {
       baseUrl: 'http://localhost:0',
       config: { retention: { messageTtlDays: 45 } },
       presence: { sweepIntervalMs: 0 },
-      eventQueue: { pollIntervalMs: 0 },
+      eventQueue: {
+        pollIntervalMs: 0,
+        retention: { defaults: { messageTtlDays: 7 } },
+      },
     });
     try {
       expect(runtime.deps.config?.retention).toEqual({ messageTtlDays: 45 });

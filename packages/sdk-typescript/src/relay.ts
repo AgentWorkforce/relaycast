@@ -119,6 +119,7 @@ import {
   SessionMessagesResultSchema,
   WorkspaceLookupSchema,
 } from '@relaycast/types';
+import { ZodError } from 'zod';
 import { AgentClient, type AgentClientOptions } from './agent.js';
 import { HttpClient, type RetryPolicyInput } from './client.js';
 import { WsClient, type WsClientOptions, withInternalWsOrigin } from './ws.js';
@@ -697,13 +698,13 @@ export class RelayCast {
           query,
           { schema: SessionMessagesResultSchema },
         );
-      } catch {
+      } catch (error) {
         // Replay availability is fail-closed: transport/auth/server failures
         // are unknown, never evidence that the session is retained.
         return {
           sessionRef,
           availability: 'unknown',
-          reason: 'query_failed',
+          reason: error instanceof ZodError ? 'response_invalid' : 'query_failed',
           retention: {
             policy: 'unknown',
             messageTtlDays: null,

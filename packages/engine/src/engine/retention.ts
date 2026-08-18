@@ -117,7 +117,10 @@ export async function resolveEffectiveMessageRetention(
     };
   }
 
-  if (ttlDays !== null && (!Number.isFinite(ttlDays) || !Number.isFinite(now.getTime()))) {
+  if (
+    ttlDays !== null
+    && (!Number.isFinite(ttlDays) || (ttlDays > 0 && !Number.isFinite(now.getTime())))
+  ) {
     return {
       policy: 'unknown',
       message_ttl_days: null,

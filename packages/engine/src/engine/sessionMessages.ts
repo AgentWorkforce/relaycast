@@ -19,7 +19,7 @@ export const SESSION_MESSAGE_DEFAULT_LIMIT = 100;
 export const SESSION_MESSAGE_MAX_LIMIT = 500;
 export const SessionRefSchema = z
   .string()
-  .min(1)
+  .min(1, 'session_ref must contain at least 1 character')
   .refine(
     (value) => Array.from(value).length <= MAX_SESSION_REF_LENGTH,
     `session_ref must contain at most ${MAX_SESSION_REF_LENGTH} characters`,

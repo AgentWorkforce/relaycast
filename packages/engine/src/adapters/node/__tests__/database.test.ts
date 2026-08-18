@@ -199,7 +199,8 @@ describe('session_ref lookup migration', () => {
         ('400', 'ws_1', '{}', 40),
         ('500', 'ws_1', '{"session_ref":"emoji-😀"}', 50),
         ('600', 'ws_1', '{"session_ref":"untrusted","__relaycast_origin":"inbound_webhook","__relaycast_webhook_id":"hook_open"}', 60),
-        ('700', 'ws_1', '{"session_ref":"trusted","__relaycast_origin":"inbound_webhook","__relaycast_webhook_id":"hook_protected"}', 70);
+        ('700', 'ws_1', '{"session_ref":"trusted","__relaycast_origin":"inbound_webhook","__relaycast_webhook_id":"hook_protected"}', 70),
+        ('750', 'ws_1', '{"session_ref":"relayfile-session","__relaycast_origin":"inbound_webhook","__relaycast_webhook_id":"relayfile:slack"}', 75);
     `);
     sqlite.prepare(
       'INSERT INTO messages (id, workspace_id, metadata, created_at) VALUES (?, ?, ?, ?)',
@@ -223,6 +224,7 @@ describe('session_ref lookup migration', () => {
       { id: '500', session_ref: 'emoji-😀' },
       { id: '600', session_ref: null },
       { id: '700', session_ref: 'trusted' },
+      { id: '750', session_ref: 'relayfile-session' },
       { id: '800', session_ref: null },
     ]);
     expect(sqlite.prepare(`
@@ -235,6 +237,13 @@ describe('session_ref lookup migration', () => {
         session_ref: 'emoji-😀',
         first_message_at: 50,
         last_message_at: 50,
+        start_is_known: 0,
+      },
+      {
+        workspace_id: 'ws_1',
+        session_ref: 'relayfile-session',
+        first_message_at: 75,
+        last_message_at: 75,
         start_is_known: 0,
       },
       {

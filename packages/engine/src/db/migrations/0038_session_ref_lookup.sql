@@ -35,6 +35,9 @@ WHERE metadata IS NOT NULL
       WHERE webhooks.id = json_extract(metadata, '$.__relaycast_webhook_id')
         AND webhooks.token_hash IS NOT NULL
     )
+    -- Internal Relayfile deliveries use the same display metadata shape but
+    -- never have a row in the public webhooks table.
+    OR json_extract(metadata, '$.__relaycast_webhook_id') GLOB 'relayfile:*'
   );
 
 INSERT INTO message_sessions (

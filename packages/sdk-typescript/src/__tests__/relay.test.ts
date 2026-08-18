@@ -99,7 +99,7 @@ describe('RelayCast', () => {
 
     expect(result.availability).toBe('unknown');
     expect(result.availability).not.toBe('retained');
-    expect(result.reason).toBe('query_failed');
+    expect(result.reason).toBe('response_invalid');
   });
 
   it('must-not-fire: resolves a retained session with bounded cursor options', async () => {

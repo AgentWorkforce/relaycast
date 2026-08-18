@@ -129,6 +129,22 @@ groupDmRoutes.post(
           ? { data_sha256: await sha256Hex(canonicalMetadata) }
           : {}),
       };
+      // Records written before canonical metadata hashing remain replayable for
+      // their 24-hour TTL. New records always store the canonical fingerprint.
+      const legacyFingerprintBody = {
+        conversationId,
+        text,
+        ...(normalizedAttachments ? { attachments: normalizedAttachments } : {}),
+        ...(data !== undefined
+          ? { data_sha256: await sha256Hex(JSON.stringify(data)) }
+          : {}),
+      };
+      const fingerprint = mode === 'steer'
+        ? JSON.stringify({ ...fingerprintBody, mode })
+        : JSON.stringify(fingerprintBody);
+      const legacyFingerprint = mode === 'steer'
+        ? JSON.stringify({ ...legacyFingerprintBody, mode })
+        : JSON.stringify(legacyFingerprintBody);
       const toGroupDmReceivedEventData = (data: Awaited<ReturnType<typeof groupDmEngine.postGroupMessage>>) => buildGroupDmReceivedEventData(data, {
         fromName: agent!.name,
       });
@@ -139,9 +155,8 @@ groupDmRoutes.post(
         scope: `dm-group-message:${conversationId}`,
         key: idempotencyKey,
         status: 201,
-        fingerprint: mode === 'steer'
-          ? JSON.stringify({ ...fingerprintBody, mode })
-          : JSON.stringify(fingerprintBody),
+        fingerprint,
+        compatibleFingerprints: legacyFingerprint === fingerprint ? [] : [legacyFingerprint],
         kv: c.get('engine').kv,
         operation: () =>
           groupDmEngine.postGroupMessage(

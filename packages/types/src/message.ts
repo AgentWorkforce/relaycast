@@ -185,6 +185,7 @@ export const SessionMessagesResultSchema = z.object({
     'workspace_unknown',
     'session_not_found',
     'query_failed',
+    'response_invalid',
     'pre_migration_history_unknown',
   ]).optional(),
   retention: EffectiveMessageRetentionSchema,
