@@ -10,7 +10,17 @@
 
 ## Summary
 
-Closed all eight PR #333 review findings: required atomic workspace writes, added mid-batch and bare-handle coverage, normalized/redacted HTTP errors, retried plain-object D1 causes, recovered exact committed pairs after retry exhaustion, documented the 503 contract, and corrected changelog/PR claims.
+At commit `f3af1d8`, closed the eight PR #333 findings present during this run:
+required atomic workspace writes, added mid-batch and bare-handle coverage,
+normalized/redacted HTTP errors, retried plain-object D1 causes, recovered exact
+committed pairs after retry exhaustion, documented the 503 contract, and
+corrected changelog/PR claims.
+
+Local focused, engine, and non-container monorepo gates were green at that
+commit. A separate injected container proof against the starting revision
+`1795e4e5` had demonstrated the `status: 0` leak; `f3af1d8` changes that code and
+its regression passes, but that separate injected proof was not rerun as part
+of this trajectory.
 
 **Approach:** Standard approach
 
@@ -40,4 +50,4 @@ Closed all eight PR #333 review findings: required atomic workspace writes, adde
 - Use isolated PR worktree and require atomic workspace writes: Use isolated PR worktree and require atomic workspace writes
 - Recover exact committed workspace pairs after retry exhaustion: Recover exact committed workspace pairs after retry exhaustion
 - Document storage exhaustion as an indeterminate outcome: Document storage exhaustion as an indeterminate outcome
-- All eight review findings verified and addressed; focused regressions, full engine tests, and non-container monorepo build/lint/test gates are green.
+- At `f3af1d8`, all eight review findings present during the run were addressed; focused regressions, full engine tests, and non-container monorepo build/lint/test gates were green.
