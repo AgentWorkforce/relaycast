@@ -460,6 +460,7 @@ POST   /agents
 POST   /channels
 POST   /channels/:name/messages
 GET    /channels/:name/messages
+GET    /sessions/:session_ref/messages?limit=<1-500>&after=<message-id>
 POST   /messages/:id/replies
 POST   /dm
 GET    /dm/conversations?limit=<1-100>  List the agent's newest DM conversations (limit optional)
@@ -505,6 +506,17 @@ through the message history APIs, subject to the workspace's message retention.
 Messages are retained indefinitely by default; a workspace's `retention.message_ttl_days`
 setting (or a deployment-wide default — the hosted service uses 30 days; self-host:
 `RELAYCAST_MESSAGE_TTL_DAYS`) enables pruning of older messages.
+
+For replay correlation, stamp message metadata with the opaque `session_ref` and resolve it
+with a workspace key through `GET /sessions/:session_ref/messages` or
+`relay.messages.bySessionRef(sessionRef)`. The lookup is bounded, cursor-paginated, and backed
+by `(workspace_id, session_ref, id)`; it never scans JSON message history. Its live
+`availability` is `retained`, `partial`, `aged_out`, or `unknown`. `partial` means the session
+crosses the current retention boundary, while `unknown` means the boundary or lookup could not
+be established and must never be presented as replayable. A payload-free session ledger
+survives message pruning so an aged-out session remains distinguishable from an unknown or
+never-observed reference. `GET /workspace` reports the same effective message-retention policy,
+including the calculated `retained_since` boundary or `never_prune` cold storage.
 
 Canonical realtime/subscription event names are dotted and shared across WebSocket
 and outbound subscriptions: `message.created`, `message.reacted`, `message.read`,

@@ -24,14 +24,21 @@ export function registerMessagingTools(
       channel: z.string().describe('Name of the channel to post the message to (e.g. "general", "build-alerts")'),
       text: z.string().describe('The message body text, which may include @mentions of other agents'),
       attachments: z.array(z.string()).optional().describe('Array of file attachment IDs obtained from the upload_file tool'),
+      data: z.record(z.string(), z.unknown()).optional().describe('Structured message metadata, including session_ref for replay correlation'),
       ...workspaceRoutingInputShape,
       ...identityOverrideInputShape,
     },
     outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, async ({ channel, text, attachments, workspace_id, workspace_alias, as: asIdentity }) => {
+  }, async ({ channel, text, attachments, data, workspace_id, workspace_alias, as: asIdentity }) => {
     const client = getAgentClient(workspaceRefFromArgs({ workspace_id, workspace_alias }), asIdentity);
-    const msg = await client.send(channel, text, attachments ? { attachments } : undefined);
+    const options = attachments || data !== undefined
+      ? {
+          ...(attachments ? { attachments } : {}),
+          ...(data !== undefined ? { data } : {}),
+        }
+      : undefined;
+    const msg = await client.send(channel, text, options);
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(msg, null, 2) }],
       structuredContent: msg as unknown as Record<string, unknown>,
@@ -67,14 +74,17 @@ export function registerMessagingTools(
     inputSchema: {
       message_id: z.string().describe('ID of the parent message to reply to, which becomes the thread root'),
       text: z.string().describe('The reply body text, which may include @mentions of other agents'),
+      data: z.record(z.string(), z.unknown()).optional().describe('Structured reply metadata, including session_ref for replay correlation'),
       ...workspaceRoutingInputShape,
       ...identityOverrideInputShape,
     },
     outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, async ({ message_id, text, workspace_id, workspace_alias, as: asIdentity }) => {
+  }, async ({ message_id, text, data, workspace_id, workspace_alias, as: asIdentity }) => {
     const client = getAgentClient(workspaceRefFromArgs({ workspace_id, workspace_alias }), asIdentity);
-    const reply = await client.reply(message_id, text);
+    const reply = data === undefined
+      ? await client.reply(message_id, text)
+      : await client.reply(message_id, text, { data });
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(reply, null, 2) }],
       structuredContent: reply as unknown as Record<string, unknown>,
@@ -106,14 +116,17 @@ export function registerMessagingTools(
     inputSchema: {
       to: z.string().describe('Name of the registered agent to send the direct message to'),
       text: z.string().describe('The direct message body text'),
+      data: z.record(z.string(), z.unknown()).optional().describe('Structured DM metadata, including session_ref for replay correlation'),
       ...workspaceRoutingInputShape,
       ...identityOverrideInputShape,
     },
     outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, async ({ to, text, workspace_id, workspace_alias, as: asIdentity }) => {
+  }, async ({ to, text, data, workspace_id, workspace_alias, as: asIdentity }) => {
     const client = getAgentClient(workspaceRefFromArgs({ workspace_id, workspace_alias }), asIdentity);
-    const result = await client.dm(to, text);
+    const result = data === undefined
+      ? await client.dm(to, text)
+      : await client.dm(to, text, { data });
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
       structuredContent: result as unknown as Record<string, unknown>,
@@ -148,15 +161,18 @@ export function registerMessagingTools(
       participants: z.array(z.string()).describe('Array of agent names to include in the group conversation'),
       name: z.string().optional().describe('Optional display name for the group conversation (e.g. "Backend Team", "Project Alpha")'),
       text: z.string().describe('The first message to send to the group, which initiates the conversation'),
+      data: z.record(z.string(), z.unknown()).optional().describe('Structured first-message metadata, including session_ref for replay correlation'),
       ...workspaceRoutingInputShape,
       ...identityOverrideInputShape,
     },
     outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, async ({ participants, name, text, workspace_id, workspace_alias, as: asIdentity }) => {
+  }, async ({ participants, name, text, data, workspace_id, workspace_alias, as: asIdentity }) => {
     const client = getAgentClient(workspaceRefFromArgs({ workspace_id, workspace_alias }), asIdentity);
     const conversation = await client.dms.createGroup({ participants, name });
-    const message = await client.dms.sendMessage(conversation.id, text);
+    const message = data === undefined
+      ? await client.dms.sendMessage(conversation.id, text)
+      : await client.dms.sendMessage(conversation.id, text, { data });
     const result = { conversation, message };
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],

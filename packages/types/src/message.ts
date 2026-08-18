@@ -136,3 +136,63 @@ export const SearchMessageResultSchema = z.object({
   relevance_score: z.number(),
 });
 export type SearchMessageResult = z.infer<typeof SearchMessageResultSchema>;
+
+export const EffectiveMessageRetentionSchema = z.discriminatedUnion('policy', [
+  z.object({
+    policy: z.literal('window'),
+    message_ttl_days: z.number().positive(),
+    retained_since: z.string(),
+    source: z.enum(['workspace_override', 'deployment_default']),
+  }),
+  z.object({
+    policy: z.literal('never_prune'),
+    message_ttl_days: z.null(),
+    retained_since: z.null(),
+    source: z.enum(['workspace_override', 'deployment_default']),
+  }),
+  z.object({
+    policy: z.literal('unknown'),
+    message_ttl_days: z.null(),
+    retained_since: z.null(),
+    source: z.literal('unknown'),
+    reason: z.enum(['boundary_unavailable', 'workspace_unknown']),
+  }),
+]);
+export type EffectiveMessageRetention = z.infer<typeof EffectiveMessageRetentionSchema>;
+
+export const SessionMessageSchema = z.object({
+  id: z.string(),
+  channel_id: z.string(),
+  channel_name: z.string(),
+  conversation_id: z.string().nullable(),
+  agent_id: z.string(),
+  agent_name: z.string(),
+  thread_id: z.string().nullable(),
+  text: z.string(),
+  blocks: z.array(MessageBlockSchema).nullable(),
+  metadata: z.record(z.string(), z.unknown()),
+  has_attachments: z.boolean(),
+  created_at: z.string(),
+});
+export type SessionMessage = z.infer<typeof SessionMessageSchema>;
+
+export const SessionMessagesResultSchema = z.object({
+  session_ref: z.string(),
+  availability: z.enum(['retained', 'partial', 'aged_out', 'unknown']),
+  reason: z.enum([
+    'outside_retention_window',
+    'boundary_unavailable',
+    'workspace_unknown',
+    'session_not_found',
+    'query_failed',
+  ]).optional(),
+  retention: EffectiveMessageRetentionSchema,
+  session_started_at: z.string().nullable(),
+  session_last_message_at: z.string().nullable(),
+  messages: z.array(SessionMessageSchema),
+  page: z.object({
+    next_cursor: z.string().nullable(),
+    has_more: z.boolean(),
+  }),
+});
+export type SessionMessagesResult = z.infer<typeof SessionMessagesResultSchema>;

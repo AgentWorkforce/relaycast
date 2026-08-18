@@ -7,6 +7,7 @@ import { codedError } from '../lib/httpError.js';
 import { D1WriteRetryExhaustedError, retryD1Write } from '../lib/d1Retry.js';
 import { runAtomicWrites } from '../ports/database.js';
 import type { FileStorage } from '../ports/files.js';
+import { resolveEffectiveMessageRetention } from './retention.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -278,11 +279,15 @@ export async function getWorkspaceByName(db: Db, name: string) {
   };
 }
 
-export async function getWorkspace(db: Db, workspaceId: string) {
-  const [workspace] = await db
-    .select()
-    .from(workspaces)
-    .where(eq(workspaces.id, workspaceId));
+export async function getWorkspace(
+  db: Db,
+  workspaceId: string,
+  deploymentMessageTtlDays?: number | null,
+) {
+  const [[workspace], effectiveMessageRetention] = await Promise.all([
+    db.select().from(workspaces).where(eq(workspaces.id, workspaceId)),
+    resolveEffectiveMessageRetention(db, workspaceId, deploymentMessageTtlDays),
+  ]);
   if (!workspace) return null;
 
   return {
@@ -292,6 +297,7 @@ export async function getWorkspace(db: Db, workspaceId: string) {
     system_prompt: workspace.systemPrompt,
     created_at: workspace.createdAt.toISOString(),
     metadata: workspace.metadata,
+    effective_retention: { messages: effectiveMessageRetention },
     expires_at: workspace.expiresAt?.toISOString() ?? null,
   };
 }
@@ -300,6 +306,7 @@ export async function updateWorkspace(
   db: Db,
   workspaceId: string,
   updates: { name?: string; system_prompt?: string | null },
+  deploymentMessageTtlDays?: number | null,
 ) {
   const setClause: Record<string, unknown> = {};
   if (updates.name !== undefined) setClause.name = updates.name;
@@ -307,7 +314,7 @@ export async function updateWorkspace(
     setClause.systemPrompt = updates.system_prompt;
 
   if (Object.keys(setClause).length === 0) {
-    return getWorkspace(db, workspaceId);
+    return getWorkspace(db, workspaceId, deploymentMessageTtlDays);
   }
 
   const [updated] = await db
@@ -318,15 +325,7 @@ export async function updateWorkspace(
 
   if (!updated) return null;
 
-  return {
-    id: updated.id,
-    name: updated.name,
-    plan: updated.plan,
-    system_prompt: updated.systemPrompt,
-    created_at: updated.createdAt.toISOString(),
-    metadata: updated.metadata,
-    expires_at: updated.expiresAt?.toISOString() ?? null,
-  };
+  return getWorkspace(db, updated.id, deploymentMessageTtlDays);
 }
 
 async function deleteWorkspaceBatch(

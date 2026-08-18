@@ -13,6 +13,7 @@ import { buildGroupDmReceivedEventData } from '../engine/deliveryWire.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
+import { sha256Hex } from '../lib/crypto.js';
 import {
   jsonCreated,
   jsonError,
@@ -31,6 +32,7 @@ const createGroupDmSchema = z.object({
 const postGroupDmMessageSchema = z.object({
   text: z.string().min(1),
   attachments: z.array(z.string()).optional(),
+  data: z.record(z.string(), z.unknown()).nullable().optional(),
   mode: z.enum(['wait', 'steer']).default('wait'),
 });
 
@@ -89,18 +91,21 @@ groupDmRoutes.post(
         const hasTextIssue = failure.error.issues.some((issue) => issue.path[0] === 'text');
         const hasModeIssue = failure.error.issues.some((issue) => issue.path[0] === 'mode');
         const hasAttachmentsIssue = failure.error.issues.some((issue) => issue.path[0] === 'attachments');
+        const hasDataIssue = failure.error.issues.some((issue) => issue.path[0] === 'data');
         return hasTextIssue
           ? 'text is required'
           : hasModeIssue
             ? 'mode must be one of: wait, steer'
             : hasAttachmentsIssue
               ? 'attachments must be an array of file ids'
+              : hasDataIssue
+                ? 'data must be an object'
               : 'invalid group dm body';
       });
       if (!parsed.ok) {
         return parsed.response;
       }
-      const { text, attachments, mode } = parsed.data;
+      const { text, attachments, data, mode } = parsed.data;
       const normalizedAttachments = attachments && attachments.length > 0 ? attachments : undefined;
 
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
@@ -110,6 +115,12 @@ groupDmRoutes.post(
 
       const conversationId = c.req.param('conversation_id');
       const mailbox = resolveMailboxConfig(c.get('engine').config, workspace.id);
+      const fingerprintBody = {
+        conversationId,
+        text,
+        ...(normalizedAttachments ? { attachments: normalizedAttachments } : {}),
+        ...(data !== undefined ? { data_sha256: await sha256Hex(JSON.stringify(data)) } : {}),
+      };
       const toGroupDmReceivedEventData = (data: Awaited<ReturnType<typeof groupDmEngine.postGroupMessage>>) => buildGroupDmReceivedEventData(data, {
         fromName: agent!.name,
       });
@@ -121,8 +132,8 @@ groupDmRoutes.post(
         key: idempotencyKey,
         status: 201,
         fingerprint: mode === 'steer'
-          ? JSON.stringify({ conversationId, text, ...(normalizedAttachments ? { attachments: normalizedAttachments } : {}), mode })
-          : JSON.stringify({ conversationId, text, ...(normalizedAttachments ? { attachments: normalizedAttachments } : {}) }),
+          ? JSON.stringify({ ...fingerprintBody, mode })
+          : JSON.stringify(fingerprintBody),
         kv: c.get('engine').kv,
         operation: () =>
           groupDmEngine.postGroupMessage(
@@ -133,6 +144,7 @@ groupDmRoutes.post(
             {
               text,
               attachments: normalizedAttachments,
+              data,
               mode,
             },
             { mailbox },

@@ -476,6 +476,7 @@ export class AgentClient {
     opts?: {
       attachments?: string[];
       blocks?: MessageBlock[];
+      data?: Record<string, unknown> | null;
       mode?: 'wait' | 'steer';
       idempotencyKey?: string;
     },
@@ -485,6 +486,7 @@ export class AgentClient {
       text,
       ...(opts?.attachments ? { attachments: opts.attachments } : {}),
       ...(opts?.blocks ? { blocks: opts.blocks } : {}),
+      ...(opts?.data !== undefined ? { data: opts.data } : {}),
       mode: opts?.mode ?? 'wait',
     };
     return this.client.post(
@@ -500,6 +502,7 @@ export class AgentClient {
     opts?: {
       attachments?: string[];
       blocks?: MessageBlock[];
+      data?: Record<string, unknown> | null;
       mode?: 'wait' | 'steer';
       idempotencyKey?: string;
     },
@@ -529,11 +532,16 @@ export class AgentClient {
   async reply(
     id: string,
     text: string,
-    opts?: { blocks?: MessageBlock[]; idempotencyKey?: string },
+    opts?: {
+      blocks?: MessageBlock[];
+      data?: Record<string, unknown> | null;
+      idempotencyKey?: string;
+    },
   ): Promise<MessageWithMeta> {
     const body: ThreadReplyRequest = {
       text,
       ...(opts?.blocks ? { blocks: opts.blocks } : {}),
+      ...(opts?.data !== undefined ? { data: opts.data } : {}),
     };
     return this.client.post(
       `/v1/messages/${encodeURIComponent(id)}/replies`,
@@ -607,13 +615,18 @@ export class AgentClient {
     sendMessage: (
       conversationId: string,
       text: string,
-      opts?: (IdempotencyOption & { attachments?: string[]; mode?: 'wait' | 'steer' }),
+      opts?: (IdempotencyOption & {
+        attachments?: string[];
+        data?: Record<string, unknown> | null;
+        mode?: 'wait' | 'steer';
+      }),
     ): Promise<GroupDmMessageResponse> =>
       this.client.post(
         `/v1/dm/${encodeURIComponent(conversationId)}/messages`,
         {
           text,
           ...(opts?.attachments ? { attachments: opts.attachments } : {}),
+          ...(opts?.data !== undefined ? { data: opts.data } : {}),
           mode: opts?.mode ?? 'wait',
         },
         idempotencyHeaders(opts),

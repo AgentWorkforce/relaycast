@@ -97,6 +97,13 @@ components:
           nullable: true
           format: date-time
           description: Explicit workspace expiry; null means the workspace is persistent
+        effective_retention:
+          type: object
+          required:
+            - messages
+          properties:
+            messages:
+              $ref: '#/components/schemas/EffectiveMessageRetention'
 
     CreateWorkspaceResponse:
       type: object
@@ -326,6 +333,159 @@ components:
         created_at:
           type: string
           format: date-time
+
+    EffectiveMessageRetention:
+      description: >-
+        Live effective message-retention policy. An unknown policy is a
+        fail-closed result and must never be rendered as replayable.
+      oneOf:
+        - type: object
+          required: [policy, message_ttl_days, retained_since, source]
+          properties:
+            policy:
+              type: string
+              enum: [window]
+            message_ttl_days:
+              type: number
+              minimum: 0
+              exclusiveMinimum: true
+            retained_since:
+              type: string
+              format: date-time
+            source:
+              type: string
+              enum: [workspace_override, deployment_default]
+        - type: object
+          required: [policy, message_ttl_days, retained_since, source]
+          properties:
+            policy:
+              type: string
+              enum: [never_prune]
+            message_ttl_days:
+              type: number
+              nullable: true
+              example: null
+            retained_since:
+              type: string
+              nullable: true
+              example: null
+            source:
+              type: string
+              enum: [workspace_override, deployment_default]
+        - type: object
+          required: [policy, message_ttl_days, retained_since, source, reason]
+          properties:
+            policy:
+              type: string
+              enum: [unknown]
+            message_ttl_days:
+              type: number
+              nullable: true
+              example: null
+            retained_since:
+              type: string
+              nullable: true
+              example: null
+            source:
+              type: string
+              enum: [unknown]
+            reason:
+              type: string
+              enum: [boundary_unavailable, workspace_unknown]
+
+    SessionMessage:
+      type: object
+      required:
+        - id
+        - channel_id
+        - channel_name
+        - conversation_id
+        - agent_id
+        - agent_name
+        - thread_id
+        - text
+        - blocks
+        - metadata
+        - has_attachments
+        - created_at
+      properties:
+        id:
+          type: string
+        channel_id:
+          type: string
+        channel_name:
+          type: string
+        conversation_id:
+          type: string
+          nullable: true
+        agent_id:
+          type: string
+        agent_name:
+          type: string
+        thread_id:
+          type: string
+          nullable: true
+        text:
+          type: string
+        blocks:
+          type: array
+          nullable: true
+          items:
+            type: object
+        metadata:
+          type: object
+          additionalProperties: true
+        has_attachments:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    SessionMessagesResult:
+      type: object
+      required:
+        - session_ref
+        - availability
+        - retention
+        - session_started_at
+        - session_last_message_at
+        - messages
+        - page
+      properties:
+        session_ref:
+          type: string
+        availability:
+          type: string
+          enum: [retained, partial, aged_out, unknown]
+          description: >-
+            `partial` means only the retained tail is returned; `unknown` is
+            fail-closed and must not be presented as replayable.
+        reason:
+          type: string
+          enum: [outside_retention_window, boundary_unavailable, workspace_unknown, session_not_found, query_failed]
+        retention:
+          $ref: '#/components/schemas/EffectiveMessageRetention'
+        session_started_at:
+          type: string
+          format: date-time
+          nullable: true
+        session_last_message_at:
+          type: string
+          format: date-time
+          nullable: true
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/SessionMessage'
+        page:
+          type: object
+          required: [next_cursor, has_more]
+          properties:
+            next_cursor:
+              type: string
+              nullable: true
+            has_more:
+              type: boolean
 
     FileAttachment:
       type: object
@@ -2583,6 +2743,65 @@ paths:
                     items:
                       $ref: '#/components/schemas/Message'
 
+  /sessions/{session_ref}/messages:
+    get:
+      operationId: getSessionMessages
+      summary: Resolve messages by session reference
+      description: >-
+        Returns a bounded, index-backed slice of messages stamped with the
+        opaque `session_ref`, together with the workspace's live effective
+        retention boundary. A payload-free ledger distinguishes a known
+        aged-out session from an unknown or never-observed reference. Results
+        with `availability: unknown` must never be presented as replayable.
+        `partial` means the session began before the current boundary and only
+        its retained tail is returned. A workspace key is required because a
+        session may span channels and direct-message conversations.
+      tags:
+        - Messages
+      security:
+        - workspaceKey: []
+      parameters:
+        - name: session_ref
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 255
+          description: Opaque session reference stored in message metadata.
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+        - name: after
+          in: query
+          schema:
+            type: string
+          description: Message ID cursor from `page.next_cursor`.
+      responses:
+        '200':
+          description: Session availability, retention boundary, and retained messages.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, data]
+                properties:
+                  ok:
+                    type: boolean
+                    enum: [true]
+                  data:
+                    $ref: '#/components/schemas/SessionMessagesResult'
+        '400':
+          description: Invalid session reference or pagination query.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /messages/{id}:
     get:
       summary: Get message
@@ -2944,6 +3163,11 @@ paths:
                   items:
                     type: string
                   description: Optional file ids to attach to this group DM message
+                data:
+                  type: object
+                  nullable: true
+                  additionalProperties: true
+                  description: Structured message metadata, including `session_ref` for replay correlation.
                 mode:
                   type: string
                   enum: [wait, steer]

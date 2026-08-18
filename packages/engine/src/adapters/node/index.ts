@@ -145,6 +145,20 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
   const auth = options.auth ?? new SqliteApiKeyAuthProvider();
   const entitlements = options.entitlements ?? new StaticEntitlementsProvider(kv);
 
+  // The API must report the same deployment fallback the local pruner uses.
+  // Node's omitted/disabled message TTL is explicitly never-prune; hosted
+  // adapters inject their own effective fallback into EngineConfig.
+  const retentionOptions = options.eventQueue?.retention;
+  const messageTtlDays = retentionOptions === false
+    ? null
+    : retentionOptions?.defaults?.messageTtlDays ?? null;
+  const config: EngineConfig = {
+    ...options.config,
+    retention: {
+      messageTtlDays,
+    },
+  };
+
   const deps: EngineDeps = {
     db,
     realtime,
@@ -158,7 +172,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
     auth,
     entitlements,
     telemetry,
-    config: options.config ?? {},
+    config,
   };
 
   realtime.setNodeCompletionDeps(deps);

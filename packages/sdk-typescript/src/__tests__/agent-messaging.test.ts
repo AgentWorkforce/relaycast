@@ -79,6 +79,21 @@ describe('AgentClient', () => {
       expect(init.body).toBe(JSON.stringify({ text: 'hello', mode: 'steer' }));
     });
 
+    it('forwards session metadata for channel messages', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ id: 'm_1' }));
+
+      await me.send('#general', 'hello', {
+        data: { session_ref: 'session-1' },
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.body).toBe(JSON.stringify({
+        text: 'hello',
+        data: { session_ref: 'session-1' },
+        mode: 'wait',
+      }));
+    });
+
     it('forwards Idempotency-Key when provided', async () => {
       mockFetch.mockImplementation(() => mockResponse({ id: 'm_1' }));
 
@@ -101,6 +116,20 @@ describe('AgentClient', () => {
       expect(typeof generated).toBe('string');
       expect(generated.length).toBeGreaterThan(0);
       expect(headers['X-Idempotency-Key']).toBe(generated);
+    });
+
+    it('forwards session metadata for thread replies', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ id: 'm_2' }));
+
+      await me.reply('m_1', 'reply', {
+        data: { session_ref: 'session-1' },
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.body).toBe(JSON.stringify({
+        text: 'reply',
+        data: { session_ref: 'session-1' },
+      }));
     });
   });
 
@@ -386,6 +415,21 @@ describe('AgentClient', () => {
 
       const [, init] = mockFetch.mock.calls[0]!;
       expect(init.body).toBe(JSON.stringify({ text: 'hello', attachments: ['file_1'], mode: 'steer' }));
+    });
+
+    it('sendMessage() forwards session metadata', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ id: 'm_2' }));
+
+      await me.dms.sendMessage('c_1', 'hello', {
+        data: { session_ref: 'session-1' },
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.body).toBe(JSON.stringify({
+        text: 'hello',
+        data: { session_ref: 'session-1' },
+        mode: 'wait',
+      }));
     });
 
     it('sendMessage() forwards Idempotency-Key when provided', async () => {

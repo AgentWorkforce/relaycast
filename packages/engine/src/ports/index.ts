@@ -95,6 +95,15 @@ export interface EngineConfig {
   appSemver?: string;
   sdkSemver?: string;
   /**
+   * Effective deployment-wide retention fallback. Adapters must provide an
+   * explicit value (`null` means never prune); omission is reported as unknown
+   * so a hosted deployment can never accidentally advertise replay coverage.
+   * Per-workspace `workspaces.retention` overrides this value.
+   */
+  retention?: {
+    messageTtlDays?: number | null;
+  };
+  /**
    * Master secret used to derive relayfile -> relaycast inbound HMAC secrets.
    * Hosted adapters wire this from their internal secret; self-host can omit it
    * to disable the relayfile inbound bridge.

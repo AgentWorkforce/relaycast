@@ -1895,7 +1895,10 @@ describe('durable delivery api', () => {
     const msg = await stack.app.request('/v1/dm/' + conversationId + '/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer ' + alice.token },
-      body: JSON.stringify({ text: 'redeliver group' }),
+      body: JSON.stringify({
+        text: 'redeliver group',
+        data: { session_ref: 'session-group-redelivery' },
+      }),
     });
     expect(msg.status).toBe(201);
     const messageId = ((await msg.json()) as { data: { id: string } }).data.id;
@@ -1915,6 +1918,12 @@ describe('durable delivery api', () => {
     const replayed = latestDeliverOfType(reconnected.sock, 'group_dm.received');
     expect(replayed).toMatchObject({ msg_id: messageId });
     expect(replayed.payload).toEqual(live.payload);
+    expect(replayed.payload).toMatchObject({
+      data: {
+        metadata: { session_ref: 'session-group-redelivery' },
+        message: { metadata: { session_ref: 'session-group-redelivery' } },
+      },
+    });
   });
 
   it('redelivers a thread reply with the same deliver payload after broker death/reconnect', async () => {

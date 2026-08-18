@@ -521,6 +521,10 @@ export const messages = sqliteTable(
     body: text('body').notNull(),
     blocks: text('blocks', { mode: 'json' }),
     metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>().default({}),
+    // Denormalized from public metadata.session_ref at write time. Keeping the
+    // join key in a real column makes replay lookup bounded and index-backed;
+    // callers must never scan JSON metadata across workspace history.
+    sessionRef: text('session_ref'),
     hasAttachments: integer('has_attachments', { mode: 'boolean' }).notNull().default(false),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
     updatedAt: integer('updated_at', { mode: 'timestamp' }),
@@ -530,6 +534,27 @@ export const messages = sqliteTable(
     index('idx_messages_channel_time').on(table.channelId, table.id),
     index('idx_messages_thread').on(table.threadId, table.id),
     index('idx_messages_workspace').on(table.workspaceId, table.id),
+    index('idx_messages_workspace_session').on(table.workspaceId, table.sessionRef, table.id),
+  ],
+);
+
+// Durable, payload-free evidence that a session_ref existed in a workspace.
+// Message retention may remove every matching message; this ledger deliberately
+// survives that pruning so the resolver can report aged_out instead of guessing
+// that an empty live-message query means "no conversation".
+export const messageSessions = sqliteTable(
+  'message_sessions',
+  {
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    sessionRef: text('session_ref').notNull(),
+    firstMessageAt: integer('first_message_at', { mode: 'timestamp' }).notNull(),
+    lastMessageAt: integer('last_message_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.workspaceId, table.sessionRef] }),
+    index('idx_message_sessions_workspace_last').on(table.workspaceId, table.lastMessageAt),
   ],
 );
 
