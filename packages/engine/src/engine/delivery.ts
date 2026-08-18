@@ -893,7 +893,12 @@ export async function deliverPendingToNode(
   const attachmentsByMessageId = await fetchAttachmentsBatch(db, workspaceId, [...new Set(rows.map((row) => row.delivery.messageId))]);
 
   const deliveredIds: string[] = [];
+  // A broker admits durable frames only in ascending sequence order per agent.
+  // If a lower sequence frame did not reach a provider, leave the remainder of
+  // that agent's stream queued for the next replay instead of creating a gap.
+  const blockedAgentIds = new Set<string>();
   for (const row of rows) {
+    if (blockedAgentIds.has(row.delivery.agentId)) continue;
     if (!isProviderAgentDeliveryReady(
       registry,
       workspaceId,
@@ -915,7 +920,11 @@ export async function deliverPendingToNode(
       mode: wireMode(row.delivery.mode),
       payload: buildDeliverPayload(eventType, eventData),
     }));
-    if (sent) deliveredIds.push(row.delivery.id);
+    if (sent) {
+      deliveredIds.push(row.delivery.id);
+    } else {
+      blockedAgentIds.add(row.delivery.agentId);
+    }
   }
 
   await markDeliveriesDelivered(db, workspaceId, deliveredIds);
