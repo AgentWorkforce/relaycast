@@ -26,6 +26,13 @@ function errorCause(error: unknown): unknown {
   return (error as { cause?: unknown }).cause;
 }
 
+function errorMessage(error: unknown): string | undefined {
+  if (typeof error === 'string') return error;
+  if (!error || typeof error !== 'object' || !('message' in error)) return undefined;
+  const message = (error as { message?: unknown }).message;
+  return typeof message === 'string' ? message : undefined;
+}
+
 /**
  * Classify only D1's own error message (including a nested Drizzle cause).
  * The outer Drizzle message contains SQL and bound parameters, so matching it
@@ -37,11 +44,7 @@ export function retryableD1ErrorCode(error: unknown): RetryableD1ErrorCode | und
 
   for (let depth = 0; current !== undefined && depth < 6 && !seen.has(current); depth += 1) {
     seen.add(current);
-    const message = current instanceof Error
-      ? current.message
-      : typeof current === 'string'
-        ? current
-        : undefined;
+    const message = errorMessage(current);
 
     if (message?.startsWith('D1_ERROR:')) {
       const match = RETRYABLE_D1_ERRORS.find(([, fragment]) => message.includes(fragment));

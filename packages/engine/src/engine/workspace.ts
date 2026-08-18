@@ -9,6 +9,11 @@ import { runAtomicWrites } from '../ports/database.js';
 
 type Db = ReturnType<typeof getDb>;
 
+type WorkspaceWriteResult = [
+  Array<typeof workspaces.$inferSelect>,
+  Array<typeof channels.$inferSelect>,
+];
+
 type CreateWorkspaceOptions =
   | string
   | {
@@ -29,6 +34,51 @@ function buildWorkspaceResponse(
     ...(apiKey ? { api_key: apiKey } : {}),
     created_at: workspace.createdAt.toISOString(),
   };
+}
+
+function isExpectedWorkspacePair(
+  writeResult: WorkspaceWriteResult,
+  expected: {
+    workspaceId: string;
+    name: string;
+    apiKeyHash: string;
+    channelId: string;
+  },
+): boolean {
+  const [workspaceRows, channelRows] = writeResult;
+  const createdWorkspace = workspaceRows[0];
+  const createdChannel = channelRows[0];
+  return Boolean(
+    createdWorkspace &&
+    createdWorkspace.id === expected.workspaceId &&
+    createdWorkspace.name === expected.name &&
+    createdWorkspace.apiKeyHash === expected.apiKeyHash &&
+    createdChannel &&
+    createdChannel.id === expected.channelId &&
+    createdChannel.workspaceId === expected.workspaceId &&
+    createdChannel.name === 'general'
+  );
+}
+
+async function readCommittedWorkspacePair(
+  db: Db,
+  expected: {
+    workspaceId: string;
+    name: string;
+    apiKeyHash: string;
+    channelId: string;
+  },
+): Promise<WorkspaceWriteResult | undefined> {
+  try {
+    const [workspaceRows, channelRows] = await Promise.all([
+      db.select().from(workspaces).where(eq(workspaces.id, expected.workspaceId)),
+      db.select().from(channels).where(eq(channels.id, expected.channelId)),
+    ]);
+    const result: WorkspaceWriteResult = [workspaceRows, channelRows];
+    return isExpectedWorkspacePair(result, expected) ? result : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function createWorkspace(
@@ -67,57 +117,56 @@ export async function createWorkspace(
   const apiKeyHash = await hashApiKey(apiKey);
 
   const channelId = generateId();
-  let writeResult: unknown[];
+  const expected = { workspaceId, name, apiKeyHash, channelId };
+  let writeResult: WorkspaceWriteResult;
   try {
-    writeResult = await retryD1Write(() => runAtomicWrites(db, (writeDb) => [
-      writeDb
-        .insert(workspaces)
-        .values({ id: workspaceId, name, apiKeyHash })
-        // A fixed id/key across attempts makes a lost D1 response safe to retry.
-        .onConflictDoUpdate({ target: workspaces.id, set: { id: workspaceId } })
-        .returning(),
-      writeDb
-        .insert(channels)
-        .values({
-          id: channelId,
-          workspaceId,
-          name: 'general',
-          topic: 'General discussion',
-        })
-        .onConflictDoUpdate({ target: channels.id, set: { id: channelId } })
-        .returning(),
-    ]));
+    writeResult = await retryD1Write(() => runAtomicWrites(
+      db,
+      (writeDb) => [
+        writeDb
+          .insert(workspaces)
+          .values({ id: workspaceId, name, apiKeyHash })
+          // A fixed id/key across attempts makes a lost D1 response safe to retry.
+          .onConflictDoUpdate({ target: workspaces.id, set: { id: workspaceId } })
+          .returning(),
+        writeDb
+          .insert(channels)
+          .values({
+            id: channelId,
+            workspaceId,
+            name: 'general',
+            topic: 'General discussion',
+          })
+          .onConflictDoUpdate({ target: channels.id, set: { id: channelId } })
+          .returning(),
+      ],
+      { requireAtomic: true },
+    )) as WorkspaceWriteResult;
   } catch (cause) {
     if (!(cause instanceof D1WriteRetryExhaustedError)) throw cause;
-    const error = codedError(
-      'Workspace storage temporarily unavailable',
-      'workspace_storage_unavailable',
-      503,
-    );
-    error.diagnostics = {
-      attempts: cause.attempts,
-      operation: 'workspace.create',
-      storage_error: cause.storageError,
-    };
-    throw error;
+    const committed = await readCommittedWorkspacePair(db, expected);
+    if (committed) {
+      writeResult = committed;
+    } else {
+      const error = codedError(
+        'Workspace storage temporarily unavailable',
+        'workspace_storage_unavailable',
+        503,
+      );
+      error.diagnostics = {
+        attempts: cause.attempts,
+        operation: 'workspace.create',
+        storage_error: cause.storageError,
+      };
+      throw error;
+    }
   }
 
-  const [workspaceRows, channelRows] = writeResult as [
-    Array<typeof workspaces.$inferSelect>,
-    Array<typeof channels.$inferSelect>,
-  ];
+  const [workspaceRows] = writeResult;
   const createdWorkspace = workspaceRows[0];
-  const createdChannel = channelRows[0];
 
   // A conflict can only be an idempotent replay of this exact generated pair.
-  if (
-    !createdWorkspace ||
-    createdWorkspace.name !== name ||
-    createdWorkspace.apiKeyHash !== apiKeyHash ||
-    !createdChannel ||
-    createdChannel.workspaceId !== workspaceId ||
-    createdChannel.name !== 'general'
-  ) {
+  if (!isExpectedWorkspacePair(writeResult, expected) || !createdWorkspace) {
     throw codedError('Generated workspace identifier collision', 'workspace_id_collision', 500);
   }
 

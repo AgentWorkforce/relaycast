@@ -7,14 +7,14 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
 
 ### Fixed
 
-- Workspace creation batches the workspace and default channel atomically and
-  retries documented transient D1 write failures with bounded backoff. Internal
-  database errors no longer expose SQL statements or bound parameters in API
-  responses; server diagnostics use an explicit safe-field allowlist.
+- Workspace creation now requires atomic storage for the workspace and default
+  channel, and classifies exhausted transient writes with a safe storage error.
+- Uncoded server errors no longer expose SQL statements or bound parameters in
+  API responses.
 
 ## [8.0.3] - 2026-08-15
 

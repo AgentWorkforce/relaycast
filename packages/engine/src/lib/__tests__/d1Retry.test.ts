@@ -15,6 +15,11 @@ describe('D1 write retries', () => {
 
     expect(retryableD1ErrorCode(error)).toBe('queue_full');
     expect(
+      retryableD1ErrorCode(new Error('outer query failure', {
+        cause: { message: 'D1_ERROR: Network connection lost.' },
+      })),
+    ).toBe('network_connection_lost');
+    expect(
       retryableD1ErrorCode(
         new Error('Failed query params: D1_ERROR: D1 DB is overloaded. Too many requests queued.'),
       ),
@@ -25,6 +30,22 @@ describe('D1 write retries', () => {
     vi.useFakeTimers();
     const write = vi.fn()
       .mockRejectedValueOnce(new Error('D1_ERROR: Network connection lost.'))
+      .mockResolvedValue('created');
+
+    const result = retryD1Write(write);
+    const expectation = expect(result).resolves.toBe('created');
+    await vi.runAllTimersAsync();
+
+    await expectation;
+    expect(write).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries a transient D1 message carried by a plain object', async () => {
+    vi.useFakeTimers();
+    const write = vi.fn()
+      .mockRejectedValueOnce({
+        message: 'D1_ERROR: D1 DB is overloaded. Too many requests queued.',
+      })
       .mockResolvedValue('created');
 
     const result = retryD1Write(write);

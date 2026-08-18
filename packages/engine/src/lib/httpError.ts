@@ -57,8 +57,15 @@ export function safeErrorDiagnostics(error: CodedError): Record<string, string |
   return safe;
 }
 
-export function safeClientErrorMessage(error: CodedError): string {
-  return (error.status ?? 500) >= 500 && error.clientSafe !== true
+function effectiveHttpStatus(error: CodedError): number {
+  return error.status || 500;
+}
+
+export function safeClientErrorMessage(
+  error: CodedError,
+  status = effectiveHttpStatus(error),
+): string {
+  return status >= 500 && error.clientSafe !== true && !error.code
     ? 'Internal server error'
     : error.message;
 }
@@ -75,10 +82,11 @@ export function errorResponse(c: Context, err: unknown) {
   if (err instanceof SyntaxError) {
     return jsonMalformedBody(c);
   }
+  const status = effectiveHttpStatus(error);
   return jsonError(
     c,
     error.code || 'internal_error',
-    safeClientErrorMessage(error),
-    (error.status || 500) as ContentfulStatusCode,
+    safeClientErrorMessage(error, status),
+    status as ContentfulStatusCode,
   );
 }

@@ -16,7 +16,12 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Workspace creation now requires atomic storage for the workspace and default
+  channel, and exhausted storage failures no longer expose database internals.
 
 ## [8.0.4] - 2026-08-17
 
