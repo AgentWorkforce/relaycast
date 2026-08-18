@@ -10,7 +10,11 @@
 
 ## Summary
 
-Closed follow-up PR #333 review: mismatched workspace/channel ID conflicts now abort atomically, while exact committed retries recover by readback; added two rollback regressions and verified the status-zero redaction regression remains green.
+Closed follow-up PR #333 review: mismatched workspace/channel ID conflicts now
+abort atomically, while exact committed retries recover by readback; added two
+rollback regressions and reran the local status-zero regression added in
+`f3af1d8`. The separate injected container proof at the starting revision was
+outside this trajectory.
 
 **Approach:** Standard approach
 
@@ -30,7 +34,7 @@ Closed follow-up PR #333 review: mismatched workspace/channel ID conflicts now a
 *Agent: default*
 
 - Replace idempotent no-op upserts with conflict-failing inserts: Replace idempotent no-op upserts with conflict-failing inserts
-- Follow-up review reproduced both mismatched generated-ID commits, then conflict-failing inserts plus exact readback made both rollback regressions pass. The status-zero finding is stale at f3af1d8 and remains green.
+- Follow-up review reproduced both mismatched generated-ID commits, then conflict-failing inserts plus exact readback made both rollback regressions pass. The local status-zero regression from `f3af1d8` also passed; the separate injected container proof was outside this trajectory.
 
 ---
 
