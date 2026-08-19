@@ -687,10 +687,10 @@ export async function sweepExpiredDeliveries(
   opts: { workspaceId?: string; now?: Date; maxBatches?: number } = {},
 ): Promise<number> {
   const now = opts.now ?? new Date();
-  const maxBatches = Math.min(
-    Math.max(Math.floor(opts.maxBatches ?? DELIVERY_EXPIRY_MAX_BATCHES), 1),
-    DELIVERY_EXPIRY_MAX_BATCHES,
-  );
+  const requestedMaxBatches = opts.maxBatches ?? DELIVERY_EXPIRY_MAX_BATCHES;
+  const maxBatches = Number.isFinite(requestedMaxBatches)
+    ? Math.min(Math.max(Math.floor(requestedMaxBatches), 1), DELIVERY_EXPIRY_MAX_BATCHES)
+    : DELIVERY_EXPIRY_MAX_BATCHES;
   let expiredCount = 0;
   for (let batchNumber = 0; batchNumber < maxBatches; batchNumber++) {
     const batch = await deliveryEngine.expireDueDeliveryBatch(engine.db, opts.workspaceId, now);

@@ -2121,7 +2121,12 @@ describe('durable delivery api', () => {
 
     await new Promise((r) => setTimeout(r, 1100));
     expect(await listDeliveries(bob.token)).toHaveLength(0);
-    expect(await sweepExpiredDeliveries(stack.runtime.deps, { workspaceId: ws.workspaceId })).toBe(1);
+    // Non-finite internal overrides must fall back to the production cap instead
+    // of turning the bounded loop into a silent no-op.
+    expect(await sweepExpiredDeliveries(stack.runtime.deps, {
+      workspaceId: ws.workspaceId,
+      maxBatches: Number.NaN,
+    })).toBe(1);
     expect(await listDeliveries(bob.token, '?status=dead_lettered')).toHaveLength(1);
     await new Promise((r) => setTimeout(r, 50));
     await waitForAssertion(() => {
