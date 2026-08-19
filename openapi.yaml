@@ -914,6 +914,15 @@ components:
           type: array
           items:
             type: string
+          description: >-
+            Free-form node labels. `repo:<owner/name>` entries are repository
+            advertisements used for placement, and are always public
+            `owner/name` keys, never filesystem paths or clone URLs. Whenever a
+            `node.register` carries `repo_keys` — including as an empty array —
+            that field is the only source of these entries and any `repo:` tag
+            in the register message's own `tags` is dropped. A register message
+            that omits `repo_keys` is a pre-`repo_keys` client, and its
+            validated `repo:` tags are preserved as-is.
         version:
           type: string
         status:

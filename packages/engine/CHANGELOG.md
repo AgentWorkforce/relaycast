@@ -7,7 +7,15 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Fleet registration persists placement-safe repository keys as public node tags for placement readback.
+
+### Security
+
+- Registration derives `repo:` node tags only from `repo_keys` whenever that field is present. A registration carrying it, including as an empty list, drops every `repo:` tag supplied in `tags`, so a node cannot advertise a repository through a tag it made up. Non-`repo:` tags still round-trip, and registrations that omit `repo_keys` keep the pre-`repo_keys` tag-only behavior.
 
 ## [8.0.7] - 2026-08-19
 

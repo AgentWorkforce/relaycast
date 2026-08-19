@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { FleetNodeTagSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { requireAuth, requireWorkspaceRead, requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -69,7 +70,7 @@ const createNodeSchema = z.object({
   delivery: z.record(z.string(), z.unknown()).nullable().optional(),
   capabilities: z.array(z.string().min(1)).optional(),
   max_agents: z.number().int().nonnegative().optional(),
-  tags: z.array(z.string()).optional(),
+  tags: z.array(FleetNodeTagSchema).optional(),
   version: z.string().optional(),
 });
 

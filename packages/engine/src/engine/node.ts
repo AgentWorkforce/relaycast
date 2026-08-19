@@ -100,6 +100,27 @@ function normalizeCapabilities(capabilities: CapabilityLike[]): FleetCapability[
   ));
 }
 
+const REPO_TAG_PREFIX = 'repo:';
+
+function isRepoTag(tag: string): boolean {
+  return tag.startsWith(REPO_TAG_PREFIX);
+}
+
+// Placement matches a node to an assignment by its `repo:<owner/name>` tag, so
+// a node that can inject its own `repo:` tag can claim work for repositories it
+// has no checkout of. Structured `repo_keys` is therefore the only source of
+// repo advertisements: once a registration carries the field at all - even as an
+// empty list - every caller-supplied `repo:` tag is dropped rather than merged.
+// Registrations that omit the field entirely are pre-`repo_keys` clients and
+// stay on the legacy tag-only path. Non-repo tags always round-trip.
+function registrationTags(message: FleetNodeRegisterMessage): string[] {
+  if (!message.repo_keys) return [...new Set(message.tags)];
+  return [...new Set([
+    ...message.tags.filter((tag) => !isRepoTag(tag)),
+    ...message.repo_keys.map((repoKey) => `repo:${repoKey}`),
+  ])];
+}
+
 function supportsProviderDeliveryReadiness(registry: NodeConnectionRegistry): boolean {
   return typeof registry.setProviderDeliveryReadiness === 'function'
     && typeof registry.markProviderAgentsDeliveryReady === 'function'
@@ -361,6 +382,8 @@ export async function registerNode(
     throw codedError('Node token is not enrolled in this workspace', 'node_not_found', 404);
   }
 
+  const tags = registrationTags(message);
+
   const [existingByName] = await db
     .select()
     .from(nodes)
@@ -372,6 +395,12 @@ export async function registerNode(
 
   // Direct nodes are the per-agent delivery hosts: they never carry providers.
   if (existing.role === 'direct') {
+    // Direct-node registration historically preserved enrollment tags. Keep
+    // those non-repo tags while refreshing only the node's repo advertisement.
+    const directTags = [...new Set([
+      ...existing.tags.filter((tag) => !isRepoTag(tag)),
+      ...tags,
+    ])];
     const [updated] = await db
       .update(nodes)
       .set({
@@ -383,7 +412,7 @@ export async function registerNode(
         deliveryConfig: existing.deliveryConfig,
         maxAgents: 1,
         activeAgents: 1,
-        tags: existing.tags,
+        tags: directTags,
         version: message.version,
         status: 'online',
         handlersLive: false,
@@ -409,7 +438,7 @@ export async function registerNode(
     await materializeProviderActions(tx, workspaceId, authenticatedNodeId, provider.name, capabilities);
     await tx
       .update(nodes)
-      .set({ name: message.name, kind: 'ws', role: 'broker', deliveryAdapter: 'ws.node.v1', deliveryConfig: null, tags: message.tags })
+      .set({ name: message.name, kind: 'ws', role: 'broker', deliveryAdapter: 'ws.node.v1', deliveryConfig: null, tags })
       .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, authenticatedNodeId)));
     await recomputeNodeAggregate(tx, workspaceId, authenticatedNodeId, {
       version: message.version,

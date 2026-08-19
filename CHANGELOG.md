@@ -16,7 +16,15 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Fleet nodes can advertise placement-safe `owner/name` repository keys without exposing local checkout paths.
+
+### Security
+
+- A node can no longer smuggle a repository advertisement through its `tags` list. When `node.register` carries `repo_keys` — including as an empty array — that field is the only source of the `repo:<owner/name>` tags placement matches on, and any `repo:` tag supplied in `tags` is dropped. Register messages that omit `repo_keys` stay on the pre-`repo_keys` tag-only path.
 
 ## [8.0.7] - 2026-08-19
 

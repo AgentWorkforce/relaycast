@@ -564,6 +564,21 @@ unless a direct node, or every constituent provider of a broker node,
 explicitly reports a genuine measurement;
 `max_agents: 0` means unlimited capacity, not zero capacity.
 
+A node can advertise which repositories it has a checkout of by sending
+`repo_keys` on `node.register`: a list of public `owner/name` keys. Relaycast
+persists each as a `repo:<owner/name>` node tag so placement and the existing
+roster readers consume one shape. Keys are `owner/name` only — filesystem paths,
+Windows paths, UNC shares, clone URLs, `.`/`..` segments, and deeper paths are
+rejected with `invalid_message`, so a checkout's location on disk never reaches
+the roster. Because placement matches a node to an assignment by its `repo:` tag,
+`repo_keys` is the *only* source of those tags: when a registration carries the
+field at all — including as an empty list, meaning "I serve no repository" —
+every caller-supplied `repo:` tag in `tags` is dropped rather than merged, so a
+node cannot claim work for a repository it did not vouch for. Non-`repo:` tags
+always round-trip untouched. Registrations that omit `repo_keys` entirely are
+pre-`repo_keys` clients and keep their legacy `repo:` tags, so brokers that
+support the field should always send it — `[]` included — rather than omitting it.
+
 Nodes are first-class delivery hosts and every agent has a node route. `kind`
 describes transport (`ws`, `http_push`, or `poll`), `role` describes ownership
 (`direct` node-of-one or `broker` node-of-many), and `delivery_adapter`
