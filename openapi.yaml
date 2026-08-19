@@ -92,6 +92,7 @@ components:
           enum: [api, sdk, cli, mcp, ci, relayflow, dashboard, other]
         origin_id:
           type: string
+          minLength: 1
           maxLength: 256
           pattern: '^[A-Za-z0-9._:/@-]+$'
           description: Stable creator-owned identifier when one exists, such as a CI run or cloud workspace id.
@@ -149,6 +150,7 @@ components:
             messages:
               $ref: '#/components/schemas/EffectiveMessageRetention'
         provenance:
+          type: object
           nullable: true
           description: Creation provenance. Observer-token requests omit request actor, user, machine, and organization identity fields.
           allOf:

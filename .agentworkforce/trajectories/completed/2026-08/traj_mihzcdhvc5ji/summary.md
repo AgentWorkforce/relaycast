@@ -34,9 +34,9 @@ Implemented portable workspace creation provenance, explicit usage classificatio
 - **Chose:** Default usage rankings to external classification
 - **Reasoning:** An implicit all-workspace view would be dominated by internal and unknown fleet traffic and actively mislead operators.
 
-### Place attribution migration 0038 after workspace lifecycle migrations
-- **Chose:** Place attribution migration 0038 after workspace lifecycle migrations
-- **Reasoning:** Lifecycle PR #338 landed migrations 0036 and 0037 first; attribution used the next available number at implementation time. A later main collision is handled by the follow-up review repair.
+### Place attribution migration 0039 after workspace lifecycle and session-replay migrations
+- **Chose:** Place attribution migration 0039 after workspace lifecycle and session-replay migrations
+- **Reasoning:** Current main owns migrations 0036 through 0038, so the final shipped attribution migration is 0039. The recorded feature commit introduced the file as 0038 before the later review repair renamed it.
 
 ### Ship the portable creator contract here; track hosted and cross-repo work separately
 - **Chose:** Ship the portable creator contract here; track hosted and cross-repo work separately
@@ -53,7 +53,7 @@ Implemented portable workspace creation provenance, explicit usage classificatio
 - Keep historical rows unknown and expose legacy name matches only as low-confidence inference: Keep historical rows unknown and expose legacy name matches only as low-confidence inference
 - Host the usage view in relaycast-cloud behind the existing internal bearer: Host the usage view in relaycast-cloud behind the existing internal bearer
 - Default usage rankings to external classification: Default usage rankings to external classification
-- Place attribution migration 0038 after workspace lifecycle migrations: Place attribution migration 0038 after workspace lifecycle migrations
+- Place attribution migration 0039 after workspace lifecycle and session-replay migrations: Place attribution migration 0039 after workspace lifecycle and session-replay migrations
 - Ship the portable creator contract here; track hosted and cross-repo work separately: Ship the portable creator contract here; track hosted and cross-repo work separately
 - This trajectory records implementation of the portable creation-attribution contract and first-party E2E population. It contains no run, test, or proof events, so it does not establish verification. The hosted usage view belongs to a companion relaycast-cloud change and was not exercised here.
 

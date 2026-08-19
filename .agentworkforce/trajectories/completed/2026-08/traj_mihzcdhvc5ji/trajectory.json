@@ -77,12 +77,12 @@
         {
           "ts": 1787048182770,
           "type": "decision",
-          "content": "Place attribution migration 0038 after workspace lifecycle migrations: Place attribution migration 0038 after workspace lifecycle migrations",
+          "content": "Place attribution migration 0039 after workspace lifecycle and session-replay migrations: Place attribution migration 0039 after workspace lifecycle and session-replay migrations",
           "raw": {
-            "question": "Place attribution migration 0038 after workspace lifecycle migrations",
-            "chosen": "Place attribution migration 0038 after workspace lifecycle migrations",
+            "question": "Place attribution migration 0039 after workspace lifecycle and session-replay migrations",
+            "chosen": "Place attribution migration 0039 after workspace lifecycle and session-replay migrations",
             "alternatives": [],
-            "reasoning": "Lifecycle PR #338 landed migrations 0036 and 0037 first; attribution used the next available number at implementation time. A later main collision is handled by the follow-up review repair."
+            "reasoning": "Current main owns migrations 0036 through 0038, so the final shipped attribution migration is 0039. The recorded feature commit introduced the file as 0038 before the later review repair renamed it."
           },
           "significance": "high"
         },
