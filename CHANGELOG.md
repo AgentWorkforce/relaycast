@@ -24,7 +24,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Security
 
-- A node can no longer claim a repository it has no checkout of. When `node.register` carries `repo_keys`, that field is the only source of the `repo:<owner/name>` tags placement matches on, and any `repo:` tag supplied in `tags` is dropped.
+- A node can no longer smuggle a repository advertisement through its `tags` list. When `node.register` carries `repo_keys` — including as an empty array — that field is the only source of the `repo:<owner/name>` tags placement matches on, and any `repo:` tag supplied in `tags` is dropped. Register messages that omit `repo_keys` stay on the pre-`repo_keys` tag-only path.
 
 ## [8.0.7] - 2026-08-19
 
