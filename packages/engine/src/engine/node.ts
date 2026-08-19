@@ -100,6 +100,13 @@ function normalizeCapabilities(capabilities: CapabilityLike[]): FleetCapability[
   ));
 }
 
+function registrationTags(message: FleetNodeRegisterMessage): string[] {
+  return [...new Set([
+    ...message.tags,
+    ...(message.repo_keys ?? []).map((repoKey) => `repo:${repoKey}`),
+  ])];
+}
+
 function supportsProviderDeliveryReadiness(registry: NodeConnectionRegistry): boolean {
   return typeof registry.setProviderDeliveryReadiness === 'function'
     && typeof registry.markProviderAgentsDeliveryReady === 'function'
@@ -361,6 +368,8 @@ export async function registerNode(
     throw codedError('Node token is not enrolled in this workspace', 'node_not_found', 404);
   }
 
+  const tags = registrationTags(message);
+
   const [existingByName] = await db
     .select()
     .from(nodes)
@@ -383,7 +392,7 @@ export async function registerNode(
         deliveryConfig: existing.deliveryConfig,
         maxAgents: 1,
         activeAgents: 1,
-        tags: existing.tags,
+        tags,
         version: message.version,
         status: 'online',
         handlersLive: false,
@@ -409,7 +418,7 @@ export async function registerNode(
     await materializeProviderActions(tx, workspaceId, authenticatedNodeId, provider.name, capabilities);
     await tx
       .update(nodes)
-      .set({ name: message.name, kind: 'ws', role: 'broker', deliveryAdapter: 'ws.node.v1', deliveryConfig: null, tags: message.tags })
+      .set({ name: message.name, kind: 'ws', role: 'broker', deliveryAdapter: 'ws.node.v1', deliveryConfig: null, tags })
       .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, authenticatedNodeId)));
     await recomputeNodeAggregate(tx, workspaceId, authenticatedNodeId, {
       version: message.version,

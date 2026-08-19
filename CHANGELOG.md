@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Fleet nodes can advertise placement-safe `owner/name` repository keys without exposing local checkout paths.
 
 ## [8.0.7] - 2026-08-19
 

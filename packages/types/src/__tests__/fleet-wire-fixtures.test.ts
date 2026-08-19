@@ -309,6 +309,47 @@ describe('fleet wire fixtures', () => {
     });
   });
 
+  it('accepts placement-safe repo_keys and repo tags on node.register', () => {
+    expect(
+      parseFleetBrokerToRelaycastMessage({
+        v: 1,
+        type: 'node.register',
+        name: 'builder-repos',
+        node_id: 'node_repos',
+        capabilities: [],
+        max_agents: 4,
+        tags: ['darwin', 'repo:AgentWorkforce/relaycast'],
+        repo_keys: ['AgentWorkforce/relay', 'acme/.github'],
+        version: 'relay-broker/0.7.0',
+      }),
+    ).toMatchObject({
+      tags: ['darwin', 'repo:AgentWorkforce/relaycast'],
+      repo_keys: ['AgentWorkforce/relay', 'acme/.github'],
+    });
+  });
+
+  it.each([
+    { repo_keys: ['/Users/alice/relaycast'] },
+    { repo_keys: ['C:\\work\\relaycast'] },
+    { repo_keys: ['AgentWorkforce/relaycast/packages/engine'] },
+    { tags: ['repo:/srv/relaycast'] },
+    { tags: ['repo:../relaycast'] },
+  ])('rejects path-shaped repository advertisements on node.register: %j', (unsafe) => {
+    expect(() =>
+      parseFleetBrokerToRelaycastMessage({
+        v: 1,
+        type: 'node.register',
+        name: 'builder-unsafe-repos',
+        node_id: 'node_unsafe_repos',
+        capabilities: [],
+        max_agents: 4,
+        tags: ['darwin'],
+        version: 'relay-broker/0.7.0',
+        ...unsafe,
+      }),
+    ).toThrow();
+  });
+
   it('accepts broker requests with request ids', () => {
     expect(
       parseFleetBrokerToRelaycastMessage({

@@ -85,6 +85,35 @@ export const FleetProviderIdentitySchema = z
   .strict();
 export type FleetProviderIdentity = z.infer<typeof FleetProviderIdentitySchema>;
 
+/**
+ * Placement-safe repository identity. Repository advertisements are public
+ * owner/name keys, never filesystem paths or clone URLs.
+ */
+export const FleetRepoKeySchema = z
+  .string()
+  .min(3)
+  .max(201)
+  .regex(
+    /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/,
+    'repo key must use owner/name with no filesystem path or URL',
+  )
+  .refine(
+    (repoKey) => repoKey.split('/').every((segment) => segment !== '.' && segment !== '..'),
+    'repo key segments cannot be . or ..',
+  );
+export type FleetRepoKey = z.infer<typeof FleetRepoKeySchema>;
+
+export const FleetNodeTagSchema = z.string().superRefine((tag, ctx) => {
+  if (!tag.startsWith('repo:')) return;
+  const parsed = FleetRepoKeySchema.safeParse(tag.slice('repo:'.length));
+  if (!parsed.success) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'repo tag must use repo:<owner/name> with no filesystem path or URL',
+    });
+  }
+});
+
 /** Per-capability outcome reported in a `node.register` reply. */
 export const FleetCapabilityAcceptanceSchema = z
   .object({
@@ -121,7 +150,10 @@ export const FleetNodeRegisterMessageSchema = z
     capabilities: z.array(FleetCapabilitySchema),
     // Provider-level capacity; the node figure is the aggregate across providers.
     max_agents: z.number().int().nonnegative(),
-    tags: z.array(z.string()),
+    tags: z.array(FleetNodeTagSchema),
+    // Placement-safe repository identities. The engine persists these as
+    // `repo:<owner/name>` tags so existing node roster readers can consume them.
+    repo_keys: z.array(FleetRepoKeySchema).optional(),
     version: z.string(),
     machine_id: z.string().optional(),
     // Absent and null both mean a fresh node with no resume cursor.
