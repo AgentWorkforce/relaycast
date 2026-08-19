@@ -9,6 +9,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Fleet registration materializes validated `repo_keys` as `repo:<owner>/<repo>`
+  node tags for placement and roster readback. Absolute repository paths are
+  rejected and are never persisted.
+
 ## [8.0.7] - 2026-08-19
 
 ### Added

@@ -96,6 +96,26 @@ export const FleetCapabilityAcceptanceSchema = z
   .strict();
 export type FleetCapabilityAcceptance = z.infer<typeof FleetCapabilityAcceptanceSchema>;
 
+/**
+ * A placement-safe repository identifier. Repository worktree paths are local
+ * node configuration and must never cross the fleet control wire.
+ */
+export const FleetRepoKeySchema = z
+  .string()
+  .max(201)
+  .regex(
+    /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/,
+    'repo key must be an <owner>/<repo> identifier',
+  );
+export type FleetRepoKey = z.infer<typeof FleetRepoKeySchema>;
+
+// `repo:<key>` is the persisted roster representation. Validate the legacy
+// form too, so a path cannot bypass `repo_keys` through the generic tag list.
+const FleetNodeTagSchema = z.string().refine(
+  (tag) => !tag.startsWith('repo:') || FleetRepoKeySchema.safeParse(tag.slice('repo:'.length)).success,
+  'repo tags must use the placement-safe repo:<owner>/<repo> form',
+);
+
 function forbidOwnProperty(property: string) {
   return (message: object, ctx: z.RefinementCtx): void => {
     if (Object.prototype.hasOwnProperty.call(message, property)) {
@@ -121,7 +141,10 @@ export const FleetNodeRegisterMessageSchema = z
     capabilities: z.array(FleetCapabilitySchema),
     // Provider-level capacity; the node figure is the aggregate across providers.
     max_agents: z.number().int().nonnegative(),
-    tags: z.array(z.string()),
+    tags: z.array(FleetNodeTagSchema),
+    // Repository identities are placement metadata only. Local repository paths
+    // remain private to the registering node and are deliberately not accepted.
+    repo_keys: z.array(FleetRepoKeySchema).optional(),
     version: z.string(),
     machine_id: z.string().optional(),
     // Absent and null both mean a fresh node with no resume cursor.

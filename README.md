@@ -559,6 +559,9 @@ ephemeral `node.online`, `node.heartbeat`, and `node.offline` events. Each
 carries a `node` payload matching the `GET /nodes` roster entry (capabilities,
 tags, `load`, `active_agents`/`max_agents`, `handlers_live`,
 `last_heartbeat_at`), so a single event fully refreshes a node's row.
+Node registration may include placement-safe `repo_keys` in `<owner>/<repo>`
+form; Relaycast exposes those as `repo:<owner>/<repo>` tags. Repository
+worktree paths remain node-local and are rejected from the control wire.
 `load` is normalized managed-agent capacity utilization and remains `null`
 unless a direct node, or every constituent provider of a broker node,
 explicitly reports a genuine measurement;

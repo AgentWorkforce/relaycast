@@ -18,6 +18,12 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased]
 
+### Added
+
+- Fleet node registration accepts validated placement-safe `repo_keys` and
+  exposes them as canonical `repo:<owner>/<repo>` roster tags, without storing
+  node-local repository paths.
+
 ## [8.0.7] - 2026-08-19
 
 ### Added

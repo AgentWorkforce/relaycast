@@ -912,6 +912,7 @@ components:
                 type: object
         tags:
           type: array
+          description: Arbitrary node labels. Placement-safe repository identities are exposed as repo:<owner>/<repo>; node-local repository paths are never returned.
           items:
             type: string
         version:

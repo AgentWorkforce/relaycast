@@ -9,6 +9,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- `FleetNodeRegisterMessageSchema` accepts placement-safe `repo_keys` in
+  `<owner>/<repo>` form and rejects repository paths, including path-shaped
+  legacy `repo:` tags.
+
 ## [8.0.7] - 2026-08-19
 
 ### Added

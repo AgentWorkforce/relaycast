@@ -100,6 +100,20 @@ function normalizeCapabilities(capabilities: CapabilityLike[]): FleetCapability[
   ));
 }
 
+/**
+ * Store repository placement metadata in the existing tag column. New
+ * `repo_keys` are authoritative when supplied; valid legacy repo tags remain
+ * supported only for registrations that have not adopted the field yet.
+ */
+function registrationTags(message: FleetNodeRegisterMessage): string[] {
+  const nonRepoTags = message.tags.filter((tag) => !tag.startsWith('repo:'));
+  const repoKeys = message.repo_keys
+    ?? message.tags
+      .filter((tag) => tag.startsWith('repo:'))
+      .map((tag) => tag.slice('repo:'.length));
+  return [...new Set([...nonRepoTags, ...repoKeys.map((repoKey) => `repo:${repoKey}`)])];
+}
+
 function supportsProviderDeliveryReadiness(registry: NodeConnectionRegistry): boolean {
   return typeof registry.setProviderDeliveryReadiness === 'function'
     && typeof registry.markProviderAgentsDeliveryReady === 'function'
@@ -383,7 +397,7 @@ export async function registerNode(
         deliveryConfig: existing.deliveryConfig,
         maxAgents: 1,
         activeAgents: 1,
-        tags: existing.tags,
+        tags: registrationTags(message),
         version: message.version,
         status: 'online',
         handlersLive: false,
@@ -397,6 +411,7 @@ export async function registerNode(
   }
 
   const capabilities = normalizeCapabilities(message.capabilities);
+  const tags = registrationTags(message);
   await runAtomic(db, async (tx) => {
     await upsertProvider(tx, workspaceId, authenticatedNodeId, {
       name: provider.name,
@@ -409,7 +424,7 @@ export async function registerNode(
     await materializeProviderActions(tx, workspaceId, authenticatedNodeId, provider.name, capabilities);
     await tx
       .update(nodes)
-      .set({ name: message.name, kind: 'ws', role: 'broker', deliveryAdapter: 'ws.node.v1', deliveryConfig: null, tags: message.tags })
+      .set({ name: message.name, kind: 'ws', role: 'broker', deliveryAdapter: 'ws.node.v1', deliveryConfig: null, tags })
       .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, authenticatedNodeId)));
     await recomputeNodeAggregate(tx, workspaceId, authenticatedNodeId, {
       version: message.version,

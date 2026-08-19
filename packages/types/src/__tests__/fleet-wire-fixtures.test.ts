@@ -309,6 +309,39 @@ describe('fleet wire fixtures', () => {
     });
   });
 
+  it('accepts placement-safe repo keys but rejects repository paths', () => {
+    const register = {
+      v: 1,
+      type: 'node.register',
+      name: 'builder-1',
+      node_id: 'node_01J7FLEET000000000000001',
+      capabilities: [{ name: 'spawn:codex', kind: 'spawn' }],
+      max_agents: 8,
+      tags: ['darwin', 'region:eu'],
+      version: 'relay-broker/0.7.0',
+    };
+
+    expect(parseFleetBrokerToRelaycastMessage({
+      ...register,
+      repo_keys: ['AgentWorkforce/factory', 'AgentWorkforce/sandbox'],
+    })).toMatchObject({
+      repo_keys: ['AgentWorkforce/factory', 'AgentWorkforce/sandbox'],
+    });
+
+    for (const repoKey of ['/Users/worker/factory', '../factory', 'AgentWorkforce/factory/.git', 'C:\\work\\factory']) {
+      expect(() => parseFleetBrokerToRelaycastMessage({ ...register, repo_keys: [repoKey] })).toThrow();
+    }
+
+    expect(() => parseFleetBrokerToRelaycastMessage({
+      ...register,
+      tags: ['repo:/Users/worker/factory'],
+    })).toThrow();
+    expect(() => parseFleetBrokerToRelaycastMessage({
+      ...register,
+      repo_paths: { 'AgentWorkforce/factory': '/Users/worker/factory' },
+    })).toThrow();
+  });
+
   it('accepts broker requests with request ids', () => {
     expect(
       parseFleetBrokerToRelaycastMessage({

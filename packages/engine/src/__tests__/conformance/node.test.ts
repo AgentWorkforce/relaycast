@@ -504,6 +504,86 @@ describe('node adapter conformance', () => {
       return { sock, handle };
     }
 
+    it('persists placement-safe repo keys as tags across a reconnect and exposes the readback', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-repo-keys-ws');
+      const nodeId = 'node_repo_keys';
+      const name = 'repo-builder';
+      const enrolled = await stack.app.request('/v1/nodes', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+        body: JSON.stringify({ node_id: nodeId, name, max_agents: 4, tags: ['enrolled'], version: 'test-node' }),
+      });
+      expect(enrolled.status).toBe(201);
+
+      const legacySock = new FakeSocket();
+      const legacyHandle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, nodeId, legacySock);
+      await legacyHandle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'register-legacy-repo-tag',
+        type: 'node.register',
+        name,
+        node_id: nodeId,
+        capabilities: [capability('spawn:codex', 'spawn')],
+        max_agents: 4,
+        tags: ['region:eu', 'repo:AgentWorkforce/legacy'],
+        version: 'test-node',
+      }));
+      expect(legacySock.ofType('reply').at(-1)).toMatchObject({
+        data: { tags: ['region:eu', 'repo:AgentWorkforce/legacy'] },
+      });
+      await legacyHandle.handleClose();
+
+      const reconnectSock = new FakeSocket();
+      const reconnectHandle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, nodeId, reconnectSock);
+      await reconnectHandle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'register-repo-keys',
+        type: 'node.register',
+        name,
+        node_id: nodeId,
+        capabilities: [capability('spawn:codex', 'spawn')],
+        max_agents: 4,
+        // repo tags are ignored when repo_keys is present, so only the
+        // structured placement-safe input can update repository placement.
+        tags: ['region:us', 'repo:AgentWorkforce/forged'],
+        repo_keys: ['AgentWorkforce/factory'],
+        version: 'test-node',
+      }));
+      expect(reconnectSock.ofType('reply').at(-1)).toMatchObject({
+        data: { tags: ['region:us', 'repo:AgentWorkforce/factory'] },
+      });
+
+      const roster = await stack.app.request('/v1/nodes?name=repo-builder', {
+        headers: { authorization: `Bearer ${ws.workspaceKey}` },
+      });
+      expect(roster.status).toBe(200);
+      const rosterBody = await roster.json() as { data: Array<{ tags: string[] }> };
+      expect(rosterBody.data).toHaveLength(1);
+      expect(rosterBody.data[0].tags).toEqual(['region:us', 'repo:AgentWorkforce/factory']);
+
+      // Invalid paths fail schema validation before registerNode can update the
+      // persisted tags, so roster readback remains placement-safe.
+      await reconnectHandle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'register-absolute-repo-path',
+        type: 'node.register',
+        name,
+        node_id: nodeId,
+        capabilities: [capability('spawn:codex', 'spawn')],
+        max_agents: 4,
+        tags: ['region:unsafe'],
+        repo_keys: ['/Users/worker/factory'],
+        version: 'test-node',
+      }));
+      expect(reconnectSock.ofType('error').at(-1)).toMatchObject({ code: 'invalid_message' });
+
+      const afterInvalid = await stack.app.request('/v1/nodes?name=repo-builder', {
+        headers: { authorization: `Bearer ${ws.workspaceKey}` },
+      });
+      const afterInvalidBody = await afterInvalid.json() as { data: Array<{ tags: string[] }> };
+      expect(afterInvalidBody.data[0].tags).toEqual(['region:us', 'repo:AgentWorkforce/factory']);
+    });
+
     it('reports placeholder load as unavailable until a finite node explicitly marks it measured', async () => {
       const ws = await createWorkspace(stack.app, 'fleet-unreported-load-ws');
       const unbounded = await enrollAndAttachNode(ws, {
