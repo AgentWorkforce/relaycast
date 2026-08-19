@@ -77,12 +77,12 @@
         {
           "ts": 1787048182770,
           "type": "decision",
-          "content": "Place attribution migration 0039 after workspace lifecycle and session-replay migrations: Place attribution migration 0039 after workspace lifecycle and session-replay migrations",
+          "content": "Place attribution migration 0038 after workspace lifecycle migrations: Place attribution migration 0038 after workspace lifecycle migrations",
           "raw": {
-            "question": "Place attribution migration 0039 after workspace lifecycle and session-replay migrations",
-            "chosen": "Place attribution migration 0039 after workspace lifecycle and session-replay migrations",
+            "question": "Place attribution migration 0038 after workspace lifecycle migrations",
+            "chosen": "Place attribution migration 0038 after workspace lifecycle migrations",
             "alternatives": [],
-            "reasoning": "Current main owns migrations 0036 through 0038; attribution must use 0039 to preserve production migration ordering."
+            "reasoning": "Lifecycle PR #338 landed migrations 0036 and 0037 first; attribution used the next available number at implementation time. A later main collision is handled by the follow-up review repair."
           },
           "significance": "high"
         },
@@ -129,7 +129,7 @@
     "confidence": 0.65
   },
   "commits": [
-    "9cb6d5180966deafa4b268fbfbd4696f8a66d528"
+    "37d6b50bb7e19bce7f26f309ad3213d99f2e4c0d"
   ],
   "filesChanged": [
     ".agentworkforce/trajectories/completed/2026-08/traj_mihzcdhvc5ji/summary.md",
@@ -140,7 +140,7 @@
     "openapi.yaml",
     "packages/engine/CHANGELOG.md",
     "packages/engine/src/__tests__/conformance/workspaceAttribution.test.ts",
-    "packages/engine/src/db/migrations/0039_workspace_usage_attribution.sql",
+    "packages/engine/src/db/migrations/0038_workspace_usage_attribution.sql",
     "packages/engine/src/db/schema.ts",
     "packages/engine/src/engine/workspace.ts",
     "packages/engine/src/lib/workspaceProvenance.ts",
@@ -168,8 +168,8 @@
   "projectId": "AgentWorkforce/relaycast",
   "tags": [],
   "_trace": {
-    "startRef": "4e62ef43fbc38c25553d08a425abc4dde47ae706",
-    "endRef": "9cb6d5180966deafa4b268fbfbd4696f8a66d528",
+    "startRef": "879bbcd444857bfd600b29d3a552fca3017cfd71",
+    "endRef": "37d6b50bb7e19bce7f26f309ad3213d99f2e4c0d",
     "traceId": "5caa3a45-c2dc-44d5-80c9-e8eb251650be"
   }
 }

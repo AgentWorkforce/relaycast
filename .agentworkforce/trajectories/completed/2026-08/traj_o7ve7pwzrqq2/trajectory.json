@@ -93,8 +93,8 @@
     "confidence": 0.95
   },
   "commits": [
-    "c70df0d9504dd852df484ff6c42d1c361aabaeee",
-    "9cb6d5180966deafa4b268fbfbd4696f8a66d528"
+    "fe5a7ac1e8080fe8f376107fb78455321c4ad397",
+    "37d6b50bb7e19bce7f26f309ad3213d99f2e4c0d"
   ],
   "filesChanged": [
     ".agentworkforce/trajectories/completed/2026-08/traj_mihzcdhvc5ji/summary.md",
@@ -105,7 +105,7 @@
     "openapi.yaml",
     "packages/engine/CHANGELOG.md",
     "packages/engine/src/__tests__/conformance/workspaceAttribution.test.ts",
-    "packages/engine/src/db/migrations/0039_workspace_usage_attribution.sql",
+    "packages/engine/src/db/migrations/0038_workspace_usage_attribution.sql",
     "packages/engine/src/db/schema.ts",
     "packages/engine/src/engine/workspace.ts",
     "packages/engine/src/lib/workspaceProvenance.ts",
@@ -136,8 +136,8 @@
   "projectId": "AgentWorkforce/relaycast",
   "tags": [],
   "_trace": {
-    "startRef": "4e62ef43fbc38c25553d08a425abc4dde47ae706",
-    "endRef": "c70df0d9504dd852df484ff6c42d1c361aabaeee",
+    "startRef": "879bbcd444857bfd600b29d3a552fca3017cfd71",
+    "endRef": "fe5a7ac1e8080fe8f376107fb78455321c4ad397",
     "traceId": "42e3084c-cb1e-4746-a8c6-3bd7fb29fecc"
   }
 }
