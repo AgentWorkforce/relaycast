@@ -24,7 +24,7 @@ import {
   WORKSPACE_EVENT_LIST_MAX_LIMIT,
   type WorkspaceEventRecord,
 } from '../engine/workspaceEvents.js';
-import { channels } from '../db/schema.js';
+import { channels, type WorkspaceProvenanceRecord } from '../db/schema.js';
 import { and, eq, inArray } from 'drizzle-orm';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { asCodedError, errorResponse, safeErrorDiagnostics } from '../lib/httpError.js';
@@ -77,6 +77,18 @@ const workspaceEventsQuerySchema = z.object({
 
 function workspaceNotFound(c: Context<AppEnv>) {
   return jsonNotFound(c, 'workspace_not_found', 'Workspace not found');
+}
+
+function redactProvenanceForObserver(
+  provenance: WorkspaceProvenanceRecord | null,
+): WorkspaceProvenanceRecord | null {
+  if (!provenance) return null;
+  return {
+    source: provenance.source,
+    ...(provenance.origin_id ? { origin_id: provenance.origin_id } : {}),
+    classification: provenance.classification,
+    source_basis: provenance.source_basis,
+  };
 }
 
 async function deleteAuthenticatedWorkspace(c: Context<AppEnv>, expectedId?: string) {
@@ -277,7 +289,10 @@ workspaceRoutes.get(
       if (!workspace) {
         return workspaceNotFound(c);
       }
-      return jsonOk(c, workspace);
+      const observer = getObserverTokenFromContext(c);
+      return jsonOk(c, observer
+        ? { ...workspace, provenance: redactProvenanceForObserver(workspace.provenance) }
+        : workspace);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

@@ -88,7 +88,7 @@
     }
   ],
   "retrospective": {
-    "summary": "Rebased PR #339 onto main, fixed TS and Rust provenance APIs, enforced classification-source integrity in migration 0038, corrected the prior trajectory's scope and git provenance, and passed 1,584 JS/TS tests plus 92 Rust tests/doc-tests, full build, and lint.",
+    "summary": "Rebased PR #339 onto main, fixed TS and Rust provenance APIs, enforced classification-source integrity in the attribution migration, corrected the prior trajectory's scope and git provenance, and passed 1,584 JS/TS tests plus 92 Rust tests/doc-tests, full build, and lint.",
     "approach": "Standard approach",
     "confidence": 0.95
   },
@@ -105,7 +105,7 @@
     "openapi.yaml",
     "packages/engine/CHANGELOG.md",
     "packages/engine/src/__tests__/conformance/workspaceAttribution.test.ts",
-    "packages/engine/src/db/migrations/0038_workspace_usage_attribution.sql",
+    "packages/engine/src/db/migrations/0039_workspace_usage_attribution.sql",
     "packages/engine/src/db/schema.ts",
     "packages/engine/src/engine/workspace.ts",
     "packages/engine/src/lib/workspaceProvenance.ts",

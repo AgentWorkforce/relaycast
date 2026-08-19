@@ -27,6 +27,9 @@ known origin-client header where possible and otherwise records `api`. An
 explicit internal/external classification is marked `creator`; an absent or
 `unknown` classification remains `unclassified`.
 
+Workspace-key reads return the complete creation snapshot. Observer-token reads
+omit request actor, user, machine, and organization identity fields.
+
 This changes the existing workspace insert and adds **zero additional writes**
 per creation. It adds **zero writes per message**.
 
@@ -80,8 +83,8 @@ classification; the service never writes an inference as historical fact.
 ## Rollout seam
 
 1. Release the Relaycast engine/types/SDK contract.
-2. Apply D1 migration `0038_workspace_usage_attribution.sql` after the workspace
-   expiry migration from #338 and before deploying an
+2. Apply D1 migration `0039_workspace_usage_attribution.sql` after the workspace
+   lifecycle and session-replay migrations and before deploying an
    engine that writes the new columns.
 3. Deploy the hosted usage routes and bump the hosted engine package.
 4. Update high-volume creators to send precise provenance: CI run ids,

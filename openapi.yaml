@@ -150,6 +150,7 @@ components:
               $ref: '#/components/schemas/EffectiveMessageRetention'
         provenance:
           nullable: true
+          description: Creation provenance. Observer-token requests omit request actor, user, machine, and organization identity fields.
           allOf:
             - $ref: '#/components/schemas/WorkspaceProvenance'
         usage_classification:

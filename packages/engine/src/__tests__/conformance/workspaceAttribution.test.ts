@@ -106,6 +106,23 @@ describe('workspace creation attribution', () => {
     });
   });
 
+  it('rejects declared provenance that omits its required source', async () => {
+    const response = await stack.app.request('/v1/workspaces', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'missing-provenance-source',
+        provenance: { classification: 'internal' },
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'invalid_request' },
+    });
+  });
+
   it('requires classification provenance at the database boundary', async () => {
     const response = await stack.app.request('/v1/workspaces', {
       method: 'POST',

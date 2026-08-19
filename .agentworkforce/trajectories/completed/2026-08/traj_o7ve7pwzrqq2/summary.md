@@ -10,7 +10,7 @@
 
 ## Summary
 
-Rebased PR #339 onto main, fixed TS and Rust provenance APIs, enforced classification-source integrity in migration 0038, corrected the prior trajectory's scope and git provenance, and passed 1,584 JS/TS tests plus 92 Rust tests/doc-tests, full build, and lint.
+Rebased PR #339 onto main, fixed TS and Rust provenance APIs, enforced classification-source integrity in the attribution migration, corrected the prior trajectory's scope and git provenance, and passed 1,584 JS/TS tests plus 92 Rust tests/doc-tests, full build, and lint.
 
 **Approach:** Standard approach
 

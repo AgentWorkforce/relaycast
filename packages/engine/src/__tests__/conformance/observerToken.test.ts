@@ -1033,4 +1033,60 @@ describe('observer tokens', () => {
     });
     expect(asAgent.status).toBe(401);
   });
+
+  it('redacts request identity from workspace provenance returned to observer tokens', async () => {
+    const createdResponse = await stack.app.request('/v1/workspaces', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-relaycast-origin-actor': 'agent-relay-cli/cli',
+        'x-agent-relay-user-id': 'usr_private',
+        'x-agent-relay-machine-id': 'machine_private',
+        'x-agent-relay-org-id': 'org_private',
+        'x-agent-relay-org-slug': 'private-org',
+      },
+      body: JSON.stringify({
+        name: 'observer-provenance-redaction',
+        provenance: {
+          source: 'ci',
+          origin_id: 'github:AgentWorkforce/relaycast/actions/runs/456',
+          classification: 'internal',
+        },
+      }),
+    });
+    expect(createdResponse.status).toBe(201);
+    const created = await createdResponse.json() as {
+      data: { api_key: string; workspace_id: string };
+    };
+
+    const asKey = await stack.app.request('/v1/workspace', {
+      headers: { authorization: `Bearer ${created.data.api_key}` },
+    });
+    const asKeyBody = await asKey.json() as { data: { provenance: Record<string, unknown> } };
+    expect(asKeyBody.data.provenance).toMatchObject({
+      origin_actor: 'agent-relay-cli/cli',
+      actor_user_id: 'usr_private',
+      actor_machine_id: 'machine_private',
+      actor_org_id: 'org_private',
+      actor_org_slug: 'private-org',
+    });
+
+    const observer = await createObserverToken(stack, created.data.api_key, {
+      name: 'provenance-reader',
+      scopes: ['agents:read'],
+    });
+    const asObserver = await stack.app.request('/v1/workspace', {
+      headers: { authorization: `Bearer ${observer.data.token}` },
+    });
+    expect(asObserver.status).toBe(200);
+    const asObserverBody = await asObserver.json() as {
+      data: { provenance: Record<string, unknown> };
+    };
+    expect(asObserverBody.data.provenance).toEqual({
+      source: 'ci',
+      origin_id: 'github:AgentWorkforce/relaycast/actions/runs/456',
+      classification: 'internal',
+      source_basis: 'declared',
+    });
+  });
 });

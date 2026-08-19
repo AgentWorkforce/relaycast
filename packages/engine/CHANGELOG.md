@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- Migration `0038` records workspace creation provenance and usage classification; authenticated workspace metadata returns the recorded attribution fields.
+- Migration `0039` records workspace creation provenance and usage classification; workspace-key metadata returns the complete attribution record while observer tokens receive identity-redacted provenance.
 
 ## [8.0.7] - 2026-08-19
 
