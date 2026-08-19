@@ -44,7 +44,7 @@ describe('fleet node repository advertisements', () => {
       node_id: 'node_repos',
       capabilities: [],
       max_agents: 4,
-      tags: ['linux', 'cwd:/Users/build', 'repo:acme/legacy'],
+      tags: ['linux', 'cwd:/Users/build', 'repo:relay', 'repo:acme/legacy'],
       repo_keys: ['AgentWorkforce/relaycast', 'acme/legacy'],
       version: 'test-node',
       resume_cursor: null,
@@ -56,6 +56,7 @@ describe('fleet node repository advertisements', () => {
         tags: [
           'linux',
           'cwd:/Users/build',
+          'repo:relay',
           'repo:acme/legacy',
           'repo:AgentWorkforce/relaycast',
         ],
@@ -65,6 +66,7 @@ describe('fleet node repository advertisements', () => {
       tags: [
         'linux',
         'cwd:/Users/build',
+        'repo:relay',
         'repo:acme/legacy',
         'repo:AgentWorkforce/relaycast',
       ],

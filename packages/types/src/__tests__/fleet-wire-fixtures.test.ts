@@ -318,22 +318,46 @@ describe('fleet wire fixtures', () => {
         node_id: 'node_repos',
         capabilities: [],
         max_agents: 4,
-        tags: ['darwin', 'repo:AgentWorkforce/relaycast'],
+        tags: ['darwin', 'repo:relay', 'repo:AgentWorkforce/relaycast'],
         repo_keys: ['AgentWorkforce/relay', 'acme/.github'],
         version: 'relay-broker/0.7.0',
       }),
     ).toMatchObject({
-      tags: ['darwin', 'repo:AgentWorkforce/relaycast'],
+      tags: ['darwin', 'repo:relay', 'repo:AgentWorkforce/relaycast'],
       repo_keys: ['AgentWorkforce/relay', 'acme/.github'],
     });
   });
 
   it.each([
+    { repo_keys: [''] },
+    { repo_keys: ['relaycast'] },
     { repo_keys: ['/Users/alice/relaycast'] },
+    { repo_keys: ['C:/work/relaycast'] },
     { repo_keys: ['C:\\work\\relaycast'] },
+    { repo_keys: ['\\\\server\\share'] },
+    { repo_keys: ['AgentWorkforce\\relaycast'] },
+    { repo_keys: ['AgentWorkforce:relaycast'] },
+    { repo_keys: ['Agent Workforce/relaycast'] },
+    { repo_keys: ['AgentWorkforce/relay cast'] },
+    { repo_keys: ['./relaycast'] },
+    { repo_keys: ['../relaycast'] },
+    { repo_keys: ['AgentWorkforce/.'] },
+    { repo_keys: ['AgentWorkforce/..'] },
+    { repo_keys: ['AgentWorkforce//relaycast'] },
     { repo_keys: ['AgentWorkforce/relaycast/packages/engine'] },
+    { repo_keys: ['https://github.com/AgentWorkforce/relaycast'] },
+    { tags: ['repo:'] },
     { tags: ['repo:/srv/relaycast'] },
+    { tags: ['repo:C:/work/relaycast'] },
+    { tags: ['repo:C:\\work\\relaycast'] },
+    { tags: ['repo:\\\\server\\share'] },
+    { tags: ['repo:AgentWorkforce\\relaycast'] },
+    { tags: ['repo:AgentWorkforce:relaycast'] },
+    { tags: ['repo:Agent Workforce/relaycast'] },
+    { tags: ['repo:.'] },
+    { tags: ['repo:..'] },
     { tags: ['repo:../relaycast'] },
+    { tags: ['repo:AgentWorkforce/relaycast/packages/engine'] },
   ])('rejects path-shaped repository advertisements on node.register: %j', (unsafe) => {
     expect(() =>
       parseFleetBrokerToRelaycastMessage({

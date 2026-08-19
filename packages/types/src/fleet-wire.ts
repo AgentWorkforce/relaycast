@@ -103,13 +103,29 @@ export const FleetRepoKeySchema = z
   );
 export type FleetRepoKey = z.infer<typeof FleetRepoKeySchema>;
 
+// Pre-repo_keys clients advertise either a single repository name or an
+// owner/name key in tags. Keep that safe legacy shape without widening the new
+// repo_keys field beyond its canonical owner/name contract.
+const FleetLegacyRepoTagValueSchema = z
+  .string()
+  .min(1)
+  .max(201)
+  .regex(
+    /^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)?$/,
+    'legacy repo tag must use name or owner/name with no filesystem path or URL',
+  )
+  .refine(
+    (repoKey) => repoKey.split('/').every((segment) => segment !== '.' && segment !== '..'),
+    'legacy repo tag segments cannot be . or ..',
+  );
+
 export const FleetNodeTagSchema = z.string().superRefine((tag, ctx) => {
   if (!tag.startsWith('repo:')) return;
-  const parsed = FleetRepoKeySchema.safeParse(tag.slice('repo:'.length));
+  const parsed = FleetLegacyRepoTagValueSchema.safeParse(tag.slice('repo:'.length));
   if (!parsed.success) {
     ctx.addIssue({
       code: 'custom',
-      message: 'repo tag must use repo:<owner/name> with no filesystem path or URL',
+      message: 'repo tag must use repo:<name> or repo:<owner/name> with no filesystem path or URL',
     });
   }
 });
