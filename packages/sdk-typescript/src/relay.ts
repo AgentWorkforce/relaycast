@@ -37,6 +37,7 @@ import type {
   MessageReactedEvent,
   MessageUpdatedEvent,
   MessageWithMeta,
+  SessionMessagesResult,
   ReactionGroup,
   SpawnAgentRequest,
   SpawnAgentResponse,
@@ -112,7 +113,13 @@ import type {
   WsPermanentlyDisconnectedEvent,
   WsResyncedEvent,
 } from './types.js';
-import { ApiResponseSchema, CreateWorkspaceResponseSchema, WorkspaceLookupSchema } from '@relaycast/types';
+import {
+  ApiResponseSchema,
+  CreateWorkspaceResponseSchema,
+  SessionMessagesResultSchema,
+  WorkspaceLookupSchema,
+} from '@relaycast/types';
+import { ZodError } from 'zod';
 import { AgentClient, type AgentClientOptions } from './agent.js';
 import { HttpClient, type RetryPolicyInput } from './client.js';
 import { WsClient, type WsClientOptions, withInternalWsOrigin } from './ws.js';
@@ -678,6 +685,40 @@ export class RelayCast {
     },
     reactions: (id: string): Promise<ReactionGroup[]> =>
       this.client.get(`/v1/messages/${encodeURIComponent(id)}/reactions`),
+    bySessionRef: async (
+      sessionRef: string,
+      opts?: { limit?: number; after?: string },
+    ): Promise<SessionMessagesResult> => {
+      const query: Record<string, string> = {};
+      if (opts?.limit != null) query.limit = String(opts.limit);
+      if (opts?.after) query.after = opts.after;
+      try {
+        return await this.client.get<SessionMessagesResult>(
+          `/v1/sessions/${encodeURIComponent(sessionRef)}/messages`,
+          query,
+          { schema: SessionMessagesResultSchema },
+        );
+      } catch (error) {
+        // Replay availability is fail-closed: transport/auth/server failures
+        // are unknown, never evidence that the session is retained.
+        return {
+          sessionRef,
+          availability: 'unknown',
+          reason: error instanceof ZodError ? 'response_invalid' : 'query_failed',
+          retention: {
+            policy: 'unknown',
+            messageTtlDays: null,
+            retainedSince: null,
+            source: 'unknown',
+            reason: 'boundary_unavailable',
+          },
+          sessionStartedAt: null,
+          sessionLastMessageAt: null,
+          messages: [],
+          page: { nextCursor: null, hasMore: false },
+        };
+      }
+    },
   };
 
   agents = {

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { EffectiveMessageRetentionSchema } from './message.js';
 
 export const WorkspaceSchema = z.object({
   id: z.string(),
@@ -7,6 +8,9 @@ export const WorkspaceSchema = z.object({
   plan: z.enum(['free', 'pro', 'enterprise']),
   created_at: z.string(),
   metadata: z.record(z.string(), z.unknown()),
+  effective_retention: z.object({
+    messages: EffectiveMessageRetentionSchema,
+  }).optional(),
   expires_at: z.string().nullable().optional(),
 });
 export type Workspace = z.infer<typeof WorkspaceSchema>;

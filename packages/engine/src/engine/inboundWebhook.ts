@@ -8,6 +8,7 @@ import { inboundWebhookMessageMetadata, sanitizeUserMessageMetadata } from './me
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { buildChannelDeliveryWrite, fetchChannelDeliveryOutcomes } from './deliveryWrites.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
+import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 
 type Db = ReturnType<typeof getDb>;
 const WEBHOOK_AGENT_NAME = '__relay_webhook__';
@@ -187,28 +188,50 @@ export async function triggerWebhook(
   if (!webhook.createdBy) {
     throw codedError('Webhook has no associated agent and cannot post messages', 'webhook_no_agent', 422);
   }
+  const postingAgentId = webhook.createdBy;
 
   // Create message in the bound channel using the webhook creator's identity
   const messageId = generateId();
-  const [message] = await db
-    .insert(messages)
-    .values({
-      id: messageId,
-      workspaceId: webhook.workspaceId,
-      channelId: webhook.channelId,
-      agentId: webhook.createdBy,
-      body: text,
-      metadata: {
-        ...inboundWebhookMessageMetadata({
-          webhookId: webhook.id,
-          webhookName: webhook.name,
-          source: data.source ?? null,
-          author,
-        }),
-        ...sanitizeUserMessageMetadata(data.payload),
-      },
-    })
-    .returning();
+  const metadata = {
+    ...inboundWebhookMessageMetadata({
+      webhookId: webhook.id,
+      webhookName: webhook.name,
+      source: data.source ?? null,
+      author,
+    }),
+    ...sanitizeUserMessageMetadata(data.payload),
+  };
+  // Legacy tokenless hooks accept arbitrary public payloads. Preserve their
+  // metadata, but do not let an unauthenticated session_ref allocate a durable
+  // replay-ledger row. Token-protected hooks may opt into replay correlation.
+  const sessionRef = webhook.tokenHash ? requireSessionRefFromMetadata(metadata) : null;
+  const createdAt = new Date();
+  const results = await runAtomicWrites(db, (writeDb) => {
+    const writes: AtomicWrite[] = [
+      writeDb
+        .insert(messages)
+        .values({
+          id: messageId,
+          workspaceId: webhook.workspaceId,
+          channelId: webhook.channelId,
+          agentId: postingAgentId,
+          body: text,
+          metadata,
+          sessionRef,
+          createdAt,
+        })
+        .returning(),
+    ];
+    const sessionWrite = buildMessageSessionWrite(
+      writeDb,
+      webhook.workspaceId,
+      sessionRef,
+      createdAt,
+    );
+    if (sessionWrite) writes.push(sessionWrite);
+    return writes;
+  });
+  const [message] = results[0] as (typeof messages.$inferSelect)[];
 
   // Get channel name
   const [channel] = await db
@@ -259,6 +282,8 @@ export async function triggerIntegrationMessage(
     }),
     ...sanitizeUserMessageMetadata(data.payload),
   };
+  const sessionRef = requireSessionRefFromMetadata(metadata);
+  const createdAt = new Date();
 
   const mailbox = options.mailbox ?? {
     ttlMs: DEFAULT_MAILBOX_TTL_MS,
@@ -280,9 +305,19 @@ export async function triggerIntegrationMessage(
           agentId: postingAgentId,
           body: data.text,
           metadata,
+          sessionRef,
+          createdAt,
         })
         .returning(),
     ];
+
+    const sessionWrite = buildMessageSessionWrite(
+      writeDb,
+      workspaceId,
+      sessionRef,
+      createdAt,
+    );
+    if (sessionWrite) writes.push(sessionWrite);
 
     writes.push(
       buildChannelDeliveryWrite(writeDb, {

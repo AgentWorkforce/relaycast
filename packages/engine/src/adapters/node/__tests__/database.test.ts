@@ -170,3 +170,108 @@ describe('action invocation provider migration', () => {
     ]);
   });
 });
+
+describe('session_ref lookup migration', () => {
+  it('backfills the indexed key and durable payload-free session ledger', () => {
+    const sqlite = new Database(':memory:');
+    handles.push(sqlite);
+    sqlite.exec(`
+      PRAGMA foreign_keys = ON;
+      CREATE TABLE workspaces (id TEXT PRIMARY KEY);
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        metadata TEXT DEFAULT '{}',
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE webhooks (
+        id TEXT PRIMARY KEY,
+        token_hash TEXT
+      );
+      INSERT INTO workspaces (id) VALUES ('ws_1');
+      INSERT INTO webhooks (id, token_hash) VALUES
+        ('hook_open', NULL),
+        ('hook_protected', 'hashed-secret');
+      INSERT INTO messages (id, workspace_id, metadata, created_at) VALUES
+        ('100', 'ws_1', '{"session_ref":"session-1"}', 10),
+        ('200', 'ws_1', '{"session_ref":"session-1"}', 20),
+        ('300', 'ws_1', '{"session_ref":42}', 30),
+        ('400', 'ws_1', '{}', 40),
+        ('500', 'ws_1', '{"session_ref":"emoji-😀"}', 50),
+        ('600', 'ws_1', '{"session_ref":"untrusted","__relaycast_origin":"inbound_webhook","__relaycast_webhook_id":"hook_open"}', 60),
+        ('700', 'ws_1', '{"session_ref":"trusted","__relaycast_origin":"inbound_webhook","__relaycast_webhook_id":"hook_protected"}', 70),
+        ('750', 'ws_1', '{"session_ref":"relayfile-session","__relaycast_origin":"inbound_webhook","__relaycast_webhook_id":"relayfile:slack"}', 75);
+    `);
+    sqlite.prepare(
+      'INSERT INTO messages (id, workspace_id, metadata, created_at) VALUES (?, ?, ?, ?)',
+    ).run('800', 'ws_1', JSON.stringify({ session_ref: '😀'.repeat(256) }), 80);
+
+    const migration = readFileSync(
+      new URL('../../../db/migrations/0038_session_ref_lookup.sql', import.meta.url),
+      'utf8',
+    );
+    sqlite.exec(migration);
+
+    expect(sqlite.prepare(`
+      SELECT id, session_ref
+      FROM messages
+      ORDER BY id
+    `).all()).toEqual([
+      { id: '100', session_ref: 'session-1' },
+      { id: '200', session_ref: 'session-1' },
+      { id: '300', session_ref: null },
+      { id: '400', session_ref: null },
+      { id: '500', session_ref: 'emoji-😀' },
+      { id: '600', session_ref: null },
+      { id: '700', session_ref: 'trusted' },
+      { id: '750', session_ref: 'relayfile-session' },
+      { id: '800', session_ref: null },
+    ]);
+    expect(sqlite.prepare(`
+      SELECT workspace_id, session_ref, first_message_at, last_message_at, start_is_known
+      FROM message_sessions
+      ORDER BY session_ref
+    `).all()).toEqual([
+      {
+        workspace_id: 'ws_1',
+        session_ref: 'emoji-😀',
+        first_message_at: 50,
+        last_message_at: 50,
+        start_is_known: 0,
+      },
+      {
+        workspace_id: 'ws_1',
+        session_ref: 'relayfile-session',
+        first_message_at: 75,
+        last_message_at: 75,
+        start_is_known: 0,
+      },
+      {
+        workspace_id: 'ws_1',
+        session_ref: 'session-1',
+        first_message_at: 10,
+        last_message_at: 20,
+        start_is_known: 0,
+      },
+      {
+        workspace_id: 'ws_1',
+        session_ref: 'trusted',
+        first_message_at: 70,
+        last_message_at: 70,
+        start_is_known: 0,
+      },
+    ]);
+
+    const indexedPlan = sqlite.prepare(`
+      EXPLAIN QUERY PLAN
+      SELECT id
+      FROM messages
+      WHERE workspace_id = ? AND session_ref = ?
+      ORDER BY length(id), id
+      LIMIT 10
+    `).all('ws_1', 'session-1') as Array<{ detail: string }>;
+    expect(indexedPlan.map((row) => row.detail).join('\n')).toContain(
+      'idx_messages_workspace_session',
+    );
+  });
+});

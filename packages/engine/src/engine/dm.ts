@@ -22,6 +22,7 @@ import {
 } from './deliveryWrites.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
 import { codedError } from '../lib/httpError.js';
+import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 import { fetchAttachmentsBatch, resolveSendAttachments, type AttachmentRow } from './attachments.js';
 import { publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
 import { queryInChunks } from '../lib/queryChunks.js';
@@ -258,6 +259,14 @@ function buildDmMessageWrites(
   messageId: string,
 ): AtomicWrite[] {
   const hasAttachments = attachments.length > 0;
+  const metadata = {
+    // Keep the server-owned delivery mode after caller metadata so a
+    // federated peer cannot override how the local runtime is injected.
+    ...sanitizeUserMessageMetadata(data.data),
+    injection_mode: data.mode ?? 'wait',
+  };
+  const sessionRef = requireSessionRefFromMetadata(metadata);
+  const createdAt = new Date();
   const writes: AtomicWrite[] = [
     db
       .insert(messages)
@@ -268,15 +277,20 @@ function buildDmMessageWrites(
         agentId: fromAgentId,
         body: data.text,
         hasAttachments,
-        metadata: {
-          // Keep the server-owned delivery mode after caller metadata so a
-          // federated peer cannot override how the local runtime is injected.
-          ...sanitizeUserMessageMetadata(data.data),
-          injection_mode: data.mode ?? 'wait',
-        },
+        metadata,
+        sessionRef,
+        createdAt,
       })
       .returning(),
   ];
+
+  const sessionWrite = buildMessageSessionWrite(
+    db,
+    workspaceId,
+    sessionRef,
+    createdAt,
+  );
+  if (sessionWrite) writes.push(sessionWrite);
 
   if (attachments.length > 0) {
     const attachmentValues = attachments.map((attachment, idx) => ({

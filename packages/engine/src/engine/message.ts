@@ -12,6 +12,7 @@ import {
 import { displayAgentName, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
 import { fetchAttachmentsBatch, resolveSendAttachments, type AttachmentRow } from './attachments.js';
+import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -41,6 +42,8 @@ export async function postMessage(
   }
 
   const metadata = sanitizeUserMessageMetadata(data.data);
+  const sessionRef = requireSessionRefFromMetadata(metadata);
+  const createdAt = new Date();
 
   const mailbox = options.mailbox ?? {
     ttlMs: DEFAULT_MAILBOX_TTL_MS,
@@ -68,10 +71,20 @@ export async function postMessage(
           body: data.text,
           blocks: data.blocks || null,
           metadata,
+          sessionRef,
           hasAttachments,
+          createdAt,
         })
         .returning(),
     ];
+
+    const sessionWrite = buildMessageSessionWrite(
+      writeDb,
+      workspaceId,
+      sessionRef,
+      createdAt,
+    );
+    if (sessionWrite) writes.push(sessionWrite);
 
     if (attachments.length > 0) {
       const attachmentValues = attachments.map((attachment, idx) => ({

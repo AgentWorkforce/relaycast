@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
 import { agents } from '../db/schema.js';
 import type { AppEnv } from '../env.js';
-import { requireSender, requireWorkspaceRead } from '../middleware/auth.js';
+import { requireSender, requireWorkspaceKey, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as messageEngine from '../engine/message.js';
@@ -30,8 +30,14 @@ import {
   jsonNotFound,
   jsonOk,
   parseJsonBody,
+  parseQueryParams,
 } from '../lib/httpResponse.js';
-import { parsePaginationQuery } from '../lib/httpQuery.js';
+import { parsePaginationQuery, positiveIntQueryParam } from '../lib/httpQuery.js';
+import {
+  getMessagesBySessionRef,
+  SessionRefSchema,
+  SESSION_MESSAGE_MAX_LIMIT,
+} from '../engine/sessionMessages.js';
 
 export const messageRoutes = new Hono<AppEnv>();
 
@@ -45,6 +51,11 @@ const postMessageSchema = z.object({
   // Node-token posts attribute the message to `from` — an agent name resolved
   // strictly within the node token's workspace. Agent-token posts must omit it.
   from: z.string().min(1).optional(),
+});
+
+const sessionMessagesQuerySchema = z.object({
+  limit: positiveIntQueryParam({ max: SESSION_MESSAGE_MAX_LIMIT }),
+  after: z.string().regex(/^(0|[1-9]\d*)$/, 'after must be a message id').optional(),
 });
 
 type ValidationFailure = { error: { issues: Array<{ path: PropertyKey[] }> } };
@@ -215,6 +226,41 @@ messageRoutes.post(
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
+  },
+);
+
+// GET /v1/sessions/:session_ref/messages - bounded, indexed replay slice.
+// A full workspace key is required because one session can span channels and
+// DMs; scoped observer-token filters cannot safely authorize that aggregate.
+messageRoutes.get(
+  '/sessions/:session_ref/messages',
+  requireWorkspaceKey,
+  rateLimit,
+  async (c) => {
+    const parsedSessionRef = SessionRefSchema.safeParse(c.req.param('session_ref'));
+    if (!parsedSessionRef.success) {
+      return jsonError(
+        c,
+        'invalid_session_ref',
+        parsedSessionRef.error.issues[0]?.message ?? 'invalid session_ref',
+        400,
+      );
+    }
+    const sessionRef = parsedSessionRef.data;
+    const query = parseQueryParams(c, sessionMessagesQuerySchema, 'Invalid session message query');
+    if (!query.ok) return query.response;
+
+    const result = await getMessagesBySessionRef(
+      c.get('db'),
+      c.get('workspace').id,
+      sessionRef,
+      {
+        limit: query.data.limit,
+        after: query.data.after,
+        deploymentMessageTtlDays: c.get('engine').config.retention?.messageTtlDays,
+      },
+    );
+    return jsonOk(c, result);
   },
 );
 

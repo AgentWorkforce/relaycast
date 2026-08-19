@@ -1,0 +1,139 @@
+{
+  "id": "traj_why9mgo0xmjk",
+  "version": 1,
+  "task": {
+    "title": "Add indexed session_ref replay lookup and effective retention boundary",
+    "source": {
+      "system": "plain",
+      "id": "relay#1522"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-08-18T21:01:04.829Z",
+  "completedAt": "2026-08-18T21:39:49.896Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-08-18T21:22:16.875Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_pl0fc81ow5k9",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-08-18T21:22:16.875Z",
+      "endedAt": "2026-08-18T21:39:49.896Z",
+      "events": [
+        {
+          "ts": 1787088136879,
+          "type": "decision",
+          "content": "Use an indexed message column plus a payload-free session ledger: Use an indexed message column plus a payload-free session ledger",
+          "raw": {
+            "question": "Use an indexed message column plus a payload-free session ledger",
+            "chosen": "Use an indexed message column plus a payload-free session ledger",
+            "alternatives": [],
+            "reasoning": "An index over retained messages makes lookup bounded, while the ledger survives payload pruning so aged-out sessions remain distinguishable from unknown or never-observed references."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1787088137207,
+          "type": "decision",
+          "content": "Return partial and unknown as explicit non-replayable states: Return partial and unknown as explicit non-replayable states",
+          "raw": {
+            "question": "Return partial and unknown as explicit non-replayable states",
+            "chosen": "Return partial and unknown as explicit non-replayable states",
+            "alternatives": [],
+            "reasoning": "A session can cross a live retention boundary, and missing boundary/query evidence cannot safely imply full replay coverage."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1787089120801,
+          "type": "reflection",
+          "content": "Indexed lookup and durable aged-out evidence are integrated across message writers; full engine and MCP suites exposed and closed group-DM reconnect metadata parity plus workspace ownership coverage.",
+          "raw": {
+            "focalPoints": [
+              "retention-boundary",
+              "metadata-parity",
+              "indexed-query"
+            ],
+            "adjustments": "Moved the endpoint to an unambiguous sessions resource and added broker replay metadata reconstruction.",
+            "confidence": 0.9
+          },
+          "significance": "high",
+          "tags": [
+            "focal:retention-boundary",
+            "focal:metadata-parity",
+            "focal:indexed-query",
+            "confidence:0.9"
+          ]
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Added bounded indexed session_ref replay lookup, payload-free aged-out evidence, live per-workspace retention boundaries, fail-closed SDK resolution, and metadata preservation across send and redelivery paths.",
+    "approach": "Standard approach",
+    "confidence": 0.93
+  },
+  "commits": [
+    "412fff7",
+    "09a4fc0",
+    "5dcc88b",
+    "80c8447"
+  ],
+  "filesChanged": [
+    ".agentworkforce/trajectories/completed/2026-08/traj_why9mgo0xmjk/summary.md",
+    ".agentworkforce/trajectories/completed/2026-08/traj_why9mgo0xmjk/trajectory.json",
+    "CHANGELOG.md",
+    "README.md",
+    "openapi.yaml",
+    "packages/engine/CHANGELOG.md",
+    "packages/engine/src/__tests__/conformance/delivery.test.ts",
+    "packages/engine/src/__tests__/conformance/sessionMessages.test.ts",
+    "packages/engine/src/__tests__/conformance/workspaceLifecycle.test.ts",
+    "packages/engine/src/adapters/node/__tests__/database.test.ts",
+    "packages/engine/src/adapters/node/__tests__/event-queue.test.ts",
+    "packages/engine/src/adapters/node/index.ts",
+    "packages/engine/src/db/migrations/0038_session_ref_lookup.sql",
+    "packages/engine/src/db/schema.ts",
+    "packages/engine/src/engine/delivery.ts",
+    "packages/engine/src/engine/dm.ts",
+    "packages/engine/src/engine/groupDm.ts",
+    "packages/engine/src/engine/__tests__/inboundWebhook.test.ts",
+    "packages/engine/src/engine/inboundWebhook.ts",
+    "packages/engine/src/engine/message.ts",
+    "packages/engine/src/engine/messageMetadata.ts",
+    "packages/engine/src/engine/retention.ts",
+    "packages/engine/src/engine/sessionMessages.ts",
+    "packages/engine/src/engine/thread.ts",
+    "packages/engine/src/engine/workspace.ts",
+    "packages/engine/src/index.ts",
+    "packages/engine/src/middleware/idempotency.ts",
+    "packages/engine/src/ports/index.ts",
+    "packages/engine/src/routes/groupDm.ts",
+    "packages/engine/src/routes/message.ts",
+    "packages/engine/src/routes/workspace.ts",
+    "packages/mcp/src/__tests__/messaging-tools.test.ts",
+    "packages/mcp/src/tools/messaging.ts",
+    "packages/sdk-typescript/CHANGELOG.md",
+    "packages/sdk-typescript/src/__tests__/agent-messaging.test.ts",
+    "packages/sdk-typescript/src/__tests__/relay.test.ts",
+    "packages/sdk-typescript/src/agent.ts",
+    "packages/sdk-typescript/src/relay.ts",
+    "packages/sdk-typescript/src/types.ts",
+    "packages/types/CHANGELOG.md",
+    "packages/types/src/__tests__/types.test.ts",
+    "packages/types/src/message.ts",
+    "packages/types/src/workspace.ts"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "4e62ef43fbc38c25553d08a425abc4dde47ae706",
+    "endRef": "80c8447ab2f42ad9c49d1ccc20f36361738d9d23"
+  }
+}

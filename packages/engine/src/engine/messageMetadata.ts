@@ -11,6 +11,25 @@ export function sanitizeUserMessageMetadata(
   );
 }
 
+function canonicalJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalJsonValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+        .map(([key, nested]) => [key, canonicalJsonValue(nested)]),
+    );
+  }
+  return value;
+}
+
+/** Stable digest input for the exact public metadata persisted on a message. */
+export function canonicalUserMessageMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+): string {
+  return JSON.stringify(canonicalJsonValue(sanitizeUserMessageMetadata(metadata)));
+}
+
 export function publicMessageMetadata(
   metadata: Record<string, unknown> | null | undefined,
 ): Record<string, unknown> {

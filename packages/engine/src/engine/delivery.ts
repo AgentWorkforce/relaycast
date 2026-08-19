@@ -570,6 +570,7 @@ function buildRoutableDeliveryEvent(
           text: row.body,
           injection_mode: injectionMode,
           attachments,
+          metadata: publicMessageMetadata(row.metadata as Record<string, unknown> | null),
         },
         created_at: row.createdAt.toISOString(),
         id: row.delivery.messageId,
@@ -577,6 +578,7 @@ function buildRoutableDeliveryEvent(
         text: row.body,
         injection_mode: injectionMode,
         attachments,
+        metadata: publicMessageMetadata(row.metadata as Record<string, unknown> | null),
       }, { fromName: senderName }),
     };
   }

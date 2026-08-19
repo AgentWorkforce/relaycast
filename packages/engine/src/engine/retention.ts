@@ -1,5 +1,6 @@
 import { and, eq, inArray, isNotNull, isNull, lt, notInArray, sql, type SQL } from 'drizzle-orm';
 import type { SQLiteColumn } from 'drizzle-orm/sqlite-core';
+import type { EffectiveMessageRetention } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import {
   deliveries,
@@ -72,6 +73,81 @@ export interface PruneResult {
 }
 
 /**
+ * Resolve the live message-retention boundary for one workspace.
+ *
+ * An omitted deployment default is deliberately `unknown`, not never-prune:
+ * hosted adapters may prune outside the engine process, and claiming unlimited
+ * coverage from absent configuration is the replay workstream's named failure
+ * mode. The Node adapter always supplies its actual default explicitly.
+ */
+export async function resolveEffectiveMessageRetention(
+  db: Db,
+  workspaceId: string,
+  deploymentMessageTtlDays: number | null | undefined,
+  now: Date = new Date(),
+): Promise<EffectiveMessageRetention> {
+  const [workspace] = await db
+    .select({ retention: workspaces.retention })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId));
+
+  if (!workspace) {
+    return {
+      policy: 'unknown',
+      message_ttl_days: null,
+      retained_since: null,
+      source: 'unknown',
+      reason: 'workspace_unknown',
+    };
+  }
+
+  const workspaceTtl = workspace.retention?.message_ttl_days;
+  const source = workspaceTtl === undefined
+    ? 'deployment_default' as const
+    : 'workspace_override' as const;
+  const ttlDays = workspaceTtl === undefined ? deploymentMessageTtlDays : workspaceTtl;
+
+  if (ttlDays === undefined) {
+    return {
+      policy: 'unknown',
+      message_ttl_days: null,
+      retained_since: null,
+      source: 'unknown',
+      reason: 'boundary_unavailable',
+    };
+  }
+
+  if (
+    ttlDays !== null
+    && (!Number.isFinite(ttlDays) || (ttlDays > 0 && !Number.isFinite(now.getTime())))
+  ) {
+    return {
+      policy: 'unknown',
+      message_ttl_days: null,
+      retained_since: null,
+      source: 'unknown',
+      reason: 'boundary_unavailable',
+    };
+  }
+
+  if (ttlDays === null || ttlDays <= 0) {
+    return {
+      policy: 'never_prune',
+      message_ttl_days: null,
+      retained_since: null,
+      source,
+    };
+  }
+
+  return {
+    policy: 'window',
+    message_ttl_days: ttlDays,
+    retained_since: new Date(now.getTime() - ttlDays * DAY_MS).toISOString(),
+    source,
+  };
+}
+
+/**
  * `column < snowflakeIdLowerBound(cutoff)` compared numerically.
  *
  * Snowflake IDs are stored as decimal TEXT without leading zeros, and their
@@ -83,6 +159,17 @@ export interface PruneResult {
 function olderThanSnowflake(column: SQLiteColumn, cutoffMs: number): SQL {
   const bound = snowflakeIdLowerBound(cutoffMs);
   return sql`(length(${column}) < ${bound.length} OR (length(${column}) = ${bound.length} AND ${column} < ${bound}))`;
+}
+
+/** Numeric `column >= snowflakeIdLowerBound(cutoff)` for decimal TEXT ids. */
+export function atOrAfterSnowflake(column: SQLiteColumn, cutoffMs: number): SQL {
+  const bound = snowflakeIdLowerBound(cutoffMs);
+  return sql`(length(${column}), ${column}) >= (${bound.length}, ${bound})`;
+}
+
+/** Numeric `column > cursor` for decimal TEXT snowflake ids. */
+export function afterSnowflake(column: SQLiteColumn, cursor: string): SQL {
+  return sql`(length(${column}), ${column}) > (${cursor.length}, ${cursor})`;
 }
 
 interface PrunePass {

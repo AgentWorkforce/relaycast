@@ -33,6 +33,8 @@ interface RunIdempotentOptions<T> {
   key?: string;
   status?: number;
   fingerprint?: string;
+  /** Prior fingerprint formats accepted only when replaying an existing record. */
+  compatibleFingerprints?: string[];
   ttlSeconds?: number;
   kv?: KeyValueStore;
   requireKv?: boolean;
@@ -43,6 +45,14 @@ interface RunIdempotentOptions<T> {
    * by a later idempotent replay.
    */
   afterOperation?: (data: T) => Promise<void>;
+}
+
+function fingerprintMatches(
+  stored: string | undefined,
+  current: string | undefined,
+  compatible: string[],
+): boolean {
+  return !stored || !current || stored === current || compatible.includes(stored);
 }
 
 function idempotencyUnavailableError(cause?: unknown): Error {
@@ -115,6 +125,7 @@ export async function runIdempotent<T>(
     scope,
     key,
     fingerprint,
+    compatibleFingerprints = [],
     operation,
     afterOperation,
     status = 201,
@@ -151,7 +162,7 @@ export async function runIdempotent<T>(
       const existingRaw = await kvStore.get(kvKey);
       if (existingRaw) {
         const parsed = JSON.parse(existingRaw) as StoredIdempotencyRecord<T>;
-        if (fingerprint && parsed.fingerprint && parsed.fingerprint !== fingerprint) {
+        if (!fingerprintMatches(parsed.fingerprint, fingerprint, compatibleFingerprints)) {
           const err = new Error('Idempotency-Key was reused with a different request payload');
           Object.assign(err, { code: 'idempotency_key_reused', status: 409 });
           throw err;
@@ -172,7 +183,7 @@ export async function runIdempotent<T>(
         const concurrentRaw = await kvStore.get(kvKey);
         if (concurrentRaw) {
           const parsed = JSON.parse(concurrentRaw) as StoredIdempotencyRecord<T>;
-          if (fingerprint && parsed.fingerprint && parsed.fingerprint !== fingerprint) {
+          if (!fingerprintMatches(parsed.fingerprint, fingerprint, compatibleFingerprints)) {
             const err = new Error('Idempotency-Key was reused with a different request payload');
             Object.assign(err, { code: 'idempotency_key_reused', status: 409 });
             throw err;
@@ -199,7 +210,7 @@ export async function runIdempotent<T>(
       if (recheckRaw) {
         await kvStore.delete(lockKey);
         const parsed = JSON.parse(recheckRaw) as StoredIdempotencyRecord<T>;
-        if (fingerprint && parsed.fingerprint && parsed.fingerprint !== fingerprint) {
+        if (!fingerprintMatches(parsed.fingerprint, fingerprint, compatibleFingerprints)) {
           const err = new Error('Idempotency-Key was reused with a different request payload');
           Object.assign(err, { code: 'idempotency_key_reused', status: 409 });
           throw err;

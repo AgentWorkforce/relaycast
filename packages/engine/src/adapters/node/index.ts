@@ -145,6 +145,18 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
   const auth = options.auth ?? new SqliteApiKeyAuthProvider();
   const entitlements = options.entitlements ?? new StaticEntitlementsProvider(kv);
 
+  // An explicit host-provided boundary is authoritative (the host may prune
+  // outside this process). Otherwise report the same fallback the local Node
+  // pruner uses; omitted/disabled message TTL is explicitly never-prune.
+  const retentionOptions = options.eventQueue?.retention;
+  const messageTtlDays = retentionOptions === false
+    ? null
+    : retentionOptions?.defaults?.messageTtlDays ?? null;
+  const config: EngineConfig = {
+    ...options.config,
+    retention: options.config?.retention ?? { messageTtlDays },
+  };
+
   const deps: EngineDeps = {
     db,
     realtime,
@@ -158,7 +170,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
     auth,
     entitlements,
     telemetry,
-    config: options.config ?? {},
+    config,
   };
 
   realtime.setNodeCompletionDeps(deps);

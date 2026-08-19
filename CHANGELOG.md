@@ -16,7 +16,15 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Replay clients can resolve indexed `session_ref` message slices with a live per-workspace retention boundary and fail-closed retained, partial, aged-out, or unknown availability.
+
+### Fixed
+
+- Channel, thread, and group-DM clients now forward replay metadata, and group-DM redelivery preserves it across broker reconnects.
 
 ## [8.0.6] - 2026-08-18
 

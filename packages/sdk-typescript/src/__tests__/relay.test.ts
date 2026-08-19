@@ -67,6 +67,100 @@ describe('RelayCast', () => {
     expect(() => new RelayCast({} as any)).toThrow('RelayCast apiKey is required');
   });
 
+  it('must-fire: reports a failed session query as unknown, never retained', async () => {
+    const { RelayCast } = await import('../relay.js');
+    const relay = new RelayCast({
+      apiKey: 'rk_live_test123',
+      retryPolicy: { maxRetries: 0 },
+    });
+    mockFetch.mockImplementation(() => mockResponse(
+      { code: 'internal_error', message: 'query failed' },
+      false,
+      503,
+    ));
+
+    const result = await relay.messages.bySessionRef('session-1');
+
+    expect(result.availability).toBe('unknown');
+    expect(result.availability).not.toBe('retained');
+    expect(result.messages).toEqual([]);
+  });
+
+  it('must-fire: treats retained availability with an unknown boundary as unknown', async () => {
+    const { RelayCast } = await import('../relay.js');
+    const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+    mockFetch.mockImplementation(() => mockResponse({
+      session_ref: 'session-1',
+      availability: 'retained',
+      retention: {
+        policy: 'unknown',
+        message_ttl_days: null,
+        retained_since: null,
+        source: 'unknown',
+        reason: 'boundary_unavailable',
+      },
+      session_started_at: '2026-08-18T00:00:00.000Z',
+      session_last_message_at: '2026-08-18T00:01:00.000Z',
+      messages: [],
+      page: { next_cursor: null, has_more: false },
+    }));
+
+    const result = await relay.messages.bySessionRef('session-1');
+
+    expect(result.availability).toBe('unknown');
+    expect(result.availability).not.toBe('retained');
+    expect(result.reason).toBe('response_invalid');
+  });
+
+  it('must-not-fire: resolves a retained session with bounded cursor options', async () => {
+    const { RelayCast } = await import('../relay.js');
+    const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+    mockFetch.mockImplementation(() => mockResponse({
+      session_ref: 'session/one',
+      availability: 'retained',
+      retention: {
+        policy: 'window',
+        message_ttl_days: 30,
+        retained_since: '2026-07-19T00:00:00.000Z',
+        source: 'workspace_override',
+      },
+      session_started_at: '2026-08-18T00:00:00.000Z',
+      session_last_message_at: '2026-08-18T00:01:00.000Z',
+      messages: [{
+        id: '2',
+        channel_id: '1',
+        channel_name: 'general',
+        conversation_id: null,
+        agent_id: '3',
+        agent_name: 'writer',
+        thread_id: null,
+        text: 'hello',
+        blocks: null,
+        metadata: { session_ref: 'session/one' },
+        has_attachments: false,
+        created_at: '2026-08-18T00:00:00.000Z',
+      }],
+      page: { next_cursor: null, has_more: false },
+    }));
+
+    const result = await relay.messages.bySessionRef('session/one', {
+      limit: 10,
+      after: '1',
+    });
+
+    const requested = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    expect(requested.pathname).toBe('/v1/sessions/session%2Fone/messages');
+    expect(requested.searchParams.get('limit')).toBe('10');
+    expect(requested.searchParams.get('after')).toBe('1');
+    expect(result).toMatchObject({
+      sessionRef: 'session/one',
+      availability: 'retained',
+      retention: { messageTtlDays: 30, retainedSince: expect.any(String) },
+      messages: [{ channelId: '1', metadata: { session_ref: 'session/one' } }],
+      page: { nextCursor: null, hasMore: false },
+    });
+  });
+
   describe('workspace realtime', () => {
     it('connect() opens /v1/ws with an observer token and SDK origin metadata', async () => {
       const { RelayCast } = await import('../relay.js');

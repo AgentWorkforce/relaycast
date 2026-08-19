@@ -246,8 +246,8 @@ workspaceRoutes.get('/workspaces/by-name/:name', publicWorkspaceLookupRateLimit,
   }
 });
 
-// GET /workspace - get current workspace metadata (id/name/plan/system_prompt/
-// created_at/metadata only, nothing sensitive) — accepts an observer token
+// GET /workspace - get current workspace metadata plus the live effective
+// message-retention boundary (no payload or raw retention config) — accepts an observer token
 // (any scope; this endpoint predates per-scope enforcement and there's no
 // narrower scope that fits "read workspace metadata") in addition to a
 // workspace key, so `selectEngineForKey`-style credential probes succeed for
@@ -260,7 +260,11 @@ workspaceRoutes.get(
   async (c) => {
     try {
       const db = c.get('db');
-      const workspace = await workspaceEngine.getWorkspace(db, c.get('workspace').id);
+      const workspace = await workspaceEngine.getWorkspace(
+        db,
+        c.get('workspace').id,
+        c.get('engine').config.retention?.messageTtlDays,
+      );
       if (!workspace) {
         return workspaceNotFound(c);
       }
@@ -369,7 +373,12 @@ workspaceRoutes.patch('/workspace', requireWorkspaceKey, rateLimit, async (c) =>
       return parsed.response;
     }
     const body = parsed.data;
-    const updated = await workspaceEngine.updateWorkspace(db, workspace.id, body);
+    const updated = await workspaceEngine.updateWorkspace(
+      db,
+      workspace.id,
+      body,
+      c.get('engine').config.retention?.messageTtlDays,
+    );
     if (!updated) {
       return workspaceNotFound(c);
     }
