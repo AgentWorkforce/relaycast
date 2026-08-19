@@ -4,6 +4,7 @@ import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/
 import { workspaceEvents, workspaces } from '../../db/schema.js';
 import {
   appendAndPublishWorkspaceEvent,
+  appendWorkspaceEventBatch,
   appendWorkspaceEvents,
   appendWorkspaceEvent,
   listWorkspaceEvents,
@@ -83,6 +84,20 @@ describe('appendWorkspaceEvent', () => {
       .where(eq(workspaceEvents.workspaceId, 'ws_a'));
     expect(rows).toHaveLength(66);
     expect(new Set(rows.map((row) => row.seq)).size).toBe(66);
+  });
+
+  it('assigns independent sequences when one batch spans workspaces', async () => {
+    const { db } = track(openDb());
+    await appendWorkspaceEvent(db, 'ws_a', { type: 'seed', payload: { n: 0 } });
+
+    const seqs = await appendWorkspaceEventBatch(db, [
+      { workspaceId: 'ws_a', input: { type: 't', payload: { n: 1 } } },
+      { workspaceId: 'ws_b', input: { type: 't', payload: { n: 2 } } },
+      { workspaceId: 'ws_a', input: { type: 't', payload: { n: 3 } } },
+      { workspaceId: 'ws_b', input: { type: 't', payload: { n: 4 } } },
+    ]);
+
+    expect(seqs).toEqual([2, 1, 3, 2]);
   });
 });
 

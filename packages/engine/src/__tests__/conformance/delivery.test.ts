@@ -2238,6 +2238,63 @@ describe('durable delivery api', () => {
       .filter((event) => event.data && (event.data as Record<string, unknown>).reason === 'ttl_expired')).toHaveLength(121);
   });
 
+  it("flushes a committed batch's failure notices before a later expiry batch fails", async () => {
+    const { ws, alice, bob, messageId } = await seed();
+    const { sock: aliceSock } = await attachDirectNodeSocket(stack, ws.workspaceId, alice);
+    const [seedMessage] = await stack.runtime.deps.db
+      .select({ channelId: messages.channelId })
+      .from(messages)
+      .where(eq(messages.id, messageId));
+    const expiredAt = new Date(Date.now() - 60_000);
+
+    await stack.runtime.deps.db.insert(messages).values(Array.from({ length: 50 }, (_, index) => ({
+      id: `expiry-failure-message-${index}`,
+      workspaceId: ws.workspaceId,
+      channelId: seedMessage.channelId,
+      agentId: alice.agentId,
+      body: `expired before later failure ${index}`,
+    })));
+    await stack.runtime.deps.db.insert(deliveries).values(Array.from({ length: 50 }, (_, index) => ({
+      id: `expiry-failure-delivery-${index}`,
+      workspaceId: ws.workspaceId,
+      messageId: `expiry-failure-message-${index}`,
+      agentId: bob.agentId,
+      status: 'queued',
+      seq: index + 2,
+      expiresAt: expiredAt,
+    })));
+    await stack.runtime.deps.db
+      .update(deliveries)
+      .set({ expiresAt: expiredAt })
+      .where(eq(deliveries.messageId, messageId));
+
+    const sqlite = stack.runtime.handle.sqlite;
+    const prepare = sqlite.prepare.bind(sqlite);
+    let expiryUpdates = 0;
+    sqlite.prepare = ((source: string) => {
+      if (source.startsWith('update "deliveries"') && source.includes('"dead_lettered_at"')) {
+        expiryUpdates++;
+        if (expiryUpdates === 2) throw new Error('simulated later expiry batch failure');
+      }
+      return prepare(source);
+    }) as typeof sqlite.prepare;
+
+    await expect(sweepExpiredDeliveries(stack.runtime.deps, { maxBatches: 2 }))
+      .rejects.toThrow('simulated later expiry batch failure');
+
+    const deadLettered = await stack.runtime.deps.db
+      .select({ id: deliveries.id })
+      .from(deliveries)
+      .where(eq(deliveries.status, 'dead_lettered'));
+    expect(deadLettered).toHaveLength(50);
+    await waitForAssertion(() => {
+      const notices = contextUpdatesOfType(aliceSock, 'delivery.failed')
+        .filter((event) => event.data && (event.data as Record<string, unknown>).reason === 'ttl_expired');
+      expect(notices).toHaveLength(50);
+      expect(new Set(notices.map((event) => (event.data as Record<string, unknown>).delivery_id)).size).toBe(50);
+    });
+  });
+
   it('keeps inbox and delivery reads available when scheduled expiry fails', async () => {
     const { ws, bob, messageId } = await seed();
     await stack.runtime.deps.db

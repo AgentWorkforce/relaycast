@@ -14,7 +14,7 @@ import { transformForClient, type WsEvent } from '../engine/wsTransform.js';
 import { isProviderAgentDeliveryReady, type EngineDb, type EngineDeps } from '../ports/index.js';
 import { fanoutToAgents } from './fanout.js';
 import { sendNodeContextEventsToAgents, sendNodeContextToAgents } from '../engine/nodeContext.js';
-import { appendAndPublishWorkspaceEvent, appendAndPublishWorkspaceEvents } from '../engine/workspaceEvents.js';
+import { appendAndPublishWorkspaceEvent, appendAndPublishWorkspaceEventBatch } from '../engine/workspaceEvents.js';
 type HonoContext = Context<AppEnv>;
 type RoutingEngine = EngineRuntime | EngineDeps;
 type RoutingContext = {
@@ -627,12 +627,13 @@ export async function sweepDueNodeDeliveries(
  */
 export const sweepDueHttpPushDeliveries = sweepDueNodeDeliveries;
 
-async function notifyDeliveryFailuresForContext(
-  ctx: RoutingContext,
+async function notifyDeliveryFailures(
+  engine: EngineDeps,
   notices: deliveryEngine.DeliveryFailureNotice[],
 ): Promise<void> {
   if (notices.length === 0) return;
   const notifications = notices.map((notice) => ({
+    workspaceId: notice.workspace_id,
     agentId: notice.sender_agent_id,
     data: {
       delivery_id: notice.delivery_id,
@@ -646,26 +647,28 @@ async function notifyDeliveryFailuresForContext(
     },
   }));
   const inputs = notifications.map((notification) => {
-    const payload = transformForClient(buildEvent('delivery.failed', ctx.workspaceId, notification.data));
-    return { type: 'delivery.failed', payload };
+    const payload = transformForClient(buildEvent('delivery.failed', notification.workspaceId, notification.data));
+    return {
+      workspaceId: notification.workspaceId,
+      input: { type: 'delivery.failed', payload },
+    };
   });
 
   await Promise.allSettled([
-    appendAndPublishWorkspaceEvents(
-      { db: ctx.db, realtime: ctx.engine.realtime },
-      ctx.workspaceId,
+    appendAndPublishWorkspaceEventBatch(
+      { db: engine.db, realtime: engine.realtime },
       inputs,
     ),
     sendNodeContextEventsToAgents(
       {
-        db: ctx.db,
-        nodeConnections: ctx.engine.nodeConnections,
-        realtime: ctx.engine.realtime,
-        workspaceId: ctx.workspaceId,
-        environment: ctx.engine.config?.environment,
-        httpPushProxy: ctx.engine.config?.httpPushProxy,
+        db: engine.db,
+        nodeConnections: engine.nodeConnections,
+        realtime: engine.realtime,
+        environment: engine.config?.environment,
+        httpPushProxy: engine.config?.httpPushProxy,
       },
       notifications.map((notification) => ({
+        workspaceId: notification.workspaceId,
         agentId: notification.agentId,
         event: 'delivery.failed',
         data: notification.data,
@@ -689,25 +692,14 @@ export async function sweepExpiredDeliveries(
     DELIVERY_EXPIRY_MAX_BATCHES,
   );
   let expiredCount = 0;
-  const notices: deliveryEngine.DeliveryFailureNotice[] = [];
   for (let batchNumber = 0; batchNumber < maxBatches; batchNumber++) {
     const batch = await deliveryEngine.expireDueDeliveryBatch(engine.db, opts.workspaceId, now);
     expiredCount += batch.expiredCount;
-    notices.push(...batch.notices);
+    // Flush every committed batch before another state transition can fail.
+    // Otherwise a later D1 error would strand already-dead-lettered rows with
+    // notices held only in this invocation's memory.
+    await notifyDeliveryFailures(engine, batch.notices);
     if (batch.expiredCount < deliveryEngine.DELIVERY_EXPIRY_BATCH_SIZE) break;
-  }
-
-  const byWorkspace = new Map<string, deliveryEngine.DeliveryFailureNotice[]>();
-  for (const notice of notices) {
-    const workspaceNotices = byWorkspace.get(notice.workspace_id) ?? [];
-    workspaceNotices.push(notice);
-    byWorkspace.set(notice.workspace_id, workspaceNotices);
-  }
-  for (const [workspaceId, workspaceNotices] of byWorkspace) {
-    await notifyDeliveryFailuresForContext(
-      { db: engine.db, workspaceId, engine },
-      workspaceNotices,
-    );
   }
   return expiredCount;
 }

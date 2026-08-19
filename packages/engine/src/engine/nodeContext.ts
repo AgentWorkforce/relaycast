@@ -1,4 +1,4 @@
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, or } from 'drizzle-orm';
 import type { EngineDb } from '../ports/database.js';
 import type { NodeConnectionRegistry, RealtimeBus } from '../ports/realtime.js';
 import { agents, agentNodeBindings, channelMembers, nodes } from '../db/schema.js';
@@ -34,6 +34,9 @@ const CONTEXT_NODE_KINDS = ['ws', 'fleet_ws', 'direct_ws', 'http_push'] as const
 // workspace/status/kind predicates add six bindings, so 80 agent ids leave
 // comfortable room below D1's 100-bound-parameter limit.
 const AGENT_CONTEXT_QUERY_CHUNK_SIZE = 80;
+// A cross-workspace target can bind both workspace and agent id. Forty worst-
+// case one-agent workspaces plus the status/kind predicates use 85 bindings.
+const AGENT_CONTEXT_EVENT_QUERY_CHUNK_SIZE = 40;
 
 function normalizeDeliveryAdapter(adapter: string | null | undefined, nodeKind: string | null | undefined): string | null {
   if (adapter === 'fleet.ws.v1' || adapter === 'direct.ws.v1') return 'ws.node.v1';
@@ -292,27 +295,73 @@ export async function sendNodeContextToAgents(
  * existing best-effort behavior without multiplying D1 reads by event count.
  */
 export async function sendNodeContextEventsToAgents(
-  deps: NodeContextDeps,
+  deps: Omit<NodeContextDeps, 'workspaceId'>,
   events: ReadonlyArray<{
+    workspaceId: string;
     agentId: string;
     event: string;
     data: Record<string, unknown>;
   }>,
 ): Promise<void> {
-  const agentIds = [...new Set(events.map((event) => event.agentId))]
-    .filter((id) => id.length > 0);
-  if (agentIds.length === 0) return;
+  const targets = [...new Map(events
+    .filter((event) => event.workspaceId.length > 0 && event.agentId.length > 0)
+    .map((event) => [
+      JSON.stringify([event.workspaceId, event.agentId]),
+      { workspaceId: event.workspaceId, agentId: event.agentId },
+    ])).values()];
+  if (targets.length === 0) return;
 
-  const rows = await listNodeContextRowsForAgents(deps, agentIds);
-  const rowsByAgent = new Map<string, ScopedNodeRow[]>();
-  for (const row of rows) {
-    const agentRows = rowsByAgent.get(row.agentId) ?? [];
-    agentRows.push(row);
-    rowsByAgent.set(row.agentId, agentRows);
+  const rowsByTarget = new Map<string, ScopedNodeRow[]>();
+  for (let offset = 0; offset < targets.length; offset += AGENT_CONTEXT_EVENT_QUERY_CHUNK_SIZE) {
+    const chunk = targets.slice(offset, offset + AGENT_CONTEXT_EVENT_QUERY_CHUNK_SIZE);
+    const agentsByWorkspace = new Map<string, string[]>();
+    for (const target of chunk) {
+      const agentIds = agentsByWorkspace.get(target.workspaceId) ?? [];
+      agentIds.push(target.agentId);
+      agentsByWorkspace.set(target.workspaceId, agentIds);
+    }
+    const scopes = [...agentsByWorkspace].map(([workspaceId, agentIds]) => and(
+      eq(agentNodeBindings.workspaceId, workspaceId),
+      inArray(agentNodeBindings.agentId, agentIds),
+    ));
+    const rows = await deps.db
+      .select({
+        workspaceId: agentNodeBindings.workspaceId,
+        nodeId: agentNodeBindings.nodeId,
+        agentId: agentNodeBindings.agentId,
+        nodeKind: nodes.kind,
+        nodeRole: nodes.role,
+        providerName: agents.providerName,
+        deliveryAdapter: nodes.deliveryAdapter,
+        deliveryConfig: nodes.deliveryConfig,
+      })
+      .from(agentNodeBindings)
+      .innerJoin(agents, and(
+        eq(agents.workspaceId, agentNodeBindings.workspaceId),
+        eq(agents.id, agentNodeBindings.agentId),
+        eq(agents.locationType, 'via_node'),
+        eq(agents.locationNodeId, agentNodeBindings.nodeId),
+      ))
+      .innerJoin(nodes, and(
+        eq(nodes.workspaceId, agentNodeBindings.workspaceId),
+        eq(nodes.id, agentNodeBindings.nodeId),
+      ))
+      .where(and(
+        eq(agentNodeBindings.status, 'active'),
+        inArray(nodes.kind, CONTEXT_NODE_KINDS),
+        or(...scopes),
+      ));
+    for (const row of rows) {
+      const key = JSON.stringify([row.workspaceId, row.agentId]);
+      const targetRows = rowsByTarget.get(key) ?? [];
+      targetRows.push(row);
+      rowsByTarget.set(key, targetRows);
+    }
   }
 
   for (const event of events) {
-    await sendContextToRows(deps, rowsByAgent.get(event.agentId) ?? [], {
+    const key = JSON.stringify([event.workspaceId, event.agentId]);
+    await sendContextToRows({ ...deps, workspaceId: event.workspaceId }, rowsByTarget.get(key) ?? [], {
       topic: 'agent',
       event: event.event,
       data: event.data,
