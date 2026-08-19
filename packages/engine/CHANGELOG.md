@@ -13,6 +13,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Fleet registration persists placement-safe repository keys as public node tags for placement readback.
 
+### Security
+
+- Registration derives `repo:` node tags only from `repo_keys`. A registration carrying the field, including an empty list, drops every `repo:` tag supplied in `tags`, so a node cannot advertise a repository it did not vouch for. Non-`repo:` tags still round-trip, and registrations that omit `repo_keys` keep the pre-`repo_keys` tag-only behavior.
+
 ## [8.0.7] - 2026-08-19
 
 ### Added

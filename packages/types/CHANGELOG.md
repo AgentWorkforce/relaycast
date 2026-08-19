@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `node.register` accepts placement-safe `repo_keys` and rejects path-shaped repository keys and tags.
+- `node.register` accepts placement-safe `repo_keys` and rejects path-shaped repository keys and tags. Keys are `owner/name` only; filesystem paths, UNC shares, clone URLs, and `.`/`..` segments are refused.
 
 ## [8.0.7] - 2026-08-19
 

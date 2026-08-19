@@ -22,6 +22,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Fleet nodes can advertise placement-safe `owner/name` repository keys without exposing local checkout paths.
 
+### Security
+
+- A node can no longer claim a repository it has no checkout of. When `node.register` carries `repo_keys`, that field is the only source of the `repo:<owner/name>` tags placement matches on, and any `repo:` tag supplied in `tags` is dropped.
+
 ## [8.0.7] - 2026-08-19
 
 ### Added

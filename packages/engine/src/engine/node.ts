@@ -100,10 +100,24 @@ function normalizeCapabilities(capabilities: CapabilityLike[]): FleetCapability[
   ));
 }
 
+const REPO_TAG_PREFIX = 'repo:';
+
+function isRepoTag(tag: string): boolean {
+  return tag.startsWith(REPO_TAG_PREFIX);
+}
+
+// Placement matches a node to an assignment by its `repo:<owner/name>` tag, so
+// a node that can inject its own `repo:` tag can claim work for repositories it
+// has no checkout of. Structured `repo_keys` is therefore the only source of
+// repo advertisements: once a registration carries the field at all - even as an
+// empty list - every caller-supplied `repo:` tag is dropped rather than merged.
+// Registrations that omit the field entirely are pre-`repo_keys` clients and
+// stay on the legacy tag-only path. Non-repo tags always round-trip.
 function registrationTags(message: FleetNodeRegisterMessage): string[] {
+  if (!message.repo_keys) return [...new Set(message.tags)];
   return [...new Set([
-    ...message.tags,
-    ...(message.repo_keys ?? []).map((repoKey) => `repo:${repoKey}`),
+    ...message.tags.filter((tag) => !isRepoTag(tag)),
+    ...message.repo_keys.map((repoKey) => `repo:${repoKey}`),
   ])];
 }
 
@@ -384,7 +398,7 @@ export async function registerNode(
     // Direct-node registration historically preserved enrollment tags. Keep
     // those non-repo tags while refreshing only the node's repo advertisement.
     const directTags = [...new Set([
-      ...existing.tags.filter((tag) => !tag.startsWith('repo:')),
+      ...existing.tags.filter((tag) => !isRepoTag(tag)),
       ...tags,
     ])];
     const [updated] = await db
