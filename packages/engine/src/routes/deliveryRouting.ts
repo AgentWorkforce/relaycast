@@ -13,8 +13,8 @@ import { isSafeExternalUrl } from '../lib/ssrf.js';
 import { transformForClient, type WsEvent } from '../engine/wsTransform.js';
 import { isProviderAgentDeliveryReady, type EngineDb, type EngineDeps } from '../ports/index.js';
 import { fanoutToAgents } from './fanout.js';
-import { sendNodeContextToAgents } from '../engine/nodeContext.js';
-import { appendAndPublishWorkspaceEvent } from '../engine/workspaceEvents.js';
+import { sendNodeContextEventsToAgents, sendNodeContextToAgents } from '../engine/nodeContext.js';
+import { appendAndPublishWorkspaceEvent, appendAndPublishWorkspaceEvents } from '../engine/workspaceEvents.js';
 type HonoContext = Context<AppEnv>;
 type RoutingEngine = EngineRuntime | EngineDeps;
 type RoutingContext = {
@@ -34,6 +34,10 @@ type DeliveryTarget = {
 };
 
 const DISPATCH_RETRY_DELAY_MS = 30_000;
+// Fifty 50-row statements expire at most 2,500 deliveries per invocation.
+// On a */5 schedule that is 720,000/day: above the measured 519,000/day peak
+// while each UPDATE remains well below D1's 100-bound-parameter ceiling.
+export const DELIVERY_EXPIRY_MAX_BATCHES = 50;
 
 function routingContextFromHono(c: HonoContext, workspaceIdOverride?: string): RoutingContext {
   const workspaceId = workspaceIdOverride ?? c.get('workspace')?.id;
@@ -627,8 +631,10 @@ async function notifyDeliveryFailuresForContext(
   ctx: RoutingContext,
   notices: deliveryEngine.DeliveryFailureNotice[],
 ): Promise<void> {
-  for (const notice of notices) {
-    await fanoutToAgentsForContext(ctx, [notice.sender_agent_id], 'delivery.failed', {
+  if (notices.length === 0) return;
+  const notifications = notices.map((notice) => ({
+    agentId: notice.sender_agent_id,
+    data: {
       delivery_id: notice.delivery_id,
       message_id: notice.message_id,
       target_agent_id: notice.target_agent_id,
@@ -637,21 +643,60 @@ async function notifyDeliveryFailuresForContext(
       reason: notice.reason,
       error: notice.error,
       retryable: notice.retryable,
-    });
-  }
+    },
+  }));
+  const inputs = notifications.map((notification) => {
+    const payload = transformForClient(buildEvent('delivery.failed', ctx.workspaceId, notification.data));
+    return { type: 'delivery.failed', payload };
+  });
+
+  await Promise.allSettled([
+    appendAndPublishWorkspaceEvents(
+      { db: ctx.db, realtime: ctx.engine.realtime },
+      ctx.workspaceId,
+      inputs,
+    ),
+    sendNodeContextEventsToAgents(
+      {
+        db: ctx.db,
+        nodeConnections: ctx.engine.nodeConnections,
+        realtime: ctx.engine.realtime,
+        workspaceId: ctx.workspaceId,
+        environment: ctx.engine.config?.environment,
+        httpPushProxy: ctx.engine.config?.httpPushProxy,
+      },
+      notifications.map((notification) => ({
+        agentId: notification.agentId,
+        event: 'delivery.failed',
+        data: notification.data,
+      })),
+    ),
+  ]);
 }
 
 /**
- * Scheduled TTL expiry maintenance. Each workspace advances by at most one
- * D1-safe delivery batch per invocation; adapters call this on a cadence rather
- * than coupling mailbox reads to cleanup work.
+ * Scheduled TTL expiry maintenance. One invocation advances through a bounded
+ * number of small D1-safe statements, then batches the best-effort failure
+ * fanout so increasing the drain rate does not multiply D1 reads per notice.
  */
 export async function sweepExpiredDeliveries(
   engine: EngineDeps,
-  opts: { workspaceId?: string; now?: Date } = {},
+  opts: { workspaceId?: string; now?: Date; maxBatches?: number } = {},
 ): Promise<number> {
   const now = opts.now ?? new Date();
-  const notices = await deliveryEngine.expireDueDeliveries(engine.db, opts.workspaceId, now);
+  const maxBatches = Math.min(
+    Math.max(Math.floor(opts.maxBatches ?? DELIVERY_EXPIRY_MAX_BATCHES), 1),
+    DELIVERY_EXPIRY_MAX_BATCHES,
+  );
+  let expiredCount = 0;
+  const notices: deliveryEngine.DeliveryFailureNotice[] = [];
+  for (let batchNumber = 0; batchNumber < maxBatches; batchNumber++) {
+    const batch = await deliveryEngine.expireDueDeliveryBatch(engine.db, opts.workspaceId, now);
+    expiredCount += batch.expiredCount;
+    notices.push(...batch.notices);
+    if (batch.expiredCount < deliveryEngine.DELIVERY_EXPIRY_BATCH_SIZE) break;
+  }
+
   const byWorkspace = new Map<string, deliveryEngine.DeliveryFailureNotice[]>();
   for (const notice of notices) {
     const workspaceNotices = byWorkspace.get(notice.workspace_id) ?? [];
@@ -664,7 +709,7 @@ export async function sweepExpiredDeliveries(
       workspaceNotices,
     );
   }
-  return notices.length;
+  return expiredCount;
 }
 
 export async function notifyDeliveryRejections(

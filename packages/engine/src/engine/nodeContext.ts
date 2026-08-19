@@ -31,6 +31,9 @@ type ScopedNodeRow = {
 // Node kinds eligible for context updates: WebSocket nodes receive a pushed
 // `context.update` frame; http_push nodes receive a best-effort POST.
 const CONTEXT_NODE_KINDS = ['ws', 'fleet_ws', 'direct_ws', 'http_push'] as const;
+// workspace/status/kind predicates add six bindings, so 80 agent ids leave
+// comfortable room below D1's 100-bound-parameter limit.
+const AGENT_CONTEXT_QUERY_CHUNK_SIZE = 80;
 
 function normalizeDeliveryAdapter(adapter: string | null | undefined, nodeKind: string | null | undefined): string | null {
   if (adapter === 'fleet.ws.v1' || adapter === 'direct.ws.v1') return 'ws.node.v1';
@@ -225,6 +228,44 @@ export async function sendNodePresenceContext(
   });
 }
 
+async function listNodeContextRowsForAgents(
+  deps: NodeContextDeps,
+  agentIds: readonly string[],
+): Promise<ScopedNodeRow[]> {
+  const rows: ScopedNodeRow[] = [];
+  for (let offset = 0; offset < agentIds.length; offset += AGENT_CONTEXT_QUERY_CHUNK_SIZE) {
+    const chunk = agentIds.slice(offset, offset + AGENT_CONTEXT_QUERY_CHUNK_SIZE);
+    rows.push(...await deps.db
+      .select({
+        nodeId: agentNodeBindings.nodeId,
+        agentId: agentNodeBindings.agentId,
+        nodeKind: nodes.kind,
+        nodeRole: nodes.role,
+        providerName: agents.providerName,
+        deliveryAdapter: nodes.deliveryAdapter,
+        deliveryConfig: nodes.deliveryConfig,
+      })
+      .from(agentNodeBindings)
+      .innerJoin(agents, and(
+        eq(agents.workspaceId, deps.workspaceId),
+        eq(agents.id, agentNodeBindings.agentId),
+        eq(agents.locationType, 'via_node'),
+        eq(agents.locationNodeId, agentNodeBindings.nodeId),
+      ))
+      .innerJoin(nodes, and(
+        eq(nodes.workspaceId, deps.workspaceId),
+        eq(nodes.id, agentNodeBindings.nodeId),
+      ))
+      .where(and(
+        eq(agentNodeBindings.workspaceId, deps.workspaceId),
+        eq(agentNodeBindings.status, 'active'),
+        inArray(agentNodeBindings.agentId, chunk),
+        inArray(nodes.kind, CONTEXT_NODE_KINDS),
+      )));
+  }
+  return rows;
+}
+
 export async function sendNodeContextToAgents(
   deps: NodeContextDeps,
   args: {
@@ -236,37 +277,45 @@ export async function sendNodeContextToAgents(
   const uniqueAgentIds = [...new Set(args.agentIds)].filter((id) => id.length > 0);
   if (uniqueAgentIds.length === 0) return;
 
-  const rows = await deps.db
-    .select({
-      nodeId: agentNodeBindings.nodeId,
-      agentId: agentNodeBindings.agentId,
-      nodeKind: nodes.kind,
-      nodeRole: nodes.role,
-      providerName: agents.providerName,
-      deliveryAdapter: nodes.deliveryAdapter,
-      deliveryConfig: nodes.deliveryConfig,
-    })
-    .from(agentNodeBindings)
-    .innerJoin(agents, and(
-      eq(agents.workspaceId, deps.workspaceId),
-      eq(agents.id, agentNodeBindings.agentId),
-      eq(agents.locationType, 'via_node'),
-      eq(agents.locationNodeId, agentNodeBindings.nodeId),
-    ))
-    .innerJoin(nodes, and(
-      eq(nodes.workspaceId, deps.workspaceId),
-      eq(nodes.id, agentNodeBindings.nodeId),
-    ))
-    .where(and(
-      eq(agentNodeBindings.workspaceId, deps.workspaceId),
-      eq(agentNodeBindings.status, 'active'),
-      inArray(agentNodeBindings.agentId, uniqueAgentIds),
-      inArray(nodes.kind, CONTEXT_NODE_KINDS),
-    ));
+  const rows = await listNodeContextRowsForAgents(deps, uniqueAgentIds);
 
   await sendContextToRows(deps, rows, {
     topic: 'agent',
     event: args.event,
     data: args.data,
   });
+}
+
+/**
+ * Send many agent-scoped context events after resolving all target bindings in
+ * bounded queries. External sends remain serialized per event, preserving the
+ * existing best-effort behavior without multiplying D1 reads by event count.
+ */
+export async function sendNodeContextEventsToAgents(
+  deps: NodeContextDeps,
+  events: ReadonlyArray<{
+    agentId: string;
+    event: string;
+    data: Record<string, unknown>;
+  }>,
+): Promise<void> {
+  const agentIds = [...new Set(events.map((event) => event.agentId))]
+    .filter((id) => id.length > 0);
+  if (agentIds.length === 0) return;
+
+  const rows = await listNodeContextRowsForAgents(deps, agentIds);
+  const rowsByAgent = new Map<string, ScopedNodeRow[]>();
+  for (const row of rows) {
+    const agentRows = rowsByAgent.get(row.agentId) ?? [];
+    agentRows.push(row);
+    rowsByAgent.set(row.agentId, agentRows);
+  }
+
+  for (const event of events) {
+    await sendContextToRows(deps, rowsByAgent.get(event.agentId) ?? [], {
+      topic: 'agent',
+      event: event.event,
+      data: event.data,
+    });
+  }
 }

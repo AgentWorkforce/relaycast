@@ -2176,6 +2176,19 @@ describe('durable delivery api', () => {
       .all(Math.floor(Date.now() / 1000)) as Array<{ detail: string }>;
     expect(expiryPlan.some((step) => step.detail.includes('idx_deliveries_active_expiry'))).toBe(true);
 
+    const retryPlan = stack.runtime.handle.sqlite
+      .prepare(`EXPLAIN QUERY PLAN
+        SELECT id FROM deliveries
+        WHERE status = 'queued'
+          AND route_node_kind IN ('http_push', 'ws', 'fleet_ws', 'direct_ws')
+          AND next_attempt_at IS NOT NULL
+          AND next_attempt_at <= ?
+          AND (expires_at IS NULL OR expires_at > ?)
+        ORDER BY next_attempt_at, created_at, id
+        LIMIT 50`)
+      .all(Math.floor(Date.now() / 1000), Math.floor(Date.now() / 1000)) as Array<{ detail: string }>;
+    expect(retryPlan.some((step) => step.detail.includes('idx_deliveries_retry_due'))).toBe(true);
+
     // Emulate D1's documented ceiling against the real SQL emitted by Drizzle.
     // The regression used to put all 121 delivery IDs in one UPDATE and trip this guard.
     const sqlite = stack.runtime.handle.sqlite;
@@ -2201,16 +2214,15 @@ describe('durable delivery api', () => {
     // Reads filter expired active rows but do not mutate them or depend on cleanup.
     expect(await deadLetteredCount()).toBe(0);
 
-    expect(await sweepExpiredDeliveries(stack.runtime.deps)).toBe(50);
-    expect(await deadLetteredCount()).toBe(50);
-
-    expect(await sweepExpiredDeliveries(stack.runtime.deps)).toBe(50);
+    // Must fire: one invocation advances through more than the 50-row SQL batch.
+    expect(await sweepExpiredDeliveries(stack.runtime.deps, { maxBatches: 2 })).toBe(100);
     // Charlie's remaining 10 rows and Bob's oldest 40 transitioned. Bob's 21
-    // still-unswept expired rows must not leak through the active list.
+    // still-unswept expired rows prove the invocation still honored its bound
+    // and must not leak through the active list.
     expect(await listDeliveries(bob.token)).toHaveLength(0);
     expect(await deadLetteredCount()).toBe(100);
 
-    expect(await sweepExpiredDeliveries(stack.runtime.deps)).toBe(21);
+    expect(await sweepExpiredDeliveries(stack.runtime.deps, { maxBatches: 1 })).toBe(21);
     expect(await deadLetteredCount()).toBe(121);
 
     await waitForAssertion(() => {

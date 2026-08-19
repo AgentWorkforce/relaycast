@@ -4,6 +4,7 @@ import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/
 import { workspaceEvents, workspaces } from '../../db/schema.js';
 import {
   appendAndPublishWorkspaceEvent,
+  appendWorkspaceEvents,
   appendWorkspaceEvent,
   listWorkspaceEvents,
 } from '../workspaceEvents.js';
@@ -60,6 +61,28 @@ describe('appendWorkspaceEvent', () => {
       appendWorkspaceEvent(handle.db, 'ws_a', { type: 'message.created', payload: { type: 'message.created' } }),
     ).resolves.toBeNull();
     expect(warn).toHaveBeenCalled();
+  });
+
+  it('appends large event sets in D1-safe chunks with contiguous sequence numbers', async () => {
+    const { db } = track(openDb());
+    await appendWorkspaceEvent(db, 'ws_a', { type: 'seed', payload: { n: 0 } });
+
+    const seqs = await appendWorkspaceEvents(
+      db,
+      'ws_a',
+      Array.from({ length: 65 }, (_, index) => ({
+        type: 'delivery.failed',
+        payload: { type: 'delivery.failed', n: index + 1 },
+      })),
+    );
+
+    expect(seqs).toEqual(Array.from({ length: 65 }, (_, index) => index + 2));
+    const rows = await db
+      .select()
+      .from(workspaceEvents)
+      .where(eq(workspaceEvents.workspaceId, 'ws_a'));
+    expect(rows).toHaveLength(66);
+    expect(new Set(rows.map((row) => row.seq)).size).toBe(66);
   });
 });
 

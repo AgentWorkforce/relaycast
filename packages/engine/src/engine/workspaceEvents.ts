@@ -22,6 +22,11 @@ export interface WorkspaceEventRecord {
   created_at: string;
 }
 
+// Each VALUES row binds type, channel_id, and payload. Thirty rows plus the
+// workspace id stay below D1's 100-bound-parameter ceiling (91 total), while
+// turning a large maintenance fanout into a small, predictable query count.
+const WORKSPACE_EVENT_APPEND_BATCH_SIZE = 30;
+
 function nextSeqSql(workspaceId: string) {
   return sql<number>`(
     SELECT COALESCE(MAX(we.seq), 0) + 1
@@ -66,6 +71,67 @@ export async function appendWorkspaceEvent(
     });
     return null;
   }
+}
+
+/**
+ * Append several events with one monotonic sequence allocation per SQL batch.
+ * The MAX(seq) read and all inserts live in the same statement, so concurrent
+ * appenders cannot reserve the same sequence range. Results align with inputs;
+ * a failed batch is represented by nulls and does not stop later batches.
+ */
+export async function appendWorkspaceEvents(
+  db: EngineDb,
+  workspaceId: string,
+  inputs: readonly WorkspaceEventInput[],
+): Promise<Array<number | null>> {
+  const assigned: Array<number | null> = [];
+
+  for (let offset = 0; offset < inputs.length; offset += WORKSPACE_EVENT_APPEND_BATCH_SIZE) {
+    const batch = inputs.slice(offset, offset + WORKSPACE_EVENT_APPEND_BATCH_SIZE);
+    const values = sql.join(batch.map((input, index) => sql`(
+      ${sql.raw(String(index))},
+      ${input.type},
+      ${input.channelId ?? null},
+      ${JSON.stringify(input.payload)}
+    )`), sql`, `);
+
+    try {
+      const rows = await db.all<{ seq: number }>(sql`
+        WITH
+          config(workspace_id) AS (VALUES (${workspaceId})),
+          input_events(ord, type, channel_id, payload) AS (VALUES ${values}),
+          base(seq) AS (
+            SELECT COALESCE(MAX(we.seq), 0)
+            FROM workspace_events we, config
+            WHERE we.workspace_id = config.workspace_id
+          )
+        INSERT INTO workspace_events (workspace_id, seq, type, channel_id, payload)
+        SELECT
+          config.workspace_id,
+          base.seq + input_events.ord + 1,
+          input_events.type,
+          input_events.channel_id,
+          input_events.payload
+        FROM input_events, base, config
+        ORDER BY input_events.ord
+        RETURNING seq
+      `);
+      const seqs = [...(rows ?? [])].map((row) => row.seq).sort((a, b) => a - b);
+      if (seqs.length !== batch.length) {
+        throw new Error(`expected ${batch.length} appended events, received ${seqs.length}`);
+      }
+      assigned.push(...seqs);
+    } catch (err) {
+      console.warn('[workspace.events] batch append failed', {
+        workspace_id: workspaceId,
+        event_count: batch.length,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      assigned.push(...batch.map(() => null));
+    }
+  }
+
+  return assigned;
 }
 
 function parsePayload(raw: string): Record<string, unknown> {
@@ -144,5 +210,25 @@ export async function appendAndPublishWorkspaceEvent(
     await deps.realtime.publishToWorkspaceStream({ workspaceId, event });
   } catch (err) {
     onPublishError?.(err);
+  }
+}
+
+/** Batch form used by bounded maintenance jobs to stay under D1 query limits. */
+export async function appendAndPublishWorkspaceEvents(
+  deps: { db: EngineDb; realtime: WorkspaceStreamPublisher },
+  workspaceId: string,
+  inputs: readonly WorkspaceEventInput[],
+  onPublishError?: (err: unknown) => void,
+): Promise<void> {
+  const seqs = await appendWorkspaceEvents(deps.db, workspaceId, inputs);
+  for (let index = 0; index < inputs.length; index++) {
+    const input = inputs[index];
+    const seq = seqs[index];
+    const event = seq == null ? input.payload : { ...input.payload, seq };
+    try {
+      await deps.realtime.publishToWorkspaceStream({ workspaceId, event });
+    } catch (err) {
+      onPublishError?.(err);
+    }
   }
 }
