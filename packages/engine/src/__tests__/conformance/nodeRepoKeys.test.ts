@@ -113,6 +113,10 @@ describe('fleet node repository advertisements', () => {
       }),
     });
     expect(unsafeEnrollment.status).toBe(400);
+    expect(await unsafeEnrollment.json()).toEqual({
+      ok: false,
+      error: { code: 'invalid_request', message: 'invalid node body' },
+    });
 
     const socket = new FakeSocket();
     const handle = stack.runtime.realtime.attachNodeSocket(workspace.workspaceId, 'node_repos', socket);
@@ -144,6 +148,49 @@ describe('fleet node repository advertisements', () => {
     expect(socket.ofType('error').at(-1)).toMatchObject({ ok: false, code: 'invalid_message' });
     expect(await readNode(workspace.workspaceKey)).toMatchObject({
       tags: ['linux', 'repo:AgentWorkforce/relaycast'],
+    });
+  });
+
+  it('preserves direct-node non-repo tags while refreshing its repo advertisement', async () => {
+    const workspace = await createWorkspace(stack.app, 'direct-node-repo-keys');
+    const enrollment = await stack.app.request('/v1/nodes', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${workspace.workspaceKey}` },
+      body: JSON.stringify({
+        node_id: 'node_repos',
+        name: 'repo-builder',
+        role: 'direct',
+        max_agents: 1,
+        tags: ['enrolled', 'repo:acme/stale'],
+        version: 'test-node',
+      }),
+    });
+    expect(enrollment.status).toBe(201);
+
+    const socket = new FakeSocket();
+    const handle = stack.runtime.realtime.attachNodeSocket(workspace.workspaceId, 'node_repos', socket);
+    await handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'register-direct-repos',
+      type: 'node.register',
+      name: 'repo-builder',
+      node_id: 'node_repos',
+      capabilities: [],
+      max_agents: 1,
+      tags: ['current', 'repo:relay'],
+      repo_keys: ['AgentWorkforce/relaycast'],
+      version: 'test-node-v2',
+    }));
+
+    expect(socket.ofType('reply').at(-1)).toMatchObject({
+      ok: true,
+      data: {
+        tags: ['enrolled', 'current', 'repo:relay', 'repo:AgentWorkforce/relaycast'],
+      },
+    });
+    expect(await readNode(workspace.workspaceKey)).toMatchObject({
+      role: 'direct',
+      tags: ['enrolled', 'current', 'repo:relay', 'repo:AgentWorkforce/relaycast'],
     });
   });
 });

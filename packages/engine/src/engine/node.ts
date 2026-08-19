@@ -381,6 +381,12 @@ export async function registerNode(
 
   // Direct nodes are the per-agent delivery hosts: they never carry providers.
   if (existing.role === 'direct') {
+    // Direct-node registration historically preserved enrollment tags. Keep
+    // those non-repo tags while refreshing only the node's repo advertisement.
+    const directTags = [...new Set([
+      ...existing.tags.filter((tag) => !tag.startsWith('repo:')),
+      ...tags,
+    ])];
     const [updated] = await db
       .update(nodes)
       .set({
@@ -392,7 +398,7 @@ export async function registerNode(
         deliveryConfig: existing.deliveryConfig,
         maxAgents: 1,
         activeAgents: 1,
-        tags,
+        tags: directTags,
         version: message.version,
         status: 'online',
         handlersLive: false,
