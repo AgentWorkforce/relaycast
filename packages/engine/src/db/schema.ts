@@ -1056,6 +1056,9 @@ export const deliveries = sqliteTable(
     index('idx_deliveries_active_expiry')
       .on(table.expiresAt, table.id)
       .where(sql`${table.status} IN ('queued', 'delivered') AND ${table.expiresAt} IS NOT NULL`),
+    index('idx_deliveries_retry_due')
+      .on(table.status, table.nextAttemptAt, table.createdAt, table.id)
+      .where(sql`${table.nextAttemptAt} IS NOT NULL`),
     index('idx_deliveries_status').on(table.workspaceId, table.status, table.createdAt),
     index('idx_deliveries_http_push_due').on(table.workspaceId, table.routeNodeKind, table.status, table.nextAttemptAt),
   ],

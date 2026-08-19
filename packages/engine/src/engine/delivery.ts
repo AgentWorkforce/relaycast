@@ -1,4 +1,4 @@
-import { eq, and, or, not, asc, isNull, inArray, notInArray, lte, gt, sql } from 'drizzle-orm';
+import { eq, and, not, asc, isNull, inArray, notInArray, lte, gt, sql, type SQL } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { deliveries, messages, agents, readReceipts, channelMembers, channels, dmConversations } from '../db/schema.js';
 import type { DeliveryStatus } from '@relaycast/types';
@@ -44,7 +44,7 @@ const TERMINAL_SUCCESS_STATUS = 'acked';
 // Keep expiry work bounded per request and leave ample room under D1's
 // 100-parameter ceiling for the UPDATE's SET and status/workspace predicates.
 // A larger backlog drains oldest-first across subsequent inbox/delivery reads.
-const DELIVERY_EXPIRY_BATCH_SIZE = 50;
+export const DELIVERY_EXPIRY_BATCH_SIZE = 50;
 
 function serializeDelivery(row: DeliveryRow & { channelId?: string }) {
   return {
@@ -451,11 +451,22 @@ export interface DeliveryFailureNotice {
   retryable: false;
 }
 
-export async function expireDueDeliveries(
+export interface ExpiredDeliveryBatch {
+  expiredCount: number;
+  notices: DeliveryFailureNotice[];
+}
+
+/**
+ * Transition one D1-safe batch of due deliveries and report both the number of
+ * rows changed and the sender notices that can be emitted for those rows.
+ * `expiredCount` deliberately stays separate from `notices.length`: system
+ * messages have no sender, but must not make a multi-batch sweep stop early.
+ */
+export async function expireDueDeliveryBatch(
   db: Db,
   workspaceId: string | undefined,
   now: Date = new Date(),
-): Promise<DeliveryFailureNotice[]> {
+): Promise<ExpiredDeliveryBatch> {
   const nowSeconds = Math.floor(now.getTime() / 1000);
   const due = await db
     .select({
@@ -477,7 +488,7 @@ export async function expireDueDeliveries(
     .orderBy(asc(deliveries.expiresAt), asc(deliveries.id))
     .limit(DELIVERY_EXPIRY_BATCH_SIZE);
 
-  if (due.length === 0) return [];
+  if (due.length === 0) return { expiredCount: 0, notices: [] };
 
   const ids = due.map((row) => row.delivery.id);
   const updated = await db
@@ -497,7 +508,7 @@ export async function expireDueDeliveries(
     .returning({ id: deliveries.id });
   const updatedIds = new Set(updated.map((row) => row.id));
 
-  return due
+  const notices = due
     .filter((row) => row.senderAgentId && updatedIds.has(row.delivery.id))
     .map((row) => ({
       workspace_id: row.delivery.workspaceId,
@@ -511,6 +522,15 @@ export async function expireDueDeliveries(
       error: 'delivery TTL expired',
       retryable: false as const,
     }));
+  return { expiredCount: updated.length, notices };
+}
+
+export async function expireDueDeliveries(
+  db: Db,
+  workspaceId: string | undefined,
+  now: Date = new Date(),
+): Promise<DeliveryFailureNotice[]> {
+  return (await expireDueDeliveryBatch(db, workspaceId, now)).notices;
 }
 
 function wireMode(mode: string): 'wait' | 'steer' {
@@ -661,22 +681,13 @@ export async function fetchDueNodeDeliveryEvents(
   const conditions = [
     eq(deliveries.status, 'queued'),
     inArray(deliveries.routeNodeKind, [...NODE_REDRIVE_KINDS]),
-    // Match deliveries that are EITHER never-attempted (nextAttemptAt IS NULL —
-    // e.g. the inline send-time dispatch never ran or its waitUntil was lost) OR
-    // due for retry (nextAttemptAt <= now). Without the NULL branch the cron
-    // could only ever *retry* deliveries that already had an inline attempt (the
-    // inline dispatch is what first stamps nextAttemptAt); a fresh delivery whose
-    // inline dispatch never fired would sit queued forever. For http_push the
-    // cron is the only guaranteed delivery path; for ws nodes it recovers a row
-    // whose single background dispatch was lost before the node re-announces.
-    or(isNull(deliveries.nextAttemptAt), lte(deliveries.nextAttemptAt, now)),
     sql`(${deliveries.expiresAt} IS NULL OR ${deliveries.expiresAt} > ${nowSeconds})`,
   ];
   if (opts.workspaceId) {
     conditions.push(eq(deliveries.workspaceId, opts.workspaceId));
   }
 
-  const rows = await db
+  const fetchRows = (attemptCondition: SQL, queryLimit: number, orderByRetryAt: boolean) => db
     .select({
       delivery: deliveries,
       recipientAgentName: agents.name,
@@ -700,9 +711,27 @@ export async function fetchDueNodeDeliveryEvents(
     .innerJoin(messages, eq(deliveries.messageId, messages.id))
     .innerJoin(channels, eq(messages.channelId, channels.id))
     .leftJoin(dmConversations, eq(dmConversations.channelId, messages.channelId))
-    .where(and(...conditions))
-    .orderBy(asc(deliveries.nextAttemptAt), asc(deliveries.createdAt), asc(deliveries.id))
-    .limit(limit);
+    .where(and(...conditions, attemptCondition))
+    .orderBy(
+      ...(orderByRetryAt ? [asc(deliveries.nextAttemptAt)] : []),
+      asc(deliveries.createdAt),
+      asc(deliveries.id),
+    )
+    .limit(queryLimit);
+
+  // SQLite orders NULL before timestamps, so preserve the former OR query's
+  // ordering by filling the page with never-attempted rows first. Splitting the
+  // branches lets the due-retry half use idx_deliveries_retry_due; a partial
+  // non-NULL index cannot serve an OR that also asks for NULL rows.
+  const neverAttempted = await fetchRows(isNull(deliveries.nextAttemptAt), limit, false);
+  const dueRetries = neverAttempted.length < limit
+    ? await fetchRows(
+      sql`${deliveries.nextAttemptAt} IS NOT NULL AND ${deliveries.nextAttemptAt} <= ${nowSeconds}`,
+      limit - neverAttempted.length,
+      true,
+    )
+    : [];
+  const rows = [...neverAttempted, ...dueRetries];
 
   if (!opts.workspaceId && rows.length > 0) {
     const workspaceAttachments = new Map<string, AttachmentRow[]>();

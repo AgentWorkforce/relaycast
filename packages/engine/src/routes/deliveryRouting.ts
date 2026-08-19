@@ -13,8 +13,8 @@ import { isSafeExternalUrl } from '../lib/ssrf.js';
 import { transformForClient, type WsEvent } from '../engine/wsTransform.js';
 import { isProviderAgentDeliveryReady, type EngineDb, type EngineDeps } from '../ports/index.js';
 import { fanoutToAgents } from './fanout.js';
-import { sendNodeContextToAgents } from '../engine/nodeContext.js';
-import { appendAndPublishWorkspaceEvent } from '../engine/workspaceEvents.js';
+import { sendNodeContextEventsToAgents, sendNodeContextToAgents } from '../engine/nodeContext.js';
+import { appendAndPublishWorkspaceEvent, appendAndPublishWorkspaceEventBatch } from '../engine/workspaceEvents.js';
 type HonoContext = Context<AppEnv>;
 type RoutingEngine = EngineRuntime | EngineDeps;
 type RoutingContext = {
@@ -34,6 +34,10 @@ type DeliveryTarget = {
 };
 
 const DISPATCH_RETRY_DELAY_MS = 30_000;
+// Fifty 50-row statements expire at most 2,500 deliveries per invocation.
+// On a */5 schedule that is 720,000/day: above the measured 519,000/day peak
+// while each UPDATE remains well below D1's 100-bound-parameter ceiling.
+export const DELIVERY_EXPIRY_MAX_BATCHES = 50;
 
 function routingContextFromHono(c: HonoContext, workspaceIdOverride?: string): RoutingContext {
   const workspaceId = workspaceIdOverride ?? c.get('workspace')?.id;
@@ -623,12 +627,15 @@ export async function sweepDueNodeDeliveries(
  */
 export const sweepDueHttpPushDeliveries = sweepDueNodeDeliveries;
 
-async function notifyDeliveryFailuresForContext(
-  ctx: RoutingContext,
+async function notifyDeliveryFailures(
+  engine: EngineDeps,
   notices: deliveryEngine.DeliveryFailureNotice[],
 ): Promise<void> {
-  for (const notice of notices) {
-    await fanoutToAgentsForContext(ctx, [notice.sender_agent_id], 'delivery.failed', {
+  if (notices.length === 0) return;
+  const notifications = notices.map((notice) => ({
+    workspaceId: notice.workspace_id,
+    agentId: notice.sender_agent_id,
+    data: {
       delivery_id: notice.delivery_id,
       message_id: notice.message_id,
       target_agent_id: notice.target_agent_id,
@@ -637,34 +644,64 @@ async function notifyDeliveryFailuresForContext(
       reason: notice.reason,
       error: notice.error,
       retryable: notice.retryable,
-    });
-  }
+    },
+  }));
+  const inputs = notifications.map((notification) => {
+    const payload = transformForClient(buildEvent('delivery.failed', notification.workspaceId, notification.data));
+    return {
+      workspaceId: notification.workspaceId,
+      input: { type: 'delivery.failed', payload },
+    };
+  });
+
+  await Promise.allSettled([
+    appendAndPublishWorkspaceEventBatch(
+      { db: engine.db, realtime: engine.realtime },
+      inputs,
+    ),
+    sendNodeContextEventsToAgents(
+      {
+        db: engine.db,
+        nodeConnections: engine.nodeConnections,
+        realtime: engine.realtime,
+        environment: engine.config?.environment,
+        httpPushProxy: engine.config?.httpPushProxy,
+      },
+      notifications.map((notification) => ({
+        workspaceId: notification.workspaceId,
+        agentId: notification.agentId,
+        event: 'delivery.failed',
+        data: notification.data,
+      })),
+    ),
+  ]);
 }
 
 /**
- * Scheduled TTL expiry maintenance. Each workspace advances by at most one
- * D1-safe delivery batch per invocation; adapters call this on a cadence rather
- * than coupling mailbox reads to cleanup work.
+ * Scheduled TTL expiry maintenance. One invocation advances through a bounded
+ * number of small D1-safe statements, then batches the best-effort failure
+ * fanout so increasing the drain rate does not multiply D1 reads per notice.
  */
 export async function sweepExpiredDeliveries(
   engine: EngineDeps,
-  opts: { workspaceId?: string; now?: Date } = {},
+  opts: { workspaceId?: string; now?: Date; maxBatches?: number } = {},
 ): Promise<number> {
   const now = opts.now ?? new Date();
-  const notices = await deliveryEngine.expireDueDeliveries(engine.db, opts.workspaceId, now);
-  const byWorkspace = new Map<string, deliveryEngine.DeliveryFailureNotice[]>();
-  for (const notice of notices) {
-    const workspaceNotices = byWorkspace.get(notice.workspace_id) ?? [];
-    workspaceNotices.push(notice);
-    byWorkspace.set(notice.workspace_id, workspaceNotices);
+  const requestedMaxBatches = opts.maxBatches ?? DELIVERY_EXPIRY_MAX_BATCHES;
+  const maxBatches = Number.isFinite(requestedMaxBatches)
+    ? Math.min(Math.max(Math.floor(requestedMaxBatches), 1), DELIVERY_EXPIRY_MAX_BATCHES)
+    : DELIVERY_EXPIRY_MAX_BATCHES;
+  let expiredCount = 0;
+  for (let batchNumber = 0; batchNumber < maxBatches; batchNumber++) {
+    const batch = await deliveryEngine.expireDueDeliveryBatch(engine.db, opts.workspaceId, now);
+    expiredCount += batch.expiredCount;
+    // Flush every committed batch before another state transition can fail.
+    // Otherwise a later D1 error would strand already-dead-lettered rows with
+    // notices held only in this invocation's memory.
+    await notifyDeliveryFailures(engine, batch.notices);
+    if (batch.expiredCount < deliveryEngine.DELIVERY_EXPIRY_BATCH_SIZE) break;
   }
-  for (const [workspaceId, workspaceNotices] of byWorkspace) {
-    await notifyDeliveryFailuresForContext(
-      { db: engine.db, workspaceId, engine },
-      workspaceNotices,
-    );
-  }
-  return notices.length;
+  return expiredCount;
 }
 
 export async function notifyDeliveryRejections(

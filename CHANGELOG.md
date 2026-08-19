@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Scheduled delivery expiry now drains up to 2,500 rows per invocation in bounded D1-safe batches, preventing expired mailbox rows from accumulating faster than the sweep can clear them.
 
 ## [8.1.0] - 2026-08-19
 

@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- The scheduled expiry sweep drains up to fifty 50-row batches per invocation and batches failure fanout; migration `0040_delivery_retry_due_index.sql` adds the global partial retry index and should be applied after the expired backlog has drained.
 
 ## [8.1.0] - 2026-08-19
 

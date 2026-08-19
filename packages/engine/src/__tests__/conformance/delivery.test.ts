@@ -2121,7 +2121,12 @@ describe('durable delivery api', () => {
 
     await new Promise((r) => setTimeout(r, 1100));
     expect(await listDeliveries(bob.token)).toHaveLength(0);
-    expect(await sweepExpiredDeliveries(stack.runtime.deps, { workspaceId: ws.workspaceId })).toBe(1);
+    // Non-finite internal overrides must fall back to the production cap instead
+    // of turning the bounded loop into a silent no-op.
+    expect(await sweepExpiredDeliveries(stack.runtime.deps, {
+      workspaceId: ws.workspaceId,
+      maxBatches: Number.NaN,
+    })).toBe(1);
     expect(await listDeliveries(bob.token, '?status=dead_lettered')).toHaveLength(1);
     await new Promise((r) => setTimeout(r, 50));
     await waitForAssertion(() => {
@@ -2176,6 +2181,19 @@ describe('durable delivery api', () => {
       .all(Math.floor(Date.now() / 1000)) as Array<{ detail: string }>;
     expect(expiryPlan.some((step) => step.detail.includes('idx_deliveries_active_expiry'))).toBe(true);
 
+    const retryPlan = stack.runtime.handle.sqlite
+      .prepare(`EXPLAIN QUERY PLAN
+        SELECT id FROM deliveries
+        WHERE status = 'queued'
+          AND route_node_kind IN ('http_push', 'ws', 'fleet_ws', 'direct_ws')
+          AND next_attempt_at IS NOT NULL
+          AND next_attempt_at <= ?
+          AND (expires_at IS NULL OR expires_at > ?)
+        ORDER BY next_attempt_at, created_at, id
+        LIMIT 50`)
+      .all(Math.floor(Date.now() / 1000), Math.floor(Date.now() / 1000)) as Array<{ detail: string }>;
+    expect(retryPlan.some((step) => step.detail.includes('idx_deliveries_retry_due'))).toBe(true);
+
     // Emulate D1's documented ceiling against the real SQL emitted by Drizzle.
     // The regression used to put all 121 delivery IDs in one UPDATE and trip this guard.
     const sqlite = stack.runtime.handle.sqlite;
@@ -2201,16 +2219,15 @@ describe('durable delivery api', () => {
     // Reads filter expired active rows but do not mutate them or depend on cleanup.
     expect(await deadLetteredCount()).toBe(0);
 
-    expect(await sweepExpiredDeliveries(stack.runtime.deps)).toBe(50);
-    expect(await deadLetteredCount()).toBe(50);
-
-    expect(await sweepExpiredDeliveries(stack.runtime.deps)).toBe(50);
+    // Must fire: one invocation advances through more than the 50-row SQL batch.
+    expect(await sweepExpiredDeliveries(stack.runtime.deps, { maxBatches: 2 })).toBe(100);
     // Charlie's remaining 10 rows and Bob's oldest 40 transitioned. Bob's 21
-    // still-unswept expired rows must not leak through the active list.
+    // still-unswept expired rows prove the invocation still honored its bound
+    // and must not leak through the active list.
     expect(await listDeliveries(bob.token)).toHaveLength(0);
     expect(await deadLetteredCount()).toBe(100);
 
-    expect(await sweepExpiredDeliveries(stack.runtime.deps)).toBe(21);
+    expect(await sweepExpiredDeliveries(stack.runtime.deps, { maxBatches: 1 })).toBe(21);
     expect(await deadLetteredCount()).toBe(121);
 
     await waitForAssertion(() => {
@@ -2224,6 +2241,63 @@ describe('durable delivery api', () => {
     await new Promise((resolve) => setTimeout(resolve, 25));
     expect(contextUpdatesOfType(aliceSock, 'delivery.failed')
       .filter((event) => event.data && (event.data as Record<string, unknown>).reason === 'ttl_expired')).toHaveLength(121);
+  });
+
+  it("flushes a committed batch's failure notices before a later expiry batch fails", async () => {
+    const { ws, alice, bob, messageId } = await seed();
+    const { sock: aliceSock } = await attachDirectNodeSocket(stack, ws.workspaceId, alice);
+    const [seedMessage] = await stack.runtime.deps.db
+      .select({ channelId: messages.channelId })
+      .from(messages)
+      .where(eq(messages.id, messageId));
+    const expiredAt = new Date(Date.now() - 60_000);
+
+    await stack.runtime.deps.db.insert(messages).values(Array.from({ length: 50 }, (_, index) => ({
+      id: `expiry-failure-message-${index}`,
+      workspaceId: ws.workspaceId,
+      channelId: seedMessage.channelId,
+      agentId: alice.agentId,
+      body: `expired before later failure ${index}`,
+    })));
+    await stack.runtime.deps.db.insert(deliveries).values(Array.from({ length: 50 }, (_, index) => ({
+      id: `expiry-failure-delivery-${index}`,
+      workspaceId: ws.workspaceId,
+      messageId: `expiry-failure-message-${index}`,
+      agentId: bob.agentId,
+      status: 'queued',
+      seq: index + 2,
+      expiresAt: expiredAt,
+    })));
+    await stack.runtime.deps.db
+      .update(deliveries)
+      .set({ expiresAt: expiredAt })
+      .where(eq(deliveries.messageId, messageId));
+
+    const sqlite = stack.runtime.handle.sqlite;
+    const prepare = sqlite.prepare.bind(sqlite);
+    let expiryUpdates = 0;
+    sqlite.prepare = ((source: string) => {
+      if (source.startsWith('update "deliveries"') && source.includes('"dead_lettered_at"')) {
+        expiryUpdates++;
+        if (expiryUpdates === 2) throw new Error('simulated later expiry batch failure');
+      }
+      return prepare(source);
+    }) as typeof sqlite.prepare;
+
+    await expect(sweepExpiredDeliveries(stack.runtime.deps, { maxBatches: 2 }))
+      .rejects.toThrow('simulated later expiry batch failure');
+
+    const deadLettered = await stack.runtime.deps.db
+      .select({ id: deliveries.id })
+      .from(deliveries)
+      .where(eq(deliveries.status, 'dead_lettered'));
+    expect(deadLettered).toHaveLength(50);
+    await waitForAssertion(() => {
+      const notices = contextUpdatesOfType(aliceSock, 'delivery.failed')
+        .filter((event) => event.data && (event.data as Record<string, unknown>).reason === 'ttl_expired');
+      expect(notices).toHaveLength(50);
+      expect(new Set(notices.map((event) => (event.data as Record<string, unknown>).delivery_id)).size).toBe(50);
+    });
   });
 
   it('keeps inbox and delivery reads available when scheduled expiry fails', async () => {
