@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Migration `0041_d1_hot_path_indexes.sql` adds a partial pending-invocation workspace index for node drains and a DM-channel lookup index for activity feeds, eliminating two production D1 scan hot paths.
 
 ## [8.1.2] - 2026-08-19
 

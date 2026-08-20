@@ -64,6 +64,7 @@ describe('activity feed', () => {
     `).all(workspace.workspaceId) as Array<{ detail: string }>;
     const details = plan.map((step) => step.detail).join('\n');
     expect(details).toContain('idx_messages_workspace');
+    expect(details).toContain('idx_dm_conversations_channel');
     expect(details).not.toContain('USE TEMP B-TREE');
   });
 });
