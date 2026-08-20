@@ -260,6 +260,24 @@ export const FleetAgentRegisterMessageSchema = z
   .strict();
 export type FleetAgentRegisterMessage = z.infer<typeof FleetAgentRegisterMessageSchema>;
 
+/**
+ * Explicit recovery of an identity already owned by this authenticated node.
+ * `agent.register` is create-only; a broker must name recovery intent and bind
+ * it to the immutable id it previously received.
+ */
+export const FleetAgentRecoverMessageSchema = z
+  .object({
+    ...FleetRequestEnvelopeFields,
+    type: z.literal('agent.recover'),
+    name: z.string(),
+    expected_agent_id: z.string(),
+    invocation_id: z.string().optional(),
+    session_ref: z.string().optional(),
+    resumable: z.boolean().optional(),
+  })
+  .strict();
+export type FleetAgentRecoverMessage = z.infer<typeof FleetAgentRecoverMessageSchema>;
+
 export const FleetAgentDeregisterMessageSchema = z
   .object({
     ...FleetRequestEnvelopeFields,
@@ -429,6 +447,7 @@ export const FleetBrokerToRelaycastNonActionResultMessageSchema = z.discriminate
   FleetNodeDeregisterMessageSchema,
   FleetNodeSpawnMessageSchema,
   FleetAgentRegisterMessageSchema,
+  FleetAgentRecoverMessageSchema,
   FleetAgentDeregisterMessageSchema,
   FleetDeliveryAckMessageSchema,
   FleetInventorySyncMessageSchema,

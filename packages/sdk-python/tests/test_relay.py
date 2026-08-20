@@ -7,6 +7,7 @@ import httpx
 import respx
 
 from relay_sdk import Relay, AsyncRelay, AgentClient, AsyncAgentClient
+from relay_sdk.errors import RelayError
 from relay_sdk.models import (
     BindAgentToNodeRequest,
     CreateNodeRequest,
@@ -295,24 +296,52 @@ class TestRelay:
         assert created.token == "at_xxx"
 
     @respx.mock
+    def test_agents_explicit_identity_recovery_routes(self):
+        recover = respx.post(f"{BASE}/v1/agents/Coder/recover").mock(
+            return_value=ok({"agent_id": "a1", "name": "Coder", "token": "at_new", "audit_id": "aid_1"})
+        )
+        takeover = respx.post(f"{BASE}/v1/agents/Coder/takeover").mock(
+            return_value=ok({"agent_id": "a1", "name": "Coder", "token": "at_owner", "audit_id": "aid_2"})
+        )
+        revoke = respx.post(f"{BASE}/v1/agents/Coder/revoke-token").mock(
+            return_value=ok({"agent_id": "a1", "name": "Coder", "audit_id": "aid_3"})
+        )
+        enroll = respx.post(f"{BASE}/v1/agent/recovery-credential").mock(
+            return_value=ok({"agent_id": "a1", "enrolled": True})
+        )
+        r = Relay(KEY, base_url=BASE)
+
+        assert r.agents.recover(
+            "Coder", expected_agent_id="a1", recovery_proof="proof"
+        )["token"] == "at_new"
+        r.agents.take_over(
+            "Coder", expected_agent_id="a1", actor="owner", reason="lost proof",
+            session_ref="incident-1", node_id="node-1",
+        )
+        r.agents.revoke_token(
+            "Coder", expected_agent_id="a1", actor="owner", reason="compromise"
+        )
+        r.agents.enroll_recovery_credential(
+            recovery_proof_hash="a" * 64, work_unit_id="job-1"
+        )
+
+        assert json.loads(recover.calls[0].request.content) == {
+            "expected_agent_id": "a1", "recovery_proof": "proof"
+        }
+        assert takeover.called and revoke.called and enroll.called
+
+    @respx.mock
     @pytest.mark.parametrize("error_code", ["agent_already_exists", "name_conflict"])
-    def test_agents_register_or_rotate_rotates_existing_agent(self, error_code):
+    def test_agents_register_or_rotate_fails_closed_on_existing_agent(self, error_code):
         respx.post(f"{BASE}/v1/agents").mock(
             return_value=httpx.Response(
                 409,
                 json={"ok": False, "error": {"code": error_code, "message": "exists"}},
             )
         )
-        get_route = respx.get(f"{BASE}/v1/agents/Coder").mock(return_value=ok(AGENT_DATA))
-        rotate_route = respx.post(f"{BASE}/v1/agents/Coder/rotate-token").mock(
-            return_value=ok({"token": "at_rotated"})
-        )
         r = Relay(KEY, base_url=BASE)
-        created = r.agents.register_or_rotate("Coder")
-        assert created.id == "a1"
-        assert created.token == "at_rotated"
-        assert get_route.called
-        assert rotate_route.called
+        with pytest.raises(RelayError):
+            r.agents.register_or_rotate("Coder")
 
     def test_as_agent_returns_agent_client(self):
         r = Relay(KEY, base_url=BASE, agent_relay_distinct_id="abc123def4567890")
@@ -442,19 +471,16 @@ class TestAsyncRelay:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("error_code", ["agent_already_exists", "name_conflict"])
     @respx.mock
-    async def test_agents_register_or_rotate_rotates_existing_agent(self, error_code):
+    async def test_agents_register_or_rotate_fails_closed_on_existing_agent(self, error_code):
         respx.post(f"{BASE}/v1/agents").mock(
             return_value=httpx.Response(
                 409,
                 json={"ok": False, "error": {"code": error_code, "message": "exists"}},
             )
         )
-        respx.get(f"{BASE}/v1/agents/Coder").mock(return_value=ok(AGENT_DATA))
-        respx.post(f"{BASE}/v1/agents/Coder/rotate-token").mock(return_value=ok({"token": "at_rotated"}))
         async with AsyncRelay(KEY, base_url=BASE) as r:
-            created = await r.agents.register_or_rotate("Coder")
-            assert created.id == "a1"
-            assert created.token == "at_rotated"
+            with pytest.raises(RelayError):
+                await r.agents.register_or_rotate("Coder")
 
     @pytest.mark.asyncio
     async def test_as_agent_returns_async_client(self):

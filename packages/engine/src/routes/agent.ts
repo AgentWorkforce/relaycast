@@ -1,10 +1,12 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { and, eq } from 'drizzle-orm';
 import { AgentTypeSchema, CliTypeSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { requireWorkspaceKey, requireAuth, requireAgentToken, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as agentEngine from '../engine/agent.js';
+import * as agentIdentityEngine from '../engine/agentIdentity.js';
 import * as nodeEngine from '../engine/node.js';
 import * as actionEngine from '../engine/action.js';
 import * as directoryEngine from '../engine/directory.js';
@@ -14,7 +16,7 @@ import {
   observerAllowsAgent,
   observerAllowsCreatedAt,
 } from '../engine/observerToken.js';
-import { fanoutToWorkspace } from './fanout.js';
+import { fanoutToAgents, fanoutToWorkspace } from './fanout.js';
 import { sendNodePresenceContext } from '../engine/nodeContext.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
@@ -30,6 +32,8 @@ import {
   parseQueryParams,
 } from '../lib/httpResponse.js';
 import { positiveIntQueryParam } from '../lib/httpQuery.js';
+import { agents } from '../db/schema.js';
+import type { EngineDb } from '../ports/database.js';
 
 export const agentRoutes = new Hono<AppEnv>();
 
@@ -50,6 +54,37 @@ const registerAgentSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
   skills: z.array(skillSchema).optional(),
   capabilities: capabilitiesSchema.optional(),
+  recovery_proof_hash: z.string().regex(agentEngine.AGENT_RECOVERY_PROOF_HASH_PATTERN).optional(),
+  work_unit_id: z.string().min(1).optional(),
+});
+
+const recoverAgentSchema = z.object({
+  expected_agent_id: z.string().min(1),
+  recovery_proof: z.string().min(1).optional(),
+  reason: z.string().min(1).optional(),
+  session_ref: z.string().min(1).optional(),
+  node_id: z.string().min(1).optional(),
+});
+
+const takeoverAgentSchema = z.object({
+  expected_agent_id: z.string().min(1),
+  actor: z.string().min(1),
+  reason: z.string().min(1),
+  session_ref: z.string().min(1),
+  node_id: z.string().min(1),
+});
+
+const revokeAgentTokenSchema = z.object({
+  expected_agent_id: z.string().min(1),
+  actor: z.string().min(1),
+  reason: z.string().min(1),
+  session_ref: z.string().min(1).optional(),
+  node_id: z.string().min(1).optional(),
+});
+
+const recoveryCredentialSchema = z.object({
+  recovery_proof_hash: z.string().regex(agentEngine.AGENT_RECOVERY_PROOF_HASH_PATTERN),
+  work_unit_id: z.string().min(1).optional(),
 });
 
 const AGENT_STATUSES = ['active', 'idle', 'blocked', 'waiting', 'offline', 'online'] as const;
@@ -100,6 +135,24 @@ function canonicalStatus(status: string): 'active' | 'idle' | 'blocked' | 'waiti
     return status;
   }
   return null;
+}
+
+function bearerToken(header: string | undefined): string | null {
+  return header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : null;
+}
+
+async function identityTargetByName(db: EngineDb, workspaceId: string, name: string) {
+  const [target] = await db
+    .select({
+      id: agents.id,
+      name: agents.name,
+      workspaceId: agents.workspaceId,
+      originNodeId: agents.originNodeId,
+      sessionRef: agents.sessionRef,
+    })
+    .from(agents)
+    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, name)));
+  return target ?? null;
 }
 
 function agentNotFound(c: Parameters<typeof jsonNotFound>[0], name: string) {
@@ -216,7 +269,16 @@ agentRoutes.post(
       if (!parsed.ok) {
         return parsed.response;
       }
-      const { name, type, persona, metadata, skills, capabilities } = parsed.data;
+      const {
+        name,
+        type,
+        persona,
+        metadata,
+        skills,
+        capabilities,
+        recovery_proof_hash: recoveryProofHash,
+        work_unit_id: workUnitId,
+      } = parsed.data;
       const nextMetadata = {
         ...(metadata || {}),
         ...(skills ? { skills } : {}),
@@ -228,6 +290,8 @@ agentRoutes.post(
         persona,
         metadata: nextMetadata,
         capabilities,
+        recoveryProofHash,
+        workUnitId,
       });
       if (skills?.length) {
         await directoryEngine.syncSourceAgentDirectoryEntry(db, workspace.id, {
@@ -243,6 +307,219 @@ agentRoutes.post(
         agent_type: type ?? 'agent',
       });
       return jsonCreated(c, result);
+    } catch (err: unknown) {
+      return errorResponse(c, err);
+    }
+  },
+);
+
+// POST /v1/agent/recovery-credential - enroll/rotate a server-owned verifier
+agentRoutes.post(
+  '/agent/recovery-credential',
+  requireAgentToken,
+  rateLimit,
+  async (c) => {
+    try {
+      const parsed = await parseJsonBody(
+        c,
+        recoveryCredentialSchema,
+        'invalid recovery credential body',
+      );
+      if (!parsed.ok) return parsed.response;
+      const workspace = c.get('workspace');
+      const agent = c.get('agent')!;
+      await agentIdentityEngine.enrollRecoveryCredential(c.get('db'), {
+        workspaceId: workspace.id,
+        agentId: agent.id,
+      }, {
+        verifierHash: parsed.data.recovery_proof_hash,
+        workUnitId: parsed.data.work_unit_id,
+      });
+      return jsonOk(c, { agent_id: agent.id, enrolled: true });
+    } catch (err: unknown) {
+      return errorResponse(c, err);
+    }
+  },
+);
+
+// POST /v1/agents/:name/recover - explicit self-service identity recovery
+agentRoutes.post(
+  '/agents/:name/recover',
+  rateLimit,
+  async (c) => {
+    try {
+      const parsed = await parseJsonBody(c, recoverAgentSchema, 'invalid agent recovery body');
+      if (!parsed.ok) return parsed.response;
+      const db = c.get('db');
+      const name = c.req.param('name');
+      const token = bearerToken(c.req.header('Authorization'));
+
+      let target: Awaited<ReturnType<typeof identityTargetByName>> | null = null;
+      let authority: agentIdentityEngine.AgentIdentityAuthority | null = null;
+      let actor = '';
+      let nodeId: string | null = parsed.data.node_id ?? null;
+
+      if (parsed.data.recovery_proof) {
+        const credential = await agentIdentityEngine.getRecoveryCredentialByProof(
+          db,
+          parsed.data.recovery_proof,
+        );
+        if (
+          credential
+          && credential.agentId === parsed.data.expected_agent_id
+          && credential.agentName === name
+        ) {
+          target = await identityTargetByName(db, credential.workspaceId, name);
+          authority = 'work_unit_proof';
+          actor = `work_unit:${credential.workUnitId ?? 'proof'}`;
+        }
+      } else if (token) {
+        const auth = await c.get('engine').auth.authenticate({ token, require: 'any', db });
+        if (!auth.ok) {
+          return jsonError(c, 'agent_recovery_not_authorized', 'Recovery credential was not accepted', 403);
+        }
+        target = await identityTargetByName(db, auth.workspace.id, name);
+        if (auth.agent && target?.id === auth.agent.id) {
+          authority = 'current_agent_token';
+          actor = `agent:${auth.agent.name}`;
+        } else if (
+          auth.node
+          && target?.originNodeId === auth.node.id
+          && (!parsed.data.node_id || parsed.data.node_id === auth.node.id)
+        ) {
+          authority = 'origin_node';
+          actor = `node:${auth.node.name}`;
+          nodeId = auth.node.id;
+        }
+      }
+
+      if (
+        !target
+        || !authority
+        || target.id !== parsed.data.expected_agent_id
+        || target.name !== name
+      ) {
+        return jsonError(
+          c,
+          'agent_recovery_not_authorized',
+          'Recovery authority does not match the expected agent identity',
+          403,
+        );
+      }
+
+      const result = await agentIdentityEngine.rotateAgentIdentity(db, {
+        workspaceId: target.workspaceId,
+        agentId: target.id,
+        agentName: target.name,
+      }, {
+        authority,
+        actor,
+        reason: parsed.data.reason ?? 'self-service identity recovery',
+        sessionRef: parsed.data.session_ref ?? target.sessionRef,
+        nodeId,
+        originActor: c.get('originActor'),
+      });
+      return jsonOk(c, result);
+    } catch (err: unknown) {
+      return errorResponse(c, err);
+    }
+  },
+);
+
+// POST /v1/agents/:name/takeover - explicit, audited workspace-admin escape hatch
+agentRoutes.post(
+  '/agents/:name/takeover',
+  requireWorkspaceKey,
+  rateLimit,
+  async (c) => {
+    try {
+      const parsed = await parseJsonBody(c, takeoverAgentSchema, 'invalid agent takeover body');
+      if (!parsed.ok) return parsed.response;
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const name = c.req.param('name');
+      const target = await identityTargetByName(db, workspace.id, name);
+      if (!target) return agentNotFound(c, name);
+      if (target.id !== parsed.data.expected_agent_id) {
+        return jsonError(
+          c,
+          'agent_identity_conflict',
+          `Agent "${name}" no longer has expected id "${parsed.data.expected_agent_id}"`,
+          409,
+        );
+      }
+
+      const result = await agentIdentityEngine.takeOverAgentIdentity(db, {
+        workspaceId: workspace.id,
+        agentId: target.id,
+        agentName: target.name,
+      }, {
+        actor: parsed.data.actor,
+        reason: parsed.data.reason,
+        sessionRef: parsed.data.session_ref,
+        nodeId: parsed.data.node_id,
+        originActor: c.get('originActor'),
+      });
+      await fanoutToAgents(c, [target.id], 'agent.identity_taken_over', {
+        agent_id: target.id,
+        agent_name: target.name,
+        actor: parsed.data.actor,
+        reason: parsed.data.reason,
+        session_ref: parsed.data.session_ref,
+        node_id: parsed.data.node_id,
+        audit_id: result.audit_id,
+      });
+      emitServerEvent(c, workspace.id, 'relaycast_server_agent_identity_taken_over', {
+        agent_id: target.id,
+        agent_name: target.name,
+        audit_id: result.audit_id,
+      });
+      return jsonOk(c, result);
+    } catch (err: unknown) {
+      return errorResponse(c, err);
+    }
+  },
+);
+
+// POST /v1/agents/:name/revoke-token - immediate compromise response
+agentRoutes.post(
+  '/agents/:name/revoke-token',
+  requireWorkspaceKey,
+  rateLimit,
+  async (c) => {
+    try {
+      const parsed = await parseJsonBody(c, revokeAgentTokenSchema, 'invalid token revocation body');
+      if (!parsed.ok) return parsed.response;
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const name = c.req.param('name');
+      const target = await identityTargetByName(db, workspace.id, name);
+      if (!target) return agentNotFound(c, name);
+      if (target.id !== parsed.data.expected_agent_id) {
+        return jsonError(
+          c,
+          'agent_identity_conflict',
+          `Agent "${name}" no longer has expected id "${parsed.data.expected_agent_id}"`,
+          409,
+        );
+      }
+      const result = await agentIdentityEngine.revokeAgentIdentityTokens(db, {
+        workspaceId: workspace.id,
+        agentId: target.id,
+        agentName: target.name,
+      }, {
+        actor: parsed.data.actor,
+        reason: parsed.data.reason,
+        sessionRef: parsed.data.session_ref,
+        nodeId: parsed.data.node_id,
+        originActor: c.get('originActor'),
+      });
+      emitServerEvent(c, workspace.id, 'relaycast_server_agent_token_revoked', {
+        agent_id: target.id,
+        agent_name: target.name,
+        audit_id: result.audit_id,
+      });
+      return jsonOk(c, result);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

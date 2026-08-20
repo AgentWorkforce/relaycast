@@ -7,7 +7,6 @@ from urllib.parse import quote
 
 from .agent import AgentClient, AsyncAgentClient
 from .client import AsyncHttpClient, HttpClient
-from .errors import RelayError
 from .models import (
     A2aAgentCard,
     A2aAgentRecord,
@@ -47,10 +46,6 @@ def _enc(value: str) -> str:
     return quote(value, safe="")
 
 
-def _is_duplicate_agent_error(err: RelayError) -> bool:
-    return err.status == 409 and err.code in {"agent_already_exists", "name_conflict"}
-
-
 class _WorkspaceNamespace:
     """Sync workspace operations."""
 
@@ -84,12 +79,16 @@ class _AgentsNamespace:
         type: str | None = None,
         persona: str | None = None,
         metadata: dict[str, Any] | None = None,
+        recovery_proof_hash: str | None = None,
+        work_unit_id: str | None = None,
     ) -> CreateAgentResponse:
         data = CreateAgentRequest(
             name=name,
             type=type,  # type: ignore[arg-type]
             persona=persona,
             metadata=metadata,
+            recovery_proof_hash=recovery_proof_hash,
+            work_unit_id=work_unit_id,
         )
         result = self._client.post("/v1/agents", data.model_dump(exclude_none=True))
         return CreateAgentResponse.model_validate(result)
@@ -101,21 +100,17 @@ class _AgentsNamespace:
         type: str | None = None,
         persona: str | None = None,
         metadata: dict[str, Any] | None = None,
+        recovery_proof_hash: str | None = None,
+        work_unit_id: str | None = None,
     ) -> CreateAgentResponse:
-        try:
-            return self.register(name, type=type, persona=persona, metadata=metadata)
-        except RelayError as err:
-            if not _is_duplicate_agent_error(err):
-                raise
-
-        agent = self.get(name)
-        rotated = self.rotate_token(agent.name)
-        return CreateAgentResponse(
-            id=agent.id,
-            name=agent.name,
-            token=rotated.token,
-            status=agent.status,
-            created_at=agent.created_at,
+        """Deprecated create-only alias; collisions fail closed."""
+        return self.register(
+            name,
+            type=type,
+            persona=persona,
+            metadata=metadata,
+            recovery_proof_hash=recovery_proof_hash,
+            work_unit_id=work_unit_id,
         )
 
     def list(self, *, status: str | None = None) -> list[Agent]:
@@ -132,6 +127,80 @@ class _AgentsNamespace:
     def rotate_token(self, name: str) -> TokenRotateResponse:
         result = self._client.post(f"/v1/agents/{_enc(name)}/rotate-token", {})
         return TokenRotateResponse.model_validate(result)
+
+    def recover(
+        self,
+        name: str,
+        *,
+        expected_agent_id: str,
+        recovery_proof: str | None = None,
+        reason: str | None = None,
+        session_ref: str | None = None,
+        node_id: str | None = None,
+    ) -> dict[str, Any]:
+        body = {
+            "expected_agent_id": expected_agent_id,
+            "recovery_proof": recovery_proof,
+            "reason": reason,
+            "session_ref": session_ref,
+            "node_id": node_id,
+        }
+        return self._client.post(
+            f"/v1/agents/{_enc(name)}/recover",
+            {key: value for key, value in body.items() if value is not None},
+        )
+
+    def take_over(
+        self,
+        name: str,
+        *,
+        expected_agent_id: str,
+        actor: str,
+        reason: str,
+        session_ref: str,
+        node_id: str,
+    ) -> dict[str, Any]:
+        return self._client.post(f"/v1/agents/{_enc(name)}/takeover", {
+            "expected_agent_id": expected_agent_id,
+            "actor": actor,
+            "reason": reason,
+            "session_ref": session_ref,
+            "node_id": node_id,
+        })
+
+    def revoke_token(
+        self,
+        name: str,
+        *,
+        expected_agent_id: str,
+        actor: str,
+        reason: str,
+        session_ref: str | None = None,
+        node_id: str | None = None,
+    ) -> dict[str, Any]:
+        body = {
+            "expected_agent_id": expected_agent_id,
+            "actor": actor,
+            "reason": reason,
+            "session_ref": session_ref,
+            "node_id": node_id,
+        }
+        return self._client.post(
+            f"/v1/agents/{_enc(name)}/revoke-token",
+            {key: value for key, value in body.items() if value is not None},
+        )
+
+    def enroll_recovery_credential(
+        self,
+        *,
+        recovery_proof_hash: str,
+        work_unit_id: str | None = None,
+    ) -> dict[str, Any]:
+        body = {"recovery_proof_hash": recovery_proof_hash, "work_unit_id": work_unit_id}
+        return self._client.post(
+            "/v1/agent/recovery-credential",
+            {key: value for key, value in body.items() if value is not None},
+        )
 
     def delete(self, name: str) -> None:
         self._client.delete(f"/v1/agents/{_enc(name)}")
@@ -248,6 +317,8 @@ class Relay:
         type: str | None = None,
         persona: str | None = None,
         metadata: dict[str, Any] | None = None,
+        recovery_proof_hash: str | None = None,
+        work_unit_id: str | None = None,
     ) -> CreateAgentResponse:
         return self.agents.register(name, type=type, persona=persona, metadata=metadata)
 
@@ -421,12 +492,16 @@ class _AsyncAgentsNamespace:
         type: str | None = None,
         persona: str | None = None,
         metadata: dict[str, Any] | None = None,
+        recovery_proof_hash: str | None = None,
+        work_unit_id: str | None = None,
     ) -> CreateAgentResponse:
         data = CreateAgentRequest(
             name=name,
             type=type,  # type: ignore[arg-type]
             persona=persona,
             metadata=metadata,
+            recovery_proof_hash=recovery_proof_hash,
+            work_unit_id=work_unit_id,
         )
         result = await self._client.post("/v1/agents", data.model_dump(exclude_none=True))
         return CreateAgentResponse.model_validate(result)
@@ -438,21 +513,17 @@ class _AsyncAgentsNamespace:
         type: str | None = None,
         persona: str | None = None,
         metadata: dict[str, Any] | None = None,
+        recovery_proof_hash: str | None = None,
+        work_unit_id: str | None = None,
     ) -> CreateAgentResponse:
-        try:
-            return await self.register(name, type=type, persona=persona, metadata=metadata)
-        except RelayError as err:
-            if not _is_duplicate_agent_error(err):
-                raise
-
-        agent = await self.get(name)
-        rotated = await self.rotate_token(agent.name)
-        return CreateAgentResponse(
-            id=agent.id,
-            name=agent.name,
-            token=rotated.token,
-            status=agent.status,
-            created_at=agent.created_at,
+        """Deprecated create-only alias; collisions fail closed."""
+        return await self.register(
+            name,
+            type=type,
+            persona=persona,
+            metadata=metadata,
+            recovery_proof_hash=recovery_proof_hash,
+            work_unit_id=work_unit_id,
         )
 
     async def list(self, *, status: str | None = None) -> list[Agent]:
@@ -469,6 +540,80 @@ class _AsyncAgentsNamespace:
     async def rotate_token(self, name: str) -> TokenRotateResponse:
         result = await self._client.post(f"/v1/agents/{_enc(name)}/rotate-token", {})
         return TokenRotateResponse.model_validate(result)
+
+    async def recover(
+        self,
+        name: str,
+        *,
+        expected_agent_id: str,
+        recovery_proof: str | None = None,
+        reason: str | None = None,
+        session_ref: str | None = None,
+        node_id: str | None = None,
+    ) -> dict[str, Any]:
+        body = {
+            "expected_agent_id": expected_agent_id,
+            "recovery_proof": recovery_proof,
+            "reason": reason,
+            "session_ref": session_ref,
+            "node_id": node_id,
+        }
+        return await self._client.post(
+            f"/v1/agents/{_enc(name)}/recover",
+            {key: value for key, value in body.items() if value is not None},
+        )
+
+    async def take_over(
+        self,
+        name: str,
+        *,
+        expected_agent_id: str,
+        actor: str,
+        reason: str,
+        session_ref: str,
+        node_id: str,
+    ) -> dict[str, Any]:
+        return await self._client.post(f"/v1/agents/{_enc(name)}/takeover", {
+            "expected_agent_id": expected_agent_id,
+            "actor": actor,
+            "reason": reason,
+            "session_ref": session_ref,
+            "node_id": node_id,
+        })
+
+    async def revoke_token(
+        self,
+        name: str,
+        *,
+        expected_agent_id: str,
+        actor: str,
+        reason: str,
+        session_ref: str | None = None,
+        node_id: str | None = None,
+    ) -> dict[str, Any]:
+        body = {
+            "expected_agent_id": expected_agent_id,
+            "actor": actor,
+            "reason": reason,
+            "session_ref": session_ref,
+            "node_id": node_id,
+        }
+        return await self._client.post(
+            f"/v1/agents/{_enc(name)}/revoke-token",
+            {key: value for key, value in body.items() if value is not None},
+        )
+
+    async def enroll_recovery_credential(
+        self,
+        *,
+        recovery_proof_hash: str,
+        work_unit_id: str | None = None,
+    ) -> dict[str, Any]:
+        body = {"recovery_proof_hash": recovery_proof_hash, "work_unit_id": work_unit_id}
+        return await self._client.post(
+            "/v1/agent/recovery-credential",
+            {key: value for key, value in body.items() if value is not None},
+        )
 
     async def delete(self, name: str) -> None:
         await self._client.delete(f"/v1/agents/{_enc(name)}")

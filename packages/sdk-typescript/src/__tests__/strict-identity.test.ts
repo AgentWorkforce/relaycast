@@ -79,25 +79,17 @@ describe('strict identity APIs', () => {
   });
 
   describe('registerAgent (non-strict / default)', () => {
-    it('retries with suffixed name on conflict', async () => {
+    it('fails closed without a suffixed-name retry on conflict', async () => {
       const { RelayCast } = await import('../relay.js');
+      const { RelayError } = await import('../errors.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
-      const created = { id: 'a_2', name: 'Bot-abc1', token: 'at_live_new', status: 'online', created_at: '2024-01-01' };
-      mockFetch
-        .mockImplementationOnce(() =>
-          mockResponse({ code: 'agent_already_exists', message: 'exists' }, false, 409),
-        )
-        .mockImplementationOnce(() => mockResponse(created));
+      mockFetch.mockImplementation(() =>
+        mockResponse({ code: 'agent_already_exists', message: 'exists' }, false, 409),
+      );
 
-      const result = await relay.registerAgent({ name: 'Bot' });
-      expect(result.token).toBe('at_live_new');
-      expect(mockFetch).toHaveBeenCalledTimes(2);
-
-      // Second call should have a suffixed name
-      const [, secondInit] = mockFetch.mock.calls[1]!;
-      const body = JSON.parse(secondInit.body);
-      expect(body.name).toMatch(/^Bot-[0-9a-f]{4}$/);
+      await expect(relay.registerAgent({ name: 'Bot' })).rejects.toBeInstanceOf(RelayError);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -114,32 +106,17 @@ describe('strict identity APIs', () => {
       expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
-    it('rotates token on name conflict', async () => {
+    it('is a fail-closed compatibility alias on name conflict', async () => {
       const { RelayCast } = await import('../relay.js');
+      const { RelayError } = await import('../errors.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
-      mockFetch
-        .mockImplementationOnce(() =>
-          mockResponse({ code: 'agent_already_exists', message: 'exists' }, false, 409),
-        )
-        .mockImplementationOnce(() =>
-          mockResponse({ id: 'a_1', name: 'Bot', type: 'agent', token_hash: 'h', status: 'online', persona: null, metadata: {}, created_at: '2024-01-01', last_seen: '2024-01-01' }),
-        )
-        .mockImplementationOnce(() =>
-          mockResponse({ token: 'at_live_rotated' }),
-        );
+      mockFetch.mockImplementation(() =>
+        mockResponse({ code: 'agent_already_exists', message: 'exists' }, false, 409),
+      );
 
-      const result = await relay.registerOrRotate({ name: 'Bot' });
-      expect(result.token).toBe('at_live_rotated');
-      expect(result.name).toBe('Bot');
-      expect(result.id).toBe('a_1');
-      expect(mockFetch).toHaveBeenCalledTimes(3);
-
-      // Verify get + rotateToken were called
-      const [getUrl] = mockFetch.mock.calls[1]!;
-      expect(getUrl).toBe('https://cast.agentrelay.com/v1/agents/Bot');
-      const [rotateUrl] = mockFetch.mock.calls[2]!;
-      expect(rotateUrl).toBe('https://cast.agentrelay.com/v1/agents/Bot/rotate-token');
+      await expect(relay.registerOrRotate({ name: 'Bot' })).rejects.toBeInstanceOf(RelayError);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
     it('rethrows non-conflict errors', async () => {
@@ -178,17 +155,9 @@ describe('strict identity APIs', () => {
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
-      // registerOrRotate with conflict
-      mockFetch
-        .mockImplementationOnce(() =>
-          mockResponse({ code: 'agent_already_exists', message: 'exists' }, false, 409),
-        )
-        .mockImplementationOnce(() =>
-          mockResponse({ id: 'a_2', name: 'Worker', type: 'agent', token_hash: 'h', status: 'online', persona: null, metadata: {}, created_at: '2024-01-01', last_seen: '2024-01-01' }),
-        )
-        .mockImplementationOnce(() =>
-          mockResponse({ token: 'at_live_rotated' }),
-        );
+      mockFetch.mockImplementationOnce(() => mockResponse({
+        id: 'a_2', name: 'Worker', token: 'at_live_new', status: 'online', created_at: '2024-01-01',
+      }));
       await relay.registerOrRotate({ name: 'Worker' });
 
       // resolveIdentity
@@ -205,6 +174,45 @@ describe('strict identity APIs', () => {
       const err = await relay.resolveIdentity().catch((e: unknown) => e);
       expect(err).toBeInstanceOf(RelayError);
       expect((err as any).code).toBe('not_found');
+    });
+  });
+
+  describe('explicit recovery operations', () => {
+    it('sends immutable id and recovery proof only to /recover', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      mockFetch.mockImplementation(() => mockResponse({
+        agent_id: 'a_1', name: 'Bot', token: 'at_live_recovered', audit_id: 'aid_1',
+      }));
+
+      const result = await relay.agents.recover({
+        name: 'Bot', expectedAgentId: 'a_1', recoveryProof: 'proof-secret', reason: 'restart',
+      });
+      expect(result).toMatchObject({ agentId: 'a_1', auditId: 'aid_1' });
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/agents/Bot/recover');
+      expect(JSON.parse(init.body)).toEqual({
+        expected_agent_id: 'a_1', recovery_proof: 'proof-secret', reason: 'restart',
+      });
+    });
+
+    it('uses separate audited owner takeover and immediate revoke operations', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      mockFetch.mockImplementation(() => mockResponse({
+        agent_id: 'a_1', name: 'Bot', token: 'at_live_recovered', audit_id: 'aid_1',
+      }));
+
+      await relay.agents.takeOver({
+        name: 'Bot', expectedAgentId: 'a_1', actor: 'owner', reason: 'lost proof',
+        sessionRef: 'incident-1', nodeId: 'node-1',
+      });
+      await relay.agents.revokeToken({
+        name: 'Bot', expectedAgentId: 'a_1', actor: 'owner', reason: 'compromise',
+      });
+
+      expect(mockFetch.mock.calls[0]![0]).toBe('https://cast.agentrelay.com/v1/agents/Bot/takeover');
+      expect(mockFetch.mock.calls[1]![0]).toBe('https://cast.agentrelay.com/v1/agents/Bot/revoke-token');
     });
   });
 

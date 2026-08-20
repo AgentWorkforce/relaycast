@@ -590,8 +590,9 @@ describe('durable delivery api', () => {
     await resumed.handle.handleMessage(JSON.stringify({
       v: 1,
       id: 'resume-bob',
-      type: 'agent.register',
+      type: 'agent.recover',
       name: bob.name,
+      expected_agent_id: bob.agentId,
       resumable: true,
       session_ref: 'sess-bob',
     }));
@@ -671,8 +672,9 @@ describe('durable delivery api', () => {
     await resumed.handle.handleMessage(JSON.stringify({
       v: 1,
       id: 'resume-bob-first',
-      type: 'agent.register',
+      type: 'agent.recover',
       name: bob.name,
+      expected_agent_id: bob.agentId,
       resumable: true,
       session_ref: 'sess-bob',
     }));
@@ -689,8 +691,9 @@ describe('durable delivery api', () => {
     await resumed.handle.handleMessage(JSON.stringify({
       v: 1,
       id: 'resume-carol-second',
-      type: 'agent.register',
+      type: 'agent.recover',
       name: carol.name,
+      expected_agent_id: carol.agentId,
       resumable: true,
       session_ref: 'sess-carol',
     }));
@@ -786,8 +789,9 @@ describe('durable delivery api', () => {
     await resumed.handle.handleMessage(JSON.stringify({
       v: 1,
       id: 'resume-live-gated-bob',
-      type: 'agent.register',
+      type: 'agent.recover',
       name: bob.name,
+      expected_agent_id: bob.agentId,
       resumable: true,
       session_ref: 'sess-bob',
     }));
@@ -848,8 +852,9 @@ describe('durable delivery api', () => {
     await resumed.handle.handleMessage(JSON.stringify({
       v: 1,
       id: 'resume-bob-after-bad-inventory',
-      type: 'agent.register',
+      type: 'agent.recover',
       name: bob.name,
+      expected_agent_id: bob.agentId,
       resumable: true,
       session_ref: 'sess-bob',
     }));

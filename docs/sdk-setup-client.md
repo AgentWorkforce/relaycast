@@ -470,7 +470,7 @@ const workspace = await setup.joinWorkspace(
 const alice = await workspace.registerAgent({ name: 'Alice', type: 'agent' })
 ```
 
-This is also the relaycast-side entry point for a `@relayfile/sdk` `AgentWorkspaceInvite`: pass `invite.workspaceId` and `invite.relaycastApiKey` to `joinWorkspace()`, set `baseUrl` from `invite.relaycastBaseUrl` when present, then claim the invited identity with `workspace.relayCast().agents.registerOrRotate({ name: invite.agentName })`. For the full multi-agent workflow, see [Agent Workspace Golden Path](../../relayfile/docs/agent-workspace-golden-path.md).
+This is also the relaycast-side entry point for a `@relayfile/sdk` `AgentWorkspaceInvite`: pass `invite.workspaceId` and `invite.relaycastApiKey` to `joinWorkspace()`, set `baseUrl` from `invite.relaycastBaseUrl` when present, then create the invited identity with `workspace.relayCast().agents.register({ name: invite.agentName })`. A collision fails closed; recover an existing invite identity only with its immutable id and enrolled recovery proof. For the full multi-agent workflow, see [Agent Workspace Golden Path](../../relayfile/docs/agent-workspace-golden-path.md).
 
 ### Self-hosted / local development mode
 

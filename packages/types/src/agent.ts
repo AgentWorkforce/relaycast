@@ -40,6 +40,8 @@ export const CreateAgentRequestSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
   skills: z.array(AgentSkillInputSchema).optional(),
   capabilities: z.record(z.string(), z.unknown()).optional(),
+  recovery_proof_hash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  work_unit_id: z.string().min(1).optional(),
 });
 export type CreateAgentRequest = z.infer<typeof CreateAgentRequestSchema>;
 

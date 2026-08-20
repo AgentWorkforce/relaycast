@@ -39,7 +39,7 @@ vi.mock('@relaycast/sdk/internal', () => {
   const mockRelay = {
     as: vi.fn().mockReturnValue(mockClient),
     agents: {
-      registerOrRotate: vi.fn().mockResolvedValue({ token: 'at_test' }),
+      register: vi.fn().mockResolvedValue({ token: 'at_test' }),
       list: vi.fn().mockResolvedValue([]),
       spawn: vi.fn().mockResolvedValue({}),
       release: vi.fn().mockResolvedValue({

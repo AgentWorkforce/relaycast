@@ -44,11 +44,17 @@ export {
   relayErrorRetryable,
 } from './errors.js';
 export type { RelayErrorCode, RelayErrorOptions } from './errors.js';
-export {
-  appendLegacySuffix,
-  isNameConflictError,
+export type {
+  AgentIdentityRecoveryResponse,
+  AgentIdentityRevocationResponse,
+  EnrollRecoveryCredentialInput,
+  RecoverAgentInput,
+  RegisterAgentInput,
+  RegisterOrRotateInput,
+  ResolvedIdentity,
+  RevokeAgentTokenInput,
+  TakeOverAgentInput,
 } from './identity.js';
-export type { RegisterAgentInput, RegisterOrRotateInput, ResolvedIdentity } from './identity.js';
 export { WsClient } from './ws.js';
 export type { WsClientOptions, EventHandler } from './ws.js';
 export { NodeProviderClient, NodeRegistrationError } from './node-provider.js';

@@ -314,7 +314,7 @@ export function registerRegistrationTools(
       }
 
       const relay = getRelay();
-      const result = await relay.agents.registerOrRotate({
+      const result = await relay.agents.register({
         name: effectiveName,
         type: effectiveType,
         persona,
@@ -484,7 +484,7 @@ export function registerRegistrationTools(
       setSession({ workspaceKey: api_key, agentToken: null, agentName: null, agents: new Map() });
 
       const relay = getRelay();
-      const regResult = await relay.agents.registerOrRotate({ name, type, persona });
+      const regResult = await relay.agents.register({ name, type, persona });
       setSession({
         agentToken: regResult.token,
         agentName: name,

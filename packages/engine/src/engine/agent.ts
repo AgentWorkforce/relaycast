@@ -1,6 +1,6 @@
 import { eq, and, gt, lt, ne, inArray, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { agents, agentNodeBindings, channels, channelMembers, dmParticipants, actions, deliveries, nodes } from '../db/schema.js';
+import { agents, agentNodeBindings, agentRecoveryCredentials, channels, channelMembers, dmParticipants, actions, deliveries, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
 import { codedError } from '../lib/httpError.js';
@@ -12,6 +12,7 @@ type Db = ReturnType<typeof getDb>;
 /** Metadata verifier used by brokers to reclaim their own registration. */
 export const AGENT_IDENTITY_METADATA_KEY = 'identity_key';
 export const AGENT_IDENTITY_HASH_PATTERN = /^[a-f0-9]{64}$/;
+export const AGENT_RECOVERY_PROOF_HASH_PATTERN = /^[a-f0-9]{64}$/;
 const AGENT_IDENTITY_METADATA_JSON_PATH = `$.${AGENT_IDENTITY_METADATA_KEY}`;
 
 function hasValidRegistrationIdentity(
@@ -146,6 +147,8 @@ export async function registerAgent(
     persona?: string;
     metadata?: Record<string, unknown>;
     capabilities?: Record<string, unknown>;
+    recoveryProofHash?: string;
+    workUnitId?: string;
   },
 ) {
   assertRegistrableAgentName(data.name);
@@ -153,6 +156,16 @@ export async function registerAgent(
     throw codedError(
       'Agent registration identity_key must be a lowercase SHA-256 verifier',
       'invalid_agent_identity_key',
+      400,
+    );
+  }
+  if (
+    data.recoveryProofHash !== undefined
+    && !AGENT_RECOVERY_PROOF_HASH_PATTERN.test(data.recoveryProofHash)
+  ) {
+    throw codedError(
+      'Agent recovery_proof_hash must be a lowercase SHA-256 verifier',
+      'invalid_agent_recovery_proof_hash',
       400,
     );
   }
@@ -210,6 +223,7 @@ export async function registerAgent(
           capabilities: data.capabilities ?? null,
           locationType: 'via_node',
           locationNodeId: directNodeId,
+          originNodeId: directNodeId,
         })
         .returning()];
 
@@ -218,6 +232,19 @@ export async function registerAgent(
           channelId: generalChannel.id,
           agentId,
           role: 'member',
+        }));
+      }
+
+      if (data.recoveryProofHash) {
+        writes.push(writeDb.insert(agentRecoveryCredentials).values({
+          id: `arc_${generateId()}`,
+          workspaceId,
+          agentId,
+          proofKind: 'work_unit',
+          verifierHash: data.recoveryProofHash,
+          workUnitId: data.workUnitId ?? null,
+          createdAt: now,
+          updatedAt: now,
         }));
       }
 

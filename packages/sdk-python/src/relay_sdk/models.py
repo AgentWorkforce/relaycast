@@ -37,6 +37,8 @@ class CreateAgentRequest(BaseModel):
     type: AgentType | None = None
     persona: str | None = None
     metadata: dict[str, Any] | None = None
+    recovery_proof_hash: str | None = None
+    work_unit_id: str | None = None
 
 
 class UpdateAgentRequest(BaseModel):

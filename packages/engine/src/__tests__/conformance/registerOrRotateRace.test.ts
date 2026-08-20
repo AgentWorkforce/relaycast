@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
 
 /**
- * Regression coverage for relay#1542. Two clients that concurrently reclaim the
- * same agent name each receive a fresh token from POST /agents/:name/rotate-token.
+ * Regression coverage for relay#1542. Two clients that concurrently roll over
+ * the same currently authenticated identity each receive a fresh token.
  * The stored `token_hash` is a single slot, so the later rotate would invalidate
  * the earlier caller's token silently — the caller was handed a 200 response
  * plus a credential that stopped working microseconds later.
@@ -13,17 +13,17 @@ import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from '.
  * they registered under. Once the grace window elapses, only the most recent
  * token authenticates and everything older stays revoked.
  */
-describe('registerOrRotate concurrency', () => {
+describe('authenticated agent token rollover concurrency', () => {
   let stack: TestStack;
 
   beforeEach(() => { stack = makeNodeStack(); });
   afterEach(() => stack.close());
 
-  async function rotate(workspaceKey: string, name: string): Promise<Response> {
+  async function rotate(agentToken: string, name: string): Promise<Response> {
     return stack.app.request(`/v1/agents/${name}/rotate-token`, {
       method: 'POST',
       headers: {
-        authorization: `Bearer ${workspaceKey}`,
+        authorization: `Bearer ${agentToken}`,
         'content-type': 'application/json',
       },
       body: '{}',
@@ -43,11 +43,11 @@ describe('registerOrRotate concurrency', () => {
 
   it('both concurrent rotations yield tokens that authenticate', async () => {
     const workspace = await createWorkspace(stack.app, 'race-both-authenticate');
-    await registerAgent(stack.app, workspace.workspaceKey, 'chief');
+    const initial = await registerAgent(stack.app, workspace.workspaceKey, 'chief');
 
     const [rotateA, rotateB] = await Promise.all([
-      rotate(workspace.workspaceKey, 'chief'),
-      rotate(workspace.workspaceKey, 'chief'),
+      rotate(initial.token, 'chief'),
+      rotate(initial.token, 'chief'),
     ]);
 
     expect(rotateA.status).toBe(200);
@@ -76,7 +76,7 @@ describe('registerOrRotate concurrency', () => {
     // Rotate once first so the grace slot (`previous_token_hash`) is actually
     // populated. Without this, the delete path is trivially satisfied by a
     // null slot and the test would pass even if release never cleared grace.
-    const rotateRes = await rotate(workspace.workspaceKey, 'ephemeral');
+    const rotateRes = await rotate(initial.token, 'ephemeral');
     expect(rotateRes.status).toBe(200);
     const currentToken = await tokenFrom(rotateRes);
     // Both slots hold a live credential before the delete: the initial token
@@ -102,9 +102,9 @@ describe('registerOrRotate concurrency', () => {
     const workspace = await createWorkspace(stack.app, 'race-chained-rotations');
     const initial = await registerAgent(stack.app, workspace.workspaceKey, 'chained');
 
-    const rotateA = await rotate(workspace.workspaceKey, 'chained');
+    const rotateA = await rotate(initial.token, 'chained');
     const tokenA = await tokenFrom(rotateA);
-    const rotateB = await rotate(workspace.workspaceKey, 'chained');
+    const rotateB = await rotate(tokenA, 'chained');
     const tokenB = await tokenFrom(rotateB);
 
     // The token from before the first rotation is fully retired.
@@ -112,5 +112,15 @@ describe('registerOrRotate concurrency', () => {
     // Both the intermediate and current tokens still authenticate during the grace window.
     expect((await authenticate(tokenA)).status).toBe(200);
     expect((await authenticate(tokenB)).status).toBe(200);
+  });
+
+  it('refuses proofless workspace-key and foreign-agent rotation', async () => {
+    const workspace = await createWorkspace(stack.app, 'rollover-auth-boundary');
+    const incumbent = await registerAgent(stack.app, workspace.workspaceKey, 'incumbent');
+    const stranger = await registerAgent(stack.app, workspace.workspaceKey, 'stranger');
+
+    expect((await rotate(workspace.workspaceKey, incumbent.name)).status).toBe(401);
+    expect((await rotate(stranger.token, incumbent.name)).status).toBe(403);
+    expect((await authenticate(incumbent.token)).status).toBe(200);
   });
 });

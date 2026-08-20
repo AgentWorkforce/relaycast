@@ -509,7 +509,7 @@ describe('workspace lifecycle', () => {
     const withoutDirectCascade = coverage.filter((table) => table.on_delete !== 'CASCADE');
 
     expect(stack.runtime.handle.sqlite.pragma('foreign_keys', { simple: true })).toBe(1);
-    expect(coverage).toHaveLength(29);
+    expect(coverage).toHaveLength(31);
     expect(withoutDirectCascade).toEqual([
       { table_name: 'workspace_events', on_delete: null },
     ]);

@@ -6,12 +6,24 @@ import {
   registerAgent,
   type TestStack,
 } from './conformance/harness.js';
-import { agents, channels, deliveries, files, messageAttachments, messageLogs, messages, readReceipts, channelMembers } from '../db/schema.js';
+import {
+  agentIdentityAudit,
+  agents,
+  channelMembers,
+  channels,
+  deliveries,
+  files,
+  messageAttachments,
+  messageLogs,
+  messages,
+  readReceipts,
+} from '../db/schema.js';
 import { postMessage } from '../engine/message.js';
 import { sendDm } from '../engine/dm.js';
 import { createGroupDm, postGroupMessage } from '../engine/groupDm.js';
 import { postReply } from '../engine/thread.js';
 import { markRead } from '../engine/receipt.js';
+import { rotateAgentIdentity } from '../engine/agentIdentity.js';
 import type { AtomicWrite, EngineDb, TransactionCapability } from '../ports/database.js';
 
 /**
@@ -276,6 +288,39 @@ describe('atomic write paths', () => {
   });
 
   describe('with a batch-capable handle (D1-style)', () => {
+    it('atomically rotates an identity and appends its audit record', async () => {
+      const { ws, alice, db } = await seed();
+      const [before] = await db
+        .select({ tokenHash: agents.tokenHash })
+        .from(agents)
+        .where(eq(agents.id, alice.agentId));
+      const batches = attachFakeBatch(db);
+
+      const recovered = await rotateAgentIdentity(db, {
+        workspaceId: ws.workspaceId,
+        agentId: alice.agentId,
+        agentName: 'alice',
+      }, {
+        authority: 'current_agent_token',
+        actor: 'agent:alice',
+        reason: 'D1 atomicity test',
+        originActor: 'conformance/atomicity',
+      });
+
+      expect(recovered.audit_id).toMatch(/^aid_/);
+      expect(batches).toHaveLength(1);
+      expect(batches[0]).toHaveLength(2);
+      expectStatementOn(batches[0], 'update', 'agents');
+      expectStatementOn(batches[0], 'insert', 'agent_identity_audit');
+      const [after] = await db
+        .select({ tokenHash: agents.tokenHash, previousTokenHash: agents.previousTokenHash })
+        .from(agents)
+        .where(eq(agents.id, alice.agentId));
+      expect(after.tokenHash).not.toBe(before.tokenHash);
+      expect(after.previousTokenHash).toBe(before.tokenHash);
+      expect(await db.select().from(agentIdentityAudit)).toHaveLength(1);
+    });
+
     it('channel send issues exactly one batch: message + deliveries + message_log', async () => {
       const { ws, alice, bob, channelId, db } = await seed();
       const batches = attachFakeBatch(db);

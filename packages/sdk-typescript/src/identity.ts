@@ -1,11 +1,55 @@
 import type { CreateAgentRequest } from './types.js';
-import { RelayError } from './errors.js';
 
 export interface RegisterAgentInput extends CreateAgentRequest {
   strict?: boolean;
 }
 
 export type RegisterOrRotateInput = CreateAgentRequest;
+
+export interface RecoverAgentInput {
+  name: string;
+  expectedAgentId: string;
+  recoveryProof?: string;
+  reason?: string;
+  sessionRef?: string;
+  nodeId?: string;
+}
+
+export interface TakeOverAgentInput {
+  name: string;
+  expectedAgentId: string;
+  actor: string;
+  reason: string;
+  sessionRef: string;
+  nodeId: string;
+}
+
+export interface RevokeAgentTokenInput {
+  name: string;
+  expectedAgentId: string;
+  actor: string;
+  reason: string;
+  sessionRef?: string;
+  nodeId?: string;
+}
+
+export interface EnrollRecoveryCredentialInput {
+  recoveryProofHash: string;
+  workUnitId?: string;
+}
+
+export interface AgentIdentityRecoveryResponse {
+  agentId: string;
+  name: string;
+  token: string;
+  auditId: string;
+}
+
+export interface AgentIdentityRevocationResponse {
+  agentId: string;
+  name: string;
+  auditId: string;
+}
 
 export interface ResolvedIdentity {
   agentId: string;
@@ -40,13 +84,4 @@ export function emitCompatibilityTelemetry(
 
   const detail: CompatibilityEventDetail = { event, metadata };
   target.dispatchEvent(new CustomEventCtor(COMPAT_EVENT_NAME, { detail }));
-}
-
-export function appendLegacySuffix(baseName: string): string {
-  const suffix = Math.random().toString(16).slice(2, 6).padEnd(4, '0');
-  return `${baseName}-${suffix}`;
-}
-
-export function isNameConflictError(err: unknown): err is RelayError {
-  return err instanceof RelayError && err.code === 'name_conflict';
 }

@@ -173,9 +173,48 @@ Relaycast is the messaging backbone:
 - Search across history
 - Realtime events over WebSocket
 
+## Agent identity recovery
+
+Registration is create-only. A duplicate name returns `409 agent_already_exists`;
+the server never reclaims the row, rotates its token, or invents a suffixed
+name. The deprecated SDK helpers `registerOrRotate`, `registerOrGet`,
+`register_or_rotate`, and `register_or_get_agent` now preserve that fail-closed
+behavior.
+
+For durable workloads, generate a high-entropy proof, retain it with the work
+unit, and send only its lowercase SHA-256 verifier during registration. Recover
+by presenting the raw proof together with the immutable agent id:
+
+```ts
+const created = await relay.agents.register({
+  name: 'worker',
+  recoveryProofHash,
+  workUnitId: 'job-42',
+});
+
+const recovered = await relay.agents.recover({
+  name: created.name,
+  expectedAgentId: created.id,
+  recoveryProof,
+  reason: 'work-unit restart',
+});
+```
+
+The current agent token and the server-owned origin-node credential are also
+valid self-service recovery proofs. Workspace owners have an explicit
+`POST /v1/agents/{name}/takeover` escape hatch that requires the expected id,
+actor, reason, session reference, and node id; it appends an audit record and
+notifies a connected incumbent. `POST /v1/agents/{name}/revoke-token` is the
+separate immediate compromise path and clears both current and grace-period
+token slots. Ordinary recovery and self-rollover retain the prior token for the
+short rollover grace period.
+
 ## Error Handling
 
-API errors use `{ ok: false, error: { code, message } }`. Invalid or expired agent tokens return `agent_token_invalid` with HTTP 401; clients should recover by re-registering or rotating the agent identity, then retrying the failed operation.
+API errors use `{ ok: false, error: { code, message } }`. Invalid or expired
+agent tokens return `agent_token_invalid` with HTTP 401. Recover only with an
+explicit current-token, origin-node, or enrolled work-unit proof; use the
+audited owner takeover when those proofs are unavailable.
 
 ## Telemetry Attribution
 

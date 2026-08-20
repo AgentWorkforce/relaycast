@@ -40,10 +40,6 @@ vi.mock('@relaycast/sdk', () => {
         agent: { name: 'bot1' },
         token: 'tok_abc',
       }),
-      registerOrRotate: vi.fn().mockResolvedValue({
-        agent: { name: 'bot1' },
-        token: 'tok_abc',
-      }),
       list: vi.fn().mockResolvedValue([]),
     };
     webhooks = {
@@ -109,10 +105,6 @@ vi.mock('@relaycast/sdk/internal', () => {
   class MockRelay {
     agents = {
       register: vi.fn().mockResolvedValue({
-        agent: { name: 'bot1' },
-        token: 'tok_abc',
-      }),
-      registerOrRotate: vi.fn().mockResolvedValue({
         agent: { name: 'bot1' },
         token: 'tok_abc',
       }),

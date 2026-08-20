@@ -3,7 +3,7 @@ import type { Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
-import { requireWorkspaceKey, requireWorkspaceRead } from '../middleware/auth.js';
+import { requireAgentToken, requireWorkspaceKey, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as workspaceEngine from '../engine/workspace.js';
 import * as activityEngine from '../engine/activity.js';
@@ -467,11 +467,21 @@ workspaceRoutes.get('/dm/conversations/:conversation_id/messages', requireWorksp
   }
 });
 
-// POST /agents/:name/rotate-token — token rotation
-workspaceRoutes.post('/agents/:name/rotate-token', requireWorkspaceKey, rateLimit, async (c) => {
+// POST /agents/:name/rotate-token — authenticated self-rollover only. Workspace
+// owners use the explicit, audited /takeover or /revoke-token operations.
+workspaceRoutes.post('/agents/:name/rotate-token', requireAgentToken, rateLimit, async (c) => {
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
+    const authAgent = c.get('agent')!;
+    if (authAgent.name !== c.req.param('name')) {
+      return jsonError(
+        c,
+        'agent_recovery_not_authorized',
+        'An agent token may rotate only its own identity',
+        403,
+      );
+    }
     const result = await tokenRotateEngine.rotateAgentToken(
       db,
       workspace.id,
