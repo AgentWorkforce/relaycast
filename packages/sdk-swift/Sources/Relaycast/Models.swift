@@ -1004,9 +1004,40 @@ public struct UploadRequest: Codable, Equatable, Sendable {
 }
 
 public struct UploadResponse: Codable, Equatable, Sendable {
+    /// `POST /v1/files/upload` returns the new file's identifier as `id`; a
+    /// `file_id` alias is accepted so a record echoed by another surface still
+    /// decodes.
     public let fileId: String
     public let uploadUrl: String
-    public let expiresAt: String
+    public let expiresAt: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case fileId, id, uploadUrl, expiresAt
+    }
+
+    public init(fileId: String, uploadUrl: String, expiresAt: String?) {
+        self.fileId = fileId
+        self.uploadUrl = uploadUrl
+        self.expiresAt = expiresAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let fileId = try container.decodeIfPresent(String.self, forKey: .fileId) {
+            self.fileId = fileId
+        } else {
+            self.fileId = try container.decode(String.self, forKey: .id)
+        }
+        uploadUrl = try container.decode(String.self, forKey: .uploadUrl)
+        expiresAt = try container.decodeIfPresent(String.self, forKey: .expiresAt)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(fileId, forKey: .fileId)
+        try container.encode(uploadUrl, forKey: .uploadUrl)
+        try container.encodeIfPresent(expiresAt, forKey: .expiresAt)
+    }
 }
 
 public struct CompleteUploadResponse: Codable, Equatable, Sendable {

@@ -17,6 +17,32 @@ final class RelaycastTests: XCTestCase {
         }
     }
 
+    func testUploadResponseDecodesHostedFileIdentifier() throws {
+        // `POST /v1/files/upload` names the identifier `id`; requiring
+        // `file_id` failed every Swift upload with "Invalid Relaycast API
+        // response", so message attachments could never be sent.
+        let payload = Data("""
+        {
+          "id": "216249393717387264",
+          "upload_url": "https://example.r2.cloudflarestorage.com/relaycast-cloud-files/abc?X-Amz-Signature=deadbeef",
+          "expires_at": "2026-08-20T18:38:37.510Z"
+        }
+        """.utf8)
+
+        let decoded = try makeRelaycastDecoder().decode(UploadResponse.self, from: payload)
+        XCTAssertEqual(decoded.fileId, "216249393717387264")
+        XCTAssertEqual(decoded.expiresAt, "2026-08-20T18:38:37.510Z")
+        XCTAssertTrue(decoded.uploadUrl.hasPrefix("https://example.r2.cloudflarestorage.com/"))
+    }
+
+    func testUploadResponseAcceptsFileIdAliasAndOmittedExpiry() throws {
+        let payload = Data(#"{"file_id": "file_1", "upload_url": "https://example.test/put"}"#.utf8)
+
+        let decoded = try makeRelaycastDecoder().decode(UploadResponse.self, from: payload)
+        XCTAssertEqual(decoded.fileId, "file_1")
+        XCTAssertNil(decoded.expiresAt)
+    }
+
     func testHttpClientEncodesSnakeCaseAndOriginHeaders() async throws {
         let session = makeMockSession()
         let client = try HttpClient(
