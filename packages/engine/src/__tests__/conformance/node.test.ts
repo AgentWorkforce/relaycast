@@ -1548,6 +1548,37 @@ describe('node adapter conformance', () => {
         status: 'pending',
       });
 
+      const drainPlan = stack.runtime.handle.sqlite.prepare(`
+        EXPLAIN QUERY PLAN
+        SELECT action_invocations.id
+        FROM action_invocations
+        LEFT JOIN actions ON action_invocations.action_id = actions.id
+        LEFT JOIN agents ON actions.handler_agent_id = agents.id
+        WHERE action_invocations.workspace_id = ?
+          AND action_invocations.status = 'pending'
+          AND (
+            action_invocations.retry_after_at IS NULL
+            OR action_invocations.retry_after_at <= ?
+          )
+          AND (
+            action_invocations.dispatched_node_id = ?
+            OR actions.handler_node_id = ?
+            OR (
+              agents.location_type = 'via_node'
+              AND agents.location_node_id = ?
+            )
+          )
+        ORDER BY action_invocations.created_at ASC
+      `).all(
+        ws.workspaceId,
+        Math.floor(Date.now() / 1000),
+        'node_alpha',
+        'node_alpha',
+        'node_alpha',
+      ) as Array<{ detail: string }>;
+      expect(drainPlan.some((step) =>
+        step.detail.includes('idx_action_invocations_pending_workspace'))).toBe(true);
+
       alpha.sock.received.length = 0;
       const drained = await drainNodeInvocations(db, stack.runtime.realtime, ws.workspaceId, 'node_alpha');
       expect(drained).toBe(1);

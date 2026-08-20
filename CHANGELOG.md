@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Fleet reconnect drains and activity-feed reads no longer perform repeated full-table D1 scans as invocation and DM history grows.
 
 ## [8.1.2] - 2026-08-19
 
