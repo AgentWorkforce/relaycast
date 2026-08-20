@@ -647,6 +647,7 @@ export const dmConversations = sqliteTable(
   },
   (table) => [
     index('idx_dm_conversations_workspace').on(table.workspaceId),
+    index('idx_dm_conversations_channel').on(table.channelId),
   ],
 );
 
@@ -950,6 +951,9 @@ export const actionInvocations = sqliteTable(
     index('idx_action_invocations_action').on(table.actionId, table.createdAt),
     index('idx_action_invocations_caller').on(table.callerId, table.createdAt),
     index('idx_action_invocations_dispatched_node').on(table.dispatchedNodeId, table.createdAt),
+    index('idx_action_invocations_pending_workspace')
+      .on(table.workspaceId, table.createdAt)
+      .where(sql`${table.status} = 'pending'`),
   ],
 );
 
