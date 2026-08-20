@@ -321,6 +321,29 @@ describe('atomic write paths', () => {
       expect(await db.select().from(agentIdentityAudit)).toHaveLength(1);
     });
 
+    it('does not append an audit record when the target changes before a D1 batch', async () => {
+      const { ws, alice, db } = await seed();
+      attachFakeBatch(db, async () => {
+        await db
+          .update(agents)
+          .set({ name: 'alice-renamed' })
+          .where(eq(agents.id, alice.agentId));
+      });
+
+      await expect(rotateAgentIdentity(db, {
+        workspaceId: ws.workspaceId,
+        agentId: alice.agentId,
+        agentName: 'alice',
+      }, {
+        authority: 'current_agent_token',
+        actor: 'agent:alice',
+        reason: 'stale target test',
+        originActor: 'conformance/atomicity',
+      })).rejects.toMatchObject({ code: 'agent_identity_conflict' });
+
+      expect(await db.select().from(agentIdentityAudit)).toHaveLength(0);
+    });
+
     it('channel send issues exactly one batch: message + deliveries + message_log', async () => {
       const { ws, alice, bob, channelId, db } = await seed();
       const batches = attachFakeBatch(db);

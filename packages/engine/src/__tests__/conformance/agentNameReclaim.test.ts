@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { createWorkspace, FakeSocket, makeNodeStack, type TestStack } from './harness.js';
-import { agents } from '../../db/schema.js';
+import { agentNodeBindings, agents, nodes } from '../../db/schema.js';
+import type { TransactionCapability } from '../../ports/database.js';
 
 /**
  * Registration is create-only. Recovery is a distinct, proof-carrying action:
@@ -125,5 +126,59 @@ describe('agent identity recovery across nodes', () => {
     expect(after.locationNodeId).toBe('node_alpha');
     expect(after.tokenHash).not.toBe(before.tokenHash);
     expect(after.previousTokenHash).toBe(before.tokenHash);
+  });
+
+  it('leaves D1 state untouched when the origin node is at capacity', async () => {
+    const ws = await createWorkspace(stack.app, 'recover-capacity-d1');
+    const alpha = await bringNodeOnline(ws, 'node_alpha', 'alpha');
+    await bringNodeOnline(ws, 'node_beta', 'beta');
+    await send(alpha, { id: 'create', type: 'agent.register', name: 'capacity-worker' });
+    const created = await agentRow(ws.workspaceId, 'capacity-worker');
+
+    await db().update(agentNodeBindings).set({ status: 'inactive' }).where(and(
+      eq(agentNodeBindings.agentId, created.id),
+      eq(agentNodeBindings.nodeId, 'node_alpha'),
+    ));
+    await db().insert(agentNodeBindings).values({
+      id: 'anb_capacity_d1',
+      workspaceId: ws.workspaceId,
+      agentId: created.id,
+      nodeId: 'node_beta',
+      status: 'active',
+      sessionRef: 'before-capacity-recovery',
+      priority: 0,
+    });
+    await db().update(agents).set({
+      status: 'offline',
+      locationNodeId: 'node_beta',
+      sessionRef: 'before-capacity-recovery',
+    }).where(eq(agents.id, created.id));
+    await db().update(nodes).set({ maxAgents: 1, activeAgents: 1 }).where(and(
+      eq(nodes.workspaceId, ws.workspaceId),
+      eq(nodes.id, 'node_alpha'),
+    ));
+
+    const before = await agentRow(ws.workspaceId, 'capacity-worker');
+    delete (db() as unknown as Partial<TransactionCapability>).withTransaction;
+    const rejected = await send(alpha, {
+      id: 'capacity-recover',
+      type: 'agent.recover',
+      name: 'capacity-worker',
+      expected_agent_id: created.id,
+    });
+    expect(rejected).toMatchObject({
+      type: 'error',
+      ok: false,
+      code: 'node_capacity_exceeded',
+    });
+    expect(await agentRow(ws.workspaceId, 'capacity-worker')).toEqual(before);
+    const bindings = await db()
+      .select({ nodeId: agentNodeBindings.nodeId, status: agentNodeBindings.status })
+      .from(agentNodeBindings)
+      .where(eq(agentNodeBindings.agentId, created.id));
+    expect(bindings).toEqual(expect.arrayContaining([
+      { nodeId: 'node_alpha', status: 'inactive' },
+      { nodeId: 'node_beta', status: 'active' },
+    ]));
   });
 });

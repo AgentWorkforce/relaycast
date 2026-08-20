@@ -96,6 +96,7 @@ export const agents = sqliteTable(
   },
   (table) => [
     uniqueIndex('agents_workspace_name_unique').on(table.workspaceId, table.name),
+    uniqueIndex('agents_workspace_id_unique').on(table.workspaceId, table.id),
     index('idx_agents_workspace').on(table.workspaceId),
     index('idx_agents_token').on(table.tokenHash),
     index('idx_agents_previous_token').on(table.previousTokenHash),
@@ -120,9 +121,7 @@ export const agentRecoveryCredentials = sqliteTable(
     workspaceId: text('workspace_id')
       .notNull()
       .references(() => workspaces.id, { onDelete: 'cascade' }),
-    agentId: text('agent_id')
-      .notNull()
-      .references(() => agents.id, { onDelete: 'cascade' }),
+    agentId: text('agent_id').notNull(),
     proofKind: text('proof_kind').notNull(),
     verifierHash: text('verifier_hash').notNull(),
     workUnitId: text('work_unit_id'),
@@ -132,6 +131,11 @@ export const agentRecoveryCredentials = sqliteTable(
   (table) => [
     uniqueIndex('agent_recovery_credentials_agent_unique').on(table.workspaceId, table.agentId),
     uniqueIndex('agent_recovery_credentials_verifier_unique').on(table.verifierHash),
+    foreignKey({
+      columns: [table.workspaceId, table.agentId],
+      foreignColumns: [agents.workspaceId, agents.id],
+      name: 'agent_recovery_credentials_agent_fk',
+    }).onDelete('cascade'),
   ],
 );
 

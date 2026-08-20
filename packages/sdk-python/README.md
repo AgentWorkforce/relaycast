@@ -58,6 +58,7 @@ Lifecycle/auth helpers added for SDK-first worker ownership:
 - `relay.agents.register_or_rotate(...)` — deprecated create-only alias; collisions fail closed.
 - `relay.agents.recover(...)` — explicitly recover the exact immutable id using a current token, origin node, or enrolled work-unit proof.
 - `relay.agents.take_over(...)` / `revoke_token(...)` — audited workspace-owner takeover and immediate compromise response.
-- `relay.agents.rotate_token(name)` — self-rollover using that agent's current token.
+- `relay.agents.rotate_token(name, agent_token=token)` — self-rollover using that agent's current token.
+- `relay.agents.enroll_recovery_credential(agent_token=token, ...)` — enroll a verifier using agent-scoped authentication.
 - `me.mark_online()` / `me.heartbeat()` — refresh presence using the agent token.
 - `me.mark_offline()` / `me.disconnect()` — explicitly mark the agent offline.

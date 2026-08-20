@@ -1303,48 +1303,51 @@ export async function recoverAgentViaNode(
       );
     }
 
-    const now = new Date().toISOString();
-    const fleetMetadata = sql`json_object(
-      'node_id', ${nodeId},
-      'invocation_id', ${message.invocation_id ?? null},
-      'registered_at', ${now}
-    )`;
-    const [result] = await tx
-      .update(agents)
-      .set({
-        status: 'active',
-        lastSeen: new Date(),
-        metadata: sql`json_patch(COALESCE(${agents.metadata}, '{}'), ${fleetMetadata})`,
-        locationType: 'via_node',
-        locationNodeId: nodeId,
-        providerName,
-        resumable: message.resumable ?? false,
-        sessionRef: message.session_ref ?? null,
-      })
-      .where(and(
-        eq(agents.workspaceId, workspaceId),
-        eq(agents.id, message.expected_agent_id),
-        eq(agents.name, message.name),
-        eq(agents.originNodeId, nodeId),
-      ))
-      .returning();
-    if (!result) {
-      throw codedError(
-        `Agent "${message.name}" changed during node recovery`,
-        'agent_identity_conflict',
-        409,
-      );
-    }
-
-    await autoJoinGeneral(tx, workspaceId, result.id);
-    const activeNodeIds = await activeBindingNodeIdsForAgent(tx, workspaceId, result.id);
+    const activeNodeIds = await activeBindingNodeIdsForAgent(tx, workspaceId, target.id);
     const targetWasActive = activeNodeIds.includes(nodeId);
     let reservedTargetSlot = false;
+    // D1 has no interactive transaction, so capacity must be acquired before
+    // any agent/location mutation. A full node now fails with the incumbent
+    // row and bindings untouched; a later failure releases this reservation.
+    if (!targetWasActive) {
+      await reserveNodeAgentSlot(tx, workspaceId, node);
+      reservedTargetSlot = true;
+    }
     try {
-      if (!targetWasActive) {
-        await reserveNodeAgentSlot(tx, workspaceId, node);
-        reservedTargetSlot = true;
+      const now = new Date().toISOString();
+      const fleetMetadata = sql`json_object(
+        'node_id', ${nodeId},
+        'invocation_id', ${message.invocation_id ?? null},
+        'registered_at', ${now}
+      )`;
+      const [result] = await tx
+        .update(agents)
+        .set({
+          status: 'active',
+          lastSeen: new Date(),
+          metadata: sql`json_patch(COALESCE(${agents.metadata}, '{}'), ${fleetMetadata})`,
+          locationType: 'via_node',
+          locationNodeId: nodeId,
+          providerName,
+          resumable: message.resumable ?? false,
+          sessionRef: message.session_ref ?? null,
+        })
+        .where(and(
+          eq(agents.workspaceId, workspaceId),
+          eq(agents.id, message.expected_agent_id),
+          eq(agents.name, message.name),
+          eq(agents.originNodeId, nodeId),
+        ))
+        .returning();
+      if (!result) {
+        throw codedError(
+          `Agent "${message.name}" changed during node recovery`,
+          'agent_identity_conflict',
+          409,
+        );
       }
+
+      await autoJoinGeneral(tx, workspaceId, result.id);
       await upsertAgentNodeBinding(tx, workspaceId, result, nodeId, {
         sessionRef: message.session_ref ?? null,
         deactivateExisting: true,
@@ -1354,37 +1357,35 @@ export async function recoverAgentViaNode(
         workspaceId,
         activeNodeIds.filter((activeNodeId) => activeNodeId !== nodeId),
       );
+      // Rotate only after every fallible routing/capacity mutation. On Node the
+      // surrounding transaction still makes the whole recovery atomic; on D1
+      // the rotation+audit pair remains one atomic batch.
+      const rotated = await rotateAgentIdentity(tx, {
+        workspaceId,
+        agentId: target.id,
+        agentName: target.name,
+      }, {
+        authority: 'origin_node',
+        actor: `node:${node.name}`,
+        reason: 'explicit node identity recovery',
+        sessionRef: message.session_ref ?? target.sessionRef,
+        nodeId,
+        originActor: 'node-control/agent.recover',
+      }, 'recover', {
+        requireAtomic: !hasInteractiveTransaction,
+        alreadyAtomic: hasInteractiveTransaction,
+      });
+
+      return {
+        agent_id: result.id,
+        name: result.name,
+        token: rotated.token,
+        ...(cursorHandshake ? { delivery_ack_seq: result.deliveryAckSeq } : {}),
+      };
     } catch (err) {
       if (reservedTargetSlot) await releaseNodeAgentSlots(tx, workspaceId, [nodeId]);
       throw err;
     }
-
-    // Rotate only after every fallible routing/capacity mutation. On Node the
-    // surrounding transaction still makes the whole recovery atomic; on D1
-    // this ordering ensures a failed binding cannot consume a token the caller
-    // never receives, while the rotation+audit pair remains one atomic batch.
-    const rotated = await rotateAgentIdentity(tx, {
-      workspaceId,
-      agentId: target.id,
-      agentName: target.name,
-    }, {
-      authority: 'origin_node',
-      actor: `node:${node.name}`,
-      reason: 'explicit node identity recovery',
-      sessionRef: message.session_ref ?? target.sessionRef,
-      nodeId,
-      originActor: 'node-control/agent.recover',
-    }, 'recover', {
-      requireAtomic: !hasInteractiveTransaction,
-      alreadyAtomic: hasInteractiveTransaction,
-    });
-
-    return {
-      agent_id: result.id,
-      name: result.name,
-      token: rotated.token,
-      ...(cursorHandshake ? { delivery_ack_seq: result.deliveryAckSeq } : {}),
-    };
   });
 }
 

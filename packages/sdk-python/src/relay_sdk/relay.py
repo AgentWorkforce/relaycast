@@ -124,8 +124,9 @@ class _AgentsNamespace:
         result = self._client.get(f"/v1/agents/{_enc(name)}")
         return Agent.model_validate(result)
 
-    def rotate_token(self, name: str) -> TokenRotateResponse:
-        result = self._client.post(f"/v1/agents/{_enc(name)}/rotate-token", {})
+    def rotate_token(self, name: str, *, agent_token: str) -> TokenRotateResponse:
+        with self._client.with_api_key(agent_token) as client:
+            result = client.post(f"/v1/agents/{_enc(name)}/rotate-token", {})
         return TokenRotateResponse.model_validate(result)
 
     def recover(
@@ -193,14 +194,16 @@ class _AgentsNamespace:
     def enroll_recovery_credential(
         self,
         *,
+        agent_token: str,
         recovery_proof_hash: str,
         work_unit_id: str | None = None,
     ) -> dict[str, Any]:
         body = {"recovery_proof_hash": recovery_proof_hash, "work_unit_id": work_unit_id}
-        return self._client.post(
-            "/v1/agent/recovery-credential",
-            {key: value for key, value in body.items() if value is not None},
-        )
+        with self._client.with_api_key(agent_token) as client:
+            return client.post(
+                "/v1/agent/recovery-credential",
+                {key: value for key, value in body.items() if value is not None},
+            )
 
     def delete(self, name: str) -> None:
         self._client.delete(f"/v1/agents/{_enc(name)}")
@@ -320,7 +323,14 @@ class Relay:
         recovery_proof_hash: str | None = None,
         work_unit_id: str | None = None,
     ) -> CreateAgentResponse:
-        return self.agents.register(name, type=type, persona=persona, metadata=metadata)
+        return self.agents.register(
+            name,
+            type=type,
+            persona=persona,
+            metadata=metadata,
+            recovery_proof_hash=recovery_proof_hash,
+            work_unit_id=work_unit_id,
+        )
 
     def register_or_rotate(
         self,
@@ -537,8 +547,9 @@ class _AsyncAgentsNamespace:
         result = await self._client.get(f"/v1/agents/{_enc(name)}")
         return Agent.model_validate(result)
 
-    async def rotate_token(self, name: str) -> TokenRotateResponse:
-        result = await self._client.post(f"/v1/agents/{_enc(name)}/rotate-token", {})
+    async def rotate_token(self, name: str, *, agent_token: str) -> TokenRotateResponse:
+        async with self._client.with_api_key(agent_token) as client:
+            result = await client.post(f"/v1/agents/{_enc(name)}/rotate-token", {})
         return TokenRotateResponse.model_validate(result)
 
     async def recover(
@@ -606,14 +617,16 @@ class _AsyncAgentsNamespace:
     async def enroll_recovery_credential(
         self,
         *,
+        agent_token: str,
         recovery_proof_hash: str,
         work_unit_id: str | None = None,
     ) -> dict[str, Any]:
         body = {"recovery_proof_hash": recovery_proof_hash, "work_unit_id": work_unit_id}
-        return await self._client.post(
-            "/v1/agent/recovery-credential",
-            {key: value for key, value in body.items() if value is not None},
-        )
+        async with self._client.with_api_key(agent_token) as client:
+            return await client.post(
+                "/v1/agent/recovery-credential",
+                {key: value for key, value in body.items() if value is not None},
+            )
 
     async def delete(self, name: str) -> None:
         await self._client.delete(f"/v1/agents/{_enc(name)}")
@@ -730,8 +743,17 @@ class AsyncRelay:
         type: str | None = None,
         persona: str | None = None,
         metadata: dict[str, Any] | None = None,
+        recovery_proof_hash: str | None = None,
+        work_unit_id: str | None = None,
     ) -> CreateAgentResponse:
-        return await self.agents.register(name, type=type, persona=persona, metadata=metadata)
+        return await self.agents.register(
+            name,
+            type=type,
+            persona=persona,
+            metadata=metadata,
+            recovery_proof_hash=recovery_proof_hash,
+            work_unit_id=work_unit_id,
+        )
 
     async def register_or_rotate(
         self,

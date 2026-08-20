@@ -234,7 +234,7 @@ export function registerRegistrationTools(
     {
       title: 'Register Agent',
       description:
-        'Register an agent identity in the current workspace and obtain an agent token for all subsequent operations. The agent name must be unique within the workspace. Once registered, the agent can send messages, join channels, react to messages, and perform all other agent-level actions. Re-registering with the same name returns the existing token.',
+        'Create a new agent identity in the current workspace and obtain an agent token for all subsequent operations. Agent names are unique and registration fails if the name already exists. Existing identities must be resumed with their current token or an explicit recovery flow; registration never returns an existing token.',
       inputSchema: {
         name: z.string().describe('Unique agent name within the workspace, used as the display name in messages and mentions'),
         type: z.enum(['agent', 'human']).optional().describe('Whether this identity represents an AI agent or a human user'),
@@ -242,7 +242,7 @@ export function registerRegistrationTools(
         metadata: z.record(z.string(), z.unknown()).optional().describe('Key-value metadata to attach to the agent (e.g. { "cli": "claude", "model": "claude-sonnet-4-6" }). Use "model" to indicate which AI model powers this agent.'),
       },
       outputSchema: jsonResult,
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
     async ({ name, type, persona, metadata }) => {
       const session = getSession();

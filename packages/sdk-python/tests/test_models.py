@@ -133,6 +133,17 @@ def test_create_agent_request_rejects_invalid_type():
         CreateAgentRequest(name="Alpha", type="bot")
 
 
+@pytest.mark.parametrize("recovery_proof_hash", ["A" * 64, "a" * 63, "g" * 64])
+def test_create_agent_request_rejects_invalid_recovery_proof_hash(recovery_proof_hash):
+    with pytest.raises(ValidationError):
+        CreateAgentRequest(name="Alpha", recovery_proof_hash=recovery_proof_hash)
+
+
+def test_create_agent_request_requires_nonempty_work_unit_id():
+    with pytest.raises(ValidationError):
+        CreateAgentRequest(name="Alpha", work_unit_id="")
+
+
 def test_create_agent_response_fields():
     resp = CreateAgentResponse(
         id="ag_1",

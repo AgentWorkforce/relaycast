@@ -194,6 +194,29 @@ describe('strict identity APIs', () => {
       expect(JSON.parse(init.body)).toEqual({
         expected_agent_id: 'a_1', recovery_proof: 'proof-secret', reason: 'restart',
       });
+
+      mockFetch.mockImplementationOnce(() => mockResponse({ id: 'ws_1', name: 'TestWS' }));
+      await expect(relay.resolveIdentity()).resolves.toEqual({
+        agentId: 'a_1', name: 'Bot', workspaceId: 'ws_1',
+      });
+    });
+
+    it('uses an agent-scoped credential for recovery enrollment', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      mockFetch.mockImplementation(() => mockResponse({ agent_id: 'a_1', enrolled: true }));
+
+      await relay.agents.enrollRecoveryCredential({
+        recoveryProofHash: 'a'.repeat(64),
+        workUnitId: 'job-1',
+      }, 'at_live_current');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/agent/recovery-credential');
+      expect(init.headers.Authorization).toBe('Bearer at_live_current');
+      expect(JSON.parse(init.body)).toEqual({
+        recovery_proof_hash: 'a'.repeat(64), work_unit_id: 'job-1',
+      });
     });
 
     it('uses separate audited owner takeover and immediate revoke operations', async () => {

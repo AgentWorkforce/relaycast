@@ -11,7 +11,7 @@ CREATE TABLE agent_recovery_credentials (
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
   updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
   FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
-  FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+  FOREIGN KEY (workspace_id, agent_id) REFERENCES agents(workspace_id, id) ON DELETE CASCADE
 );
 
 CREATE UNIQUE INDEX agent_recovery_credentials_agent_unique

@@ -1,4 +1,4 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, ne, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { agentIdentityAudit, agentRecoveryCredentials, agents } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
@@ -6,6 +6,7 @@ import { codedError } from '../lib/httpError.js';
 import { runAtomicWrites } from '../ports/database.js';
 import { generateId } from './snowflake.js';
 import { AGENT_TOKEN_GRACE_MS } from './tokenRotate.js';
+import { RELEASED_AGENT_STATUS } from './agent.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -35,6 +36,37 @@ function targetPredicate(target: AgentIdentityTarget) {
     eq(agents.workspaceId, target.workspaceId),
     eq(agents.id, target.agentId),
     eq(agents.name, target.agentName),
+    ne(agents.status, RELEASED_AGENT_STATUS),
+  );
+}
+
+function auditInsertAfterTokenChange(
+  writeDb: Db,
+  target: AgentIdentityTarget,
+  tokenHash: string,
+  row: typeof agentIdentityAudit.$inferInsert,
+) {
+  // The SELECT sees the token update earlier in the same transaction/batch.
+  // If the target predicate matched no live agent, it produces no row, so D1
+  // cannot commit a successful-looking audit entry for a failed mutation.
+  return writeDb.insert(agentIdentityAudit).select(
+    writeDb
+      .select({
+        id: sql<string>`${row.id}`.as('id'),
+        workspaceId: sql<string>`${row.workspaceId}`.as('workspace_id'),
+        agentId: sql<string>`${row.agentId}`.as('agent_id'),
+        agentName: sql<string>`${row.agentName}`.as('agent_name'),
+        action: sql<string>`${row.action}`.as('action'),
+        authority: sql<string>`${row.authority}`.as('authority'),
+        actor: sql<string>`${row.actor}`.as('actor'),
+        reason: sql<string>`${row.reason}`.as('reason'),
+        sessionRef: sql<string | null>`${row.sessionRef ?? null}`.as('session_ref'),
+        nodeId: sql<string | null>`${row.nodeId ?? null}`.as('node_id'),
+        originActor: sql<string>`${row.originActor}`.as('origin_actor'),
+        createdAt: sql<Date>`unixepoch()`.as('created_at'),
+      })
+      .from(agents)
+      .where(and(targetPredicate(target), eq(agents.tokenHash, tokenHash))),
   );
 }
 
@@ -123,7 +155,7 @@ export async function rotateAgentIdentity(
       })
       .where(targetPredicate(target))
       .returning({ id: agents.id }),
-    writeDb.insert(agentIdentityAudit).values({
+    auditInsertAfterTokenChange(writeDb, target, tokenHash, {
       id: auditId,
       workspaceId: target.workspaceId,
       agentId: target.agentId,
@@ -186,7 +218,7 @@ export async function revokeAgentIdentityTokens(
       })
       .where(targetPredicate(target))
       .returning({ id: agents.id }),
-    writeDb.insert(agentIdentityAudit).values({
+    auditInsertAfterTokenChange(writeDb, target, replacementHash, {
       id: auditId,
       workspaceId: target.workspaceId,
       agentId: target.agentId,

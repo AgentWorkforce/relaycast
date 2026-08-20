@@ -374,7 +374,11 @@ agentRoutes.post(
           actor = `work_unit:${credential.workUnitId ?? 'proof'}`;
         }
       } else if (token) {
-        const auth = await c.get('engine').auth.authenticate({ token, require: 'any', db });
+        // `sender` is the narrow existing requirement that admits node tokens
+        // alongside agent/workspace credentials. Workspace credentials still
+        // fail below because they establish neither agent nor origin-node
+        // authority; this only makes the explicit origin-node branch reachable.
+        const auth = await c.get('engine').auth.authenticate({ token, require: 'sender', db });
         if (!auth.ok) {
           return jsonError(c, 'agent_recovery_not_authorized', 'Recovery credential was not accepted', 403);
         }

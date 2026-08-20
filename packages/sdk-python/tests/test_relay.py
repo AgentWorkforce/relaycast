@@ -174,7 +174,7 @@ class TestRelay:
             return_value=ok({"token": "at_rotated"})
         )
         r = Relay(KEY, base_url=BASE)
-        rotated = r.agents.rotate_token("Coder")
+        rotated = r.agents.rotate_token("Coder", agent_token="at_live_current")
         assert rotated.token == "at_rotated"
         assert route.called
 
@@ -322,13 +322,23 @@ class TestRelay:
             "Coder", expected_agent_id="a1", actor="owner", reason="compromise"
         )
         r.agents.enroll_recovery_credential(
-            recovery_proof_hash="a" * 64, work_unit_id="job-1"
+            agent_token="at_live_current", recovery_proof_hash="a" * 64, work_unit_id="job-1"
         )
 
         assert json.loads(recover.calls[0].request.content) == {
             "expected_agent_id": "a1", "recovery_proof": "proof"
         }
-        assert takeover.called and revoke.called and enroll.called
+        assert json.loads(takeover.calls[0].request.content) == {
+            "expected_agent_id": "a1", "actor": "owner", "reason": "lost proof",
+            "session_ref": "incident-1", "node_id": "node-1",
+        }
+        assert json.loads(revoke.calls[0].request.content) == {
+            "expected_agent_id": "a1", "actor": "owner", "reason": "compromise"
+        }
+        assert json.loads(enroll.calls[0].request.content) == {
+            "recovery_proof_hash": "a" * 64, "work_unit_id": "job-1"
+        }
+        assert enroll.calls[0].request.headers["authorization"] == "Bearer at_live_current"
 
     @respx.mock
     @pytest.mark.parametrize("error_code", ["agent_already_exists", "name_conflict"])
@@ -403,7 +413,7 @@ class TestAsyncRelay:
     async def test_agents_rotate_token(self):
         respx.post(f"{BASE}/v1/agents/Coder/rotate-token").mock(return_value=ok({"token": "at_rotated"}))
         async with AsyncRelay(KEY, base_url=BASE) as r:
-            rotated = await r.agents.rotate_token("Coder")
+            rotated = await r.agents.rotate_token("Coder", agent_token="at_live_current")
             assert rotated.token == "at_rotated"
 
     @pytest.mark.asyncio

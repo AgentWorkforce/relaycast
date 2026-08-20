@@ -701,18 +701,25 @@ export class RelayCast {
       this.client.get(`/v1/agents/${encodeURIComponent(name)}`),
     me: (apiToken?: string): Promise<Agent> =>
       (apiToken ? this.client.withApiKey(apiToken) : this.client).get('/v1/agent'),
-    rotateToken: (name: string): Promise<TokenRotateResponse> =>
-      this.client.post(`/v1/agents/${encodeURIComponent(name)}/rotate-token`, {}),
-    recover: ({ name, ...data }: RecoverAgentInput): Promise<AgentIdentityRecoveryResponse> =>
-      this.client.post(`/v1/agents/${encodeURIComponent(name)}/recover`, data),
+    rotateToken: (name: string, agentToken: string): Promise<TokenRotateResponse> =>
+      this.client.withApiKey(agentToken).post(`/v1/agents/${encodeURIComponent(name)}/rotate-token`, {}),
+    recover: async ({ name, ...data }: RecoverAgentInput): Promise<AgentIdentityRecoveryResponse> => {
+      const result = await this.client.post<AgentIdentityRecoveryResponse>(
+        `/v1/agents/${encodeURIComponent(name)}/recover`,
+        data,
+      );
+      this.rememberIdentity(result.agentId, result.name);
+      return result;
+    },
     takeOver: ({ name, ...data }: TakeOverAgentInput): Promise<AgentIdentityRecoveryResponse> =>
       this.client.post(`/v1/agents/${encodeURIComponent(name)}/takeover`, data),
     revokeToken: ({ name, ...data }: RevokeAgentTokenInput): Promise<AgentIdentityRevocationResponse> =>
       this.client.post(`/v1/agents/${encodeURIComponent(name)}/revoke-token`, data),
     enrollRecoveryCredential: (
       data: EnrollRecoveryCredentialInput,
+      agentToken: string,
     ): Promise<{ agentId: string; enrolled: boolean }> =>
-      this.client.post('/v1/agent/recovery-credential', data),
+      this.client.withApiKey(agentToken).post('/v1/agent/recovery-credential', data),
     update: (name: string, data: UpdateAgentRequest): Promise<Agent> =>
       this.client.patch(`/v1/agents/${encodeURIComponent(name)}`, data),
     delete: (name: string): Promise<void> =>

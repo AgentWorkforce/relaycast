@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { agentIdentityAudit } from '../../db/schema.js';
+import { agentIdentityAudit, agentRecoveryCredentials, agents } from '../../db/schema.js';
 import { sha256Hex } from '../../lib/crypto.js';
+import { RELEASED_AGENT_STATUS } from '../../engine/agent.js';
 import {
   attachDirectNodeSocket,
   contextUpdatesOfType,
   createWorkspace,
+  FakeSocket,
   makeNodeStack,
   registerAgent,
   type TestStack,
@@ -42,6 +44,58 @@ describe('explicit agent identity recovery', () => {
   async function responseToken(response: Response): Promise<string> {
     const body = await response.json() as { data?: { token?: string } };
     return body.data?.token ?? '';
+  }
+
+  async function registerViaNode(
+    workspace: { workspaceKey: string; workspaceId: string },
+    nodeId: string,
+    nodeName: string,
+    agentName: string,
+  ): Promise<{ agentId: string; nodeToken: string }> {
+    const enrolled = await stack.app.request('/v1/nodes', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${workspace.workspaceKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        node_id: nodeId,
+        name: nodeName,
+        role: 'broker',
+        capabilities: [],
+        max_agents: 2,
+        tags: ['identity-recovery-test'],
+        version: 'v1',
+      }),
+    });
+    expect(enrolled.status).toBe(201);
+    const nodeToken = (await enrolled.json() as { data: { token: string } }).data.token;
+    const socket = new FakeSocket();
+    const handle = stack.runtime.realtime.attachNodeSocket(workspace.workspaceId, nodeId, socket);
+    await handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: `register-${nodeId}`,
+      type: 'node.register',
+      node_id: nodeId,
+      name: nodeName,
+      capabilities: [],
+      max_agents: 2,
+      tags: ['identity-recovery-test'],
+      version: 'v1',
+      resume_cursor: null,
+    }));
+    await handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: `agent-${nodeId}`,
+      type: 'agent.register',
+      name: agentName,
+    }));
+    const reply = socket.received.findLast((frame) => frame.id === `agent-${nodeId}`) as {
+      ok?: boolean;
+      data?: { agent_id?: string };
+    } | undefined;
+    expect(reply).toMatchObject({ ok: true });
+    return { agentId: reply?.data?.agent_id ?? '', nodeToken };
   }
 
   it('recovers with the current agent token and refuses another agent token', async () => {
@@ -113,6 +167,97 @@ describe('explicit agent identity recovery', () => {
     });
     expect(recovered.status).toBe(200);
     expect((await authenticate(await responseToken(recovered))).status).toBe(200);
+  });
+
+  it('reports verifier reuse accurately and rejects cross-workspace credential rows', async () => {
+    const firstWorkspace = await createWorkspace(stack.app, 'proof-owner-workspace');
+    const secondWorkspace = await createWorkspace(stack.app, 'proof-attacker-workspace');
+    const verifierHash = 'a'.repeat(64);
+
+    const first = await stack.app.request('/v1/agents', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${firstWorkspace.workspaceKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ name: 'proof-owner', recovery_proof_hash: verifierHash }),
+    });
+    expect(first.status).toBe(201);
+    const firstAgent = await first.json() as { data: { id: string } };
+
+    const duplicate = await stack.app.request('/v1/agents', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${secondWorkspace.workspaceKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ name: 'different-name', recovery_proof_hash: verifierHash }),
+    });
+    expect(duplicate.status).toBe(409);
+    await expect(duplicate.json()).resolves.toMatchObject({
+      error: { code: 'agent_recovery_proof_conflict' },
+    });
+
+    await expect(stack.runtime.deps.db.insert(agentRecoveryCredentials).values({
+      workspaceId: secondWorkspace.workspaceId,
+      agentId: firstAgent.data.id,
+      proofKind: 'work_unit',
+      verifierHash: 'b'.repeat(64),
+    })).rejects.toThrow();
+  });
+
+  it('recovers through HTTP only with the server-owned origin node token', async () => {
+    const workspace = await createWorkspace(stack.app, 'origin-node-http-recovery');
+    const origin = await registerViaNode(workspace, 'node_origin', 'origin', 'node-worker');
+    const foreign = await registerViaNode(workspace, 'node_foreign', 'foreign', 'other-worker');
+
+    const denied = await post('/v1/agents/node-worker/recover', foreign.nodeToken, {
+      expected_agent_id: origin.agentId,
+      node_id: 'node_foreign',
+    });
+    expect(denied.status).toBe(403);
+
+    const recovered = await post('/v1/agents/node-worker/recover', origin.nodeToken, {
+      expected_agent_id: origin.agentId,
+      node_id: 'node_origin',
+    });
+    expect(recovered.status).toBe(200);
+    expect((await authenticate(await responseToken(recovered))).status).toBe(200);
+  });
+
+  it('never issues a token for a terminal released identity', async () => {
+    const workspace = await createWorkspace(stack.app, 'released-agent-recovery');
+    const proof = 'released-agent-proof';
+    const registration = await stack.app.request('/v1/agents', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${workspace.workspaceKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        name: 'released-worker',
+        recovery_proof_hash: await sha256Hex(proof),
+      }),
+    });
+    const registered = await registration.json() as { data: { id: string } };
+    await stack.runtime.deps.db
+      .update(agents)
+      .set({ status: RELEASED_AGENT_STATUS })
+      .where(eq(agents.id, registered.data.id));
+
+    const recovered = await stack.app.request('/v1/agents/released-worker/recover', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        expected_agent_id: registered.data.id,
+        recovery_proof: proof,
+      }),
+    });
+    expect(recovered.status).toBe(409);
+    await expect(recovered.json()).resolves.toMatchObject({
+      error: { code: 'agent_identity_conflict' },
+    });
+    expect(await stack.runtime.deps.db.select().from(agentIdentityAudit)).toHaveLength(0);
   });
 
   it('requires an exact id and audit context for an owner takeover and notifies the incumbent', async () => {
