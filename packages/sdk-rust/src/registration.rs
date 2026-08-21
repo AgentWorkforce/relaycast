@@ -92,6 +92,18 @@ pub enum AgentRegistrationError {
     Transport { agent_name: String, detail: String },
     #[error("registration response missing token for '{agent_name}'")]
     MissingToken { agent_name: String },
+    /// The name is taken and registration is create-only.
+    ///
+    /// Since engine 8.2.0 (#349) registration never replaces an existing
+    /// identity. Replacing one is an explicit, audited operation: `recover`
+    /// with a recovery proof, or `takeover` as the workspace owner. Callers
+    /// that just need their own agent should use a name unique to the run.
+    #[error(
+        "agent '{agent_name}' already exists and registration is create-only; \
+         use recover (with a recovery proof) or takeover (workspace owner, audited) \
+         to replace an existing identity, or register under a unique name"
+    )]
+    AlreadyExists { agent_name: String },
 }
 
 /// Retries exhausted or fatal outcome for [`retry_agent_registration`].
@@ -206,48 +218,21 @@ impl AgentRegistrationClient {
                 lock_unpoisoned(&self.registration_cooldowns).remove(trimmed_name);
                 Ok(result.token)
             }
+            // Registration is create-only as of engine 8.2.0 (#349): a 409 means
+            // the name is held by an existing identity, and replacing it is a
+            // deliberate, audited act (`recover` with a proof, or `takeover` as
+            // the workspace owner) rather than something a registration call
+            // should do silently.
+            //
+            // This branch used to fall back to `rotate_agent_token` with the
+            // workspace key. That route became `requireAgentToken` in the same
+            // release, so the fallback could only ever return
+            // `401 Agent token required (at_live_...)` — a misleading auth error
+            // for what is really "this name is taken". Report the real condition.
             Err(RelayError::Api { status: 409, .. }) => {
-                match self.relay.rotate_agent_token(trimmed_name).await {
-                    Ok(result) => {
-                        if result.token.trim().is_empty() {
-                            return Err(AgentRegistrationError::MissingToken {
-                                agent_name: trimmed_name.to_string(),
-                            });
-                        }
-                        lock_unpoisoned(&self.agent_tokens)
-                            .insert(trimmed_name.to_string(), result.token.clone());
-                        lock_unpoisoned(&self.registration_cooldowns).remove(trimmed_name);
-                        Ok(result.token)
-                    }
-                    Err(RelayError::Api {
-                        status: 429,
-                        message,
-                        code,
-                    }) => {
-                        let retry_after_secs = DEFAULT_REGISTRATION_COOLDOWN_SECS;
-                        let blocked_until = Instant::now() + Duration::from_secs(retry_after_secs);
-                        lock_unpoisoned(&self.registration_cooldowns)
-                            .insert(trimmed_name.to_string(), blocked_until);
-                        Err(AgentRegistrationError::RateLimited {
-                            agent_name: trimmed_name.to_string(),
-                            retry_after_secs,
-                            detail: format!("{message} (code: {code})"),
-                        })
-                    }
-                    Err(RelayError::Api {
-                        status,
-                        message,
-                        code,
-                    }) => Err(AgentRegistrationError::Api {
-                        agent_name: trimmed_name.to_string(),
-                        status,
-                        detail: format!("{message} (code: {code})"),
-                    }),
-                    Err(error) => Err(AgentRegistrationError::Transport {
-                        agent_name: trimmed_name.to_string(),
-                        detail: error.to_string(),
-                    }),
-                }
+                Err(AgentRegistrationError::AlreadyExists {
+                    agent_name: trimmed_name.to_string(),
+                })
             }
             Err(RelayError::Api {
                 status: 429,
@@ -362,7 +347,7 @@ mod tests {
     };
     use crate::{RelayCast, RelayCastOptions};
     use serde_json::json;
-    use wiremock::matchers::{body_string_contains, method, path};
+    use wiremock::matchers::{body_string_contains, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn ok(data: serde_json::Value) -> ResponseTemplate {
@@ -450,6 +435,99 @@ mod tests {
             .await
             .expect("spawn should succeed");
         assert_eq!(token, "at_live_worker_b");
+    }
+
+    #[tokio::test]
+    async fn register_agent_token_reports_conflict_as_already_exists() {
+        // Registration is create-only since engine 8.2.0 (#349). A 409 must be
+        // reported as the conflict it is, not laundered through a rotate call
+        // that can no longer authenticate.
+        let server = MockServer::start().await;
+        let relay =
+            RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+                .expect("relay init");
+        let client = AgentRegistrationClient::new(relay, "claude");
+
+        Mock::given(method("POST"))
+            .and(path("/v1/agents"))
+            .respond_with(ResponseTemplate::new(409).set_body_json(json!({
+                "ok": false,
+                "error": {
+                    "code": "agent_already_exists",
+                    "message": "Agent \"worker-dupe\" already exists in this workspace"
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // No rotate-token mock is registered on purpose: reaching that route
+        // at all is the regression this test exists to catch.
+        let error = client
+            .register_agent_token("worker-dupe", Some("claude"))
+            .await
+            .expect_err("expected a conflict error");
+
+        match error {
+            AgentRegistrationError::AlreadyExists { agent_name } => {
+                assert_eq!(agent_name, "worker-dupe");
+            }
+            other => panic!("expected AlreadyExists, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn already_exists_error_explains_the_supported_paths() {
+        // The message is the whole point: the previous behaviour surfaced
+        // "401 Agent token required (at_live_...)" for a name collision, which
+        // sent three separate investigations after an auth bug that did not
+        // exist.
+        let message = AgentRegistrationError::AlreadyExists {
+            agent_name: "writer".to_string(),
+        }
+        .to_string();
+
+        assert!(message.contains("writer"), "names the agent: {message}");
+        assert!(
+            message.contains("create-only"),
+            "states the policy: {message}"
+        );
+        assert!(message.contains("recover"), "points at recover: {message}");
+        assert!(
+            message.contains("takeover"),
+            "points at takeover: {message}"
+        );
+        assert!(
+            message.contains("unique name"),
+            "offers the simple fix: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rotate_agent_token_authenticates_as_the_agent() {
+        // Self-rollover: the route is `requireAgentToken` as of engine 8.2.0,
+        // so the agent's own token must be sent, never the workspace key.
+        let server = MockServer::start().await;
+        let relay =
+            RelayCast::new(RelayCastOptions::new("rk_live_workspace").with_base_url(server.uri()))
+                .expect("relay init");
+
+        Mock::given(method("POST"))
+            .and(path("/v1/agents/worker-self/rotate-token"))
+            .and(header("authorization", "Bearer at_live_current"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "ok": true,
+                "data": { "name": "worker-self", "token": "at_live_rolled" }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let rotated = relay
+            .rotate_agent_token("worker-self", "at_live_current")
+            .await
+            .expect("self-rollover should succeed");
+        assert_eq!(rotated.token, "at_live_rolled");
     }
 
     #[tokio::test]
