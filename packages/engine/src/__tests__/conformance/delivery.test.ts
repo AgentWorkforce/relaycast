@@ -338,6 +338,42 @@ describe('durable delivery api', () => {
     expect(queued!.status).toBe('queued');
   });
 
+  it('does not expose an expired unswept delivery as pending agent detail', async () => {
+    const { ws, bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+    await stack.runtime.deps.db
+      .update(deliveries)
+      .set({ expiresAt: new Date(Date.now() - 1_000) })
+      .where(eq(deliveries.id, item.id as string));
+
+    const res = await stack.app.request('/v1/agents/bob', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    expect(res.status).toBe(200);
+    const pending = ((await res.json()) as {
+      data: { pending_deliveries: Array<{ id: string }> };
+    }).data.pending_deliveries;
+    expect(pending.map((delivery) => delivery.id)).not.toContain(item.id);
+
+    const [stored] = await stack.runtime.deps.db
+      .select({ status: deliveries.status })
+      .from(deliveries)
+      .where(eq(deliveries.id, item.id as string));
+    expect(stored.status).toBe('queued');
+
+    const plan = stack.runtime.handle.sqlite
+      .prepare(`EXPLAIN QUERY PLAN
+        SELECT id FROM deliveries
+        WHERE workspace_id = ?
+          AND agent_id = ?
+          AND status IN ('queued', 'delivered')
+          AND (expires_at IS NULL OR expires_at > unixepoch())
+        ORDER BY created_at, id
+        LIMIT 50`)
+      .all(ws.workspaceId, bob.agentId) as Array<{ detail: string }>;
+    expect(plan.some((step) => step.detail.includes('idx_deliveries_agent_active_created'))).toBe(true);
+  });
+
   it('rejects a malformed JSON fail body with 400 (no state change)', async () => {
     const { bob } = await seed();
     const [item] = await listDeliveries(bob.token);

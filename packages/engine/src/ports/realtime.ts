@@ -185,8 +185,8 @@ export interface NodeConnectionRegistry {
 
   /**
    * Flush any queued `action.invoke` frames to the node's live connection.
-   * Must be invoked once the node is marked online (post node.register /
-   * node.heartbeat) so capacity reservation for queued spawns can succeed.
+   * Must be invoked once the node is marked online (post node.register) and
+   * when heartbeat liveness/capacity transitions make queued work dispatchable.
    * Implementations serialize concurrent drains per node.
    */
   drainNode(workspaceId: string, nodeId: string): Promise<void>;

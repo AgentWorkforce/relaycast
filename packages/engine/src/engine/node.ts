@@ -25,11 +25,12 @@ import { isProviderAgentDeliveryReady, type NodeConnectionRegistry } from '../po
 import { generateId } from './snowflake.js';
 import { assertRegistrableAgentName } from './agent.js';
 import { rotateAgentIdentity } from './agentIdentity.js';
-import { isNodeLive, nodeHasCapability } from './placement.js';
+import { isNodeLive, nodeHasCapacity, nodeHasCapability } from './placement.js';
 import {
   DEFAULT_PROVIDER_NAME,
   capabilityKind,
   heartbeatProvider,
+  isProviderLive,
   markProviderOffline,
   materializeProviderActions,
   recomputeNodeAggregate,
@@ -1691,6 +1692,68 @@ async function readNodeStatus(db: Db, workspaceId: string, nodeId: string): Prom
   return row?.status;
 }
 
+async function readHeartbeatDrainState(
+  db: Db,
+  workspaceId: string,
+  nodeId: string,
+  providerName: string,
+) {
+  const [nodeRows, providerRows] = await Promise.all([
+    db
+      .select({
+        status: nodes.status,
+        handlersLive: nodes.handlersLive,
+        maxAgents: nodes.maxAgents,
+        activeAgents: nodes.activeAgents,
+        reservedAgents: nodes.reservedAgents,
+        lastHeartbeatAt: nodes.lastHeartbeatAt,
+      })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId))),
+    db
+      .select({
+        status: nodeProviders.status,
+        handlersLive: nodeProviders.handlersLive,
+        lastHeartbeatAt: nodeProviders.lastHeartbeatAt,
+      })
+      .from(nodeProviders)
+      .where(and(
+        eq(nodeProviders.workspaceId, workspaceId),
+        eq(nodeProviders.nodeId, nodeId),
+        eq(nodeProviders.name, providerName),
+      )),
+  ]);
+  return { node: nodeRows[0], provider: providerRows[0] };
+}
+
+/**
+ * A steady heartbeat only refreshes liveness metadata; draining every such
+ * frame turns node cadence into a workspace-wide pending-invocation scan. A
+ * drain is needed only when the heartbeat makes queued work dispatchable.
+ */
+function shouldDrainAfterHeartbeat(
+  prior: Awaited<ReturnType<typeof readHeartbeatDrainState>>,
+  current: ReturnType<typeof publicNode> | null,
+  message: FleetNodeHeartbeatMessage,
+): boolean {
+  if (!current?.live) return false;
+  if (!prior.node || !isNodeLive(prior.node)) return true;
+  if (!prior.node.handlersLive && current.handlers_live) return true;
+
+  // A provider can become dispatchable while another provider kept the node's
+  // aggregate handlers_live flag true, so preserve the provider transition too.
+  if (
+    message.handlers_live
+    && (!prior.provider || !isProviderLive(prior.provider) || !prior.provider.handlersLive)
+  ) {
+    return true;
+  }
+
+  const currentHasCapacity = current.max_agents === 0
+    || current.active_agents + prior.node.reservedAgents < current.max_agents;
+  return !nodeHasCapacity(prior.node) && currentHasCapacity;
+}
+
 /**
  * Emit a durable `node.status.online` only on a real offline -> online
  * transition: the node was not `online` before the register/heartbeat and the
@@ -1842,16 +1905,21 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
         return;
       }
       case 'node.heartbeat': {
-        const priorStatus = await readNodeStatus(args.db, args.workspaceId, args.nodeId);
+        const prior = await readHeartbeatDrainState(
+          args.db,
+          args.workspaceId,
+          args.nodeId,
+          frameProviderName,
+        );
         const beat = await heartbeatNode(args.db, args.workspaceId, args.nodeId, frameProviderName, message);
         // The node row is already persisted, so emit the durable online
         // transition before draining: a drainNode rejection must not skip the
         // node.status.online event. Isolated so its own failure can't either.
-        await emitNodeOnlineTransition(args.completionDeps, args.workspaceId, priorStatus, beat)
+        await emitNodeOnlineTransition(args.completionDeps, args.workspaceId, prior.node?.status, beat)
           .catch((err) => console.error('[node.status] online event emission failed', err));
-        // Heartbeat refreshes online/capacity state; re-drain as a backstop in
-        // case a queued spawn could not reserve capacity at register time.
-        await args.registry.drainNode(args.workspaceId, args.nodeId);
+        if (shouldDrainAfterHeartbeat(prior, beat, message)) {
+          await args.registry.drainNode(args.workspaceId, args.nodeId);
+        }
         return;
       }
       case 'node.deregister':

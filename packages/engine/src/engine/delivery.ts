@@ -95,7 +95,10 @@ export async function listDeliveries(
   const limit = Math.min(Math.max(opts.limit ?? 100, 1), 200);
   const statusFilter = opts.status
     ? eq(deliveries.status, opts.status)
-    : inArray(deliveries.status, [...ACTIVE_DELIVERY_STATUSES]);
+    // Keep the default active predicate literal so SQLite can use the partial
+    // idx_deliveries_agent_active_created index. Explicit status queries
+    // intentionally continue to reflect durable stored state.
+    : sql`${deliveries.status} IN ('queued', 'delivered')`;
   // A bounded workspace sweep may spend its batch on another agent's older
   // backlog. Never expose this agent's still-unswept expired rows through the
   // default active queue; explicit status queries continue to reflect stored state.

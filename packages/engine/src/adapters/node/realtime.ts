@@ -533,8 +533,8 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       handleClose: async () => this.onNodeConnectionClose(connectionId),
     };
     // Best-effort early flush (covers non-spawn frames that need no capacity);
-    // the authoritative drain fires post node.register/heartbeat once the node
-    // is marked online, so queued spawns can reserve capacity. See drainNode.
+    // the authoritative drain fires after node.register and after heartbeat
+    // liveness/capacity transitions once the node is dispatchable. See drainNode.
     void this.drainNode(workspaceId, nodeId);
     return handle;
   }
