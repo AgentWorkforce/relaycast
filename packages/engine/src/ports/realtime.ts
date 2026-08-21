@@ -62,6 +62,11 @@ export interface NodeUpgradeArgs {
   originActor?: string;
 }
 
+export interface NodeDrainOptions {
+  /** Include pending rows whose prior retry deadline has not elapsed yet. */
+  includeDeferred?: boolean;
+}
+
 export interface NodeConnectionRegistry {
   /**
    * Upgrade an incoming node-control request. Cloudflare adapters own the 101
@@ -189,7 +194,11 @@ export interface NodeConnectionRegistry {
    * when heartbeat liveness/capacity transitions make queued work dispatchable.
    * Implementations serialize concurrent drains per node.
    */
-  drainNode(workspaceId: string, nodeId: string): Promise<void>;
+  drainNode(
+    workspaceId: string,
+    nodeId: string,
+    options?: NodeDrainOptions,
+  ): Promise<void>;
 }
 
 /** Registries without cursor-readiness support retain legacy immediate delivery. */

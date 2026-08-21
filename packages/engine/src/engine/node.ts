@@ -1885,7 +1885,9 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           .catch((err) => console.error('[node.status] online event emission failed', err));
         // Node is now marked online: flush any queued action.invoke frames so
         // spawns queued while it was offline can reserve capacity and dispatch.
-        await args.registry.drainNode(args.workspaceId, args.nodeId);
+        // Reconnect makes deferred work dispatchable too; bypass a retry delay
+        // that may have been armed only because the prior socket was unavailable.
+        await args.registry.drainNode(args.workspaceId, args.nodeId, { includeDeferred: true });
         // The success reply was already sent above; keep the pending flush
         // best-effort so a delivery error cannot trigger a second error reply
         // for the same request id from the outer catch.
@@ -1918,7 +1920,10 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
         await emitNodeOnlineTransition(args.completionDeps, args.workspaceId, prior.node?.status, beat)
           .catch((err) => console.error('[node.status] online event emission failed', err));
         if (shouldDrainAfterHeartbeat(prior, beat, message)) {
-          await args.registry.drainNode(args.workspaceId, args.nodeId);
+          // A readiness transition invalidates the old backoff condition. Include
+          // retry-delayed rows in this one bounded pass so a transition just
+          // before retryAfterAt cannot strand work until another reconnect.
+          await args.registry.drainNode(args.workspaceId, args.nodeId, { includeDeferred: true });
         }
         return;
       }

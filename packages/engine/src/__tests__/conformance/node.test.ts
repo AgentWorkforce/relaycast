@@ -1604,7 +1604,7 @@ describe('node adapter conformance', () => {
       expect(updated.attemptedNodeIds).toEqual(['node_alpha']);
     });
 
-    it('exported drain helper preserves spawn-prefixed actions and skips retry-delayed invocations', async () => {
+    it('exported drain helper preserves spawn-prefixed actions and only includes retry-delayed invocations when forced', async () => {
       const ws = await createWorkspace(stack.app, 'fleet-spawn-prefix-drain-helper-ws');
       const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
       const alpha = await enrollAndAttachNode(ws, {
@@ -1674,6 +1674,19 @@ describe('node adapter conformance', () => {
       expect(delayed.spawnReservedAt).toBeNull();
       expect(delayed.retryAfterAt).toBeInstanceOf(Date);
       expect(delayed.retryAfterAt!.getTime()).toBeGreaterThan(Date.now());
+
+      alpha.sock.received.length = 0;
+      const forced = await drainNodeInvocations(
+        db,
+        stack.runtime.realtime,
+        ws.workspaceId,
+        'node_alpha',
+        { includeDeferred: true },
+      );
+      expect(forced).toBe(1);
+      expect(alpha.sock.ofType('action.invoke')).toEqual([
+        expect.objectContaining({ invocation_id: 'inv_spawn_future_retry' }),
+      ]);
     });
 
     it('exported drain helper releases spawn capacity when redispatch is rejected', async () => {
@@ -2025,7 +2038,11 @@ describe('node adapter conformance', () => {
         handlers_live: true,
       }));
       expect(drain).toHaveBeenCalledOnce();
-      expect(drain).toHaveBeenCalledWith(ws.workspaceId, 'node_alpha');
+      expect(drain).toHaveBeenCalledWith(
+        ws.workspaceId,
+        'node_alpha',
+        { includeDeferred: true },
+      );
     });
 
     it('publishes action.invoked to the workspace observer stream', async () => {

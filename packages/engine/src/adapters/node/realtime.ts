@@ -2,6 +2,7 @@ import type {
   RealtimeBus,
   ConnectionRegistry,
   NodeConnectionRegistry,
+  NodeDrainOptions,
   EngineEvent,
   UpgradeArgs,
   NodeUpgradeArgs,
@@ -587,10 +588,14 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
    * chained so two drains never run at once (which could double-reserve spawn
    * capacity); each caller's promise resolves after its own drain pass runs.
    */
-  drainNode(workspaceId: string, nodeId: string): Promise<void> {
+  drainNode(
+    workspaceId: string,
+    nodeId: string,
+    options?: NodeDrainOptions,
+  ): Promise<void> {
     const key = this.nodeKey(workspaceId, nodeId);
     const prior = this.nodeDrainChains.get(key) ?? Promise.resolve();
-    const next = prior.catch(() => {}).then(() => this.drainNodeQueue(workspaceId, nodeId));
+    const next = prior.catch(() => {}).then(() => this.drainNodeQueue(workspaceId, nodeId, options));
     this.nodeDrainChains.set(key, next);
     void next.finally(() => {
       if (this.nodeDrainChains.get(key) === next) this.nodeDrainChains.delete(key);
@@ -598,9 +603,13 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     return next;
   }
 
-  private async drainNodeQueue(workspaceId: string, nodeId: string): Promise<void> {
+  private async drainNodeQueue(
+    workspaceId: string,
+    nodeId: string,
+    options?: NodeDrainOptions,
+  ): Promise<void> {
     if (!this.isNodeConnected(workspaceId, nodeId)) return;
-    await drainNodeInvocations(this.db, this, workspaceId, nodeId);
+    await drainNodeInvocations(this.db, this, workspaceId, nodeId, options);
     // The authoritative re-dispatch is DB-driven; clear the per-provider
     // in-memory buffers now that their frames have been re-sent.
     const nodeKey = this.nodeKey(workspaceId, nodeId);
