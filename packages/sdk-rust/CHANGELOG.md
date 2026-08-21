@@ -10,6 +10,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Changed
 
+- **BREAKING:** `RelayCast::rotate_agent_token` now requires the current agent token; use `take_over_agent` or `recover_agent` to replace an identity you cannot authenticate as.
+- **BREAKING:** `AgentRegistrationClient::register_agent_token` is create-only and returns `AgentRegistrationError::AlreadyExists` on conflicts; use a unique name or persist the token for self-rollover.
 - `NodeRosterEntry.load` is now `Option<f64>`, matching the API's explicit unreported state; direct-agent heartbeats no longer label a constant utilization as measured.
 
 ### Added

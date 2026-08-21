@@ -229,11 +229,21 @@ use relaycast::{AgentRegistrationClient, RelayCast, RelayCastOptions};
 let relay = RelayCast::new(RelayCastOptions::new("rk_live_xxx"))?;
 let registration = AgentRegistrationClient::new(relay, "codex");
 
+// Registration is create-only: a name already held by another identity returns
+// AgentRegistrationError::AlreadyExists rather than replacing it. Give
+// ephemeral agents a name unique to the run — the token cache is per-client and
+// in memory, so a restarted process reusing a fixed name hits that error.
+let agent_name = format!("worker-{}", uuid_v4_short());
 let agent = registration
-    .registered_agent_client("worker-a", Some("codex"))
+    .registered_agent_client(&agent_name, Some("codex"))
     .await?;
 agent.send("#general", "ready", None, None, None).await?;
 ```
+
+To keep a **stable** name across restarts, persist the agent's token and roll it
+over yourself with `RelayCast::rotate_agent_token(name, agent_token)` — rotation
+is authenticated as the agent. To reclaim a name whose token you no longer hold,
+use the explicit, audited `take_over_agent` or `recover_agent`.
 
 ### Files
 
