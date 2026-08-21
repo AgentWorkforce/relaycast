@@ -10,21 +10,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Changed
 
-- **BREAKING:** `RelayCast::rotate_agent_token` now takes the agent's own token
-  as a second argument. Engine 8.2.0 made `POST /agents/{name}/rotate-token`
-  authenticated self-rollover (`requireAgentToken`), so a workspace key is
-  rejected. Migration: pass the agent's current token, or — when replacing an
-  identity you cannot authenticate as — use the explicit, audited
-  `take_over_agent` / `recover_agent` instead.
-- **BREAKING:** `AgentRegistrationClient::register_agent_token` no longer
-  rotates on a name collision. Registration is create-only as of engine 8.2.0,
-  so a 409 now returns the new `AgentRegistrationError::AlreadyExists` rather
-  than attempting a rotation that can only fail with
-  `401 Agent token required (at_live_...)`. Callers needing a fresh agent per
-  run should register under a name unique to that run; callers reclaiming a
-  stable name must persist its token (self-rollover) or take it over
-  explicitly.
-
+- **BREAKING:** `RelayCast::rotate_agent_token` now requires the current agent token; use `take_over_agent` or `recover_agent` to replace an identity you cannot authenticate as.
+- **BREAKING:** `AgentRegistrationClient::register_agent_token` is create-only and returns `AgentRegistrationError::AlreadyExists` on conflicts; use a unique name or persist the token for self-rollover.
 - `NodeRosterEntry.load` is now `Option<f64>`, matching the API's explicit unreported state; direct-agent heartbeats no longer label a constant utilization as measured.
 
 ### Added
