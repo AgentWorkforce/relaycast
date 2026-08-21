@@ -99,6 +99,7 @@ impl RelayCast {
     pub async fn create_workspace(
         name: &str,
         base_url: Option<&str>,
+        provenance: WorkspaceProvenance,
     ) -> Result<CreateWorkspaceResponse> {
         let url = format!("{}/v1/workspaces", base_url.unwrap_or(DEFAULT_BASE_URL));
 
@@ -109,7 +110,7 @@ impl RelayCast {
             .header("X-SDK-Version", SDK_VERSION)
             .header("X-Relaycast-Origin-Client", DEFAULT_ORIGIN_CLIENT)
             .header("X-Relaycast-Origin-Version", SDK_VERSION)
-            .json(&serde_json::json!({ "name": name }))
+            .json(&serde_json::json!({ "name": name, "provenance": provenance }))
             .send()
             .await?;
 

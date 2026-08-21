@@ -42,7 +42,7 @@ async function createWorkspace(
   const response = await fetch(`${normalizeBaseUrl(baseUrl)}/v1/workspaces`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, provenance: { source: 'mcp' } }),
   });
 
   const payload = (await response.json()) as ApiOk<CreateWorkspaceResponse> | ApiErr;

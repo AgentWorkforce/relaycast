@@ -4,6 +4,7 @@ import {
   DeliveryItemSchema,
   ServerEventSchema,
   SessionMessagesResultSchema,
+  WorkspaceSchema,
 } from '../index.js';
 import type {
   Workspace,
@@ -74,6 +75,25 @@ describe('Type definitions', () => {
     expectTypeOf<'free'>().toMatchTypeOf<Workspace['plan']>();
     expectTypeOf<'pro'>().toMatchTypeOf<Workspace['plan']>();
     expectTypeOf<'enterprise'>().toMatchTypeOf<Workspace['plan']>();
+  });
+
+  it('defaults attribution fields for responses from pre-attribution engines', () => {
+    const workspace = WorkspaceSchema.parse({
+      id: 'rw_legacy',
+      name: 'legacy',
+      api_key_hash: 'hash',
+      system_prompt: null,
+      plan: 'free',
+      created_at: '2026-08-18T00:00:00.000Z',
+      metadata: {},
+    });
+    expect(workspace).toMatchObject({
+      provenance: null,
+      usage_classification: 'unknown',
+      classification_source: 'unclassified',
+      classification_reason: null,
+      classified_at: null,
+    });
   });
 
   it('CreateWorkspaceRequest has name', () => {

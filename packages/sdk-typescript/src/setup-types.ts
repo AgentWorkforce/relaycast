@@ -1,4 +1,5 @@
 import type { CreateAgentRequest, CreateAgentResponse } from './types.js';
+import type { WorkspaceProvenanceOptions } from './workspace-provenance.js';
 
 export interface RelaycastSetupOptions {
   /**
@@ -40,6 +41,8 @@ export interface CreateWorkspaceOptions {
    * Omit for a persistent workspace.
    */
   expiresInSeconds?: number;
+  /** Creation context recorded once for hosted usage attribution. */
+  provenance?: WorkspaceProvenanceOptions;
 }
 
 export type JoinWorkspaceOptions = Record<string, never>;

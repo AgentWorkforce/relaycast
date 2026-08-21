@@ -78,6 +78,51 @@ components:
       description: Per-webhook bearer token returned by `POST /webhooks` (wh_live_*)
 
   schemas:
+    WorkspaceProvenanceInput:
+      type: object
+      description: >-
+        Analytics-only creation context recorded once on the workspace row. It
+        never grants access and must not be treated as a billing or authorization
+        claim.
+      required:
+        - source
+      properties:
+        source:
+          type: string
+          enum: [api, sdk, cli, mcp, ci, relayflow, dashboard, other]
+        origin_id:
+          type: string
+          minLength: 1
+          maxLength: 256
+          pattern: '^[A-Za-z0-9._:/@-]+$'
+          description: Stable creator-owned identifier when one exists, such as a CI run or cloud workspace id.
+        classification:
+          type: string
+          enum: [internal, external, unknown]
+          default: unknown
+          description: Caller-declared usage classification; hosted operators can verify or override it separately.
+
+    WorkspaceProvenance:
+      allOf:
+        - $ref: '#/components/schemas/WorkspaceProvenanceInput'
+        - type: object
+          required:
+            - source_basis
+          properties:
+            source_basis:
+              type: string
+              enum: [declared, origin_client, default]
+            origin_actor:
+              type: string
+            actor_user_id:
+              type: string
+            actor_machine_id:
+              type: string
+            actor_org_id:
+              type: string
+            actor_org_slug:
+              type: string
+
     Workspace:
       type: object
       properties:
@@ -104,6 +149,25 @@ components:
           properties:
             messages:
               $ref: '#/components/schemas/EffectiveMessageRetention'
+        provenance:
+          type: object
+          nullable: true
+          description: Creation provenance. Observer-token requests omit request actor, user, machine, and organization identity fields.
+          allOf:
+            - $ref: '#/components/schemas/WorkspaceProvenance'
+        usage_classification:
+          type: string
+          enum: [internal, external, unknown]
+        classification_source:
+          type: string
+          enum: [creator, operator, unclassified]
+        classification_reason:
+          type: string
+          nullable: true
+        classified_at:
+          type: string
+          format: date-time
+          nullable: true
 
     CreateWorkspaceResponse:
       type: object
@@ -1434,6 +1498,8 @@ paths:
                     Explicit lifetime for a throwaway workspace. Omit for a
                     persistent workspace. Once stored, the resulting expiry is
                     the sole automatic whole-workspace deletion predicate.
+                provenance:
+                  $ref: '#/components/schemas/WorkspaceProvenanceInput'
       responses:
         '200':
           description: Existing workspace returned (idempotent)

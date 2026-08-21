@@ -16,7 +16,15 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Workspace creation records provenance and explicit internal/external/unknown classification for hosted per-workspace usage reporting without adding message-path writes.
+
+### Security
+
+- Observer tokens receive workspace provenance without request actor, user, machine, or organization identity fields.
 
 ## [8.1.3] - 2026-08-20
 

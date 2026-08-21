@@ -27,6 +27,7 @@ export {
   WorkspaceNotFoundError,
 } from './setup-errors.js';
 export type { RelaycastSetupErrorCode } from './setup-errors.js';
+export type { WorkspaceProvenanceOptions } from './workspace-provenance.js';
 export { AgentClient } from './agent.js';
 export type { AgentClientOptions } from './agent.js';
 export { HttpClient, RelayError } from './client.js';

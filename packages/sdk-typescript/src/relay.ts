@@ -143,6 +143,10 @@ import {
   resolveAgentRelayIdentity,
 } from './origin.js';
 import { camelizeKeys } from './casing.js';
+import {
+  toWorkspaceProvenanceInput,
+  type WorkspaceProvenanceOptions,
+} from './workspace-provenance.js';
 
 export interface RelayCastOptions {
   /**
@@ -194,6 +198,8 @@ export interface WorkspaceBootstrapOptions extends WorkspaceIdentityOptions {
   baseUrl?: string;
   /** Explicit lifetime for a throwaway workspace; omit for persistence. */
   expiresInSeconds?: number;
+  /** Creation context recorded once for hosted usage attribution. */
+  provenance?: WorkspaceProvenanceOptions;
 }
 
 export interface WorkspaceLookupOptions extends WorkspaceIdentityOptions {
@@ -345,6 +351,7 @@ export class RelayCast {
         ...(resolved.expiresInSeconds !== undefined
           ? { expires_in_seconds: resolved.expiresInSeconds }
           : {}),
+        provenance: toWorkspaceProvenanceInput(resolved.provenance),
       }),
     });
 

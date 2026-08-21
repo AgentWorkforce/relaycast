@@ -153,6 +153,13 @@ async function main(): Promise<void> {
     const created = await setup.createWorkspace({
       name: workspaceName,
       expiresInSeconds: 24 * 60 * 60,
+      provenance: {
+        source: 'ci',
+        originId: process.env.GITHUB_RUN_ID
+          ? `github:AgentWorkforce/relaycast/actions/runs/${process.env.GITHUB_RUN_ID}`
+          : 'relaycast:e2e-sdk-setup:local',
+        classification: 'internal',
+      },
     });
     assert(created.workspaceId, 'createWorkspace', 'workspaceId was empty');
     assert(created.apiKey, 'createWorkspace', 'apiKey was empty');

@@ -7,6 +7,7 @@ import { codedError } from '../lib/httpError.js';
 import { D1WriteRetryExhaustedError, retryD1Write } from '../lib/d1Retry.js';
 import { runAtomicWrites } from '../ports/database.js';
 import type { FileStorage } from '../ports/files.js';
+import type { WorkspaceProvenanceRecord } from '../db/schema.js';
 import { resolveEffectiveMessageRetention } from './retention.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -27,6 +28,11 @@ type CreateWorkspaceOptions =
       ownerApiKey?: string;
       ownerApiKeyHash?: string;
       expiresAt?: Date;
+      provenance?: WorkspaceProvenanceRecord;
+      usageClassification?: 'internal' | 'external' | 'unknown';
+      classificationSource?: 'creator' | 'operator' | 'unclassified';
+      classificationReason?: string | null;
+      classifiedAt?: Date | null;
     };
 
 export const DEFAULT_WORKSPACE_REAP_LIMIT = 25;
@@ -153,6 +159,7 @@ export async function createWorkspace(
   }
 
   const ownerApiKeyHash = providedOwnerApiKeyHash ?? derivedOwnerApiKeyHash;
+  const createOptions = typeof options === 'string' ? undefined : options;
 
   // Repeated creates from the same owner/key should reuse the existing workspace.
   if (ownerApiKeyHash) {
@@ -189,7 +196,17 @@ export async function createWorkspace(
           (writeDb) => [
             writeDb
               .insert(workspaces)
-              .values({ id: workspaceId, name, apiKeyHash, expiresAt })
+              .values({
+                id: workspaceId,
+                name,
+                apiKeyHash,
+                expiresAt,
+                provenance: createOptions?.provenance,
+                usageClassification: createOptions?.usageClassification ?? 'unknown',
+                classificationSource: createOptions?.classificationSource ?? 'unclassified',
+                classificationReason: createOptions?.classificationReason ?? null,
+                classifiedAt: createOptions?.classifiedAt ?? null,
+              })
               .returning(),
             writeDb
               .insert(channels)
@@ -313,6 +330,11 @@ export async function getWorkspace(
     metadata: workspace.metadata,
     effective_retention: { messages: effectiveMessageRetention },
     expires_at: workspace.expiresAt?.toISOString() ?? null,
+    provenance: workspace.provenance ?? null,
+    usage_classification: workspace.usageClassification,
+    classification_source: workspace.classificationSource,
+    classification_reason: workspace.classificationReason,
+    classified_at: workspace.classifiedAt?.toISOString() ?? null,
   };
 }
 

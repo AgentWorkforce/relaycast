@@ -11,7 +11,7 @@ import {
 } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
-import type { FleetCapability } from '@relaycast/types';
+import type { FleetCapability, WorkspaceProvenance } from '@relaycast/types';
 
 // ============================================
 // Workspaces
@@ -27,6 +27,8 @@ export interface WorkspaceRetentionSettings {
   message_log_ttl_days?: number | null;
   workspace_event_ttl_days?: number | null;
 }
+
+export type WorkspaceProvenanceRecord = WorkspaceProvenance;
 
 export interface ObserverTokenFilters {
   channel_ids?: string[];
@@ -52,8 +54,25 @@ export const workspaces = sqliteTable(
     // A non-null deadline is an explicit, immutable opt-in to whole-workspace
     // deletion. Persistent workspaces always leave this null.
     expiresAt: integer('expires_at', { mode: 'timestamp' }),
+    provenance: text('provenance', { mode: 'json' }).$type<WorkspaceProvenanceRecord>(),
+    usageClassification: text('usage_classification').notNull().default('unknown'),
+    classificationSource: text('classification_source').notNull().default('unclassified'),
+    classificationReason: text('classification_reason'),
+    classifiedAt: integer('classified_at', { mode: 'timestamp' }),
   },
-  (table) => [index('idx_workspaces_expires_at').on(table.expiresAt)],
+  (table) => [
+    index('idx_workspaces_expires_at').on(table.expiresAt),
+    check(
+      'workspaces_usage_classification_source_check',
+      sql`(
+        (${table.usageClassification} = 'unknown' AND ${table.classificationSource} = 'unclassified')
+        OR (
+          ${table.usageClassification} IN ('internal', 'external')
+          AND ${table.classificationSource} IN ('creator', 'operator')
+        )
+      )`,
+    ),
+  ],
 );
 
 // ============================================

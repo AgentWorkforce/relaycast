@@ -12,6 +12,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 - `NodeRosterEntry.load` is now `Option<f64>`, matching the API's explicit unreported state; direct-agent heartbeats no longer label a constant utilization as measured.
 
+### Added
+
+- `RelayCast::create_workspace` now requires explicit provenance, preventing CLI bootstrap workspaces from being mislabeled as SDK-created.
+
 ## [4.2.0] - 2026-06-24
 
 ### Added
