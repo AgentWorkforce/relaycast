@@ -424,6 +424,61 @@ impl RelayCast {
             .await
     }
 
+    /// Recover an existing identity with current-token, node, or work-unit proof.
+    pub async fn recover_agent(
+        &self,
+        name: &str,
+        request: RecoverAgentRequest,
+    ) -> Result<AgentIdentityRecoveryResponse> {
+        self.client
+            .post(
+                &format!("/v1/agents/{}/recover", urlencoding::encode(name)),
+                Some(request),
+                None,
+            )
+            .await
+    }
+
+    /// Explicit audited workspace-owner takeover.
+    pub async fn take_over_agent(
+        &self,
+        name: &str,
+        request: TakeOverAgentRequest,
+    ) -> Result<AgentIdentityRecoveryResponse> {
+        self.client
+            .post(
+                &format!("/v1/agents/{}/takeover", urlencoding::encode(name)),
+                Some(request),
+                None,
+            )
+            .await
+    }
+
+    /// Immediately revoke both current and grace-period token slots.
+    pub async fn revoke_agent_token(
+        &self,
+        name: &str,
+        request: RevokeAgentTokenRequest,
+    ) -> Result<AgentIdentityRevocationResponse> {
+        self.client
+            .post(
+                &format!("/v1/agents/{}/revoke-token", urlencoding::encode(name)),
+                Some(request),
+                None,
+            )
+            .await
+    }
+
+    /// Enroll or rotate the authenticated agent's server-owned proof verifier.
+    pub async fn enroll_recovery_credential(
+        &self,
+        request: EnrollRecoveryCredentialRequest,
+    ) -> Result<serde_json::Value> {
+        self.client
+            .post("/v1/agent/recovery-credential", Some(request), None)
+            .await
+    }
+
     /// Update an agent.
     pub async fn update_agent(&self, name: &str, request: UpdateAgentRequest) -> Result<Agent> {
         self.client
@@ -447,30 +502,12 @@ impl RelayCast {
         self.client.get("/v1/agents/presence", None, None).await
     }
 
-    /// Register an agent or get existing one (with token rotation).
+    /// Deprecated create-only alias. A name collision fails closed.
     pub async fn register_or_get_agent(
         &self,
         request: CreateAgentRequest,
     ) -> Result<CreateAgentResponse> {
-        match self.register_agent(request.clone()).await {
-            Ok(response) => Ok(response),
-            Err(RelayError::Api { code, status, .. })
-                if code == "agent_already_exists" || status == 409 =>
-            {
-                let agent = self.get_agent(&request.name).await?;
-                let token_response = self.rotate_agent_token(&agent.name).await?;
-                let created_at = agent.created_at.or(agent.last_seen).unwrap_or_default();
-                Ok(CreateAgentResponse {
-                    id: agent.id,
-                    workspace_id: agent.workspace_id,
-                    name: agent.name,
-                    token: token_response.token,
-                    status: agent.status,
-                    created_at,
-                })
-            }
-            Err(e) => Err(e),
-        }
+        self.register_agent(request).await
     }
 
     /// Spawn an agent process (registering if needed).

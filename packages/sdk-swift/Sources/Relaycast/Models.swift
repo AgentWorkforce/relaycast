@@ -126,6 +126,77 @@ public struct TokenRotateResponse: Codable, Equatable, Sendable {
     public let token: String
 }
 
+public struct RecoverAgentRequest: Codable, Equatable, Sendable {
+    public var expectedAgentId: String
+    public var recoveryProof: String?
+    public var reason: String?
+    public var sessionRef: String?
+    public var nodeId: String?
+
+    public init(expectedAgentId: String, recoveryProof: String? = nil, reason: String? = nil, sessionRef: String? = nil, nodeId: String? = nil) {
+        self.expectedAgentId = expectedAgentId
+        self.recoveryProof = recoveryProof
+        self.reason = reason
+        self.sessionRef = sessionRef
+        self.nodeId = nodeId
+    }
+}
+
+public struct TakeOverAgentRequest: Codable, Equatable, Sendable {
+    public var expectedAgentId: String
+    public var actor: String
+    public var reason: String
+    public var sessionRef: String
+    public var nodeId: String
+
+    public init(expectedAgentId: String, actor: String, reason: String, sessionRef: String, nodeId: String) {
+        self.expectedAgentId = expectedAgentId
+        self.actor = actor
+        self.reason = reason
+        self.sessionRef = sessionRef
+        self.nodeId = nodeId
+    }
+}
+
+public struct RevokeAgentTokenRequest: Codable, Equatable, Sendable {
+    public var expectedAgentId: String
+    public var actor: String
+    public var reason: String
+    public var sessionRef: String?
+    public var nodeId: String?
+
+    public init(expectedAgentId: String, actor: String, reason: String, sessionRef: String? = nil, nodeId: String? = nil) {
+        self.expectedAgentId = expectedAgentId
+        self.actor = actor
+        self.reason = reason
+        self.sessionRef = sessionRef
+        self.nodeId = nodeId
+    }
+}
+
+public struct EnrollRecoveryCredentialRequest: Codable, Equatable, Sendable {
+    public var recoveryProofHash: String
+    public var workUnitId: String?
+
+    public init(recoveryProofHash: String, workUnitId: String? = nil) {
+        self.recoveryProofHash = recoveryProofHash
+        self.workUnitId = workUnitId
+    }
+}
+
+public struct AgentIdentityRecoveryResponse: Codable, Equatable, Sendable {
+    public let agentId: String
+    public let name: String
+    public let token: String
+    public let auditId: String
+}
+
+public struct AgentIdentityRevocationResponse: Codable, Equatable, Sendable {
+    public let agentId: String
+    public let name: String
+    public let auditId: String
+}
+
 public struct ObserverTokenFilters: Codable, Equatable, Sendable {
     public var channelIds: [String]?
     public var channelNames: [String]?

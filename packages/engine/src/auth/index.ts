@@ -54,9 +54,9 @@ export class SqliteApiKeyAuthProvider implements AuthProvider {
       let [agent] = await db.select().from(agents).where(eq(agents.tokenHash, hash));
       if (!agent) {
         // Fall back to the previous slot inside its grace window. This is the
-        // credential a caller that lost a `registerOrRotate` race was handed
-        // (relay#1542); it must remain live long enough for that caller to
-        // upgrade to a persistent session.
+        // credential a caller that lost a concurrent self-rollover race was
+        // handed (relay#1542); it must remain live long enough for that caller
+        // to upgrade to a persistent session.
         [agent] = await db
           .select()
           .from(agents)

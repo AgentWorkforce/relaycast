@@ -34,7 +34,7 @@ vi.mock('@relaycast/sdk/internal', () => {
     const relay = {
       as: vi.fn().mockImplementation((agentToken: string) => getAgentClient(agentToken)),
       agents: {
-        registerOrRotate: vi.fn(),
+        register: vi.fn(),
         list: vi.fn(),
       },
       webhooks: {

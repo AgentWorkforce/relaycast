@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+/** Lowercase SHA-256 verifier accepted for server-owned recovery proofs. */
+export const AGENT_RECOVERY_PROOF_HASH_PATTERN = /^[a-f0-9]{64}$/;
+
 export const AgentTypeSchema = z.enum(['agent', 'human', 'system']);
 export type AgentType = z.infer<typeof AgentTypeSchema>;
 
@@ -40,6 +43,8 @@ export const CreateAgentRequestSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
   skills: z.array(AgentSkillInputSchema).optional(),
   capabilities: z.record(z.string(), z.unknown()).optional(),
+  recovery_proof_hash: z.string().regex(AGENT_RECOVERY_PROOF_HASH_PATTERN).optional(),
+  work_unit_id: z.string().min(1).optional(),
 });
 export type CreateAgentRequest = z.infer<typeof CreateAgentRequestSchema>;
 

@@ -52,7 +52,7 @@ async function bootstrapOneWorkspace(
 
     // If no valid token, register or rotate
     if (!token) {
-      const result = await relay.agents.registerOrRotate({
+      const result = await relay.agents.register({
         name: agentName,
         type: 'agent',
       });

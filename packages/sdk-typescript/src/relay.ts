@@ -125,12 +125,16 @@ import { HttpClient, type RetryPolicyInput } from './client.js';
 import { WsClient, type WsClientOptions, withInternalWsOrigin } from './ws.js';
 import { RelayError, relayErrorFromApi } from './errors.js';
 import {
-  appendLegacySuffix,
   emitCompatibilityTelemetry,
-  isNameConflictError,
+  type AgentIdentityRecoveryResponse,
+  type AgentIdentityRevocationResponse,
+  type EnrollRecoveryCredentialInput,
+  type RecoverAgentInput,
   type RegisterAgentInput,
   type RegisterOrRotateInput,
   type ResolvedIdentity,
+  type RevokeAgentTokenInput,
+  type TakeOverAgentInput,
 } from './identity.js';
 import { SDK_VERSION } from './version.js';
 import {
@@ -459,24 +463,6 @@ export class RelayCast {
     };
   }
 
-  private async registerWithLegacySuffix(data: CreateAgentRequest): Promise<CreateAgentResponse> {
-    const maxAttempts = 5;
-    let candidateName = data.name;
-
-    for (let attempt = 0; attempt <= maxAttempts; attempt += 1) {
-      try {
-        return await this.agents.register({ ...data, name: candidateName });
-      } catch (err) {
-        if (!isNameConflictError(err) || attempt === maxAttempts) {
-          throw err;
-        }
-        candidateName = appendLegacySuffix(data.name);
-      }
-    }
-
-    throw new RelayError('transport_error', 'Failed to register agent identity after suffix retries');
-  }
-
   private registerTypedIdentity(
     type: RegisterIdentityType,
     data: RegisterTypedIdentityInput,
@@ -485,36 +471,15 @@ export class RelayCast {
   }
 
   async registerAgent(data: RegisterAgentInput): Promise<CreateAgentResponse> {
-    const { strict, ...request } = data;
-    if (strict) {
-      return this.agents.register(request);
-    }
-
-    emitCompatibilityTelemetry('agents.registerAgent.legacy_suffix', {
-      requested_name: data.name,
-    });
-    return this.registerWithLegacySuffix(request);
+    const { strict: _strict, ...request } = data;
+    return this.agents.register(request);
   }
 
   async registerOrRotate(data: RegisterOrRotateInput): Promise<CreateAgentResponse> {
-    try {
-      return await this.registerAgent({ ...data, strict: true });
-    } catch (err) {
-      if (isNameConflictError(err)) {
-        const agent = await this.agents.get(data.name);
-        const { token } = await this.agents.rotateToken(agent.name);
-        this.rememberIdentity(agent.id, agent.name);
-        const createdAt = agent.createdAt ?? agent.lastSeen;
-        return {
-          id: agent.id,
-          name: agent.name,
-          token,
-          status: agent.status,
-          createdAt,
-        };
-      }
-      throw err;
-    }
+    emitCompatibilityTelemetry('agents.registerOrRotate.deprecated', {
+      replacement: 'agents.register or agents.recover',
+    });
+    return this.registerAgent(data);
   }
 
   async resolveIdentity(): Promise<ResolvedIdentity> {
@@ -736,8 +701,25 @@ export class RelayCast {
       this.client.get(`/v1/agents/${encodeURIComponent(name)}`),
     me: (apiToken?: string): Promise<Agent> =>
       (apiToken ? this.client.withApiKey(apiToken) : this.client).get('/v1/agent'),
-    rotateToken: (name: string): Promise<TokenRotateResponse> =>
-      this.client.post(`/v1/agents/${encodeURIComponent(name)}/rotate-token`, {}),
+    rotateToken: (name: string, agentToken: string): Promise<TokenRotateResponse> =>
+      this.client.withApiKey(agentToken).post(`/v1/agents/${encodeURIComponent(name)}/rotate-token`, {}),
+    recover: async ({ name, ...data }: RecoverAgentInput): Promise<AgentIdentityRecoveryResponse> => {
+      const result = await this.client.post<AgentIdentityRecoveryResponse>(
+        `/v1/agents/${encodeURIComponent(name)}/recover`,
+        data,
+      );
+      this.rememberIdentity(result.agentId, result.name);
+      return result;
+    },
+    takeOver: ({ name, ...data }: TakeOverAgentInput): Promise<AgentIdentityRecoveryResponse> =>
+      this.client.post(`/v1/agents/${encodeURIComponent(name)}/takeover`, data),
+    revokeToken: ({ name, ...data }: RevokeAgentTokenInput): Promise<AgentIdentityRevocationResponse> =>
+      this.client.post(`/v1/agents/${encodeURIComponent(name)}/revoke-token`, data),
+    enrollRecoveryCredential: (
+      data: EnrollRecoveryCredentialInput,
+      agentToken: string,
+    ): Promise<{ agentId: string; enrolled: boolean }> =>
+      this.client.withApiKey(agentToken).post('/v1/agent/recovery-credential', data),
     update: (name: string, data: UpdateAgentRequest): Promise<Agent> =>
       this.client.patch(`/v1/agents/${encodeURIComponent(name)}`, data),
     delete: (name: string): Promise<void> =>
@@ -746,9 +728,9 @@ export class RelayCast {
       this.client.get('/v1/agents/presence'),
     registerOrGet: async (data: CreateAgentRequest): Promise<CreateAgentResponse> => {
       emitCompatibilityTelemetry('agents.registerOrGet.deprecated', {
-        replacement: 'agents.registerOrRotate',
+        replacement: 'agents.register or agents.recover',
       });
-      return this.registerOrRotate(data);
+      return this.agents.register(data);
     },
     registerAgent: (data: RegisterAgentInput): Promise<CreateAgentResponse> =>
       this.registerAgent(data),

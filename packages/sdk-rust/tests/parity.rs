@@ -142,7 +142,7 @@ async fn ensure_joined_channel_treats_conflicts_as_success() {
 }
 
 #[tokio::test]
-async fn register_or_get_agent_reclaims_public_agent_payload() {
+async fn register_or_get_agent_fails_closed_on_collision() {
     let server = MockServer::start().await;
     let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
         .expect("failed to create relay client");
@@ -158,53 +158,16 @@ async fn register_or_get_agent_reclaims_public_agent_payload() {
         .mount(&server)
         .await;
 
-    Mock::given(method("GET"))
-        .and(path("/v1/agents/Lead"))
-        .respond_with(ok(json!({
-            "id": "a_existing",
-            "name": "Lead",
-            "type": "agent",
-            "status": "offline",
-            "persona": null,
-            "last_seen": "2026-01-01T00:00:00.000Z",
-            "channels": [
-                {
-                    "id": "ch_1",
-                    "name": "general",
-                    "role": "member",
-                    "joined_at": "2026-01-01T00:00:00.000Z"
-                }
-            ]
-        })))
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    Mock::given(method("POST"))
-        .and(path("/v1/agents/Lead/rotate-token"))
-        .respond_with(ok(json!({
-            "name": "Lead",
-            "token": "at_live_rotated"
-        })))
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let reclaimed = relay
+    let result = relay
         .register_or_get_agent(CreateAgentRequest {
             name: "Lead".to_string(),
             agent_type: Some("agent".to_string()),
             persona: None,
             metadata: None,
         })
-        .await
-        .expect("register_or_get_agent should tolerate public get-agent payload");
+        .await;
 
-    assert_eq!(reclaimed.id, "a_existing");
-    assert_eq!(reclaimed.name, "Lead");
-    assert_eq!(reclaimed.token, "at_live_rotated");
-    assert_eq!(reclaimed.status, "offline");
-    assert_eq!(reclaimed.created_at, "2026-01-01T00:00:00.000Z");
+    assert!(result.is_err());
 }
 
 #[tokio::test]

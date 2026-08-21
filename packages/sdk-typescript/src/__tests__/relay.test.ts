@@ -1374,25 +1374,17 @@ describe('RelayCast', () => {
       expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
-    it('falls back to get + rotateToken on agent_already_exists', async () => {
+    it('fails closed on agent_already_exists', async () => {
       const { RelayCast } = await import('../relay.js');
+      const { RelayError } = await import('../client.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
-      mockFetch
-        .mockImplementationOnce(() =>
-          mockResponse({ code: 'agent_already_exists', message: 'exists' }, false, 409),
-        )
-        .mockImplementationOnce(() =>
-          mockResponse({ id: 'a_1', name: 'Bot', status: 'online', created_at: '2024-01-01' }),
-        )
-        .mockImplementationOnce(() =>
-          mockResponse({ token: 'at_live_rotated' }),
-        );
+      mockFetch.mockImplementation(() =>
+        mockResponse({ code: 'agent_already_exists', message: 'exists' }, false, 409),
+      );
 
-      const result = await relay.agents.registerOrGet({ name: 'Bot' });
-      expect(result.token).toBe('at_live_rotated');
-      expect(result.name).toBe('Bot');
-      expect(mockFetch).toHaveBeenCalledTimes(3);
+      await expect(relay.agents.registerOrGet({ name: 'Bot' })).rejects.toBeInstanceOf(RelayError);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
     it('rethrows non-conflict errors', async () => {

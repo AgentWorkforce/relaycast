@@ -104,6 +104,70 @@ export const agents = sqliteTable(
 );
 
 // ============================================
+// Agent Identity Recovery
+// ============================================
+/**
+ * Server-owned verifier state for explicit identity recovery.
+ *
+ * This deliberately does not live in `agents.metadata`: generic metadata is a
+ * caller-facing document and therefore cannot be an authorization boundary.
+ * Raw recovery proofs are never stored; callers present the proof and the
+ * engine compares its SHA-256 verifier.
+ */
+export const agentRecoveryCredentials = sqliteTable(
+  'agent_recovery_credentials',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    agentId: text('agent_id').notNull(),
+    proofKind: text('proof_kind').notNull(),
+    verifierHash: text('verifier_hash').notNull(),
+    workUnitId: text('work_unit_id'),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (table) => [
+    uniqueIndex('agent_recovery_credentials_agent_unique').on(table.workspaceId, table.agentId),
+    uniqueIndex('agent_recovery_credentials_verifier_unique').on(table.verifierHash),
+    foreignKey({
+      columns: [table.workspaceId, table.agentId],
+      foreignColumns: [agents.workspaceId, agents.id],
+      name: 'agent_recovery_credentials_agent_fk',
+    }).onDelete('cascade'),
+  ],
+);
+
+/**
+ * Append-only security record. There is intentionally no agent foreign key:
+ * an identity audit must survive release/deletion and retention pruning.
+ */
+export const agentIdentityAudit = sqliteTable(
+  'agent_identity_audit',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    agentId: text('agent_id').notNull(),
+    agentName: text('agent_name').notNull(),
+    action: text('action').notNull(),
+    authority: text('authority').notNull(),
+    actor: text('actor').notNull(),
+    reason: text('reason').notNull(),
+    sessionRef: text('session_ref'),
+    nodeId: text('node_id'),
+    originActor: text('origin_actor').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (table) => [
+    index('idx_agent_identity_audit_workspace').on(table.workspaceId, table.createdAt),
+    index('idx_agent_identity_audit_agent').on(table.workspaceId, table.agentId, table.createdAt),
+  ],
+);
+
+// ============================================
 // Nodes
 // ============================================
 export const nodes = sqliteTable(

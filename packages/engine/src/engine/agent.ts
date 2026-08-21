@@ -1,11 +1,14 @@
 import { eq, and, gt, lt, ne, inArray, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { agents, agentNodeBindings, channels, channelMembers, dmParticipants, actions, deliveries, nodes } from '../db/schema.js';
+import { agents, agentNodeBindings, agentRecoveryCredentials, channels, channelMembers, dmParticipants, actions, deliveries, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
 import { codedError } from '../lib/httpError.js';
 import { directNodeIdForAgent } from './node.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
+import { AGENT_RECOVERY_PROOF_HASH_PATTERN } from '@relaycast/types';
+
+export { AGENT_RECOVERY_PROOF_HASH_PATTERN } from '@relaycast/types';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -137,6 +140,22 @@ function isUniqueConstraintError(err: unknown): boolean {
   return false;
 }
 
+/** Distinguish verifier reuse from the workspace/name collision contract. */
+function isRecoveryVerifierConstraintError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { message?: string; cause?: unknown };
+  if (typeof e.message === 'string') {
+    const message = e.message.toLowerCase();
+    if (
+      message.includes('agent_recovery_credentials.verifier_hash')
+      || message.includes('agent_recovery_credentials_verifier_unique')
+    ) {
+      return true;
+    }
+  }
+  return e.cause ? isRecoveryVerifierConstraintError(e.cause) : false;
+}
+
 export async function registerAgent(
   db: Db,
   workspaceId: string,
@@ -146,6 +165,8 @@ export async function registerAgent(
     persona?: string;
     metadata?: Record<string, unknown>;
     capabilities?: Record<string, unknown>;
+    recoveryProofHash?: string;
+    workUnitId?: string;
   },
 ) {
   assertRegistrableAgentName(data.name);
@@ -153,6 +174,16 @@ export async function registerAgent(
     throw codedError(
       'Agent registration identity_key must be a lowercase SHA-256 verifier',
       'invalid_agent_identity_key',
+      400,
+    );
+  }
+  if (
+    data.recoveryProofHash !== undefined
+    && !AGENT_RECOVERY_PROOF_HASH_PATTERN.test(data.recoveryProofHash)
+  ) {
+    throw codedError(
+      'Agent recovery_proof_hash must be a lowercase SHA-256 verifier',
+      'invalid_agent_recovery_proof_hash',
       400,
     );
   }
@@ -210,6 +241,7 @@ export async function registerAgent(
           capabilities: data.capabilities ?? null,
           locationType: 'via_node',
           locationNodeId: directNodeId,
+          originNodeId: directNodeId,
         })
         .returning()];
 
@@ -218,6 +250,19 @@ export async function registerAgent(
           channelId: generalChannel.id,
           agentId,
           role: 'member',
+        }));
+      }
+
+      if (data.recoveryProofHash) {
+        writes.push(writeDb.insert(agentRecoveryCredentials).values({
+          id: `arc_${generateId()}`,
+          workspaceId,
+          agentId,
+          proofKind: 'work_unit',
+          verifierHash: data.recoveryProofHash,
+          workUnitId: data.workUnitId ?? null,
+          createdAt: now,
+          updatedAt: now,
         }));
       }
 
@@ -236,6 +281,13 @@ export async function registerAgent(
     });
     [agent] = results[1] as (typeof agents.$inferSelect)[];
   } catch (insertErr: unknown) {
+    if (isRecoveryVerifierConstraintError(insertErr)) {
+      throw codedError(
+        'Agent recovery proof verifier is already enrolled to another identity',
+        'agent_recovery_proof_conflict',
+        409,
+      );
+    }
     // Unique constraint violation on (workspace_id, name) → agent already exists
     // D1 uses .code = 'SQLITE_CONSTRAINT_UNIQUE', drizzle may wrap in its own error,
     // and the message may contain 'UNIQUE constraint failed' or 'D1_ERROR: UNIQUE'

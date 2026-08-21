@@ -1,5 +1,6 @@
-import { and, eq, inArray, lt, ne, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, ne, or, sql } from 'drizzle-orm';
 import type {
+  FleetAgentRecoverMessage,
   FleetAgentRegisterMessage,
   FleetBrokerToRelaycastMessage,
   FleetCapabilityAcceptance,
@@ -22,7 +23,8 @@ import { runAtomic } from '../ports/database.js';
 import type { EngineDb } from '../ports/database.js';
 import { isProviderAgentDeliveryReady, type NodeConnectionRegistry } from '../ports/realtime.js';
 import { generateId } from './snowflake.js';
-import { AGENT_RECLAIM_GRACE_MS, assertRegistrableAgentName } from './agent.js';
+import { assertRegistrableAgentName } from './agent.js';
+import { rotateAgentIdentity } from './agentIdentity.js';
 import { isNodeLive, nodeHasCapability } from './placement.js';
 import {
   DEFAULT_PROVIDER_NAME,
@@ -1188,11 +1190,6 @@ export async function registerAgentViaNode(
     const token = `at_live_${randomHex(16)}`;
     const tokenHash = await sha256Hex(token);
     const now = new Date().toISOString();
-    const fleetMetadata = sql`json_object(
-      'node_id', ${nodeId},
-      'invocation_id', ${message.invocation_id ?? null},
-      'registered_at', ${now}
-    )`;
     const [result] = await tx
       .insert(agents)
       .values({
@@ -1212,65 +1209,15 @@ export async function registerAgentViaNode(
         resumable: message.resumable ?? false,
         sessionRef: message.session_ref ?? null,
       })
-      .onConflictDoUpdate({
-        target: [agents.workspaceId, agents.name],
-        set: {
-          tokenHash,
-          status: 'active',
-          lastSeen: new Date(),
-          metadata: sql`json_patch(COALESCE(${agents.metadata}, '{}'), ${fleetMetadata})`,
-          locationType: 'via_node',
-          locationNodeId: nodeId,
-          providerName,
-          originNodeId: sql`COALESCE(${agents.originNodeId}, ${nodeId})`,
-          resumable: message.resumable ?? false,
-          sessionRef: message.session_ref ?? null,
-        },
-        // Who may take this name and be issued a token for it.
-        //
-        // The first disjunct gates on OBSERVED SILENCE (`last_seen`), not on
-        // the `status` column. Those are not the same question and must not
-        // share a field. `status` is maintained by `sweepStaleAgents`, which
-        // runs on every roster read — so while identity was gated on it, an
-        // `agent list` flipped records to 'offline' and thereby moved them
-        // from "reclaimable only by their own node" to "reclaimable by any
-        // node, on name alone, with a `token_hash` overwrite". A read must
-        // never widen who may claim an identity.
-        //
-        // Precisely: the sweep's status update cannot affect this gate at all
-        // any more. The sweep does also clamp a FUTURE `last_seen` back to the
-        // server clock, which is a write — but it can only move the reclaim
-        // moment later-or-equal relative to that bogus timestamp, never make a
-        // row claimable now, since the clamped value is `now` and this
-        // predicate needs `now - AGENT_RECLAIM_GRACE_MS`. That clamp exists so
-        // a client with a skewed clock cannot make its name permanently
-        // unreclaimable; it is deliberate, and it is the only path by which a
-        // read touches this column.
-        //
-        // The grace window is far longer than the presence TTL: an agent goes
-        // 'offline' on the roster after 5 minutes of silence, but its name is
-        // not reclaimable by a stranger until AGENT_RECLAIM_GRACE_MS. Between
-        // those two points the agent reads as away and its identity is still
-        // its own.
-        //
-        // The second disjunct is unchanged: the agent's own node may always
-        // re-register it, so a node restart or reconnect is never blocked by
-        // the grace window.
-        setWhere: or(
-          lt(agents.lastSeen, new Date(Date.now() - AGENT_RECLAIM_GRACE_MS)),
-          and(
-            eq(agents.locationType, 'via_node'),
-            or(
-              eq(agents.locationNodeId, nodeId),
-              sql`${agents.locationNodeId} = 'node_direct_' || ${agents.id}`,
-            ),
-          ),
-        ),
-      })
+      .onConflictDoNothing({ target: [agents.workspaceId, agents.name] })
       .returning();
 
     if (!result) {
-      throw codedError(`Agent "${message.name}" already has an active location`, 'agent_location_conflict', 409);
+      throw codedError(
+        `Agent "${message.name}" already exists; use agent.recover with proof of the immutable id`,
+        'agent_already_exists',
+        409,
+      );
     }
 
     await autoJoinGeneral(tx, workspaceId, result.id);
@@ -1299,6 +1246,146 @@ export async function registerAgentViaNode(
       token,
       ...(cursorHandshake ? { delivery_ack_seq: result.deliveryAckSeq } : {}),
     };
+  });
+}
+
+/**
+ * Recover an existing agent using the authenticated node as the authority.
+ * The immutable id and server-owned `origin_node_id` must both match; name,
+ * presence, silence, and the synthetic direct-node convention grant nothing.
+ */
+export async function recoverAgentViaNode(
+  db: Db,
+  workspaceId: string,
+  nodeId: string,
+  providerName: string,
+  message: FleetAgentRecoverMessage,
+  options: { deliveryCursorSupported?: boolean } = {},
+): Promise<AgentRegisterReplyData> {
+  assertRegistrableAgentName(message.name);
+  const hasInteractiveTransaction = typeof (db as EngineDb & {
+    withTransaction?: unknown;
+  }).withTransaction === 'function';
+  return runAtomic(db, async (tx) => {
+    const [node] = await tx
+      .select()
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+    if (!node) throw codedError(`Node "${nodeId}" not found`, 'node_not_found', 404);
+
+    const [provider] = await tx
+      .select({ capabilities: nodeProviders.capabilities })
+      .from(nodeProviders)
+      .where(and(
+        eq(nodeProviders.workspaceId, workspaceId),
+        eq(nodeProviders.nodeId, nodeId),
+        eq(nodeProviders.name, providerName),
+      ));
+    const cursorHandshake = (options.deliveryCursorSupported ?? true) && (provider?.capabilities?.some(
+      (capability) => capability.name === FLEET_DELIVERY_CURSOR_CAPABILITY,
+    ) ?? false);
+
+    const [target] = await tx
+      .select()
+      .from(agents)
+      .where(and(
+        eq(agents.workspaceId, workspaceId),
+        eq(agents.name, message.name),
+      ));
+    if (!target) {
+      throw codedError(`Agent "${message.name}" not found`, 'agent_not_found', 404);
+    }
+    if (target.id !== message.expected_agent_id || target.originNodeId !== nodeId) {
+      throw codedError(
+        `Node "${nodeId}" does not own expected agent "${message.expected_agent_id}"`,
+        'agent_recovery_not_authorized',
+        403,
+      );
+    }
+
+    const activeNodeIds = await activeBindingNodeIdsForAgent(tx, workspaceId, target.id);
+    const targetWasActive = activeNodeIds.includes(nodeId);
+    let reservedTargetSlot = false;
+    // D1 has no interactive transaction, so capacity must be acquired before
+    // any agent/location mutation. A full node now fails with the incumbent
+    // row and bindings untouched; a later failure releases this reservation.
+    if (!targetWasActive) {
+      await reserveNodeAgentSlot(tx, workspaceId, node);
+      reservedTargetSlot = true;
+    }
+    try {
+      const now = new Date().toISOString();
+      const fleetMetadata = sql`json_object(
+        'node_id', ${nodeId},
+        'invocation_id', ${message.invocation_id ?? null},
+        'registered_at', ${now}
+      )`;
+      const [result] = await tx
+        .update(agents)
+        .set({
+          status: 'active',
+          lastSeen: new Date(),
+          metadata: sql`json_patch(COALESCE(${agents.metadata}, '{}'), ${fleetMetadata})`,
+          locationType: 'via_node',
+          locationNodeId: nodeId,
+          providerName,
+          resumable: message.resumable ?? false,
+          sessionRef: message.session_ref ?? null,
+        })
+        .where(and(
+          eq(agents.workspaceId, workspaceId),
+          eq(agents.id, message.expected_agent_id),
+          eq(agents.name, message.name),
+          eq(agents.originNodeId, nodeId),
+        ))
+        .returning();
+      if (!result) {
+        throw codedError(
+          `Agent "${message.name}" changed during node recovery`,
+          'agent_identity_conflict',
+          409,
+        );
+      }
+
+      await autoJoinGeneral(tx, workspaceId, result.id);
+      await upsertAgentNodeBinding(tx, workspaceId, result, nodeId, {
+        sessionRef: message.session_ref ?? null,
+        deactivateExisting: true,
+      });
+      await releaseNodeAgentSlots(
+        tx,
+        workspaceId,
+        activeNodeIds.filter((activeNodeId) => activeNodeId !== nodeId),
+      );
+      // Rotate only after every fallible routing/capacity mutation. On Node the
+      // surrounding transaction still makes the whole recovery atomic; on D1
+      // the rotation+audit pair remains one atomic batch.
+      const rotated = await rotateAgentIdentity(tx, {
+        workspaceId,
+        agentId: target.id,
+        agentName: target.name,
+      }, {
+        authority: 'origin_node',
+        actor: `node:${node.name}`,
+        reason: 'explicit node identity recovery',
+        sessionRef: message.session_ref ?? target.sessionRef,
+        nodeId,
+        originActor: 'node-control/agent.recover',
+      }, 'recover', {
+        requireAtomic: !hasInteractiveTransaction,
+        alreadyAtomic: hasInteractiveTransaction,
+      });
+
+      return {
+        agent_id: result.id,
+        name: result.name,
+        token: rotated.token,
+        ...(cursorHandshake ? { delivery_ack_seq: result.deliveryAckSeq } : {}),
+      };
+    } catch (err) {
+      if (reservedTargetSlot) await releaseNodeAgentSlots(tx, workspaceId, [nodeId]);
+      throw err;
+    }
   });
 }
 
@@ -1835,6 +1922,39 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           args.workspaceId,
           args.nodeId,
           { providerName: frameProviderName, agentIds: [registered.agent_id] },
+        );
+        return;
+      }
+      case 'agent.recover': {
+        const recovered = await recoverAgentViaNode(
+          args.db,
+          args.workspaceId,
+          args.nodeId,
+          frameProviderName,
+          message,
+          { deliveryCursorSupported: supportsProviderDeliveryReadiness(args.registry) },
+        );
+        const replySent = sendControl(args.socket, {
+          v: 1,
+          id: requestId(message),
+          type: 'reply',
+          ok: true,
+          data: recovered,
+        });
+        if (!replySent) return;
+        args.registry.markProviderAgentsDeliveryReady?.(
+          args.workspaceId,
+          args.nodeId,
+          frameProviderName,
+          args.connectionId,
+          [recovered.agent_id],
+        );
+        await deliverPendingToNode(
+          args.db,
+          args.registry,
+          args.workspaceId,
+          args.nodeId,
+          { providerName: frameProviderName, agentIds: [recovered.agent_id] },
         );
         return;
       }

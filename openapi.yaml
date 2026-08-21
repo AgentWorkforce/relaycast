@@ -170,6 +170,7 @@ components:
             durably swept as `offline`.
         token:
           type: string
+          description: Node token for `/v1/node/ws`.
           description: Agent token (only returned on registration)
         metadata:
           type: object
@@ -216,7 +217,30 @@ components:
           description: Implicit direct node name.
         token:
           type: string
-          description: Node token for `/v1/node/ws`.
+
+    AgentIdentityRecovery:
+      type: object
+      required: [agent_id, name, token, audit_id]
+      properties:
+        agent_id:
+          type: string
+        name:
+          type: string
+        token:
+          type: string
+        audit_id:
+          type: string
+
+    AgentIdentityRevocation:
+      type: object
+      required: [agent_id, name, audit_id]
+      properties:
+        agent_id:
+          type: string
+        name:
+          type: string
+        audit_id:
+          type: string
 
     LifecycleActionInvocation:
       type: object
@@ -1918,8 +1942,10 @@ paths:
       description: >-
         Register a new agent in the workspace. Agent names are unique per
         workspace; registering a duplicate name returns 409
-        agent_already_exists. Initial registration may include identity_key in
-        metadata only as a 64-character lowercase SHA-256 verifier.
+        agent_already_exists and never rotates, reclaims, or silently suffixes
+        the existing identity. Initial registration may include identity_key in
+        metadata and a recovery_proof_hash only as 64-character lowercase
+        SHA-256 verifiers; raw recovery proofs are never stored.
       tags:
         - Agents
       security:
@@ -1942,6 +1968,13 @@ paths:
                   type: string
                 metadata:
                   type: object
+                recovery_proof_hash:
+                  type: string
+                  pattern: '^[a-f0-9]{64}$'
+                  description: SHA-256 verifier for a caller-held work-unit recovery proof
+                work_unit_id:
+                  type: string
+                  description: Stable work-unit label recorded with the recovery verifier
       responses:
         '201':
           description: Agent registered (includes token)
@@ -1991,6 +2024,37 @@ paths:
                     type: array
                     items:
                       $ref: '#/components/schemas/Agent'
+
+  /agent/recovery-credential:
+    post:
+      summary: Enroll an agent recovery verifier
+      description: >-
+        Enroll or rotate the authenticated agent's server-owned work-unit
+        recovery verifier. The raw proof is never sent to or stored by this
+        operation.
+      tags: [Agents]
+      security:
+        - agentToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [recovery_proof_hash]
+              properties:
+                recovery_proof_hash:
+                  type: string
+                  pattern: '^[a-f0-9]{64}$'
+                work_unit_id:
+                  type: string
+      responses:
+        '200':
+          description: Recovery verifier enrolled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
 
   /agents/{name}:
     get:
@@ -2135,6 +2199,151 @@ paths:
             Agent already has an identity (agent_identity_already_claimed), is
             not offline (agent_not_offline), or changed during the claim
             (agent_identity_claim_conflict)
+
+  /agents/{name}/recover:
+    post:
+      summary: Explicitly recover an agent identity
+      description: >-
+        Rotate the credential for the exact immutable agent id using the
+        current agent token, its server-owned origin-node credential, or a
+        caller-held work-unit proof whose SHA-256 verifier was enrolled. Name,
+        liveness, status, and name collision are never recovery authority.
+        Ordinary recovery retains the prior token for the documented rollover
+        grace period; use revoke-token for immediate compromise response.
+      tags: [Agents]
+      security:
+        - agentToken: []
+        - nodeToken: []
+        - {}
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_agent_id]
+              properties:
+                expected_agent_id:
+                  type: string
+                recovery_proof:
+                  type: string
+                  description: Raw caller-held proof; accepted only when its stored verifier matches
+                reason:
+                  type: string
+                session_ref:
+                  type: string
+                node_id:
+                  type: string
+      responses:
+        '200':
+          description: Identity recovered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/AgentIdentityRecovery'
+        '403':
+          description: Recovery authority does not match the exact identity
+        '409':
+          description: Identity changed before recovery completed
+
+  /agents/{name}/takeover:
+    post:
+      summary: Explicitly take over an agent identity
+      description: >-
+        Workspace-owner escape hatch for lost recovery proof. Requires the
+        exact immutable id and complete operator audit context. The incumbent
+        receives an agent.identity_taken_over context event when connected.
+      tags: [Agents]
+      security:
+        - workspaceKey: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_agent_id, actor, reason, session_ref, node_id]
+              properties:
+                expected_agent_id: { type: string }
+                actor: { type: string }
+                reason: { type: string }
+                session_ref: { type: string }
+                node_id: { type: string }
+      responses:
+        '200':
+          description: Identity taken over and audit record appended
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/AgentIdentityRecovery'
+        '409':
+          description: expected_agent_id does not match the current identity
+
+  /agents/{name}/revoke-token:
+    post:
+      summary: Immediately revoke an agent credential
+      description: >-
+        Workspace-owner compromise response. Clears both current and prior
+        grace-period token slots and appends an audit record. This does not
+        issue a replacement token.
+      tags: [Agents]
+      security:
+        - workspaceKey: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_agent_id, actor, reason]
+              properties:
+                expected_agent_id: { type: string }
+                actor: { type: string }
+                reason: { type: string }
+                session_ref: { type: string }
+                node_id: { type: string }
+      responses:
+        '200':
+          description: Both token slots revoked and audit record appended
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/AgentIdentityRevocation'
+        '409':
+          description: expected_agent_id does not match the current identity
 
   /agents/spawn:
     post:
@@ -3384,11 +3593,14 @@ paths:
   /agents/{name}/rotate-token:
     post:
       summary: Rotate agent token
-      description: Rotate and return a new token for an existing agent
+      description: >-
+        Self-rollover for the exact authenticated agent. A workspace key cannot
+        use this endpoint; owners use the audited takeover or revoke-token
+        operations.
       tags:
         - Agents
       security:
-        - workspaceKey: []
+        - agentToken: []
       parameters:
         - name: name
           in: path

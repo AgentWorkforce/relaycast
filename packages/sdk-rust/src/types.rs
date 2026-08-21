@@ -135,6 +135,61 @@ pub struct TokenRotateResponse {
     pub token: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct RecoverAgentRequest {
+    pub expected_agent_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovery_proof: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TakeOverAgentRequest {
+    pub expected_agent_id: String,
+    pub actor: String,
+    pub reason: String,
+    pub session_ref: String,
+    pub node_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RevokeAgentTokenRequest {
+    pub expected_agent_id: String,
+    pub actor: String,
+    pub reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EnrollRecoveryCredentialRequest {
+    pub recovery_proof_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work_unit_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentIdentityRecoveryResponse {
+    pub agent_id: String,
+    pub name: String,
+    pub token: String,
+    pub audit_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentIdentityRevocationResponse {
+    pub agent_id: String,
+    pub name: String,
+    pub audit_id: String,
+}
+
 // === Observer tokens ===
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

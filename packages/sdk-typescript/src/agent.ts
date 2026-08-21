@@ -30,6 +30,7 @@ import type {
   CompleteUploadResponse,
   FileInfo,
   Agent,
+  TokenRotateResponse,
   InvokeActionResult,
   CompleteInvocationRequest,
   ActionInvocation,
@@ -76,6 +77,7 @@ import { WsClient, type WsClientOptions, withInternalWsOrigin } from './ws.js';
 import type { Subscription } from './subscription.js';
 import { stableRelaycastEventId } from './event-id.js';
 import { SDK_VERSION } from './version.js';
+import type { EnrollRecoveryCredentialInput } from './identity.js';
 
 function stripHash(channel: string): string {
   return channel.startsWith('#') ? channel.slice(1) : channel;
@@ -284,6 +286,18 @@ export class AgentClient {
   /** Send a REST heartbeat to keep this agent online in PresenceDO without a WebSocket. */
   async heartbeat(): Promise<void> {
     await this.presence.heartbeat();
+  }
+
+  /** Authenticated self-rollover for this agent identity. */
+  async rotateToken(name: string): Promise<TokenRotateResponse> {
+    return this.client.post(`/v1/agents/${encodeURIComponent(name)}/rotate-token`, {});
+  }
+
+  /** Enroll or rotate this agent's server-owned recovery verifier. */
+  async enrollRecoveryCredential(
+    data: EnrollRecoveryCredentialInput,
+  ): Promise<{ agentId: string; enrolled: boolean }> {
+    return this.client.post('/v1/agent/recovery-credential', data);
   }
 
   /**
