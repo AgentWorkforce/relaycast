@@ -601,6 +601,13 @@ fn node_heartbeat(registration: &NodeRegistration) -> serde_json::Value {
     })
 }
 
+// The error type is `tungstenite::Error`, fixed by the `Sink` bound this
+// function is generic over, and Rust 1.98's tightened `result_large_err`
+// threshold now flags it. Boxing would mean allocating on a path that only ever
+// forwards `write.send()`, and would change the signature of an external
+// crate's error for every caller — so the size is acknowledged rather than
+// worked around.
+#[allow(clippy::result_large_err)]
 async fn send_node_register<S>(
     write: &mut S,
     registration: &NodeRegistration,
