@@ -172,7 +172,24 @@ impl AgentRegistrationClient {
         lock_unpoisoned(&self.registration_cooldowns).remove(trimmed);
     }
 
-    /// Register (or rotate) an agent token via `/v1/agents` and token rotation.
+    /// Register a **new** agent and return its token.
+    ///
+    /// Registration is create-only as of engine 8.2.0 (#349): a name already
+    /// held by another identity yields
+    /// [`AgentRegistrationError::AlreadyExists`], and this method will not
+    /// silently replace it. Note the cache is per-client and in memory, so a
+    /// restarted process registering the same stable name hits that error
+    /// rather than reusing the previous token.
+    ///
+    /// Pick one of:
+    ///
+    /// - **a name unique per run** (simplest, and the intended model for
+    ///   ephemeral agents),
+    /// - **persist the agent token** and roll it over yourself with
+    ///   [`RelayCast::rotate_agent_token`],
+    /// - **take the identity over explicitly** with
+    ///   [`RelayCast::take_over_agent`] or [`RelayCast::recover_agent`], which
+    ///   are audited operations requiring an expected agent id and a reason.
     pub async fn register_agent_token(
         &self,
         agent_name: &str,
@@ -513,7 +530,10 @@ mod tests {
                 .expect("relay init");
 
         Mock::given(method("POST"))
-            .and(path("/v1/agents/worker-self/rotate-token"))
+            // Built with `format!` so the SDK/OpenAPI route-sync test normalizes
+            // this to `/v1/agents/{param}/rotate-token` rather than treating
+            // `worker-self` as a literal route missing from openapi.yaml.
+            .and(path(format!("/v1/agents/{}/rotate-token", "worker-self")))
             .and(header("authorization", "Bearer at_live_current"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "ok": true,
