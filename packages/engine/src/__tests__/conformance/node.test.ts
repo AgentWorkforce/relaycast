@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { drainNodeInvocations, sweepTimedOutInvocations } from '../../index.js';
 import {
@@ -1604,7 +1604,7 @@ describe('node adapter conformance', () => {
       expect(updated.attemptedNodeIds).toEqual(['node_alpha']);
     });
 
-    it('exported drain helper preserves spawn-prefixed actions and skips retry-delayed invocations', async () => {
+    it('exported drain helper preserves spawn-prefixed actions and only includes retry-delayed invocations when forced', async () => {
       const ws = await createWorkspace(stack.app, 'fleet-spawn-prefix-drain-helper-ws');
       const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
       const alpha = await enrollAndAttachNode(ws, {
@@ -1674,6 +1674,19 @@ describe('node adapter conformance', () => {
       expect(delayed.spawnReservedAt).toBeNull();
       expect(delayed.retryAfterAt).toBeInstanceOf(Date);
       expect(delayed.retryAfterAt!.getTime()).toBeGreaterThan(Date.now());
+
+      alpha.sock.received.length = 0;
+      const forced = await drainNodeInvocations(
+        db,
+        stack.runtime.realtime,
+        ws.workspaceId,
+        'node_alpha',
+        { includeDeferred: true },
+      );
+      expect(forced).toBe(1);
+      expect(alpha.sock.ofType('action.invoke')).toEqual([
+        expect.objectContaining({ invocation_id: 'inv_spawn_future_retry' }),
+      ]);
     });
 
     it('exported drain helper releases spawn capacity when redispatch is rejected', async () => {
@@ -1987,6 +2000,49 @@ describe('node adapter conformance', () => {
       expect(stillNode.maxAgents).toBe(8);
       expect(stillNode.version).toBe('test-node-v2');
       expect(stillNode.capabilities.map((cap) => cap.name).sort()).toEqual(['echo', 'spawn:claude']);
+    });
+
+    it('does not scan pending invocations on steady heartbeats but drains when capacity becomes available', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-heartbeat-drain-transition-ws');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha',
+        name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        maxAgents: 1,
+      });
+      const drain = vi.spyOn(stack.runtime.realtime, 'drainNode');
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.heartbeat',
+        load: 0,
+        active_agents: 0,
+        handlers_live: true,
+      }));
+      expect(drain).not.toHaveBeenCalled();
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.heartbeat',
+        load: 1,
+        active_agents: 1,
+        handlers_live: true,
+      }));
+      expect(drain).not.toHaveBeenCalled();
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.heartbeat',
+        load: 0,
+        active_agents: 0,
+        handlers_live: true,
+      }));
+      expect(drain).toHaveBeenCalledOnce();
+      expect(drain).toHaveBeenCalledWith(
+        ws.workspaceId,
+        'node_alpha',
+        { includeDeferred: true },
+      );
     });
 
     it('publishes action.invoked to the workspace observer stream', async () => {

@@ -1,4 +1,4 @@
-import { eq, and, gt, lt, ne, inArray, sql } from 'drizzle-orm';
+import { eq, and, gt, lt, ne, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { agents, agentNodeBindings, agentRecoveryCredentials, channels, channelMembers, dmParticipants, actions, deliveries, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
@@ -313,9 +313,6 @@ export async function registerAgent(
 }
 
 export async function listAgents(db: Db, workspaceId: string, status?: string) {
-  // Keep the durable state aligned as a cleanup side effect, while still
-  // deriving below so correctness never depends on a cron/sweep having run.
-  await sweepStaleAgents(db, workspaceId);
   const rows = await db
     .select()
     .from(agents)
@@ -339,9 +336,6 @@ export async function listAgents(db: Db, workspaceId: string, status?: string) {
 }
 
 export async function getAgentByName(db: Db, workspaceId: string, name: string) {
-  // Match roster reads: detail consumers should observe both derived and
-  // durable presence consistently within this workspace.
-  await sweepStaleAgents(db, workspaceId);
   const [agent] = await db
     .select()
     .from(agents)
@@ -383,10 +377,17 @@ export async function getAgentByName(db: Db, workspaceId: string, name: string) 
         createdAt: deliveries.createdAt,
       })
       .from(deliveries)
-      // Mirror the GET /v1/deliveries replay queue: queued + delivered are the
-      // non-terminal, still-pending states.
-      .where(and(eq(deliveries.agentId, agent.id), inArray(deliveries.status, ['queued', 'delivered'])))
-      .orderBy(deliveries.createdAt)
+      // Keep this detail projection aligned with GET /v1/deliveries: an
+      // expired row is no longer pending even if scheduled maintenance has not
+      // transitioned its durable status yet. Keep the active predicate literal
+      // so SQLite can use idx_deliveries_agent_active_created.
+      .where(and(
+        eq(deliveries.workspaceId, workspaceId),
+        eq(deliveries.agentId, agent.id),
+        sql`${deliveries.status} IN ('queued', 'delivered')`,
+        sql`(${deliveries.expiresAt} IS NULL OR ${deliveries.expiresAt} > unixepoch())`,
+      ))
+      .orderBy(deliveries.createdAt, deliveries.id)
       .limit(50),
   ]);
 
@@ -659,7 +660,9 @@ export async function sweepStaleAgents(db: Db, workspaceId?: string): Promise<nu
   const now = new Date();
   const cutoff = new Date(now.getTime() - AGENT_LIVENESS_TTL_MS);
   const future = and(
-    inArray(agents.status, ['active', 'online']),
+    // Keep this literal aligned with idx_agents_active_last_seen. SQLite cannot
+    // prove a parameterized IN predicate implies a partial-index predicate.
+    sql`${agents.status} IN ('active', 'online')`,
     gt(agents.lastSeen, now),
     ...(workspaceId ? [eq(agents.workspaceId, workspaceId)] : []),
   );
@@ -669,7 +672,7 @@ export async function sweepStaleAgents(db: Db, workspaceId?: string): Promise<nu
     .where(future)
     .returning({ id: agents.id });
   const stale = and(
-    inArray(agents.status, ['active', 'online']),
+    sql`${agents.status} IN ('active', 'online')`,
     lt(agents.lastSeen, cutoff),
     ...(workspaceId ? [eq(agents.workspaceId, workspaceId)] : []),
   );

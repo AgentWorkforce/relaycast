@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Fleet heartbeats and agent reads no longer amplify into workspace-wide D1 maintenance scans; pending delivery views also exclude expired rows before cleanup runs.
 
 ## [8.2.0] - 2026-08-21
 
