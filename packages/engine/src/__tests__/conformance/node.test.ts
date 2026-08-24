@@ -2073,6 +2073,50 @@ describe('node adapter conformance', () => {
       expect(alpha.sock.ofType('action.invoke').filter((event) => event.action.startsWith('spawn'))).toHaveLength(0);
     });
 
+    it('replays a pre-dispatch node-action failure as 503 instead of a failed 201', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-node-action-failed-replay-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha',
+        name: 'alpha',
+        capabilities: [capability('offline-action', 'action')],
+        load: 0,
+      });
+      await stack.runtime.handle.db
+        .update(actions)
+        .set({ handlerProvider: 'offline-action-provider' })
+        .where(and(
+          eq(actions.workspaceId, ws.workspaceId),
+          eq(actions.handlerNodeId, 'node_alpha'),
+          eq(actions.name, 'offline-action'),
+        ));
+
+      const invoke = () => stack.app.request('/v1/actions/offline-action/invoke', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${caller.token}`,
+          'Idempotency-Key': 'failed-node-action-replay',
+        },
+        body: JSON.stringify({ input: { value: 'one' } }),
+      });
+
+      const first = await invoke();
+      const replay = await invoke();
+      expect([first.status, replay.status]).toEqual([503, 503]);
+      expect((await first.json() as { error: { code: string } }).error.code).toBe('handler_unavailable');
+      expect((await replay.json() as { error: { code: string } }).error.code).toBe('handler_unavailable');
+      const rows = await stack.runtime.handle.db
+        .select({ status: actionInvocations.status, dispatchedNodeId: actionInvocations.dispatchedNodeId })
+        .from(actionInvocations)
+        .where(and(
+          eq(actionInvocations.workspaceId, ws.workspaceId),
+          eq(actionInvocations.actionName, 'offline-action'),
+        ));
+      expect(rows).toEqual([{ status: 'failed', dispatchedNodeId: null }]);
+      expect(alpha.sock.ofType('action.invoke').filter((event) => event.action === 'offline-action')).toHaveLength(0);
+    });
+
     it('fires a trigger only once when concurrent posts match the same rate-limited trigger', async () => {
       const ws = await createWorkspace(stack.app, 'fleet-trigger-ws');
       const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');

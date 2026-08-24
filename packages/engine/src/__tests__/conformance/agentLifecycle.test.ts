@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { actionInvocations, agentNodeBindings, agents, nodes, workspaceEvents } from '../../db/schema.js';
 import { AGENT_LIVENESS_TTL_MS } from '../../engine/agent.js';
@@ -281,6 +281,59 @@ describe('agent presence and release lifecycle', () => {
         eq(actionInvocations.actionName, 'release'),
       ));
     expect(invocation).toEqual({ status: 'completed', handlerNodeId: nodeId });
+  });
+
+  it('waits for a durable release dispatch outcome before answering a concurrent replay', async () => {
+    const ws = await createWorkspace(stack.app, 'release-dispatch-race-replay');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'release-race-target');
+    const targetNode = await attachDirectNodeSocket(stack, ws.workspaceId, target);
+
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    const originalSend = nodeConnections.sendToProvider.bind(nodeConnections);
+    let frameSent!: () => void;
+    const frameSentPromise = new Promise<void>((resolve) => { frameSent = resolve; });
+    let resumeSend!: () => void;
+    const resumeSendPromise = new Promise<void>((resolve) => { resumeSend = resolve; });
+    vi.spyOn(nodeConnections, 'sendToProvider').mockImplementation(async (...args) => {
+      const sent = await originalSend(...args);
+      if (args[3].type !== 'action.invoke' || args[3].action !== 'release') return sent;
+      frameSent();
+      await resumeSendPromise;
+      return sent;
+    });
+
+    const invoke = () => stack.app.request('/v1/actions/release/invoke', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+        'Idempotency-Key': 'release-dispatch-race',
+      },
+      body: JSON.stringify({ input: { name: target.name, delete_agent: false } }),
+    });
+
+    const freshPromise = invoke();
+    await frameSentPromise;
+    let replaySettled = false;
+    const replayPromise = invoke().then((response) => {
+      replaySettled = true;
+      return response;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(replaySettled).toBe(false);
+
+    resumeSend();
+    const [fresh, replay] = await Promise.all([freshPromise, replayPromise]);
+    expect([fresh.status, replay.status]).toEqual([201, 201]);
+    expect(replay.headers.get('Idempotency-Replayed')).toBe('true');
+    const [freshBody, replayBody] = await Promise.all([
+      fresh.json() as Promise<{ data: Record<string, unknown> }>,
+      replay.json() as Promise<{ data: Record<string, unknown> }>,
+    ]);
+    expect(freshBody.data.handler_node_id).toBe(targetNode.nodeId);
+    expect(replayBody).toEqual(freshBody);
+    expect(targetNode.sock.ofType('action.invoke').filter((event) => event.action === 'release')).toHaveLength(1);
   });
 
   it('reaps a hostless agent that has already spoken', async () => {

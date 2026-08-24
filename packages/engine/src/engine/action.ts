@@ -531,7 +531,7 @@ async function idempotentInvocationId(
   return `inv_idem_${digest}`;
 }
 
-async function waitForSpawnReplayOutcome(
+async function waitForInvocationReplayOutcome(
   db: Db,
   workspaceId: string,
   invocation: InvocationRow,
@@ -542,7 +542,7 @@ async function waitForSpawnReplayOutcome(
     if (!OPEN_INVOCATION_STATUSES.some((status) => status === current.status)) {
       if (current.status === 'failed') {
         throw codedError(
-          'Spawn invocation failed before provider dispatch completed',
+          'Action invocation failed before provider dispatch completed',
           current.error ?? 'handler_unavailable',
           503,
         );
@@ -553,7 +553,7 @@ async function waitForSpawnReplayOutcome(
       // The winning request may have died after its durable claim but before
       // placement or dispatch persistence. Fail retryably without releasing the
       // key for another spawn.
-      throw codedError('Idempotent spawn dispatch is still pending', 'idempotency_unavailable', 503);
+      throw codedError('Idempotent action dispatch is still pending', 'idempotency_unavailable', 503);
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
     const [updated] = await db
@@ -836,7 +836,10 @@ async function dispatchRelease(args: {
     action_name: 'release',
     invocation_id: args.invocationId,
   });
-  if (replayed) return markInvocationReplay(invocationAck(invocation, { actionName: 'release' }));
+  if (replayed) {
+    const settled = await waitForInvocationReplayOutcome(args.db, args.workspaceId, invocation);
+    return markInvocationReplay(invocationAck(settled, { actionName: 'release' }));
+  }
   const completeLocally = async () => {
     const completedAt = new Date();
     const exitNodeId = nodeId ?? agent.locationNodeId;
@@ -1118,7 +1121,7 @@ async function dispatchSpawn(args: {
     invocation_id: args.invocationId,
   });
   if (replayed) {
-    const dispatched = await waitForSpawnReplayOutcome(args.db, args.workspaceId, invocation);
+    const dispatched = await waitForInvocationReplayOutcome(args.db, args.workspaceId, invocation);
     return markInvocationReplay(invocationAck(dispatched, { actionName: 'spawn' }));
   }
 
@@ -1308,11 +1311,19 @@ export async function invokeAction(
       .where(and(
         eq(actionInvocations.workspaceId, workspaceId),
         eq(actionInvocations.id, invocationId),
-      ));
+    ));
     if (existing) {
       assertInvocationClaimMatches(existing, actionName, data);
+      // Built-ins and node-scoped actions can fail before any 201 is returned;
+      // wait for their durable dispatch/terminal outcome. Agent-hosted actions
+      // deliberately replay their immutable ack immediately: the provider may
+      // already have received the frame while dispatch persistence is paused,
+      // and a concurrent handler takeover can terminally fail that row without
+      // turning the accepted request into a pre-dispatch failure.
       const replay = isSpawnInvocation(actionName)
-        ? await waitForSpawnReplayOutcome(db, workspaceId, existing)
+        || isReleaseInvocation(actionName)
+        || !!action?.handlerNodeId
+        ? await waitForInvocationReplayOutcome(db, workspaceId, existing)
         : existing;
       return markInvocationReplay(invocationAck(replay, { actionName }));
     }
@@ -1362,7 +1373,8 @@ export async function invokeAction(
       invocation_id: invocationId,
     });
     if (replayed) {
-      return markInvocationReplay(invocationAck(invocation, { actionName }));
+      const settled = await waitForInvocationReplayOutcome(db, workspaceId, invocation);
+      return markInvocationReplay(invocationAck(settled, { actionName }));
     }
     // Only mark the reservation held when we actually incremented the node's
     // reserved-capacity counter, so completion/reschedule release stays balanced.

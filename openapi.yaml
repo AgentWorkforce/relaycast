@@ -4443,8 +4443,9 @@ paths:
             `handler_unavailable` — the action's handler agent has no live
             connection, so the invocation fails fast instead of queueing toward
             a handler that cannot answer; or `idempotency_unavailable` — the
-            durable idempotency claim cannot be read, or a keyed spawn replay
-            cannot yet observe its durable placement and dispatch outcome. Retry
+            durable idempotency claim cannot be read, or a keyed invocation
+            replay cannot yet observe its durable placement/dispatch outcome.
+            Retry
             the same logical request with the same key.
           content:
             application/json:
