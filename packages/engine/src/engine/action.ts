@@ -1322,7 +1322,7 @@ export async function invokeAction(
       // turning the accepted request into a pre-dispatch failure.
       const replay = isSpawnInvocation(actionName)
         || isReleaseInvocation(actionName)
-        || !!action?.handlerNodeId
+        || (!!existing.handlerNodeId && !existing.handlerAgentId)
         ? await waitForInvocationReplayOutcome(db, workspaceId, existing)
         : existing;
       return markInvocationReplay(invocationAck(replay, { actionName }));

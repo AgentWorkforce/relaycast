@@ -2117,6 +2117,81 @@ describe('node adapter conformance', () => {
       expect(alpha.sock.ofType('action.invoke').filter((event) => event.action === 'offline-action')).toHaveLength(0);
     });
 
+    it('classifies a keyed node-action replay from its durable claim after the action is deleted', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-node-action-deleted-replay-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha',
+        name: 'alpha',
+        capabilities: [capability('vanishing-action', 'action')],
+        load: 0,
+      });
+
+      const nodeConnections = stack.runtime.deps.nodeConnections!;
+      const originalSend = nodeConnections.sendToProvider.bind(nodeConnections);
+      let frameSent!: () => void;
+      const frameSentPromise = new Promise<void>((resolve) => { frameSent = resolve; });
+      let resumeSend!: () => void;
+      const resumeSendPromise = new Promise<void>((resolve) => { resumeSend = resolve; });
+      vi.spyOn(nodeConnections, 'sendToProvider').mockImplementation(async (...args) => {
+        const sent = await originalSend(...args);
+        if (args[3].type !== 'action.invoke' || args[3].action !== 'vanishing-action') return sent;
+        frameSent();
+        await resumeSendPromise;
+        return sent;
+      });
+
+      const invoke = () => stack.app.request('/v1/actions/vanishing-action/invoke', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${caller.token}`,
+          'Idempotency-Key': 'deleted-node-action-replay',
+        },
+        body: JSON.stringify({ input: { value: 'one' } }),
+      });
+
+      const freshPromise = invoke();
+      await frameSentPromise;
+
+      // The durable claim already snapshots node_alpha, but dispatch state is
+      // still uncommitted. Deletion terminally fails the claim and removes the
+      // current action row that must not be used to classify a later replay.
+      const deleted = await stack.app.request('/v1/actions/vanishing-action', {
+        method: 'DELETE',
+        headers: { authorization: `Bearer ${ws.workspaceKey}` },
+      });
+      expect(deleted.status).toBe(204);
+
+      const replay = await invoke();
+      expect(replay.status).toBe(503);
+      expect((await replay.json() as { error: { code: string } }).error.code).toBe('action_deleted');
+
+      resumeSend();
+      await freshPromise;
+      const rows = await stack.runtime.handle.db
+        .select({
+          status: actionInvocations.status,
+          error: actionInvocations.error,
+          handlerAgentId: actionInvocations.handlerAgentId,
+          handlerNodeId: actionInvocations.handlerNodeId,
+          dispatchedNodeId: actionInvocations.dispatchedNodeId,
+        })
+        .from(actionInvocations)
+        .where(and(
+          eq(actionInvocations.workspaceId, ws.workspaceId),
+          eq(actionInvocations.actionName, 'vanishing-action'),
+        ));
+      expect(rows).toEqual([{
+        status: 'failed',
+        error: 'action_deleted',
+        handlerAgentId: null,
+        handlerNodeId: 'node_alpha',
+        dispatchedNodeId: null,
+      }]);
+      expect(alpha.sock.ofType('action.invoke').filter((event) => event.action === 'vanishing-action')).toHaveLength(1);
+    });
+
     it('fires a trigger only once when concurrent posts match the same rate-limited trigger', async () => {
       const ws = await createWorkspace(stack.app, 'fleet-trigger-ws');
       const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
