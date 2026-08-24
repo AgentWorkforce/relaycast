@@ -26,6 +26,7 @@ type RetryableInvocationRow = Pick<
 >;
 
 const OPEN_INVOCATION_STATUSES = ['pending', 'dispatched', 'invoked'];
+const REPLAYED_INVOCATION = Symbol('replayed-action-invocation');
 export const ACTION_DISPATCH_TIMEOUT_MS = 30_000;
 /**
  * How long an agent handler's connection must be CONTINUOUSLY unreachable
@@ -116,6 +117,20 @@ function recordInput(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalJson(item)).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
 }
 
 function publicAction(row: {
@@ -444,23 +459,105 @@ async function createInvocation(
     caller_name?: string | null;
     action_name?: string;
     status?: string;
+    invocation_id?: string;
   },
 ) {
-  const invocationId = `inv_${generateId()}`;
-  const [invocation] = await db
+  const invocationId = data.invocation_id ?? `inv_${generateId()}`;
+  const expectedActionName = action?.name ?? data.action_name ?? 'spawn';
+  const [created] = await db
     .insert(actionInvocations)
     .values({
       id: invocationId,
       workspaceId,
       actionId: action?.id ?? null,
-      actionName: action?.name ?? data.action_name ?? 'spawn',
+      actionName: expectedActionName,
       callerId: data.caller_id ?? null,
       callerName: data.caller_name ?? null,
       input: data.input ?? {},
       status: data.status ?? 'pending',
     })
+    .onConflictDoNothing()
     .returning();
-  return invocation;
+  if (created) return { invocation: created, replayed: false };
+
+  // Only a deterministic idempotency claim is expected to conflict. Its row
+  // is the durable pre-dispatch claim: a concurrent request or later retry
+  // observes the same invocation instead of sending another provider frame.
+  if (!data.invocation_id) {
+    throw new Error(`Action invocation id collision: ${invocationId}`);
+  }
+  const [existing] = await db
+    .select()
+    .from(actionInvocations)
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.id, invocationId),
+    ));
+  if (!existing) {
+    throw codedError('Idempotency claim could not be read after conflict', 'idempotency_unavailable', 503);
+  }
+  assertInvocationClaimMatches(existing, expectedActionName, data);
+  return { invocation: existing, replayed: true };
+}
+
+function assertInvocationClaimMatches(
+  existing: InvocationRow,
+  expectedActionName: string,
+  data: { input?: Record<string, unknown>; caller_id?: string | null },
+): void {
+  const samePayload = existing.actionName === expectedActionName
+    && existing.callerId === (data.caller_id ?? null)
+    && canonicalJson(recordInput(existing.input)) === canonicalJson(recordInput(data.input));
+  if (!samePayload) {
+    throw codedError(
+      'Idempotency-Key was reused with a different request payload',
+      'idempotency_key_reused',
+      409,
+    );
+  }
+}
+
+async function idempotentInvocationId(
+  workspaceId: string,
+  callerId: string,
+  actionName: string,
+  key: string,
+): Promise<string> {
+  const digest = await sha256Hex(['action-invoke-v1', workspaceId, callerId, actionName, key].join('\0'));
+  return `inv_idem_${digest}`;
+}
+
+function invocationAck(
+  invocation: InvocationRow,
+  {
+    actionName = invocation.actionName,
+    handlerAgentId = null,
+    handlerNodeId = null,
+  }: {
+    actionName?: string;
+    handlerAgentId?: string | null;
+    handlerNodeId?: string | null;
+  } = {},
+) {
+  return {
+    invocation_id: invocation.id,
+    action_name: actionName,
+    handler_agent_id: handlerAgentId,
+    handler_node_id: invocation.dispatchedNodeId ?? handlerNodeId,
+    dispatched_node_id: invocation.dispatchedNodeId,
+    input: recordInput(invocation.input),
+    status: invocation.status,
+    created_at: invocation.createdAt.toISOString(),
+  };
+}
+
+function markInvocationReplay<T extends object>(result: T): T {
+  Object.defineProperty(result, REPLAYED_INVOCATION, { value: true });
+  return result;
+}
+
+export function wasInvocationReplayed(result: object): boolean {
+  return REPLAYED_INVOCATION in result;
 }
 
 /**
@@ -666,6 +763,7 @@ async function dispatchRelease(args: {
   registry?: NodeConnectionRegistry;
   completionDeps?: InvocationCompletionDeps;
   workspaceId: string;
+  invocationId?: string;
   data: {
     input?: Record<string, unknown>;
     caller_id?: string;
@@ -685,12 +783,14 @@ async function dispatchRelease(args: {
   if (!agent) {
     throw codedError(`Agent "${name}" not found`, 'agent_not_found', 404);
   }
-  const invocation = await createInvocation(args.db, args.workspaceId, null, {
+  const { invocation, replayed } = await createInvocation(args.db, args.workspaceId, null, {
     input,
     caller_id: args.data.caller_id,
     caller_name: args.data.caller_name,
     action_name: 'release',
+    invocation_id: args.invocationId,
   });
+  if (replayed) return markInvocationReplay(invocationAck(invocation, { actionName: 'release' }));
   const completeLocally = async () => {
     const completedAt = new Date();
     // Keyed on the agent id, not on the clock: the id is already unique per
@@ -944,6 +1044,7 @@ async function dispatchSpawn(args: {
   db: Db;
   registry?: NodeConnectionRegistry;
   workspaceId: string;
+  invocationId?: string;
   data: {
     input?: Record<string, unknown>;
     caller_id?: string;
@@ -961,11 +1062,13 @@ async function dispatchSpawn(args: {
   const input = recordInput(args.data.input);
   const capability = dispatchActionNameForInvocation('spawn', input);
 
-  const invocation = await createInvocation(args.db, args.workspaceId, null, {
+  const { invocation, replayed } = await createInvocation(args.db, args.workspaceId, null, {
     input: args.data.input,
     caller_id: args.data.caller_id,
     caller_name: args.data.caller_name,
+    invocation_id: args.invocationId,
   });
+  if (replayed) return markInvocationReplay(invocationAck(invocation, { actionName: 'spawn' }));
 
   const placement = await claimSpawnNode(args.db, args.workspaceId, {
     actionName: 'spawn',
@@ -1076,7 +1179,7 @@ export async function invokeNodeAction(
     }
   }
 
-  const invocation = await createInvocation(db, workspaceId, action, {
+  const { invocation } = await createInvocation(db, workspaceId, action, {
     input: data.input,
     caller_id: data.caller_id,
     caller_name: data.caller_name,
@@ -1121,11 +1224,37 @@ export async function invokeAction(
   options: {
     nodeConnections?: NodeConnectionRegistry;
     completionDeps?: InvocationCompletionDeps;
+    /** A validated caller-supplied key for an atomic durable invocation claim. */
+    idempotencyKey?: string;
     /** Resolve plain node-scoped actions too (message triggers bind by name
      * without a node); the resolved row is dispatched node-addressed. */
     includeNodeScoped?: boolean;
   } = {},
 ) {
+  let invocationId: string | undefined;
+  if (options.idempotencyKey !== undefined) {
+    if (!data.caller_id) {
+      throw codedError('Authenticated caller is required for idempotent action invocation', 'idempotency_actor_required', 400);
+    }
+    invocationId = await idempotentInvocationId(
+      workspaceId,
+      data.caller_id,
+      actionName,
+      options.idempotencyKey,
+    );
+    const [existing] = await db
+      .select()
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, workspaceId),
+        eq(actionInvocations.id, invocationId),
+      ));
+    if (existing) {
+      assertInvocationClaimMatches(existing, actionName, data);
+      return markInvocationReplay(invocationAck(existing, { actionName }));
+    }
+  }
+
   const action = await fetchAction(db, workspaceId, actionName, options.includeNodeScoped);
 
   if (!action && actionName === 'spawn') {
@@ -1134,6 +1263,7 @@ export async function invokeAction(
       registry: options.nodeConnections,
       workspaceId,
       data,
+      invocationId,
     });
   }
 
@@ -1144,6 +1274,7 @@ export async function invokeAction(
       completionDeps: options.completionDeps,
       workspaceId,
       data,
+      invocationId,
     });
   }
 
@@ -1163,11 +1294,18 @@ export async function invokeAction(
     if (!options.nodeConnections) {
       throw codedError('Node dispatch is not available', 'node_dispatch_unavailable', 503);
     }
-    const invocation = await createInvocation(db, workspaceId, action, {
+    const { invocation, replayed } = await createInvocation(db, workspaceId, action, {
       input: data.input,
       caller_id: data.caller_id,
       caller_name: data.caller_name,
+      invocation_id: invocationId,
     });
+    if (replayed) {
+      return markInvocationReplay(invocationAck(invocation, {
+        actionName,
+        handlerNodeId: action.handlerNodeId,
+      }));
+    }
     // Only mark the reservation held when we actually incremented the node's
     // reserved-capacity counter, so completion/reschedule release stays balanced.
     // If the reservation can't be taken (node offline / at capacity) the queued
@@ -1246,11 +1384,19 @@ export async function invokeAction(
     }
   }
 
-  const invocation = await createInvocation(db, workspaceId, action, {
+  const { invocation, replayed } = await createInvocation(db, workspaceId, action, {
     input: data.input,
     caller_id: data.caller_id,
     caller_name: data.caller_name,
+    invocation_id: invocationId,
   });
+  if (replayed) {
+    return markInvocationReplay(invocationAck(invocation, {
+      actionName,
+      handlerAgentId: action.handlerAgentId,
+      handlerNodeId: handlerAgent.locationNodeId,
+    }));
+  }
   // Re-validate the handler pointer AFTER the insert. A takeover committing
   // between action resolution above and the insert misses this invocation in
   // its stranded snapshot (the row was not visible yet), which would leave it

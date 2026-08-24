@@ -4424,7 +4424,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '409':
-          description: The idempotency key is still in progress or was reused with different input.
+          description: The idempotency key was reused with different input.
           content:
             application/json:
               schema:
@@ -4439,8 +4439,8 @@ paths:
           description: >
             `handler_unavailable` — the action's handler agent has no live
             connection, so the invocation fails fast instead of queueing toward
-            a handler that cannot answer; or idempotency storage is unavailable
-            for a keyed invocation.
+            a handler that cannot answer; or the durable idempotency claim cannot
+            be read for a keyed invocation.
           content:
             application/json:
               schema:

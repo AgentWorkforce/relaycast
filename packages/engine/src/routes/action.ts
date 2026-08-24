@@ -4,7 +4,7 @@ import { FleetWireJsonValueSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { errorResponse } from '../lib/httpError.js';
 import { requireAuth } from '../middleware/auth.js';
-import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
+import { jsonIdempotentOk, parseIdempotencyKey } from '../middleware/idempotency.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as actionEngine from '../engine/action.js';
 import { emitInvocationCompletionEffects } from '../engine/invocationCompletion.js';
@@ -174,43 +174,21 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
 
     const actionName = c.req.param('name');
     const { nodeConnections } = c.get('engine');
-    const idempotent = await runIdempotent({
-      workspaceId: workspace.id,
-      actorId: agent.id,
-      scope: `action-invoke:${actionName}`,
-      key: idempotencyKey,
-      status: 201,
-      fingerprint: JSON.stringify({ actionName, input: parsed.data.input ?? {} }),
-      kv: c.get('engine').kv,
-      requireKv: idempotencyKey !== undefined,
-      operation: () => actionEngine.invokeAction(
-        db,
-        workspace.id,
-        actionName,
-        {
-          input: parsed.data.input,
-          caller_id: agent.id,
-          caller_name: agent.name,
-        },
-        {
-          nodeConnections,
-        },
-      ),
-      afterOperation: async (result) => {
-        await sendWebhookEvent(c, {
-          type: 'action.invoked',
-          workspaceId: workspace.id,
-          data: {
-            invocation_id: result.invocation_id,
-            action_name: result.action_name,
-            caller_name: agent.name,
-            handler_agent_id: result.handler_agent_id,
-            handler_node_id: result.handler_node_id,
-          },
-        });
+    const result = await actionEngine.invokeAction(
+      db,
+      workspace.id,
+      actionName,
+      {
+        input: parsed.data.input,
+        caller_id: agent.id,
+        caller_name: agent.name,
       },
-    });
-    const result = idempotent.data;
+      {
+        nodeConnections,
+        idempotencyKey,
+      },
+    );
+    const replayed = actionEngine.wasInvocationReplayed(result);
 
     const eventData = {
       invocation_id: result.invocation_id,
@@ -220,7 +198,12 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
       handler_node_id: result.handler_node_id,
     };
 
-    if (!idempotent.replayed) {
+    if (!replayed) {
+      await sendWebhookEvent(c, {
+        type: 'action.invoked',
+        workspaceId: workspace.id,
+        data: eventData,
+      });
       emitServerEvent(c, workspace.id, 'relaycast_server_action_invoked', {
         action_name: result.action_name,
         invocation_id: result.invocation_id,
@@ -236,7 +219,7 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
       );
     }
 
-    return jsonIdempotentOk(c, idempotent);
+    return jsonIdempotentOk(c, { status: 201, data: result, replayed });
   } catch (err: unknown) {
     const error = asCodedError(err);
     if (error.code === 'action_denied') {

@@ -98,32 +98,38 @@ describe('SDK v8 service contract', () => {
     expect(workspaceGet.status).toBe(404);
 
     const handlerNode = await attachDirectNodeSocket(stack, ws.workspaceId, handler);
+    let kvPutAttempts = 0;
+    stack.runtime.deps.kv.put = async () => {
+      kvPutAttempts += 1;
+      throw new Error('post-dispatch idempotency result storage is unavailable');
+    };
     const idempotencyKey = 'sdk-action-invoke-1';
-    const invoke = await stack.app.request('/v1/actions/summarize/invoke', {
+    const invokeRequest = (input: Record<string, unknown> = { text: 'hello', mode: 'brief' }) => stack.app.request('/v1/actions/summarize/invoke', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
         authorization: `Bearer ${caller.token}`,
         'Idempotency-Key': idempotencyKey,
       },
-      body: JSON.stringify({ input: { text: 'hello' } }),
+      body: JSON.stringify({ input }),
     });
-    expect(invoke.status).toBe(201);
-    const invokeBody = await invoke.json() as { data: { invocation_id: string } };
+
+    // Two concurrent requests compete for the same durable claim. Exactly one
+    // owns provider dispatch; the other replays that invocation immediately.
+    const concurrent = await Promise.all([invokeRequest(), invokeRequest()]);
+    expect(concurrent.map((response) => response.status)).toEqual([201, 201]);
+    expect(concurrent.map((response) => response.headers.get('Idempotency-Replayed')).sort())
+      .toEqual([null, 'true']);
+    const [invokeBody, concurrentReplayBody] = await Promise.all(concurrent.map(
+      (response) => response.json() as Promise<{ data: { invocation_id: string } }>,
+    ));
     expect(invokeBody.data.invocation_id).toMatch(/^inv_/);
+    expect(concurrentReplayBody.data.invocation_id).toBe(invokeBody.data.invocation_id);
 
     // Model a committed first attempt whose response the caller loses: retry the
     // same logical request and require the original invocation, not another row
     // or another provider execution.
-    const replay = await stack.app.request('/v1/actions/summarize/invoke', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${caller.token}`,
-        'Idempotency-Key': idempotencyKey,
-      },
-      body: JSON.stringify({ input: { text: 'hello' } }),
-    });
+    const replay = await invokeRequest({ mode: 'brief', text: 'hello' });
     expect(replay.status).toBe(201);
     expect(replay.headers.get('Idempotency-Replayed')).toBe('true');
     const replayBody = await replay.json() as { data: { invocation_id: string } };
@@ -136,7 +142,7 @@ describe('SDK v8 service contract', () => {
         authorization: `Bearer ${caller.token}`,
         'Idempotency-Key': idempotencyKey,
       },
-      body: JSON.stringify({ input: { text: 'different' } }),
+      body: JSON.stringify({ input: { text: 'different', mode: 'brief' } }),
     });
     expect(conflict.status).toBe(409);
     await expect(conflict.json()).resolves.toMatchObject({
@@ -151,7 +157,7 @@ describe('SDK v8 service contract', () => {
       action: 'summarize',
       agent_id: handler.agentId,
       agent_name: 'handler',
-      input: { text: 'hello' },
+      input: { text: 'hello', mode: 'brief' },
     });
     const storedInvocations = await stack.runtime.deps.db
       .select({ id: actionInvocations.id })
@@ -162,6 +168,7 @@ describe('SDK v8 service contract', () => {
         eq(actionInvocations.actionName, 'summarize'),
       ));
     expect(storedInvocations).toEqual([{ id: invokeBody.data.invocation_id }]);
+    expect(kvPutAttempts).toBe(0);
 
     const deniedNode = await attachDirectNodeSocket(stack, ws.workspaceId, denied);
     const deniedInvoke = await stack.app.request('/v1/actions/summarize/invoke', {

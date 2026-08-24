@@ -10,7 +10,7 @@
 
 ## Summary
 
-Made action invocation retries idempotent across the TypeScript SDK and engine: stable per-call keys survive HttpClient retries, keyed replays return the original invocation, mismatched reuse is rejected, duplicate provider/event effects are suppressed, and the HTTP/README/changelog contracts are documented.
+Made action invocation retries durable across the TypeScript SDK and engine: stable per-call keys survive HttpClient retries, an atomic pre-dispatch invocation claim prevents duplicate provider execution, keyed replays return the original invocation, mismatched reuse is rejected, and duplicate event effects are suppressed.
 
 **Approach:** Standard approach
 
@@ -18,9 +18,9 @@ Made action invocation retries idempotent across the TypeScript SDK and engine: 
 
 ## Key Decisions
 
-### Use the existing route-level idempotency contract for action invocation
-- **Chose:** Use the existing route-level idempotency contract for action invocation
-- **Reasoning:** POST /actions/:name/invoke will scope the caller-supplied key by workspace, authenticated agent, and action name, fingerprint the action input, require KV before a keyed mutation, and store the original 201 response. The TypeScript SDK already has a one-key-per-logical-call helper whose request options survive HttpClient retries, so extending actions.invoke with it fixes the observed committed-response-loss retry without a migration or a second dedupe protocol. The existing middleware is not a transactional D1/provider-dispatch unit: a storage failure after provider dispatch remains an ambiguous edge, which is accepted here because the required incident path is a completed first request whose response is lost; a durable invocation-table key would be a broader follow-up.
+### Replace the initial KV coordinator with a durable pre-dispatch invocation claim
+- **Chose:** Replace the initial KV coordinator with a durable pre-dispatch invocation claim
+- **Reasoning:** The first implementation used the shared route-level KV coordinator, but review proved its non-atomic lock and post-dispatch result write could both permit duplicate provider execution. The final design derives a deterministic invocation id from the workspace, authenticated caller, action name, and key, then atomically inserts that `action_invocations` primary-key claim before provider dispatch. A conflict replays the existing invocation and a payload mismatch returns 409; KV failure cannot reopen the key.
 
 ---
 
@@ -29,5 +29,5 @@ Made action invocation retries idempotent across the TypeScript SDK and engine: 
 ### 1. Work
 *Agent: default*
 
-- Use the existing route-level idempotency contract for action invocation: Use the existing route-level idempotency contract for action invocation
-- Action invocation now carries one stable SDK key through transport retries; the engine replays the original 201 response, rejects payload reuse, and suppresses duplicate provider, webhook, telemetry, and observer effects. Focused and full Node 22 suites are green (engine 678/678, SDK 436/436), builds/typecheck and package linters pass.
+- Replace the initial KV coordinator with a durable pre-dispatch invocation claim: Replace the initial KV coordinator with a durable pre-dispatch invocation claim
+- Action invocation now carries one stable SDK key through transport retries; the engine atomically claims a deterministic invocation row before provider dispatch, replays that invocation, rejects payload reuse, and suppresses duplicate provider, webhook, telemetry, and observer effects. Focused and full Node 22 suites are green (engine 679/679, SDK 436/436), builds/typecheck and package linters pass.

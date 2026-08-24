@@ -764,7 +764,9 @@ an agent identity, and invoke enforces the same rule.
 Action invocation retries are idempotent. `POST /v1/actions/:name/invoke` accepts an
 `Idempotency-Key` scoped to the authenticated workspace, agent, and action; replaying
 the same key and input returns the original `invocation_id` with
-`Idempotency-Replayed: true`. The TypeScript SDK generates one key per
+`Idempotency-Replayed: true`. The engine stores an atomic durable invocation claim
+before provider dispatch, so a concurrent request or failed post-dispatch cache write
+cannot execute the provider twice. The TypeScript SDK generates one key per
 `actions.invoke()` call and preserves it across its automatic retries.
 
 Action registration is an idempotent assertion: re-registering an existing name
