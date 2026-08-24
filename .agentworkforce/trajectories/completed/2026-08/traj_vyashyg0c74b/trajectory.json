@@ -1,0 +1,79 @@
+{
+  "id": "traj_vyashyg0c74b",
+  "version": 1,
+  "task": {
+    "title": "Make action invocation retries idempotent",
+    "source": {
+      "system": "plain",
+      "id": "AgentWorkforce/relaycast#354"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-08-23T23:49:30.438Z",
+  "completedAt": "2026-08-24T00:04:14.948Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-08-23T23:55:47.994Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_wtiu23latkrr",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-08-23T23:55:47.994Z",
+      "endedAt": "2026-08-24T00:04:14.948Z",
+      "events": [
+        {
+          "ts": 1787529347995,
+          "type": "decision",
+          "content": "Use the existing route-level idempotency contract for action invocation: Use the existing route-level idempotency contract for action invocation",
+          "raw": {
+            "question": "Use the existing route-level idempotency contract for action invocation",
+            "chosen": "Use the existing route-level idempotency contract for action invocation",
+            "alternatives": [],
+            "reasoning": "POST /actions/:name/invoke will scope the caller-supplied key by workspace, authenticated agent, and action name, fingerprint the action input, require KV before a keyed mutation, and store the original 201 response. The TypeScript SDK already has a one-key-per-logical-call helper whose request options survive HttpClient retries, so extending actions.invoke with it fixes the observed committed-response-loss retry without a migration or a second dedupe protocol. The existing middleware is not a transactional D1/provider-dispatch unit: a storage failure after provider dispatch remains an ambiguous edge, which is accepted here because the required incident path is a completed first request whose response is lost; a durable invocation-table key would be a broader follow-up."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1787529854788,
+          "type": "reflection",
+          "content": "Action invocation now carries one stable SDK key through transport retries; the engine replays the original 201 response, rejects payload reuse, and suppresses duplicate provider, webhook, telemetry, and observer effects. Focused and full Node 22 suites are green (engine 678/678, SDK 436/436), builds/typecheck and package linters pass.",
+          "raw": {
+            "focalPoints": [
+              "idempotency",
+              "retry-safety",
+              "side-effect-suppression",
+              "verification"
+            ],
+            "confidence": 0.93
+          },
+          "significance": "high",
+          "tags": [
+            "focal:idempotency",
+            "focal:retry-safety",
+            "focal:side-effect-suppression",
+            "focal:verification",
+            "confidence:0.93"
+          ]
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Made action invocation retries idempotent across the TypeScript SDK and engine: stable per-call keys survive HttpClient retries, keyed replays return the original invocation, mismatched reuse is rejected, duplicate provider/event effects are suppressed, and the HTTP/README/changelog contracts are documented.",
+    "approach": "Standard approach",
+    "confidence": 0.93
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "b9f9726f8e280468999cfa32f551dc5c87f19ef4",
+    "endRef": "b9f9726f8e280468999cfa32f551dc5c87f19ef4"
+  }
+}

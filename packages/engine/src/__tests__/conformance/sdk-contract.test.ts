@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { deliverEvent } from '../../engine/eventDelivery.js';
-import { webhooks } from '../../db/schema.js';
+import { actionInvocations, webhooks } from '../../db/schema.js';
 import {
   makeNodeStack,
   createWorkspace,
@@ -98,14 +98,51 @@ describe('SDK v8 service contract', () => {
     expect(workspaceGet.status).toBe(404);
 
     const handlerNode = await attachDirectNodeSocket(stack, ws.workspaceId, handler);
+    const idempotencyKey = 'sdk-action-invoke-1';
     const invoke = await stack.app.request('/v1/actions/summarize/invoke', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+        'Idempotency-Key': idempotencyKey,
+      },
       body: JSON.stringify({ input: { text: 'hello' } }),
     });
     expect(invoke.status).toBe(201);
     const invokeBody = await invoke.json() as { data: { invocation_id: string } };
     expect(invokeBody.data.invocation_id).toMatch(/^inv_/);
+
+    // Model a committed first attempt whose response the caller loses: retry the
+    // same logical request and require the original invocation, not another row
+    // or another provider execution.
+    const replay = await stack.app.request('/v1/actions/summarize/invoke', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+        'Idempotency-Key': idempotencyKey,
+      },
+      body: JSON.stringify({ input: { text: 'hello' } }),
+    });
+    expect(replay.status).toBe(201);
+    expect(replay.headers.get('Idempotency-Replayed')).toBe('true');
+    const replayBody = await replay.json() as { data: { invocation_id: string } };
+    expect(replayBody.data.invocation_id).toBe(invokeBody.data.invocation_id);
+
+    const conflict = await stack.app.request('/v1/actions/summarize/invoke', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+        'Idempotency-Key': idempotencyKey,
+      },
+      body: JSON.stringify({ input: { text: 'different' } }),
+    });
+    expect(conflict.status).toBe(409);
+    await expect(conflict.json()).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'idempotency_key_reused' },
+    });
 
     await new Promise((r) => setTimeout(r, 50));
     expect(handlerNode.sock.ofType('action.invoke')).toHaveLength(1);
@@ -116,6 +153,15 @@ describe('SDK v8 service contract', () => {
       agent_name: 'handler',
       input: { text: 'hello' },
     });
+    const storedInvocations = await stack.runtime.deps.db
+      .select({ id: actionInvocations.id })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.callerId, caller.agentId),
+        eq(actionInvocations.actionName, 'summarize'),
+      ));
+    expect(storedInvocations).toEqual([{ id: invokeBody.data.invocation_id }]);
 
     const deniedNode = await attachDirectNodeSocket(stack, ws.workspaceId, denied);
     const deniedInvoke = await stack.app.request('/v1/actions/summarize/invoke', {

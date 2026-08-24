@@ -761,6 +761,12 @@ workspace observers, and subscriptions. Action discovery is filtered by `availab
 for agent-token callers, workspace-key callers do not see restricted actions without
 an agent identity, and invoke enforces the same rule.
 
+Action invocation retries are idempotent. `POST /v1/actions/:name/invoke` accepts an
+`Idempotency-Key` scoped to the authenticated workspace, agent, and action; replaying
+the same key and input returns the original `invocation_id` with
+`Idempotency-Replayed: true`. The TypeScript SDK generates one key per
+`actions.invoke()` call and preserves it across its automatic retries.
+
 Action registration is an idempotent assertion: re-registering an existing name
 (`POST /actions`) refreshes its description, handler, schemas, `available_to`, and
 `is_active` in place and returns 200, so a reconnecting publisher re-asserts its

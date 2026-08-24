@@ -4388,6 +4388,13 @@ paths:
           required: true
           schema:
             type: string
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: Reuse the same key to retry one logical invocation; a replay returns the original invocation.
+          schema:
+            type: string
+            maxLength: 255
       requestBody:
         required: false
         content:
@@ -4400,10 +4407,28 @@ paths:
       responses:
         '201':
           description: Action invocation created; response `data` includes `invocation_id`
+          headers:
+            Idempotency-Replayed:
+              description: Set to `true` when the original invocation is replayed.
+              schema:
+                type: string
+                enum: ['true']
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid `Idempotency-Key` header.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The idempotency key is still in progress or was reused with different input.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '403':
           description: Agent token required, or caller is not allowed to invoke this action. Denied agent callers receive an `action.denied` event.
           content:
@@ -4414,7 +4439,8 @@ paths:
           description: >
             `handler_unavailable` — the action's handler agent has no live
             connection, so the invocation fails fast instead of queueing toward
-            a handler that cannot answer.
+            a handler that cannot answer; or idempotency storage is unavailable
+            for a keyed invocation.
           content:
             application/json:
               schema:
