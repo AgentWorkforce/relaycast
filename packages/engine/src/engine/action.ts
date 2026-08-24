@@ -452,12 +452,13 @@ export async function deleteAction(
 async function createInvocation(
   db: Db,
   workspaceId: string,
-  action: Pick<ActionRow, 'id' | 'name' | 'handlerAgentId'> | null,
+  action: Pick<ActionRow, 'id' | 'name' | 'handlerAgentId' | 'handlerNodeId'> | null,
   data: {
     input?: Record<string, unknown>;
     caller_id?: string | null;
     caller_name?: string | null;
     handler_agent_id?: string | null;
+    handler_node_id?: string | null;
     action_name?: string;
     status?: string;
     invocation_id?: string;
@@ -475,6 +476,7 @@ async function createInvocation(
       callerId: data.caller_id ?? null,
       callerName: data.caller_name ?? null,
       handlerAgentId: data.handler_agent_id ?? action?.handlerAgentId ?? null,
+      handlerNodeId: data.handler_node_id ?? action?.handlerNodeId ?? null,
       input: data.input ?? {},
       status: data.status ?? 'pending',
     })
@@ -534,7 +536,7 @@ function invocationAck(
   {
     actionName = invocation.actionName,
     handlerAgentId = invocation.handlerAgentId,
-    handlerNodeId = null,
+    handlerNodeId = invocation.handlerNodeId,
   }: {
     actionName?: string;
     handlerAgentId?: string | null;
@@ -545,7 +547,9 @@ function invocationAck(
     invocation_id: invocation.id,
     action_name: actionName,
     handler_agent_id: handlerAgentId,
-    handler_node_id: invocation.dispatchedNodeId ?? handlerNodeId,
+    // The snapshot is the handler returned by the original 201. The mutable
+    // dispatched node remains available separately for current lifecycle state.
+    handler_node_id: handlerNodeId ?? invocation.dispatchedNodeId,
     dispatched_node_id: invocation.dispatchedNodeId,
     input: recordInput(invocation.input),
     status: invocation.status,
@@ -1254,10 +1258,7 @@ export async function invokeAction(
       ));
     if (existing) {
       assertInvocationClaimMatches(existing, actionName, data);
-      return markInvocationReplay(invocationAck(existing, {
-        actionName,
-        handlerNodeId: action?.handlerNodeId,
-      }));
+      return markInvocationReplay(invocationAck(existing, { actionName }));
     }
   }
 
@@ -1305,10 +1306,7 @@ export async function invokeAction(
       invocation_id: invocationId,
     });
     if (replayed) {
-      return markInvocationReplay(invocationAck(invocation, {
-        actionName,
-        handlerNodeId: action.handlerNodeId,
-      }));
+      return markInvocationReplay(invocationAck(invocation, { actionName }));
     }
     // Only mark the reservation held when we actually incremented the node's
     // reserved-capacity counter, so completion/reschedule release stays balanced.
@@ -1392,13 +1390,11 @@ export async function invokeAction(
     input: data.input,
     caller_id: data.caller_id,
     caller_name: data.caller_name,
+    handler_node_id: handlerAgent.locationNodeId,
     invocation_id: invocationId,
   });
   if (replayed) {
-    return markInvocationReplay(invocationAck(invocation, {
-      actionName,
-      handlerNodeId: handlerAgent.locationNodeId,
-    }));
+    return markInvocationReplay(invocationAck(invocation, { actionName }));
   }
   // Re-validate the handler pointer AFTER the insert. A takeover committing
   // between action resolution above and the insert misses this invocation in
@@ -1619,6 +1615,9 @@ async function dispatchNodeAttempt(
     .update(actionInvocations)
     .set({
       ...stateFields,
+      // The first selected target is part of the immutable 201 response. Keep
+      // it even when this invocation is later rescheduled to a different node.
+      handlerNodeId: sql`COALESCE(${actionInvocations.handlerNodeId}, ${nodeId})`,
       dispatchedNodeId: nodeId,
       dispatchedProvider: opts.providerName,
       spawnReservedAt: opts.reservationHeld ? new Date() : null,
@@ -1688,6 +1687,21 @@ async function dispatchNodeInvocation(args: {
     ...(args.agent ? { agent_id: args.agent.id, agent_name: args.agent.name } : {}),
     input: toFleetWireJson(args.input),
   };
+  // Persist the response identity before the provider can observe the frame.
+  // `dispatchedNodeId` is intentionally written after a successful send, but a
+  // replay in that interval still has to return the original handler node.
+  const [snapshotted] = await args.db
+    .update(actionInvocations)
+    .set({
+      handlerNodeId: sql`COALESCE(${actionInvocations.handlerNodeId}, ${args.nodeId})`,
+    })
+    .where(and(
+      eq(actionInvocations.workspaceId, args.workspaceId),
+      eq(actionInvocations.id, args.invocationId),
+      inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+    ))
+    .returning({ id: actionInvocations.id });
+  if (!snapshotted) return { accepted: false, pending: false };
   const connectedBefore = args.registry.isProviderConnected(args.workspaceId, args.nodeId, args.providerName);
   const sent = await args.registry.sendToProvider(args.workspaceId, args.nodeId, args.providerName, frame);
 

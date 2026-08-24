@@ -41,7 +41,7 @@
         {
           "ts": 1787529854788,
           "type": "reflection",
-          "content": "Action invocation now carries one stable SDK key through transport retries; the engine atomically claims a deterministic invocation row with immutable handler identity before provider dispatch, replays that invocation, rejects payload reuse, and suppresses duplicate provider, webhook, telemetry, and observer effects. Focused and full Node 22 suites are green (engine 680/680, SDK 436/436), builds/typecheck and package linters pass.",
+          "content": "Action invocation now carries one stable SDK key through transport retries; the engine atomically claims a deterministic invocation row with immutable handler and node identity before provider dispatch, replays that invocation, rejects payload reuse, and suppresses duplicate provider, webhook, telemetry, and observer effects. Focused and full Node 22 suites are green (engine 681/681, SDK 436/436), builds/typecheck and package linters pass.",
           "raw": {
             "focalPoints": [
               "idempotency",

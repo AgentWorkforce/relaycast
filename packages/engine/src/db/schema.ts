@@ -1008,10 +1008,11 @@ export const actionInvocations = sqliteTable(
     actionName: text('action_name').notNull(),
     callerId: text('caller_id').references(() => agents.id, { onDelete: 'set null' }),
     callerName: text('caller_name'),
-    // Immutable response snapshot for idempotent replay. Deliberately not a
-    // foreign key: a later handler release/deletion must not rewrite the 201
-    // acknowledgement for the invocation that was already dispatched.
+    // Immutable response snapshots for idempotent replay. Deliberately not
+    // foreign keys: a later handler release/deletion or routing move must not
+    // rewrite the 201 acknowledgement for the invocation already dispatched.
     handlerAgentId: text('handler_agent_id'),
+    handlerNodeId: text('handler_node_id'),
     input: text('input', { mode: 'json' }).default({}),
     output: text('output', { mode: 'json' }),
     status: text('status').notNull().default('pending'),

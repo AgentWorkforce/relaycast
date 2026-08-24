@@ -192,9 +192,13 @@ describe('action invocation handler snapshot migration', () => {
     sqlite.exec(migration);
 
     expect(sqlite.prepare(`
-      SELECT id, handler_agent_id
+      SELECT id, handler_agent_id, handler_node_id
       FROM action_invocations
-    `).all()).toEqual([{ id: 'inv_existing', handler_agent_id: null }]);
+    `).all()).toEqual([{
+      id: 'inv_existing',
+      handler_agent_id: null,
+      handler_node_id: null,
+    }]);
   });
 });
 

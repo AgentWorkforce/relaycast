@@ -130,7 +130,11 @@ describe('SDK v8 service contract', () => {
       .toEqual([null, 'true']);
     const concurrentBodies = await Promise.all(concurrent.map(
       (response) => response.json() as Promise<{
-        data: { invocation_id: string; handler_agent_id: string | null };
+        data: {
+          invocation_id: string;
+          handler_agent_id: string | null;
+          handler_node_id: string | null;
+        };
       }>,
     ));
     const freshIndex = concurrent.findIndex(
@@ -140,6 +144,7 @@ describe('SDK v8 service contract', () => {
     const concurrentReplayBody = concurrentBodies[1 - freshIndex]!;
     expect(invokeBody.data.invocation_id).toMatch(/^inv_/);
     expect(invokeBody.data.handler_agent_id).toBe(handler.agentId);
+    expect(invokeBody.data.handler_node_id).toBe(handlerNode.nodeId);
     expect(concurrentReplayBody.data.invocation_id).toBe(invokeBody.data.invocation_id);
 
     // Model a committed first attempt whose response the caller loses: retry the
@@ -204,7 +209,11 @@ describe('SDK v8 service contract', () => {
       input: { text: 'hello', mode: 'brief' },
     });
     const storedInvocations = await stack.runtime.deps.db
-      .select({ id: actionInvocations.id, handlerAgentId: actionInvocations.handlerAgentId })
+      .select({
+        id: actionInvocations.id,
+        handlerAgentId: actionInvocations.handlerAgentId,
+        handlerNodeId: actionInvocations.handlerNodeId,
+      })
       .from(actionInvocations)
       .where(and(
         eq(actionInvocations.workspaceId, ws.workspaceId),
@@ -214,6 +223,7 @@ describe('SDK v8 service contract', () => {
     expect(storedInvocations).toEqual([{
       id: invokeBody.data.invocation_id,
       handlerAgentId: handler.agentId,
+      handlerNodeId: handlerNode.nodeId,
     }]);
     expect(kvPutAttempts).toBe(0);
 
@@ -226,6 +236,87 @@ describe('SDK v8 service contract', () => {
     expect(deniedInvoke.status).toBe(403);
     await new Promise((r) => setTimeout(r, 50));
     expect(deliverFramesOfType(deniedNode.sock, 'action.denied')).toHaveLength(1);
+  });
+
+  it('snapshots the original handler node before a provider send can race replay', async () => {
+    const ws = await createWorkspace(stack.app, 'sdk-action-replay-node-ws');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    const handler = await registerAgent(stack.app, ws.workspaceKey, 'handler');
+    const replacement = await registerAgent(stack.app, ws.workspaceKey, 'replacement');
+
+    const register = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${handler.token}` },
+      body: JSON.stringify({
+        name: 'race-send',
+        description: 'Pin replay routing identity',
+        handler_agent: 'handler',
+        available_to: ['caller'],
+      }),
+    });
+    expect(register.status).toBe(201);
+
+    const handlerNode = await attachDirectNodeSocket(stack, ws.workspaceId, handler);
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    const originalSend = nodeConnections.sendToProvider.bind(nodeConnections);
+    let frameSent!: () => void;
+    const frameSentPromise = new Promise<void>((resolve) => { frameSent = resolve; });
+    let resumeSend!: () => void;
+    const resumeSendPromise = new Promise<void>((resolve) => { resumeSend = resolve; });
+    vi.spyOn(nodeConnections, 'sendToProvider').mockImplementation(async (...args) => {
+      const sent = await originalSend(...args);
+      if (args[3].type !== 'action.invoke' || args[3].action !== 'race-send') return sent;
+      frameSent();
+      await resumeSendPromise;
+      return sent;
+    });
+
+    const invoke = () => stack.app.request('/v1/actions/race-send/invoke', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+        'Idempotency-Key': 'sdk-action-node-race-1',
+      },
+      body: JSON.stringify({ input: { text: 'hello' } }),
+    });
+
+    const freshPromise = invoke();
+    await frameSentPromise;
+
+    const moveHandler = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${replacement.token}` },
+      body: JSON.stringify({
+        name: 'race-send',
+        description: 'Pin replay routing identity',
+        handler_agent: 'replacement',
+        available_to: ['caller'],
+      }),
+    });
+    expect(moveHandler.status).toBe(200);
+
+    const replay = await invoke();
+    resumeSend();
+    const fresh = await freshPromise;
+    expect(replay.status).toBe(201);
+    expect(replay.headers.get('Idempotency-Replayed')).toBe('true');
+    const replayBody = await replay.json() as {
+      data: {
+        invocation_id: string;
+        handler_agent_id: string | null;
+        handler_node_id: string | null;
+      };
+    };
+    expect(replayBody.data).toMatchObject({
+      handler_agent_id: handler.agentId,
+      handler_node_id: handlerNode.nodeId,
+    });
+
+    expect(fresh.status).toBe(201);
+    const freshBody = await fresh.json() as { data: { invocation_id: string } };
+    expect(replayBody.data.invocation_id).toBe(freshBody.data.invocation_id);
+    expect(handlerNode.sock.ofType('action.invoke')).toHaveLength(1);
   });
 
   it('requires inbound webhook tokens and accepts SDK message/author payloads', async () => {
