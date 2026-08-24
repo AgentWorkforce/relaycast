@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { deliverEvent } from '../../engine/eventDelivery.js';
-import { actionInvocations, webhooks } from '../../db/schema.js';
+import { actionInvocations, actions, webhooks } from '../../db/schema.js';
+import { sha256Hex } from '../../lib/crypto.js';
 import {
   makeNodeStack,
   createWorkspace,
@@ -317,6 +318,97 @@ describe('SDK v8 service contract', () => {
     const freshBody = await fresh.json() as { data: { invocation_id: string } };
     expect(replayBody.data.invocation_id).toBe(freshBody.data.invocation_id);
     expect(handlerNode.sock.ofType('action.invoke')).toHaveLength(1);
+  });
+
+  it('does not acknowledge an agent-hosted claim that takeover fails before provider dispatch starts', async () => {
+    const ws = await createWorkspace(stack.app, 'sdk-action-pre-send-takeover-ws');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    const handler = await registerAgent(stack.app, ws.workspaceKey, 'handler');
+    const replacement = await registerAgent(stack.app, ws.workspaceKey, 'replacement');
+
+    const register = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${handler.token}` },
+      body: JSON.stringify({
+        name: 'pre-send-race',
+        description: 'Reject a replay before provider dispatch',
+        handler_agent: 'handler',
+        available_to: ['caller'],
+      }),
+    });
+    expect(register.status).toBe(201);
+    const handlerNode = await attachDirectNodeSocket(stack, ws.workspaceId, handler);
+    const [action] = await stack.runtime.handle.db
+      .select({ id: actions.id })
+      .from(actions)
+      .where(and(
+        eq(actions.workspaceId, ws.workspaceId),
+        eq(actions.name, 'pre-send-race'),
+      ));
+
+    // Materialize the exact durable state after createInvocation() wins the
+    // key but before its post-insert handler revalidation starts any provider
+    // attempt. The takeover must see and terminally fail this open claim.
+    const idempotencyKey = 'sdk-action-pre-send-race-1';
+    const invocationId = `inv_idem_${await sha256Hex([
+      'action-invoke-v1',
+      ws.workspaceId,
+      caller.agentId,
+      'pre-send-race',
+      idempotencyKey,
+    ].join('\0'))}`;
+    await stack.runtime.handle.db.insert(actionInvocations).values({
+      id: invocationId,
+      workspaceId: ws.workspaceId,
+      actionId: action!.id,
+      actionName: 'pre-send-race',
+      callerId: caller.agentId,
+      callerName: caller.name,
+      handlerAgentId: handler.agentId,
+      handlerNodeId: handlerNode.nodeId,
+      input: { text: 'hello' },
+      status: 'pending',
+    });
+
+    const moveHandler = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${replacement.token}` },
+      body: JSON.stringify({
+        name: 'pre-send-race',
+        description: 'Reject a replay before provider dispatch',
+        handler_agent: 'replacement',
+        available_to: ['caller'],
+      }),
+    });
+    expect(moveHandler.status).toBe(200);
+
+    const replay = await stack.app.request('/v1/actions/pre-send-race/invoke', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+        'Idempotency-Key': idempotencyKey,
+      },
+      body: JSON.stringify({ input: { text: 'hello' } }),
+    });
+    expect(replay.status).toBe(503);
+    expect((await replay.json() as { error: { code: string } }).error.code).toBe('handler_unavailable');
+    const [stored] = await stack.runtime.handle.db
+      .select({
+        status: actionInvocations.status,
+        error: actionInvocations.error,
+        dispatchAttempts: actionInvocations.dispatchAttempts,
+        dispatchedNodeId: actionInvocations.dispatchedNodeId,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(stored).toEqual({
+      status: 'failed',
+      error: 'handler_unavailable',
+      dispatchAttempts: 0,
+      dispatchedNodeId: null,
+    });
+    expect(handlerNode.sock.ofType('action.invoke')).toHaveLength(0);
   });
 
   it('requires inbound webhook tokens and accepts SDK message/author payloads', async () => {

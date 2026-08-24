@@ -535,10 +535,14 @@ async function waitForInvocationReplayOutcome(
   db: Db,
   workspaceId: string,
   invocation: InvocationRow,
+  options: { acceptDispatchStarted?: boolean } = {},
 ): Promise<InvocationRow> {
   let current = invocation;
   const deadline = Date.now() + 500;
-  while (!current.dispatchedNodeId) {
+  while (
+    !current.dispatchedNodeId
+    && !(options.acceptDispatchStarted && current.dispatchAttempts > 0)
+  ) {
     if (!OPEN_INVOCATION_STATUSES.some((status) => status === current.status)) {
       if (current.status === 'failed') {
         throw codedError(
@@ -551,8 +555,8 @@ async function waitForInvocationReplayOutcome(
     }
     if (Date.now() >= deadline) {
       // The winning request may have died after its durable claim but before
-      // placement or dispatch persistence. Fail retryably without releasing the
-      // key for another spawn.
+      // provider dispatch started or completed. Fail retryably without
+      // releasing the key for another execution.
       throw codedError('Idempotent action dispatch is still pending', 'idempotency_unavailable', 503);
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -564,7 +568,7 @@ async function waitForInvocationReplayOutcome(
         eq(actionInvocations.id, invocation.id),
       ));
     if (!updated) {
-      throw codedError('Idempotency claim disappeared during placement', 'idempotency_unavailable', 503);
+      throw codedError('Idempotency claim disappeared during dispatch', 'idempotency_unavailable', 503);
     }
     current = updated;
   }
@@ -1324,7 +1328,19 @@ export async function invokeAction(
         || isReleaseInvocation(actionName)
         || (!!existing.handlerNodeId && !existing.handlerAgentId)
         ? await waitForInvocationReplayOutcome(db, workspaceId, existing)
-        : existing;
+        : existing.handlerAgentId
+          // A handler takeover can win after the durable claim insert but
+          // before the winner revalidates the handler and starts provider
+          // dispatch. Do not acknowledge that pre-send claim. Once the durable
+          // attempt marker exists, preserve the accepted post-send replay
+          // contract even if a later takeover terminally fails the row.
+          ? await waitForInvocationReplayOutcome(
+              db,
+              workspaceId,
+              existing,
+              { acceptDispatchStarted: true },
+            )
+          : existing;
       return markInvocationReplay(invocationAck(replay, { actionName }));
     }
   }
@@ -1706,11 +1722,18 @@ async function snapshotInvocationHandlerNode(
   workspaceId: string,
   invocationId: string,
   nodeId: string,
+  options: { recordAttempt?: boolean } = {},
 ): Promise<boolean> {
   const [updated] = await db
     .update(actionInvocations)
     .set({
       handlerNodeId: sql`COALESCE(${actionInvocations.handlerNodeId}, ${nodeId})`,
+      ...(options.recordAttempt
+        ? {
+            attemptedNodeIds: sql`json_insert(COALESCE(${actionInvocations.attemptedNodeIds}, '[]'), '$[#]', ${nodeId})`,
+            dispatchAttempts: sql`COALESCE(${actionInvocations.dispatchAttempts}, 0) + 1`,
+          }
+        : {}),
     })
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
@@ -1783,6 +1806,11 @@ async function dispatchNodeInvocation(args: {
     args.workspaceId,
     args.invocationId,
     args.nodeId,
+    // For agent-hosted actions, this durable marker separates a bare claim
+    // (which can still fail the post-insert handler check without any send)
+    // from a request that has entered the provider-send boundary. Queue drains
+    // are the same attempt and must not increment it again.
+    { recordAttempt: !!args.agent && !args.skipIncrementAttempts },
   );
   if (!snapshotted) return { accepted: false, pending: false };
   const connectedBefore = args.registry.isProviderConnected(args.workspaceId, args.nodeId, args.providerName);
@@ -1801,7 +1829,7 @@ async function dispatchNodeInvocation(args: {
       providerName: args.providerName,
       retryAfterAt: args.retryAfterAt,
       reservationHeld: args.reservationHeld,
-      skipIncrementAttempts: args.skipIncrementAttempts,
+      skipIncrementAttempts: args.skipIncrementAttempts || !!args.agent,
       actionId: args.actionId,
     },
   );
