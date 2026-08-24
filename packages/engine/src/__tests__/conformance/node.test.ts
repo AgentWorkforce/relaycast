@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { drainNodeInvocations, sweepTimedOutInvocations } from '../../index.js';
 import {
@@ -1913,6 +1913,164 @@ describe('node adapter conformance', () => {
         .from(nodes)
         .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')));
       expect(node.reservedAgents).toBe(1);
+    });
+
+    it('waits for durable spawn dispatch state before answering a concurrent replay', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-spawn-dispatch-race-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha',
+        name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0,
+        maxAgents: 2,
+      });
+
+      const nodeConnections = stack.runtime.deps.nodeConnections!;
+      const originalSend = nodeConnections.sendToProvider.bind(nodeConnections);
+      let frameSent!: () => void;
+      const frameSentPromise = new Promise<void>((resolve) => { frameSent = resolve; });
+      let resumeSend!: () => void;
+      const resumeSendPromise = new Promise<void>((resolve) => { resumeSend = resolve; });
+      vi.spyOn(nodeConnections, 'sendToProvider').mockImplementation(async (...args) => {
+        const sent = await originalSend(...args);
+        if (args[3].type !== 'action.invoke' || !args[3].action.startsWith('spawn')) return sent;
+        frameSent();
+        await resumeSendPromise;
+        return sent;
+      });
+
+      const invoke = () => stack.app.request('/v1/actions/spawn/invoke', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${caller.token}`,
+          'Idempotency-Key': 'spawn-dispatch-race',
+        },
+        body: JSON.stringify({ input: { cli: 'claude', name: 'worker', task: 'one' } }),
+      });
+
+      const freshPromise = invoke();
+      await frameSentPromise;
+      let replaySettled = false;
+      const replayPromise = invoke().then((response) => {
+        replaySettled = true;
+        return response;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(replaySettled).toBe(false);
+
+      resumeSend();
+      const [fresh, replay] = await Promise.all([freshPromise, replayPromise]);
+      expect([fresh.status, replay.status]).toEqual([201, 201]);
+      expect(replay.headers.get('Idempotency-Replayed')).toBe('true');
+      const [freshBody, replayBody] = await Promise.all([
+        fresh.json() as Promise<{ data: Record<string, unknown> }>,
+        replay.json() as Promise<{ data: Record<string, unknown> }>,
+      ]);
+      expect(replayBody).toEqual(freshBody);
+      expect(alpha.sock.ofType('action.invoke').filter((event) => event.action.startsWith('spawn'))).toHaveLength(1);
+    });
+
+    it('replays a failed keyed spawn as the same retryable failure, not a pending success', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-spawn-failed-replay-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha',
+        name: 'alpha',
+        capabilities: [capability('spawn:claude', 'action', { agent: 'claude' })],
+        load: 0,
+        maxAgents: 2,
+      });
+      // Keep native capacity live, but make the shadow action's owning provider
+      // unavailable. Placement can therefore snapshot node_alpha before the
+      // shadow dispatch terminally fails.
+      await stack.runtime.handle.db
+        .update(actions)
+        .set({ handlerProvider: 'offline-shadow-provider' })
+        .where(and(
+          eq(actions.workspaceId, ws.workspaceId),
+          eq(actions.handlerNodeId, 'node_alpha'),
+          eq(actions.name, 'spawn:claude'),
+        ));
+
+      const invoke = () => stack.app.request('/v1/actions/spawn/invoke', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${caller.token}`,
+          'Idempotency-Key': 'failed-spawn-replay',
+        },
+        body: JSON.stringify({ input: { cli: 'claude', name: 'worker', task: 'one' } }),
+      });
+
+      const first = await invoke();
+      const replay = await invoke();
+      expect([first.status, replay.status]).toEqual([503, 503]);
+      expect((await first.json() as { error: { code: string } }).error.code).toBe('handler_unavailable');
+      expect((await replay.json() as { error: { code: string } }).error.code).toBe('handler_unavailable');
+      const [stored] = await stack.runtime.handle.db
+        .select({
+          status: actionInvocations.status,
+          handlerNodeId: actionInvocations.handlerNodeId,
+          dispatchedNodeId: actionInvocations.dispatchedNodeId,
+        })
+        .from(actionInvocations)
+        .where(and(
+          eq(actionInvocations.workspaceId, ws.workspaceId),
+          eq(actionInvocations.actionName, 'spawn'),
+        ));
+      expect(stored).toEqual({ status: 'failed', handlerNodeId: 'node_alpha', dispatchedNodeId: null });
+      expect(alpha.sock.ofType('action.invoke').filter((event) => event.action.startsWith('spawn'))).toHaveLength(0);
+    });
+
+    it('keeps a keyed pre-placement failure retryable without replaying a pending success', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-spawn-placement-failed-replay-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha',
+        name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0,
+        maxAgents: 2,
+      });
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.heartbeat',
+        load: 0,
+        load_reported: true,
+        active_agents: 0,
+        handlers_live: false,
+      }));
+
+      const invoke = () => stack.app.request('/v1/actions/spawn/invoke', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${caller.token}`,
+          'Idempotency-Key': 'failed-spawn-placement-replay',
+        },
+        body: JSON.stringify({ input: { cli: 'claude', name: 'worker', task: 'one' } }),
+      });
+
+      const first = await invoke();
+      const replay = await invoke();
+      expect([first.status, replay.status]).toEqual([503, 503]);
+      expect((await first.json() as { error: { code: string } }).error.code).toBe('handler_unavailable');
+      expect((await replay.json() as { error: { code: string } }).error.code).toBe('idempotency_unavailable');
+      const [stored] = await stack.runtime.handle.db
+        .select({
+          status: actionInvocations.status,
+          handlerNodeId: actionInvocations.handlerNodeId,
+          dispatchedNodeId: actionInvocations.dispatchedNodeId,
+        })
+        .from(actionInvocations)
+        .where(and(
+          eq(actionInvocations.workspaceId, ws.workspaceId),
+          eq(actionInvocations.actionName, 'spawn'),
+        ));
+      expect(stored).toEqual({ status: 'pending', handlerNodeId: null, dispatchedNodeId: null });
+      expect(alpha.sock.ofType('action.invoke').filter((event) => event.action.startsWith('spawn'))).toHaveLength(0);
     });
 
     it('fires a trigger only once when concurrent posts match the same rate-limited trigger', async () => {

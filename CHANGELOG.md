@@ -20,7 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
-- Retried action invocations reuse the original invocation instead of executing a provider action twice.
+- Retried action invocations reuse the original invocation instead of executing a provider action twice, wait for a durable spawn dispatch outcome, and preserve locally completed release routing identity.
 
 ## [8.2.0] - 2026-08-21
 

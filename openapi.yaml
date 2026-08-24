@@ -4391,10 +4391,13 @@ paths:
         - name: Idempotency-Key
           in: header
           required: false
-          description: Reuse the same key to retry one logical invocation; a replay returns the original invocation.
+          description: >
+            Reuse the same key to retry one logical invocation; a replay returns
+            the original invocation. The server trims leading and trailing
+            whitespace, then requires the normalized key to contain 1-255 visible
+            ASCII characters.
           schema:
             type: string
-            maxLength: 255
       requestBody:
         required: false
         content:
@@ -4439,8 +4442,10 @@ paths:
           description: >
             `handler_unavailable` — the action's handler agent has no live
             connection, so the invocation fails fast instead of queueing toward
-            a handler that cannot answer; or the durable idempotency claim cannot
-            be read for a keyed invocation.
+            a handler that cannot answer; or `idempotency_unavailable` — the
+            durable idempotency claim cannot be read, or a keyed spawn replay
+            cannot yet observe its durable placement and dispatch outcome. Retry
+            the same logical request with the same key.
           content:
             application/json:
               schema:

@@ -767,7 +767,12 @@ the same key and input returns the original `invocation_id` with
 `Idempotency-Replayed: true`. The engine stores an atomic durable invocation claim
 before provider dispatch, so a concurrent request or failed post-dispatch cache write
 cannot execute the provider twice. The TypeScript SDK generates one key per
-`actions.invoke()` call and preserves it across its automatic retries.
+`actions.invoke()` call and preserves it across its automatic retries. The server
+trims leading and trailing whitespace from a supplied key, then requires the
+normalized value to contain 1-255 visible ASCII characters. A keyed spawn replay
+that reaches the narrow interval before placement and dispatch are durable returns
+retryable `idempotency_unavailable`; clients must retry the same logical request with
+the same key rather than minting a replacement.
 
 Action registration is an idempotent assertion: re-registering an existing name
 (`POST /actions`) refreshes its description, handler, schemas, `available_to`, and

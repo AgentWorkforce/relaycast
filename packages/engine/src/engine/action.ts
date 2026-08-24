@@ -531,21 +531,29 @@ async function idempotentInvocationId(
   return `inv_idem_${digest}`;
 }
 
-async function waitForSpawnReplayTarget(
+async function waitForSpawnReplayOutcome(
   db: Db,
   workspaceId: string,
   invocation: InvocationRow,
 ): Promise<InvocationRow> {
   let current = invocation;
   const deadline = Date.now() + 500;
-  while (!current.handlerNodeId) {
+  while (!current.dispatchedNodeId) {
     if (!OPEN_INVOCATION_STATUSES.some((status) => status === current.status)) {
-      throw codedError('Spawn invocation did not acquire a handler node', 'handler_unavailable', 503);
+      if (current.status === 'failed') {
+        throw codedError(
+          'Spawn invocation failed before provider dispatch completed',
+          current.error ?? 'handler_unavailable',
+          503,
+        );
+      }
+      return current;
     }
     if (Date.now() >= deadline) {
       // The winning request may have died after its durable claim but before
-      // placement. Fail retryably without releasing the key for another spawn.
-      throw codedError('Idempotent spawn placement is still pending', 'idempotency_unavailable', 503);
+      // placement or dispatch persistence. Fail retryably without releasing the
+      // key for another spawn.
+      throw codedError('Idempotent spawn dispatch is still pending', 'idempotency_unavailable', 503);
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
     const [updated] = await db
@@ -831,6 +839,7 @@ async function dispatchRelease(args: {
   if (replayed) return markInvocationReplay(invocationAck(invocation, { actionName: 'release' }));
   const completeLocally = async () => {
     const completedAt = new Date();
+    const exitNodeId = nodeId ?? agent.locationNodeId;
     // Keyed on the agent id, not on the clock: the id is already unique per
     // workspace, so the tombstone can never collide with an existing row (a
     // second release of the same row is idempotent). A timestamped name would
@@ -943,6 +952,9 @@ async function dispatchRelease(args: {
         .update(actionInvocations)
         .set({
           status: 'completed',
+          // This is part of the same atomic unit as completion so a lost 201
+          // replays the exact handler node returned below.
+          handlerNodeId: sql`COALESCE(${actionInvocations.handlerNodeId}, ${exitNodeId})`,
           output: {
             released: true,
             // The roster row is retained as a tombstone so the agent's history
@@ -966,7 +978,6 @@ async function dispatchRelease(args: {
 
     // External completion effects belong after the durable atomic unit: an
     // aborted local reap must never publish agent.exited.
-    const exitNodeId = nodeId ?? agent.locationNodeId;
     if (completed.length > 0 && args.completionDeps && exitNodeId) {
       await emitAgentExitedEffects(args.completionDeps, args.workspaceId, {
         agentId: agent.id,
@@ -1107,10 +1118,8 @@ async function dispatchSpawn(args: {
     invocation_id: args.invocationId,
   });
   if (replayed) {
-    const placed = invocation.handlerNodeId
-      ? invocation
-      : await waitForSpawnReplayTarget(args.db, args.workspaceId, invocation);
-    return markInvocationReplay(invocationAck(placed, { actionName: 'spawn' }));
+    const dispatched = await waitForSpawnReplayOutcome(args.db, args.workspaceId, invocation);
+    return markInvocationReplay(invocationAck(dispatched, { actionName: 'spawn' }));
   }
 
   const placement = await claimSpawnNode(args.db, args.workspaceId, {
@@ -1302,8 +1311,8 @@ export async function invokeAction(
       ));
     if (existing) {
       assertInvocationClaimMatches(existing, actionName, data);
-      const replay = isSpawnInvocation(actionName) && !existing.handlerNodeId
-        ? await waitForSpawnReplayTarget(db, workspaceId, existing)
+      const replay = isSpawnInvocation(actionName)
+        ? await waitForSpawnReplayOutcome(db, workspaceId, existing)
         : existing;
       return markInvocationReplay(invocationAck(replay, { actionName }));
     }

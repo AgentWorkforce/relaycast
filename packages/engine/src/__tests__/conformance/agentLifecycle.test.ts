@@ -247,6 +247,42 @@ describe('agent presence and release lifecycle', () => {
     });
   });
 
+  it('replays the handler node returned by a keyed local release', async () => {
+    const ws = await createWorkspace(stack.app, 'hostless-agent-release-replay');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'release-replay-target');
+    const nodeId = `node_direct_${target.agentId}`;
+    const invoke = () => stack.app.request('/v1/actions/release/invoke', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+        'Idempotency-Key': 'local-release-replay',
+      },
+      body: JSON.stringify({ input: { name: target.name, delete_agent: true } }),
+    });
+
+    const first = await invoke();
+    const replay = await invoke();
+    expect([first.status, replay.status]).toEqual([201, 201]);
+    expect(replay.headers.get('Idempotency-Replayed')).toBe('true');
+    const [firstBody, replayBody] = await Promise.all([
+      first.json() as Promise<{ data: Record<string, unknown> }>,
+      replay.json() as Promise<{ data: Record<string, unknown> }>,
+    ]);
+    expect(firstBody.data.handler_node_id).toBe(nodeId);
+    expect(replayBody).toEqual(firstBody);
+
+    const [invocation] = await stack.runtime.deps.db
+      .select({ status: actionInvocations.status, handlerNodeId: actionInvocations.handlerNodeId })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'release'),
+      ));
+    expect(invocation).toEqual({ status: 'completed', handlerNodeId: nodeId });
+  });
+
   it('reaps a hostless agent that has already spoken', async () => {
     const ws = await createWorkspace(stack.app, 'hostless-agent-delete-with-history');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'talkative-agent');
