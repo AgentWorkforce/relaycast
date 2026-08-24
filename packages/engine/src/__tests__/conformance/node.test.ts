@@ -1884,23 +1884,29 @@ describe('node adapter conformance', () => {
       expect(responses.map((response) => response.headers.get('Idempotency-Replayed')).sort())
         .toEqual([null, 'true']);
       const bodies = await Promise.all(responses.map(
-        (response) => response.json() as Promise<{ data: { invocation_id: string } }>,
+        (response) => response.json() as Promise<{
+          data: { invocation_id: string; handler_node_id: string | null };
+        }>,
       ));
       expect(new Set(bodies.map((body) => body.data.invocation_id)).size).toBe(1);
+      expect(bodies.map((body) => body.data.handler_node_id)).toEqual(['node_alpha', 'node_alpha']);
 
       const frames = alpha.sock.ofType('action.invoke').filter((event) => event.action.startsWith('spawn'));
       expect(frames).toHaveLength(1);
       expect(frames[0]).toMatchObject({ invocation_id: bodies[0].data.invocation_id, action: 'spawn:claude' });
 
       const invocations = await stack.runtime.handle.db
-        .select({ id: actionInvocations.id })
+        .select({ id: actionInvocations.id, handlerNodeId: actionInvocations.handlerNodeId })
         .from(actionInvocations)
         .where(and(
           eq(actionInvocations.workspaceId, ws.workspaceId),
           eq(actionInvocations.callerId, caller.agentId),
           eq(actionInvocations.actionName, 'spawn'),
         ));
-      expect(invocations).toEqual([{ id: bodies[0].data.invocation_id }]);
+      expect(invocations).toEqual([{
+        id: bodies[0].data.invocation_id,
+        handlerNodeId: 'node_alpha',
+      }]);
 
       const [node] = await stack.runtime.handle.db
         .select({ reservedAgents: nodes.reservedAgents })

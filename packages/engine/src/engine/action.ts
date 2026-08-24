@@ -531,6 +531,38 @@ async function idempotentInvocationId(
   return `inv_idem_${digest}`;
 }
 
+async function waitForSpawnReplayTarget(
+  db: Db,
+  workspaceId: string,
+  invocation: InvocationRow,
+): Promise<InvocationRow> {
+  let current = invocation;
+  const deadline = Date.now() + 500;
+  while (!current.handlerNodeId) {
+    if (!OPEN_INVOCATION_STATUSES.some((status) => status === current.status)) {
+      throw codedError('Spawn invocation did not acquire a handler node', 'handler_unavailable', 503);
+    }
+    if (Date.now() >= deadline) {
+      // The winning request may have died after its durable claim but before
+      // placement. Fail retryably without releasing the key for another spawn.
+      throw codedError('Idempotent spawn placement is still pending', 'idempotency_unavailable', 503);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const [updated] = await db
+      .select()
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, workspaceId),
+        eq(actionInvocations.id, invocation.id),
+      ));
+    if (!updated) {
+      throw codedError('Idempotency claim disappeared during placement', 'idempotency_unavailable', 503);
+    }
+    current = updated;
+  }
+  return current;
+}
+
 function invocationAck(
   invocation: InvocationRow,
   {
@@ -1074,7 +1106,12 @@ async function dispatchSpawn(args: {
     caller_name: args.data.caller_name,
     invocation_id: args.invocationId,
   });
-  if (replayed) return markInvocationReplay(invocationAck(invocation, { actionName: 'spawn' }));
+  if (replayed) {
+    const placed = invocation.handlerNodeId
+      ? invocation
+      : await waitForSpawnReplayTarget(args.db, args.workspaceId, invocation);
+    return markInvocationReplay(invocationAck(placed, { actionName: 'spawn' }));
+  }
 
   const placement = await claimSpawnNode(args.db, args.workspaceId, {
     actionName: 'spawn',
@@ -1083,6 +1120,13 @@ async function dispatchSpawn(args: {
     preferredNodeId: args.targetNodeId,
   });
   const nodeId = placement.node.id;
+  // Placement and the durable idempotency claim are separate writes on D1.
+  // Publish the selected response target immediately; a concurrent replay in
+  // this narrow interval waits for this snapshot instead of returning null.
+  if (!await snapshotInvocationHandlerNode(args.db, args.workspaceId, invocation.id, nodeId)) {
+    if (!placement.queued) await releaseNodeCapacity(args.db, args.workspaceId, nodeId);
+    throw codedError('Spawn invocation is no longer available for placement', 'idempotency_unavailable', 503);
+  }
 
   // A registered `spawn:<harness>` action shadows native capacity on this node.
   // Capacity-direct delegation (ctx.spawnAgent) bypasses the shadow so a handler
@@ -1258,7 +1302,10 @@ export async function invokeAction(
       ));
     if (existing) {
       assertInvocationClaimMatches(existing, actionName, data);
-      return markInvocationReplay(invocationAck(existing, { actionName }));
+      const replay = isSpawnInvocation(actionName) && !existing.handlerNodeId
+        ? await waitForSpawnReplayTarget(db, workspaceId, existing)
+        : existing;
+      return markInvocationReplay(invocationAck(replay, { actionName }));
     }
   }
 
@@ -1633,6 +1680,26 @@ async function dispatchNodeAttempt(
   return !!updated;
 }
 
+async function snapshotInvocationHandlerNode(
+  db: Db,
+  workspaceId: string,
+  invocationId: string,
+  nodeId: string,
+): Promise<boolean> {
+  const [updated] = await db
+    .update(actionInvocations)
+    .set({
+      handlerNodeId: sql`COALESCE(${actionInvocations.handlerNodeId}, ${nodeId})`,
+    })
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.id, invocationId),
+      inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+    ))
+    .returning({ id: actionInvocations.id });
+  return !!updated;
+}
+
 /**
  * Transition a drained offline-queue invocation into the live `dispatched` state
  * once its queued `action.invoke` frame is actually delivered on node
@@ -1690,17 +1757,12 @@ async function dispatchNodeInvocation(args: {
   // Persist the response identity before the provider can observe the frame.
   // `dispatchedNodeId` is intentionally written after a successful send, but a
   // replay in that interval still has to return the original handler node.
-  const [snapshotted] = await args.db
-    .update(actionInvocations)
-    .set({
-      handlerNodeId: sql`COALESCE(${actionInvocations.handlerNodeId}, ${args.nodeId})`,
-    })
-    .where(and(
-      eq(actionInvocations.workspaceId, args.workspaceId),
-      eq(actionInvocations.id, args.invocationId),
-      inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
-    ))
-    .returning({ id: actionInvocations.id });
+  const snapshotted = await snapshotInvocationHandlerNode(
+    args.db,
+    args.workspaceId,
+    args.invocationId,
+    args.nodeId,
+  );
   if (!snapshotted) return { accepted: false, pending: false };
   const connectedBefore = args.registry.isProviderConnected(args.workspaceId, args.nodeId, args.providerName);
   const sent = await args.registry.sendToProvider(args.workspaceId, args.nodeId, args.providerName, frame);
