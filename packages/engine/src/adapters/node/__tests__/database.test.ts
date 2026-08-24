@@ -171,6 +171,33 @@ describe('action invocation provider migration', () => {
   });
 });
 
+describe('action invocation handler snapshot migration', () => {
+  it('adds an immutable nullable handler identity without rewriting existing invocations', () => {
+    const sqlite = new Database(':memory:');
+    handles.push(sqlite);
+    sqlite.exec(`
+      CREATE TABLE action_invocations (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        action_name TEXT NOT NULL
+      );
+      INSERT INTO action_invocations (id, workspace_id, action_name)
+      VALUES ('inv_existing', 'ws_1', 'summarize');
+    `);
+
+    const migration = readFileSync(
+      new URL('../../../db/migrations/0042_action_invocation_handler_snapshot.sql', import.meta.url),
+      'utf8',
+    );
+    sqlite.exec(migration);
+
+    expect(sqlite.prepare(`
+      SELECT id, handler_agent_id
+      FROM action_invocations
+    `).all()).toEqual([{ id: 'inv_existing', handler_agent_id: null }]);
+  });
+});
+
 describe('session_ref lookup migration', () => {
   it('backfills the indexed key and durable payload-free session ledger', () => {
     const sqlite = new Database(':memory:');

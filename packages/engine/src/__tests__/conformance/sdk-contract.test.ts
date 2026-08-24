@@ -50,6 +50,7 @@ describe('SDK v8 service contract', () => {
     const ws = await createWorkspace(stack.app, 'sdk-action-ws');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
     const handler = await registerAgent(stack.app, ws.workspaceKey, 'handler');
+    const replacement = await registerAgent(stack.app, ws.workspaceKey, 'replacement');
     const denied = await registerAgent(stack.app, ws.workspaceKey, 'denied');
 
     const register = await stack.app.request('/v1/actions', {
@@ -152,6 +153,32 @@ describe('SDK v8 service contract', () => {
     };
     expect(replayBody).toEqual(invokeBody);
 
+    const moveHandler = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${replacement.token}` },
+      body: JSON.stringify({
+        name: 'summarize',
+        description: 'Summarize text',
+        handler_agent: 'replacement',
+        available_to: ['caller'],
+      }),
+    });
+    expect(moveHandler.status).toBe(200);
+
+    // The action row is mutable, but an idempotent replay describes the
+    // invocation that was actually dispatched, not its replacement handler.
+    const replayAfterMove = await invokeRequest({ mode: 'brief', text: 'hello' });
+    expect(replayAfterMove.status).toBe(201);
+    expect(replayAfterMove.headers.get('Idempotency-Replayed')).toBe('true');
+    const replayAfterMoveBody = await replayAfterMove.json() as {
+      data: { invocation_id: string; handler_agent_id: string | null };
+    };
+    expect(replayAfterMoveBody.data).toMatchObject({
+      invocation_id: invokeBody.data.invocation_id,
+      handler_agent_id: handler.agentId,
+    });
+    expect(replayAfterMoveBody.data.handler_agent_id).not.toBe(replacement.agentId);
+
     const conflict = await stack.app.request('/v1/actions/summarize/invoke', {
       method: 'POST',
       headers: {
@@ -177,14 +204,17 @@ describe('SDK v8 service contract', () => {
       input: { text: 'hello', mode: 'brief' },
     });
     const storedInvocations = await stack.runtime.deps.db
-      .select({ id: actionInvocations.id })
+      .select({ id: actionInvocations.id, handlerAgentId: actionInvocations.handlerAgentId })
       .from(actionInvocations)
       .where(and(
         eq(actionInvocations.workspaceId, ws.workspaceId),
         eq(actionInvocations.callerId, caller.agentId),
         eq(actionInvocations.actionName, 'summarize'),
       ));
-    expect(storedInvocations).toEqual([{ id: invokeBody.data.invocation_id }]);
+    expect(storedInvocations).toEqual([{
+      id: invokeBody.data.invocation_id,
+      handlerAgentId: handler.agentId,
+    }]);
     expect(kvPutAttempts).toBe(0);
 
     const deniedNode = await attachDirectNodeSocket(stack, ws.workspaceId, denied);

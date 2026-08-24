@@ -452,11 +452,12 @@ export async function deleteAction(
 async function createInvocation(
   db: Db,
   workspaceId: string,
-  action: Pick<ActionRow, 'id' | 'name'> | null,
+  action: Pick<ActionRow, 'id' | 'name' | 'handlerAgentId'> | null,
   data: {
     input?: Record<string, unknown>;
     caller_id?: string | null;
     caller_name?: string | null;
+    handler_agent_id?: string | null;
     action_name?: string;
     status?: string;
     invocation_id?: string;
@@ -473,6 +474,7 @@ async function createInvocation(
       actionName: expectedActionName,
       callerId: data.caller_id ?? null,
       callerName: data.caller_name ?? null,
+      handlerAgentId: data.handler_agent_id ?? action?.handlerAgentId ?? null,
       input: data.input ?? {},
       status: data.status ?? 'pending',
     })
@@ -531,7 +533,7 @@ function invocationAck(
   invocation: InvocationRow,
   {
     actionName = invocation.actionName,
-    handlerAgentId = null,
+    handlerAgentId = invocation.handlerAgentId,
     handlerNodeId = null,
   }: {
     actionName?: string;
@@ -1254,7 +1256,6 @@ export async function invokeAction(
       assertInvocationClaimMatches(existing, actionName, data);
       return markInvocationReplay(invocationAck(existing, {
         actionName,
-        handlerAgentId: action?.handlerAgentId,
         handlerNodeId: action?.handlerNodeId,
       }));
     }
@@ -1396,7 +1397,6 @@ export async function invokeAction(
   if (replayed) {
     return markInvocationReplay(invocationAck(invocation, {
       actionName,
-      handlerAgentId: action.handlerAgentId,
       handlerNodeId: handlerAgent.locationNodeId,
     }));
   }
