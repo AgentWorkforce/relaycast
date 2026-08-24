@@ -611,7 +611,7 @@ fn node_heartbeat(registration: &NodeRegistration) -> serde_json::Value {
 async fn send_node_register<S>(
     write: &mut S,
     registration: &NodeRegistration,
-) -> std::result::Result<(), Box<tokio_tungstenite::tungstenite::Error>>
+) -> std::result::Result<(), tokio_tungstenite::tungstenite::Error>
 where
     S: Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
 {
@@ -627,10 +627,7 @@ where
         "version": SDK_VERSION,
         "resume_cursor": null,
     });
-    write
-        .send(Message::Text(msg.to_string()))
-        .await
-        .map_err(Box::new)
+    write.send(Message::Text(msg.to_string())).await
 }
 
 fn node_delivery_ack(value: &serde_json::Value) -> Option<serde_json::Value> {
