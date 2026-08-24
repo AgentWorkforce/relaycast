@@ -99,8 +99,15 @@ describe('SDK v8 service contract', () => {
 
     const handlerNode = await attachDirectNodeSocket(stack, ws.workspaceId, handler);
     let kvPutAttempts = 0;
-    stack.runtime.deps.kv.put = async () => {
+    const originalKvPut = stack.runtime.deps.kv.put.bind(stack.runtime.deps.kv);
+    stack.runtime.deps.kv.put = async (key, value, options) => {
       kvPutAttempts += 1;
+      // Model the exact rejected coordinator window: its pre-dispatch lock can
+      // commit, but the final result record written after provider dispatch
+      // cannot. The durable invocation claim must bypass both writes entirely.
+      if (key.endsWith(':lock')) {
+        return originalKvPut(key, value, options);
+      }
       throw new Error('post-dispatch idempotency result storage is unavailable');
     };
     const idempotencyKey = 'sdk-action-invoke-1';
