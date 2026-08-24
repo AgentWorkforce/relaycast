@@ -1165,12 +1165,32 @@ async function dispatchSpawn(args: {
     return markInvocationReplay(invocationAck(dispatched, { actionName: 'spawn' }));
   }
 
-  const placement = await claimSpawnNode(args.db, args.workspaceId, {
-    actionName: 'spawn',
-    input,
-    callerId: args.data.caller_id,
-    preferredNodeId: args.targetNodeId,
-  });
+  let placement;
+  try {
+    placement = await claimSpawnNode(args.db, args.workspaceId, {
+      actionName: 'spawn',
+      input,
+      callerId: args.data.caller_id,
+      preferredNodeId: args.targetNodeId,
+    });
+  } catch (error) {
+    // Placement is transactional and no provider frame can exist yet. Release
+    // only this untouched pre-placement claim so a keyed retry can try again
+    // after capacity recovers. Once any target/attempt state exists, the claim
+    // remains immutable and the normal replay path owns it.
+    await args.db
+      .delete(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, args.workspaceId),
+        eq(actionInvocations.id, invocation.id),
+        eq(actionInvocations.status, 'pending'),
+        isNull(actionInvocations.handlerNodeId),
+        isNull(actionInvocations.dispatchedNodeId),
+        isNull(actionInvocations.spawnReservedAt),
+        eq(actionInvocations.dispatchAttempts, 0),
+      ));
+    throw error;
+  }
   const nodeId = placement.node.id;
   // Placement and the durable idempotency claim are separate writes on D1.
   // Publish the selected response target immediately; a concurrent replay in

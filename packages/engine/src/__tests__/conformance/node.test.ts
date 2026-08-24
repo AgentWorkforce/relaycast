@@ -2026,7 +2026,7 @@ describe('node adapter conformance', () => {
       expect(alpha.sock.ofType('action.invoke').filter((event) => event.action.startsWith('spawn'))).toHaveLength(0);
     });
 
-    it('keeps a keyed pre-placement failure retryable without replaying a pending success', async () => {
+    it('releases a keyed pre-placement claim so capacity recovery can retry it', async () => {
       const ws = await createWorkspace(stack.app, 'fleet-spawn-placement-failed-replay-ws');
       const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
       const alpha = await enrollAndAttachNode(ws, {
@@ -2056,11 +2056,9 @@ describe('node adapter conformance', () => {
       });
 
       const first = await invoke();
-      const replay = await invoke();
-      expect([first.status, replay.status]).toEqual([503, 503]);
+      expect(first.status).toBe(503);
       expect((await first.json() as { error: { code: string } }).error.code).toBe('handler_unavailable');
-      expect((await replay.json() as { error: { code: string } }).error.code).toBe('idempotency_unavailable');
-      const [stored] = await stack.runtime.handle.db
+      const afterFailure = await stack.runtime.handle.db
         .select({
           status: actionInvocations.status,
           handlerNodeId: actionInvocations.handlerNodeId,
@@ -2071,8 +2069,29 @@ describe('node adapter conformance', () => {
           eq(actionInvocations.workspaceId, ws.workspaceId),
           eq(actionInvocations.actionName, 'spawn'),
         ));
-      expect(stored).toEqual({ status: 'pending', handlerNodeId: null, dispatchedNodeId: null });
+      expect(afterFailure).toEqual([]);
       expect(alpha.sock.ofType('action.invoke').filter((event) => event.action.startsWith('spawn'))).toHaveLength(0);
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.heartbeat',
+        load: 0,
+        load_reported: true,
+        active_agents: 0,
+        handlers_live: true,
+      }));
+
+      const recovered = await invoke();
+      expect(recovered.status).toBe(201);
+      expect(recovered.headers.get('Idempotency-Replayed')).toBeNull();
+      expect(await recovered.json()).toMatchObject({
+        data: {
+          status: 'dispatched',
+          handler_node_id: 'node_alpha',
+          dispatched_node_id: 'node_alpha',
+        },
+      });
+      expect(alpha.sock.ofType('action.invoke').filter((event) => event.action.startsWith('spawn'))).toHaveLength(1);
     });
 
     it('replays a pre-dispatch node-action failure as 503 instead of a failed 201', async () => {
