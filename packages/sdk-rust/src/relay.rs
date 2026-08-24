@@ -415,8 +415,23 @@ impl RelayCast {
     }
 
     /// Rotate an agent's token.
-    pub async fn rotate_agent_token(&self, name: &str) -> Result<TokenRotateResponse> {
+    /// Roll the calling agent's own token over.
+    ///
+    /// Requires the agent's *current* token, not a workspace key: since
+    /// engine 8.2.0 (`fix: make agent identity recovery explicit`, #349) this
+    /// route is authenticated self-rollover only. A workspace owner replacing
+    /// an identity they do not hold the token for uses the explicit, audited
+    /// [`Self::take_over_agent`] or [`Self::recover_agent`] instead.
+    ///
+    /// Mirrors the TypeScript SDK's `agents.rotateToken(name, agentToken)`,
+    /// which took the same `agentToken` parameter in that release.
+    pub async fn rotate_agent_token(
+        &self,
+        name: &str,
+        agent_token: impl Into<String>,
+    ) -> Result<TokenRotateResponse> {
         self.client
+            .with_api_key(agent_token)?
             .post(
                 &format!("/v1/agents/{}/rotate-token", urlencoding::encode(name)),
                 Some(serde_json::json!({})),
@@ -1029,10 +1044,7 @@ impl RelayCast {
     pub async fn list_directory_ratings(&self, slug: &str) -> Result<Vec<DirectoryRating>> {
         self.client
             .get(
-                &format!(
-                    "/v1/directory/agents/{}/ratings",
-                    urlencoding::encode(slug)
-                ),
+                &format!("/v1/directory/agents/{}/ratings", urlencoding::encode(slug)),
                 None,
                 None,
             )
@@ -1047,10 +1059,7 @@ impl RelayCast {
     ) -> Result<DirectoryRating> {
         self.client
             .post(
-                &format!(
-                    "/v1/directory/agents/{}/ratings",
-                    urlencoding::encode(slug)
-                ),
+                &format!("/v1/directory/agents/{}/ratings", urlencoding::encode(slug)),
                 Some(request),
                 None,
             )
@@ -1064,7 +1073,9 @@ impl RelayCast {
         &self,
         request: ImportSkillsRequest,
     ) -> Result<Option<DirectoryAgent>> {
-        self.client.post("/v1/skills/sync", Some(request), None).await
+        self.client
+            .post("/v1/skills/sync", Some(request), None)
+            .await
     }
 
     /// Search skills across the directory.
@@ -1200,11 +1211,7 @@ impl RelayCast {
     }
 
     /// Update a trigger.
-    pub async fn update_trigger(
-        &self,
-        id: &str,
-        request: UpdateTriggerRequest,
-    ) -> Result<Trigger> {
+    pub async fn update_trigger(&self, id: &str, request: UpdateTriggerRequest) -> Result<Trigger> {
         self.client
             .patch(
                 &format!("/v1/triggers/{}", urlencoding::encode(id)),
@@ -1296,7 +1303,9 @@ impl RelayCast {
             Some(slice.as_slice())
         };
 
-        self.client.get("/v1/console/messages", query_ref, None).await
+        self.client
+            .get("/v1/console/messages", query_ref, None)
+            .await
     }
 
     /// Get console overview statistics.
@@ -1388,8 +1397,9 @@ mod tests {
     #[tokio::test]
     async fn register_agent_parses_workspace_id() {
         let server = MockServer::start().await;
-        let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
-            .expect("relay init");
+        let relay =
+            RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+                .expect("relay init");
 
         Mock::given(method("POST"))
             .and(path("/v1/agents"))
@@ -1413,8 +1423,9 @@ mod tests {
     async fn register_agent_without_workspace_id_defaults_to_none() {
         // Engines that predate the field omit it; the client must still parse.
         let server = MockServer::start().await;
-        let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
-            .expect("relay init");
+        let relay =
+            RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+                .expect("relay init");
 
         Mock::given(method("POST"))
             .and(path("/v1/agents"))
