@@ -1231,6 +1231,7 @@ export async function invokeAction(
     includeNodeScoped?: boolean;
   } = {},
 ) {
+  const action = await fetchAction(db, workspaceId, actionName, options.includeNodeScoped);
   let invocationId: string | undefined;
   if (options.idempotencyKey !== undefined) {
     if (!data.caller_id) {
@@ -1251,11 +1252,13 @@ export async function invokeAction(
       ));
     if (existing) {
       assertInvocationClaimMatches(existing, actionName, data);
-      return markInvocationReplay(invocationAck(existing, { actionName }));
+      return markInvocationReplay(invocationAck(existing, {
+        actionName,
+        handlerAgentId: action?.handlerAgentId,
+        handlerNodeId: action?.handlerNodeId,
+      }));
     }
   }
-
-  const action = await fetchAction(db, workspaceId, actionName, options.includeNodeScoped);
 
   if (!action && actionName === 'spawn') {
     return dispatchSpawn({

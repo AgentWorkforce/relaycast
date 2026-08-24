@@ -127,10 +127,18 @@ describe('SDK v8 service contract', () => {
     expect(concurrent.map((response) => response.status)).toEqual([201, 201]);
     expect(concurrent.map((response) => response.headers.get('Idempotency-Replayed')).sort())
       .toEqual([null, 'true']);
-    const [invokeBody, concurrentReplayBody] = await Promise.all(concurrent.map(
-      (response) => response.json() as Promise<{ data: { invocation_id: string } }>,
+    const concurrentBodies = await Promise.all(concurrent.map(
+      (response) => response.json() as Promise<{
+        data: { invocation_id: string; handler_agent_id: string | null };
+      }>,
     ));
+    const freshIndex = concurrent.findIndex(
+      (response) => response.headers.get('Idempotency-Replayed') === null,
+    );
+    const invokeBody = concurrentBodies[freshIndex]!;
+    const concurrentReplayBody = concurrentBodies[1 - freshIndex]!;
     expect(invokeBody.data.invocation_id).toMatch(/^inv_/);
+    expect(invokeBody.data.handler_agent_id).toBe(handler.agentId);
     expect(concurrentReplayBody.data.invocation_id).toBe(invokeBody.data.invocation_id);
 
     // Model a committed first attempt whose response the caller loses: retry the
@@ -139,8 +147,10 @@ describe('SDK v8 service contract', () => {
     const replay = await invokeRequest({ mode: 'brief', text: 'hello' });
     expect(replay.status).toBe(201);
     expect(replay.headers.get('Idempotency-Replayed')).toBe('true');
-    const replayBody = await replay.json() as { data: { invocation_id: string } };
-    expect(replayBody.data.invocation_id).toBe(invokeBody.data.invocation_id);
+    const replayBody = await replay.json() as {
+      data: { invocation_id: string; handler_agent_id: string | null };
+    };
+    expect(replayBody).toEqual(invokeBody);
 
     const conflict = await stack.app.request('/v1/actions/summarize/invoke', {
       method: 'POST',
