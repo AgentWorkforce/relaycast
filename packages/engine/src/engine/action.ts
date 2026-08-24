@@ -575,6 +575,42 @@ async function waitForInvocationReplayOutcome(
   return current;
 }
 
+/**
+ * Resolve a losing durable claim from the immutable invocation snapshots.
+ *
+ * This is shared by the optimistic pre-read and every branch-local insert
+ * conflict. The action row resolved by the losing request may have changed
+ * scope or handler after the winning claim was created, so it is never a safe
+ * source for replay classification.
+ */
+async function replayInvocationClaim(
+  db: Db,
+  workspaceId: string,
+  invocation: InvocationRow,
+): Promise<InvocationRow> {
+  if (
+    isSpawnInvocation(invocation.actionName)
+    || isReleaseInvocation(invocation.actionName)
+    || (!!invocation.handlerNodeId && !invocation.handlerAgentId)
+  ) {
+    return waitForInvocationReplayOutcome(db, workspaceId, invocation);
+  }
+  if (invocation.handlerAgentId) {
+    // A handler takeover can win after the durable claim insert but before the
+    // winner revalidates the handler and starts provider dispatch. Do not
+    // acknowledge that pre-send claim. Once the durable attempt marker exists,
+    // preserve the accepted post-send replay contract even if a later takeover
+    // terminally fails the row.
+    return waitForInvocationReplayOutcome(
+      db,
+      workspaceId,
+      invocation,
+      { acceptDispatchStarted: true },
+    );
+  }
+  return invocation;
+}
+
 function invocationAck(
   invocation: InvocationRow,
   {
@@ -1318,29 +1354,7 @@ export async function invokeAction(
     ));
     if (existing) {
       assertInvocationClaimMatches(existing, actionName, data);
-      // Built-ins and node-scoped actions can fail before any 201 is returned;
-      // wait for their durable dispatch/terminal outcome. Agent-hosted actions
-      // deliberately replay their immutable ack immediately: the provider may
-      // already have received the frame while dispatch persistence is paused,
-      // and a concurrent handler takeover can terminally fail that row without
-      // turning the accepted request into a pre-dispatch failure.
-      const replay = isSpawnInvocation(actionName)
-        || isReleaseInvocation(actionName)
-        || (!!existing.handlerNodeId && !existing.handlerAgentId)
-        ? await waitForInvocationReplayOutcome(db, workspaceId, existing)
-        : existing.handlerAgentId
-          // A handler takeover can win after the durable claim insert but
-          // before the winner revalidates the handler and starts provider
-          // dispatch. Do not acknowledge that pre-send claim. Once the durable
-          // attempt marker exists, preserve the accepted post-send replay
-          // contract even if a later takeover terminally fails the row.
-          ? await waitForInvocationReplayOutcome(
-              db,
-              workspaceId,
-              existing,
-              { acceptDispatchStarted: true },
-            )
-          : existing;
+      const replay = await replayInvocationClaim(db, workspaceId, existing);
       return markInvocationReplay(invocationAck(replay, { actionName }));
     }
   }
@@ -1389,7 +1403,7 @@ export async function invokeAction(
       invocation_id: invocationId,
     });
     if (replayed) {
-      const settled = await waitForInvocationReplayOutcome(db, workspaceId, invocation);
+      const settled = await replayInvocationClaim(db, workspaceId, invocation);
       return markInvocationReplay(invocationAck(settled, { actionName }));
     }
     // Only mark the reservation held when we actually incremented the node's
@@ -1478,7 +1492,8 @@ export async function invokeAction(
     invocation_id: invocationId,
   });
   if (replayed) {
-    return markInvocationReplay(invocationAck(invocation, { actionName }));
+    const settled = await replayInvocationClaim(db, workspaceId, invocation);
+    return markInvocationReplay(invocationAck(settled, { actionName }));
   }
   // Re-validate the handler pointer AFTER the insert. A takeover committing
   // between action resolution above and the insert misses this invocation in
