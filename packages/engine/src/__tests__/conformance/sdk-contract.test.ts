@@ -258,12 +258,12 @@ describe('SDK v8 service contract', () => {
 
     const handlerNode = await attachDirectNodeSocket(stack, ws.workspaceId, handler);
     const nodeConnections = stack.runtime.deps.nodeConnections!;
-    const originalSend = nodeConnections.sendToProvider.bind(nodeConnections);
+    const originalSend = nodeConnections.sendAuthorizedActionToProvider!.bind(nodeConnections);
     let frameSent!: () => void;
     const frameSentPromise = new Promise<void>((resolve) => { frameSent = resolve; });
     let resumeSend!: () => void;
     const resumeSendPromise = new Promise<void>((resolve) => { resumeSend = resolve; });
-    vi.spyOn(nodeConnections, 'sendToProvider').mockImplementation(async (...args) => {
+    vi.spyOn(nodeConnections, 'sendAuthorizedActionToProvider').mockImplementation(async (...args) => {
       const sent = await originalSend(...args);
       if (args[3].type !== 'action.invoke' || args[3].action !== 'race-send') return sent;
       frameSent();
@@ -319,6 +319,55 @@ describe('SDK v8 service contract', () => {
     expect(handlerNode.sock.ofType('action.invoke')).toHaveLength(1);
   });
 
+  it('fails closed when a node adapter cannot enforce owner-side agent dispatch authorization', async () => {
+    const ws = await createWorkspace(stack.app, 'sdk-action-owner-gate-required-ws');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    const handler = await registerAgent(stack.app, ws.workspaceKey, 'handler');
+
+    const register = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${handler.token}` },
+      body: JSON.stringify({
+        name: 'owner-gate-required',
+        description: 'Require an owner-side dispatch gate',
+        handler_agent: 'handler',
+        available_to: ['caller'],
+      }),
+    });
+    expect(register.status).toBe(201);
+    const handlerNode = await attachDirectNodeSocket(stack, ws.workspaceId, handler);
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    const ownerAuthorizedSend = nodeConnections.sendAuthorizedActionToProvider;
+    nodeConnections.sendAuthorizedActionToProvider = undefined;
+    let response!: Response;
+    try {
+      response = await stack.app.request('/v1/actions/owner-gate-required/invoke', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${caller.token}`,
+          'Idempotency-Key': 'sdk-action-owner-gate-required-1',
+        },
+        body: JSON.stringify({ input: { text: 'hello' } }),
+      });
+    } finally {
+      nodeConnections.sendAuthorizedActionToProvider = ownerAuthorizedSend;
+    }
+
+    expect(response.status).toBe(503);
+    expect((await response.json() as { error: { code: string } }).error.code)
+      .toBe('node_dispatch_unavailable');
+    expect(handlerNode.sock.ofType('action.invoke')).toHaveLength(0);
+    const [stored] = await stack.runtime.handle.db
+      .select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'owner-gate-required'),
+      ));
+    expect(stored).toEqual({ status: 'failed', error: 'node_dispatch_unavailable' });
+  });
+
   it('does not acknowledge an agent-hosted claim that takeover fails before provider dispatch starts', async () => {
     const ws = await createWorkspace(stack.app, 'sdk-action-pre-send-takeover-ws');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
@@ -338,12 +387,12 @@ describe('SDK v8 service contract', () => {
     expect(register.status).toBe(201);
     const handlerNode = await attachDirectNodeSocket(stack, ws.workspaceId, handler);
     const nodeConnections = stack.runtime.deps.nodeConnections!;
-    const originalSend = nodeConnections.sendToProvider.bind(nodeConnections);
+    const originalSend = nodeConnections.sendAuthorizedActionToProvider!.bind(nodeConnections);
     let beforeProviderSend!: () => void;
     const beforeProviderSendPromise = new Promise<void>((resolve) => { beforeProviderSend = resolve; });
     let resumeProviderSend!: () => void;
     const resumeProviderSendPromise = new Promise<void>((resolve) => { resumeProviderSend = resolve; });
-    vi.spyOn(nodeConnections, 'sendToProvider').mockImplementation(async (...args) => {
+    vi.spyOn(nodeConnections, 'sendAuthorizedActionToProvider').mockImplementation(async (...args) => {
       if (args[3].type !== 'action.invoke' || args[3].action !== 'pre-send-race') {
         return originalSend(...args);
       }

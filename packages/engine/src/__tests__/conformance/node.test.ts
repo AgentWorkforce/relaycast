@@ -1544,6 +1544,8 @@ describe('node adapter conformance', () => {
         actionName: 'agent-echo',
         callerId: caller.agentId,
         callerName: caller.name,
+        handlerAgentId,
+        handlerNodeId: 'node_alpha',
         input: { value: 'from-db' },
         status: 'pending',
       });

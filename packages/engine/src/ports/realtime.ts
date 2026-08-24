@@ -62,6 +62,21 @@ export interface NodeUpgradeArgs {
   originActor?: string;
 }
 
+/**
+ * Serializable proof inputs for an agent-hosted action dispatch. Remote socket
+ * owners (for example a Cloudflare Durable Object) must re-read these durable
+ * identities immediately before accepting the frame; a closure created in the
+ * engine process cannot cross that transport boundary.
+ */
+export interface AgentActionProviderAuthorization {
+  kind: 'agent-action-v1';
+  invocationId: string;
+  actionId: string;
+  handlerAgentId: string;
+  /** False when a queued attempt was already counted before this delivery. */
+  recordAttempt: boolean;
+}
+
 export interface NodeConnectionRegistry {
   /**
    * Upgrade an incoming node-control request. Cloudflare adapters own the 101
@@ -86,14 +101,23 @@ export interface NodeConnectionRegistry {
     nodeId: string,
     providerName: string,
     message: FleetRelaycastToBrokerMessage,
-    hooks?: {
-      /** Last-moment authorization gate, evaluated by the socket owner before
-       * it sends or queues the frame. */
-      beforeSend?: () => Promise<boolean>;
-      /** Durable acknowledgement hook, run after the frame is accepted by the
-       * live socket or its offline queue and before this call resolves. */
-      onAccepted?: () => Promise<void>;
-    },
+  ): Promise<boolean>;
+
+  /**
+   * Send an agent-hosted `action.invoke` only after the socket owner verifies
+   * that the durable invocation is open and the action still names the same
+   * handler. The owner also records provider acceptance before resolving.
+   *
+   * Optional for adapter source compatibility, but agent-hosted dispatch fails
+   * closed when it is absent. This prevents an older remote adapter from
+   * silently accepting a callback or option that it cannot enforce.
+   */
+  sendAuthorizedActionToProvider?(
+    workspaceId: string,
+    nodeId: string,
+    providerName: string,
+    message: Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }>,
+    authorization: AgentActionProviderAuthorization,
   ): Promise<boolean>;
 
   /** True when the node currently has at least one connected provider. */

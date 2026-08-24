@@ -1495,6 +1495,14 @@ export async function invokeAction(
     const settled = await replayInvocationClaim(db, workspaceId, invocation);
     return markInvocationReplay(invocationAck(settled, { actionName }));
   }
+  if (!options.nodeConnections.sendAuthorizedActionToProvider) {
+    await failOpenInvocationRows(db, workspaceId, [invocation.id], 'node_dispatch_unavailable');
+    throw codedError(
+      'Node adapter does not support owner-authorized agent action dispatch',
+      'node_dispatch_unavailable',
+      503,
+    );
+  }
   // Re-validate the handler pointer AFTER the insert. A takeover committing
   // between action resolution above and the insert misses this invocation in
   // its stranded snapshot (the row was not visible yet), which would leave it
@@ -1765,51 +1773,6 @@ async function snapshotInvocationHandlerNode(
   return !!updated;
 }
 
-async function agentProviderDispatchStillAuthorized(
-  db: Db,
-  workspaceId: string,
-  invocationId: string,
-  actionId: string,
-  handlerAgentId: string,
-): Promise<boolean> {
-  const [authorized] = await db
-    .select({ id: actionInvocations.id })
-    .from(actionInvocations)
-    .innerJoin(actions, eq(actionInvocations.actionId, actions.id))
-    .where(and(
-      eq(actionInvocations.workspaceId, workspaceId),
-      eq(actionInvocations.id, invocationId),
-      inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
-      eq(actions.workspaceId, workspaceId),
-      eq(actions.id, actionId),
-      eq(actions.handlerAgentId, handlerAgentId),
-    ));
-  return !!authorized;
-}
-
-async function recordAgentProviderAccepted(
-  db: Db,
-  workspaceId: string,
-  invocationId: string,
-  nodeId: string,
-): Promise<boolean> {
-  const [updated] = await db
-    .update(actionInvocations)
-    .set({
-      handlerNodeId: sql`COALESCE(${actionInvocations.handlerNodeId}, ${nodeId})`,
-      attemptedNodeIds: sql`json_insert(COALESCE(${actionInvocations.attemptedNodeIds}, '[]'), '$[#]', ${nodeId})`,
-      dispatchAttempts: sql`COALESCE(${actionInvocations.dispatchAttempts}, 0) + 1`,
-    })
-    // Provider acceptance is historical evidence even if a concurrent
-    // takeover terminally failed the row immediately after the socket send.
-    .where(and(
-      eq(actionInvocations.workspaceId, workspaceId),
-      eq(actionInvocations.id, invocationId),
-    ))
-    .returning({ id: actionInvocations.id });
-  return !!updated;
-}
-
 /**
  * Transition a drained offline-queue invocation into the live `dispatched` state
  * once its queued `action.invoke` frame is actually delivered on node
@@ -1877,40 +1840,28 @@ async function dispatchNodeInvocation(args: {
       );
   if (!snapshotted) return { accepted: false, pending: false };
   const connectedBefore = args.registry.isProviderConnected(args.workspaceId, args.nodeId, args.providerName);
-  let providerAcceptedRecorded = false;
-  const beforeSend = args.agent && args.actionId
-    ? () => agentProviderDispatchStillAuthorized(
-        args.db,
+  const sent = args.agent && args.actionId
+    ? await (args.registry.sendAuthorizedActionToProvider?.(
         args.workspaceId,
-        args.invocationId,
-        args.actionId!,
-        args.agent!.id,
-      )
-    : undefined;
-  const onAccepted = args.agent && !args.skipIncrementAttempts
-    ? async () => {
-        if (!await recordAgentProviderAccepted(args.db, args.workspaceId, args.invocationId, args.nodeId)) {
-          throw codedError(
-            'Provider accepted an action whose durable invocation disappeared',
-            'idempotency_unavailable',
-            503,
-          );
-        }
-        providerAcceptedRecorded = true;
-      }
-    : undefined;
-  const sent = await args.registry.sendToProvider(
-    args.workspaceId,
-    args.nodeId,
-    args.providerName,
-    frame,
-    { beforeSend, onAccepted },
-  );
+        args.nodeId,
+        args.providerName,
+        frame,
+        {
+          kind: 'agent-action-v1',
+          invocationId: args.invocationId,
+          actionId: args.actionId,
+          handlerAgentId: args.agent.id,
+          recordAttempt: !args.skipIncrementAttempts,
+        },
+      ) ?? false)
+    : await args.registry.sendToProvider(
+        args.workspaceId,
+        args.nodeId,
+        args.providerName,
+        frame,
+      );
 
   if (!sent) return { accepted: false, pending: false };
-  // Compatibility fallback for an older registry implementation that accepts
-  // the optional hooks structurally but does not invoke onAccepted yet.
-  if (onAccepted && !providerAcceptedRecorded) await onAccepted();
 
   const pending = !!args.pending || !connectedBefore;
   const accepted = await dispatchNodeAttempt(
