@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- `sweepTimedOutInvocations` now fails `pending` invocations that never dispatched (`dispatch_attempts = 0`) and are older than `PENDING_INVOCATION_MAX_AGE_MS` (default 72h) with the distinguishing error `never_dispatched_expired`. The existing `handler_unavailable` TTL guard, which requires a dispatched handler connection to observe unreachable, still runs first; the age bound covers the never-dispatched shape it cannot see.
 
 ## [8.2.1] - 2026-08-24
 

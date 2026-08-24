@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Never-dispatched pending action invocations are now bounded by absolute age (default 72h), so stale spawn queues can no longer drain into live agents that evict an existing resident under the same name.
 
 ## [8.2.1] - 2026-08-24
 

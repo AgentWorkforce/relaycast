@@ -36,6 +36,19 @@ export const ACTION_DISPATCH_TIMEOUT_MS = 30_000;
  * a signal instead of an unbounded hang.
  */
 export const ACTION_HANDLER_UNREACHABLE_TTL_MS = 120_000;
+/**
+ * Absolute age bound for a `pending` invocation that was NEVER dispatched to a
+ * node (`dispatch_attempts = 0`). The handler-unreachable TTL only fires once a
+ * dispatched handler connection has been observed offline; an invocation that
+ * never left the queue has no handler to observe, so the clock never starts
+ * and the row can sit `pending` forever. When the queue eventually drains
+ * (e.g. a node returns after a long outage), week-old spawn briefs come back
+ * to life as fresh agents that can evict the live resident under the same
+ * name — a delayed-action identity hazard, not inert backlog. Sized deliberately:
+ * long enough to ride out a weekend-scale node outage plus a day of buffer,
+ * far shorter than the observed multi-month backlog that motivated it.
+ */
+export const PENDING_INVOCATION_MAX_AGE_MS = 72 * 60 * 60 * 1000;
 const ACTION_RETRY_BACKOFF_MS = 5_000;
 const NODE_DRAIN_REQUEUE_RETRY_MS = 5_000;
 
@@ -43,6 +56,8 @@ export interface SweepTimedOutInvocationsOptions {
   timeoutMs?: number;
   /** Override for {@link ACTION_HANDLER_UNREACHABLE_TTL_MS}. */
   handlerUnreachableTtlMs?: number;
+  /** Override for {@link PENDING_INVOCATION_MAX_AGE_MS}. */
+  pendingInvocationMaxAgeMs?: number;
   /** When provided, TTL failures emit `action.failed` back to the caller. */
   completionDeps?: InvocationCompletionDeps;
 }
@@ -2177,6 +2192,44 @@ async function failUnreachableAgentInvocations(
   }
 }
 
+/**
+ * Absolute-age bound for never-dispatched pending invocations. The
+ * handler-unreachable TTL keys off a dispatched connection going quiet; an
+ * invocation that never left the queue has no handler to observe, so it needs
+ * its own bound. Fails rows that are `pending`, have `dispatch_attempts = 0`,
+ * and are older than `maxAgeMs` with a distinguishing error so operators can
+ * tell a never-dispatched expiry from a handler-that-went-quiet expiry.
+ */
+async function failNeverDispatchedExpiredInvocations(
+  db: Db,
+  maxAgeMs: number,
+  completionDeps?: InvocationCompletionDeps,
+): Promise<void> {
+  const cutoff = new Date(Date.now() - maxAgeMs);
+  const rows = await db
+    .select({ id: actionInvocations.id, workspaceId: actionInvocations.workspaceId })
+    .from(actionInvocations)
+    .where(and(
+      eq(actionInvocations.status, 'pending'),
+      eq(actionInvocations.dispatchAttempts, 0),
+      lte(actionInvocations.createdAt, cutoff),
+    ));
+
+  const byWorkspace = new Map<string, string[]>();
+  for (const row of rows) {
+    const list = byWorkspace.get(row.workspaceId) ?? [];
+    list.push(row.id);
+    byWorkspace.set(row.workspaceId, list);
+  }
+  for (const [workspaceId, ids] of byWorkspace) {
+    try {
+      await failOpenInvocations(db, workspaceId, ids, 'never_dispatched_expired', completionDeps);
+    } catch {
+      // Leave for the next sweep.
+    }
+  }
+}
+
 export async function sweepTimedOutInvocations(
   db: Db,
   registry: NodeConnectionRegistry,
@@ -2188,6 +2241,11 @@ export async function sweepTimedOutInvocations(
     db,
     registry,
     sweepOpts.handlerUnreachableTtlMs ?? ACTION_HANDLER_UNREACHABLE_TTL_MS,
+    sweepOpts.completionDeps,
+  );
+  await failNeverDispatchedExpiredInvocations(
+    db,
+    sweepOpts.pendingInvocationMaxAgeMs ?? PENDING_INVOCATION_MAX_AGE_MS,
     sweepOpts.completionDeps,
   );
   const now = new Date();
