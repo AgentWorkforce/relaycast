@@ -86,6 +86,14 @@ export interface NodeConnectionRegistry {
     nodeId: string,
     providerName: string,
     message: FleetRelaycastToBrokerMessage,
+    hooks?: {
+      /** Last-moment authorization gate, evaluated by the socket owner before
+       * it sends or queues the frame. */
+      beforeSend?: () => Promise<boolean>;
+      /** Durable acknowledgement hook, run after the frame is accepted by the
+       * live socket or its offline queue and before this call resolves. */
+      onAccepted?: () => Promise<void>;
+    },
   ): Promise<boolean>;
 
   /** True when the node currently has at least one connected provider. */

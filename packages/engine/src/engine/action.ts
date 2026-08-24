@@ -1525,7 +1525,20 @@ export async function invokeAction(
     action: action.name,
     input: recordInput(invocation.input),
     agent: { id: handlerAgent.id, name: handlerAgent.name },
+    actionId: action.id,
   });
+
+  if (!dispatched.accepted) {
+    // A takeover can invalidate the last-moment adapter gate. Re-read the
+    // durable claim so the original request and its replay agree on the same
+    // pre-send failure instead of returning a pending 201.
+    await waitForInvocationReplayOutcome(
+      db,
+      workspaceId,
+      invocation,
+      { acceptDispatchStarted: true },
+    );
+  }
 
   return {
     invocation_id: invocation.id,
@@ -1737,23 +1750,61 @@ async function snapshotInvocationHandlerNode(
   workspaceId: string,
   invocationId: string,
   nodeId: string,
-  options: { recordAttempt?: boolean } = {},
 ): Promise<boolean> {
   const [updated] = await db
     .update(actionInvocations)
     .set({
       handlerNodeId: sql`COALESCE(${actionInvocations.handlerNodeId}, ${nodeId})`,
-      ...(options.recordAttempt
-        ? {
-            attemptedNodeIds: sql`json_insert(COALESCE(${actionInvocations.attemptedNodeIds}, '[]'), '$[#]', ${nodeId})`,
-            dispatchAttempts: sql`COALESCE(${actionInvocations.dispatchAttempts}, 0) + 1`,
-          }
-        : {}),
     })
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
       eq(actionInvocations.id, invocationId),
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+    ))
+    .returning({ id: actionInvocations.id });
+  return !!updated;
+}
+
+async function agentProviderDispatchStillAuthorized(
+  db: Db,
+  workspaceId: string,
+  invocationId: string,
+  actionId: string,
+  handlerAgentId: string,
+): Promise<boolean> {
+  const [authorized] = await db
+    .select({ id: actionInvocations.id })
+    .from(actionInvocations)
+    .innerJoin(actions, eq(actionInvocations.actionId, actions.id))
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.id, invocationId),
+      inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      eq(actions.workspaceId, workspaceId),
+      eq(actions.id, actionId),
+      eq(actions.handlerAgentId, handlerAgentId),
+    ));
+  return !!authorized;
+}
+
+async function recordAgentProviderAccepted(
+  db: Db,
+  workspaceId: string,
+  invocationId: string,
+  nodeId: string,
+): Promise<boolean> {
+  const [updated] = await db
+    .update(actionInvocations)
+    .set({
+      handlerNodeId: sql`COALESCE(${actionInvocations.handlerNodeId}, ${nodeId})`,
+      attemptedNodeIds: sql`json_insert(COALESCE(${actionInvocations.attemptedNodeIds}, '[]'), '$[#]', ${nodeId})`,
+      dispatchAttempts: sql`COALESCE(${actionInvocations.dispatchAttempts}, 0) + 1`,
+    })
+    // Provider acceptance is historical evidence even if a concurrent
+    // takeover terminally failed the row immediately after the socket send.
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.id, invocationId),
     ))
     .returning({ id: actionInvocations.id });
   return !!updated;
@@ -1813,25 +1864,53 @@ async function dispatchNodeInvocation(args: {
     ...(args.agent ? { agent_id: args.agent.id, agent_name: args.agent.name } : {}),
     input: toFleetWireJson(args.input),
   };
-  // Persist the response identity before the provider can observe the frame.
-  // `dispatchedNodeId` is intentionally written after a successful send, but a
-  // replay in that interval still has to return the original handler node.
-  const snapshotted = await snapshotInvocationHandlerNode(
-    args.db,
-    args.workspaceId,
-    args.invocationId,
-    args.nodeId,
-    // For agent-hosted actions, this durable marker separates a bare claim
-    // (which can still fail the post-insert handler check without any send)
-    // from a request that has entered the provider-send boundary. Queue drains
-    // are the same attempt and must not increment it again.
-    { recordAttempt: !!args.agent && !args.skipIncrementAttempts },
-  );
+  // Agent-hosted createInvocation() already persisted the immutable handler
+  // node. Avoid another awaited DB write after handler revalidation; the socket
+  // owner performs the last-moment gate below immediately before the send.
+  const snapshotted = args.agent
+    ? true
+    : await snapshotInvocationHandlerNode(
+        args.db,
+        args.workspaceId,
+        args.invocationId,
+        args.nodeId,
+      );
   if (!snapshotted) return { accepted: false, pending: false };
   const connectedBefore = args.registry.isProviderConnected(args.workspaceId, args.nodeId, args.providerName);
-  const sent = await args.registry.sendToProvider(args.workspaceId, args.nodeId, args.providerName, frame);
+  let providerAcceptedRecorded = false;
+  const beforeSend = args.agent && args.actionId
+    ? () => agentProviderDispatchStillAuthorized(
+        args.db,
+        args.workspaceId,
+        args.invocationId,
+        args.actionId!,
+        args.agent!.id,
+      )
+    : undefined;
+  const onAccepted = args.agent && !args.skipIncrementAttempts
+    ? async () => {
+        if (!await recordAgentProviderAccepted(args.db, args.workspaceId, args.invocationId, args.nodeId)) {
+          throw codedError(
+            'Provider accepted an action whose durable invocation disappeared',
+            'idempotency_unavailable',
+            503,
+          );
+        }
+        providerAcceptedRecorded = true;
+      }
+    : undefined;
+  const sent = await args.registry.sendToProvider(
+    args.workspaceId,
+    args.nodeId,
+    args.providerName,
+    frame,
+    { beforeSend, onAccepted },
+  );
 
   if (!sent) return { accepted: false, pending: false };
+  // Compatibility fallback for an older registry implementation that accepts
+  // the optional hooks structurally but does not invoke onAccepted yet.
+  if (onAccepted && !providerAcceptedRecorded) await onAccepted();
 
   const pending = !!args.pending || !connectedBefore;
   const accepted = await dispatchNodeAttempt(
@@ -1883,9 +1962,10 @@ async function selectRetryPlacement(
 async function targetAgentForInvocation(
   db: Db,
   invocation: Pick<InvocationRow, 'id' | 'workspaceId'>,
-): Promise<{ agentId: string; agentName: string; nodeId: string; providerName: string } | null> {
+): Promise<{ actionId: string; agentId: string; agentName: string; nodeId: string; providerName: string } | null> {
   const [row] = await db
     .select({
+      actionId: actions.id,
       agentId: agents.id,
       agentName: agents.name,
       locationType: agents.locationType,
@@ -1900,7 +1980,13 @@ async function targetAgentForInvocation(
       eq(actionInvocations.id, invocation.id),
     ));
   if (!row || row.locationType !== 'via_node' || !row.nodeId) return null;
-  return { agentId: row.agentId, agentName: row.agentName, nodeId: row.nodeId, providerName: row.providerName };
+  return {
+    actionId: row.actionId,
+    agentId: row.agentId,
+    agentName: row.agentName,
+    nodeId: row.nodeId,
+    providerName: row.providerName,
+  };
 }
 
 export async function drainNodeInvocations(
@@ -1913,6 +1999,7 @@ export async function drainNodeInvocations(
   const rows = await db
     .select({
       id: actionInvocations.id,
+      actionId: actions.id,
       workspaceId: actionInvocations.workspaceId,
       actionName: actionInvocations.actionName,
       input: actionInvocations.input,
@@ -2016,6 +2103,7 @@ export async function drainNodeInvocations(
         action: dispatchActionNameForInvocation(row.actionName, input),
         input,
         agent: targetAgent ? { id: targetAgent.id, name: targetAgent.name } : null,
+        actionId: targetAgent ? row.actionId ?? undefined : undefined,
         retryAfterAt: new Date(Date.now() + ACTION_DISPATCH_TIMEOUT_MS),
         reservationHeld,
         skipIncrementAttempts: row.dispatchedNodeId === nodeId,
@@ -2078,6 +2166,7 @@ export async function rescheduleNodeInvocation(
       action: invocation.actionName,
       input: recordInput(invocation.input),
       agent: { id: targetAgent.agentId, name: targetAgent.agentName },
+      actionId: targetAgent.actionId,
       retryAfterAt: opts.retryAfterAt ?? null,
     });
     return dispatched.accepted;

@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { deliverEvent } from '../../engine/eventDelivery.js';
-import { actionInvocations, actions, webhooks } from '../../db/schema.js';
-import { sha256Hex } from '../../lib/crypto.js';
+import { actionInvocations, webhooks } from '../../db/schema.js';
 import {
   makeNodeStack,
   createWorkspace,
@@ -338,37 +337,34 @@ describe('SDK v8 service contract', () => {
     });
     expect(register.status).toBe(201);
     const handlerNode = await attachDirectNodeSocket(stack, ws.workspaceId, handler);
-    const [action] = await stack.runtime.handle.db
-      .select({ id: actions.id })
-      .from(actions)
-      .where(and(
-        eq(actions.workspaceId, ws.workspaceId),
-        eq(actions.name, 'pre-send-race'),
-      ));
-
-    // Materialize the exact durable state after createInvocation() wins the
-    // key but before its post-insert handler revalidation starts any provider
-    // attempt. The takeover must see and terminally fail this open claim.
-    const idempotencyKey = 'sdk-action-pre-send-race-1';
-    const invocationId = `inv_idem_${await sha256Hex([
-      'action-invoke-v1',
-      ws.workspaceId,
-      caller.agentId,
-      'pre-send-race',
-      idempotencyKey,
-    ].join('\0'))}`;
-    await stack.runtime.handle.db.insert(actionInvocations).values({
-      id: invocationId,
-      workspaceId: ws.workspaceId,
-      actionId: action!.id,
-      actionName: 'pre-send-race',
-      callerId: caller.agentId,
-      callerName: caller.name,
-      handlerAgentId: handler.agentId,
-      handlerNodeId: handlerNode.nodeId,
-      input: { text: 'hello' },
-      status: 'pending',
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    const originalSend = nodeConnections.sendToProvider.bind(nodeConnections);
+    let beforeProviderSend!: () => void;
+    const beforeProviderSendPromise = new Promise<void>((resolve) => { beforeProviderSend = resolve; });
+    let resumeProviderSend!: () => void;
+    const resumeProviderSendPromise = new Promise<void>((resolve) => { resumeProviderSend = resolve; });
+    vi.spyOn(nodeConnections, 'sendToProvider').mockImplementation(async (...args) => {
+      if (args[3].type !== 'action.invoke' || args[3].action !== 'pre-send-race') {
+        return originalSend(...args);
+      }
+      beforeProviderSend();
+      await resumeProviderSendPromise;
+      return originalSend(...args);
     });
+
+    const idempotencyKey = 'sdk-action-pre-send-race-1';
+    const invoke = () => stack.app.request('/v1/actions/pre-send-race/invoke', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+        'Idempotency-Key': idempotencyKey,
+      },
+      body: JSON.stringify({ input: { text: 'hello' } }),
+    });
+
+    const freshPromise = invoke();
+    await beforeProviderSendPromise;
 
     const moveHandler = await stack.app.request('/v1/actions', {
       method: 'POST',
@@ -382,17 +378,18 @@ describe('SDK v8 service contract', () => {
     });
     expect(moveHandler.status).toBe(200);
 
-    const replay = await stack.app.request('/v1/actions/pre-send-race/invoke', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${caller.token}`,
-        'Idempotency-Key': idempotencyKey,
-      },
-      body: JSON.stringify({ input: { text: 'hello' } }),
-    });
-    expect(replay.status).toBe(503);
-    expect((await replay.json() as { error: { code: string } }).error.code).toBe('handler_unavailable');
+    const replay = await invoke();
+    resumeProviderSend();
+    const fresh = await freshPromise;
+    expect([fresh.status, replay.status]).toEqual([503, 503]);
+    const [freshError, replayError] = await Promise.all([
+      fresh.json() as Promise<{ error: { code: string } }>,
+      replay.json() as Promise<{ error: { code: string } }>,
+    ]);
+    expect([freshError.error.code, replayError.error.code]).toEqual([
+      'handler_unavailable',
+      'handler_unavailable',
+    ]);
     const [stored] = await stack.runtime.handle.db
       .select({
         status: actionInvocations.status,
@@ -401,7 +398,10 @@ describe('SDK v8 service contract', () => {
         dispatchedNodeId: actionInvocations.dispatchedNodeId,
       })
       .from(actionInvocations)
-      .where(eq(actionInvocations.id, invocationId));
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'pre-send-race'),
+      ));
     expect(stored).toEqual({
       status: 'failed',
       error: 'handler_unavailable',

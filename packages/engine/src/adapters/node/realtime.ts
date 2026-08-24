@@ -240,7 +240,12 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     nodeId: string,
     providerName: string,
     message: FleetRelaycastToBrokerMessage,
+    hooks: {
+      beforeSend?: () => Promise<boolean>;
+      onAccepted?: () => Promise<void>;
+    } = {},
   ): Promise<boolean> {
+    if (hooks.beforeSend && !(await hooks.beforeSend())) return false;
     const nodeKey = this.nodeKey(workspaceId, nodeId);
     if (
       message.type === 'deliver'
@@ -250,11 +255,20 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     }
     const socket = this.providerSocket(nodeKey, providerName);
     if (socket) {
+      let socketAccepted = false;
       try {
         socket.send(JSON.stringify(message));
-        return true;
+        socketAccepted = true;
       } catch {
         this.detachProvider(workspaceId, nodeId, providerName);
+        if (message.type !== 'action.invoke') return false;
+      }
+      if (socketAccepted) {
+        // Keep persistence failures distinct from socket failures. The frame
+        // may already be visible to the provider, so never detach/requeue and
+        // invoke onAccepted twice if its durable write rejects.
+        await hooks.onAccepted?.();
+        return true;
       }
     }
 
@@ -270,6 +284,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     }
     while (queue.length > 100) queue.shift();
     this.nodeQueues.set(queueKey, queue);
+    await hooks.onAccepted?.();
     return true;
   }
 
