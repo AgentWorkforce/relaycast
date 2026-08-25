@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Node delivery replay now stops an affected agent's sequence stream after a failed send, preventing a higher-sequence message from arriving first while other agents continue receiving.
 
 ## [8.2.1] - 2026-08-24
 

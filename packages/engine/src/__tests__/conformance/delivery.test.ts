@@ -1847,6 +1847,72 @@ describe('durable delivery api', () => {
     ]);
   });
 
+  it('does not send a higher sequence after a replay send fails for the same agent', async () => {
+    // A partial provider failure must not put a gap on one agent's ordered
+    // stream, while another ready agent on the same node may keep receiving.
+    const ws = await createWorkspace(stack.app, 'mailbox-node-replay-partial-failure');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws);
+    const bob = await registerViaNode(node, 'bob');
+    const carol = await registerViaNode(node, 'carol');
+
+    for (const text of ['first', 'second']) {
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text }),
+      });
+      expect(post.status).toBe(201);
+    }
+    await waitForAssertion(() => expect(node.sock.ofType('deliver')).toHaveLength(4));
+
+    const db = stack.runtime.deps.db;
+    await db
+      .update(deliveries)
+      .set({ status: 'queued', deliveredAt: null })
+      .where(and(
+        eq(deliveries.workspaceId, ws.workspaceId),
+        eq(deliveries.routeNodeId, node.id),
+      ));
+
+    const attempted: Array<{ agent: string; seq: number }> = [];
+    const registry: NodeConnectionRegistry = {
+      upgradeNode: async () => new Response(null, { status: 501 }),
+      sendToNode: async () => false,
+      sendToProvider: async (_workspaceId, _nodeId, _providerName, frame) => {
+        const delivery = frame as { agent: string; seq: number };
+        attempted.push({ agent: delivery.agent, seq: delivery.seq });
+        return !(delivery.agent === bob.name && delivery.seq === 1);
+      },
+      isNodeConnected: () => true,
+      isProviderConnected: () => true,
+      setProviderDeliveryReadiness: () => {},
+      markProviderAgentsDeliveryReady: () => {},
+      isProviderAgentDeliveryReady: () => true,
+      detachProvider: () => {},
+      disconnectNode: async () => {},
+      drainNode: async () => {},
+    };
+
+    expect(await deliverPendingToNode(db, registry, ws.workspaceId, node.id)).toBe(2);
+    expect(attempted).toEqual([
+      { agent: bob.name, seq: 1 },
+      { agent: carol.name, seq: 1 },
+      { agent: carol.name, seq: 2 },
+    ]);
+
+    const rows = await db
+      .select({ agentId: deliveries.agentId, seq: deliveries.seq, status: deliveries.status })
+      .from(deliveries)
+      .where(and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.routeNodeId, node.id)));
+    expect(rows).toEqual(expect.arrayContaining([
+      { agentId: bob.agentId, seq: 1, status: 'queued' },
+      { agentId: bob.agentId, seq: 2, status: 'queued' },
+      { agentId: carol.agentId, seq: 1, status: 'delivered' },
+      { agentId: carol.agentId, seq: 2, status: 'delivered' },
+    ]));
+  });
+
   it('redelivers a DM with the same deliver payload after broker death/reconnect', async () => {
     const ws = await createWorkspace(stack.app, 'mailbox-node-redeliver-dm');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
