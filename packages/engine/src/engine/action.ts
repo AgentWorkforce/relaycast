@@ -5,6 +5,7 @@ import { generateId } from './snowflake.js';
 import { RELEASED_AGENT_STATUS, releasedAgentName } from './agent.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
+import { D1_SAFE_IN_QUERY_CHUNK_SIZE } from '../lib/queryChunks.js';
 import { toFleetWireJson } from './deliveryWire.js';
 import {
   emitAgentExitedEffects,
@@ -2222,12 +2223,56 @@ async function failNeverDispatchedExpiredInvocations(
     byWorkspace.set(row.workspaceId, list);
   }
   for (const [workspaceId, ids] of byWorkspace) {
-    try {
-      await failOpenInvocations(db, workspaceId, ids, 'never_dispatched_expired', completionDeps);
-    } catch {
-      // Leave for the next sweep.
+    // Chunk ids so the IN clause stays under D1's 100-bound-parameter cap. A per-
+    // chunk try/catch keeps one bad chunk from stalling the whole workspace, so a
+    // large stale backlog can actually drain across sweeps.
+    for (let i = 0; i < ids.length; i += D1_SAFE_IN_QUERY_CHUNK_SIZE) {
+      const chunk = ids.slice(i, i + D1_SAFE_IN_QUERY_CHUNK_SIZE);
+      try {
+        const failed = await failNeverDispatchedInvocationRows(
+          db,
+          workspaceId,
+          chunk,
+          cutoff,
+          'never_dispatched_expired',
+        );
+        if (completionDeps && failed.length > 0) {
+          await emitFailedInvocationEffects(completionDeps, workspaceId, failed);
+        }
+      } catch {
+        // Leave this chunk for the next sweep; other chunks still get their shot.
+      }
     }
   }
+}
+
+/**
+ * Terminally fail never-dispatched rows atomically: the UPDATE re-checks the
+ * SELECT predicates (`status = 'pending'`, `dispatch_attempts = 0`, `created_at
+ * <= cutoff`), so a row that was concurrently dispatched between the sweep's
+ * SELECT and this UPDATE is skipped instead of being killed mid-flight. Never-
+ * dispatched rows carry no spawn reservation (dispatch_attempts = 0 means no
+ * node was ever chosen), so no capacity release is needed.
+ */
+async function failNeverDispatchedInvocationRows(
+  db: Db,
+  workspaceId: string,
+  invocationIds: string[],
+  cutoff: Date,
+  error: string,
+): Promise<InvocationRow[]> {
+  if (invocationIds.length === 0) return [];
+  return await db
+    .update(actionInvocations)
+    .set({ status: 'failed', error, completedAt: new Date(), spawnReservedAt: null })
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      inArray(actionInvocations.id, invocationIds),
+      eq(actionInvocations.status, 'pending'),
+      eq(actionInvocations.dispatchAttempts, 0),
+      lte(actionInvocations.createdAt, cutoff),
+    ))
+    .returning();
 }
 
 export async function sweepTimedOutInvocations(

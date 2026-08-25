@@ -152,6 +152,32 @@ describe('pending invocation age bound (issue #357)', () => {
     expect(row.dispatchAttempts).toBeGreaterThan(0);
   });
 
+  // must-not-fire: isolate the `dispatch_attempts = 0` filter. A `pending` row
+  // whose `dispatchAttempts > 0` (e.g. rescheduled back to pending after a prior
+  // dispatch) is exactly the handler-unreachable TTL's territory and the new age
+  // bound must NOT touch it — even when the row is past the cutoff. The earlier
+  // must-not-fire uses a `dispatched` row, so this case isolates the attempts
+  // filter from the status filter and proves each is load-bearing on its own.
+  it('leaves a pending row with dispatch_attempts > 0 past the cutoff alone', async () => {
+    const ws = await createWorkspace(stack.app, 'ndx-attempts-nonzero');
+
+    const requeuedId = 'inv_requeued_pending';
+    await insertPendingInvocation(stack, ws.workspaceId, {
+      id: requeuedId,
+      createdAt: new Date(Date.now() - 10_000),
+      dispatchAttempts: 1,
+    });
+
+    await sweepTimedOutInvocations(stack.runtime.handle.db, stack.runtime.realtime, {
+      pendingInvocationMaxAgeMs: 1_000,
+    });
+
+    const row = await readInvocation(stack, requeuedId);
+    expect(row.status).toBe('pending');
+    expect(row.error).toBeNull();
+    expect(row.dispatchAttempts).toBe(1);
+  });
+
   // Prove the must-not-fire guard can actually fail: remove the dispatch_attempts
   // qualifier on the row and the age bound will (correctly) fire on it. If this
   // control test doesn't turn red, the must-not-fire above is not really testing
