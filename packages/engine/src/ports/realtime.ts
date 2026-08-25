@@ -62,6 +62,21 @@ export interface NodeUpgradeArgs {
   originActor?: string;
 }
 
+/**
+ * Serializable proof inputs for an agent-hosted action dispatch. Remote socket
+ * owners (for example a Cloudflare Durable Object) must re-read these durable
+ * identities immediately before accepting the frame; a closure created in the
+ * engine process cannot cross that transport boundary.
+ */
+export interface AgentActionProviderAuthorization {
+  kind: 'agent-action-v1';
+  invocationId: string;
+  actionId: string;
+  handlerAgentId: string;
+  /** False when a queued attempt was already counted before this delivery. */
+  recordAttempt: boolean;
+}
+
 export interface NodeDrainOptions {
   /** Include pending rows whose prior retry deadline has not elapsed yet. */
   includeDeferred?: boolean;
@@ -91,6 +106,23 @@ export interface NodeConnectionRegistry {
     nodeId: string,
     providerName: string,
     message: FleetRelaycastToBrokerMessage,
+  ): Promise<boolean>;
+
+  /**
+   * Send an agent-hosted `action.invoke` only after the socket owner verifies
+   * that the durable invocation is open and the action still names the same
+   * handler. The owner also records provider acceptance before resolving.
+   *
+   * Optional for adapter source compatibility, but agent-hosted dispatch fails
+   * closed when it is absent. This prevents an older remote adapter from
+   * silently accepting a callback or option that it cannot enforce.
+   */
+  sendAuthorizedActionToProvider?(
+    workspaceId: string,
+    nodeId: string,
+    providerName: string,
+    message: Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }>,
+    authorization: AgentActionProviderAuthorization,
   ): Promise<boolean>;
 
   /** True when the node currently has at least one connected provider. */

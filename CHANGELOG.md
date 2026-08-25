@@ -21,6 +21,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Fixed
 
 - Never-dispatched pending action invocations are now bounded by absolute age (default 72h), so stale spawn queues can no longer drain into live agents that evict an existing resident under the same name.
+- Retried action invocations reuse the original invocation instead of executing a provider action twice, wait for a durable dispatch outcome, and preserve locally completed release routing identity.
 
 ## [8.2.1] - 2026-08-24
 

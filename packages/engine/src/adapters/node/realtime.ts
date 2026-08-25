@@ -2,15 +2,16 @@ import type {
   RealtimeBus,
   ConnectionRegistry,
   NodeConnectionRegistry,
+  AgentActionProviderAuthorization,
   NodeDrainOptions,
   EngineEvent,
   UpgradeArgs,
   NodeUpgradeArgs,
 } from '../../ports/realtime.js';
 import type { ObserverToken } from '../../ports/auth.js';
-import { and, eq, gt, isNull, or } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { EngineDb } from '../../ports/database.js';
-import { observerTokens } from '../../db/schema.js';
+import { actions, actionInvocations, observerTokens } from '../../db/schema.js';
 import { handleNodeControlMessage, handleProviderDisconnect, markNodeOffline } from '../../engine/node.js';
 import { serializeNodeOp } from '../../engine/nodeLock.js';
 import { DEFAULT_PROVIDER_NAME } from '../../engine/nodeProvider.js';
@@ -242,6 +243,72 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     providerName: string,
     message: FleetRelaycastToBrokerMessage,
   ): Promise<boolean> {
+    return this.sendToProviderUnchecked(workspaceId, nodeId, providerName, message);
+  }
+
+  async sendAuthorizedActionToProvider(
+    workspaceId: string,
+    nodeId: string,
+    providerName: string,
+    message: Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }>,
+    authorization: AgentActionProviderAuthorization,
+  ): Promise<boolean> {
+    if (
+      message.invocation_id !== authorization.invocationId
+      || message.agent_id !== authorization.handlerAgentId
+    ) {
+      return false;
+    }
+    const [authorized] = await this.db
+      .select({ id: actionInvocations.id })
+      .from(actionInvocations)
+      .innerJoin(actions, eq(actionInvocations.actionId, actions.id))
+      .where(and(
+        eq(actionInvocations.workspaceId, workspaceId),
+        eq(actionInvocations.id, authorization.invocationId),
+        inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked']),
+        eq(actionInvocations.handlerAgentId, authorization.handlerAgentId),
+        eq(actionInvocations.handlerNodeId, nodeId),
+        eq(actions.workspaceId, workspaceId),
+        eq(actions.id, authorization.actionId),
+        eq(actions.handlerAgentId, authorization.handlerAgentId),
+        isNull(actions.handlerNodeId),
+      ));
+    if (!authorized) return false;
+
+    // No await occurs between the authorization read above resuming and this
+    // in-process socket owner accepting the frame. Remote owners implement the
+    // same serializable contract inside their own send boundary.
+    const sent = await this.sendToProviderUnchecked(workspaceId, nodeId, providerName, message);
+    if (!sent) return false;
+    if (authorization.recordAttempt) {
+      const [recorded] = await this.db
+        .update(actionInvocations)
+        .set({
+          handlerNodeId: sql`COALESCE(${actionInvocations.handlerNodeId}, ${nodeId})`,
+          attemptedNodeIds: sql`json_insert(COALESCE(${actionInvocations.attemptedNodeIds}, '[]'), '$[#]', ${nodeId})`,
+          dispatchAttempts: sql`COALESCE(${actionInvocations.dispatchAttempts}, 0) + 1`,
+        })
+        // Acceptance is historical evidence even if a concurrent takeover
+        // terminally failed the row immediately after the socket send.
+        .where(and(
+          eq(actionInvocations.workspaceId, workspaceId),
+          eq(actionInvocations.id, authorization.invocationId),
+        ))
+        .returning({ id: actionInvocations.id });
+      if (!recorded) {
+        throw new Error('Provider accepted an action whose durable invocation disappeared');
+      }
+    }
+    return true;
+  }
+
+  private async sendToProviderUnchecked(
+    workspaceId: string,
+    nodeId: string,
+    providerName: string,
+    message: FleetRelaycastToBrokerMessage,
+  ): Promise<boolean> {
     const nodeKey = this.nodeKey(workspaceId, nodeId);
     if (
       message.type === 'deliver'
@@ -251,11 +318,16 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     }
     const socket = this.providerSocket(nodeKey, providerName);
     if (socket) {
+      let socketAccepted = false;
       try {
         socket.send(JSON.stringify(message));
-        return true;
+        socketAccepted = true;
       } catch {
         this.detachProvider(workspaceId, nodeId, providerName);
+        if (message.type !== 'action.invoke') return false;
+      }
+      if (socketAccepted) {
+        return true;
       }
     }
 

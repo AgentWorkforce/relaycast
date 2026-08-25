@@ -79,6 +79,7 @@ describe('pending invocation age bound (issue #357)', () => {
 
     await sweepTimedOutInvocations(stack.runtime.handle.db, stack.runtime.realtime, {
       pendingInvocationMaxAgeMs: 1_000,
+      neverDispatchedSweepGraceMs: 0,
     });
 
     const row = await readInvocation(stack, staleId);
@@ -98,6 +99,7 @@ describe('pending invocation age bound (issue #357)', () => {
 
     await sweepTimedOutInvocations(stack.runtime.handle.db, stack.runtime.realtime, {
       pendingInvocationMaxAgeMs: PENDING_INVOCATION_MAX_AGE_MS,
+      neverDispatchedSweepGraceMs: 0,
     });
 
     const row = await readInvocation(stack, freshId);
@@ -144,6 +146,7 @@ describe('pending invocation age bound (issue #357)', () => {
     await sweepTimedOutInvocations(stack.runtime.handle.db, stack.runtime.realtime, {
       handlerUnreachableTtlMs: 60_000,
       pendingInvocationMaxAgeMs: 1_000,
+      neverDispatchedSweepGraceMs: 0,
     });
 
     const row = await readInvocation(stack, invocationId);
@@ -170,6 +173,7 @@ describe('pending invocation age bound (issue #357)', () => {
 
     await sweepTimedOutInvocations(stack.runtime.handle.db, stack.runtime.realtime, {
       pendingInvocationMaxAgeMs: 1_000,
+      neverDispatchedSweepGraceMs: 0,
     });
 
     const row = await readInvocation(stack, requeuedId);
@@ -221,6 +225,7 @@ describe('pending invocation age bound (issue #357)', () => {
     await sweepTimedOutInvocations(stack.runtime.handle.db, stack.runtime.realtime, {
       handlerUnreachableTtlMs: 60_000,
       pendingInvocationMaxAgeMs: 1_000,
+      neverDispatchedSweepGraceMs: 0,
     });
 
     const row = await readInvocation(stack, invocationId);
