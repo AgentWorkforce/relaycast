@@ -5,6 +5,7 @@ import { generateId } from './snowflake.js';
 import { RELEASED_AGENT_STATUS, releasedAgentName } from './agent.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
+import { D1_SAFE_IN_QUERY_CHUNK_SIZE } from '../lib/queryChunks.js';
 import { toFleetWireJson } from './deliveryWire.js';
 import {
   emitAgentExitedEffects,
@@ -37,6 +38,31 @@ export const ACTION_DISPATCH_TIMEOUT_MS = 30_000;
  * a signal instead of an unbounded hang.
  */
 export const ACTION_HANDLER_UNREACHABLE_TTL_MS = 120_000;
+/**
+ * Absolute age bound for a `pending` invocation that was NEVER dispatched to a
+ * node (`dispatch_attempts = 0`). The handler-unreachable TTL only fires once a
+ * dispatched handler connection has been observed offline; an invocation that
+ * never left the queue has no handler to observe, so the clock never starts
+ * and the row can sit `pending` forever. When the queue eventually drains
+ * (e.g. a node returns after a long outage), week-old spawn briefs come back
+ * to life as fresh agents that can evict the live resident under the same
+ * name — a delayed-action identity hazard, not inert backlog. Sized deliberately:
+ * long enough to ride out a weekend-scale node outage plus a day of buffer,
+ * far shorter than the observed multi-month backlog that motivated it.
+ */
+export const PENDING_INVOCATION_MAX_AGE_MS = 72 * 60 * 60 * 1000;
+/**
+ * Sleep between the never-dispatched sweep's candidate SELECT and its atomic
+ * UPDATE. `dispatchNodeInvocation` sends the frame before recording
+ * `dispatchAttempts += 1`, so a sweep landing between those two dispatcher
+ * calls could otherwise mark an in-flight dispatch `never_dispatched_expired`
+ * while the handler already has the frame. The atomic UPDATE re-checks
+ * `dispatch_attempts = 0`, so once the dispatcher's UPDATE lands, the sweep's
+ * WHERE excludes the row. This grace window (default 5s) covers the send→record
+ * gap by a wide margin — the dispatcher's UPDATE is one D1 round-trip — while
+ * still bounding sweep latency. Set to 0 in tests to keep them fast.
+ */
+export const NEVER_DISPATCHED_SWEEP_GRACE_MS = 5_000;
 const ACTION_RETRY_BACKOFF_MS = 5_000;
 const NODE_DRAIN_REQUEUE_RETRY_MS = 5_000;
 
@@ -44,6 +70,10 @@ export interface SweepTimedOutInvocationsOptions {
   timeoutMs?: number;
   /** Override for {@link ACTION_HANDLER_UNREACHABLE_TTL_MS}. */
   handlerUnreachableTtlMs?: number;
+  /** Override for {@link PENDING_INVOCATION_MAX_AGE_MS}. */
+  pendingInvocationMaxAgeMs?: number;
+  /** Override for {@link NEVER_DISPATCHED_SWEEP_GRACE_MS}. */
+  neverDispatchedSweepGraceMs?: number;
   /** When provided, TTL failures emit `action.failed` back to the caller. */
   completionDeps?: InvocationCompletionDeps;
 }
@@ -2526,6 +2556,100 @@ async function failUnreachableAgentInvocations(
   }
 }
 
+/**
+ * Absolute-age bound for never-dispatched pending invocations. The
+ * handler-unreachable TTL keys off a dispatched connection going quiet; an
+ * invocation that never left the queue has no handler to observe, so it needs
+ * its own bound. Fails rows that are `pending`, have `dispatch_attempts = 0`,
+ * and are older than `maxAgeMs` with a distinguishing error so operators can
+ * tell a never-dispatched expiry from a handler-that-went-quiet expiry.
+ */
+async function failNeverDispatchedExpiredInvocations(
+  db: Db,
+  maxAgeMs: number,
+  graceMs: number,
+  completionDeps?: InvocationCompletionDeps,
+): Promise<void> {
+  const cutoff = new Date(Date.now() - maxAgeMs);
+  const rows = await db
+    .select({ id: actionInvocations.id, workspaceId: actionInvocations.workspaceId })
+    .from(actionInvocations)
+    .where(and(
+      eq(actionInvocations.status, 'pending'),
+      eq(actionInvocations.dispatchAttempts, 0),
+      lte(actionInvocations.createdAt, cutoff),
+    ));
+
+  if (rows.length === 0) return;
+
+  // Give any concurrent dispatcher's send→record window (`dispatchNodeAttempt`
+  // UPDATE, one D1 round-trip) time to close before the atomic UPDATE fires.
+  // Combined with the UPDATE's `dispatch_attempts = 0` re-check, this makes an
+  // in-flight dispatch reliably invisible to the age sweep instead of racing
+  // with it. See `NEVER_DISPATCHED_SWEEP_GRACE_MS`.
+  if (graceMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, graceMs));
+  }
+
+  const byWorkspace = new Map<string, string[]>();
+  for (const row of rows) {
+    const list = byWorkspace.get(row.workspaceId) ?? [];
+    list.push(row.id);
+    byWorkspace.set(row.workspaceId, list);
+  }
+  for (const [workspaceId, ids] of byWorkspace) {
+    // Chunk ids so the IN clause stays under D1's 100-bound-parameter cap. A per-
+    // chunk try/catch keeps one bad chunk from stalling the whole workspace, so a
+    // large stale backlog can actually drain across sweeps.
+    for (let i = 0; i < ids.length; i += D1_SAFE_IN_QUERY_CHUNK_SIZE) {
+      const chunk = ids.slice(i, i + D1_SAFE_IN_QUERY_CHUNK_SIZE);
+      try {
+        const failed = await failNeverDispatchedInvocationRows(
+          db,
+          workspaceId,
+          chunk,
+          cutoff,
+          'never_dispatched_expired',
+        );
+        if (completionDeps && failed.length > 0) {
+          await emitFailedInvocationEffects(completionDeps, workspaceId, failed);
+        }
+      } catch {
+        // Leave this chunk for the next sweep; other chunks still get their shot.
+      }
+    }
+  }
+}
+
+/**
+ * Terminally fail never-dispatched rows atomically: the UPDATE re-checks the
+ * SELECT predicates (`status = 'pending'`, `dispatch_attempts = 0`, `created_at
+ * <= cutoff`), so a row that was concurrently dispatched between the sweep's
+ * SELECT and this UPDATE is skipped instead of being killed mid-flight. Never-
+ * dispatched rows carry no spawn reservation (dispatch_attempts = 0 means no
+ * node was ever chosen), so no capacity release is needed.
+ */
+async function failNeverDispatchedInvocationRows(
+  db: Db,
+  workspaceId: string,
+  invocationIds: string[],
+  cutoff: Date,
+  error: string,
+): Promise<InvocationRow[]> {
+  if (invocationIds.length === 0) return [];
+  return await db
+    .update(actionInvocations)
+    .set({ status: 'failed', error, completedAt: new Date(), spawnReservedAt: null })
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      inArray(actionInvocations.id, invocationIds),
+      eq(actionInvocations.status, 'pending'),
+      eq(actionInvocations.dispatchAttempts, 0),
+      lte(actionInvocations.createdAt, cutoff),
+    ))
+    .returning();
+}
+
 export async function sweepTimedOutInvocations(
   db: Db,
   registry: NodeConnectionRegistry,
@@ -2537,6 +2661,12 @@ export async function sweepTimedOutInvocations(
     db,
     registry,
     sweepOpts.handlerUnreachableTtlMs ?? ACTION_HANDLER_UNREACHABLE_TTL_MS,
+    sweepOpts.completionDeps,
+  );
+  await failNeverDispatchedExpiredInvocations(
+    db,
+    sweepOpts.pendingInvocationMaxAgeMs ?? PENDING_INVOCATION_MAX_AGE_MS,
+    sweepOpts.neverDispatchedSweepGraceMs ?? NEVER_DISPATCHED_SWEEP_GRACE_MS,
     sweepOpts.completionDeps,
   );
   const now = new Date();
