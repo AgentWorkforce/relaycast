@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- `POST /v1/actions/:name/invoke` atomically claims caller-scoped idempotency keys before provider dispatch, waits for a durable dispatch outcome, and replays the original invocation with its immutable handler and node identity, including locally completed releases.
 
 ## [8.2.1] - 2026-08-24
 

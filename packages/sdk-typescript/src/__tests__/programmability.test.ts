@@ -295,7 +295,34 @@ describe('Programmability SDK', () => {
       expect(url).toBe('https://cast.agentrelay.com/v1/actions/deploy/invoke');
       expect(init.method).toBe('POST');
       expect(init.headers.Authorization).toBe('Bearer at_live_agent123');
+      expect(init.headers['Idempotency-Key']).toBeTruthy();
+      expect(init.headers['X-Idempotency-Key']).toBe(init.headers['Idempotency-Key']);
       expect(JSON.parse(init.body)).toEqual({ input: { force: true } });
+    });
+
+    it('invoke() preserves one generated idempotency key across transport retries', async () => {
+      const me = new AgentClient(new HttpClient({
+        apiKey: 'at_live_agent123',
+        retryPolicy: { maxRetries: 1, backoffMs: 0, jitter: false },
+      }));
+
+      mockFetch
+        .mockRejectedValueOnce(new TypeError('response lost'))
+        .mockImplementationOnce(() => mockResponse({
+          invocation_id: 'inv_1',
+          action_name: 'deploy',
+          status: 'invoked',
+        }));
+
+      await me.actions.invoke('deploy', { force: true });
+
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      const firstHeaders = mockFetch.mock.calls[0]![1].headers;
+      const retryHeaders = mockFetch.mock.calls[1]![1].headers;
+      expect(firstHeaders['Idempotency-Key']).toBeTruthy();
+      expect(retryHeaders['Idempotency-Key']).toBe(firstHeaders['Idempotency-Key']);
+      expect(firstHeaders['X-Idempotency-Key']).toBe(firstHeaders['Idempotency-Key']);
+      expect(retryHeaders['X-Idempotency-Key']).toBe(firstHeaders['Idempotency-Key']);
     });
   });
 

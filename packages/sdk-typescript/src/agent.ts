@@ -887,8 +887,13 @@ export class AgentClient {
     invoke: (
       name: string,
       input?: Record<string, unknown>,
+      opts?: IdempotencyOption,
     ): Promise<InvokeActionResult> =>
-      this.client.post(`/v1/actions/${encodeURIComponent(name)}/invoke`, { input }),
+      this.client.post(
+        `/v1/actions/${encodeURIComponent(name)}/invoke`,
+        { input },
+        idempotencyHeaders(opts),
+      ),
 
     completeInvocation: (
       name: string,

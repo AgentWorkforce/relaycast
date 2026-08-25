@@ -4388,6 +4388,16 @@ paths:
           required: true
           schema:
             type: string
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: >
+            Reuse the same key to retry one logical invocation; a replay returns
+            the original invocation. The server trims leading and trailing
+            whitespace, then requires the normalized key to contain 1-255 visible
+            ASCII characters.
+          schema:
+            type: string
       requestBody:
         required: false
         content:
@@ -4400,10 +4410,28 @@ paths:
       responses:
         '201':
           description: Action invocation created; response `data` includes `invocation_id`
+          headers:
+            Idempotency-Replayed:
+              description: Set to `true` when the original invocation is replayed.
+              schema:
+                type: string
+                enum: ['true']
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid `Idempotency-Key` header.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The idempotency key was reused with different input.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '403':
           description: Agent token required, or caller is not allowed to invoke this action. Denied agent callers receive an `action.denied` event.
           content:
@@ -4414,7 +4442,11 @@ paths:
           description: >
             `handler_unavailable` — the action's handler agent has no live
             connection, so the invocation fails fast instead of queueing toward
-            a handler that cannot answer.
+            a handler that cannot answer; or `idempotency_unavailable` — the
+            durable idempotency claim cannot be read, or a keyed invocation
+            replay cannot yet observe its durable placement/dispatch outcome.
+            Retry
+            the same logical request with the same key.
           content:
             application/json:
               schema:
