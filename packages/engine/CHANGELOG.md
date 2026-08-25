@@ -13,6 +13,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - `POST /v1/actions/:name/invoke` atomically claims caller-scoped idempotency keys before provider dispatch, waits for a durable dispatch outcome, and replays the original invocation with its immutable handler and node identity, including locally completed releases.
 
+## [8.2.1] - 2026-08-24
+
+### Fixed
+
+- Steady node heartbeats no longer re-scan pending workspace invocations; drains now run when reconnect, handler-liveness, or capacity transitions make queued work dispatchable.
+- Agent reads derive presence without issuing cleanup writes, and migration `0042_d1_read_path_indexes.sql` indexes scheduled presence cleanup plus active, unexpired delivery reads.
+
 ## [8.2.0] - 2026-08-21
 
 ### Added

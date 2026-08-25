@@ -12,7 +12,7 @@ import {
   fleetInvocationId,
   type InvocationCompletionDeps,
 } from './invocationCompletion.js';
-import type { NodeConnectionRegistry } from '../ports/realtime.js';
+import type { NodeConnectionRegistry, NodeDrainOptions } from '../ports/realtime.js';
 import { runAtomic, runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { claimSpawnNode, chooseNodeForAction, isNodeLive, releaseNodeCapacity, reserveNodeCapacity } from './placement.js';
 import { DEFAULT_PROVIDER_NAME, capacityProviderName, getProvider, isProviderLive } from './nodeProvider.js';
@@ -1965,6 +1965,7 @@ export async function drainNodeInvocations(
   registry: NodeConnectionRegistry,
   workspaceId: string,
   nodeId: string,
+  options: NodeDrainOptions = {},
 ): Promise<number> {
   const now = new Date();
   const rows = await db
@@ -1990,7 +1991,9 @@ export async function drainNodeInvocations(
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
       eq(actionInvocations.status, 'pending'),
-      or(isNull(actionInvocations.retryAfterAt), lte(actionInvocations.retryAfterAt, now)),
+      options.includeDeferred
+        ? undefined
+        : or(isNull(actionInvocations.retryAfterAt), lte(actionInvocations.retryAfterAt, now)),
       or(
         eq(actionInvocations.dispatchedNodeId, nodeId),
         eq(actions.handlerNodeId, nodeId),

@@ -77,6 +77,11 @@ export interface AgentActionProviderAuthorization {
   recordAttempt: boolean;
 }
 
+export interface NodeDrainOptions {
+  /** Include pending rows whose prior retry deadline has not elapsed yet. */
+  includeDeferred?: boolean;
+}
+
 export interface NodeConnectionRegistry {
   /**
    * Upgrade an incoming node-control request. Cloudflare adapters own the 101
@@ -217,11 +222,15 @@ export interface NodeConnectionRegistry {
 
   /**
    * Flush any queued `action.invoke` frames to the node's live connection.
-   * Must be invoked once the node is marked online (post node.register /
-   * node.heartbeat) so capacity reservation for queued spawns can succeed.
+   * Must be invoked once the node is marked online (post node.register) and
+   * when heartbeat liveness/capacity transitions make queued work dispatchable.
    * Implementations serialize concurrent drains per node.
    */
-  drainNode(workspaceId: string, nodeId: string): Promise<void>;
+  drainNode(
+    workspaceId: string,
+    nodeId: string,
+    options?: NodeDrainOptions,
+  ): Promise<void>;
 }
 
 /** Registries without cursor-readiness support retain legacy immediate delivery. */

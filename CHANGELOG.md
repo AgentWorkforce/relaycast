@@ -22,6 +22,12 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Retried action invocations reuse the original invocation instead of executing a provider action twice, wait for a durable dispatch outcome, and preserve locally completed release routing identity.
 
+## [8.2.1] - 2026-08-24
+
+### Fixed
+
+- Fleet heartbeats and agent reads no longer amplify into workspace-wide D1 maintenance scans; pending delivery views also exclude expired rows before cleanup runs.
+
 ## [8.2.0] - 2026-08-21
 
 ### Added

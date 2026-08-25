@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { actionInvocations, agentNodeBindings, agents, nodes, workspaceEvents } from '../../db/schema.js';
-import { AGENT_LIVENESS_TTL_MS } from '../../engine/agent.js';
+import { AGENT_LIVENESS_TTL_MS, sweepStaleAgents } from '../../engine/agent.js';
 import {
   attachDirectNodeSocket,
   createWorkspace,
@@ -16,7 +16,7 @@ describe('agent presence and release lifecycle', () => {
   beforeEach(() => { stack = makeNodeStack(); });
   afterEach(() => stack.close());
 
-  it('derives presence from last_seen and persists stale active agents offline', async () => {
+  it('derives stale presence without writing during a roster read', async () => {
     const ws = await createWorkspace(stack.app, 'agent-presence-expiry');
     const stale = await registerAgent(stack.app, ws.workspaceKey, 'stale-agent');
     await stack.runtime.deps.db
@@ -38,10 +38,17 @@ describe('agent presence and release lifecycle', () => {
       .select({ status: agents.status })
       .from(agents)
       .where(eq(agents.id, stale.agentId));
-    expect(persisted.status).toBe('offline');
+    expect(persisted.status).toBe('active');
+
+    expect(await sweepStaleAgents(stack.runtime.deps.db, ws.workspaceId)).toBe(1);
+    const [swept] = await stack.runtime.deps.db
+      .select({ status: agents.status })
+      .from(agents)
+      .where(eq(agents.id, stale.agentId));
+    expect(swept.status).toBe('offline');
   });
 
-  it('persists stale presence before returning agent detail', async () => {
+  it('derives stale presence without writing during an agent detail read', async () => {
     const ws = await createWorkspace(stack.app, 'agent-detail-presence-expiry');
     const stale = await registerAgent(stack.app, ws.workspaceKey, 'stale-detail-agent');
     await stack.runtime.deps.db
@@ -62,10 +69,10 @@ describe('agent presence and release lifecycle', () => {
       .select({ status: agents.status })
       .from(agents)
       .where(eq(agents.id, stale.agentId));
-    expect(persisted.status).toBe('offline');
+    expect(persisted.status).toBe('active');
   });
 
-  it('clamps a future last_seen before applying the liveness window', async () => {
+  it('leaves future last_seen untouched on reads and lets maintenance clamp it', async () => {
     const ws = await createWorkspace(stack.app, 'agent-future-presence');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'future-agent');
     const beforeRead = Date.now();
@@ -83,14 +90,21 @@ describe('agent presence and release lifecycle', () => {
     expect(response.status).toBe(200);
     expect((await response.json() as { data: { status: string } }).data.status).toBe('active');
 
-    const afterRead = Date.now();
     const [persisted] = await stack.runtime.deps.db
       .select({ lastSeen: agents.lastSeen })
       .from(agents)
       .where(eq(agents.id, target.agentId));
+    expect(persisted.lastSeen.getTime()).toBeGreaterThan(beforeRead);
+
+    expect(await sweepStaleAgents(stack.runtime.deps.db, ws.workspaceId)).toBe(1);
+    const afterSweep = Date.now();
+    const [normalized] = await stack.runtime.deps.db
+      .select({ lastSeen: agents.lastSeen })
+      .from(agents)
+      .where(eq(agents.id, target.agentId));
     // SQLite timestamp mode stores whole seconds.
-    expect(persisted.lastSeen.getTime()).toBeGreaterThanOrEqual(beforeRead - 1_000);
-    expect(persisted.lastSeen.getTime()).toBeLessThanOrEqual(afterRead);
+    expect(normalized.lastSeen.getTime()).toBeGreaterThanOrEqual(beforeRead - 1_000);
+    expect(normalized.lastSeen.getTime()).toBeLessThanOrEqual(afterSweep);
   });
 
   it('atomically registers human rows with an implicit direct binding', async () => {

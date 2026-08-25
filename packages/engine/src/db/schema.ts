@@ -119,6 +119,9 @@ export const agents = sqliteTable(
     index('idx_agents_workspace').on(table.workspaceId),
     index('idx_agents_token').on(table.tokenHash),
     index('idx_agents_previous_token').on(table.previousTokenHash),
+    index('idx_agents_active_last_seen')
+      .on(table.lastSeen)
+      .where(sql`${table.status} IN ('active', 'online')`),
   ],
 );
 
@@ -1144,6 +1147,9 @@ export const deliveries = sqliteTable(
     uniqueIndex('deliveries_agent_seq_unique').on(table.workspaceId, table.agentId, table.seq),
     index('idx_deliveries_agent').on(table.agentId, table.createdAt),
     index('idx_deliveries_agent_status_seq').on(table.workspaceId, table.agentId, table.status, table.seq),
+    index('idx_deliveries_agent_active_created')
+      .on(table.workspaceId, table.agentId, table.createdAt, table.id)
+      .where(sql`${table.status} IN ('queued', 'delivered')`),
     index('idx_deliveries_expires').on(table.workspaceId, table.status, table.expiresAt),
     index('idx_deliveries_active_expiry')
       .on(table.expiresAt, table.id)
