@@ -109,6 +109,22 @@ function isRepoTag(tag: string): boolean {
   return tag.startsWith(REPO_TAG_PREFIX);
 }
 
+// Tags whose value is set by the enrollment/provisioning surface (the
+// operator side — cloud's ensure route, `withDaytonaJitNodeTag`, and
+// `POST /v1/nodes`), NOT by the node's own `defineNode(...)`. Placement
+// matches on these (`cloud:node-type:*-jit` is the sandbox-only gate),
+// so a re-registration whose local definition happens to lack the tag
+// must not silently strip it — otherwise a JIT-provisioned sandbox that
+// runs bare `relay node up` (no config file) comes online with `tags: []`
+// and placement refuses every node cloud just provisioned for it
+// (cloud#3213). The client can still ADD tags on top; it just cannot
+// clear the server-authoritative set.
+const SERVER_AUTHORITATIVE_TAG_PREFIX = 'cloud:';
+
+function isServerAuthoritativeTag(tag: string): boolean {
+  return tag.startsWith(SERVER_AUTHORITATIVE_TAG_PREFIX);
+}
+
 // Placement matches a node to an assignment by its `repo:<owner/name>` tag, so
 // a node that can inject its own `repo:` tag can claim work for repositories it
 // has no checkout of. Structured `repo_keys` is therefore the only source of
@@ -116,11 +132,27 @@ function isRepoTag(tag: string): boolean {
 // empty list - every caller-supplied `repo:` tag is dropped rather than merged.
 // Registrations that omit the field entirely are pre-`repo_keys` clients and
 // stay on the legacy tag-only path. Non-repo tags always round-trip.
-function registrationTags(message: FleetNodeRegisterMessage): string[] {
-  if (!message.repo_keys) return [...new Set(message.tags)];
+//
+// Server-authoritative tags (see {@link isServerAuthoritativeTag}) are merged
+// on top of what the client sent so a bare re-registration cannot clear a tag
+// the enrollment surface set.
+function registrationTags(
+  message: FleetNodeRegisterMessage,
+  existingTags: readonly string[],
+): string[] {
+  const preservedServerTags = existingTags.filter(isServerAuthoritativeTag);
+  const clientTags = message.repo_keys
+    ? [
+        ...message.tags.filter((tag) => !isRepoTag(tag)),
+        ...message.repo_keys.map((repoKey) => `repo:${repoKey}`),
+      ]
+    : [...message.tags];
+  // Drop client-supplied `cloud:*` tags on the same principle as `repo:` —
+  // a node cannot self-declare a server-authoritative identity. Merge in
+  // the enrollment-set values from `existingTags` instead.
   return [...new Set([
-    ...message.tags.filter((tag) => !isRepoTag(tag)),
-    ...message.repo_keys.map((repoKey) => `repo:${repoKey}`),
+    ...clientTags.filter((tag) => !isServerAuthoritativeTag(tag)),
+    ...preservedServerTags,
   ])];
 }
 
@@ -385,7 +417,7 @@ export async function registerNode(
     throw codedError('Node token is not enrolled in this workspace', 'node_not_found', 404);
   }
 
-  const tags = registrationTags(message);
+  const tags = registrationTags(message, existing.tags);
 
   const [existingByName] = await db
     .select()
