@@ -374,6 +374,25 @@ export async function getBrokerNodeByMachineId(db: Db, workspaceId: string, mach
 }
 
 /**
+ * The role an enroll is asking for, derived from the request alone.
+ *
+ * Enrollment's role default depends on `kind` (`ws` is a broker; `http_push`
+ * and `poll` are direct) and on `max_agents`, and the machine lookup has to
+ * know it *before* it runs. Otherwise a machine that already has a broker has
+ * that broker rotated -- and its transport rewritten to http_push or poll --
+ * by a node enrolling alongside it without an explicit `role`. That failure
+ * would be silent and would move a live node's identity, which is worse than
+ * the roster growth this dedupe exists to stop.
+ */
+export function requestedNodeRole(data: { kind?: string; role?: NodeRole; max_agents?: number }): NodeRole {
+  if (data.role) return data.role;
+  return normalizeLegacyNodeShape(
+    data.kind ?? 'ws',
+    data.max_agents !== undefined && data.max_agents > 1 ? 'broker' : undefined,
+  ).role;
+}
+
+/**
  * Resolve the node an enroll (POST /v1/nodes) targets: by node_id when
  * supplied, then by name, then by machine_id.
  *
@@ -390,14 +409,14 @@ export async function getBrokerNodeByMachineId(db: Db, workspaceId: string, mach
 export async function resolveNodeForEnroll(
   db: Db,
   workspaceId: string,
-  data: { node_id?: string; name: string; machine_id?: string; role?: NodeRole },
+  data: { node_id?: string; name: string; machine_id?: string; kind?: string; role?: NodeRole; max_agents?: number },
 ) {
   if (data.node_id !== undefined) {
     return getNodeById(db, workspaceId, data.node_id);
   }
   const byName = await getNodeByName(db, workspaceId, data.name);
   if (byName) return byName;
-  if (data.machine_id !== undefined && data.role !== 'direct') {
+  if (data.machine_id !== undefined && requestedNodeRole(data) === 'broker') {
     return getBrokerNodeByMachineId(db, workspaceId, data.machine_id);
   }
   return null;

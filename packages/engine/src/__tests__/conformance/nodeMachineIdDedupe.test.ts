@@ -92,6 +92,50 @@ describe('node enrollment — machine_id dedupe', () => {
     expect(rows.find((r) => r.name === 'direct-host')?.role).toBe('direct');
   });
 
+  it('does not hijack a machine\'s broker when an http_push node enrolls without a role', async () => {
+    const ws = await createWorkspace(stack.app, 'httppush');
+    const broker = await enroll(ws.workspaceKey, { name: 'broker-host', machine_id: 'machine-a', role: 'broker', max_agents: 4 });
+
+    // `role` omitted: for a non-ws kind the documented default is `direct`, so
+    // this must create its own node rather than rotate — and re-transport —
+    // the live broker sharing the machine.
+    const push = await enroll(ws.workspaceKey, {
+      name: 'push-host',
+      machine_id: 'machine-a',
+      kind: 'http_push',
+      delivery: { url: 'https://push.example.com/hook' },
+    });
+    expect(push.body.data?.id).not.toBe(broker.body.data?.id);
+
+    const rows = await roster(ws.workspaceKey);
+    expect(rows).toHaveLength(2);
+    const stillBroker = rows.find((r) => r.name === 'broker-host');
+    expect(stillBroker?.kind).toBe('ws');
+    expect(stillBroker?.role).toBe('broker');
+  });
+
+  it('does not hijack a machine\'s broker when a poll node enrolls without a role', async () => {
+    const ws = await createWorkspace(stack.app, 'poll');
+    const broker = await enroll(ws.workspaceKey, { name: 'broker-host', machine_id: 'machine-a', role: 'broker', max_agents: 4 });
+    const poll = await enroll(ws.workspaceKey, { name: 'poll-host', machine_id: 'machine-a', kind: 'poll' });
+
+    expect(poll.body.data?.id).not.toBe(broker.body.data?.id);
+    expect(await roster(ws.workspaceKey)).toHaveLength(2);
+  });
+
+  it('keeps concurrent first-enrollments of one machine on a single row', async () => {
+    const ws = await createWorkspace(stack.app, 'concurrent');
+    // Two boots of the same machine racing to enroll under different names.
+    // Both miss node_id and name, so both reach the machine lookup; without
+    // serialization both insert and the roster grows anyway.
+    await Promise.all([
+      enroll(ws.workspaceKey, { name: 'host-a-boot1', machine_id: 'machine-a' }),
+      enroll(ws.workspaceKey, { name: 'host-a-boot2', machine_id: 'machine-a' }),
+    ]);
+
+    expect(await roster(ws.workspaceKey)).toHaveLength(1);
+  });
+
   it('lets an explicit node_id pin identity and opt out of machine grouping', async () => {
     const ws = await createWorkspace(stack.app, 'pinned');
     const a = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'broker-a', machine_id: 'machine-a', role: 'broker', max_agents: 4 });

@@ -979,6 +979,10 @@ components:
         role:
           type: string
           enum: [direct, broker]
+        machine_id:
+          type: string
+          nullable: true
+          description: Host machine this node runs on, recorded at enrollment or on register. Null when nothing has reported one.
         delivery_adapter:
           type: string
         delivery:

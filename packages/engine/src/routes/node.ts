@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { FleetNodeTagSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
@@ -16,7 +16,7 @@ import {
   parseOptionalJsonBody,
 } from '../lib/httpResponse.js';
 import * as nodeEngine from '../engine/node.js';
-import { serializeNodeOp } from '../engine/nodeLock.js';
+import { serializeNodeOp, serializeMachineEnroll } from '../engine/nodeLock.js';
 import * as actionEngine from '../engine/action.js';
 import { sendNodeDeliveriesToAgents } from '../engine/nodeDeliver.js';
 import { fanoutToWorkspace } from './fanout.js';
@@ -138,14 +138,27 @@ nodeRoutes.post('/nodes', requireWorkspaceKey, rateLimit, async (c) => {
     if (!parsed.ok) {
       return parsed.response;
     }
-    const existing = await nodeEngine.resolveNodeForEnroll(c.get('db'), c.get('workspace').id, parsed.data);
-    const kind = parsed.data.kind ?? (existing?.kind as z.infer<typeof nodeKindSchema> | undefined) ?? 'ws';
-    const role = parsed.data.role
+    // Machine-keyed enrollment resolves then writes, so concurrent first
+    // enrollments of one machine must not interleave between those steps.
+    const machineId = parsed.data.machine_id;
+    return machineId === undefined
+      ? enrollNode(c, parsed.data)
+      : serializeMachineEnroll(c.get('workspace').id, machineId, () => enrollNode(c, parsed.data));
+  } catch (err: unknown) {
+    return errorResponse(c, err);
+  }
+});
+
+async function enrollNode(c: Context<AppEnv>, data: z.infer<typeof createNodeSchema>): Promise<Response> {
+  try {
+    const existing = await nodeEngine.resolveNodeForEnroll(c.get('db'), c.get('workspace').id, data);
+    const kind = data.kind ?? (existing?.kind as z.infer<typeof nodeKindSchema> | undefined) ?? 'ws';
+    const role = data.role
       ?? (existing?.role as z.infer<typeof nodeRoleSchema> | undefined)
-      ?? (kind === 'ws' || (parsed.data.max_agents !== undefined && parsed.data.max_agents > 1) ? 'broker' : 'direct');
-    const deliveryInput = parsed.data.delivery === undefined
+      ?? (kind === 'ws' || (data.max_agents !== undefined && data.max_agents > 1) ? 'broker' : 'direct');
+    const deliveryInput = data.delivery === undefined
       ? existing?.deliveryConfig ?? null
-      : parsed.data.delivery;
+      : data.delivery;
     const delivery = normalizeDelivery(kind, deliveryInput);
     if (delivery && 'success' in delivery && !delivery.success) {
       return jsonError(c, 'invalid_node_delivery', 'invalid node delivery body', 400);
@@ -159,11 +172,11 @@ nodeRoutes.post('/nodes', requireWorkspaceKey, rateLimit, async (c) => {
         return jsonError(c, 'unsafe_node_delivery_url', 'delivery.url is not allowed', 400);
       }
     }
-    if (role === 'direct' && (parsed.data.max_agents ?? existing?.maxAgents ?? 1) !== 1) {
+    if (role === 'direct' && (data.max_agents ?? existing?.maxAgents ?? 1) !== 1) {
       return jsonError(c, 'direct_node_capacity_exceeded', 'direct nodes can bind at most one agent', 400);
     }
     const result = await nodeEngine.createNodeToken(c.get('db'), c.get('workspace').id, {
-      ...parsed.data,
+      ...data,
       kind,
       role,
       delivery: delivery && !('success' in delivery) ? delivery : null,
@@ -172,7 +185,7 @@ nodeRoutes.post('/nodes', requireWorkspaceKey, rateLimit, async (c) => {
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
-});
+}
 
 // GET /v1/nodes?capability=&name= - node roster
 nodeRoutes.get('/nodes', requireWorkspaceRead('nodes:read'), rateLimit, async (c) => {
