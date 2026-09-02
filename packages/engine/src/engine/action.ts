@@ -1587,15 +1587,28 @@ export async function invokeAction(
   });
 
   if (!dispatched.accepted) {
-    // A takeover can invalidate the last-moment adapter gate. Re-read the
-    // durable claim so the original request and its replay agree on the same
-    // pre-send failure instead of returning a pending 201.
-    await waitForInvocationReplayOutcome(
-      db,
-      workspaceId,
-      invocation,
-      { acceptDispatchStarted: true },
-    );
+    if (invocationId !== undefined) {
+      // A keyed claim must remain durable across a transient disconnect. Re-read
+      // it so the original request and its replay agree on the same pre-send
+      // outcome without releasing the key for a second execution.
+      await waitForInvocationReplayOutcome(
+        db,
+        workspaceId,
+        invocation,
+        { acceptDispatchStarted: true },
+      );
+    } else {
+      // An unkeyed invocation has no replay contract to preserve. Leaving its
+      // pre-send row pending reports an idempotency failure to a caller that did
+      // not request idempotency and strands work no retry can address. Fail the
+      // row and classify the actual condition instead.
+      await failOpenInvocationRows(db, workspaceId, [invocation.id], 'handler_unavailable');
+      throw codedError(
+        `Action "${actionName}" handler "${handlerAgent.name}" has no live connection`,
+        'handler_unavailable',
+        503,
+      );
+    }
   }
 
   return {

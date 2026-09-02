@@ -368,6 +368,50 @@ describe('SDK v8 service contract', () => {
     expect(stored).toEqual({ status: 'failed', error: 'node_dispatch_unavailable' });
   });
 
+  it('classifies an unkeyed owner-side send miss as handler unavailable', async () => {
+    const ws = await createWorkspace(stack.app, 'sdk-action-unkeyed-send-miss-ws');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    const handler = await registerAgent(stack.app, ws.workspaceKey, 'handler');
+
+    const register = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${handler.token}` },
+      body: JSON.stringify({
+        name: 'unkeyed-send-miss',
+        description: 'Reject an unkeyed invocation when the owner-side send misses',
+        handler_agent: 'handler',
+        available_to: ['caller'],
+      }),
+    });
+    expect(register.status).toBe(201);
+    const handlerNode = await attachDirectNodeSocket(stack, ws.workspaceId, handler);
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    vi.spyOn(nodeConnections, 'sendAuthorizedActionToProvider').mockResolvedValue(false);
+
+    const response = await stack.app.request('/v1/actions/unkeyed-send-miss/invoke', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+      },
+      body: JSON.stringify({ input: { text: 'hello' } }),
+    });
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'handler_unavailable' },
+    });
+    expect(handlerNode.sock.ofType('action.invoke')).toHaveLength(0);
+    const [stored] = await stack.runtime.handle.db
+      .select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'unkeyed-send-miss'),
+      ));
+    expect(stored).toEqual({ status: 'failed', error: 'handler_unavailable' });
+  });
+
   it('does not acknowledge an agent-hosted claim that takeover fails before provider dispatch starts', async () => {
     const ws = await createWorkspace(stack.app, 'sdk-action-pre-send-takeover-ws');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
