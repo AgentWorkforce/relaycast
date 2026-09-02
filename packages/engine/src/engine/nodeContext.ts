@@ -38,6 +38,7 @@ const AGENT_CONTEXT_QUERY_CHUNK_SIZE = 80;
 // case one-agent workspaces plus the status/kind predicates use 85 bindings.
 const AGENT_CONTEXT_EVENT_QUERY_CHUNK_SIZE = 40;
 
+/** Collapse the per-kind WebSocket adapter aliases onto the single `ws.node.v1` contract. */
 function normalizeDeliveryAdapter(adapter: string | null | undefined, nodeKind: string | null | undefined): string | null {
   if (adapter === 'fleet.ws.v1' || adapter === 'direct.ws.v1') return 'ws.node.v1';
   if (adapter) return adapter;
@@ -55,8 +56,10 @@ type GroupedNode = {
   agentIds: string[];
 };
 
-// Group by (node, provider) so a WebSocket context.update lands on the provider
-// whose connection hosts those agents, not a phantom node-default provider.
+/**
+ * Group by (node, provider) so a WebSocket context.update lands on the provider
+ * whose connection hosts those agents, not a phantom node-default provider.
+ */
 function groupByNodeProvider(rows: ScopedNodeRow[]): Map<string, GroupedNode> {
   const grouped = new Map<string, GroupedNode>();
   for (const row of rows) {
@@ -78,6 +81,13 @@ function groupByNodeProvider(rows: ScopedNodeRow[]): Map<string, GroupedNode> {
   return grouped;
 }
 
+/**
+ * Push one context event to every (node, provider) target in `rows`.
+ *
+ * Targets are independent — one failing node never cancels another — but the
+ * failures are not swallowed: if any send rejects, this throws an
+ * `AggregateError` so callers can report the sink as failed.
+ */
 async function sendContextToRows(
   deps: NodeContextDeps,
   rows: ScopedNodeRow[],
@@ -138,9 +148,19 @@ async function sendContextToRows(
       event: message.event,
     });
   }
-  await Promise.allSettled(tasks);
+  const settled = await Promise.allSettled(tasks);
+  const failures = settled
+    .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+    .map((result) => result.reason);
+  if (failures.length > 0) {
+    throw new AggregateError(
+      failures,
+      `node context push failed for ${failures.length} of ${tasks.length} node targets`,
+    );
+  }
 }
 
+/** Push a channel/thread context event to every node hosting a member of `channelId`. */
 export async function sendNodeContextForChannel(
   deps: NodeContextDeps,
   args: {
@@ -189,6 +209,7 @@ export async function sendNodeContextForChannel(
   });
 }
 
+/** Push a presence context event about `subjectAgentId` to every node in the workspace. */
 export async function sendNodePresenceContext(
   deps: NodeContextDeps,
   args: {
@@ -231,6 +252,7 @@ export async function sendNodePresenceContext(
   });
 }
 
+/** Resolve the node/provider targets for `agentIds` in D1-bound-parameter-safe chunks. */
 async function listNodeContextRowsForAgents(
   deps: NodeContextDeps,
   agentIds: readonly string[],
@@ -269,6 +291,7 @@ async function listNodeContextRowsForAgents(
   return rows;
 }
 
+/** Push an agent-scoped context event to the nodes hosting `agentIds`. */
 export async function sendNodeContextToAgents(
   deps: NodeContextDeps,
   args: {
@@ -291,8 +314,9 @@ export async function sendNodeContextToAgents(
 
 /**
  * Send many agent-scoped context events after resolving all target bindings in
- * bounded queries. External sends remain serialized per event, preserving the
- * existing best-effort behavior without multiplying D1 reads by event count.
+ * bounded queries. External sends stay serialized per event, so one event's
+ * failure never strands the rest; if any event failed, this throws an
+ * `AggregateError` once the whole batch has been attempted.
  */
 export async function sendNodeContextEventsToAgents(
   deps: Omit<NodeContextDeps, 'workspaceId'>,
@@ -359,12 +383,25 @@ export async function sendNodeContextEventsToAgents(
     }
   }
 
+  const failures: unknown[] = [];
   for (const event of events) {
     const key = JSON.stringify([event.workspaceId, event.agentId]);
-    await sendContextToRows({ ...deps, workspaceId: event.workspaceId }, rowsByTarget.get(key) ?? [], {
-      topic: 'agent',
-      event: event.event,
-      data: event.data,
-    });
+    try {
+      await sendContextToRows({ ...deps, workspaceId: event.workspaceId }, rowsByTarget.get(key) ?? [], {
+        topic: 'agent',
+        event: event.event,
+        data: event.data,
+      });
+    } catch (err) {
+      // One failing event must not strand the rest of the batch, but the batch
+      // still reports failure so the caller's sink error handler fires.
+      failures.push(err);
+    }
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(
+      failures,
+      `node context push failed for ${failures.length} of ${events.length} agent events`,
+    );
   }
 }

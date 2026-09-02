@@ -10,11 +10,9 @@ import type {
 import { agents, agentNodeBindings, deliveries as deliveryRows, nodes } from '../db/schema.js';
 import { buildHttpPushHeaders, resolveHttpPushProxy } from '../engine/httpPushDispatch.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
-import { transformForClient, type WsEvent } from '../engine/wsTransform.js';
 import { isProviderAgentDeliveryReady, type EngineDb, type EngineDeps } from '../ports/index.js';
 import { fanoutToAgents } from './fanout.js';
-import { sendNodeContextEventsToAgents, sendNodeContextToAgents } from '../engine/nodeContext.js';
-import { appendAndPublishWorkspaceEvent, appendAndPublishWorkspaceEventBatch } from '../engine/workspaceEvents.js';
+import { publishEvent, publishEventsToAgents } from '../engine/eventDispatch.js';
 type HonoContext = Context<AppEnv>;
 type RoutingEngine = EngineRuntime | EngineDeps;
 type RoutingContext = {
@@ -55,54 +53,22 @@ function wireMode(mode: string): 'wait' | 'steer' {
   return mode === 'next-tool-call' ? 'steer' : 'wait';
 }
 
+/** Outside tests, node delivery URLs must pass the SSRF-safe external URL check. */
 function strictExternalUrl(engine: RoutingEngine): boolean {
   return engine.config?.environment !== 'test';
 }
 
-function buildEvent(
-  type: string,
-  workspaceId: string,
-  data: Record<string, unknown>,
-): WsEvent {
-  return {
-    type,
-    workspace_id: workspaceId,
-    data,
-    timestamp: new Date().toISOString(),
-  };
-}
-
+/** Dispatch an agent-scoped routing event (stream + node context) for `agentIds`. */
 async function fanoutToAgentsForContext(
   ctx: RoutingContext,
   agentIds: string[],
   type: string,
   data: Record<string, unknown>,
 ): Promise<void> {
-  const payload = transformForClient(buildEvent(type, ctx.workspaceId, data));
-  const unique = [...new Set(agentIds)];
-  const tasks: Promise<unknown>[] = [
-    appendAndPublishWorkspaceEvent(
-      { db: ctx.db, realtime: ctx.engine.realtime },
-      ctx.workspaceId,
-      { type, payload },
-    ),
-    sendNodeContextToAgents(
-      {
-        db: ctx.db,
-        nodeConnections: ctx.engine.nodeConnections,
-        realtime: ctx.engine.realtime,
-        workspaceId: ctx.workspaceId,
-        environment: ctx.engine.config?.environment,
-        httpPushProxy: ctx.engine.config?.httpPushProxy,
-      },
-      {
-        agentIds: unique,
-        event: type,
-        data,
-      },
-    ),
-  ];
-  await Promise.allSettled(tasks);
+  await publishEvent(
+    { db: ctx.db, engine: ctx.engine },
+    { workspaceId: ctx.workspaceId, type, data, scope: { kind: 'agents', agentIds } },
+  );
 }
 
 async function resolveLiveLocations(
@@ -627,6 +593,7 @@ export async function sweepDueNodeDeliveries(
  */
 export const sweepDueHttpPushDeliveries = sweepDueNodeDeliveries;
 
+/** Dispatch one `delivery.failed` event per undeliverable notice as a single bounded batch. */
 async function notifyDeliveryFailures(
   engine: EngineDeps,
   notices: deliveryEngine.DeliveryFailureNotice[],
@@ -646,35 +613,15 @@ async function notifyDeliveryFailures(
       retryable: notice.retryable,
     },
   }));
-  const inputs = notifications.map((notification) => {
-    const payload = transformForClient(buildEvent('delivery.failed', notification.workspaceId, notification.data));
-    return {
+  await publishEventsToAgents(
+    { db: engine.db, engine },
+    notifications.map((notification) => ({
       workspaceId: notification.workspaceId,
-      input: { type: 'delivery.failed', payload },
-    };
-  });
-
-  await Promise.allSettled([
-    appendAndPublishWorkspaceEventBatch(
-      { db: engine.db, realtime: engine.realtime },
-      inputs,
-    ),
-    sendNodeContextEventsToAgents(
-      {
-        db: engine.db,
-        nodeConnections: engine.nodeConnections,
-        realtime: engine.realtime,
-        environment: engine.config?.environment,
-        httpPushProxy: engine.config?.httpPushProxy,
-      },
-      notifications.map((notification) => ({
-        workspaceId: notification.workspaceId,
-        agentId: notification.agentId,
-        event: 'delivery.failed',
-        data: notification.data,
-      })),
-    ),
-  ]);
+      agentId: notification.agentId,
+      type: 'delivery.failed',
+      data: notification.data,
+    })),
+  );
 }
 
 /**

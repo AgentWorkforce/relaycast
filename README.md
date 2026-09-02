@@ -653,7 +653,12 @@ describes the wire contract. Directly connected agents are implicit
 `kind: "ws", role: "direct"` nodes, broker-controlled agents bind to
 `kind: "ws", role: "broker"` nodes over `/v1/node/ws`, and both use the same
 `ws.node.v1` `deliver` frame. Agent-targeted receipt/failure notifications are
-best-effort `context.update` frames on the same node stream. HTTP push nodes default to one bound agent, which
+best-effort `context.update` frames on the same node stream. Which event types ride the
+`deliver` frame at all is declared once in `@relaycast/types`
+(`NODE_DELIVER_FRAME_EVENT_TYPES` / `nodeFrameKindFor`) — durably for `message.created`
+and `thread.reply`, best-effort with no delivery row for `message.read`, `message.reacted`,
+and the caller-addressed `action.completed`/`action.failed`/`action.denied`/`agent.exited`/
+`node.status.*` notifications; every other type is a best-effort `context.update`. HTTP push nodes default to one bound agent, which
 makes the common "one remote agent, one endpoint" shape explicit while still
 allowing larger broker-style endpoints with `max_agents`.
 

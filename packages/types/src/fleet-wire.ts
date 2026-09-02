@@ -433,6 +433,53 @@ export const FleetContextUpdateMessageSchema = z
   .strict();
 export type FleetContextUpdateMessage = z.infer<typeof FleetContextUpdateMessageSchema>;
 
+/**
+ * Which node frame carries an event type. This is a statement about the wire
+ * frame, not about durability: both frames can be best-effort.
+ */
+export const NodeFrameKindSchema = z.enum(['deliver', 'context']);
+export type NodeFrameKind = z.infer<typeof NodeFrameKindSchema>;
+
+/**
+ * Event types nodes receive on the `deliver` frame.
+ *
+ * `message.created` and `thread.reply` are durable: each is a delivery row with
+ * a per-agent `seq`, is acked, and is replayed when the node reconnects.
+ * Every other type listed here rides the same frame as a synthetic `seq: 0`
+ * send with no delivery row — best-effort, dropped when the node is not ready:
+ * the channel receipts `message.read` and `message.reacted`, and the
+ * caller-addressed notifications the engine sends to one agent's mailbox
+ * (`action.completed`, `action.failed`, `action.denied`, `agent.exited`,
+ * `node.status.online`, `node.status.offline`). Every type not listed is a
+ * best-effort `context.update` frame (or, for `http_push` nodes, a best-effort
+ * POST) — see {@link nodeFrameKindFor}.
+ */
+export const NODE_DELIVER_FRAME_EVENT_TYPES = [
+  'message.created',
+  'thread.reply',
+  'message.read',
+  'message.reacted',
+  'action.completed',
+  'action.failed',
+  'action.denied',
+  'agent.exited',
+  'node.status.online',
+  'node.status.offline',
+] as const;
+export type NodeDeliverFrameEventType = (typeof NODE_DELIVER_FRAME_EVENT_TYPES)[number];
+
+const NODE_DELIVER_FRAME_EVENT_TYPE_SET: ReadonlySet<string> = new Set(NODE_DELIVER_FRAME_EVENT_TYPES);
+
+/** Whether `type` reaches nodes on the `deliver` frame rather than `context.update`. */
+export function isNodeDeliverFrameEventType(type: string): type is NodeDeliverFrameEventType {
+  return NODE_DELIVER_FRAME_EVENT_TYPE_SET.has(type);
+}
+
+/** The node frame that carries `type`; unknown types travel as `context`. */
+export function nodeFrameKindFor(type: string): NodeFrameKind {
+  return isNodeDeliverFrameEventType(type) ? 'deliver' : 'context';
+}
+
 export const FleetPingMessageSchema = z
   .object({
     ...FleetWireEnvelopeFields,
