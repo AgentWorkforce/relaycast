@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `POST /v1/nodes` accepts and persists `machine_id`, and `resolveNodeForEnroll` falls back to the machine's existing `broker` node when it matches neither `node_id` nor `name` — so re-enrollment under a fresh name rotates that node rather than inserting another roster row. The lookup is scoped to `broker` because a machine legitimately runs many `direct` node-of-one delivery hosts, and resolves oldest-first so a roster already holding several rows for one machine converges on its earliest. The requested role is derived from the request alone (`requestedNodeRole`) *before* the machine lookup runs, so an `http_push` or `poll` node enrolling without an explicit `role` cannot rotate — and re-transport — the broker sharing its machine. Concurrent enrollments keyed on one machine are serialized in-process (`serializeMachineEnroll`). Migration `0043_node_machine_id_index.sql` indexes `nodes(workspace_id, machine_id)` for the lookup. `publicNode` now exposes `machine_id`.
+- `POST /v1/nodes` accepts `machine_id` and uses it as the enrollment key of last resort, after `node_id` and `name`, so re-enrollment under a fresh name rotates the machine's existing `broker` node instead of inserting another roster row. Only `broker` requests match — the role is resolved from `kind`/`max_agents` before the lookup, so a `direct` node sharing the machine is never rotated — and matching resolves oldest-first. Enrollments keyed on one machine are serialized in-process. Migration `0043_node_machine_id_index.sql` indexes `nodes(workspace_id, machine_id)`. The roster API now returns `machine_id`.
 
 ## [8.2.2] - 2026-09-02
 
