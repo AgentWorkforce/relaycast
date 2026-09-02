@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { makeNodeStack, createWorkspace, FakeSocket, type TestStack } from './harness.js';
 import { nodes } from '../../db/schema.js';
+import { isNodeLive } from '../../engine/placement.js';
 
 /**
  * Enrollment dedupes on machine_id.
@@ -191,9 +192,78 @@ describe('node enrollment — machine_id dedupe', () => {
     const [row] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_m'));
     expect(row!.machineId).toBe('machine-a');
 
-    // And the dedupe still works afterwards: next boot, fresh name, same row.
+    // And the dedupe still works on the next boot. Registering made the node
+    // live, and a live incumbent is deliberately never adopted, so first take
+    // it offline — the host going away is exactly what precedes a re-enroll.
+    await stack.runtime.deps.db.update(nodes).set({ status: 'offline' }).where(eq(nodes.id, 'node_m'));
+
     const reboot = await enroll(ws.workspaceKey, { name: 'broker-host-reboot', machine_id: 'machine-a' });
     expect(reboot.body.data?.id).toBe('node_m');
+    expect(await roster(ws.workspaceKey)).toHaveLength(1);
+  });
+
+  it('does not adopt a LIVE incumbent broker when a second broker presents its machine_id', async () => {
+    // The renamed-reboot case dedupes because the old node is gone. This is the
+    // opposite case: the incumbent is still live, so the claimant cannot be the
+    // same host coming back. Adopting the row here would rename a running
+    // broker and rotate its token out from under it -- a silent hijack, the
+    // same shape as burning an agent name.
+    //
+    // A shared machine_id is not automatically hostile: a VM cloned from a
+    // snapshot, or containers baked from one image, legitimately carry the same
+    // id and run concurrently. So the claimant gets its OWN row rather than a
+    // rejection -- the ambiguous match is declined, not the enrollment.
+    const ws = await createWorkspace(stack.app, 'live-incumbent');
+
+    const incumbent = await enroll(ws.workspaceKey, {
+      node_id: 'node_live', name: 'broker-a', machine_id: 'machine-a', role: 'broker', max_agents: 4,
+    });
+    expect(incumbent.status).toBe(201);
+
+    // Bring the incumbent live: register + heartbeat, so status=online and the
+    // heartbeat is inside NODE_LIVENESS_TTL_MS.
+    const handle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, 'node_live', new FakeSocket());
+    await handle.handleMessage(JSON.stringify({
+      v: 1, id: 'reg-live', type: 'node.register', name: 'broker-a', node_id: 'node_live',
+      provider: { name: 'default', instance_id: 'i1' }, capabilities: [], max_agents: 4,
+      tags: [], version: 'v1', resume_cursor: null,
+    }));
+    await handle.handleMessage(JSON.stringify({
+      v: 1, type: 'node.heartbeat', provider: { name: 'default', instance_id: 'i1' },
+      active_agents: 0, handlers_live: true,
+    }));
+
+    const [before] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_live'));
+    expect(isNodeLive(before!)).toBe(true);
+
+    // A different broker claims the live incumbent's machine_id.
+    const claimant = await enroll(ws.workspaceKey, {
+      name: 'broker-b', machine_id: 'machine-a', role: 'broker', max_agents: 4,
+    });
+    expect(claimant.status).toBe(201);
+    expect(claimant.body.data?.id).not.toBe('node_live');
+
+    // The incumbent must be untouched in all three identity fields.
+    const [after] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_live'));
+    expect(after!.id).toBe(before!.id);
+    expect(after!.name).toBe('broker-a');
+    expect(after!.tokenHash).toBe(before!.tokenHash);
+
+    expect(await roster(ws.workspaceKey)).toHaveLength(2);
+  });
+
+  it('still dedupes onto a stale incumbent once it is no longer live', async () => {
+    // The guard is liveness, not identity: the same claim against an incumbent
+    // that has gone offline is the reboot case and must still collapse.
+    const ws = await createWorkspace(stack.app, 'stale-incumbent');
+    const first = await enroll(ws.workspaceKey, {
+      name: 'broker-a', machine_id: 'machine-a', role: 'broker', max_agents: 4,
+    });
+    // Never registered, so never live.
+    const second = await enroll(ws.workspaceKey, {
+      name: 'broker-a-reboot', machine_id: 'machine-a', role: 'broker', max_agents: 4,
+    });
+    expect(second.body.data?.id).toBe(first.body.data?.id);
     expect(await roster(ws.workspaceKey)).toHaveLength(1);
   });
 

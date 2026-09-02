@@ -349,18 +349,36 @@ export async function getNodeById(db: Db, workspaceId: string, nodeId: string) {
 }
 
 /**
- * The broker a machine already has on the roster, if any.
+ * How many rows sharing one machine_id the enroll lookup will consider. A
+ * machine with more live brokers than this is already pathological, and the
+ * fallthrough (a new row) is the safe outcome there anyway.
+ */
+const MACHINE_MATCH_SCAN_LIMIT = 20;
+
+/**
+ * The broker a machine already has on the roster and is no longer running.
  *
  * Scoped to `broker` deliberately: a broker is the node-of-many fleet host and
  * a machine runs one, so machine_id identifies it. A `direct` node is a
  * node-of-one delivery host and a single machine legitimately runs many of
  * them, so machine_id is not a key there and must never collapse them.
  *
+ * A LIVE incumbent is never returned. Adopting one would rename a running
+ * broker and rotate its token out from under it — the caller cannot be that
+ * host coming back, because that host has not left. Only a node that is gone
+ * can be the one re-enrolling. Skipping the live row lets the caller fall
+ * through to a new node instead, which is the right answer for the legitimate
+ * duplicate too: a VM cloned from a snapshot, or containers baked from one
+ * image, carry the same machine_id and run CONCURRENTLY, so they are genuinely
+ * separate nodes. Declining the match costs an extra roster row; rejecting the
+ * enrollment outright would break a whole fleet booted from one image.
+ *
  * Ordered oldest-first so a roster that already holds several rows for one
- * machine converges onto its earliest row instead of picking arbitrarily.
+ * machine converges onto its earliest reusable row instead of picking
+ * arbitrarily.
  */
 export async function getBrokerNodeByMachineId(db: Db, workspaceId: string, machineId: string) {
-  const [node] = await db
+  const candidates = await db
     .select()
     .from(nodes)
     .where(and(
@@ -369,8 +387,10 @@ export async function getBrokerNodeByMachineId(db: Db, workspaceId: string, mach
       eq(nodes.role, 'broker'),
     ))
     .orderBy(asc(nodes.createdAt), asc(nodes.id))
-    .limit(1);
-  return node ?? null;
+    .limit(MACHINE_MATCH_SCAN_LIMIT);
+  // Liveness is read through isNodeLive rather than reproduced in SQL, so this
+  // cannot drift from the definition placement and the roster already use.
+  return candidates.find((node) => !isNodeLive(node)) ?? null;
 }
 
 /**
@@ -405,6 +425,10 @@ export function requestedNodeRole(data: { kind?: string; role?: NodeRole; max_ag
  * node_id and name still win, so a caller that pins either keeps the exact
  * identity it asked for; passing node_id is the way to opt out of machine
  * grouping and run two brokers on one host.
+ *
+ * The machine step only ever matches a node that is not live — see
+ * getBrokerNodeByMachineId — so a running broker is never adopted by another
+ * caller presenting its machine_id.
  */
 export async function resolveNodeForEnroll(
   db: Db,
