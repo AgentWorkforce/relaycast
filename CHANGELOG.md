@@ -20,7 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Added
 
-- `POST /v1/nodes` accepts `machine_id` and uses it as the enrollment key of last resort, after `node_id` and `name`. A fleet host that persists no `node_id` renames itself on every boot, and each boot used to leave another roster row behind; it now rotates the machine's existing `broker` node instead. `direct` node-of-one delivery hosts are never matched this way, a running broker is never adopted (only a node that has gone offline is reused, so cloned VMs and containers sharing a baked `machine_id` keep separate identities), and an explicit `node_id` still pins identity. Node roster entries now return `machine_id`.
+- `POST /v1/nodes` accepts `machine_id` and uses it as the enrollment key of last resort, after `node_id` and `name`. A fleet host that persists no `node_id` renames itself on every boot, and each boot used to leave another roster row behind; it now rotates the machine's existing `broker` node instead. `direct` node-of-one delivery hosts are never matched this way, a live broker is never adopted (only a node whose heartbeat has lapsed or gone offline is reused, so cloned VMs and containers sharing a baked `machine_id` keep separate identities), and an explicit `node_id` still pins identity. Node roster entries now return `machine_id`.
 
 ## [8.2.2] - 2026-09-02
 

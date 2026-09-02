@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, ne, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, lte, ne, or, sql } from 'drizzle-orm';
 import type {
   FleetAgentRecoverMessage,
   FleetAgentRegisterMessage,
@@ -25,7 +25,7 @@ import { isProviderAgentDeliveryReady, type NodeConnectionRegistry } from '../po
 import { generateId } from './snowflake.js';
 import { assertRegistrableAgentName } from './agent.js';
 import { rotateAgentIdentity } from './agentIdentity.js';
-import { isNodeLive, nodeHasCapacity, nodeHasCapability } from './placement.js';
+import { isNodeLive, nodeHasCapacity, nodeHasCapability, NODE_LIVENESS_TTL_MS } from './placement.js';
 import {
   DEFAULT_PROVIDER_NAME,
   capabilityKind,
@@ -349,9 +349,9 @@ export async function getNodeById(db: Db, workspaceId: string, nodeId: string) {
 }
 
 /**
- * How many rows sharing one machine_id the enroll lookup will consider. A
- * machine with more live brokers than this is already pathological, and the
- * fallthrough (a new row) is the safe outcome there anyway.
+ * How many *reusable* rows sharing one machine_id the enroll lookup will
+ * consider. Live rows are excluded in SQL before this bound applies, so a
+ * machine with many live brokers cannot push its one offline row out of range.
  */
 const MACHINE_MATCH_SCAN_LIMIT = 20;
 
@@ -378,6 +378,11 @@ const MACHINE_MATCH_SCAN_LIMIT = 20;
  * arbitrarily.
  */
 export async function getBrokerNodeByMachineId(db: Db, workspaceId: string, machineId: string) {
+  // Exclude live rows in SQL so the bound below counts only reusable
+  // candidates. Bounding first and filtering after would let a machine with
+  // enough live brokers hide its one offline row past the limit, and enrollment
+  // would insert a new row instead of reusing it.
+  const liveCutoff = new Date(Date.now() - NODE_LIVENESS_TTL_MS);
   const candidates = await db
     .select()
     .from(nodes)
@@ -385,11 +390,19 @@ export async function getBrokerNodeByMachineId(db: Db, workspaceId: string, mach
       eq(nodes.workspaceId, workspaceId),
       eq(nodes.machineId, machineId),
       eq(nodes.role, 'broker'),
+      or(
+        ne(nodes.status, 'online'),
+        isNull(nodes.lastHeartbeatAt),
+        lte(nodes.lastHeartbeatAt, liveCutoff),
+      ),
     ))
     .orderBy(asc(nodes.createdAt), asc(nodes.id))
     .limit(MACHINE_MATCH_SCAN_LIMIT);
-  // Liveness is read through isNodeLive rather than reproduced in SQL, so this
-  // cannot drift from the definition placement and the roster already use.
+  // isNodeLive stays authoritative: the SQL predicate above is only a
+  // pre-filter. Where the two could disagree — a heartbeat timestamped in the
+  // future, which isNodeLive treats as not live — SQL is the stricter of the
+  // two, so the row is skipped and enrollment creates a new node. That is the
+  // safe direction: an extra roster row, never an adopted live broker.
   return candidates.find((node) => !isNodeLive(node)) ?? null;
 }
 

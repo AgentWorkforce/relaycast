@@ -267,6 +267,52 @@ describe('node enrollment — machine_id dedupe', () => {
     expect(await roster(ws.workspaceKey)).toHaveLength(1);
   });
 
+  it('finds the offline row even when many live brokers share the machine_id', async () => {
+    // The candidate scan is bounded. If the bound were applied before the
+    // liveness filter, enough live rows would push the one reusable row out of
+    // range and enrollment would insert yet another - the exact growth this
+    // feature exists to stop, reappearing only on busy machines.
+    const ws = await createWorkspace(stack.app, 'crowded-machine');
+    const now = Date.now();
+
+    // 25 live brokers on one machine, all older than the offline row.
+    for (let i = 0; i < 25; i++) {
+      await stack.runtime.deps.db.insert(nodes).values({
+        id: `node_live_${i}`,
+        workspaceId: ws.workspaceId,
+        name: `live-${i}`,
+        tokenHash: `hash-live-${i}`,
+        machineId: 'machine-a',
+        role: 'broker',
+        kind: 'ws',
+        status: 'online',
+        lastHeartbeatAt: new Date(now),
+        createdAt: new Date(now - 10_000 + i),
+      });
+    }
+    // One offline row, newest of the set, so an ordered scan reaches it last.
+    await stack.runtime.deps.db.insert(nodes).values({
+      id: 'node_reusable',
+      workspaceId: ws.workspaceId,
+      name: 'gone-host',
+      tokenHash: 'hash-reusable',
+      machineId: 'machine-a',
+      role: 'broker',
+      kind: 'ws',
+      status: 'offline',
+      lastHeartbeatAt: new Date(now - 600_000),
+      createdAt: new Date(now),
+    });
+
+    const reboot = await enroll(ws.workspaceKey, {
+      name: 'gone-host-reboot', machine_id: 'machine-a', role: 'broker', max_agents: 4,
+    });
+    expect(reboot.status).toBe(201);
+    // Must reuse the offline row, not mint a 27th.
+    expect(reboot.body.data?.id).toBe('node_reusable');
+    expect(await roster(ws.workspaceKey)).toHaveLength(26);
+  });
+
   it('adopts the machine_id of a row that enrolled before it reported one', async () => {
     const ws = await createWorkspace(stack.app, 'backfill');
     // Pre-existing roster row from before this path existed: no machine_id.

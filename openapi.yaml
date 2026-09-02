@@ -4536,8 +4536,9 @@ paths:
         that, a `machine_id` is matched against the machine's existing `broker` node, so a
         host that re-enrolls under a fresh name rotates that node instead of adding a roster
         entry. `direct` nodes are never matched by `machine_id` — one machine legitimately
-        runs many of them — and a **live** broker is never matched, so a caller presenting a
-        running broker's `machine_id` receives its own node and leaves the incumbent's id,
+        runs many of them — and a **live** broker (`status: online` with a heartbeat inside the
+        node liveness TTL) is never matched, so a caller presenting a live broker's
+        `machine_id` receives its own node and leaves the incumbent's id,
         name and token unchanged.
         Fleet WebSocket nodes use the returned token on `/node/ws`; HTTP push nodes store a
         delivery endpoint and can host one bound agent by default.
