@@ -139,11 +139,15 @@ nodeRoutes.post('/nodes', requireWorkspaceKey, rateLimit, async (c) => {
       return parsed.response;
     }
     // Machine-keyed enrollment resolves then writes, so concurrent first
-    // enrollments of one machine must not interleave between those steps.
+    // enrollments of one machine must not interleave between those steps. Only
+    // broker requests key on the machine, so only they need the queue: direct
+    // hosts stay independent rather than queueing behind each other on a box
+    // running many of them.
     const machineId = parsed.data.machine_id;
-    return machineId === undefined
-      ? enrollNode(c, parsed.data)
-      : serializeMachineEnroll(c.get('workspace').id, machineId, () => enrollNode(c, parsed.data));
+    const machineKeyed = machineId !== undefined && nodeEngine.requestedNodeRole(parsed.data) === 'broker';
+    return machineKeyed
+      ? serializeMachineEnroll(c.get('workspace').id, machineId, () => enrollNode(c, parsed.data))
+      : enrollNode(c, parsed.data);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }

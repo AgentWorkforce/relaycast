@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { makeNodeStack, createWorkspace, type TestStack } from './harness.js';
+import { makeNodeStack, createWorkspace, FakeSocket, type TestStack } from './harness.js';
 import { nodes } from '../../db/schema.js';
 
 /**
@@ -73,8 +73,11 @@ describe('node enrollment — machine_id dedupe', () => {
 
   it('does not collapse the many direct delivery hosts one machine runs', async () => {
     const ws = await createWorkspace(stack.app, 'direct');
-    await enroll(ws.workspaceKey, { name: 'agent-1-host', machine_id: 'machine-a', kind: 'ws', role: 'direct', max_agents: 1 });
-    await enroll(ws.workspaceKey, { name: 'agent-2-host', machine_id: 'machine-a', kind: 'ws', role: 'direct', max_agents: 1 });
+    const hosts = await Promise.all([
+      enroll(ws.workspaceKey, { name: 'agent-1-host', machine_id: 'machine-a', kind: 'ws', role: 'direct', max_agents: 1 }),
+      enroll(ws.workspaceKey, { name: 'agent-2-host', machine_id: 'machine-a', kind: 'ws', role: 'direct', max_agents: 1 }),
+    ]);
+    expect(hosts.map((r) => r.status)).toEqual([201, 201]);
 
     // A direct node is a node-of-one: a machine legitimately hosts many, so
     // machine_id must not key them.
@@ -128,11 +131,14 @@ describe('node enrollment — machine_id dedupe', () => {
     // Two boots of the same machine racing to enroll under different names.
     // Both miss node_id and name, so both reach the machine lookup; without
     // serialization both insert and the roster grows anyway.
-    await Promise.all([
+    const results = await Promise.all([
       enroll(ws.workspaceKey, { name: 'host-a-boot1', machine_id: 'machine-a' }),
       enroll(ws.workspaceKey, { name: 'host-a-boot2', machine_id: 'machine-a' }),
     ]);
 
+    // Both must succeed: one row is only the right answer if neither enroll
+    // was rejected, otherwise this passes for the wrong reason.
+    expect(results.map((r) => r.status)).toEqual([201, 201]);
     expect(await roster(ws.workspaceKey)).toHaveLength(1);
   });
 
@@ -152,6 +158,42 @@ describe('node enrollment — machine_id dedupe', () => {
     const second = await enroll(ws.workspaceKey, { name: 'host-a' });
 
     expect(second.body.data?.id).toBe(first.body.data?.id);
+    expect(await roster(ws.workspaceKey)).toHaveLength(1);
+  });
+
+  it('keeps the enrollment-set machine_id when a register frame omits one', async () => {
+    // The dedupe key is only durable if the WS register path cannot erase it.
+    // recomputeNodeAggregate writes machineId only when non-null, and this
+    // feature now depends on that: a broker that enrolls with a machine_id and
+    // then registers without one must keep the value, or its next boot under a
+    // fresh name would mint a new row again.
+    const ws = await createWorkspace(stack.app, 'register-keeps');
+    const enrolled = await enroll(ws.workspaceKey, {
+      node_id: 'node_m', name: 'broker-host', machine_id: 'machine-a', role: 'broker', max_agents: 4,
+    });
+    expect(enrolled.status).toBe(201);
+
+    const handle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, 'node_m', new FakeSocket());
+    await handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'reg-no-machine',
+      type: 'node.register',
+      name: 'broker-host',
+      node_id: 'node_m',
+      provider: { name: 'default', instance_id: 'i1' },
+      capabilities: [],
+      max_agents: 4,
+      tags: [],
+      version: 'v1',
+      resume_cursor: null,
+    }));
+
+    const [row] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_m'));
+    expect(row!.machineId).toBe('machine-a');
+
+    // And the dedupe still works afterwards: next boot, fresh name, same row.
+    const reboot = await enroll(ws.workspaceKey, { name: 'broker-host-reboot', machine_id: 'machine-a' });
+    expect(reboot.body.data?.id).toBe('node_m');
     expect(await roster(ws.workspaceKey)).toHaveLength(1);
   });
 
