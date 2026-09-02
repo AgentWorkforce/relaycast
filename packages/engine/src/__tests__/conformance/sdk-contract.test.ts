@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { deliverEvent } from '../../engine/eventDelivery.js';
-import { actions, actionInvocations, webhooks } from '../../db/schema.js';
+import { actionInvocations, webhooks } from '../../db/schema.js';
 import {
   makeNodeStack,
   createWorkspace,
@@ -519,78 +519,6 @@ describe('SDK v8 service contract', () => {
     expect(stored).toEqual({
       status: 'failed',
       error: 'handler_unavailable',
-      dispatchAttempts: 0,
-      dispatchedNodeId: null,
-    });
-    expect(handlerNode.sock.ofType('action.invoke')).toHaveLength(0);
-  });
-
-  it('keeps an undeliverable agent-hosted invoke pending when the action opted into queue', async () => {
-    const ws = await createWorkspace(stack.app, 'sdk-action-undeliverable-queue-ws');
-    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
-    const handler = await registerAgent(stack.app, ws.workspaceKey, 'handler');
-
-    const register = await stack.app.request('/v1/actions', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${handler.token}` },
-      body: JSON.stringify({
-        name: 'undeliverable-queued',
-        description: 'Queued handler the host adapter cannot reach',
-        handler_agent: 'handler',
-        available_to: ['caller'],
-      }),
-    });
-    expect(register.status).toBe(201);
-    // `queue` is only settable through node-provider capability registration
-    // (which never has an agent handler), so set the column directly.
-    await stack.runtime.deps.db
-      .update(actions)
-      .set({ queue: true })
-      .where(and(
-        eq(actions.workspaceId, ws.workspaceId),
-        eq(actions.name, 'undeliverable-queued'),
-      ));
-
-    const handlerNode = await attachDirectNodeSocket(stack, ws.workspaceId, handler);
-    await handlerNode.handle.handleClose();
-
-    const nodeConnections = stack.runtime.deps.nodeConnections!;
-    const connectedSpy = vi.spyOn(nodeConnections, 'isProviderConnected').mockReturnValue(true);
-    const sendSpy = vi.spyOn(nodeConnections, 'sendAuthorizedActionToProvider')
-      .mockResolvedValue(false);
-    let response!: Response;
-    try {
-      response = await stack.app.request('/v1/actions/undeliverable-queued/invoke', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
-        body: JSON.stringify({ input: { text: 'hello' } }),
-      });
-    } finally {
-      sendSpy.mockRestore();
-      connectedSpy.mockRestore();
-    }
-
-    expect(response.status).toBe(201);
-    const body = await response.json() as {
-      data: { status: string; dispatched_node_id: string | null };
-    };
-    expect(body.data.status).toBe('pending');
-    expect(body.data.dispatched_node_id).toBeNull();
-    const [stored] = await stack.runtime.deps.db
-      .select({
-        status: actionInvocations.status,
-        error: actionInvocations.error,
-        dispatchAttempts: actionInvocations.dispatchAttempts,
-        dispatchedNodeId: actionInvocations.dispatchedNodeId,
-      })
-      .from(actionInvocations)
-      .where(and(
-        eq(actionInvocations.workspaceId, ws.workspaceId),
-        eq(actionInvocations.actionName, 'undeliverable-queued'),
-      ));
-    expect(stored).toEqual({
-      status: 'pending',
-      error: null,
       dispatchAttempts: 0,
       dispatchedNodeId: null,
     });

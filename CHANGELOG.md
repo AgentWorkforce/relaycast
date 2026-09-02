@@ -20,7 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
-- Invoking an agent-handled action whose host adapter cannot deliver to the handler now fails fast with 503 `handler_unavailable` (or stays queued when the action opted into `queue`) instead of returning 503 `idempotency_unavailable` after the replay wait.
+- Invoking an agent-handled action whose host cannot deliver to the handler now fails with 503 `handler_unavailable` instead of 503 `idempotency_unavailable`.
 
 ## [8.3.0] - 2026-09-02
 
@@ -373,7 +373,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased - Patch]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.3...HEAD
+[Unreleased - Patch]: https://github.com/AgentWorkforce/relaycast/compare/v8.3.0...HEAD
 [6.0.3]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.2...v6.0.3
 [6.0.2]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.1...v6.0.2
 [6.0.1]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.0...v6.0.1

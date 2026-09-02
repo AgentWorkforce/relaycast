@@ -561,6 +561,25 @@ async function idempotentInvocationId(
   return `inv_idem_${digest}`;
 }
 
+/**
+ * Poll a durable idempotency claim until the winning request's dispatch is
+ * visible, for up to 500ms.
+ *
+ * Resolves as soon as the row leaves the pre-dispatch state: it returns the row
+ * once `dispatchedNodeId` is set (or, with `acceptDispatchStarted`, once an
+ * attempt has been recorded), returns a settled non-open row, and throws the
+ * row's own failure for one that failed before dispatch.
+ *
+ * `onDeadline` picks what a still-open row does when the 500ms deadline passes:
+ * `'throw'` (the default) raises a retryable 503 `idempotency_unavailable`,
+ * which is what a replay observing someone else's claim wants; `'return'` hands
+ * the still-open row back so a caller that owns the claim itself — the
+ * post-send takeover re-read below — can classify it.
+ *
+ * @param options.acceptDispatchStarted - treat a recorded attempt as dispatch.
+ * @param options.onDeadline - deadline behavior for a still-open row.
+ * @returns the invocation row as last read.
+ */
 async function waitForInvocationReplayOutcome(
   db: Db,
   workspaceId: string,
@@ -726,6 +745,37 @@ async function failInvocationForUnavailableProvider(
       eq(actionInvocations.id, invocationId),
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
     ));
+}
+
+/**
+ * Terminally fail one invocation ONLY while it is still open AND was never
+ * dispatched — no recorded attempt and no dispatched node. The predicates make
+ * the failure atomic against a concurrent dispatcher (`drainNodeInvocations`
+ * on a handler reconnect): once that dispatcher's attempt lands, this update
+ * matches nothing and the live dispatch is left alone. Sets the same columns as
+ * {@link failInvocationForUnavailableProvider}; no spawn reservation can be
+ * held by a row with no dispatched node, so there is no capacity to release.
+ *
+ * @returns true when this call is the one that failed the row.
+ */
+async function failNeverDispatchedInvocation(
+  db: Db,
+  workspaceId: string,
+  invocationId: string,
+  error: string,
+): Promise<boolean> {
+  const failed = await db
+    .update(actionInvocations)
+    .set({ status: 'failed', error, completedAt: new Date(), spawnReservedAt: null })
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.id, invocationId),
+      inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      eq(actionInvocations.dispatchAttempts, 0),
+      isNull(actionInvocations.dispatchedNodeId),
+    ))
+    .returning({ id: actionInvocations.id });
+  return failed.length > 0;
 }
 
 /**
@@ -1589,46 +1639,68 @@ export async function invokeAction(
     actionId: action.id,
   });
 
+  // Set when the send was not accepted and a concurrent dispatcher, not this
+  // request, owns the row's outcome — the response is then reported from it.
+  let undispatched: InvocationRow | null = null;
   if (!dispatched.accepted) {
     // A takeover can invalidate the last-moment adapter gate. Re-read the
     // durable claim so the original request and its replay agree on the same
     // pre-send failure instead of returning a pending 201.
-    const settled = await waitForInvocationReplayOutcome(
+    await waitForInvocationReplayOutcome(
       db,
       workspaceId,
       invocation,
       { acceptDispatchStarted: true, onDeadline: 'return' },
     );
-    // Still open with nobody having recorded an attempt: no takeover raced us,
-    // the host adapter simply could not deliver to the handler. A hosted
-    // adapter can only learn that from the send itself, so the pre-dispatch
-    // liveness gate above could not catch it. Resolve it the same way that
-    // gate would instead of reporting a retryable idempotency stall.
-    if (
-      !settled.dispatchedNodeId
-      && settled.dispatchAttempts === 0
-      && OPEN_INVOCATION_STATUSES.some((status) => status === settled.status)
-      && !action.queue
-    ) {
-      await failOpenInvocationRows(db, workspaceId, [invocation.id], 'handler_unavailable');
+    // No takeover raced us, so the host adapter simply could not deliver to the
+    // handler. A hosted adapter can only learn that from the send itself, so
+    // the pre-dispatch liveness gate above could not catch it. Resolve it the
+    // same way that gate would instead of reporting a retryable idempotency
+    // stall. The failure is conditional on the row still being open AND never
+    // dispatched: a handler that reconnected after the last poll may have had
+    // this very row dispatched by `drainNodeInvocations`, and overwriting a
+    // live dispatch with `handler_unavailable` would fail the caller while the
+    // handler runs the action.
+    const failed = await failNeverDispatchedInvocation(
+      db,
+      workspaceId,
+      invocation.id,
+      'handler_unavailable',
+    );
+    if (failed) {
       throw codedError(
         `Action "${actionName}" handler "${handlerAgent.name}" has no live connection`,
         'handler_unavailable',
         503,
       );
     }
-    // An action that opted into `queue` keeps the pending row as its offline
-    // queue; it drains on reconnect and the never-dispatched age bound applies.
+    // Someone else owns the row now. Report its state rather than this
+    // request's failed send.
+    const [current] = await db
+      .select()
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, workspaceId),
+        eq(actionInvocations.id, invocation.id),
+      ));
+    undispatched = current ?? null;
   }
 
+  // A row another dispatcher took over reports as `dispatched` only once it
+  // both names a node and reached that status; anything else is still pending.
+  const takenOverNodeId = undispatched && undispatched.status === 'dispatched'
+    ? undispatched.dispatchedNodeId
+    : null;
   return {
     invocation_id: invocation.id,
     action_name: actionName,
     handler_agent_id: action.handlerAgentId,
     handler_node_id: handlerAgent.locationNodeId,
-    dispatched_node_id: dispatched.accepted ? handlerAgent.locationNodeId : null,
+    dispatched_node_id: dispatched.accepted ? handlerAgent.locationNodeId : takenOverNodeId,
     input: recordInput(invocation.input),
-    status: dispatched.accepted ? (dispatched.pending ? 'pending' : 'dispatched') : 'pending',
+    status: dispatched.accepted
+      ? (dispatched.pending ? 'pending' : 'dispatched')
+      : (takenOverNodeId ? 'dispatched' : 'pending'),
     created_at: invocation.createdAt.toISOString(),
   };
 }
