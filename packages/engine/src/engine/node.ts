@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, lte, ne, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, lt, ne, or, sql } from 'drizzle-orm';
 import type {
   FleetAgentRecoverMessage,
   FleetAgentRegisterMessage,
@@ -390,14 +390,11 @@ export async function getBrokerNodeByMachineId(db: Db, workspaceId: string, mach
       eq(nodes.workspaceId, workspaceId),
       eq(nodes.machineId, machineId),
       eq(nodes.role, 'broker'),
-      // Mirrors isReusableForMachineMatch: an `online` row is reusable only
-      // once its heartbeat is older than the liveness cutoff, which excludes
-      // future-dated heartbeats too.
-      or(
-        ne(nodes.status, 'online'),
-        isNull(nodes.lastHeartbeatAt),
-        lte(nodes.lastHeartbeatAt, liveCutoff),
-      ),
+      // Mirrors isReusableForMachineMatch: the row must have heartbeated at
+      // least once, and that heartbeat must predate the liveness cutoff. This
+      // also excludes future-dated heartbeats.
+      isNotNull(nodes.lastHeartbeatAt),
+      lt(nodes.lastHeartbeatAt, liveCutoff),
     ))
     .orderBy(asc(nodes.createdAt), asc(nodes.id))
     .limit(MACHINE_MATCH_SCAN_LIMIT);

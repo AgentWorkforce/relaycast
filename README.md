@@ -667,14 +667,18 @@ this way — a machine legitimately runs many `direct` node-of-one delivery host
 brokers on one machine. The value is recorded on the node and returned on
 roster entries.
 
-A **live** broker is never adopted — live meaning `status: online` with a
-heartbeat inside the node liveness TTL, not merely a process that is up. Only a
-node whose heartbeat has lapsed or gone offline is reused, because a broker the
-server can still see cannot be the host re-enrolling.
-A second caller presenting a live broker's `machine_id` gets its own node and
-leaves the incumbent's id, name and token untouched — so a VM cloned from a
-snapshot, or containers baked from one image, keep separate identities instead
-of fighting over one row.
+Reuse requires the matched row to have heartbeated at least once and then gone
+stale — proof that a host held it and left. A row that has never connected is
+never reused, because that case cannot be told apart from two hosts cold-booting
+from one snapshot or baked image: they enroll moments apart, neither has
+heartbeated, and adopting the first row would overwrite its token so the first
+host is handed a working-looking credential that silently stops authenticating.
+A live broker is likewise never adopted, nor one whose heartbeat is in the
+future (a server clock rollback, where the node may still be running).
+
+The trade is deliberate: a host that enrolls and never connects is not deduped,
+so this bounds the roster for hosts that actually join the fleet. Rows that
+never connect are reclaimed by the roster reaper instead.
 
 ```ts
 const node = await relay.nodes.create({

@@ -4536,10 +4536,11 @@ paths:
         that, a `machine_id` is matched against the machine's existing `broker` node, so a
         host that re-enrolls under a fresh name rotates that node instead of adding a roster
         entry. `direct` nodes are never matched by `machine_id` — one machine legitimately
-        runs many of them — and a **live** broker (`status: online` with a heartbeat inside the
-        node liveness TTL) is never matched, so a caller presenting a live broker's
-        `machine_id` receives its own node and leaves the incumbent's id,
-        name and token unchanged.
+        runs many of them. Reuse also requires the matched row to have heartbeated at least
+        once and then gone stale: a row that never connected, one that is still live, and one
+        whose heartbeat is in the future are all left alone, so a caller presenting such a
+        `machine_id` receives its own node and the incumbent's id, name and token are
+        unchanged. Two hosts cold-booting from one image therefore keep separate identities.
         Fleet WebSocket nodes use the returned token on `/node/ws`; HTTP push nodes store a
         delivery endpoint and can host one bound agent by default.
       tags:
@@ -4562,7 +4563,7 @@ paths:
                   type: string
                 machine_id:
                   type: string
-                  description: Stable id of the host machine. Used as the enrollment key of last resort, after `node_id` and `name`, so a host that keeps no `node_id` and renames itself on each boot rotates its existing `broker` node instead of growing the roster. Only an offline broker is reused — a live one is never adopted, so concurrent hosts sharing a `machine_id` (a cloned VM, or containers from one image) keep separate identities. Recorded on the node and returned on roster entries.
+                  description: Stable id of the host machine. Used as the enrollment key of last resort, after `node_id` and `name`, so a host that keeps no `node_id` and renames itself on each boot rotates its existing `broker` node instead of growing the roster. Reuse requires that broker to have heartbeated once and then gone stale; a row that never connected, one still live, and one with a future heartbeat are never adopted, so concurrent hosts sharing a `machine_id` (a cloned VM, or containers from one image) keep separate identities and credentials. Recorded on the node and returned on roster entries.
                 kind:
                   type: string
                   enum: [ws, http_push, poll]
