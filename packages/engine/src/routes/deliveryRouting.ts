@@ -53,10 +53,12 @@ function wireMode(mode: string): 'wait' | 'steer' {
   return mode === 'next-tool-call' ? 'steer' : 'wait';
 }
 
+/** Outside tests, node delivery URLs must pass the SSRF-safe external URL check. */
 function strictExternalUrl(engine: RoutingEngine): boolean {
   return engine.config?.environment !== 'test';
 }
 
+/** Dispatch an agent-scoped routing event (stream + node context) for `agentIds`. */
 async function fanoutToAgentsForContext(
   ctx: RoutingContext,
   agentIds: string[],
@@ -591,6 +593,7 @@ export async function sweepDueNodeDeliveries(
  */
 export const sweepDueHttpPushDeliveries = sweepDueNodeDeliveries;
 
+/** Dispatch one `delivery.failed` event per undeliverable notice as a single bounded batch. */
 async function notifyDeliveryFailures(
   engine: EngineDeps,
   notices: deliveryEngine.DeliveryFailureNotice[],

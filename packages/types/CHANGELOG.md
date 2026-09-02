@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `NODE_DURABLE_EVENT_TYPES`, `NodeDeliveryClassSchema`, `isNodeDurableEventType`, and `nodeDeliveryClassFor` declare which event types nodes receive as durable `deliver` frames; every other type is ephemeral.
+- `NODE_DELIVER_FRAME_EVENT_TYPES`, `NodeFrameKindSchema`, `isNodeDeliverFrameEventType`, and `nodeFrameKindFor` declare which event types nodes receive on the `deliver` frame (`message.created` and `thread.reply` durably, `message.read` and `message.reacted` best-effort); every other type travels as `context.update`.
 
 ## [8.2.0] - 2026-08-21
 

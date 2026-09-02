@@ -14,10 +14,10 @@ type HonoContext = Context<AppEnv>;
 /**
  * Route-level wrappers over the single event dispatcher
  * (`engine/eventDispatch.ts`). They only name the audience — which sinks an
- * event reaches, and whether it is durable or ephemeral for nodes, is decided
- * there.
+ * event reaches, and which node frame carries it, is decided there.
  */
 
+/** Build the per-sink error handler that logs a sink failure with request context. */
 function sinkErrorLogger(
   c: HonoContext,
   workspaceId: string,
@@ -35,6 +35,7 @@ function sinkErrorLogger(
   };
 }
 
+/** Hand one event to the dispatcher with the route's logger wired to `onSinkError`. */
 async function dispatch(
   c: HonoContext,
   workspaceId: string,
@@ -59,6 +60,7 @@ async function dispatch(
   );
 }
 
+/** Publish a workspace-scoped event, or delegate to {@link fanoutToChannel} when `channelId` is given. */
 export async function publishWorkspaceEvent(
   c: HonoContext,
   type: string,
@@ -73,6 +75,7 @@ export async function publishWorkspaceEvent(
   await dispatch(c, workspaceId, type, data, { kind: 'workspace' });
 }
 
+/** Fan an event out to the workspace stream and to the nodes hosting the channel's members. */
 export async function fanoutToChannel(
   c: HonoContext,
   channelId: string,
@@ -97,6 +100,7 @@ export async function fanoutToChannel(
   await dispatch(c, workspaceId, type, data, { kind: 'channel', channelId });
 }
 
+/** Fan an event out to the workspace stream and to the nodes hosting `agentIds`. */
 export async function fanoutToAgents(
   c: HonoContext,
   agentIds: string[],
@@ -106,6 +110,7 @@ export async function fanoutToAgents(
   await dispatch(c, c.get('workspace').id, type, data, { kind: 'agents', agentIds });
 }
 
+/** Fan a workspace-wide event out to the workspace stream; workspace scope has no node audience. */
 export async function fanoutToWorkspace(
   c: HonoContext,
   type: string,

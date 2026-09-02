@@ -434,39 +434,40 @@ export const FleetContextUpdateMessageSchema = z
 export type FleetContextUpdateMessage = z.infer<typeof FleetContextUpdateMessageSchema>;
 
 /**
- * How an event type reaches a node.
- *
- * `durable` events are pushed as `deliver` frames: they persist as a delivery
- * row with a per-agent `seq`, require an ack, and are replayed when the node
- * reconnects. `ephemeral` events are pushed once as a `context.update` frame
- * (or, for `http_push` nodes, a best-effort POST) and are dropped when the node
- * is not connected.
+ * Which node frame carries an event type. This is a statement about the wire
+ * frame, not about durability: both frames can be best-effort.
  */
-export const NodeDeliveryClassSchema = z.enum(['durable', 'ephemeral']);
-export type NodeDeliveryClass = z.infer<typeof NodeDeliveryClassSchema>;
+export const NodeFrameKindSchema = z.enum(['deliver', 'context']);
+export type NodeFrameKind = z.infer<typeof NodeFrameKindSchema>;
 
 /**
- * Event types delivered to nodes durably, as `deliver` frames. Every other
- * event type is ephemeral — see {@link nodeDeliveryClassFor}.
+ * Event types nodes receive on the `deliver` frame.
+ *
+ * `message.created` and `thread.reply` are durable: each is a delivery row with
+ * a per-agent `seq`, is acked, and is replayed when the node reconnects.
+ * `message.read` and `message.reacted` ride the same frame but are synthetic
+ * `seq: 0` sends with no delivery row — best-effort, dropped when the node is
+ * not ready. Every other event type is a best-effort `context.update` frame (or,
+ * for `http_push` nodes, a best-effort POST) — see {@link nodeFrameKindFor}.
  */
-export const NODE_DURABLE_EVENT_TYPES = [
+export const NODE_DELIVER_FRAME_EVENT_TYPES = [
   'message.created',
   'thread.reply',
   'message.read',
   'message.reacted',
 ] as const;
-export type NodeDurableEventType = (typeof NODE_DURABLE_EVENT_TYPES)[number];
+export type NodeDeliverFrameEventType = (typeof NODE_DELIVER_FRAME_EVENT_TYPES)[number];
 
-const NODE_DURABLE_EVENT_TYPE_SET: ReadonlySet<string> = new Set(NODE_DURABLE_EVENT_TYPES);
+const NODE_DELIVER_FRAME_EVENT_TYPE_SET: ReadonlySet<string> = new Set(NODE_DELIVER_FRAME_EVENT_TYPES);
 
-/** Whether `type` is delivered to nodes as a durable `deliver` frame. */
-export function isNodeDurableEventType(type: string): type is NodeDurableEventType {
-  return NODE_DURABLE_EVENT_TYPE_SET.has(type);
+/** Whether `type` reaches nodes on the `deliver` frame rather than `context.update`. */
+export function isNodeDeliverFrameEventType(type: string): type is NodeDeliverFrameEventType {
+  return NODE_DELIVER_FRAME_EVENT_TYPE_SET.has(type);
 }
 
-/** The node delivery class for `type`; unknown types are `ephemeral`. */
-export function nodeDeliveryClassFor(type: string): NodeDeliveryClass {
-  return isNodeDurableEventType(type) ? 'durable' : 'ephemeral';
+/** The node frame that carries `type`; unknown types travel as `context`. */
+export function nodeFrameKindFor(type: string): NodeFrameKind {
+  return isNodeDeliverFrameEventType(type) ? 'deliver' : 'context';
 }
 
 export const FleetPingMessageSchema = z

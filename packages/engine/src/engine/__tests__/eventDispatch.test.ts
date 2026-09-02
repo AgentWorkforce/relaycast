@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { NODE_DURABLE_EVENT_TYPES, type FleetRelaycastToBrokerMessage } from '@relaycast/types';
+import { NODE_DELIVER_FRAME_EVENT_TYPES, type FleetRelaycastToBrokerMessage } from '@relaycast/types';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
 import {
   agentNodeBindings,
@@ -11,10 +11,37 @@ import {
 } from '../../db/schema.js';
 import { publishEvent, publishEventsToAgents, type EventDispatchEngine } from '../eventDispatch.js';
 
+
+// The workspace-log append swallows its own DB errors today, so the only way to
+// exercise the dispatcher's handling of a rejected append task is to make the
+// append itself reject.
+const workspaceLog = vi.hoisted(() => ({ failure: null as Error | null }));
+
+vi.mock('../workspaceEvents.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspaceEvents.js')>();
+  return {
+    ...actual,
+    appendAndPublishWorkspaceEvent: async (
+      ...args: Parameters<typeof actual.appendAndPublishWorkspaceEvent>
+    ) => {
+      if (workspaceLog.failure) throw workspaceLog.failure;
+      return actual.appendAndPublishWorkspaceEvent(...args);
+    },
+    appendAndPublishWorkspaceEventBatch: async (
+      ...args: Parameters<typeof actual.appendAndPublishWorkspaceEventBatch>
+    ) => {
+      if (workspaceLog.failure) throw workspaceLog.failure;
+      return actual.appendAndPublishWorkspaceEventBatch(...args);
+    },
+  };
+});
+
 const WORKSPACE_ID = 'ws_dispatch';
 const CHANNEL_ID = 'ch_dispatch';
 const AGENT_ID = 'ag_dispatch';
 const NODE_ID = 'node_dispatch';
+const SECOND_AGENT_ID = 'ag_dispatch_2';
+const SECOND_NODE_ID = 'node_dispatch_2';
 
 type ContextFrame = {
   workspaceId: string;
@@ -26,6 +53,7 @@ type ContextFrame = {
 const handles: SqliteDbHandle[] = [];
 
 afterEach(() => {
+  workspaceLog.failure = null;
   vi.restoreAllMocks();
   for (const handle of handles.splice(0)) {
     try { handle.sqlite.close(); } catch { /* already closed */ }
@@ -71,9 +99,40 @@ async function seedFixture() {
   return db;
 }
 
+/** Add a second node hosting a second member of the same channel. */
+async function seedSecondNode(db: Awaited<ReturnType<typeof seedFixture>>) {
+  await db.insert(nodes).values({
+    id: SECOND_NODE_ID,
+    workspaceId: WORKSPACE_ID,
+    name: 'dispatch-node-2',
+    tokenHash: 'hash_node_2',
+    kind: 'ws',
+    role: 'broker',
+    deliveryAdapter: 'ws.node.v1',
+    status: 'online',
+  });
+  await db.insert(agents).values({
+    id: SECOND_AGENT_ID,
+    workspaceId: WORKSPACE_ID,
+    name: 'dispatch-agent-2',
+    tokenHash: 'hash_agent_2',
+    locationType: 'via_node',
+    locationNodeId: SECOND_NODE_ID,
+    providerName: 'default',
+  });
+  await db.insert(agentNodeBindings).values({
+    id: 'bind_dispatch_2',
+    workspaceId: WORKSPACE_ID,
+    agentId: SECOND_AGENT_ID,
+    nodeId: SECOND_NODE_ID,
+    status: 'active',
+  });
+  await db.insert(channelMembers).values({ channelId: CHANNEL_ID, agentId: SECOND_AGENT_ID });
+}
+
 function makeEngine(overrides: {
   publish?: (args: { workspaceId: string; event: Record<string, unknown> }) => Promise<void>;
-  send?: () => Promise<boolean>;
+  send?: (nodeId: string) => Promise<boolean>;
 } = {}) {
   const published: Array<{ workspaceId: string; event: Record<string, unknown> }> = [];
   const frames: ContextFrame[] = [];
@@ -92,7 +151,7 @@ function makeEngine(overrides: {
         message: FleetRelaycastToBrokerMessage,
       ) => {
         frames.push({ workspaceId, nodeId, providerName, message });
-        return overrides.send ? overrides.send() : true;
+        return overrides.send ? overrides.send(nodeId) : true;
       },
     },
     config: { environment: 'test' },
@@ -107,8 +166,8 @@ function contextUpdates(frames: ContextFrame[]) {
 }
 
 describe('publishEvent', () => {
-  it.each([...NODE_DURABLE_EVENT_TYPES])(
-    'does not push a context.update for the durable type %s',
+  it.each([...NODE_DELIVER_FRAME_EVENT_TYPES])(
+    'does not push a context.update for the deliver-frame type %s',
     async (type) => {
       const db = await seedFixture();
       const { engine, published, frames } = makeEngine();
@@ -127,7 +186,7 @@ describe('publishEvent', () => {
     },
   );
 
-  it('pushes a channel-scoped context.update for an ephemeral type', async () => {
+  it('pushes a channel-scoped context.update for a context-frame type', async () => {
     const db = await seedFixture();
     const { engine, published, frames } = makeEngine();
 
@@ -260,13 +319,61 @@ describe('publishEvent', () => {
     })).resolves.toBeUndefined();
 
     expect(published).toHaveLength(1);
-    // sendContextToRows settles its own sends, so the dispatcher sees no rejection.
-    expect(errors).toHaveLength(0);
+    // sendContextToRows settles its sends independently, then reports the batch.
+    expect(errors.map(([sink]) => sink)).toEqual(['node_context']);
+  });
+
+  it('reports a rejected workspace-log append and still pushes node context', async () => {
+    const db = await seedFixture();
+    const errors: Array<[string, unknown]> = [];
+    const { engine, frames } = makeEngine();
+    workspaceLog.failure = new Error('append rejected');
+
+    await expect(publishEvent({ db, engine }, {
+      workspaceId: WORKSPACE_ID,
+      type: 'member.joined',
+      data: { agent_name: 'dispatch-agent' },
+      scope: { kind: 'channel', channelId: CHANNEL_ID },
+      onSinkError: (sink, err) => errors.push([sink, err]),
+    })).resolves.toBeUndefined();
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0][0]).toBe('workspace_stream');
+    expect((errors[0][1] as Error).message).toBe('append rejected');
+    expect(contextUpdates(frames)).toHaveLength(1);
+  });
+
+  it('delivers to the healthy node and reports node_context once when one node send fails', async () => {
+    const db = await seedFixture();
+    await seedSecondNode(db);
+    const errors: Array<[string, unknown]> = [];
+    const { engine, published, frames } = makeEngine({
+      send: async (nodeId) => {
+        if (nodeId === NODE_ID) throw new Error('socket gone');
+        return true;
+      },
+    });
+
+    await expect(publishEvent({ db, engine }, {
+      workspaceId: WORKSPACE_ID,
+      type: 'member.joined',
+      data: { agent_name: 'dispatch-agent' },
+      scope: { kind: 'channel', channelId: CHANNEL_ID },
+      onSinkError: (sink, err) => errors.push([sink, err]),
+    })).resolves.toBeUndefined();
+
+    expect(published).toHaveLength(1);
+    // Both nodes were attempted; the healthy one still received its frame.
+    expect(frames.map((frame) => frame.nodeId).sort()).toEqual([NODE_ID, SECOND_NODE_ID]);
+    expect(errors.map(([sink]) => sink)).toEqual(['node_context']);
+    const reported = errors[0][1] as AggregateError;
+    expect(reported).toBeInstanceOf(AggregateError);
+    expect(reported.message).toBe('node context push failed for 1 of 2 node targets');
   });
 });
 
 describe('publishEventsToAgents', () => {
-  it('publishes each event and pushes ephemeral ones to their agent nodes', async () => {
+  it('publishes each event and pushes context-frame ones to their agent nodes', async () => {
     const db = await seedFixture();
     const { engine, published, frames } = makeEngine();
 
@@ -282,7 +389,7 @@ describe('publishEventsToAgents', () => {
     ]);
   });
 
-  it('suppresses the node push for durable types', async () => {
+  it('suppresses the node push for deliver-frame types', async () => {
     const db = await seedFixture();
     const { engine, published, frames } = makeEngine();
 
@@ -292,6 +399,24 @@ describe('publishEventsToAgents', () => {
 
     expect(published).toHaveLength(1);
     expect(frames).toHaveLength(0);
+  });
+
+  it('reports a rejected batch workspace-log append and still pushes node context', async () => {
+    const db = await seedFixture();
+    const errors: Array<[string, unknown]> = [];
+    const { engine, frames } = makeEngine();
+    workspaceLog.failure = new Error('batch append rejected');
+
+    await publishEventsToAgents(
+      { db, engine },
+      [{ workspaceId: WORKSPACE_ID, agentId: AGENT_ID, type: 'delivery.failed', data: { delivery_id: 'dl_1' } }],
+      (sink, err) => errors.push([sink, err]),
+    );
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0][0]).toBe('workspace_stream');
+    expect((errors[0][1] as Error).message).toBe('batch append rejected');
+    expect(contextUpdates(frames)).toHaveLength(1);
   });
 
   it('is a no-op for an empty batch', async () => {

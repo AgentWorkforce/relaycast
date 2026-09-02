@@ -158,6 +158,7 @@ function agentNotFound(c: Parameters<typeof jsonNotFound>[0], name: string) {
   return jsonNotFound(c, 'agent_not_found', `Agent "${name}" not found`);
 }
 
+/** Fan an agent status change out to the workspace stream, presence-observing nodes, and webhooks. */
 async function fanoutAgentStatus(c: Parameters<typeof runInBackground>[0], agent: { id: string; name: string }, status: string, eventId?: string): Promise<void> {
   const nextStatus = canonicalStatus(status);
   if (!nextStatus) return;

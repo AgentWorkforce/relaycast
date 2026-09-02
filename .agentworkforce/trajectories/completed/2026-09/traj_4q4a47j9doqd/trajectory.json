@@ -38,16 +38,30 @@
     }
   ],
   "retrospective": {
-    "summary": "Declared NODE_DURABLE_EVENT_TYPES/nodeDeliveryClassFor in @relaycast/types, added engine/eventDispatch.ts as the single sink dispatcher, and rewired fanout.ts, deliveryRouting.ts and agent.ts onto it. Behavior preserved; 714 engine + 206 types tests green.",
+    "summary": "Declared the node frame kind in @relaycast/types (NODE_DELIVER_FRAME_EVENT_TYPES / nodeFrameKindFor), added engine/eventDispatch.ts as the single sink dispatcher, and rewired fanout.ts, deliveryRouting.ts and agent.ts onto it; nodeContext.ts now reports per-node send failures as an AggregateError instead of swallowing them. Verified on the review follow-up commit with npx turbo build (9/9 tasks), npx turbo lint (13/13 tasks), npx turbo test (18/18 tasks: 714 engine tests in 69 files, 206 types tests in 7 files, plus sdk/mcp/react/a2a/observer-dashboard/cli/openclaw), and npx tsc --noEmit -p packages/engine (clean).",
     "approach": "Standard approach",
     "confidence": 0.85
   },
-  "commits": [],
-  "filesChanged": [],
+  "commits": [
+    "3f8ba166f5602daa140c00ebce95ea6a3cbb323b"
+  ],
+  "filesChanged": [
+    "CHANGELOG.md",
+    "README.md",
+    "packages/engine/src/engine/__tests__/eventDispatch.test.ts",
+    "packages/engine/src/engine/eventDispatch.ts",
+    "packages/engine/src/engine/nodeContext.ts",
+    "packages/engine/src/routes/agent.ts",
+    "packages/engine/src/routes/deliveryRouting.ts",
+    "packages/engine/src/routes/fanout.ts",
+    "packages/types/CHANGELOG.md",
+    "packages/types/src/__tests__/node-frame-kind.test.ts",
+    "packages/types/src/fleet-wire.ts"
+  ],
   "projectId": "AgentWorkforce/relaycast",
   "tags": [],
   "_trace": {
     "startRef": "596760483188d6a4d2a7de55a4d6fa7ed48fa58c",
-    "endRef": "596760483188d6a4d2a7de55a4d6fa7ed48fa58c"
+    "endRef": "3f8ba166f5602daa140c00ebce95ea6a3cbb323b"
   }
 }

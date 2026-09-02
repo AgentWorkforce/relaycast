@@ -1,4 +1,4 @@
-import { nodeDeliveryClassFor } from '@relaycast/types';
+import { nodeFrameKindFor } from '@relaycast/types';
 import type { EngineConfig, EngineDb, EngineDeps } from '../ports/index.js';
 import { transformForClient, type WsEvent } from './wsTransform.js';
 import {
@@ -19,10 +19,9 @@ import {
  * the workspace observer stream. Whether it is *also* pushed to the nodes that
  * host the audience agents is decided by two things, in this order:
  *
- * 1. The event's node delivery class, declared in `@relaycast/types`
- *    (`nodeDeliveryClassFor`). `durable` types travel as `deliver` frames
- *    written by the delivery pipeline, so they are never re-sent here as an
- *    ephemeral `context.update`.
+ * 1. The node frame that carries the event, declared in `@relaycast/types`
+ *    (`nodeFrameKindFor`). `deliver`-frame types are already sent by the
+ *    delivery pipeline, so they are never re-sent here as a `context.update`.
  * 2. The dispatch scope. Workspace-wide events have no node audience; channel,
  *    agent, and presence scopes each resolve their own node bindings.
  *
@@ -33,9 +32,10 @@ import {
 /** The sinks a dispatched event can reach. Used to label failures. */
 export type EventSink = 'workspace_stream' | 'node_context';
 
+/** Reports a per-sink failure; the other sinks still run. */
 export type EventSinkErrorHandler = (sink: EventSink, err: unknown) => void;
 
-/** The audience an event's ephemeral node push is resolved against. */
+/** The audience an event's `context.update` node push is resolved against. */
 export type EventDispatchScope =
   | { kind: 'workspace' }
   | { kind: 'channel'; channelId: string }
@@ -47,11 +47,13 @@ export type EventDispatchEngine = Pick<EngineDeps, 'realtime' | 'nodeConnections
   config?: EngineConfig;
 };
 
+/** Everything {@link publishEvent} needs: the database plus the engine ports. */
 export interface EventDispatchDeps {
   db: EngineDb;
   engine: EventDispatchEngine;
 }
 
+/** One event to dispatch, plus the audience its node push resolves against. */
 export interface PublishEventArgs {
   workspaceId: string;
   type: string;
@@ -68,6 +70,7 @@ export interface ScopedAgentEvent {
   data: Record<string, unknown>;
 }
 
+/** Build the raw workspace event frame published to observers and logged. */
 function buildEvent(
   type: string,
   workspaceId: string,
@@ -83,6 +86,7 @@ function buildEvent(
   };
 }
 
+/** Narrow the dispatcher deps to the transport deps `engine/nodeContext.ts` takes. */
 function nodeContextDeps(deps: EventDispatchDeps, workspaceId: string) {
   return {
     db: deps.db,
@@ -94,12 +98,13 @@ function nodeContextDeps(deps: EventDispatchDeps, workspaceId: string) {
   };
 }
 
-/** Node context is an ephemeral-only push, and workspace-wide events have no node audience. */
+/** Node context carries only `context`-frame events, and workspace-wide events have no node audience. */
 function reachesNodeContext(type: string, scope: EventDispatchScope): boolean {
   if (scope.kind === 'workspace') return false;
-  return nodeDeliveryClassFor(type) === 'ephemeral';
+  return nodeFrameKindFor(type) === 'context';
 }
 
+/** Resolve the scope's node audience and push one `context.update`; `null` when the scope has none. */
 function pushNodeContext(
   deps: EventDispatchDeps,
   args: PublishEventArgs,
@@ -148,7 +153,7 @@ export async function publishEvent(
       args.workspaceId,
       { type: args.type, channelId: channelId ?? null, payload },
       (err) => args.onSinkError?.('workspace_stream', err),
-    ),
+    ).catch((err) => args.onSinkError?.('workspace_stream', err)),
   ];
 
   if (reachesNodeContext(args.type, args.scope)) {
@@ -181,7 +186,7 @@ export async function publishEventsToAgents(
     },
   }));
   const contextEvents = events
-    .filter((event) => nodeDeliveryClassFor(event.type) === 'ephemeral')
+    .filter((event) => nodeFrameKindFor(event.type) === 'context')
     .map((event) => ({
       workspaceId: event.workspaceId,
       agentId: event.agentId,
@@ -194,7 +199,7 @@ export async function publishEventsToAgents(
       { db: deps.db, realtime: deps.engine.realtime },
       inputs,
       (err) => onSinkError?.('workspace_stream', err),
-    ),
+    ).catch((err) => onSinkError?.('workspace_stream', err)),
   ];
   if (contextEvents.length > 0) {
     tasks.push(
