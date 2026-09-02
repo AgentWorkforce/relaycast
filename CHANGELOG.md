@@ -22,6 +22,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - `@relaycast/types` declares the node delivery class for event types (`NODE_DURABLE_EVENT_TYPES`, `nodeDeliveryClassFor`), so hosts can tell durable `deliver` events from ephemeral `context.update` events without copying the engine's list.
 
+## [8.2.2] - 2026-09-02
+
 ### Fixed
 
 - Never-dispatched pending action invocations are now bounded by absolute age (default 72h), so stale spawn queues can no longer drain into live agents that evict an existing resident under the same name.
