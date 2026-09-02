@@ -667,6 +667,13 @@ this way — a machine legitimately runs many `direct` node-of-one delivery host
 brokers on one machine. The value is recorded on the node and returned on
 roster entries.
 
+A **live** broker is never adopted. Only a node that has gone offline is
+reused, because a broker that is still running cannot be the host re-enrolling.
+A second caller presenting a live broker's `machine_id` gets its own node and
+leaves the incumbent's id, name and token untouched — so a VM cloned from a
+snapshot, or containers baked from one image, keep separate identities instead
+of fighting over one row.
+
 ```ts
 const node = await relay.nodes.create({
   name: 'billing-agent-http',
