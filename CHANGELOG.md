@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `POST /v1/nodes` accepts `machine_id` and uses it as the enrollment key of last resort, after `node_id` and `name`. A fleet host that persists no `node_id` renames itself on every boot, and each boot used to leave another roster row behind; it now rotates the machine's existing `broker` node instead. `direct` node-of-one delivery hosts are never matched this way, and an explicit `node_id` still pins identity. Node roster entries now return `machine_id`.
 
 ## [8.2.2] - 2026-09-02
 

@@ -1,4 +1,4 @@
-import { and, eq, inArray, ne, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, ne, or, sql } from 'drizzle-orm';
 import type {
   FleetAgentRecoverMessage,
   FleetAgentRegisterMessage,
@@ -141,6 +141,7 @@ function publicNode(row: NodeRow) {
     name: row.name,
     kind: row.kind,
     role: row.role,
+    machine_id: row.machineId,
     delivery_adapter: row.deliveryAdapter,
     delivery: redactDeliveryConfig(row.deliveryConfig),
     capabilities: row.capabilities,
@@ -218,6 +219,7 @@ export async function createNodeToken(
   data: {
     node_id?: string;
     name: string;
+    machine_id?: string;
     kind?: NodeKind;
     role?: NodeRole;
     delivery_adapter?: string;
@@ -283,6 +285,7 @@ export async function createNodeToken(
         deliveryAdapter,
         deliveryConfig,
         capabilities: normalizeCapabilities(data.capabilities ?? existing.capabilities),
+        machineId: data.machine_id ?? existing.machineId,
         maxAgents,
         tags: data.tags ?? existing.tags,
         version: data.version ?? existing.version,
@@ -308,6 +311,7 @@ export async function createNodeToken(
       deliveryAdapter,
       deliveryConfig,
       capabilities: normalizeCapabilities(data.capabilities ?? []),
+      machineId: data.machine_id ?? null,
       maxAgents,
       tags: data.tags ?? [],
       version: data.version ?? 'unknown',
@@ -345,18 +349,58 @@ export async function getNodeById(db: Db, workspaceId: string, nodeId: string) {
 }
 
 /**
+ * The broker a machine already has on the roster, if any.
+ *
+ * Scoped to `broker` deliberately: a broker is the node-of-many fleet host and
+ * a machine runs one, so machine_id identifies it. A `direct` node is a
+ * node-of-one delivery host and a single machine legitimately runs many of
+ * them, so machine_id is not a key there and must never collapse them.
+ *
+ * Ordered oldest-first so a roster that already holds several rows for one
+ * machine converges onto its earliest row instead of picking arbitrarily.
+ */
+export async function getBrokerNodeByMachineId(db: Db, workspaceId: string, machineId: string) {
+  const [node] = await db
+    .select()
+    .from(nodes)
+    .where(and(
+      eq(nodes.workspaceId, workspaceId),
+      eq(nodes.machineId, machineId),
+      eq(nodes.role, 'broker'),
+    ))
+    .orderBy(asc(nodes.createdAt), asc(nodes.id))
+    .limit(1);
+  return node ?? null;
+}
+
+/**
  * Resolve the node an enroll (POST /v1/nodes) targets: by node_id when
- * supplied, by name otherwise.
+ * supplied, then by name, then by machine_id.
+ *
+ * The machine_id step is what stops the roster refilling. A host that enrolls
+ * without a persisted node_id arrives under a fresh name on every boot, and
+ * each of those names used to mint a brand-new row that nothing ever reclaimed.
+ * Falling back to the machine's existing broker turns re-enrollment into a
+ * token rotation on the row that is already there.
+ *
+ * node_id and name still win, so a caller that pins either keeps the exact
+ * identity it asked for; passing node_id is the way to opt out of machine
+ * grouping and run two brokers on one host.
  */
 export async function resolveNodeForEnroll(
   db: Db,
   workspaceId: string,
-  data: { node_id?: string; name: string },
+  data: { node_id?: string; name: string; machine_id?: string; role?: NodeRole },
 ) {
   if (data.node_id !== undefined) {
     return getNodeById(db, workspaceId, data.node_id);
   }
-  return getNodeByName(db, workspaceId, data.name);
+  const byName = await getNodeByName(db, workspaceId, data.name);
+  if (byName) return byName;
+  if (data.machine_id !== undefined && data.role !== 'direct') {
+    return getBrokerNodeByMachineId(db, workspaceId, data.machine_id);
+  }
+  return null;
 }
 
 export interface RegisterNodeResult {

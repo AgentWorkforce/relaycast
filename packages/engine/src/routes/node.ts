@@ -64,6 +64,9 @@ const httpDeliverySchema = z.object({
 const createNodeSchema = z.object({
   node_id: z.string().min(1).optional(),
   name: z.string().min(1),
+  // Dedupe key for re-enrollment: a host that keeps no node_id gets a fresh
+  // name each boot, and without this every boot minted another roster row.
+  machine_id: z.string().min(1).optional(),
   kind: nodeKindSchema.optional(),
   role: nodeRoleSchema.optional(),
   delivery_adapter: z.string().min(1).optional(),

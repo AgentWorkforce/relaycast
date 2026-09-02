@@ -202,7 +202,8 @@ export const nodes = sqliteTable(
     name: text('name').notNull(),
     tokenHash: text('token_hash').notNull().unique(),
     // Physical machine grouping in fleet views and a placement input; never a
-    // capability scope. Null until a provider reports it on register.
+    // capability scope. Set at enrollment when the caller supplies it, and by a
+    // provider on register; null when neither reports one.
     machineId: text('machine_id'),
     kind: text('kind').notNull().default('ws'),
     role: text('role').notNull().default('broker'),
@@ -228,6 +229,7 @@ export const nodes = sqliteTable(
     index('idx_nodes_workspace').on(table.workspaceId),
     index('idx_nodes_token').on(table.tokenHash),
     index('idx_nodes_status').on(table.workspaceId, table.status),
+    index('idx_nodes_workspace_machine').on(table.workspaceId, table.machineId),
   ],
 );
 
