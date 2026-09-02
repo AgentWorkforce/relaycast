@@ -22,6 +22,12 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - `@relaycast/types` declares which node frame carries each event type (`NODE_DELIVER_FRAME_EVENT_TYPES`, `nodeFrameKindFor`), so hosts can tell `deliver`-frame events from `context.update` events without copying the engine's list.
 
+## [8.3.0] - 2026-09-02
+
+### Added
+
+- `@relaycast/types` declares which node frame carries each event type (`NODE_DELIVER_FRAME_EVENT_TYPES`, `nodeFrameKindFor`), so hosts can tell `deliver`-frame events from `context.update` events without copying the engine's list.
+
 ## [8.2.2] - 2026-09-02
 
 ### Fixed
