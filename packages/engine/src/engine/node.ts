@@ -25,7 +25,7 @@ import { isProviderAgentDeliveryReady, type NodeConnectionRegistry } from '../po
 import { generateId } from './snowflake.js';
 import { assertRegistrableAgentName } from './agent.js';
 import { rotateAgentIdentity } from './agentIdentity.js';
-import { isNodeLive, nodeHasCapacity, nodeHasCapability, NODE_LIVENESS_TTL_MS } from './placement.js';
+import { isNodeLive, isReusableForMachineMatch, nodeHasCapacity, nodeHasCapability, NODE_LIVENESS_TTL_MS } from './placement.js';
 import {
   DEFAULT_PROVIDER_NAME,
   capabilityKind,
@@ -390,6 +390,9 @@ export async function getBrokerNodeByMachineId(db: Db, workspaceId: string, mach
       eq(nodes.workspaceId, workspaceId),
       eq(nodes.machineId, machineId),
       eq(nodes.role, 'broker'),
+      // Mirrors isReusableForMachineMatch: an `online` row is reusable only
+      // once its heartbeat is older than the liveness cutoff, which excludes
+      // future-dated heartbeats too.
       or(
         ne(nodes.status, 'online'),
         isNull(nodes.lastHeartbeatAt),
@@ -398,12 +401,11 @@ export async function getBrokerNodeByMachineId(db: Db, workspaceId: string, mach
     ))
     .orderBy(asc(nodes.createdAt), asc(nodes.id))
     .limit(MACHINE_MATCH_SCAN_LIMIT);
-  // isNodeLive stays authoritative: the SQL predicate above is only a
-  // pre-filter. Where the two could disagree — a heartbeat timestamped in the
-  // future, which isNodeLive treats as not live — SQL is the stricter of the
-  // two, so the row is skipped and enrollment creates a new node. That is the
-  // safe direction: an extra roster row, never an adopted live broker.
-  return candidates.find((node) => !isNodeLive(node)) ?? null;
+  // The SQL above is a pre-filter for `isReusableForMachineMatch`, which is the
+  // single definition of reusability and mirrors it exactly — including
+  // treating an `online` row with a future heartbeat as live. Re-checking here
+  // keeps that definition authoritative rather than trusting the query alone.
+  return candidates.find((node) => isReusableForMachineMatch(node)) ?? null;
 }
 
 /**

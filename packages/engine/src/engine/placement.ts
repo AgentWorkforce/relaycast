@@ -78,6 +78,36 @@ export function isNodeLive(node: Pick<NodeRow, 'status' | 'lastHeartbeatAt'>, no
   );
 }
 
+/**
+ * Whether a row sharing a machine_id may be reused by a new enrollment.
+ *
+ * This is deliberately STRICTER than `!isNodeLive(node)`, and the gap is the
+ * point rather than an oversight.
+ *
+ * `lastHeartbeatAt` is always stamped server-side, never supplied by a caller,
+ * so a heartbeat in the future means the server's own clock moved backwards —
+ * a rollback, or a database restored from a snapshot. `isNodeLive` requires
+ * `age >= 0`, so it reports such a node as NOT live even while that node is
+ * still heartbeating normally. Reusing it would rename a running broker and
+ * rotate its token: exactly the hijack the liveness gate exists to prevent,
+ * occurring precisely when `isNodeLive` cannot be trusted to detect it.
+ *
+ * So an `online` row with a future heartbeat is treated as live. The cost is a
+ * duplicate roster row, bounded at one per machine per rollback — the row that
+ * enrollment creates instead is inserted with a null heartbeat, so the next
+ * enrollment reuses that one rather than adding another. It also self-heals:
+ * once the clock passes the stale future timestamp, the original row becomes
+ * reusable again and oldest-first convergence collapses back onto it.
+ */
+export function isReusableForMachineMatch(
+  node: Pick<NodeRow, 'status' | 'lastHeartbeatAt'>,
+  now = Date.now(),
+): boolean {
+  if (isNodeLive(node, now)) return false;
+  const heartbeat = node.lastHeartbeatAt?.getTime();
+  return !(node.status === 'online' && heartbeat !== undefined && heartbeat > now);
+}
+
 export function nodeHasCapability(node: Pick<NodeRow, 'capabilities'>, capability: string): boolean {
   return Array.isArray(node.capabilities)
     && node.capabilities.some((item) => {

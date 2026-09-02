@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { makeNodeStack, createWorkspace, FakeSocket, type TestStack } from './harness.js';
 import { nodes } from '../../db/schema.js';
-import { isNodeLive } from '../../engine/placement.js';
+import { isNodeLive, isReusableForMachineMatch } from '../../engine/placement.js';
 
 /**
  * Enrollment dedupes on machine_id.
@@ -311,6 +311,54 @@ describe('node enrollment — machine_id dedupe', () => {
     // Must reuse the offline row, not mint a 27th.
     expect(reboot.body.data?.id).toBe('node_reusable');
     expect(await roster(ws.workspaceKey)).toHaveLength(26);
+  });
+
+  it('does not adopt an online broker whose heartbeat is in the future', async () => {
+    // lastHeartbeatAt is always stamped server-side, so a future value means
+    // the server clock rolled back (or the DB was restored). isNodeLive reports
+    // such a node as NOT live because it requires age >= 0 -- while the node may
+    // still be heartbeating perfectly well. Deferring to isNodeLive here would
+    // hand a running broker's row and token to whoever enrolls next, in exactly
+    // the window where isNodeLive cannot detect the hijack.
+    const ws = await createWorkspace(stack.app, 'future-heartbeat');
+    const future = new Date(Date.now() + 10 * 60_000);
+    await stack.runtime.deps.db.insert(nodes).values({
+      id: 'node_future',
+      workspaceId: ws.workspaceId,
+      name: 'skewed-host',
+      tokenHash: 'hash-future',
+      machineId: 'machine-a',
+      role: 'broker',
+      kind: 'ws',
+      status: 'online',
+      lastHeartbeatAt: future,
+      createdAt: new Date(Date.now() - 60_000),
+    });
+
+    const [before] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_future'));
+    // The premise: isNodeLive alone would call this reusable...
+    expect(isNodeLive(before!)).toBe(false);
+    // ...and the reusability rule deliberately does not.
+    expect(isReusableForMachineMatch(before!)).toBe(false);
+
+    const claimant = await enroll(ws.workspaceKey, {
+      name: 'claimant-host', machine_id: 'machine-a', role: 'broker', max_agents: 4,
+    });
+    expect(claimant.status).toBe(201);
+    expect(claimant.body.data?.id).not.toBe('node_future');
+
+    const [after] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_future'));
+    expect(after!.name).toBe('skewed-host');
+    expect(after!.tokenHash).toBe('hash-future');
+    expect(await roster(ws.workspaceKey)).toHaveLength(2);
+
+    // The leak is bounded: the row just created carries a null heartbeat, so
+    // the NEXT enrollment reuses it rather than adding a third.
+    const second = await enroll(ws.workspaceKey, {
+      name: 'claimant-host-reboot', machine_id: 'machine-a', role: 'broker', max_agents: 4,
+    });
+    expect(second.body.data?.id).toBe(claimant.body.data?.id);
+    expect(await roster(ws.workspaceKey)).toHaveLength(2);
   });
 
   it('adopts the machine_id of a row that enrolled before it reported one', async () => {
