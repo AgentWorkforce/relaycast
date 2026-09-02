@@ -7,11 +7,7 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Minor]
-
-### Added
-
-- `NODE_DELIVER_FRAME_EVENT_TYPES`, `NodeFrameKindSchema`, `isNodeDeliverFrameEventType`, and `nodeFrameKindFor` declare which event types nodes receive on the `deliver` frame (`message.created` and `thread.reply` durably; `message.read`, `message.reacted`, and the caller-addressed `action.completed`/`action.failed`/`action.denied`/`agent.exited`/`node.status.*` notifications best-effort); every other type travels as `context.update`.
+## [Unreleased]
 
 ## [8.3.0] - 2026-09-02
 

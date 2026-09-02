@@ -565,7 +565,7 @@ async function waitForInvocationReplayOutcome(
   db: Db,
   workspaceId: string,
   invocation: InvocationRow,
-  options: { acceptDispatchStarted?: boolean } = {},
+  options: { acceptDispatchStarted?: boolean; onDeadline?: 'throw' | 'return' } = {},
 ): Promise<InvocationRow> {
   let current = invocation;
   const deadline = Date.now() + 500;
@@ -586,7 +586,10 @@ async function waitForInvocationReplayOutcome(
     if (Date.now() >= deadline) {
       // The winning request may have died after its durable claim but before
       // provider dispatch started or completed. Fail retryably without
-      // releasing the key for another execution.
+      // releasing the key for another execution. Callers that own the claim
+      // themselves (the post-send takeover re-read) opt out and classify the
+      // still-open row instead.
+      if (options.onDeadline === 'return') return current;
       throw codedError('Idempotent action dispatch is still pending', 'idempotency_unavailable', 503);
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -1590,12 +1593,32 @@ export async function invokeAction(
     // A takeover can invalidate the last-moment adapter gate. Re-read the
     // durable claim so the original request and its replay agree on the same
     // pre-send failure instead of returning a pending 201.
-    await waitForInvocationReplayOutcome(
+    const settled = await waitForInvocationReplayOutcome(
       db,
       workspaceId,
       invocation,
-      { acceptDispatchStarted: true },
+      { acceptDispatchStarted: true, onDeadline: 'return' },
     );
+    // Still open with nobody having recorded an attempt: no takeover raced us,
+    // the host adapter simply could not deliver to the handler. A hosted
+    // adapter can only learn that from the send itself, so the pre-dispatch
+    // liveness gate above could not catch it. Resolve it the same way that
+    // gate would instead of reporting a retryable idempotency stall.
+    if (
+      !settled.dispatchedNodeId
+      && settled.dispatchAttempts === 0
+      && OPEN_INVOCATION_STATUSES.some((status) => status === settled.status)
+      && !action.queue
+    ) {
+      await failOpenInvocationRows(db, workspaceId, [invocation.id], 'handler_unavailable');
+      throw codedError(
+        `Action "${actionName}" handler "${handlerAgent.name}" has no live connection`,
+        'handler_unavailable',
+        503,
+      );
+    }
+    // An action that opted into `queue` keeps the pending row as its offline
+    // queue; it drains on reconnect and the never-dispatched age bound applies.
   }
 
   return {

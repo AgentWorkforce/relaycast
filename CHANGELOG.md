@@ -16,11 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Minor]
+## [Unreleased - Patch]
 
-### Added
+### Fixed
 
-- `@relaycast/types` declares which node frame carries each event type (`NODE_DELIVER_FRAME_EVENT_TYPES`, `nodeFrameKindFor`), so hosts can tell `deliver`-frame events from `context.update` events without copying the engine's list.
+- Invoking an agent-handled action whose host adapter cannot deliver to the handler now fails fast with 503 `handler_unavailable` (or stays queued when the action opted into `queue`) instead of returning 503 `idempotency_unavailable` after the replay wait.
 
 ## [8.3.0] - 2026-09-02
 
