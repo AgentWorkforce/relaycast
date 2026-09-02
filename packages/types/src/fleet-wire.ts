@@ -445,16 +445,26 @@ export type NodeFrameKind = z.infer<typeof NodeFrameKindSchema>;
  *
  * `message.created` and `thread.reply` are durable: each is a delivery row with
  * a per-agent `seq`, is acked, and is replayed when the node reconnects.
- * `message.read` and `message.reacted` ride the same frame but are synthetic
- * `seq: 0` sends with no delivery row — best-effort, dropped when the node is
- * not ready. Every other event type is a best-effort `context.update` frame (or,
- * for `http_push` nodes, a best-effort POST) — see {@link nodeFrameKindFor}.
+ * Every other type listed here rides the same frame as a synthetic `seq: 0`
+ * send with no delivery row — best-effort, dropped when the node is not ready:
+ * the channel receipts `message.read` and `message.reacted`, and the
+ * caller-addressed notifications the engine sends to one agent's mailbox
+ * (`action.completed`, `action.failed`, `action.denied`, `agent.exited`,
+ * `node.status.online`, `node.status.offline`). Every type not listed is a
+ * best-effort `context.update` frame (or, for `http_push` nodes, a best-effort
+ * POST) — see {@link nodeFrameKindFor}.
  */
 export const NODE_DELIVER_FRAME_EVENT_TYPES = [
   'message.created',
   'thread.reply',
   'message.read',
   'message.reacted',
+  'action.completed',
+  'action.failed',
+  'action.denied',
+  'agent.exited',
+  'node.status.online',
+  'node.status.offline',
 ] as const;
 export type NodeDeliverFrameEventType = (typeof NODE_DELIVER_FRAME_EVENT_TYPES)[number];
 

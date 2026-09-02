@@ -7,12 +7,21 @@ import {
 } from '../index.js';
 
 describe('node frame kind', () => {
-  it('declares exactly the four deliver-frame event types', () => {
+  it('declares exactly the deliver-frame event types', () => {
     expect([...NODE_DELIVER_FRAME_EVENT_TYPES]).toEqual([
+      // durable mailbox rows
       'message.created',
       'thread.reply',
+      // synthetic seq-0 channel receipts
       'message.read',
       'message.reacted',
+      // synthetic seq-0 caller-addressed notifications
+      'action.completed',
+      'action.failed',
+      'action.denied',
+      'agent.exited',
+      'node.status.online',
+      'node.status.offline',
     ]);
   });
 
@@ -27,6 +36,8 @@ describe('node frame kind', () => {
     'agent.status.changed',
     'member.joined',
     'delivery.failed',
+    'action.invoked',
+    'action.registered',
     'message.updated',
     'channel.created',
     'not.a.real.event',

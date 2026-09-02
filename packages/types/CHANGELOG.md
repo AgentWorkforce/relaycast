@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `NODE_DELIVER_FRAME_EVENT_TYPES`, `NodeFrameKindSchema`, `isNodeDeliverFrameEventType`, and `nodeFrameKindFor` declare which event types nodes receive on the `deliver` frame (`message.created` and `thread.reply` durably, `message.read` and `message.reacted` best-effort); every other type travels as `context.update`.
+- `NODE_DELIVER_FRAME_EVENT_TYPES`, `NodeFrameKindSchema`, `isNodeDeliverFrameEventType`, and `nodeFrameKindFor` declare which event types nodes receive on the `deliver` frame (`message.created` and `thread.reply` durably; `message.read`, `message.reacted`, and the caller-addressed `action.completed`/`action.failed`/`action.denied`/`agent.exited`/`node.status.*` notifications best-effort); every other type travels as `context.update`.
 
 ## [8.2.0] - 2026-08-21
 

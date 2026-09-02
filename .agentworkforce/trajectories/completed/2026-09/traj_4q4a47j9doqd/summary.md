@@ -16,7 +16,8 @@ Declared the node frame kind in @relaycast/types (`NODE_DELIVER_FRAME_EVENT_TYPE
 ## Commits
 
 - `3f8ba166f5602daa140c00ebce95ea6a3cbb323b` — the original refactor.
-- A follow-up review-fix commit on the same branch (`claude/codebase-review-architecture-rsucow`) renamed the durable/ephemeral classification to the frame-kind naming above, added the sink-failure reporting, and filled in this record. Its SHA is the commit that contains this file's current revision; `_trace.endRef` stays at the original commit it was recorded from.
+- `d384d389fa2932ff05cb875696445c4be4225a5f` — review round: frame-kind rename, sink-failure reporting, docstrings.
+- A later commit extended `NODE_DELIVER_FRAME_EVENT_TYPES` with the caller-addressed deliver-frame types and amended this record (`commits` and `_trace.endRef` now end at `d384d38`); that commit itself only touches the declaration, its tests/docs, and these trajectory files. The tool cannot amend a completed trajectory, so this was hand-edited.
 
 **Approach:** Standard approach
 
