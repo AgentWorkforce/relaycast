@@ -653,7 +653,9 @@ describes the wire contract. Directly connected agents are implicit
 `kind: "ws", role: "direct"` nodes, broker-controlled agents bind to
 `kind: "ws", role: "broker"` nodes over `/v1/node/ws`, and both use the same
 `ws.node.v1` `deliver` frame. Agent-targeted receipt/failure notifications are
-best-effort `context.update` frames on the same node stream. HTTP push nodes default to one bound agent, which
+best-effort `context.update` frames on the same node stream. Which event types are
+durable is declared once in `@relaycast/types` (`NODE_DURABLE_EVENT_TYPES` /
+`nodeDeliveryClassFor`); every other type is ephemeral. HTTP push nodes default to one bound agent, which
 makes the common "one remote agent, one endpoint" shape explicit while still
 allowing larger broker-style endpoints with `max_agents`.
 

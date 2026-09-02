@@ -16,8 +16,7 @@ import {
   observerAllowsAgent,
   observerAllowsCreatedAt,
 } from '../engine/observerToken.js';
-import { fanoutToAgents, fanoutToWorkspace } from './fanout.js';
-import { sendNodePresenceContext } from '../engine/nodeContext.js';
+import { fanoutPresence, fanoutToAgents, fanoutToWorkspace } from './fanout.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
@@ -169,22 +168,7 @@ async function fanoutAgentStatus(c: Parameters<typeof runInBackground>[0], agent
     status: nextStatus,
     ...(eventId ? { event_id: eventId } : {}),
   };
-  runInBackground(c, fanoutToWorkspace(c, eventType, eventData), `fanout ${eventType}`);
-  runInBackground(
-    c,
-    sendNodePresenceContext(
-      {
-        db: c.get('db'),
-        nodeConnections: c.get('engine').nodeConnections,
-        environment: c.get('engine').config?.environment,
-        httpPushProxy: c.get('engine').config?.httpPushProxy,
-        realtime: c.get('engine').realtime,
-        workspaceId: c.get('workspace').id,
-      },
-      { subjectAgentId: agent.id, event: eventType, data: eventData },
-    ),
-    `node context ${eventType}`,
-  );
+  runInBackground(c, fanoutPresence(c, agent.id, eventType, eventData), `fanout ${eventType}`);
   await sendWebhookEvent(c, {
     type: eventType,
     workspaceId: c.get('workspace').id,
@@ -883,22 +867,7 @@ agentRoutes.post(
           event_id: event.id,
           payload,
         };
-        runInBackground(c, fanoutToWorkspace(c, eventType, eventData), `fanout ${eventType}`);
-        runInBackground(
-          c,
-          sendNodePresenceContext(
-            {
-              db,
-              nodeConnections: c.get('engine').nodeConnections,
-              environment: c.get('engine').config?.environment,
-              httpPushProxy: c.get('engine').config?.httpPushProxy,
-              realtime: c.get('engine').realtime,
-              workspaceId: workspace.id,
-            },
-            { subjectAgentId: agentRecord.id, event: eventType, data: eventData },
-          ),
-          `node context ${eventType}`,
-        );
+        runInBackground(c, fanoutPresence(c, agentRecord.id, eventType, eventData), `fanout ${eventType}`);
         await sendWebhookEvent(c, {
           type: eventType,
           workspaceId: workspace.id,

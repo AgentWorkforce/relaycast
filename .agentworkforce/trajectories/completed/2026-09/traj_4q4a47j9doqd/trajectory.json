@@ -1,0 +1,53 @@
+{
+  "id": "traj_4q4a47j9doqd",
+  "version": 1,
+  "task": {
+    "title": "Refactor: declare node delivery class in @relaycast/types and route events through one dispatcher"
+  },
+  "status": "completed",
+  "startedAt": "2026-09-02T04:20:45.642Z",
+  "completedAt": "2026-09-02T04:34:27.891Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-09-02T04:34:22.098Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_0dq7oafnohy2",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-09-02T04:34:22.098Z",
+      "endedAt": "2026-09-02T04:34:27.891Z",
+      "events": [
+        {
+          "ts": 1788323662099,
+          "type": "decision",
+          "content": "Declared the node delivery class in @relaycast/types and funneled all event fan-out through engine/eventDispatch.ts: Declared the node delivery class in @relaycast/types and funneled all event fan-out through engine/eventDispatch.ts",
+          "raw": {
+            "question": "Declared the node delivery class in @relaycast/types and funneled all event fan-out through engine/eventDispatch.ts",
+            "chosen": "Declared the node delivery class in @relaycast/types and funneled all event fan-out through engine/eventDispatch.ts",
+            "alternatives": [],
+            "reasoning": "The durable/ephemeral split was a hard-coded Set inside a route file and the sink fan-out was hand-assembled in fanout.ts, deliveryRouting.ts and agent.ts; one dispatcher keyed off a types-level declaration removes the drift risk while keeping nodeContext.ts as the transport layer"
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Declared NODE_DURABLE_EVENT_TYPES/nodeDeliveryClassFor in @relaycast/types, added engine/eventDispatch.ts as the single sink dispatcher, and rewired fanout.ts, deliveryRouting.ts and agent.ts onto it. Behavior preserved; 714 engine + 206 types tests green.",
+    "approach": "Standard approach",
+    "confidence": 0.85
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "596760483188d6a4d2a7de55a4d6fa7ed48fa58c",
+    "endRef": "596760483188d6a4d2a7de55a4d6fa7ed48fa58c"
+  }
+}

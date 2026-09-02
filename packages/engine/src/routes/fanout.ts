@@ -1,53 +1,60 @@
 import type { Context } from 'hono';
 import type { AppEnv } from '../env.js';
-import { transformForClient, type WsEvent } from '../engine/wsTransform.js';
 import { getRequestLogger, toErrorDetails } from '../lib/logger.js';
 import { dmConversations, dmParticipants } from '../db/schema.js';
 import { and, eq, isNull } from 'drizzle-orm';
-import { sendNodeContextForChannel, sendNodeContextToAgents } from '../engine/nodeContext.js';
-import { appendAndPublishWorkspaceEvent } from '../engine/workspaceEvents.js';
+import {
+  publishEvent,
+  type EventDispatchScope,
+  type EventSinkErrorHandler,
+} from '../engine/eventDispatch.js';
 
 type HonoContext = Context<AppEnv>;
 
-const NODE_DELIVERY_EVENT_TYPES = new Set([
-  'message.created',
-  'thread.reply',
-  'message.read',
-  'message.reacted',
-]);
+/**
+ * Route-level wrappers over the single event dispatcher
+ * (`engine/eventDispatch.ts`). They only name the audience — which sinks an
+ * event reaches, and whether it is durable or ephemeral for nodes, is decided
+ * there.
+ */
 
-function buildEvent(
-  type: string,
-  workspaceId: string,
-  data: Record<string, unknown>,
-  channelId?: string,
-): WsEvent {
-  return {
-    type,
-    workspace_id: workspaceId,
-    channel_id: channelId,
-    data,
-    timestamp: new Date().toISOString(),
-  };
-}
-
-async function publishToWorkspaceStream(
+function sinkErrorLogger(
   c: HonoContext,
   workspaceId: string,
   type: string,
-  payload: Record<string, unknown>,
   channelId?: string,
+): EventSinkErrorHandler {
+  return (sink, err) => {
+    const logger = getRequestLogger(c, `fanout.${sink}`);
+    logger.error(`${sink} error for workspace ${workspaceId}, event ${type}`, {
+      workspace_id: workspaceId,
+      ...(channelId ? { channel_id: channelId } : {}),
+      event_type: type,
+      ...toErrorDetails(err),
+    });
+  };
+}
+
+async function dispatch(
+  c: HonoContext,
+  workspaceId: string,
+  type: string,
+  data: Record<string, unknown>,
+  scope: EventDispatchScope,
 ): Promise<void> {
-  const logger = getRequestLogger(c, 'fanout.workspace_stream');
-  await appendAndPublishWorkspaceEvent(
-    { db: c.get('db'), realtime: c.get('engine').realtime },
-    workspaceId,
-    { type, channelId: channelId ?? null, payload },
-    (err) => {
-      logger.error(`workspace stream publish error for workspace ${workspaceId}`, {
-        workspace_id: workspaceId,
-        ...toErrorDetails(err),
-      });
+  await publishEvent(
+    { db: c.get('db'), engine: c.get('engine') },
+    {
+      workspaceId,
+      type,
+      data,
+      scope,
+      onSinkError: sinkErrorLogger(
+        c,
+        workspaceId,
+        type,
+        scope.kind === 'channel' ? scope.channelId : undefined,
+      ),
     },
   );
 }
@@ -63,8 +70,7 @@ export async function publishWorkspaceEvent(
     await fanoutToChannel(c, channelId, type, data, workspaceId);
     return;
   }
-  const event = buildEvent(type, workspaceId, data, channelId);
-  await publishToWorkspaceStream(c, workspaceId, type, transformForClient(event));
+  await dispatch(c, workspaceId, type, data, { kind: 'workspace' });
 }
 
 export async function fanoutToChannel(
@@ -74,13 +80,13 @@ export async function fanoutToChannel(
   data: Record<string, unknown>,
   workspaceIdOverride?: string,
 ): Promise<void> {
-  const logger = getRequestLogger(c, 'fanout.channel');
   let workspaceId = workspaceIdOverride;
   if (!workspaceId) {
     const workspace = c.get('workspace');
     workspaceId = workspace?.id;
   }
   if (!workspaceId) {
+    const logger = getRequestLogger(c, 'fanout.channel');
     logger.error('fanoutToChannel missing workspace context', {
       channel_id: channelId,
       event_type: type,
@@ -88,41 +94,7 @@ export async function fanoutToChannel(
     return;
   }
 
-  const event = buildEvent(type, workspaceId, data, channelId);
-  const payload = transformForClient(event);
-  const ws = workspaceId;
-
-  const tasks: Promise<unknown>[] = [];
-  tasks.push(publishToWorkspaceStream(c, ws, type, payload, channelId));
-  if (!NODE_DELIVERY_EVENT_TYPES.has(type)) {
-    tasks.push(
-      sendNodeContextForChannel(
-        {
-          db: c.get('db'),
-          nodeConnections: c.get('engine').nodeConnections,
-          environment: c.get('engine').config?.environment,
-          httpPushProxy: c.get('engine').config?.httpPushProxy,
-          realtime: c.get('engine').realtime,
-          workspaceId: ws,
-        },
-        {
-          channelId,
-          topic: type.startsWith('thread.') ? 'thread' : 'channel',
-          event: type,
-          data,
-        },
-      ).catch((err) => {
-        logger.error(`node context error for channel ${channelId}, event ${type}`, {
-          workspace_id: ws,
-          channel_id: channelId,
-          event_type: type,
-          ...toErrorDetails(err),
-        });
-      }),
-    );
-  }
-
-  await Promise.allSettled(tasks);
+  await dispatch(c, workspaceId, type, data, { kind: 'channel', channelId });
 }
 
 export async function fanoutToAgents(
@@ -131,32 +103,7 @@ export async function fanoutToAgents(
   type: string,
   data: Record<string, unknown>,
 ): Promise<void> {
-  const workspaceId = c.get('workspace').id;
-  const event = buildEvent(type, workspaceId, data);
-  const payload = transformForClient(event);
-
-  const unique = [...new Set(agentIds)];
-  const tasks: Promise<unknown>[] = [
-    publishToWorkspaceStream(c, workspaceId, type, payload),
-  ];
-  if (!NODE_DELIVERY_EVENT_TYPES.has(type)) {
-    tasks.push(sendNodeContextToAgents(
-      {
-        db: c.get('db'),
-        nodeConnections: c.get('engine').nodeConnections,
-        environment: c.get('engine').config?.environment,
-        httpPushProxy: c.get('engine').config?.httpPushProxy,
-        realtime: c.get('engine').realtime,
-        workspaceId,
-      },
-      {
-        agentIds: unique,
-        event: type,
-        data,
-      },
-    ));
-  }
-  await Promise.allSettled(tasks);
+  await dispatch(c, c.get('workspace').id, type, data, { kind: 'agents', agentIds });
 }
 
 export async function fanoutToWorkspace(
@@ -164,18 +111,20 @@ export async function fanoutToWorkspace(
   type: string,
   data: Record<string, unknown>,
 ): Promise<void> {
-  const logger = getRequestLogger(c, 'fanout.workspace');
-  const workspaceId = c.get('workspace').id;
-  try {
-    await publishWorkspaceEvent(c, type, data);
-  } catch (err) {
-    logger.error(`fanoutToWorkspace error for workspace ${workspaceId}, event ${type}`, {
-      workspace_id: workspaceId,
-      event_type: type,
-      ...toErrorDetails(err),
-    });
-    throw err;
-  }
+  await publishWorkspaceEvent(c, type, data);
+}
+
+/**
+ * Fan an event out to the workspace stream and to the nodes hosting agents that
+ * observe presence for `subjectAgentId`.
+ */
+export async function fanoutPresence(
+  c: HonoContext,
+  subjectAgentId: string,
+  type: string,
+  data: Record<string, unknown>,
+): Promise<void> {
+  await dispatch(c, c.get('workspace').id, type, data, { kind: 'presence', subjectAgentId });
 }
 
 /**
