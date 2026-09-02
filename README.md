@@ -667,8 +667,12 @@ this way — a machine legitimately runs many `direct` node-of-one delivery host
 brokers on one machine. The value is recorded on the node and returned on
 roster entries.
 
-Reuse requires the matched row to have heartbeated at least once and then gone
-stale — proof that a host held it and left. A row that has never connected is
+Reuse requires the matched row to have proved it was alive — an actual heartbeat
+frame, recorded in `proven_live_at` — and for that proof to have gone stale.
+`last_heartbeat_at` cannot serve here: registration and disconnect cleanup write
+it too, so it does not distinguish a node that connected from one that proved
+it was running. The proof is cleared whenever enrollment re-issues a row's
+token, so a row cannot be taken twice before its new holder proves itself. A row that has never connected is
 never reused, because that case cannot be told apart from two hosts cold-booting
 from one snapshot or baked image: they enroll moments apart, neither has
 heartbeated, and adopting the first row would overwrite its token so the first

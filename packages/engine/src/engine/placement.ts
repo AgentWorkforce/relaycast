@@ -81,42 +81,38 @@ export function isNodeLive(node: Pick<NodeRow, 'status' | 'lastHeartbeatAt'>, no
 /**
  * Whether a row sharing a machine_id may be reused by a new enrollment.
  *
- * Reuse requires that the row has heartbeated at least once AND that the
- * heartbeat is old enough for the host to be gone. Both halves are load-bearing.
+ * Reads `provenLiveAt`, NOT `lastHeartbeatAt`. That distinction is the whole
+ * point: `lastHeartbeatAt` is written by registration (`registerNode`,
+ * `upsertProvider`, `recomputeNodeAggregate`) and by disconnect cleanup
+ * (`markNodeOffline`, `markProviderOffline`, `markDirectNodeOfflineForAgent`)
+ * as well as by real heartbeats, so a node that registered and never sent one
+ * carries a timestamp indistinguishable from a node that did. Gating reuse on
+ * it would let a host that merely connected be treated as proven, and reuse
+ * rotates the row's token — a wrong answer silently revokes a credential
+ * another host is holding.
  *
- * Requiring a heartbeat is what makes reuse safe. A row that has never
- * heartbeated has never proven that any host successfully used its credential,
- * and the holder may be seconds away from connecting — two hosts cold-booting
- * from one snapshot or baked image enroll within moments of each other, and at
- * the instant the second enrolls the first is still `offline` with no heartbeat.
- * Reusing it there overwrites `tokenHash`, so the first host is handed a 201 and
- * a credential that silently stops authenticating. Enrollment cannot tell that
- * sequence apart from one host re-enrolling twice — the requests are identical —
- * so the only safe rule is to reuse a row only once a host has demonstrably
- * held it and then gone away.
+ * `provenLiveAt` is written only by an arriving heartbeat frame, and cleared
+ * whenever enrollment re-issues the row's token, so a row that was just reused
+ * cannot be reused again until its new holder has proved itself.
  *
- * Requiring the heartbeat to be stale is the liveness guard: a broker still
- * heartbeating is not the host coming back, and adopting it would rename a
- * running node and rotate its token.
+ * Reuse therefore needs all of: the node is not live; it has proved life at
+ * least once since its current credential was issued; and that proof is old
+ * enough that the host is gone. A proof timestamped in the future is rejected —
+ * it means the server clock moved backwards, and the node may still be running.
  *
- * A heartbeat in the FUTURE is treated as not reusable. `lastHeartbeatAt` is
- * always stamped server-side, so a future value means the server clock moved
- * backwards; the node may still be heartbeating normally while arithmetic on a
- * skewed clock says otherwise, and adopting it would be the same hijack.
- *
- * The cost is that a host which enrolls and never connects is never deduped.
- * That population is reaped rather than reused (relaycast-cloud#91), and it has
- * no working credential to protect — but it does mean this feature bounds the
- * roster only for hosts that actually connect.
+ * Cost: a host that enrolls, or even registers, but never heartbeats is never
+ * deduped. Those rows have no proven holder to protect and are reclaimed by the
+ * roster reaper instead.
  */
 export function isReusableForMachineMatch(
-  node: Pick<NodeRow, 'status' | 'lastHeartbeatAt'>,
+  node: Pick<NodeRow, 'status' | 'lastHeartbeatAt' | 'provenLiveAt'>,
   now = Date.now(),
 ): boolean {
-  const heartbeat = node.lastHeartbeatAt?.getTime();
-  if (heartbeat === undefined) return false;
-  if (heartbeat > now) return false;
-  return now - heartbeat > NODE_LIVENESS_TTL_MS;
+  if (isNodeLive(node, now)) return false;
+  const proven = node.provenLiveAt?.getTime();
+  if (proven === undefined) return false;
+  if (proven > now) return false;
+  return now - proven > NODE_LIVENESS_TTL_MS;
 }
 
 export function nodeHasCapability(node: Pick<NodeRow, 'capabilities'>, capability: string): boolean {

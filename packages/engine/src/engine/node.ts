@@ -286,6 +286,11 @@ export async function createNodeToken(
         deliveryConfig,
         capabilities: normalizeCapabilities(data.capabilities ?? existing.capabilities),
         machineId: data.machine_id ?? existing.machineId,
+        // The credential just changed, so whatever the previous holder proved
+        // no longer applies to this row. Without clearing it, a row reused once
+        // still looks proven and could be reused again immediately, revoking
+        // the token this call is handing out.
+        provenLiveAt: null,
         maxAgents,
         tags: data.tags ?? existing.tags,
         version: data.version ?? existing.version,
@@ -390,11 +395,11 @@ export async function getBrokerNodeByMachineId(db: Db, workspaceId: string, mach
       eq(nodes.workspaceId, workspaceId),
       eq(nodes.machineId, machineId),
       eq(nodes.role, 'broker'),
-      // Mirrors isReusableForMachineMatch: the row must have heartbeated at
-      // least once, and that heartbeat must predate the liveness cutoff. This
-      // also excludes future-dated heartbeats.
-      isNotNull(nodes.lastHeartbeatAt),
-      lt(nodes.lastHeartbeatAt, liveCutoff),
+      // Mirrors isReusableForMachineMatch: the row must have proved life since
+      // its current credential was issued, and that proof must predate the
+      // liveness cutoff. Also excludes future-dated proofs.
+      isNotNull(nodes.provenLiveAt),
+      lt(nodes.provenLiveAt, liveCutoff),
     ))
     .orderBy(asc(nodes.createdAt), asc(nodes.id))
     .limit(MACHINE_MATCH_SCAN_LIMIT);
@@ -596,6 +601,9 @@ export async function heartbeatNode(
         activeAgents: 1,
         handlersLive: false,
         lastHeartbeatAt: new Date(),
+        // A heartbeat frame arrived: this is proof of life, unlike the
+        // registration and disconnect writes that also touch lastHeartbeatAt.
+        provenLiveAt: new Date(),
       })
       .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)))
       .returning();
@@ -640,6 +648,13 @@ export async function heartbeatNode(
       await tx.update(nodes).set({ name: message.name }).where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
     }
     await recomputeNodeAggregate(tx, workspaceId, nodeId, message.version !== undefined ? { version: message.version } : {});
+    // Stamped after the aggregate so it cannot be overwritten by it: the
+    // aggregate derives lastHeartbeatAt from provider rows, which registration
+    // also writes, whereas this column is only ever set by an arriving frame.
+    await tx
+      .update(nodes)
+      .set({ provenLiveAt: new Date() })
+      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
   });
 
   const [updated] = await db

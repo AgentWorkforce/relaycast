@@ -37,11 +37,20 @@ describe('node enrollment — machine_id dedupe', () => {
     return ((await res.json()) as { data: Record<string, unknown>[] }).data;
   }
 
-  /** The host connected, then went away: a heartbeat well past the liveness TTL. */
+  /** The host heartbeated, then went away: proof of life well past the TTL. */
   async function markConnectedThenGone(nodeId: string) {
+    const long_ago = new Date(Date.now() - 600_000);
     await stack.runtime.deps.db
       .update(nodes)
-      .set({ status: 'offline', lastHeartbeatAt: new Date(Date.now() - 600_000) })
+      .set({ status: 'offline', lastHeartbeatAt: long_ago, provenLiveAt: long_ago })
+      .where(eq(nodes.id, nodeId));
+  }
+
+  /** Registered but never heartbeated: the plumbing wrote lastHeartbeatAt only. */
+  async function markRegisteredNeverHeartbeated(nodeId: string) {
+    await stack.runtime.deps.db
+      .update(nodes)
+      .set({ status: 'offline', lastHeartbeatAt: new Date(Date.now() - 600_000), provenLiveAt: null })
       .where(eq(nodes.id, nodeId));
   }
 
@@ -77,6 +86,74 @@ describe('node enrollment — machine_id dedupe', () => {
     const [rowA] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, a.body.data?.id as string));
     expect(rowA!.name).toBe('clone-a');
     expect(await roster(ws.workspaceKey)).toHaveLength(2);
+  });
+
+  it('does not reuse a row that only ever registered, never heartbeated', async () => {
+    // registerNode / upsertProvider / recomputeNodeAggregate all write
+    // lastHeartbeatAt, and markNodeOffline writes it again on disconnect. None
+    // of those prove the node was alive, so none may unlock reuse.
+    const ws = await createWorkspace(stack.app, 'registered-only');
+    const first = await enroll(ws.workspaceKey, { name: 'host-a', machine_id: 'machine-a', role: 'broker', max_agents: 4 });
+    await markRegisteredNeverHeartbeated(first.body.data?.id as string);
+
+    const second = await enroll(ws.workspaceKey, { name: 'host-a-boot2', machine_id: 'machine-a', role: 'broker', max_agents: 4 });
+    expect(second.body.data?.id).not.toBe(first.body.data?.id);
+    expect(await roster(ws.workspaceKey)).toHaveLength(2);
+  });
+
+  it('does not let a just-reused row be reused again before its new holder proves life', async () => {
+    // Reuse rotates tokenHash. If the stale proof survived that rotation, a
+    // third enrollment could take the row straight back and revoke the token
+    // the second enrollment was just handed.
+    const ws = await createWorkspace(stack.app, 'double-reuse');
+    const first = await enroll(ws.workspaceKey, { name: 'host-boot1', machine_id: 'machine-a', role: 'broker', max_agents: 4 });
+    await markConnectedThenGone(first.body.data?.id as string);
+
+    const second = await enroll(ws.workspaceKey, { name: 'host-boot2', machine_id: 'machine-a', role: 'broker', max_agents: 4 });
+    expect(second.body.data?.id).toBe(first.body.data?.id);
+
+    const [afterReuse] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, second.body.data?.id as string));
+    expect(afterReuse!.provenLiveAt).toBeNull();
+
+    const third = await enroll(ws.workspaceKey, { name: 'host-boot3', machine_id: 'machine-a', role: 'broker', max_agents: 4 });
+    expect(third.body.data?.id).not.toBe(second.body.data?.id);
+
+    // The second host's row and credential survive.
+    const [rowTwo] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, second.body.data?.id as string));
+    expect(rowTwo!.name).toBe('host-boot2');
+    const { sha256Hex } = await import('../../lib/crypto.js');
+    expect(rowTwo!.tokenHash).toBe(await sha256Hex(second.body.data?.token as string));
+  });
+
+  it('a real heartbeat frame is what unlocks reuse', async () => {
+    // End-to-end: enroll, register, heartbeat, then age the proof out.
+    const ws = await createWorkspace(stack.app, 'heartbeat-unlocks');
+    await enroll(ws.workspaceKey, {
+      node_id: 'node_hb', name: 'broker-host', machine_id: 'machine-a', role: 'broker', max_agents: 4,
+    });
+    const handle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, 'node_hb', new FakeSocket());
+    await handle.handleMessage(JSON.stringify({
+      v: 1, id: 'reg', type: 'node.register', name: 'broker-host', node_id: 'node_hb',
+      provider: { name: 'default', instance_id: 'i1' }, capabilities: [], max_agents: 4,
+      tags: [], version: 'v1', resume_cursor: null,
+    }));
+    // Registration alone must not set proof of life.
+    const [afterRegister] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_hb'));
+    expect(afterRegister!.lastHeartbeatAt).not.toBeNull();
+    expect(afterRegister!.provenLiveAt).toBeNull();
+
+    await handle.handleMessage(JSON.stringify({
+      v: 1, type: 'node.heartbeat', provider: { name: 'default', instance_id: 'i1' },
+      active_agents: 0, handlers_live: true,
+    }));
+    const [afterHeartbeat] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_hb'));
+    expect(afterHeartbeat!.provenLiveAt).not.toBeNull();
+
+    // Age the proof out; now the row is reusable.
+    await markConnectedThenGone('node_hb');
+    const reboot = await enroll(ws.workspaceKey, { name: 'broker-host-reboot', machine_id: 'machine-a' });
+    expect(reboot.body.data?.id).toBe('node_hb');
+    expect(await roster(ws.workspaceKey)).toHaveLength(1);
   });
 
   it('persists machine_id supplied at enrollment', async () => {
@@ -185,7 +262,7 @@ describe('node enrollment — machine_id dedupe', () => {
       id: 'node_future', workspaceId: ws.workspaceId, name: 'skewed-host',
       tokenHash: 'hash-future', machineId: 'machine-a', role: 'broker', kind: 'ws',
       status: 'online', lastHeartbeatAt: new Date(Date.now() + 600_000),
-      createdAt: new Date(Date.now() - 60_000),
+      provenLiveAt: new Date(Date.now() + 600_000), createdAt: new Date(Date.now() - 60_000),
     });
 
     const [before] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_future'));
@@ -215,7 +292,8 @@ describe('node enrollment — machine_id dedupe', () => {
     await stack.runtime.deps.db.insert(nodes).values({
       id: 'node_reusable', workspaceId: ws.workspaceId, name: 'gone-host',
       tokenHash: 'hash-reusable', machineId: 'machine-a', role: 'broker', kind: 'ws',
-      status: 'offline', lastHeartbeatAt: new Date(now - 600_000), createdAt: new Date(now),
+      status: 'offline', lastHeartbeatAt: new Date(now - 600_000),
+      provenLiveAt: new Date(now - 600_000), createdAt: new Date(now),
     });
 
     const reboot = await enroll(ws.workspaceKey, {
