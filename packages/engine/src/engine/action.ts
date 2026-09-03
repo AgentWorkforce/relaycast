@@ -1586,16 +1586,50 @@ export async function invokeAction(
     actionId: action.id,
   });
 
-  if (!dispatched.accepted) {
-    // A takeover can invalidate the last-moment adapter gate. Re-read the
-    // durable claim so the original request and its replay agree on the same
-    // pre-send failure instead of returning a pending 201.
-    await waitForInvocationReplayOutcome(
-      db,
-      workspaceId,
-      invocation,
-      { acceptDispatchStarted: true },
-    );
+  if (dispatched.sent && !dispatched.accepted) {
+    // The provider owns the frame once the send returns true. A fast completion
+    // can make the following open-row dispatch UPDATE lose legitimately; in
+    // that case acknowledge the durable terminal state instead of reporting a
+    // retryable send failure for work the handler already executed.
+    const [settled] = await db
+      .select()
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, workspaceId),
+        eq(actionInvocations.id, invocation.id),
+      ));
+    if (settled) {
+      return invocationAck(settled, {
+        actionName,
+        handlerAgentId: action.handlerAgentId,
+        handlerNodeId: handlerAgent.locationNodeId,
+      });
+    }
+  }
+
+  if (!dispatched.sent) {
+    if (invocationId !== undefined) {
+      // A keyed claim must remain durable across a transient disconnect. Re-read
+      // it so the original request and its replay agree on the same pre-send
+      // outcome without releasing the key for a second execution.
+      await waitForInvocationReplayOutcome(
+        db,
+        workspaceId,
+        invocation,
+        { acceptDispatchStarted: true },
+      );
+    } else {
+      // An unkeyed invocation has no replay contract to preserve. Leaving its
+      // pre-send row pending reports an idempotency failure to a caller that did
+      // not request idempotency and strands work no retry can address. Fail the
+      // row and classify the actual condition instead.
+      await failOpenInvocationRows(db, workspaceId, [invocation.id], 'handler_unavailable');
+      throw codedError(
+        `Action "${actionName}" handler "${handlerAgent.name}" has no live connection`,
+        'handler_unavailable',
+        503,
+      );
+    }
   }
 
   return {
@@ -1868,7 +1902,7 @@ async function dispatchNodeInvocation(args: {
   retryAfterAt?: Date | null;
   reservationHeld?: boolean;
   skipIncrementAttempts?: boolean;
-}): Promise<{ accepted: boolean; pending: boolean }> {
+}): Promise<{ accepted: boolean; pending: boolean; sent: boolean }> {
   const frame = {
     v: 1 as const,
     type: 'action.invoke' as const,
@@ -1888,7 +1922,7 @@ async function dispatchNodeInvocation(args: {
         args.invocationId,
         args.nodeId,
       );
-  if (!snapshotted) return { accepted: false, pending: false };
+  if (!snapshotted) return { accepted: false, pending: false, sent: false };
   const connectedBefore = args.registry.isProviderConnected(args.workspaceId, args.nodeId, args.providerName);
   const sent = args.agent && args.actionId
     ? await (args.registry.sendAuthorizedActionToProvider?.(
@@ -1911,7 +1945,7 @@ async function dispatchNodeInvocation(args: {
         frame,
       );
 
-  if (!sent) return { accepted: false, pending: false };
+  if (!sent) return { accepted: false, pending: false, sent: false };
 
   const pending = !!args.pending || !connectedBefore;
   const accepted = await dispatchNodeAttempt(
@@ -1928,7 +1962,7 @@ async function dispatchNodeInvocation(args: {
       actionId: args.actionId,
     },
   );
-  return { accepted, pending };
+  return { accepted, pending, sent: true };
 }
 
 function attemptedNodeSet(invocation: Pick<InvocationRow, 'attemptedNodeIds' | 'dispatchedNodeId'>): string[] {

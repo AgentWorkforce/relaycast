@@ -22,6 +22,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - `POST /v1/nodes` accepts `machine_id` and uses it as the enrollment key of last resort, after `node_id` and `name`. A fleet host that persists no `node_id` renames itself on every boot, and each boot used to leave another roster row behind; it now rotates the machine's existing `broker` node instead. `direct` node-of-one delivery hosts are never matched this way, and reuse requires the matched broker to have proved it was alive — by an actual heartbeat frame, tracked in a new `proven_live_at` column, since `last_heartbeat_at` is also written by registration and disconnect cleanup. That proof is cleared whenever enrollment re-issues a row's token, so a row cannot be taken twice before its new holder proves itself. Rows that never heartbeated, rows still live, and rows with a future proof are all left alone, so hosts cold-booting from a shared baked `machine_id` keep separate identities and credentials. An explicit `node_id` still pins identity. Hosts that enroll or register but never heartbeat are not deduped; those rows are reclaimed by the roster reaper. Node roster entries now return `machine_id`.
 
+### Fixed
+
+- Unkeyed agent-action invocations now report `handler_unavailable` and fail their durable row when the owner-side provider send misses, while still acknowledging work that completes between provider acceptance and dispatch bookkeeping.
+
 ## [8.3.0] - 2026-09-02
 
 ### Added
@@ -373,7 +377,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased - Minor]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.3...HEAD
+[Unreleased - Minor]: https://github.com/AgentWorkforce/relaycast/compare/v8.3.0...HEAD
 [6.0.3]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.2...v6.0.3
 [6.0.2]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.1...v6.0.2
 [6.0.1]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.0...v6.0.1
