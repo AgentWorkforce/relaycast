@@ -109,6 +109,12 @@ export function isReusableForMachineMatch(
   now = Date.now(),
 ): boolean {
   if (isNodeLive(node, now)) return false;
+  // A timestamp in the future on EITHER column means the server clock moved
+  // backwards. `isNodeLive` reports such a row as not live because it requires
+  // `age >= 0`, so without this a stale proof plus a future heartbeat would
+  // read as reusable while the broker is still running.
+  const heartbeat = node.lastHeartbeatAt?.getTime();
+  if (heartbeat !== undefined && heartbeat > now) return false;
   const proven = node.provenLiveAt?.getTime();
   if (proven === undefined) return false;
   if (proven > now) return false;

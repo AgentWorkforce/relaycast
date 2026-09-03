@@ -11,9 +11,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `POST /v1/nodes` accepts `machine_id` and uses it as the enrollment key of last resort, after `node_id` and `name`, so re-enrollment under a fresh name rotates the machine's existing `broker` node instead of inserting another roster row. Only `broker` requests match — the role is resolved from `kind`/`max_agents` before the lookup, so a `direct` node sharing the machine is never rotated. `isReusableForMachineMatch` gates reuse on `proven_live_at` (migration `0044_node_proven_live_at.sql`), a new column written only by an arriving heartbeat frame and cleared when enrollment re-issues a row's token. `last_heartbeat_at` cannot serve this purpose because `registerNode`, `upsertProvider` and `recomputeNodeAggregate` write it on registration and `markNodeOffline`, `markProviderOffline` and `markDirectNodeOfflineForAgent` write it on disconnect. Rows that never heartbeated, live rows, rows with a future proof, and rows whose token was just re-issued are never adopted, so a running broker is never renamed or re-tokened and cold-booting clones sharing a baked `machine_id` keep separate credentials. Matching resolves oldest-first. Enrollments keyed on one machine are serialized in-process. Migration `0043_node_machine_id_index.sql` indexes `nodes(workspace_id, machine_id)`. The roster API now returns `machine_id`.
-
-## [8.2.2] - 2026-09-02
+- `POST /v1/nodes` accepts `machine_id` and reuses the machine's existing `broker` node instead of adding a roster row, so a host that re-enrolls under a fresh name stops growing the roster. Only a node that proved it was alive and has since gone stale is reused, so live brokers, hosts that never heartbeated, and clones sharing a baked `machine_id` keep their own rows and credentials. An explicit `node_id` still pins identity, and roster entries now return `machine_id`.
+- Migration `0043_node_machine_id_index.sql` indexes `nodes(workspace_id, machine_id)`; migration `0044_node_proven_live_at.sql` adds `proven_live_at`, written only by an arriving heartbeat and cleared when a node's token is re-issued.
 
 ### Fixed
 

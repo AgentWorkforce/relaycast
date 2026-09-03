@@ -672,7 +672,14 @@ frame, recorded in `proven_live_at` — and for that proof to have gone stale.
 `last_heartbeat_at` cannot serve here: registration and disconnect cleanup write
 it too, so it does not distinguish a node that connected from one that proved
 it was running. The proof is cleared whenever enrollment re-issues a row's
-token, so a row cannot be taken twice before its new holder proves itself. A row that has never connected is
+token, so a row cannot be taken twice before its new holder proves itself.
+
+That last guarantee holds within one server process: enrollments keyed on a
+machine are serialized in-process, the same mechanism node-control operations
+use. It is not cross-isolate atomic, so on a multi-isolate deployment two
+enrollments resolving the same stale row concurrently can still both rotate it.
+The window is narrow and self-correcting — matching resolves oldest-first — but
+it is a serialization boundary, not a distributed lock. A row that has never connected is
 never reused, because that case cannot be told apart from two hosts cold-booting
 from one snapshot or baked image: they enroll moments apart, neither has
 heartbeated, and adopting the first row would overwrite its token so the first

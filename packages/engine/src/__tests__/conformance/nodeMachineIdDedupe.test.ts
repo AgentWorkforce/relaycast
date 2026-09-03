@@ -286,7 +286,11 @@ describe('node enrollment — machine_id dedupe', () => {
       await stack.runtime.deps.db.insert(nodes).values({
         id: `node_live_${i}`, workspaceId: ws.workspaceId, name: `live-${i}`,
         tokenHash: `hash-live-${i}`, machineId: 'machine-a', role: 'broker', kind: 'ws',
-        status: 'online', lastHeartbeatAt: new Date(now), createdAt: new Date(now - 10_000 + i),
+        // Registered just now (so live) but last PROVED life long ago. Without
+        // the liveness predicate in SQL these pass the proof filter, fill the
+        // scan window, and hide the reusable row behind them.
+        status: 'online', lastHeartbeatAt: new Date(now),
+        provenLiveAt: new Date(now - 600_000), createdAt: new Date(now - 10_000 + i),
       });
     }
     await stack.runtime.deps.db.insert(nodes).values({
@@ -301,6 +305,32 @@ describe('node enrollment — machine_id dedupe', () => {
     });
     expect(reboot.body.data?.id).toBe('node_reusable');
     expect(await roster(ws.workspaceKey)).toHaveLength(26);
+  });
+
+  it('does not reuse a row with a stale proof but a future heartbeat', async () => {
+    // Server clock rollback. isNodeLive returns false for the negative age, so
+    // the stale proof alone would read as reusable while the broker is running.
+    const ws = await createWorkspace(stack.app, 'future-hb-stale-proof');
+    await stack.runtime.deps.db.insert(nodes).values({
+      id: 'node_skew', workspaceId: ws.workspaceId, name: 'skewed-host',
+      tokenHash: 'hash-skew', machineId: 'machine-a', role: 'broker', kind: 'ws',
+      status: 'online', lastHeartbeatAt: new Date(Date.now() + 600_000),
+      provenLiveAt: new Date(Date.now() - 600_000), createdAt: new Date(Date.now() - 60_000),
+    });
+
+    const [before] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_skew'));
+    expect(isNodeLive(before!)).toBe(false);
+    expect(isReusableForMachineMatch(before!)).toBe(false);
+
+    const claimant = await enroll(ws.workspaceKey, {
+      name: 'claimant', machine_id: 'machine-a', role: 'broker', max_agents: 4,
+    });
+    expect(claimant.body.data?.id).not.toBe('node_skew');
+
+    const [after] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_skew'));
+    expect(after!.name).toBe('skewed-host');
+    expect(after!.tokenHash).toBe('hash-skew');
+    expect(await roster(ws.workspaceKey)).toHaveLength(2);
   });
 
   it('lets an explicit node_id pin identity and opt out of machine grouping', async () => {

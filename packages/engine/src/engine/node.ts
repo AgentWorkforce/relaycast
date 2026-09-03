@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNotNull, lt, ne, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from 'drizzle-orm';
 import type {
   FleetAgentRecoverMessage,
   FleetAgentRegisterMessage,
@@ -387,7 +387,8 @@ export async function getBrokerNodeByMachineId(db: Db, workspaceId: string, mach
   // candidates. Bounding first and filtering after would let a machine with
   // enough live brokers hide its one offline row past the limit, and enrollment
   // would insert a new row instead of reusing it.
-  const liveCutoff = new Date(Date.now() - NODE_LIVENESS_TTL_MS);
+  const now = new Date();
+  const liveCutoff = new Date(now.getTime() - NODE_LIVENESS_TTL_MS);
   const candidates = await db
     .select()
     .from(nodes)
@@ -395,11 +396,21 @@ export async function getBrokerNodeByMachineId(db: Db, workspaceId: string, mach
       eq(nodes.workspaceId, workspaceId),
       eq(nodes.machineId, machineId),
       eq(nodes.role, 'broker'),
-      // Mirrors isReusableForMachineMatch: the row must have proved life since
-      // its current credential was issued, and that proof must predate the
-      // liveness cutoff. Also excludes future-dated proofs.
+      // Mirrors isReusableForMachineMatch in full, so the scan bound below
+      // counts only rows that are actually reusable. A stale proof alone is not
+      // enough: a broker that registered recently has a fresh lastHeartbeatAt
+      // and is therefore live, and admitting those here would let them crowd
+      // the window and hide the one reusable row behind them.
       isNotNull(nodes.provenLiveAt),
       lt(nodes.provenLiveAt, liveCutoff),
+      // not live — mirrors isNodeLive
+      or(
+        ne(nodes.status, 'online'),
+        isNull(nodes.lastHeartbeatAt),
+        lt(nodes.lastHeartbeatAt, liveCutoff),
+      ),
+      // no future-dated heartbeat — server clock rollback
+      or(isNull(nodes.lastHeartbeatAt), lte(nodes.lastHeartbeatAt, now)),
     ))
     .orderBy(asc(nodes.createdAt), asc(nodes.id))
     .limit(MACHINE_MATCH_SCAN_LIMIT);
