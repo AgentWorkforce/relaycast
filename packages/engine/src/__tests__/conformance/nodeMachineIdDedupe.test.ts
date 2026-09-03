@@ -314,7 +314,10 @@ describe('node enrollment — machine_id dedupe', () => {
     await stack.runtime.deps.db.insert(nodes).values({
       id: 'node_skew', workspaceId: ws.workspaceId, name: 'skewed-host',
       tokenHash: 'hash-skew', machineId: 'machine-a', role: 'broker', kind: 'ws',
-      status: 'online', lastHeartbeatAt: new Date(Date.now() + 600_000),
+      // `offline` deliberately: with `online` the SQL not-live clause already
+      // excludes this row, so the separate future-heartbeat clause would never
+      // be exercised and could be deleted without failing this test.
+      status: 'offline', lastHeartbeatAt: new Date(Date.now() + 600_000),
       provenLiveAt: new Date(Date.now() - 600_000), createdAt: new Date(Date.now() - 60_000),
     });
 
@@ -331,6 +334,35 @@ describe('node enrollment — machine_id dedupe', () => {
     expect(after!.name).toBe('skewed-host');
     expect(after!.tokenHash).toBe('hash-skew');
     expect(await roster(ws.workspaceKey)).toHaveLength(2);
+  });
+
+  it('finds the reusable row behind many future-dated rows', async () => {
+    // Pins the SQL future-heartbeat clause specifically. A single future-dated
+    // row is caught by the JS check whether or not SQL excludes it, so only
+    // crowding shows the difference: without the SQL clause these fill the scan
+    // window and the reusable row behind them is never seen.
+    const ws = await createWorkspace(stack.app, 'crowded-future');
+    const now = Date.now();
+    for (let i = 0; i < 25; i++) {
+      await stack.runtime.deps.db.insert(nodes).values({
+        id: `node_skew_${i}`, workspaceId: ws.workspaceId, name: `skew-${i}`,
+        tokenHash: `hash-skew-${i}`, machineId: 'machine-a', role: 'broker', kind: 'ws',
+        status: 'offline', lastHeartbeatAt: new Date(now + 600_000),
+        provenLiveAt: new Date(now - 600_000), createdAt: new Date(now - 10_000 + i),
+      });
+    }
+    await stack.runtime.deps.db.insert(nodes).values({
+      id: 'node_reusable_2', workspaceId: ws.workspaceId, name: 'gone-host',
+      tokenHash: 'hash-reusable-2', machineId: 'machine-a', role: 'broker', kind: 'ws',
+      status: 'offline', lastHeartbeatAt: new Date(now - 600_000),
+      provenLiveAt: new Date(now - 600_000), createdAt: new Date(now),
+    });
+
+    const reboot = await enroll(ws.workspaceKey, {
+      name: 'gone-host-reboot', machine_id: 'machine-a', role: 'broker', max_agents: 4,
+    });
+    expect(reboot.body.data?.id).toBe('node_reusable_2');
+    expect(await roster(ws.workspaceKey)).toHaveLength(26);
   });
 
   it('lets an explicit node_id pin identity and opt out of machine grouping', async () => {
