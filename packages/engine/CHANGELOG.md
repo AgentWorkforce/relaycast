@@ -16,7 +16,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- Unkeyed agent-action invocations now report `handler_unavailable` and fail their durable row when the owner-side provider send misses, instead of returning an unrelated idempotency error and leaving the invocation pending.
+- Unkeyed agent-action invocations now report `handler_unavailable` and fail their durable row when the owner-side provider send misses, while still acknowledging work that completes between provider acceptance and dispatch bookkeeping.
 
 ## [8.2.2] - 2026-09-02
 

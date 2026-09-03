@@ -412,6 +412,72 @@ describe('SDK v8 service contract', () => {
     expect(stored).toEqual({ status: 'failed', error: 'handler_unavailable' });
   });
 
+  it('acknowledges an unkeyed invocation when completion wins after provider send', async () => {
+    const ws = await createWorkspace(stack.app, 'sdk-action-unkeyed-completion-race-ws');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    const handler = await registerAgent(stack.app, ws.workspaceKey, 'handler');
+
+    const register = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${handler.token}` },
+      body: JSON.stringify({
+        name: 'unkeyed-completion-race',
+        description: 'Acknowledge provider work that completes before dispatch recording',
+        handler_agent: 'handler',
+        available_to: ['caller'],
+      }),
+    });
+    expect(register.status).toBe(201);
+    const handlerNode = await attachDirectNodeSocket(stack, ws.workspaceId, handler);
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    const originalSend = nodeConnections.sendAuthorizedActionToProvider!.bind(nodeConnections);
+    vi.spyOn(nodeConnections, 'sendAuthorizedActionToProvider').mockImplementation(async (...args) => {
+      const sent = await originalSend(...args);
+      if (args[3].type !== 'action.invoke' || args[3].action !== 'unkeyed-completion-race') {
+        return sent;
+      }
+      await stack.runtime.handle.db
+        .update(actionInvocations)
+        .set({
+          status: 'completed',
+          output: { result: 'done' },
+          completedAt: new Date(),
+        })
+        .where(and(
+          eq(actionInvocations.workspaceId, ws.workspaceId),
+          eq(actionInvocations.id, args[3].invocation_id),
+        ));
+      return sent;
+    });
+
+    const response = await stack.app.request('/v1/actions/unkeyed-completion-race/invoke', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+      },
+      body: JSON.stringify({ input: { text: 'hello' } }),
+    });
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        handler_agent_id: handler.agentId,
+        handler_node_id: handlerNode.nodeId,
+        status: 'completed',
+      },
+    });
+    expect(handlerNode.sock.ofType('action.invoke')).toHaveLength(1);
+    const [stored] = await stack.runtime.handle.db
+      .select({ status: actionInvocations.status, output: actionInvocations.output })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'unkeyed-completion-race'),
+      ));
+    expect(stored).toEqual({ status: 'completed', output: { result: 'done' } });
+  });
+
   it('does not acknowledge an agent-hosted claim that takeover fails before provider dispatch starts', async () => {
     const ws = await createWorkspace(stack.app, 'sdk-action-pre-send-takeover-ws');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');

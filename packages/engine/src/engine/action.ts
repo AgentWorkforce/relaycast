@@ -1586,7 +1586,28 @@ export async function invokeAction(
     actionId: action.id,
   });
 
-  if (!dispatched.accepted) {
+  if (dispatched.sent && !dispatched.accepted) {
+    // The provider owns the frame once the send returns true. A fast completion
+    // can make the following open-row dispatch UPDATE lose legitimately; in
+    // that case acknowledge the durable terminal state instead of reporting a
+    // retryable send failure for work the handler already executed.
+    const [settled] = await db
+      .select()
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, workspaceId),
+        eq(actionInvocations.id, invocation.id),
+      ));
+    if (settled) {
+      return invocationAck(settled, {
+        actionName,
+        handlerAgentId: action.handlerAgentId,
+        handlerNodeId: handlerAgent.locationNodeId,
+      });
+    }
+  }
+
+  if (!dispatched.sent) {
     if (invocationId !== undefined) {
       // A keyed claim must remain durable across a transient disconnect. Re-read
       // it so the original request and its replay agree on the same pre-send
@@ -1881,7 +1902,7 @@ async function dispatchNodeInvocation(args: {
   retryAfterAt?: Date | null;
   reservationHeld?: boolean;
   skipIncrementAttempts?: boolean;
-}): Promise<{ accepted: boolean; pending: boolean }> {
+}): Promise<{ accepted: boolean; pending: boolean; sent: boolean }> {
   const frame = {
     v: 1 as const,
     type: 'action.invoke' as const,
@@ -1901,7 +1922,7 @@ async function dispatchNodeInvocation(args: {
         args.invocationId,
         args.nodeId,
       );
-  if (!snapshotted) return { accepted: false, pending: false };
+  if (!snapshotted) return { accepted: false, pending: false, sent: false };
   const connectedBefore = args.registry.isProviderConnected(args.workspaceId, args.nodeId, args.providerName);
   const sent = args.agent && args.actionId
     ? await (args.registry.sendAuthorizedActionToProvider?.(
@@ -1924,7 +1945,7 @@ async function dispatchNodeInvocation(args: {
         frame,
       );
 
-  if (!sent) return { accepted: false, pending: false };
+  if (!sent) return { accepted: false, pending: false, sent: false };
 
   const pending = !!args.pending || !connectedBefore;
   const accepted = await dispatchNodeAttempt(
@@ -1941,7 +1962,7 @@ async function dispatchNodeInvocation(args: {
       actionId: args.actionId,
     },
   );
-  return { accepted, pending };
+  return { accepted, pending, sent: true };
 }
 
 function attemptedNodeSet(invocation: Pick<InvocationRow, 'attemptedNodeIds' | 'dispatchedNodeId'>): string[] {

@@ -24,7 +24,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
-- Unkeyed agent-action invocations now report `handler_unavailable` and fail their durable row when the owner-side provider send misses, instead of returning an unrelated idempotency error and leaving the invocation pending.
+- Unkeyed agent-action invocations now report `handler_unavailable` and fail their durable row when the owner-side provider send misses, while still acknowledging work that completes between provider acceptance and dispatch bookkeeping.
 
 ## [8.3.0] - 2026-09-02
 
@@ -377,7 +377,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased - Minor]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.3...HEAD
+[Unreleased - Minor]: https://github.com/AgentWorkforce/relaycast/compare/v8.3.0...HEAD
 [6.0.3]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.2...v6.0.3
 [6.0.2]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.1...v6.0.2
 [6.0.1]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.0...v6.0.1
