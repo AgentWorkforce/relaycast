@@ -20,7 +20,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
-- Keyed (idempotent) agent-action invocations whose host cannot deliver to the handler now fail with 503 `handler_unavailable` instead of 503 `idempotency_unavailable`, and an undeliverable invocation is only failed while no dispatcher has claimed it, so a handler that reconnects mid-request keeps its dispatch.
+- Keyed (idempotent) agent-action invocations whose host cannot deliver to the handler now fail with 503 `handler_unavailable` instead of 503 `idempotency_unavailable`.
+- An agent-action invocation is no longer reported as `handler_unavailable` when its handler reconnected and received it mid-request; the caller sees the live dispatch instead.
 
 ## [8.3.1] - 2026-09-03
 
