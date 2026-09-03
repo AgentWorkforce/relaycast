@@ -334,6 +334,8 @@ export interface NodeRosterEntry {
   name: string;
   kind: NodeKind | string;
   role: NodeRole | string;
+  /** Host machine this node runs on; null when nothing reported one. */
+  machineId: string | null;
   deliveryAdapter: string;
   delivery: Record<string, unknown> | null;
   capabilities: NodeCapability[];
@@ -353,6 +355,13 @@ export interface NodeRosterEntry {
 export interface CreateNodeRequest {
   nodeId?: string;
   name: string;
+  /**
+   * Stable id of the host machine. Enrollment's key of last resort, after
+   * `nodeId` and `name`: a host that keeps no `nodeId` and renames itself on
+   * each boot rotates its existing `broker` node instead of adding a roster
+   * row. Never matches `direct` nodes — one machine runs many of those.
+   */
+  machineId?: string;
   kind?: NodeKind;
   role?: NodeRole;
   deliveryAdapter?: string;

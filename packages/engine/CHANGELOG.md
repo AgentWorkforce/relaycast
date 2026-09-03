@@ -7,9 +7,12 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
 
-## [8.2.2] - 2026-09-02
+### Added
+
+- `POST /v1/nodes` accepts `machine_id` and reuses the machine's existing `broker` node instead of adding a roster row, so a host that re-enrolls under a fresh name stops growing the roster. Only a node that proved it was alive and has since gone stale is reused, so live brokers, hosts that never heartbeated, and clones sharing a baked `machine_id` keep their own rows and credentials. An explicit `node_id` still pins identity, and roster entries now return `machine_id`.
+- Migration `0043_node_machine_id_index.sql` indexes `nodes(workspace_id, machine_id)`; migration `0044_node_proven_live_at.sql` adds `proven_live_at`, written only by an arriving heartbeat and cleared when a node's token is re-issued.
 
 ### Fixed
 

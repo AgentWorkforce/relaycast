@@ -1,4 +1,4 @@
-import { and, eq, inArray, ne, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from 'drizzle-orm';
 import type {
   FleetAgentRecoverMessage,
   FleetAgentRegisterMessage,
@@ -25,7 +25,7 @@ import { isProviderAgentDeliveryReady, type NodeConnectionRegistry } from '../po
 import { generateId } from './snowflake.js';
 import { assertRegistrableAgentName } from './agent.js';
 import { rotateAgentIdentity } from './agentIdentity.js';
-import { isNodeLive, nodeHasCapacity, nodeHasCapability } from './placement.js';
+import { isNodeLive, isReusableForMachineMatch, nodeHasCapacity, nodeHasCapability, NODE_LIVENESS_TTL_MS } from './placement.js';
 import {
   DEFAULT_PROVIDER_NAME,
   capabilityKind,
@@ -141,6 +141,7 @@ function publicNode(row: NodeRow) {
     name: row.name,
     kind: row.kind,
     role: row.role,
+    machine_id: row.machineId,
     delivery_adapter: row.deliveryAdapter,
     delivery: redactDeliveryConfig(row.deliveryConfig),
     capabilities: row.capabilities,
@@ -218,6 +219,7 @@ export async function createNodeToken(
   data: {
     node_id?: string;
     name: string;
+    machine_id?: string;
     kind?: NodeKind;
     role?: NodeRole;
     delivery_adapter?: string;
@@ -283,6 +285,12 @@ export async function createNodeToken(
         deliveryAdapter,
         deliveryConfig,
         capabilities: normalizeCapabilities(data.capabilities ?? existing.capabilities),
+        machineId: data.machine_id ?? existing.machineId,
+        // The credential just changed, so whatever the previous holder proved
+        // no longer applies to this row. Without clearing it, a row reused once
+        // still looks proven and could be reused again immediately, revoking
+        // the token this call is handing out.
+        provenLiveAt: null,
         maxAgents,
         tags: data.tags ?? existing.tags,
         version: data.version ?? existing.version,
@@ -308,6 +316,7 @@ export async function createNodeToken(
       deliveryAdapter,
       deliveryConfig,
       capabilities: normalizeCapabilities(data.capabilities ?? []),
+      machineId: data.machine_id ?? null,
       maxAgents,
       tags: data.tags ?? [],
       version: data.version ?? 'unknown',
@@ -345,18 +354,124 @@ export async function getNodeById(db: Db, workspaceId: string, nodeId: string) {
 }
 
 /**
+ * How many *reusable* rows sharing one machine_id the enroll lookup will
+ * consider. Live rows are excluded in SQL before this bound applies, so a
+ * machine with many live brokers cannot push its one offline row out of range.
+ */
+const MACHINE_MATCH_SCAN_LIMIT = 20;
+
+/**
+ * The broker a machine already has on the roster and is no longer running.
+ *
+ * Scoped to `broker` deliberately: a broker is the node-of-many fleet host and
+ * a machine runs one, so machine_id identifies it. A `direct` node is a
+ * node-of-one delivery host and a single machine legitimately runs many of
+ * them, so machine_id is not a key there and must never collapse them.
+ *
+ * A LIVE incumbent is never returned. Adopting one would rename a running
+ * broker and rotate its token out from under it — the caller cannot be that
+ * host coming back, because that host has not left. Only a node that is gone
+ * can be the one re-enrolling. Skipping the live row lets the caller fall
+ * through to a new node instead, which is the right answer for the legitimate
+ * duplicate too: a VM cloned from a snapshot, or containers baked from one
+ * image, carry the same machine_id and run CONCURRENTLY, so they are genuinely
+ * separate nodes. Declining the match costs an extra roster row; rejecting the
+ * enrollment outright would break a whole fleet booted from one image.
+ *
+ * Ordered oldest-first so a roster that already holds several rows for one
+ * machine converges onto its earliest reusable row instead of picking
+ * arbitrarily.
+ */
+export async function getBrokerNodeByMachineId(db: Db, workspaceId: string, machineId: string) {
+  // Exclude live rows in SQL so the bound below counts only reusable
+  // candidates. Bounding first and filtering after would let a machine with
+  // enough live brokers hide its one offline row past the limit, and enrollment
+  // would insert a new row instead of reusing it.
+  const now = new Date();
+  const liveCutoff = new Date(now.getTime() - NODE_LIVENESS_TTL_MS);
+  const candidates = await db
+    .select()
+    .from(nodes)
+    .where(and(
+      eq(nodes.workspaceId, workspaceId),
+      eq(nodes.machineId, machineId),
+      eq(nodes.role, 'broker'),
+      // Mirrors isReusableForMachineMatch in full, so the scan bound below
+      // counts only rows that are actually reusable. A stale proof alone is not
+      // enough: a broker that registered recently has a fresh lastHeartbeatAt
+      // and is therefore live, and admitting those here would let them crowd
+      // the window and hide the one reusable row behind them.
+      isNotNull(nodes.provenLiveAt),
+      lt(nodes.provenLiveAt, liveCutoff),
+      // not live — mirrors isNodeLive
+      or(
+        ne(nodes.status, 'online'),
+        isNull(nodes.lastHeartbeatAt),
+        lt(nodes.lastHeartbeatAt, liveCutoff),
+      ),
+      // no future-dated heartbeat — server clock rollback
+      or(isNull(nodes.lastHeartbeatAt), lte(nodes.lastHeartbeatAt, now)),
+    ))
+    .orderBy(asc(nodes.createdAt), asc(nodes.id))
+    .limit(MACHINE_MATCH_SCAN_LIMIT);
+  // The SQL above is a pre-filter for `isReusableForMachineMatch`, which is the
+  // single definition of reusability and mirrors it exactly — including
+  // treating an `online` row with a future heartbeat as live. Re-checking here
+  // keeps that definition authoritative rather than trusting the query alone.
+  return candidates.find((node) => isReusableForMachineMatch(node)) ?? null;
+}
+
+/**
+ * The role an enroll is asking for, derived from the request alone.
+ *
+ * Enrollment's role default depends on `kind` (`ws` is a broker; `http_push`
+ * and `poll` are direct) and on `max_agents`, and the machine lookup has to
+ * know it *before* it runs. Otherwise a machine that already has a broker has
+ * that broker rotated -- and its transport rewritten to http_push or poll --
+ * by a node enrolling alongside it without an explicit `role`. That failure
+ * would be silent and would move a live node's identity, which is worse than
+ * the roster growth this dedupe exists to stop.
+ */
+export function requestedNodeRole(data: { kind?: string; role?: NodeRole; max_agents?: number }): NodeRole {
+  if (data.role) return data.role;
+  return normalizeLegacyNodeShape(
+    data.kind ?? 'ws',
+    data.max_agents !== undefined && data.max_agents > 1 ? 'broker' : undefined,
+  ).role;
+}
+
+/**
  * Resolve the node an enroll (POST /v1/nodes) targets: by node_id when
- * supplied, by name otherwise.
+ * supplied, then by name, then by machine_id.
+ *
+ * The machine_id step is what stops the roster refilling. A host that enrolls
+ * without a persisted node_id arrives under a fresh name on every boot, and
+ * each of those names used to mint a brand-new row that nothing ever reclaimed.
+ * Falling back to the machine's existing broker turns re-enrollment into a
+ * token rotation on the row that is already there.
+ *
+ * node_id and name still win, so a caller that pins either keeps the exact
+ * identity it asked for; passing node_id is the way to opt out of machine
+ * grouping and run two brokers on one host.
+ *
+ * The machine step only ever matches a node that is not live — see
+ * getBrokerNodeByMachineId — so a running broker is never adopted by another
+ * caller presenting its machine_id.
  */
 export async function resolveNodeForEnroll(
   db: Db,
   workspaceId: string,
-  data: { node_id?: string; name: string },
+  data: { node_id?: string; name: string; machine_id?: string; kind?: string; role?: NodeRole; max_agents?: number },
 ) {
   if (data.node_id !== undefined) {
     return getNodeById(db, workspaceId, data.node_id);
   }
-  return getNodeByName(db, workspaceId, data.name);
+  const byName = await getNodeByName(db, workspaceId, data.name);
+  if (byName) return byName;
+  if (data.machine_id !== undefined && requestedNodeRole(data) === 'broker') {
+    return getBrokerNodeByMachineId(db, workspaceId, data.machine_id);
+  }
+  return null;
 }
 
 export interface RegisterNodeResult {
@@ -497,6 +612,9 @@ export async function heartbeatNode(
         activeAgents: 1,
         handlersLive: false,
         lastHeartbeatAt: new Date(),
+        // A heartbeat frame arrived: this is proof of life, unlike the
+        // registration and disconnect writes that also touch lastHeartbeatAt.
+        provenLiveAt: new Date(),
       })
       .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)))
       .returning();
@@ -541,6 +659,13 @@ export async function heartbeatNode(
       await tx.update(nodes).set({ name: message.name }).where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
     }
     await recomputeNodeAggregate(tx, workspaceId, nodeId, message.version !== undefined ? { version: message.version } : {});
+    // Stamped after the aggregate so it cannot be overwritten by it: the
+    // aggregate derives lastHeartbeatAt from provider rows, which registration
+    // also writes, whereas this column is only ever set by an arriving frame.
+    await tx
+      .update(nodes)
+      .set({ provenLiveAt: new Date() })
+      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
   });
 
   const [updated] = await db
