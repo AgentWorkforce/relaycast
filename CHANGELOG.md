@@ -16,7 +16,12 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Keyed (idempotent) agent-action invocations whose host cannot deliver to the handler now fail with 503 `handler_unavailable` instead of 503 `idempotency_unavailable`.
+- An agent-action invocation is no longer reported as `handler_unavailable` when its handler reconnected and received it mid-request; the caller sees the live dispatch instead.
 
 ## [8.3.1] - 2026-09-03
 
@@ -379,7 +384,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased - Minor]: https://github.com/AgentWorkforce/relaycast/compare/v8.3.0...HEAD
+[Unreleased - Patch]: https://github.com/AgentWorkforce/relaycast/compare/v8.3.1...HEAD
 [6.0.3]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.2...v6.0.3
 [6.0.2]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.1...v6.0.2
 [6.0.1]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.0...v6.0.1

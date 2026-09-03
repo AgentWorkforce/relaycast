@@ -570,6 +570,93 @@ describe('SDK v8 service contract', () => {
     expect(handlerNode.sock.ofType('action.invoke')).toHaveLength(0);
   });
 
+  it('fails a keyed agent-hosted invoke when a host adapter cannot deliver to the handler', async () => {
+    const ws = await createWorkspace(stack.app, 'sdk-action-undeliverable-ws');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    const handler = await registerAgent(stack.app, ws.workspaceKey, 'handler');
+
+    const register = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${handler.token}` },
+      body: JSON.stringify({
+        name: 'undeliverable',
+        description: 'Handler the host adapter cannot reach',
+        handler_agent: 'handler',
+        available_to: ['caller'],
+      }),
+    });
+    expect(register.status).toBe(201);
+
+    // Bind the handler to its direct node, then drop the socket: the handler is
+    // registered and node-bound but has nowhere to receive a frame.
+    const handlerNode = await attachDirectNodeSocket(stack, ws.workspaceId, handler);
+    await handlerNode.handle.handleClose();
+
+    // Simulate a hosted adapter (relaycast-cloud) that cannot observe socket
+    // state synchronously: it answers `isProviderConnected` optimistically and
+    // only learns the handler is gone when the send itself fails.
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    const connectedSpy = vi.spyOn(nodeConnections, 'isProviderConnected').mockReturnValue(true);
+    const sendSpy = vi.spyOn(nodeConnections, 'sendAuthorizedActionToProvider')
+      .mockResolvedValue(false);
+    let response!: Response;
+    try {
+      // Keyed: 8.3.1 already fails an unkeyed send miss, but a keyed claim used
+      // to wait out the replay deadline and report `idempotency_unavailable`
+      // while its row stayed pending.
+      response = await stack.app.request('/v1/actions/undeliverable/invoke', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${caller.token}`,
+          'Idempotency-Key': 'undeliverable-key',
+        },
+        body: JSON.stringify({ input: { text: 'hello' } }),
+      });
+    } finally {
+      sendSpy.mockRestore();
+      connectedSpy.mockRestore();
+    }
+
+    expect(response.status).toBe(503);
+    expect((await response.json() as { error: { code: string } }).error.code)
+      .toBe('handler_unavailable');
+    const [stored] = await stack.runtime.deps.db
+      .select({
+        status: actionInvocations.status,
+        error: actionInvocations.error,
+        dispatchAttempts: actionInvocations.dispatchAttempts,
+        dispatchedNodeId: actionInvocations.dispatchedNodeId,
+      })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'undeliverable'),
+      ));
+    expect(stored).toEqual({
+      status: 'failed',
+      error: 'handler_unavailable',
+      dispatchAttempts: 0,
+      dispatchedNodeId: null,
+    });
+    expect(handlerNode.sock.ofType('action.invoke')).toHaveLength(0);
+
+    // A replay of the same key reports the claim's own failure, so the caller
+    // and its retry agree instead of the retry seeing an idempotency stall.
+    const replay = await stack.app.request('/v1/actions/undeliverable/invoke', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+        'Idempotency-Key': 'undeliverable-key',
+      },
+      body: JSON.stringify({ input: { text: 'hello' } }),
+    });
+    expect(replay.status).toBe(503);
+    expect((await replay.json() as { error: { code: string } }).error.code)
+      .toBe('handler_unavailable');
+  });
+
   it('requires inbound webhook tokens and accepts SDK message/author payloads', async () => {
     const ws = await createWorkspace(stack.app, 'sdk-webhook-ws');
 

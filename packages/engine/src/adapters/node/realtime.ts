@@ -276,12 +276,15 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       ));
     if (!authorized) return false;
 
-    // No await occurs between the authorization read above resuming and this
-    // in-process socket owner accepting the frame. Remote owners implement the
-    // same serializable contract inside their own send boundary.
-    const sent = await this.sendToProviderUnchecked(workspaceId, nodeId, providerName, message);
-    if (!sent) return false;
     if (authorization.recordAttempt) {
+      // Record the attempt BEFORE the socket send: this mutation IS the
+      // authorization decision, re-checked atomically against the same
+      // predicates the read above used. Recording afterwards left a window in
+      // which the handler already held the frame while the row still read
+      // `dispatch_attempts = 0`, so a concurrent request classifying an
+      // undeliverable invocation could fail a dispatch that had in fact
+      // landed. The relaycast-cloud NodeDO orders its own send boundary the
+      // same way.
       const [recorded] = await this.db
         .update(actionInvocations)
         .set({
@@ -289,18 +292,24 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
           attemptedNodeIds: sql`json_insert(COALESCE(${actionInvocations.attemptedNodeIds}, '[]'), '$[#]', ${nodeId})`,
           dispatchAttempts: sql`COALESCE(${actionInvocations.dispatchAttempts}, 0) + 1`,
         })
-        // Acceptance is historical evidence even if a concurrent takeover
-        // terminally failed the row immediately after the socket send.
         .where(and(
           eq(actionInvocations.workspaceId, workspaceId),
           eq(actionInvocations.id, authorization.invocationId),
+          inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked']),
+          eq(actionInvocations.handlerAgentId, authorization.handlerAgentId),
+          eq(actionInvocations.handlerNodeId, nodeId),
         ))
         .returning({ id: actionInvocations.id });
-      if (!recorded) {
-        throw new Error('Provider accepted an action whose durable invocation disappeared');
-      }
+      if (!recorded) return false;
     }
-    return true;
+
+    // No await occurs between the authorization decision above resuming and
+    // this in-process socket owner accepting the frame. Remote owners
+    // implement the same serializable contract inside their own send boundary.
+    // `action.invoke` is never rejected by the send itself here (an
+    // unreachable provider queues it), so a recorded attempt always has a
+    // frame behind it.
+    return this.sendToProviderUnchecked(workspaceId, nodeId, providerName, message);
   }
 
   private async sendToProviderUnchecked(

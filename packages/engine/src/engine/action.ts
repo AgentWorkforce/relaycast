@@ -561,11 +561,30 @@ async function idempotentInvocationId(
   return `inv_idem_${digest}`;
 }
 
+/**
+ * Poll a durable idempotency claim until the winning request's dispatch is
+ * visible, for up to 500ms.
+ *
+ * Resolves as soon as the row leaves the pre-dispatch state: it returns the row
+ * once `dispatchedNodeId` is set (or, with `acceptDispatchStarted`, once an
+ * attempt has been recorded), returns a settled non-open row, and throws the
+ * row's own failure for one that failed before dispatch.
+ *
+ * `onDeadline` picks what a still-open row does when the 500ms deadline passes:
+ * `'throw'` (the default) raises a retryable 503 `idempotency_unavailable`,
+ * which is what a replay observing someone else's claim wants; `'return'` hands
+ * the still-open row back so a caller that owns the claim itself — the
+ * post-send takeover re-read below — can classify it.
+ *
+ * @param options.acceptDispatchStarted - treat a recorded attempt as dispatch.
+ * @param options.onDeadline - deadline behavior for a still-open row.
+ * @returns the invocation row as last read.
+ */
 async function waitForInvocationReplayOutcome(
   db: Db,
   workspaceId: string,
   invocation: InvocationRow,
-  options: { acceptDispatchStarted?: boolean } = {},
+  options: { acceptDispatchStarted?: boolean; onDeadline?: 'throw' | 'return' } = {},
 ): Promise<InvocationRow> {
   let current = invocation;
   const deadline = Date.now() + 500;
@@ -586,7 +605,10 @@ async function waitForInvocationReplayOutcome(
     if (Date.now() >= deadline) {
       // The winning request may have died after its durable claim but before
       // provider dispatch started or completed. Fail retryably without
-      // releasing the key for another execution.
+      // releasing the key for another execution. Callers that own the claim
+      // themselves (the post-send takeover re-read) opt out and classify the
+      // still-open row instead.
+      if (options.onDeadline === 'return') return current;
       throw codedError('Idempotent action dispatch is still pending', 'idempotency_unavailable', 503);
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -723,6 +745,37 @@ async function failInvocationForUnavailableProvider(
       eq(actionInvocations.id, invocationId),
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
     ));
+}
+
+/**
+ * Terminally fail one invocation ONLY while it is still open AND was never
+ * dispatched — no recorded attempt and no dispatched node. The predicates make
+ * the failure atomic against a concurrent dispatcher (`drainNodeInvocations`
+ * on a handler reconnect): once that dispatcher's attempt lands, this update
+ * matches nothing and the live dispatch is left alone. Sets the same columns as
+ * {@link failInvocationForUnavailableProvider}; no spawn reservation can be
+ * held by a row with no dispatched node, so there is no capacity to release.
+ *
+ * @returns true when this call is the one that failed the row.
+ */
+async function failNeverDispatchedInvocation(
+  db: Db,
+  workspaceId: string,
+  invocationId: string,
+  error: string,
+): Promise<boolean> {
+  const failed = await db
+    .update(actionInvocations)
+    .set({ status: 'failed', error, completedAt: new Date(), spawnReservedAt: null })
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.id, invocationId),
+      inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      eq(actionInvocations.dispatchAttempts, 0),
+      isNull(actionInvocations.dispatchedNodeId),
+    ))
+    .returning({ id: actionInvocations.id });
+  return failed.length > 0;
 }
 
 /**
@@ -1609,27 +1662,62 @@ export async function invokeAction(
 
   if (!dispatched.sent) {
     if (invocationId !== undefined) {
-      // A keyed claim must remain durable across a transient disconnect. Re-read
-      // it so the original request and its replay agree on the same pre-send
-      // outcome without releasing the key for a second execution.
+      // A keyed claim must stay consistent with its replays. Re-read it so a
+      // takeover that raced the last-moment adapter gate is observed here (a
+      // row it already failed throws its own error) instead of this request
+      // and its replay disagreeing on the pre-send outcome. A row still open
+      // at the deadline is handed back for classification below rather than
+      // reported as a retryable idempotency stall.
       await waitForInvocationReplayOutcome(
         db,
         workspaceId,
         invocation,
-        { acceptDispatchStarted: true },
+        { acceptDispatchStarted: true, onDeadline: 'return' },
       );
-    } else {
-      // An unkeyed invocation has no replay contract to preserve. Leaving its
-      // pre-send row pending reports an idempotency failure to a caller that did
-      // not request idempotency and strands work no retry can address. Fail the
-      // row and classify the actual condition instead.
-      await failOpenInvocationRows(db, workspaceId, [invocation.id], 'handler_unavailable');
+    }
+    // The host adapter could not deliver to the handler. A hosted adapter can
+    // only learn that from the send itself, so the pre-dispatch liveness gate
+    // above could not catch it. Resolve it the same way that gate would. The
+    // failure is conditional on the row still being open AND never dispatched:
+    // a handler that reconnected in the meantime may have had this very row
+    // dispatched by `drainNodeInvocations`, and overwriting a live dispatch
+    // with `handler_unavailable` would fail the caller while the handler runs
+    // the action.
+    const failed = await failNeverDispatchedInvocation(
+      db,
+      workspaceId,
+      invocation.id,
+      'handler_unavailable',
+    );
+    if (failed) {
       throw codedError(
         `Action "${actionName}" handler "${handlerAgent.name}" has no live connection`,
         'handler_unavailable',
         503,
       );
     }
+    // Someone else owns the row now: a dispatcher on handler reconnect, or a
+    // takeover that already failed it. Report that outcome rather than this
+    // request's failed send.
+    const [current] = await db
+      .select()
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, workspaceId),
+        eq(actionInvocations.id, invocation.id),
+      ));
+    if (!current || current.status === 'failed') {
+      throw codedError(
+        'Action invocation failed before provider dispatch completed',
+        current?.error ?? 'handler_unavailable',
+        503,
+      );
+    }
+    return invocationAck(current, {
+      actionName,
+      handlerAgentId: action.handlerAgentId,
+      handlerNodeId: handlerAgent.locationNodeId,
+    });
   }
 
   return {
