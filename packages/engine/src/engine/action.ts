@@ -1639,28 +1639,50 @@ export async function invokeAction(
     actionId: action.id,
   });
 
-  // Set when the send was not accepted and a concurrent dispatcher, not this
-  // request, owns the row's outcome — the response is then reported from it.
-  let undispatched: InvocationRow | null = null;
-  if (!dispatched.accepted) {
-    // A takeover can invalidate the last-moment adapter gate. Re-read the
-    // durable claim so the original request and its replay agree on the same
-    // pre-send failure instead of returning a pending 201.
-    await waitForInvocationReplayOutcome(
-      db,
-      workspaceId,
-      invocation,
-      { acceptDispatchStarted: true, onDeadline: 'return' },
-    );
-    // No takeover raced us, so the host adapter simply could not deliver to the
-    // handler. A hosted adapter can only learn that from the send itself, so
-    // the pre-dispatch liveness gate above could not catch it. Resolve it the
-    // same way that gate would instead of reporting a retryable idempotency
-    // stall. The failure is conditional on the row still being open AND never
-    // dispatched: a handler that reconnected after the last poll may have had
-    // this very row dispatched by `drainNodeInvocations`, and overwriting a
-    // live dispatch with `handler_unavailable` would fail the caller while the
-    // handler runs the action.
+  if (dispatched.sent && !dispatched.accepted) {
+    // The provider owns the frame once the send returns true. A fast completion
+    // can make the following open-row dispatch UPDATE lose legitimately; in
+    // that case acknowledge the durable terminal state instead of reporting a
+    // retryable send failure for work the handler already executed.
+    const [settled] = await db
+      .select()
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, workspaceId),
+        eq(actionInvocations.id, invocation.id),
+      ));
+    if (settled) {
+      return invocationAck(settled, {
+        actionName,
+        handlerAgentId: action.handlerAgentId,
+        handlerNodeId: handlerAgent.locationNodeId,
+      });
+    }
+  }
+
+  if (!dispatched.sent) {
+    if (invocationId !== undefined) {
+      // A keyed claim must stay consistent with its replays. Re-read it so a
+      // takeover that raced the last-moment adapter gate is observed here (a
+      // row it already failed throws its own error) instead of this request
+      // and its replay disagreeing on the pre-send outcome. A row still open
+      // at the deadline is handed back for classification below rather than
+      // reported as a retryable idempotency stall.
+      await waitForInvocationReplayOutcome(
+        db,
+        workspaceId,
+        invocation,
+        { acceptDispatchStarted: true, onDeadline: 'return' },
+      );
+    }
+    // The host adapter could not deliver to the handler. A hosted adapter can
+    // only learn that from the send itself, so the pre-dispatch liveness gate
+    // above could not catch it. Resolve it the same way that gate would. The
+    // failure is conditional on the row still being open AND never dispatched:
+    // a handler that reconnected in the meantime may have had this very row
+    // dispatched by `drainNodeInvocations`, and overwriting a live dispatch
+    // with `handler_unavailable` would fail the caller while the handler runs
+    // the action.
     const failed = await failNeverDispatchedInvocation(
       db,
       workspaceId,
@@ -1674,7 +1696,8 @@ export async function invokeAction(
         503,
       );
     }
-    // Someone else owns the row now. Report its state rather than this
+    // Someone else owns the row now: a dispatcher on handler reconnect, or a
+    // takeover that already failed it. Report that outcome rather than this
     // request's failed send.
     const [current] = await db
       .select()
@@ -1683,24 +1706,28 @@ export async function invokeAction(
         eq(actionInvocations.workspaceId, workspaceId),
         eq(actionInvocations.id, invocation.id),
       ));
-    undispatched = current ?? null;
+    if (!current || current.status === 'failed') {
+      throw codedError(
+        'Action invocation failed before provider dispatch completed',
+        current?.error ?? 'handler_unavailable',
+        503,
+      );
+    }
+    return invocationAck(current, {
+      actionName,
+      handlerAgentId: action.handlerAgentId,
+      handlerNodeId: handlerAgent.locationNodeId,
+    });
   }
 
-  // A row another dispatcher took over reports as `dispatched` only once it
-  // both names a node and reached that status; anything else is still pending.
-  const takenOverNodeId = undispatched && undispatched.status === 'dispatched'
-    ? undispatched.dispatchedNodeId
-    : null;
   return {
     invocation_id: invocation.id,
     action_name: actionName,
     handler_agent_id: action.handlerAgentId,
     handler_node_id: handlerAgent.locationNodeId,
-    dispatched_node_id: dispatched.accepted ? handlerAgent.locationNodeId : takenOverNodeId,
+    dispatched_node_id: dispatched.accepted ? handlerAgent.locationNodeId : null,
     input: recordInput(invocation.input),
-    status: dispatched.accepted
-      ? (dispatched.pending ? 'pending' : 'dispatched')
-      : (takenOverNodeId ? 'dispatched' : 'pending'),
+    status: dispatched.accepted ? (dispatched.pending ? 'pending' : 'dispatched') : 'pending',
     created_at: invocation.createdAt.toISOString(),
   };
 }
@@ -1963,7 +1990,7 @@ async function dispatchNodeInvocation(args: {
   retryAfterAt?: Date | null;
   reservationHeld?: boolean;
   skipIncrementAttempts?: boolean;
-}): Promise<{ accepted: boolean; pending: boolean }> {
+}): Promise<{ accepted: boolean; pending: boolean; sent: boolean }> {
   const frame = {
     v: 1 as const,
     type: 'action.invoke' as const,
@@ -1983,7 +2010,7 @@ async function dispatchNodeInvocation(args: {
         args.invocationId,
         args.nodeId,
       );
-  if (!snapshotted) return { accepted: false, pending: false };
+  if (!snapshotted) return { accepted: false, pending: false, sent: false };
   const connectedBefore = args.registry.isProviderConnected(args.workspaceId, args.nodeId, args.providerName);
   const sent = args.agent && args.actionId
     ? await (args.registry.sendAuthorizedActionToProvider?.(
@@ -2006,7 +2033,7 @@ async function dispatchNodeInvocation(args: {
         frame,
       );
 
-  if (!sent) return { accepted: false, pending: false };
+  if (!sent) return { accepted: false, pending: false, sent: false };
 
   const pending = !!args.pending || !connectedBefore;
   const accepted = await dispatchNodeAttempt(
@@ -2023,7 +2050,7 @@ async function dispatchNodeInvocation(args: {
       actionId: args.actionId,
     },
   );
-  return { accepted, pending };
+  return { accepted, pending, sent: true };
 }
 
 function attemptedNodeSet(invocation: Pick<InvocationRow, 'attemptedNodeIds' | 'dispatchedNodeId'>): string[] {

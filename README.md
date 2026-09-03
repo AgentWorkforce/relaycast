@@ -662,6 +662,40 @@ and the caller-addressed `action.completed`/`action.failed`/`action.denied`/`age
 makes the common "one remote agent, one endpoint" shape explicit while still
 allowing larger broker-style endpoints with `max_agents`.
 
+Enrollment resolves an existing node by `node_id`, then `name`, then
+`machine_id`. That last step keeps the roster bounded: a fleet host that
+persists no `node_id` enrolls under a fresh name on every boot, and matching on
+name alone left each boot's row behind forever. Passing `machine_id` rotates
+the machine's existing `broker` node instead. Only `broker` nodes are matched
+this way — a machine legitimately runs many `direct` node-of-one delivery hosts
+— and passing an explicit `node_id` pins identity, which is how you run two
+brokers on one machine. The value is recorded on the node and returned on
+roster entries.
+
+Reuse requires the matched row to have proved it was alive — an actual heartbeat
+frame, recorded in `proven_live_at` — and for that proof to have gone stale.
+`last_heartbeat_at` cannot serve here: registration and disconnect cleanup write
+it too, so it does not distinguish a node that connected from one that proved
+it was running. The proof is cleared whenever enrollment re-issues a row's
+token, so a row cannot be taken twice before its new holder proves itself.
+
+That last guarantee holds within one server process: enrollments keyed on a
+machine are serialized in-process, the same mechanism node-control operations
+use. It is not cross-isolate atomic, so on a multi-isolate deployment two
+enrollments resolving the same stale row concurrently can still both rotate it.
+The window is narrow and self-correcting — matching resolves oldest-first — but
+it is a serialization boundary, not a distributed lock. A row that has never connected is
+never reused, because that case cannot be told apart from two hosts cold-booting
+from one snapshot or baked image: they enroll moments apart, neither has
+heartbeated, and adopting the first row would overwrite its token so the first
+host is handed a working-looking credential that silently stops authenticating.
+A live broker is likewise never adopted, nor one whose heartbeat is in the
+future (a server clock rollback, where the node may still be running).
+
+The trade is deliberate: a host that enrolls and never connects is not deduped,
+so this bounds the roster for hosts that actually join the fleet. Rows that
+never connect are reclaimed by the roster reaper instead.
+
 ```ts
 const node = await relay.nodes.create({
   name: 'billing-agent-http',

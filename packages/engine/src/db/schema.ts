@@ -202,7 +202,8 @@ export const nodes = sqliteTable(
     name: text('name').notNull(),
     tokenHash: text('token_hash').notNull().unique(),
     // Physical machine grouping in fleet views and a placement input; never a
-    // capability scope. Null until a provider reports it on register.
+    // capability scope. Set at enrollment when the caller supplies it, and by a
+    // provider on register; null when neither reports one.
     machineId: text('machine_id'),
     kind: text('kind').notNull().default('ws'),
     role: text('role').notNull().default('broker'),
@@ -220,6 +221,11 @@ export const nodes = sqliteTable(
     load: real('load').notNull().default(0),
     loadReported: integer('load_reported', { mode: 'boolean' }).notNull().default(false),
     lastHeartbeatAt: integer('last_heartbeat_at', { mode: 'timestamp' }),
+    // Written ONLY by an arriving heartbeat frame — never by registration or
+    // disconnect cleanup, both of which write lastHeartbeatAt. Cleared when
+    // enrollment re-issues this row's token. This is the only column that means
+    // "this node proved it was alive", and the machine_id reuse gate reads it.
+    provenLiveAt: integer('proven_live_at', { mode: 'timestamp' }),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   },
   (table) => [
@@ -228,6 +234,8 @@ export const nodes = sqliteTable(
     index('idx_nodes_workspace').on(table.workspaceId),
     index('idx_nodes_token').on(table.tokenHash),
     index('idx_nodes_status').on(table.workspaceId, table.status),
+    index('idx_nodes_workspace_machine').on(table.workspaceId, table.machineId),
+    index('idx_nodes_workspace_machine_proven').on(table.workspaceId, table.machineId, table.provenLiveAt),
   ],
 );
 

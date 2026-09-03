@@ -11,7 +11,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- Invoking an agent-handled action whose host cannot deliver to the handler now fails with 503 `handler_unavailable` instead of 503 `idempotency_unavailable`.
+- Keyed (idempotent) agent-action invocations whose host cannot deliver to the handler now fail with 503 `handler_unavailable` instead of 503 `idempotency_unavailable`, and an undeliverable invocation is only failed while no dispatcher has claimed it, so a handler that reconnects mid-request keeps its dispatch.
+
+## [8.3.1] - 2026-09-03
+
+### Added
+
+- `POST /v1/nodes` accepts `machine_id` and reuses the machine's existing `broker` node instead of adding a roster row, so a host that re-enrolls under a fresh name stops growing the roster. Only a node that proved it was alive and has since gone stale is reused, so live brokers, hosts that never heartbeated, and clones sharing a baked `machine_id` keep their own rows and credentials. An explicit `node_id` still pins identity, and roster entries now return `machine_id`.
+- Migration `0043_node_machine_id_index.sql` indexes `nodes(workspace_id, machine_id)`; migration `0044_node_proven_live_at.sql` adds `proven_live_at`, written only by an arriving heartbeat and cleared when a node's token is re-issued.
+
+### Fixed
+
+- Unkeyed agent-action invocations now report `handler_unavailable` and fail their durable row when the owner-side provider send misses, while still acknowledging work that completes between provider acceptance and dispatch bookkeeping.
 
 ## [8.2.2] - 2026-09-02
 
