@@ -1289,7 +1289,7 @@ describe('RelayCast', () => {
           json: () =>
             Promise.resolve({
               ok: true,
-              data: { workspace_id: 'ws_existing', created_at: '2024-01-02' },
+              data: { workspace_id: 'ws_existing', api_key: 'rk_live_existing', created_at: '2024-01-02' },
             }),
         }),
       );
@@ -1298,6 +1298,7 @@ describe('RelayCast', () => {
         RelayCast.createWorkspace('Dup', { apiKey: 'rk_live_existing', baseUrl: 'http://localhost:3000' }),
       ).resolves.toEqual({
         workspaceId: 'ws_existing',
+        apiKey: 'rk_live_existing',
         createdAt: '2024-01-02',
       });
 
@@ -1413,7 +1414,7 @@ describe('RelayCast', () => {
           json: () =>
             Promise.resolve({
               ok: true,
-              data: { workspace_id: 'ws_existing', created_at: '2024-01-02' },
+              data: { workspace_id: 'ws_existing', api_key: 'rk_live_existing', created_at: '2024-01-02' },
             }),
         }),
       );
@@ -1426,6 +1427,7 @@ describe('RelayCast', () => {
         existed: true,
         name: 'Taken Workspace',
         workspaceId: 'ws_existing',
+        apiKey: 'rk_live_existing',
         createdAt: '2024-01-02',
       });
       expect(mockFetch).toHaveBeenCalledTimes(1);
