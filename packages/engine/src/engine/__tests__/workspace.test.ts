@@ -293,16 +293,25 @@ describe('workspace write durability', () => {
       },
     });
 
-    let selectCalls = 0;
     const failingReadbackDb = new Proxy(db, {
       get(target, property) {
         if (property === 'select') {
           return (...args: Parameters<EngineDb['select']>) => {
-            selectCalls += 1;
-            if (selectCalls >= 4) {
-              throw new Error('readback query unavailable');
-            }
-            return target.select(...args);
+            const query = target.select(...args) as unknown as {
+              from(table: unknown): unknown;
+            };
+            const originalFrom = query.from.bind(query);
+            return new Proxy(query, {
+              get(queryTarget, queryProperty, receiver) {
+                if (queryProperty === 'from') {
+                  return (table: unknown) => {
+                    if (table === channels) throw new Error('readback query unavailable');
+                    return originalFrom(table);
+                  };
+                }
+                return Reflect.get(queryTarget, queryProperty, receiver);
+              },
+            });
           };
         }
         const value = Reflect.get(target, property, target) as unknown;
