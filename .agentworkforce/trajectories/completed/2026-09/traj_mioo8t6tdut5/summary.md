@@ -10,7 +10,7 @@
 
 ## Summary
 
-Hardened Relaycast workspace-create idempotency across SDK transport, documentation, OpenAPI, SemVer metadata, and audit records; full Node 20 build, lint, and tests pass.
+Hardened the first-round Relaycast workspace-create idempotency review patch across SDK transport, documentation, OpenAPI, SemVer metadata, and audit records; full Node 20 build, lint, and tests passed for commit `52dbe22e`.
 
 **Approach:** Standard approach
 
@@ -30,4 +30,4 @@ Hardened Relaycast workspace-create idempotency across SDK transport, documentat
 *Agent: default*
 
 - Preserve explicit empty idempotency keys at the SDK transport boundary: Preserve explicit empty idempotency keys at the SDK transport boundary
-- Addressed every actionable PR review item: SDK transport semantics, authenticated-owner documentation, OpenAPI response requirements, SemVer classification, and trajectory attribution. Full Node 20 build, lint, and test gates are green.
+- Addressed every actionable first-round PR review item: SDK transport semantics, authenticated-owner documentation, OpenAPI response requirements, SemVer classification, and trajectory attribution. Full Node 20 build, lint, and test gates for commit `52dbe22e` are green.
