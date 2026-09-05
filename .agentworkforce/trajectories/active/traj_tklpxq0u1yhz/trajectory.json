@@ -1,0 +1,50 @@
+{
+  "id": "traj_tklpxq0u1yhz",
+  "version": 1,
+  "task": {
+    "title": "Fix Relaycast publish workflow npm edgesOut failure and release 8.4.0",
+    "source": {
+      "system": "plain",
+      "id": "relaycast-release-8.4.0"
+    }
+  },
+  "status": "active",
+  "startedAt": "2026-09-05T21:56:12.811Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-09-05T21:57:35.346Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_5is6cx70hyhj",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-09-05T21:57:35.346Z",
+      "events": [
+        {
+          "ts": 1788645455347,
+          "type": "decision",
+          "content": "Preserve and refresh the existing lockfile before npm ci: Preserve and refresh the existing lockfile before npm ci",
+          "raw": {
+            "question": "Preserve and refresh the existing lockfile before npm ci",
+            "chosen": "Preserve and refresh the existing lockfile before npm ci",
+            "alternatives": [],
+            "reasoning": "The release failed in npm/arborist while resolving all workspaces from a deleted lockfile. On the exact Node 22 toolchain and 8.4.0 manifest transformation, npm install --package-lock-only --ignore-scripts followed by npm ci completed cleanly and retained the reviewed dependency graph."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "9f1dcb401ee0a33091862098b8fb7702a3385cbd",
+    "endRef": "9f1dcb401ee0a33091862098b8fb7702a3385cbd"
+  }
+}
