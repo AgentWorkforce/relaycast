@@ -1511,7 +1511,9 @@ paths:
           required: false
           schema:
             type: string
+            minLength: 1
             maxLength: 255
+            pattern: '^[\x21-\x7E]+$'
           description: >-
             Owner-scoped key for crash-safe delegated creation. Requires an
             authenticated `Authorization: Bearer rk_*` owner. Reusing it with
