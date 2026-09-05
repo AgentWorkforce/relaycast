@@ -69,6 +69,7 @@ interface RequestConfig {
   body?: Record<string, unknown>;
   allowNotFound?: boolean;
   requireApiKey?: boolean;
+  headers?: Record<string, string>;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -272,6 +273,7 @@ export class RelaycastSetup {
           : {}),
         provenance: toWorkspaceProvenanceInput(options.provenance),
       },
+      headers: options.idempotencyKey ? { 'Idempotency-Key': options.idempotencyKey } : undefined,
       requireApiKey: true,
     });
 
@@ -333,6 +335,7 @@ export class RelaycastSetup {
     method: 'GET' | 'POST',
     path: string,
     body?: Record<string, unknown>,
+    extraHeaders?: Record<string, string>,
   ): Promise<Response> {
     const url = new URL(path, this.config.baseUrl);
     const apiKey = await this.resolveApiKey();
@@ -350,6 +353,7 @@ export class RelaycastSetup {
     if (method === 'POST') {
       headers['Content-Type'] = 'application/json';
     }
+    Object.assign(headers, extraHeaders ?? {});
 
     let attempt = 0;
 
@@ -388,10 +392,11 @@ export class RelaycastSetup {
     path,
     schema,
     body,
+    headers: extraHeaders,
     allowNotFound = false,
     requireApiKey = false,
   }: RequestConfig): Promise<TOutput | null> {
-    const response = await this.fetchWithRetry(method, path, body);
+    const response = await this.fetchWithRetry(method, path, body, extraHeaders);
 
     if (allowNotFound && response.status === 404) {
       return null;

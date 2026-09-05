@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeNodeStack, type TestStack } from '../../__tests__/conformance/harness.js';
-import { channels, workspaces } from '../../db/schema.js';
+import { channels, workspaceCreateIdempotency, workspaces } from '../../db/schema.js';
 import type {
   AtomicWrite,
   BatchCapability,
@@ -10,7 +10,7 @@ import type {
   TransactionCapability,
 } from '../../ports/database.js';
 import * as snowflake from '../snowflake.js';
-import { createWorkspace, deleteWorkspace } from '../workspace.js';
+import { createWorkspace, deleteWorkspace, workspaceCreateRequestDigest } from '../workspace.js';
 
 describe('workspace write durability', () => {
   let stack: TestStack;
@@ -186,6 +186,69 @@ describe('workspace write durability', () => {
 
     expect(batchCalls()).toBe(2);
     await expectOneCompleteWorkspace(created.workspace_id);
+  });
+
+  it('recovers a delegated child key after commit/response loss', async () => {
+    const batchCalls = attachD1Batch({ loseFirstResponse: true });
+    const ownerApiKey = 'rk_live_parent_for_recovery';
+    const requestDigest = await workspaceCreateRequestDigest({ name: 'delegated-child', expiresInSeconds: 3_600 });
+    const created = await createWorkspace(db, 'delegated-child', {
+      ownerApiKey, idempotencyKey: 'cloud-job-123', requestDigest,
+      expiresAt: new Date(Date.now() + 3_600_000),
+    });
+
+    expect(batchCalls()).toBe(2);
+    expect(created.created).toBe(false);
+    expect(created.api_key).toMatch(/^rk_live_[0-9a-f]{32}$/);
+    expect(await db.select().from(workspaces)).toHaveLength(1);
+    expect(await db.select().from(workspaceCreateIdempotency)).toHaveLength(1);
+
+    const replay = await createWorkspace(db, 'delegated-child', {
+      ownerApiKey, idempotencyKey: 'cloud-job-123', requestDigest,
+      expiresAt: new Date(Date.now() + 3_600_000),
+    });
+    expect(replay.created).toBe(false);
+    expect(replay.workspace_id).toBe(created.workspace_id);
+    expect(replay.api_key).toBe(created.api_key);
+  });
+
+  it('serializes concurrent delegated duplicates and scopes bindings to the owner', async () => {
+    attachD1Batch({});
+    const requestDigest = await workspaceCreateRequestDigest({ name: 'concurrent-child' });
+    const firstOwner = 'rk_live_owner_a';
+    const secondOwner = 'rk_live_owner_b';
+    const [a, b] = await Promise.all([
+      createWorkspace(db, 'concurrent-child', { ownerApiKey: firstOwner, idempotencyKey: 'same-job', requestDigest }),
+      createWorkspace(db, 'concurrent-child', { ownerApiKey: firstOwner, idempotencyKey: 'same-job', requestDigest }),
+    ]);
+    expect(a.workspace_id).toBe(b.workspace_id);
+    expect(a.api_key).toBe(b.api_key);
+    expect(await db.select().from(workspaces)).toHaveLength(1);
+
+    const otherOwner = await createWorkspace(db, 'concurrent-child', {
+      ownerApiKey: secondOwner, idempotencyKey: 'same-job', requestDigest,
+    });
+    expect(otherOwner.workspace_id).not.toBe(a.workspace_id);
+    expect(await db.select().from(workspaces)).toHaveLength(2);
+  });
+
+  it('rejects digest conflicts and prevents recreation after child deletion', async () => {
+    attachD1Batch({});
+    const ownerApiKey = 'rk_live_owner_conflict';
+    const key = 'cloud-job-conflict';
+    const originalDigest = await workspaceCreateRequestDigest({ name: 'original' });
+    const created = await createWorkspace(db, 'original', { ownerApiKey, idempotencyKey: key, requestDigest: originalDigest });
+    const changedDigest = await workspaceCreateRequestDigest({ name: 'changed' });
+    await expect(createWorkspace(db, 'changed', { ownerApiKey, idempotencyKey: key, requestDigest: changedDigest }))
+      .rejects.toMatchObject({ code: 'workspace_create_idempotency_conflict', status: 409 });
+
+    await deleteWorkspace(db, stack.runtime.deps.files, created.workspace_id);
+    await expect(createWorkspace(db, 'original', { ownerApiKey, idempotencyKey: key, requestDigest: originalDigest }))
+      .rejects.toMatchObject({ code: 'workspace_create_idempotency_terminalized', status: 409 });
+    expect(await db.select().from(workspaces)).toHaveLength(0);
+    expect(await db.select().from(workspaceCreateIdempotency)).toMatchObject([
+      { status: 'terminalized', workspaceId: created.workspace_id },
+    ]);
   });
 
   it('returns storage unavailable when committed-pair readback fails', async () => {

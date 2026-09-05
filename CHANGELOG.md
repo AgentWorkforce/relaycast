@@ -20,6 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
+- Delegated `POST /v1/workspaces` creates now accept an owner-scoped `Idempotency-Key`, recover the same child key after response loss, reject request-digest conflicts, and terminalize bindings on deletion or expiry.
 - Keyed (idempotent) agent-action invocations whose host cannot deliver to the handler now fail with 503 `handler_unavailable` instead of 503 `idempotency_unavailable`.
 - An agent-action invocation is no longer reported as `handler_unavailable` when its handler reconnected and received it mid-request; the caller sees the live dispatch instead.
 

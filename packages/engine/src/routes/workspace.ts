@@ -1,10 +1,12 @@
 import { Hono } from 'hono';
 import type { Context } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { createMiddleware } from 'hono/factory';
 import { z } from 'zod';
 import { WorkspaceProvenanceInputSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { requireAgentToken, requireWorkspaceKey, requireWorkspaceRead } from '../middleware/auth.js';
+import { parseIdempotencyKey } from '../middleware/idempotency.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as workspaceEngine from '../engine/workspace.js';
 import * as activityEngine from '../engine/activity.js';
@@ -196,14 +198,36 @@ workspaceRoutes.post('/workspaces', async (c) => {
       expires_in_seconds: expiresInSeconds,
       provenance: declaredProvenance,
     } = parsed.data;
+    const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
+    if (idempotencyError) {
+      return jsonError(c, 'invalid_idempotency_key', idempotencyError, 400);
+    }
     const db = c.get('db');
     const ownerApiKey = extractOwnerApiKey(c.req.header('Authorization'));
+    if (idempotencyKey) {
+      if (!ownerApiKey) {
+        return jsonError(c, 'workspace_create_idempotency_owner_required', 'An authenticated workspace owner is required when Idempotency-Key is supplied', 401);
+      }
+      const ownerAuth = await c.get('engine').auth.authenticate({ token: ownerApiKey, require: 'workspace', db });
+      if (!ownerAuth.ok) {
+        return jsonError(c, ownerAuth.code, ownerAuth.message, ownerAuth.status as ContentfulStatusCode);
+      }
+    }
+    const requestDigest = idempotencyKey
+      ? await workspaceEngine.workspaceCreateRequestDigest({
+        name,
+        ...(expiresInSeconds === undefined ? {} : { expiresInSeconds }),
+        ...(declaredProvenance === undefined ? {} : { provenance: declaredProvenance }),
+      })
+      : undefined;
     const attribution = buildWorkspaceProvenance(c.req.raw, declaredProvenance);
     const result = await workspaceEngine.createWorkspace(
       db,
       name,
       {
         ...(ownerApiKey ? { ownerApiKey } : {}),
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+        ...(requestDigest ? { requestDigest } : {}),
         ...(expiresInSeconds
           ? { expiresAt: new Date(Date.now() + expiresInSeconds * 1_000) }
           : {}),

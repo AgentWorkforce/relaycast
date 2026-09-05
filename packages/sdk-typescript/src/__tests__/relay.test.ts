@@ -1129,6 +1129,30 @@ describe('RelayCast', () => {
       expect(result.expiresAt).toBe('2024-01-01T01:00:00.000Z');
     });
 
+    it('forwards the owner-scoped idempotency key for delegated creates', async () => {
+      const { RelayCast } = await import('../relay.js');
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 201,
+          json: () => Promise.resolve({
+            ok: true,
+            data: { workspace_id: 'ws_child', api_key: 'rk_live_child', created_at: '2024-01-01' },
+          }),
+        }),
+      );
+
+      await RelayCast.createWorkspace('child', {
+        apiKey: 'rk_live_parent',
+        idempotencyKey: 'cloud-job-371',
+        baseUrl: 'http://localhost:3000',
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.headers.Authorization).toBe('Bearer rk_live_parent');
+      expect(init.headers['Idempotency-Key']).toBe('cloud-job-371');
+    });
+
     it('forwards explicit creation provenance', async () => {
       const { RelayCast } = await import('../relay.js');
       mockFetch.mockImplementation(() =>

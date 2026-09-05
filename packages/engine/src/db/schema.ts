@@ -75,6 +75,29 @@ export const workspaces = sqliteTable(
   ],
 );
 
+/**
+ * Durable owner-scoped idempotency bindings for delegated workspace creates.
+ * The child API key is derived at replay time and is never persisted in
+ * plaintext.
+ */
+export const workspaceCreateIdempotency = sqliteTable(
+  'workspace_create_idempotency',
+  {
+    ownerScopeHash: text('owner_scope_hash').notNull(),
+    idempotencyKeyHash: text('idempotency_key_hash').notNull(),
+    requestDigest: text('request_digest').notNull(),
+    workspaceId: text('workspace_id').notNull(),
+    status: text('status').notNull().default('active'),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    terminalizedAt: integer('terminalized_at', { mode: 'timestamp' }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.ownerScopeHash, table.idempotencyKeyHash] }),
+    uniqueIndex('workspace_create_idempotency_workspace_unique').on(table.workspaceId),
+    index('idx_workspace_create_idempotency_workspace').on(table.workspaceId),
+  ],
+);
+
 // ============================================
 // Agents
 // ============================================

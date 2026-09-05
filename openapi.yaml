@@ -180,7 +180,7 @@ components:
           description: Snowflake ID of the workspace
         api_key:
           type: string
-          description: Workspace API key (only returned on first creation)
+          description: Workspace API key (returned on first creation and on an authenticated idempotent replay)
         created_at:
           type: string
           format: date-time
@@ -1472,12 +1472,12 @@ paths:
       summary: Create workspace
       description: >
         Create a workspace and get an API key when a new workspace is created. This operation is
-        idempotent by workspace name for the same bearer workspace key: if you repeat the call with
-        the same name and the same `Authorization: Bearer rk_*` key, the existing workspace is
-        returned with a `200` response; otherwise a new workspace is created and returned with a
-        `201` response. If transient storage attempts are exhausted and the server cannot confirm
-        the committed workspace/channel pair, it returns `503 workspace_storage_unavailable`.
-        That outcome is indeterminate; callers must not assume no workspace committed.
+        idempotent by workspace name for the same bearer workspace key. For delegated creates,
+        provide an `Idempotency-Key`: the authenticated owner, key, and exact request digest are
+        durably bound to one child. Replaying the same request returns the same child key with a
+        `200` response, while changing the request returns `409`. If transient storage attempts are
+        exhausted and the server cannot confirm the committed workspace/channel pair, it returns
+        `503 workspace_storage_unavailable`; that outcome is indeterminate.
       tags:
         - Workspaces
       security:
@@ -1504,6 +1504,17 @@ paths:
                     the sole automatic whole-workspace deletion predicate.
                 provenance:
                   $ref: '#/components/schemas/WorkspaceProvenanceInput'
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            maxLength: 255
+          description: >-
+            Owner-scoped key for crash-safe delegated creation. Requires an
+            authenticated `Authorization: Bearer rk_*` owner. Reusing it with
+            the same request replays the child; a different request is a 409.
       responses:
         '200':
           description: Existing workspace returned (idempotent)
@@ -1529,6 +1540,12 @@ paths:
                     $ref: '#/components/schemas/CreateWorkspaceResponse'
         '400':
           description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Idempotency key conflict or terminalized child binding
           content:
             application/json:
               schema:

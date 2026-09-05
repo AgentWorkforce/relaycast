@@ -43,6 +43,8 @@ export interface CreateWorkspaceOptions {
   expiresInSeconds?: number;
   /** Creation context recorded once for hosted usage attribution. */
   provenance?: WorkspaceProvenanceOptions;
+  /** Owner-scoped key for crash-safe delegated workspace-create retries. */
+  idempotencyKey?: string;
 }
 
 export type JoinWorkspaceOptions = Record<string, never>;

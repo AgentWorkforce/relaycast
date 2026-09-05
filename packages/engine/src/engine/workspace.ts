@@ -1,7 +1,7 @@
 import { and, asc, eq, gt, inArray, isNull, like, lte, or, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { workspaces, channels, fileCleanupQueue, workspaceEvents } from '../db/schema.js';
-import { randomHex, sha256Hex } from '../lib/crypto.js';
+import { workspaces, channels, fileCleanupQueue, workspaceEvents, workspaceCreateIdempotency } from '../db/schema.js';
+import { hmacSha256Hex, randomHex, sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
 import { codedError } from '../lib/httpError.js';
 import { D1WriteRetryExhaustedError, retryD1Write } from '../lib/d1Retry.js';
@@ -27,6 +27,8 @@ type CreateWorkspaceOptions =
   | {
       ownerApiKey?: string;
       ownerApiKeyHash?: string;
+      idempotencyKey?: string;
+      requestDigest?: string;
       expiresAt?: Date;
       provenance?: WorkspaceProvenanceRecord;
       usageClassification?: 'internal' | 'external' | 'unknown';
@@ -42,6 +44,28 @@ const FILE_CLEANUP_RETRY_MS = 30_000;
 
 function hashApiKey(apiKey: string): Promise<string> {
   return sha256Hex(apiKey);
+}
+
+/** Canonical digest for the public workspace-create request contract. */
+export function workspaceCreateRequestDigest(input: {
+  name: string;
+  expiresInSeconds?: number;
+  provenance?: Pick<WorkspaceProvenanceRecord, 'source' | 'origin_id' | 'classification'>;
+}): Promise<string> {
+  return sha256Hex(JSON.stringify({
+    name: input.name,
+    ...(input.expiresInSeconds === undefined ? {} : { expires_in_seconds: input.expiresInSeconds }),
+    ...(input.provenance === undefined ? {} : { provenance: input.provenance }),
+  }));
+}
+
+async function deriveIdempotentWorkspaceApiKey(ownerApiKey: string, idempotencyKey: string, requestDigest: string): Promise<string> {
+  const material = `relaycast:workspace-create:v1:${idempotencyKey}:${requestDigest}`;
+  return `rk_live_${(await hmacSha256Hex(material, ownerApiKey)).slice(0, 32)}`;
+}
+
+function idempotencyConflict(message: string, code = 'workspace_create_idempotency_conflict') {
+  return codedError(message, code, 409);
 }
 
 function buildWorkspaceResponse(
@@ -160,9 +184,61 @@ export async function createWorkspace(
 
   const ownerApiKeyHash = providedOwnerApiKeyHash ?? derivedOwnerApiKeyHash;
   const createOptions = typeof options === 'string' ? undefined : options;
+  const idempotencyKey = createOptions?.idempotencyKey;
+  const requestDigest = createOptions?.requestDigest;
+
+  if (idempotencyKey && !providedOwnerApiKey) {
+    throw codedError(
+      'An authenticated owner API key is required when Idempotency-Key is supplied',
+      'workspace_create_idempotency_owner_required',
+      401,
+    );
+  }
+  if (idempotencyKey && !requestDigest) {
+    throw codedError(
+      'A request digest is required for workspace create idempotency',
+      'workspace_create_idempotency_digest_required',
+      400,
+    );
+  }
+
+  const idempotencyKeyHash = idempotencyKey ? await hashApiKey(idempotencyKey) : undefined;
+  const deterministicApiKey = idempotencyKey && requestDigest
+    ? await deriveIdempotentWorkspaceApiKey(providedOwnerApiKey!, idempotencyKey, requestDigest)
+    : undefined;
+
+  if (ownerApiKeyHash && idempotencyKeyHash && requestDigest) {
+    const [binding] = await db
+      .select()
+      .from(workspaceCreateIdempotency)
+      .where(and(
+        eq(workspaceCreateIdempotency.ownerScopeHash, ownerApiKeyHash),
+        eq(workspaceCreateIdempotency.idempotencyKeyHash, idempotencyKeyHash),
+      ));
+    if (binding) {
+      if (binding.requestDigest !== requestDigest) {
+        throw idempotencyConflict('Idempotency-Key was reused with a different request payload');
+      }
+      if (binding.status !== 'active') {
+        throw idempotencyConflict(
+          'The workspace create idempotency binding has been terminalized and cannot be replayed',
+          'workspace_create_idempotency_terminalized',
+        );
+      }
+      const [existing] = await db.select().from(workspaces).where(eq(workspaces.id, binding.workspaceId));
+      if (!existing || existing.apiKeyHash !== await hashApiKey(deterministicApiKey!)) {
+        throw idempotencyConflict(
+          'The workspace create idempotency binding cannot recover its child workspace',
+          'workspace_create_idempotency_unusable',
+        );
+      }
+      const workspace = buildWorkspaceResponse(existing, deterministicApiKey);
+      return { workspace, created: false, ...workspace };
+    }
+  }
 
   // Repeated creates from the same owner/key should reuse the existing workspace.
-  if (ownerApiKeyHash) {
+  if (ownerApiKeyHash && !idempotencyKey) {
     const [existing] = await db
       .select()
       .from(workspaces)
@@ -182,11 +258,12 @@ export async function createWorkspace(
   }
 
   const workspaceId = generateId();
-  const apiKey = `rk_live_${randomHex(16)}`;
+  const apiKey = deterministicApiKey ?? `rk_live_${randomHex(16)}`;
   const apiKeyHash = await hashApiKey(apiKey);
 
   const channelId = generateId();
   const expected = { workspaceId, name, apiKeyHash, channelId };
+  let replayedWorkspace: typeof workspaces.$inferSelect | undefined;
   let writeResult: WorkspaceWriteResult;
   try {
     writeResult = await retryD1Write(async () => {
@@ -217,10 +294,44 @@ export async function createWorkspace(
                 topic: 'General discussion',
               })
               .returning(),
+            ...(ownerApiKeyHash && idempotencyKeyHash && requestDigest
+              ? [writeDb.insert(workspaceCreateIdempotency).values({
+                ownerScopeHash: ownerApiKeyHash,
+                idempotencyKeyHash,
+                requestDigest,
+                workspaceId,
+              }).returning()]
+              : []),
           ],
           { requireAtomic: true },
         ) as WorkspaceWriteResult;
       } catch (cause) {
+        if (isUniqueConstraintError(cause) && ownerApiKeyHash && idempotencyKeyHash && requestDigest) {
+          const [binding] = await db.select().from(workspaceCreateIdempotency).where(and(
+            eq(workspaceCreateIdempotency.ownerScopeHash, ownerApiKeyHash),
+            eq(workspaceCreateIdempotency.idempotencyKeyHash, idempotencyKeyHash),
+          ));
+          if (binding) {
+            if (binding.requestDigest !== requestDigest) {
+              throw idempotencyConflict('Idempotency-Key was reused with a different request payload');
+            }
+            if (binding.status !== 'active') {
+              throw idempotencyConflict(
+                'The workspace create idempotency binding has been terminalized and cannot be replayed',
+                'workspace_create_idempotency_terminalized',
+              );
+            }
+            const [existing] = await db.select().from(workspaces).where(eq(workspaces.id, binding.workspaceId));
+            if (!existing || existing.apiKeyHash !== apiKeyHash) {
+              throw idempotencyConflict(
+                'The workspace create idempotency binding cannot recover its child workspace',
+                'workspace_create_idempotency_unusable',
+              );
+            }
+            replayedWorkspace = existing;
+            return [[existing], await db.select().from(channels).where(eq(channels.workspaceId, existing.id))] as WorkspaceWriteResult;
+          }
+        }
         if (!isUniqueConstraintError(cause)) throw cause;
 
         // A prior attempt may have committed before its response was lost.
@@ -264,6 +375,11 @@ export async function createWorkspace(
 
   const [workspaceRows] = writeResult;
   const createdWorkspace = workspaceRows[0];
+
+  if (replayedWorkspace) {
+    const workspace = buildWorkspaceResponse(replayedWorkspace, apiKey);
+    return { workspace, created: false, ...workspace };
+  }
 
   // A conflict can only be an idempotent replay of this exact generated pair.
   if (!isExpectedWorkspacePair(writeResult, expected) || !createdWorkspace) {
@@ -392,6 +508,10 @@ async function deleteWorkspaceBatch(
         writeDb
           .delete(workspaceEvents)
           .where(inArray(workspaceEvents.workspaceId, workspaceIds)),
+        writeDb
+          .update(workspaceCreateIdempotency)
+          .set({ status: 'terminalized', terminalizedAt: new Date() })
+          .where(inArray(workspaceCreateIdempotency.workspaceId, workspaceIds)),
         writeDb
           .delete(workspaces)
           .where(inArray(workspaces.id, workspaceIds)),
