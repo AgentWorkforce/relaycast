@@ -274,6 +274,7 @@ export async function createWorkspace(
   const channelId = generateId();
   const expected = { workspaceId, name, apiKeyHash, channelId };
   let replayedWorkspace: typeof workspaces.$inferSelect | undefined;
+  let recoveredOwnWorkspace = false;
   let writeResult: WorkspaceWriteResult;
   try {
     writeResult = await retryD1Write(async () => {
@@ -339,6 +340,11 @@ export async function createWorkspace(
               );
             }
             replayedWorkspace = existing;
+            // The binding can point at this invocation's generated workspace
+            // when the first atomic write committed but its response was lost.
+            // Preserve the original create semantics in that case; a binding
+            // owned by another invocation is a replay and must remain 200/false.
+            recoveredOwnWorkspace = existing.id === workspaceId;
             return [[existing], await db.select().from(channels).where(eq(channels.workspaceId, existing.id))] as WorkspaceWriteResult;
           }
         }
@@ -388,7 +394,7 @@ export async function createWorkspace(
 
   if (replayedWorkspace) {
     const workspace = buildWorkspaceResponse(replayedWorkspace, apiKey);
-    return { workspace, created: false, ...workspace };
+    return { workspace, created: recoveredOwnWorkspace, ...workspace };
   }
 
   // A conflict can only be an idempotent replay of this exact generated pair.

@@ -198,7 +198,9 @@ describe('workspace write durability', () => {
     });
 
     expect(batchCalls()).toBe(2);
-    expect(created.created).toBe(false);
+    // The first write committed before its response was lost, so this is a
+    // recovery of this invocation's own create and must retain 201 semantics.
+    expect(created.created).toBe(true);
     expect(created.api_key).toMatch(/^rk_live_[0-9a-f]{32}$/);
     expect(await db.select().from(workspaces)).toHaveLength(1);
     expect(await db.select().from(workspaceCreateIdempotency)).toHaveLength(1);
