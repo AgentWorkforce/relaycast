@@ -176,7 +176,11 @@ export interface CreateWorkspaceOptions {
    * Required by POST /v1/workspaces.
    */
   name: string
-  /** Owner-scoped key for crash-safe delegated workspace-create retries. */
+  /**
+   * Owner-scoped key for crash-safe delegated workspace-create retries.
+   * Requires this setup client to have an authenticated owner `apiKey`;
+   * keyed anonymous creation is rejected.
+   */
   idempotencyKey?: string
 }
 ```

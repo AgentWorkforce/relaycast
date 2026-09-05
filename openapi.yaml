@@ -173,6 +173,7 @@ components:
       type: object
       required:
         - workspace_id
+        - api_key
         - created_at
       properties:
         workspace_id:

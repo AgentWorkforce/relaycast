@@ -273,7 +273,9 @@ export class RelaycastSetup {
           : {}),
         provenance: toWorkspaceProvenanceInput(options.provenance),
       },
-      headers: options.idempotencyKey ? { 'Idempotency-Key': options.idempotencyKey } : undefined,
+      headers: options.idempotencyKey !== undefined
+        ? { 'Idempotency-Key': options.idempotencyKey }
+        : undefined,
       requireApiKey: true,
     });
 

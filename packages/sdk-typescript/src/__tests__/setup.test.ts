@@ -116,6 +116,23 @@ describe('RelaycastSetup', () => {
     expect(init.headers['Idempotency-Key']).toBe('cloud-job-371');
   });
 
+  it('does not silently downgrade an explicitly empty idempotency key', async () => {
+    const { RelaycastSetup } = await import('../setup.js');
+    mockFetch.mockImplementation(() =>
+      jsonResponse({
+        ok: false,
+        error: { code: 'invalid_idempotency_key', message: 'Idempotency-Key must not be empty' },
+      }, 400),
+    );
+
+    const setup = new RelaycastSetup({ apiKey: 'rk_live_parent' });
+    await expect(setup.createWorkspace({ name: 'child', idempotencyKey: '' }))
+      .rejects.toMatchObject({ httpStatus: 400 });
+
+    const [, init] = mockFetch.mock.calls[0]!;
+    expect(init.headers['Idempotency-Key']).toBe('');
+  });
+
   it('createWorkspace() uses a custom baseUrl and resolves apiKey functions per request', async () => {
     const { RelaycastSetup } = await import('../setup.js');
 

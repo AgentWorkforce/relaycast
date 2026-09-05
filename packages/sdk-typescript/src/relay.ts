@@ -343,7 +343,9 @@ export class RelayCast {
       headers: {
         'Content-Type': 'application/json',
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-        ...(resolved.idempotencyKey ? { 'Idempotency-Key': resolved.idempotencyKey } : {}),
+        ...(resolved.idempotencyKey !== undefined
+          ? { 'Idempotency-Key': resolved.idempotencyKey }
+          : {}),
         'X-SDK-Version': SDK_VERSION,
         'X-Relaycast-Origin-Client': SDK_ORIGIN.client,
         'X-Relaycast-Origin-Version': SDK_ORIGIN.version,

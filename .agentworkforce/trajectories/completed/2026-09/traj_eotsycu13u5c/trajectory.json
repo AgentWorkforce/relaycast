@@ -49,7 +49,7 @@
         {
           "ts": 1788638678749,
           "type": "reflection",
-          "content": "Engine and SDK implementation passed focused and full local gates; independent diff review found no plaintext credential persistence or cross-owner binding path.",
+          "content": "PR verification recorded before this trajectory reported that commit 9c1c971e passed the engine and SDK gates and an independent diff review; this trajectory itself recorded the implementation decisions after that product commit.",
           "raw": {
             "focalPoints": [
               "atomicity",
@@ -70,12 +70,32 @@
     }
   ],
   "retrospective": {
-    "summary": "Added owner-scoped crash-idempotent delegated workspace creation with request-digest conflicts, concurrent replay recovery, HMAC-derived child credentials, atomic terminalization on delete/expiry, OpenAPI/SDK/docs, and tests. Commit 9c1c971e, PR #372.",
+    "summary": "Recorded the decision context for the owner-scoped crash-idempotent workspace implementation in product commit 9c1c971e. The trajectory record was committed separately as 129ecc6 in PR #372.",
     "approach": "Standard approach",
     "confidence": 0.9
   },
-  "commits": [],
-  "filesChanged": [],
+  "commits": [
+    "9c1c971e"
+  ],
+  "filesChanged": [
+    "CHANGELOG.md",
+    "README.md",
+    "docs/sdk-setup-client.md",
+    "openapi.yaml",
+    "packages/engine/CHANGELOG.md",
+    "packages/engine/src/__tests__/conformance/workspaceLifecycle.test.ts",
+    "packages/engine/src/db/migrations/0045_workspace_create_idempotency.sql",
+    "packages/engine/src/db/schema.ts",
+    "packages/engine/src/engine/__tests__/workspace.test.ts",
+    "packages/engine/src/engine/workspace.ts",
+    "packages/engine/src/routes/workspace.ts",
+    "packages/sdk-typescript/CHANGELOG.md",
+    "packages/sdk-typescript/src/__tests__/relay.test.ts",
+    "packages/sdk-typescript/src/__tests__/setup.test.ts",
+    "packages/sdk-typescript/src/relay.ts",
+    "packages/sdk-typescript/src/setup-types.ts",
+    "packages/sdk-typescript/src/setup.ts"
+  ],
   "projectId": "AgentWorkforce/relaycast",
   "tags": [],
   "_trace": {

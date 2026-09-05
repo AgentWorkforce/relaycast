@@ -9,7 +9,7 @@
 
 ## Summary
 
-Added owner-scoped crash-idempotent delegated workspace creation with request-digest conflicts, concurrent replay recovery, HMAC-derived child credentials, atomic terminalization on delete/expiry, OpenAPI/SDK/docs, and tests. Commit 9c1c971e, PR #372.
+Recorded the decision context for the owner-scoped crash-idempotent workspace implementation in product commit `9c1c971e`. The implementation and its engine/SDK gates were PR verification completed before this trajectory began; this trajectory record was committed separately as `129ecc6` in PR #372.
 
 **Approach:** Standard approach
 
@@ -34,4 +34,4 @@ Added owner-scoped crash-idempotent delegated workspace creation with request-di
 
 - Use a durable owner-hash plus idempotency-key binding and request digest: Use a durable owner-hash plus idempotency-key binding and request digest
 - Derive child API keys with HMAC instead of persisting plaintext: Derive child API keys with HMAC instead of persisting plaintext
-- Engine and SDK implementation passed focused and full local gates; independent diff review found no plaintext credential persistence or cross-owner binding path.
+- PR verification recorded before this trajectory reported that commit `9c1c971e` passed the engine and SDK gates and an independent diff review; this trajectory itself recorded the implementation decisions after that product commit.
