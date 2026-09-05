@@ -1523,9 +1523,13 @@ paths:
             application/json:
               schema:
                 type: object
+                required:
+                  - ok
+                  - data
                 properties:
                   ok:
                     type: boolean
+                    enum: [true]
                   data:
                     $ref: '#/components/schemas/CreateWorkspaceResponse'
         '201':
@@ -1534,9 +1538,13 @@ paths:
             application/json:
               schema:
                 type: object
+                required:
+                  - ok
+                  - data
                 properties:
                   ok:
                     type: boolean
+                    enum: [true]
                   data:
                     $ref: '#/components/schemas/CreateWorkspaceResponse'
         '400':
