@@ -10,6 +10,6 @@
 
 ## Summary
 
-Audited Relaycast PR #372 at 4cabc3e: local full test passed, CI arm64 still pending, two Codex P2 threads and two Cubic metadata threads remain unresolved; PR is not merge-ready.
+Audited Relaycast PR #372 at 4cabc3e: identified two Codex P2 threads and two Cubic metadata threads; PR was not merge-ready. This trajectory recorded gate findings only and did not author product changes or validation claims.
 
 **Approach:** Standard approach

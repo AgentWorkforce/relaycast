@@ -342,9 +342,11 @@ export async function createWorkspace(
             replayedWorkspace = existing;
             // The binding can point at this invocation's generated workspace
             // when the first atomic write committed but its response was lost.
-            // Preserve the original create semantics in that case; a binding
-            // owned by another invocation is a replay and must remain 200/false.
-            recoveredOwnWorkspace = existing.id === workspaceId;
+            // Verify the complete generated pair before preserving create
+            // semantics; matching only workspaceId would misclassify an
+            // unrelated workspace-id collision as our own recovery.
+            const committed = await readCommittedWorkspacePair(db, expected);
+            recoveredOwnWorkspace = committed.status === 'match';
             return [[existing], await db.select().from(channels).where(eq(channels.workspaceId, existing.id))] as WorkspaceWriteResult;
           }
         }

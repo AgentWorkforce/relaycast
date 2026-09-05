@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeNodeStack, type TestStack } from '../../__tests__/conformance/harness.js';
 import { channels, workspaceCreateIdempotency, workspaces } from '../../db/schema.js';
+import { hmacSha256Hex, sha256Hex } from '../../lib/crypto.js';
 import type {
   AtomicWrite,
   BatchCapability,
@@ -33,6 +34,7 @@ describe('workspace write durability', () => {
     failAfterLostResponse?: boolean;
     failBeforeFirst?: boolean;
     loseFirstResponse?: boolean;
+    beforeFirstBatch?: () => void | Promise<void>;
   }): () => number {
     let calls = 0;
     const sqlite = stack.runtime.handle.sqlite;
@@ -44,6 +46,9 @@ describe('workspace write durability', () => {
       }
       if (calls > 1 && options.failAfterLostResponse) {
         throw new Error('D1_ERROR: D1 DB is overloaded. Too many requests queued.');
+      }
+      if (calls === 1 && options.beforeFirstBatch) {
+        await options.beforeFirstBatch();
       }
 
       sqlite.exec('BEGIN IMMEDIATE');
@@ -212,6 +217,49 @@ describe('workspace write durability', () => {
     expect(replay.created).toBe(false);
     expect(replay.workspace_id).toBe(created.workspace_id);
     expect(replay.api_key).toBe(created.api_key);
+  });
+
+  it('does not treat an unrelated workspace-id collision as own recovery', async () => {
+    const ownerApiKey = 'rk_live_collision_owner';
+    const idempotencyKey = 'collision-job';
+    const requestDigest = await workspaceCreateRequestDigest({ name: 'collision-child' });
+    const deterministicApiKey = `rk_live_${(await hmacSha256Hex(
+      `relaycast:workspace-create:v1:${idempotencyKey}:${requestDigest}`,
+      ownerApiKey,
+    )).slice(0, 32)}`;
+    const pair = useGeneratedPair();
+
+    attachD1Batch({
+      beforeFirstBatch: async () => {
+        await db.insert(workspaces).values({
+          id: pair.workspaceId,
+          name: 'collision-child',
+          apiKeyHash: await sha256Hex(deterministicApiKey),
+        });
+        await db.insert(channels).values({
+          id: 'bound-channel',
+          workspaceId: pair.workspaceId,
+          name: 'general',
+          topic: 'General discussion',
+        });
+        await db.insert(workspaceCreateIdempotency).values({
+          ownerScopeHash: await sha256Hex(ownerApiKey),
+          idempotencyKeyHash: await sha256Hex(idempotencyKey),
+          requestDigest,
+          workspaceId: pair.workspaceId,
+        });
+      },
+    });
+
+    const result = await createWorkspace(db, 'collision-child', {
+      ownerApiKey,
+      idempotencyKey,
+      requestDigest,
+    });
+
+    expect(result.created).toBe(false);
+    expect(result.workspace_id).toBe(pair.workspaceId);
+    expect(result.api_key).toBe(deterministicApiKey);
   });
 
   it('canonicalizes provenance field order in workspace-create request digests', async () => {
