@@ -212,6 +212,19 @@ describe('workspace write durability', () => {
     expect(replay.api_key).toBe(created.api_key);
   });
 
+  it('canonicalizes provenance field order in workspace-create request digests', async () => {
+    const first = await workspaceCreateRequestDigest({
+      name: 'canonical-child',
+      provenance: { source: 'ci', origin_id: 'run-371', classification: 'internal' },
+    });
+    const reordered = await workspaceCreateRequestDigest({
+      name: 'canonical-child',
+      provenance: { classification: 'internal', origin_id: 'run-371', source: 'ci' },
+    });
+
+    expect(reordered).toBe(first);
+  });
+
   it('serializes concurrent delegated duplicates and scopes bindings to the owner', async () => {
     attachD1Batch({});
     const requestDigest = await workspaceCreateRequestDigest({ name: 'concurrent-child' });

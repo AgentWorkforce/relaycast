@@ -14,5 +14,3 @@ CREATE TABLE workspace_create_idempotency (
 
 CREATE UNIQUE INDEX workspace_create_idempotency_workspace_unique
   ON workspace_create_idempotency(workspace_id);
-CREATE INDEX idx_workspace_create_idempotency_workspace
-  ON workspace_create_idempotency(workspace_id);

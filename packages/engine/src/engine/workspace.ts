@@ -52,10 +52,20 @@ export function workspaceCreateRequestDigest(input: {
   expiresInSeconds?: number;
   provenance?: Pick<WorkspaceProvenanceRecord, 'source' | 'origin_id' | 'classification'>;
 }): Promise<string> {
+  const provenance = input.provenance === undefined
+    ? undefined
+    : {
+        source: input.provenance.source,
+        ...(input.provenance.origin_id === undefined ? {} : { origin_id: input.provenance.origin_id }),
+        ...(input.provenance.classification === undefined
+          ? {}
+          : { classification: input.provenance.classification }),
+      };
+
   return sha256Hex(JSON.stringify({
     name: input.name,
     ...(input.expiresInSeconds === undefined ? {} : { expires_in_seconds: input.expiresInSeconds }),
-    ...(input.provenance === undefined ? {} : { provenance: input.provenance }),
+    ...(provenance === undefined ? {} : { provenance }),
   }));
 }
 

@@ -94,7 +94,6 @@ export const workspaceCreateIdempotency = sqliteTable(
   (table) => [
     primaryKey({ columns: [table.ownerScopeHash, table.idempotencyKeyHash] }),
     uniqueIndex('workspace_create_idempotency_workspace_unique').on(table.workspaceId),
-    index('idx_workspace_create_idempotency_workspace').on(table.workspaceId),
   ],
 );
 

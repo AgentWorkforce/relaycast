@@ -9,9 +9,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased - Minor]
 
-### Fixed
+### Added
 
 - Delegated workspace creates now recover the same child credential after response loss with an owner-scoped `Idempotency-Key`; conflicting replays fail closed and deletion/expiry terminalizes the binding.
+
+### Fixed
+
 - Keyed (idempotent) agent-action invocations whose host cannot deliver to the handler now fail with 503 `handler_unavailable` instead of 503 `idempotency_unavailable`.
 - An agent-action invocation is no longer reported as `handler_unavailable` when its handler reconnected and received it mid-request; the caller sees the live dispatch instead.
 
