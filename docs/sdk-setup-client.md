@@ -176,6 +176,12 @@ export interface CreateWorkspaceOptions {
    * Required by POST /v1/workspaces.
    */
   name: string
+  /**
+   * Owner-scoped key for crash-safe delegated workspace-create retries.
+   * Requires this setup client to have an authenticated owner `apiKey`;
+   * keyed anonymous creation is rejected.
+   */
+  idempotencyKey?: string
 }
 ```
 
@@ -352,8 +358,10 @@ export class MissingApiKeyError extends RelaycastSetupError {
 
 Sequence:
 
-1. `POST {baseUrl}/v1/workspaces` with body `{ name }`
-   — Auth header: `Authorization: Bearer {apiKey}` if provided, else anonymous
+1. `POST {baseUrl}/v1/workspaces` with body `{ name }` (and an optional
+   `Idempotency-Key` header from `idempotencyKey`)
+   — Auth header: `Authorization: Bearer {apiKey}` is required when
+   `idempotencyKey` is set and optional otherwise
    — Returns: `{ ok: true, data: { workspace_id, api_key, created_at } }`
 
 2. Construct and return a `WorkspaceHandle` with:

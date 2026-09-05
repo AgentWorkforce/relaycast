@@ -97,6 +97,47 @@ describe('workspace lifecycle', () => {
     expect(persistentRow.expiresAt).toBeNull();
   });
 
+  it('replays delegated workspace creation by owner and request digest', async () => {
+    const parent = await createWorkspace(stack.app, 'delegating-parent');
+    const unauthenticated = await stack.app.request('/v1/workspaces', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'Idempotency-Key': 'cloud-job-unauthenticated' },
+      body: JSON.stringify({ name: 'must-not-create' }),
+    });
+    expect(unauthenticated.status).toBe(401);
+    expect((await unauthenticated.json() as { error: { code: string } }).error.code)
+      .toBe('workspace_create_idempotency_owner_required');
+
+    const headers = {
+      'content-type': 'application/json',
+      authorization: `Bearer ${parent.workspaceKey}`,
+      'Idempotency-Key': 'cloud-job-371',
+    };
+    const body = JSON.stringify({ name: 'delegated-child', expires_in_seconds: 3_600 });
+    const first = await stack.app.request('/v1/workspaces', { method: 'POST', headers, body });
+    expect(first.status).toBe(201);
+    const firstData = (await first.json() as { data: { workspace_id: string; api_key: string } }).data;
+    const replay = await stack.app.request('/v1/workspaces', { method: 'POST', headers, body });
+    expect(replay.status).toBe(200);
+    const replayData = (await replay.json() as { data: { workspace_id: string; api_key: string } }).data;
+    expect(replayData).toEqual(firstData);
+
+    const changed = await stack.app.request('/v1/workspaces', {
+      method: 'POST', headers,
+      body: JSON.stringify({ name: 'different-child', expires_in_seconds: 3_600 }),
+    });
+    expect(changed.status).toBe(409);
+    expect((await changed.json() as { error: { code: string } }).error.code).toBe('workspace_create_idempotency_conflict');
+
+    const deleted = await stack.app.request(`/v1/workspaces/${firstData.workspace_id}`, {
+      method: 'DELETE', headers: { authorization: `Bearer ${firstData.api_key}` },
+    });
+    expect(deleted.status).toBe(204);
+    const afterDelete = await stack.app.request('/v1/workspaces', { method: 'POST', headers, body });
+    expect(afterDelete.status).toBe(409);
+    expect((await afterDelete.json() as { error: { code: string } }).error.code).toBe('workspace_create_idempotency_terminalized');
+  });
+
   it.each([0, 59, 2_592_001, 60.5])(
     'rejects invalid expires_in_seconds value %s',
     async (expiresInSeconds) => {
@@ -509,8 +550,9 @@ describe('workspace lifecycle', () => {
     const withoutDirectCascade = coverage.filter((table) => table.on_delete !== 'CASCADE');
 
     expect(stack.runtime.handle.sqlite.pragma('foreign_keys', { simple: true })).toBe(1);
-    expect(coverage).toHaveLength(31);
+    expect(coverage).toHaveLength(32);
     expect(withoutDirectCascade).toEqual([
+      { table_name: 'workspace_create_idempotency', on_delete: null },
       { table_name: 'workspace_events', on_delete: null },
     ]);
   });

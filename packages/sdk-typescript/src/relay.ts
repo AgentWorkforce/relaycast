@@ -200,6 +200,8 @@ export interface WorkspaceBootstrapOptions extends WorkspaceIdentityOptions {
   expiresInSeconds?: number;
   /** Creation context recorded once for hosted usage attribution. */
   provenance?: WorkspaceProvenanceOptions;
+  /** Owner-scoped key for crash-safe delegated workspace-create retries. */
+  idempotencyKey?: string;
 }
 
 export interface WorkspaceLookupOptions extends WorkspaceIdentityOptions {
@@ -341,6 +343,9 @@ export class RelayCast {
       headers: {
         'Content-Type': 'application/json',
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        ...(resolved.idempotencyKey !== undefined
+          ? { 'Idempotency-Key': resolved.idempotencyKey }
+          : {}),
         'X-SDK-Version': SDK_VERSION,
         'X-Relaycast-Origin-Client': SDK_ORIGIN.client,
         'X-Relaycast-Origin-Version': SDK_ORIGIN.version,

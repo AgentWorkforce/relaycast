@@ -1129,6 +1129,53 @@ describe('RelayCast', () => {
       expect(result.expiresAt).toBe('2024-01-01T01:00:00.000Z');
     });
 
+    it('forwards the owner-scoped idempotency key for delegated creates', async () => {
+      const { RelayCast } = await import('../relay.js');
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 201,
+          json: () => Promise.resolve({
+            ok: true,
+            data: { workspace_id: 'ws_child', api_key: 'rk_live_child', created_at: '2024-01-01' },
+          }),
+        }),
+      );
+
+      await RelayCast.createWorkspace('child', {
+        apiKey: 'rk_live_parent',
+        idempotencyKey: 'cloud-job-371',
+        baseUrl: 'http://localhost:3000',
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.headers.Authorization).toBe('Bearer rk_live_parent');
+      expect(init.headers['Idempotency-Key']).toBe('cloud-job-371');
+    });
+
+    it('does not silently downgrade an explicitly empty idempotency key', async () => {
+      const { RelayCast } = await import('../relay.js');
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: false,
+          status: 400,
+          json: () => Promise.resolve({
+            ok: false,
+            error: { code: 'invalid_idempotency_key', message: 'Idempotency-Key must not be empty' },
+          }),
+        }),
+      );
+
+      await expect(RelayCast.createWorkspace('child', {
+        apiKey: 'rk_live_parent',
+        idempotencyKey: '',
+        baseUrl: 'http://localhost:3000',
+      })).rejects.toMatchObject({ statusCode: 400 });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.headers['Idempotency-Key']).toBe('');
+    });
+
     it('forwards explicit creation provenance', async () => {
       const { RelayCast } = await import('../relay.js');
       mockFetch.mockImplementation(() =>
@@ -1242,7 +1289,7 @@ describe('RelayCast', () => {
           json: () =>
             Promise.resolve({
               ok: true,
-              data: { workspace_id: 'ws_existing', created_at: '2024-01-02' },
+              data: { workspace_id: 'ws_existing', api_key: 'rk_live_existing', created_at: '2024-01-02' },
             }),
         }),
       );
@@ -1251,6 +1298,7 @@ describe('RelayCast', () => {
         RelayCast.createWorkspace('Dup', { apiKey: 'rk_live_existing', baseUrl: 'http://localhost:3000' }),
       ).resolves.toEqual({
         workspaceId: 'ws_existing',
+        apiKey: 'rk_live_existing',
         createdAt: '2024-01-02',
       });
 
@@ -1366,7 +1414,7 @@ describe('RelayCast', () => {
           json: () =>
             Promise.resolve({
               ok: true,
-              data: { workspace_id: 'ws_existing', created_at: '2024-01-02' },
+              data: { workspace_id: 'ws_existing', api_key: 'rk_live_existing', created_at: '2024-01-02' },
             }),
         }),
       );
@@ -1379,6 +1427,7 @@ describe('RelayCast', () => {
         existed: true,
         name: 'Taken Workspace',
         workspaceId: 'ws_existing',
+        apiKey: 'rk_live_existing',
         createdAt: '2024-01-02',
       });
       expect(mockFetch).toHaveBeenCalledTimes(1);

@@ -5,6 +5,7 @@ import {
   ServerEventSchema,
   SessionMessagesResultSchema,
   WorkspaceSchema,
+  CreateWorkspaceResponseSchema,
 } from '../index.js';
 import type {
   Workspace,
@@ -105,6 +106,13 @@ describe('Type definitions', () => {
     expectTypeOf<CreateWorkspaceResponse>().toHaveProperty('api_key');
     expectTypeOf<CreateWorkspaceResponse>().toHaveProperty('workspace_id');
     expectTypeOf<CreateWorkspaceResponse>().toHaveProperty('expires_at');
+  });
+
+  it('CreateWorkspaceResponse requires the returned api_key', () => {
+    expect(() => CreateWorkspaceResponseSchema.parse({
+      workspace_id: 'ws_missing_key',
+      created_at: '2026-09-05T00:00:00.000Z',
+    })).toThrow();
   });
 
   it('WorkspaceLookup exposes public lookup fields', () => {

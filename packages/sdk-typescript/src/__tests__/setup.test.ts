@@ -99,6 +99,40 @@ describe('RelaycastSetup', () => {
     });
   });
 
+  it('createWorkspace() forwards the delegated idempotency key header', async () => {
+    const { RelaycastSetup } = await import('../setup.js');
+    mockFetch.mockImplementation(() =>
+      jsonResponse({
+        ok: true,
+        data: { workspace_id: 'ws_child', api_key: 'rk_live_child', created_at: '2026-04-30T12:00:00.000Z' },
+      }, 201),
+    );
+
+    const setup = new RelaycastSetup({ apiKey: 'rk_live_parent' });
+    await setup.createWorkspace({ name: 'child', idempotencyKey: 'cloud-job-371' });
+
+    const [, init] = mockFetch.mock.calls[0]!;
+    expect(init.headers.Authorization).toBe('Bearer rk_live_parent');
+    expect(init.headers['Idempotency-Key']).toBe('cloud-job-371');
+  });
+
+  it('does not silently downgrade an explicitly empty idempotency key', async () => {
+    const { RelaycastSetup } = await import('../setup.js');
+    mockFetch.mockImplementation(() =>
+      jsonResponse({
+        ok: false,
+        error: { code: 'invalid_idempotency_key', message: 'Idempotency-Key must not be empty' },
+      }, 400),
+    );
+
+    const setup = new RelaycastSetup({ apiKey: 'rk_live_parent' });
+    await expect(setup.createWorkspace({ name: 'child', idempotencyKey: '' }))
+      .rejects.toMatchObject({ httpStatus: 400 });
+
+    const [, init] = mockFetch.mock.calls[0]!;
+    expect(init.headers['Idempotency-Key']).toBe('');
+  });
+
   it('createWorkspace() uses a custom baseUrl and resolves apiKey functions per request', async () => {
     const { RelaycastSetup } = await import('../setup.js');
 

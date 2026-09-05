@@ -2,7 +2,8 @@ import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeNodeStack, type TestStack } from '../../__tests__/conformance/harness.js';
-import { channels, workspaces } from '../../db/schema.js';
+import { channels, workspaceCreateIdempotency, workspaces } from '../../db/schema.js';
+import { sha256Hex } from '../../lib/crypto.js';
 import type {
   AtomicWrite,
   BatchCapability,
@@ -10,7 +11,12 @@ import type {
   TransactionCapability,
 } from '../../ports/database.js';
 import * as snowflake from '../snowflake.js';
-import { createWorkspace, deleteWorkspace } from '../workspace.js';
+import {
+  createWorkspace,
+  deleteWorkspace,
+  deriveIdempotentWorkspaceApiKey,
+  workspaceCreateRequestDigest,
+} from '../workspace.js';
 
 describe('workspace write durability', () => {
   let stack: TestStack;
@@ -33,6 +39,7 @@ describe('workspace write durability', () => {
     failAfterLostResponse?: boolean;
     failBeforeFirst?: boolean;
     loseFirstResponse?: boolean;
+    beforeFirstBatch?: () => void | Promise<void>;
   }): () => number {
     let calls = 0;
     const sqlite = stack.runtime.handle.sqlite;
@@ -44,6 +51,9 @@ describe('workspace write durability', () => {
       }
       if (calls > 1 && options.failAfterLostResponse) {
         throw new Error('D1_ERROR: D1 DB is overloaded. Too many requests queued.');
+      }
+      if (calls === 1 && options.beforeFirstBatch) {
+        await options.beforeFirstBatch();
       }
 
       sqlite.exec('BEGIN IMMEDIATE');
@@ -186,6 +196,172 @@ describe('workspace write durability', () => {
 
     expect(batchCalls()).toBe(2);
     await expectOneCompleteWorkspace(created.workspace_id);
+  });
+
+  it('recovers a delegated child key after commit/response loss', async () => {
+    const batchCalls = attachD1Batch({ loseFirstResponse: true });
+    const ownerApiKey = 'rk_live_parent_for_recovery';
+    const requestDigest = await workspaceCreateRequestDigest({ name: 'delegated-child', expiresInSeconds: 3_600 });
+    const created = await createWorkspace(db, 'delegated-child', {
+      ownerApiKey, idempotencyKey: 'cloud-job-123', requestDigest,
+      expiresAt: new Date(Date.now() + 3_600_000),
+    });
+
+    expect(batchCalls()).toBe(2);
+    // The first write committed before its response was lost, so this is a
+    // recovery of this invocation's own create and must retain 201 semantics.
+    expect(created.created).toBe(true);
+    expect(created.api_key).toMatch(/^rk_live_[0-9a-f]{32}$/);
+    expect(await db.select().from(workspaces)).toHaveLength(1);
+    expect(await db.select().from(workspaceCreateIdempotency)).toHaveLength(1);
+
+    const replay = await createWorkspace(db, 'delegated-child', {
+      ownerApiKey, idempotencyKey: 'cloud-job-123', requestDigest,
+      expiresAt: new Date(Date.now() + 3_600_000),
+    });
+    expect(replay.created).toBe(false);
+    expect(replay.workspace_id).toBe(created.workspace_id);
+    expect(replay.api_key).toBe(created.api_key);
+  });
+
+  it('does not treat an unrelated workspace-id collision as own recovery', async () => {
+    const ownerApiKey = 'rk_live_collision_owner';
+    const idempotencyKey = 'collision-job';
+    const requestDigest = await workspaceCreateRequestDigest({ name: 'collision-child' });
+    const deterministicApiKey = await deriveIdempotentWorkspaceApiKey(ownerApiKey, idempotencyKey, requestDigest);
+    const pair = useGeneratedPair();
+
+    attachD1Batch({
+      beforeFirstBatch: async () => {
+        await db.insert(workspaces).values({
+          id: pair.workspaceId,
+          name: 'collision-child',
+          apiKeyHash: await sha256Hex(deterministicApiKey),
+        });
+        await db.insert(channels).values({
+          id: 'bound-channel',
+          workspaceId: pair.workspaceId,
+          name: 'general',
+          topic: 'General discussion',
+        });
+        await db.insert(workspaceCreateIdempotency).values({
+          ownerScopeHash: await sha256Hex(ownerApiKey),
+          idempotencyKeyHash: await sha256Hex(idempotencyKey),
+          requestDigest,
+          workspaceId: pair.workspaceId,
+        });
+      },
+    });
+
+    const result = await createWorkspace(db, 'collision-child', {
+      ownerApiKey,
+      idempotencyKey,
+      requestDigest,
+    });
+
+    expect(result.created).toBe(false);
+    expect(result.workspace_id).toBe(pair.workspaceId);
+    expect(result.api_key).toBe(deterministicApiKey);
+  });
+
+  it('fails closed when binding recovery cannot verify the committed pair', async () => {
+    const ownerApiKey = 'rk_live_readback_owner';
+    const idempotencyKey = 'readback-job';
+    const requestDigest = await workspaceCreateRequestDigest({ name: 'readback-child' });
+    // The first atomic write commits, but its response is lost. The retry then
+    // reaches generated-pair readback before it can classify the replay.
+    attachD1Batch({ loseFirstResponse: true });
+
+    const failingReadbackDb = new Proxy(db, {
+      get(target, property) {
+        if (property === 'select') {
+          return (...args: Parameters<EngineDb['select']>) => {
+            const query = target.select(...args) as unknown as {
+              from(table: unknown): unknown;
+            };
+            const originalFrom = query.from.bind(query);
+            return new Proxy(query, {
+              get(queryTarget, queryProperty, receiver) {
+                if (queryProperty === 'from') {
+                  return (table: unknown) => {
+                    if (table === channels) throw new Error('readback query unavailable');
+                    return originalFrom(table);
+                  };
+                }
+                return Reflect.get(queryTarget, queryProperty, receiver);
+              },
+            });
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    await expect(createWorkspace(failingReadbackDb, 'readback-child', {
+      ownerApiKey,
+      idempotencyKey,
+      requestDigest,
+    })).rejects.toMatchObject({
+      code: 'workspace_storage_unavailable',
+      status: 503,
+      diagnostics: {
+        operation: 'workspace.create',
+        storage_error: 'readback_unavailable',
+      },
+    });
+  });
+
+  it('canonicalizes provenance field order in workspace-create request digests', async () => {
+    const first = await workspaceCreateRequestDigest({
+      name: 'canonical-child',
+      provenance: { source: 'ci', origin_id: 'run-371', classification: 'internal' },
+    });
+    const reordered = await workspaceCreateRequestDigest({
+      name: 'canonical-child',
+      provenance: { classification: 'internal', origin_id: 'run-371', source: 'ci' },
+    });
+
+    expect(reordered).toBe(first);
+  });
+
+  it('serializes concurrent delegated duplicates and scopes bindings to the owner', async () => {
+    attachD1Batch({});
+    const requestDigest = await workspaceCreateRequestDigest({ name: 'concurrent-child' });
+    const firstOwner = 'rk_live_owner_a';
+    const secondOwner = 'rk_live_owner_b';
+    const [a, b] = await Promise.all([
+      createWorkspace(db, 'concurrent-child', { ownerApiKey: firstOwner, idempotencyKey: 'same-job', requestDigest }),
+      createWorkspace(db, 'concurrent-child', { ownerApiKey: firstOwner, idempotencyKey: 'same-job', requestDigest }),
+    ]);
+    expect(a.workspace_id).toBe(b.workspace_id);
+    expect(a.api_key).toBe(b.api_key);
+    expect(await db.select().from(workspaces)).toHaveLength(1);
+
+    const otherOwner = await createWorkspace(db, 'concurrent-child', {
+      ownerApiKey: secondOwner, idempotencyKey: 'same-job', requestDigest,
+    });
+    expect(otherOwner.workspace_id).not.toBe(a.workspace_id);
+    expect(await db.select().from(workspaces)).toHaveLength(2);
+  });
+
+  it('rejects digest conflicts and prevents recreation after child deletion', async () => {
+    attachD1Batch({});
+    const ownerApiKey = 'rk_live_owner_conflict';
+    const key = 'cloud-job-conflict';
+    const originalDigest = await workspaceCreateRequestDigest({ name: 'original' });
+    const created = await createWorkspace(db, 'original', { ownerApiKey, idempotencyKey: key, requestDigest: originalDigest });
+    const changedDigest = await workspaceCreateRequestDigest({ name: 'changed' });
+    await expect(createWorkspace(db, 'changed', { ownerApiKey, idempotencyKey: key, requestDigest: changedDigest }))
+      .rejects.toMatchObject({ code: 'workspace_create_idempotency_conflict', status: 409 });
+
+    await deleteWorkspace(db, stack.runtime.deps.files, created.workspace_id);
+    await expect(createWorkspace(db, 'original', { ownerApiKey, idempotencyKey: key, requestDigest: originalDigest }))
+      .rejects.toMatchObject({ code: 'workspace_create_idempotency_terminalized', status: 409 });
+    expect(await db.select().from(workspaces)).toHaveLength(0);
+    expect(await db.select().from(workspaceCreateIdempotency)).toMatchObject([
+      { status: 'terminalized', workspaceId: created.workspace_id },
+    ]);
   });
 
   it('returns storage unavailable when committed-pair readback fails', async () => {

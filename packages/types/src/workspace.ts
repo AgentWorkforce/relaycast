@@ -71,7 +71,7 @@ export type CreateWorkspaceRequest = z.infer<typeof CreateWorkspaceRequestSchema
 
 export const CreateWorkspaceResponseSchema = z.object({
   workspace_id: z.string(),
-  api_key: z.string().optional(),
+  api_key: z.string(),
   created_at: z.string(),
   expires_at: z.string().nullable().optional(),
 });

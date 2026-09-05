@@ -95,7 +95,20 @@ valid lowercase SHA-256 verifier, but malformed registration values and claims
 return 400; already-claimed, non-offline, or concurrently changed records return
 409.
 
-Workspace names are not globally unique. Workspace creation is idempotent for the same workspace name and API key: repeating that combination returns the existing workspace instead of creating another one.
+Workspace names are not globally unique. Workspace creation is idempotent for the same workspace name and API key: repeating that combination returns the existing workspace instead of creating another one. For delegated or crash-retryable creates, send an owner-authenticated `Idempotency-Key`; the same key and request digest recover the exact child workspace and usable child key, while a changed request is rejected with `409`.
+
+```ts
+const child = await RelayCast.createWorkspace('job-child', {
+  apiKey: parentWorkspaceKey,
+  expiresInSeconds: 60 * 60,
+  idempotencyKey: `job:${jobId}`,
+});
+```
+
+The child key is derived from the owner key and idempotency binding rather than
+stored in plaintext. Deleting or expiring the child terminalizes its binding;
+replaying the key cannot accidentally create a replacement. Unauthenticated
+by-name lookup never returns workspace credentials.
 
 If workspace storage remains unavailable after its transient retries and the
 server cannot confirm the committed workspace/channel pair, creation returns
