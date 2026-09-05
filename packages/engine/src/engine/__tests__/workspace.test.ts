@@ -268,30 +268,9 @@ describe('workspace write durability', () => {
     const ownerApiKey = 'rk_live_readback_owner';
     const idempotencyKey = 'readback-job';
     const requestDigest = await workspaceCreateRequestDigest({ name: 'readback-child' });
-    const deterministicApiKey = await deriveIdempotentWorkspaceApiKey(ownerApiKey, idempotencyKey, requestDigest);
-    const pair = useGeneratedPair();
-
-    attachD1Batch({
-      beforeFirstBatch: async () => {
-        await db.insert(workspaces).values({
-          id: pair.workspaceId,
-          name: 'readback-child',
-          apiKeyHash: await sha256Hex(deterministicApiKey),
-        });
-        await db.insert(channels).values({
-          id: 'readback-channel',
-          workspaceId: pair.workspaceId,
-          name: 'general',
-          topic: 'General discussion',
-        });
-        await db.insert(workspaceCreateIdempotency).values({
-          ownerScopeHash: await sha256Hex(ownerApiKey),
-          idempotencyKeyHash: await sha256Hex(idempotencyKey),
-          requestDigest,
-          workspaceId: pair.workspaceId,
-        });
-      },
-    });
+    // The first atomic write commits, but its response is lost. The retry then
+    // reaches generated-pair readback before it can classify the replay.
+    attachD1Batch({ loseFirstResponse: true });
 
     const failingReadbackDb = new Proxy(db, {
       get(target, property) {
