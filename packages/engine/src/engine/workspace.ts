@@ -69,7 +69,11 @@ export function workspaceCreateRequestDigest(input: {
   }));
 }
 
-async function deriveIdempotentWorkspaceApiKey(ownerApiKey: string, idempotencyKey: string, requestDigest: string): Promise<string> {
+export async function deriveIdempotentWorkspaceApiKey(
+  ownerApiKey: string,
+  idempotencyKey: string,
+  requestDigest: string,
+): Promise<string> {
   const material = `relaycast:workspace-create:v1:${idempotencyKey}:${requestDigest}`;
   return `rk_live_${(await hmacSha256Hex(material, ownerApiKey)).slice(0, 32)}`;
 }
@@ -346,6 +350,18 @@ export async function createWorkspace(
             // semantics; matching only workspaceId would misclassify an
             // unrelated workspace-id collision as our own recovery.
             const committed = await readCommittedWorkspacePair(db, expected);
+            if (committed.status === 'unavailable') {
+              const error = codedError(
+                'Workspace storage temporarily unavailable',
+                'workspace_storage_unavailable',
+                503,
+              );
+              error.diagnostics = {
+                operation: 'workspace.create',
+                storage_error: 'readback_unavailable',
+              };
+              throw error;
+            }
             recoveredOwnWorkspace = committed.status === 'match';
             return [[existing], await db.select().from(channels).where(eq(channels.workspaceId, existing.id))] as WorkspaceWriteResult;
           }

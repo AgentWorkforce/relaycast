@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeNodeStack, type TestStack } from '../../__tests__/conformance/harness.js';
 import { channels, workspaceCreateIdempotency, workspaces } from '../../db/schema.js';
-import { hmacSha256Hex, sha256Hex } from '../../lib/crypto.js';
+import { sha256Hex } from '../../lib/crypto.js';
 import type {
   AtomicWrite,
   BatchCapability,
@@ -11,7 +11,12 @@ import type {
   TransactionCapability,
 } from '../../ports/database.js';
 import * as snowflake from '../snowflake.js';
-import { createWorkspace, deleteWorkspace, workspaceCreateRequestDigest } from '../workspace.js';
+import {
+  createWorkspace,
+  deleteWorkspace,
+  deriveIdempotentWorkspaceApiKey,
+  workspaceCreateRequestDigest,
+} from '../workspace.js';
 
 describe('workspace write durability', () => {
   let stack: TestStack;
@@ -223,10 +228,7 @@ describe('workspace write durability', () => {
     const ownerApiKey = 'rk_live_collision_owner';
     const idempotencyKey = 'collision-job';
     const requestDigest = await workspaceCreateRequestDigest({ name: 'collision-child' });
-    const deterministicApiKey = `rk_live_${(await hmacSha256Hex(
-      `relaycast:workspace-create:v1:${idempotencyKey}:${requestDigest}`,
-      ownerApiKey,
-    )).slice(0, 32)}`;
+    const deterministicApiKey = await deriveIdempotentWorkspaceApiKey(ownerApiKey, idempotencyKey, requestDigest);
     const pair = useGeneratedPair();
 
     attachD1Batch({
@@ -260,6 +262,66 @@ describe('workspace write durability', () => {
     expect(result.created).toBe(false);
     expect(result.workspace_id).toBe(pair.workspaceId);
     expect(result.api_key).toBe(deterministicApiKey);
+  });
+
+  it('fails closed when binding recovery cannot verify the committed pair', async () => {
+    const ownerApiKey = 'rk_live_readback_owner';
+    const idempotencyKey = 'readback-job';
+    const requestDigest = await workspaceCreateRequestDigest({ name: 'readback-child' });
+    const deterministicApiKey = await deriveIdempotentWorkspaceApiKey(ownerApiKey, idempotencyKey, requestDigest);
+    const pair = useGeneratedPair();
+
+    attachD1Batch({
+      beforeFirstBatch: async () => {
+        await db.insert(workspaces).values({
+          id: pair.workspaceId,
+          name: 'readback-child',
+          apiKeyHash: await sha256Hex(deterministicApiKey),
+        });
+        await db.insert(channels).values({
+          id: 'readback-channel',
+          workspaceId: pair.workspaceId,
+          name: 'general',
+          topic: 'General discussion',
+        });
+        await db.insert(workspaceCreateIdempotency).values({
+          ownerScopeHash: await sha256Hex(ownerApiKey),
+          idempotencyKeyHash: await sha256Hex(idempotencyKey),
+          requestDigest,
+          workspaceId: pair.workspaceId,
+        });
+      },
+    });
+
+    let selectCalls = 0;
+    const failingReadbackDb = new Proxy(db, {
+      get(target, property) {
+        if (property === 'select') {
+          return (...args: Parameters<EngineDb['select']>) => {
+            selectCalls += 1;
+            if (selectCalls >= 4) {
+              throw new Error('readback query unavailable');
+            }
+            return target.select(...args);
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    await expect(createWorkspace(failingReadbackDb, 'readback-child', {
+      ownerApiKey,
+      idempotencyKey,
+      requestDigest,
+    })).rejects.toMatchObject({
+      code: 'workspace_storage_unavailable',
+      status: 503,
+      diagnostics: {
+        operation: 'workspace.create',
+        storage_error: 'readback_unavailable',
+      },
+    });
   });
 
   it('canonicalizes provenance field order in workspace-create request digests', async () => {
