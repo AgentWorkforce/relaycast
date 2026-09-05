@@ -154,10 +154,14 @@ jobs:
             }
           NODE
 
+      - name: Refresh lockfile after version bump
+        # Preserve the resolved dependency graph and update only the workspace
+        # metadata. Re-resolving from an empty lockfile can trip npm/arborist's
+        # `edgesOut` failure after every workspace version changes at once.
+        run: npm install --package-lock-only --ignore-scripts
+
       - name: Clean reinstall after version bump
-        run: |
-          rm -rf node_modules packages/*/node_modules package-lock.json
-          npm install
+        run: npm ci
 
       - name: Build all packages
         run: npx turbo build
