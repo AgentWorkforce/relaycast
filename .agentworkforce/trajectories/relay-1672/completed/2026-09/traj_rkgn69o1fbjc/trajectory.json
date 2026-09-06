@@ -41,7 +41,7 @@
         {
           "ts": 1788678105665,
           "type": "reflection",
-          "content": "Red regressions covered stale release before dispatch, at the socket-owner boundary, during named-provider drain, and at atomic completion. Exact product head 0b8c5cc44acef0fbde5e88c6e35d2b5c20dddec0 reran engine lint, typecheck, and all 70 engine files / 759 tests. TypeScript SDK (22 files / 441 tests), types (7 files / 209 tests), Rust SDK (103 tests plus 5 doc tests), and Rust library clippy were run on product head 2951bcb435a578c4bfc35c4b9b62c4455857a052; those package sources are unchanged through the final product head.",
+          "content": "Red regressions covered stale release before dispatch, at the socket-owner boundary, during named-provider drain, at atomic completion, and node-completed audit metadata. Exact product head 038af6af9ad61e53e08790fb5ffa3051f3017951 reran engine lint, typecheck, and all 70 engine files / 759 tests. TypeScript SDK (22 files / 441 tests), types (7 files / 209 tests), Rust SDK (103 tests plus 5 doc tests), and Rust library clippy were run on product head 2951bcb435a578c4bfc35c4b9b62c4455857a052; those package sources are unchanged through the final product head.",
           "raw": {
             "focalPoints": [
               "generation-identity",
@@ -70,7 +70,8 @@
     "2951bcb435a578c4bfc35c4b9b62c4455857a052",
     "fd4208e84a45661a4dd58468e918ef879e2c57dc",
     "99c31ea9d4b9298e43d6da0b726f1a20119467a8",
-    "0b8c5cc44acef0fbde5e88c6e35d2b5c20dddec0"
+    "0b8c5cc44acef0fbde5e88c6e35d2b5c20dddec0",
+    "038af6af9ad61e53e08790fb5ffa3051f3017951"
   ],
   "filesChanged": [
     "CHANGELOG.md",
@@ -96,6 +97,6 @@
   "tags": [],
   "_trace": {
     "startRef": "80ab366048a0634fbf1a8b5301de71dd22c50026",
-    "endRef": "0b8c5cc44acef0fbde5e88c6e35d2b5c20dddec0"
+    "endRef": "038af6af9ad61e53e08790fb5ffa3051f3017951"
   }
 }
