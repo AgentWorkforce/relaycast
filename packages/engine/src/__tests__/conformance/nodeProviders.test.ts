@@ -1168,6 +1168,43 @@ describe('node providers', () => {
     expect(accepted.providerAcceptedAttempt).toBe(2);
   });
 
+  it('uses a new proof kind so legacy registered-action owners fail closed', async () => {
+    const { ws, invocationId } = await setupPrunedReleaseAction(
+      'np-legacy-action-authorization-owner',
+      false,
+      false,
+    );
+    const registry = stack.runtime.realtime;
+    let receivedKind: string | undefined;
+    vi.spyOn(registry, 'sendAuthorizedActionToProvider').mockImplementation(async (
+      _workspaceId,
+      _nodeId,
+      _providerName,
+      _message,
+      authorization,
+    ) => {
+      receivedKind = authorization.kind;
+      // Model an owner compiled against the v1 contract: it recognizes v1
+      // without an attempt generation, but rejects every unknown proof kind.
+      return authorization.kind === 'registered-node-action-v1';
+    });
+
+    const rescheduled = await rescheduleInvocationsForLostNode(
+      stack.runtime.handle.db,
+      registry,
+      ws.workspaceId,
+      'node_a',
+    );
+
+    expect(receivedKind).toBe('registered-node-action-v2');
+    expect(rescheduled).toBe(0);
+    const [failed] = await stack.runtime.handle.db
+      .select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(failed).toEqual({ status: 'failed', error: 'node_dispatch_unavailable' });
+  });
+
   it('does not deliver a claimed action after pruning replaces its exact identity', async () => {
     const { ws, beta, invocationId } = await setupPrunedReleaseAction(
       'np-prune-before-action-authorization',
