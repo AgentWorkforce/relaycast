@@ -14,6 +14,7 @@ import {
 import { actionInvocations, actions, agentNodeBindings, agents, deliveries, nodeProviders, nodes } from '../../db/schema.js';
 import { handleNodeControlMessage } from '../../node-control.js';
 import type { NodeConnectionRegistry } from '../../ports/realtime.js';
+import { sha256Hex } from '../../lib/crypto.js';
 
 function capability(name: string, kind?: string, metadata?: Record<string, unknown>) {
   return { name, ...(kind ? { kind } : {}), ...(metadata ? { metadata } : {}) };
@@ -2172,6 +2173,110 @@ describe('node adapter conformance', () => {
         dispatchedNodeId: null,
       }]);
       expect(alpha.sock.ofType('action.invoke').filter((event) => event.action === 'release')).toHaveLength(0);
+    });
+
+    it.each([
+      { guard: 'without a generation-shaped input', includeExpectedTokenHash: false },
+      { guard: 'with a generation-shaped input', includeExpectedTokenHash: true },
+    ])('keeps a successful user-defined release action generic $guard', async ({ includeExpectedTokenHash }) => {
+      const ws = await createWorkspace(
+        stack.app,
+        `fleet-custom-release-completion-${includeExpectedTokenHash ? 'guarded' : 'unguarded'}-ws`,
+      );
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha',
+        name: 'alpha',
+        capabilities: [capability('release', 'action')],
+        load: 0,
+      });
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'custom-release-target-register',
+        type: 'agent.register',
+        name: 'custom-release-target',
+        session_ref: 'pty://alpha/custom-release-target',
+      }));
+      const targetReply = alpha.sock.ofType('reply').find(
+        (frame) => frame.id === 'custom-release-target-register',
+      ) as { data?: { agent_id?: string; token?: string } };
+      const targetAgentId = targetReply.data?.agent_id ?? '';
+      const targetToken = targetReply.data?.token ?? '';
+      expect(targetAgentId.length).toBeGreaterThan(0);
+      expect(targetToken.length).toBeGreaterThan(0);
+
+      const input = {
+        name: 'custom-release-target',
+        delete_agent: false,
+        ...(includeExpectedTokenHash
+          ? { expected_token_hash: await sha256Hex(targetToken) }
+          : {}),
+      };
+      const invoke = await stack.app.request('/v1/actions/release/invoke', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${caller.token}`,
+        },
+        body: JSON.stringify({ input }),
+      });
+      expect(invoke.status).toBe(201);
+      const invokeBody = await invoke.json() as { data: { invocation_id: string } };
+      expect(alpha.sock.ofType('action.invoke').find(
+        (frame) => frame.invocation_id === invokeBody.data.invocation_id,
+      )).toMatchObject({ action: 'release', input });
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'action.result',
+        invocation_id: invokeBody.data.invocation_id,
+        output: { custom_release: 'completed' },
+      }));
+
+      const [invocation] = await stack.runtime.handle.db
+        .select({
+          actionId: actionInvocations.actionId,
+          status: actionInvocations.status,
+          output: actionInvocations.output,
+          error: actionInvocations.error,
+        })
+        .from(actionInvocations)
+        .where(eq(actionInvocations.id, invokeBody.data.invocation_id));
+      expect(invocation).toEqual({
+        actionId: expect.any(String),
+        status: 'completed',
+        output: { custom_release: 'completed' },
+        error: null,
+      });
+      const [target] = await stack.runtime.handle.db
+        .select({
+          name: agents.name,
+          status: agents.status,
+          locationType: agents.locationType,
+          locationNodeId: agents.locationNodeId,
+        })
+        .from(agents)
+        .where(eq(agents.id, targetAgentId));
+      expect(target).toEqual({
+        name: 'custom-release-target',
+        status: 'active',
+        locationType: 'via_node',
+        locationNodeId: 'node_alpha',
+      });
+      const [binding] = await stack.runtime.handle.db
+        .select({ status: agentNodeBindings.status })
+        .from(agentNodeBindings)
+        .where(and(
+          eq(agentNodeBindings.workspaceId, ws.workspaceId),
+          eq(agentNodeBindings.agentId, targetAgentId),
+          eq(agentNodeBindings.nodeId, 'node_alpha'),
+        ));
+      expect(binding.status).toBe('active');
+      const [node] = await stack.runtime.handle.db
+        .select({ activeAgents: nodes.activeAgents })
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')));
+      expect(node.activeAgents).toBe(1);
     });
 
     it('classifies a keyed node-action replay from its durable claim after the action is deleted', async () => {

@@ -24,7 +24,7 @@ type ActionRow = typeof actions.$inferSelect;
 type InvocationRow = typeof actionInvocations.$inferSelect;
 type RetryableInvocationRow = Pick<
   InvocationRow,
-  'id' | 'workspaceId' | 'actionName' | 'callerId' | 'input' | 'status' | 'dispatchedNodeId' | 'spawnReservedAt' | 'attemptedNodeIds' | 'dispatchAttempts'
+  'id' | 'workspaceId' | 'actionId' | 'actionName' | 'callerId' | 'input' | 'status' | 'dispatchedNodeId' | 'spawnReservedAt' | 'attemptedNodeIds' | 'dispatchAttempts'
 >;
 
 const OPEN_INVOCATION_STATUSES = ['pending', 'dispatched', 'invoked'];
@@ -694,7 +694,7 @@ async function replayInvocationClaim(
 ): Promise<InvocationRow> {
   if (
     isSpawnInvocation(invocation.actionName)
-    || isReleaseInvocation(invocation.actionName)
+    || isBuiltinReleaseInvocation(invocation)
     || (!!invocation.handlerNodeId && !invocation.handlerAgentId)
   ) {
     return waitForInvocationReplayOutcome(db, workspaceId, invocation);
@@ -946,7 +946,8 @@ async function dispatchNodeProviderInvocation(args: {
   input: Record<string, unknown>;
   agent?: { id: string; name: string } | null;
   queue: boolean;
-  actionId?: string;
+  /** Durable registered-action identity; null is reserved for built-in protocols. */
+  actionId: string | null;
   reservationHeld?: boolean;
 }, options: {
   failIfUnavailable?: boolean;
@@ -972,7 +973,7 @@ async function dispatchNodeProviderInvocation(args: {
       providerName: args.providerName,
       pending: true,
       reservationHeld: args.reservationHeld,
-      actionId: args.actionId,
+      actionId: args.actionId ?? undefined,
     });
     return { accepted, pending: true };
   }
@@ -1324,6 +1325,7 @@ async function dispatchRelease(args: {
     providerName: agent.providerName,
     action: 'release',
     input,
+    actionId: null,
   });
 
   // Some socket owners durably record or complete an accepted frame before
@@ -1513,6 +1515,7 @@ async function dispatchSpawn(args: {
         action: capability,
         input,
         queue: shadow.queue,
+        actionId: shadow.id,
       });
       return spawnResult(invocation, nodeId, dispatched);
     }
@@ -1528,6 +1531,7 @@ async function dispatchSpawn(args: {
     providerName: capProvider,
     action: capability,
     input,
+    actionId: null,
     pending: placement.queued,
     reservationHeld: !placement.queued,
   });
@@ -1616,6 +1620,7 @@ export async function invokeNodeAction(
     action: action.name,
     input: recordInput(invocation.input),
     queue: action.queue,
+    actionId: action.id,
     reservationHeld: !!reservedNode,
   });
   return {
@@ -1744,6 +1749,7 @@ export async function invokeAction(
       action: action.name,
       input: recordInput(invocation.input),
       queue: action.queue || providerName === DEFAULT_PROVIDER_NAME,
+      actionId: action.id,
       reservationHeld: !!reservedNode,
     });
     return {
@@ -2214,12 +2220,12 @@ async function applyReleaseCompletionEffect(
   db: Db,
   workspaceId: string,
   nodeId: string | null,
-  invocation: Pick<InvocationRow, 'actionName' | 'input'>,
+  invocation: Pick<InvocationRow, 'actionName' | 'actionId' | 'input'>,
   data: { error?: string },
   deps?: InvocationCompletionDeps,
   options: { allowMissingBinding?: boolean; expectedAgentId?: string } = {},
 ): Promise<boolean> {
-  if (!isReleaseInvocation(invocation.actionName) || data.error) return false;
+  if (!isBuiltinReleaseInvocation(invocation) || data.error) return false;
 
   const input = recordInput(invocation.input);
   const name = typeof input.name === 'string' ? input.name : null;
@@ -2445,7 +2451,8 @@ async function dispatchNodeInvocation(args: {
   action: string;
   input: Record<string, unknown>;
   agent?: { id: string; name: string } | null;
-  actionId?: string;
+  /** Durable registered-action identity; null is reserved for built-in protocols. */
+  actionId: string | null;
   pending?: boolean;
   retryAfterAt?: Date | null;
   reservationHeld?: boolean;
@@ -2456,7 +2463,7 @@ async function dispatchNodeInvocation(args: {
   sent: boolean;
   settled?: InvocationRow;
 }> {
-  const guardedReleaseHash = isReleaseInvocation(args.action)
+  const guardedReleaseHash = args.actionId === null && isReleaseInvocation(args.action)
     ? releaseExpectedTokenHash(args.input)
     : null;
   if (guardedReleaseHash) {
@@ -2595,7 +2602,7 @@ async function dispatchNodeInvocation(args: {
       retryAfterAt: args.retryAfterAt,
       reservationHeld: args.reservationHeld,
       skipIncrementAttempts: args.skipIncrementAttempts || !!args.agent,
-      actionId: args.actionId,
+      actionId: args.actionId ?? undefined,
     },
   );
   if (!accepted && guardedReleaseHash) {
@@ -2683,7 +2690,7 @@ export async function drainNodeInvocations(
   const rows = await db
     .select({
       id: actionInvocations.id,
-      actionId: actions.id,
+      actionId: actionInvocations.actionId,
       workspaceId: actionInvocations.workspaceId,
       actionName: actionInvocations.actionName,
       input: actionInvocations.input,
@@ -2739,7 +2746,7 @@ export async function drainNodeInvocations(
       ? row.handlerAgentProvider ?? DEFAULT_PROVIDER_NAME
       : row.handlerNodeId
         ? row.handlerProvider ?? DEFAULT_PROVIDER_NAME
-        : isReleaseInvocation(row.actionName)
+        : isBuiltinReleaseInvocation(row)
           ? row.dispatchedProvider ?? DEFAULT_PROVIDER_NAME
           : shadowProvider
             ?? (isSpawnInvocation(row.actionName)
@@ -2792,7 +2799,7 @@ export async function drainNodeInvocations(
         action: dispatchActionNameForInvocation(row.actionName, input),
         input,
         agent: targetAgent ? { id: targetAgent.id, name: targetAgent.name } : null,
-        actionId: targetAgent ? row.actionId ?? undefined : undefined,
+        actionId: row.actionId,
         retryAfterAt: new Date(Date.now() + ACTION_DISPATCH_TIMEOUT_MS),
         reservationHeld,
         skipIncrementAttempts: row.dispatchedNodeId === nodeId,
@@ -2863,7 +2870,7 @@ export async function rescheduleNodeInvocation(
   // Release invocations carry no actionId, so targetAgentForInvocation() returns
   // null. They must never fall through to generic node placement, which could
   // route a release to an unrelated node that doesn't own the agent.
-  if (isReleaseInvocation(invocation.actionName)) {
+  if (isBuiltinReleaseInvocation(invocation)) {
     return false;
   }
   const attempted = attemptedNodeSet(invocation);
@@ -2936,7 +2943,7 @@ export async function rescheduleNodeInvocation(
           nodeId: placement.node.id,
           providerName,
           action: actionToSend,
-          actionId: target?.id,
+          actionId: target?.id ?? null,
           input,
           reservationHeld,
         });
@@ -3098,6 +3105,7 @@ export async function completeNodeInvocation(
     .select({
       id: actionInvocations.id,
       workspaceId: actionInvocations.workspaceId,
+      actionId: actionInvocations.actionId,
       actionName: actionInvocations.actionName,
       callerId: actionInvocations.callerId,
       input: actionInvocations.input,
@@ -3146,7 +3154,7 @@ export async function completeNodeInvocation(
 
   if (
     !data.error
-    && isReleaseInvocation(existing.actionName)
+    && isBuiltinReleaseInvocation(existing)
     && releaseExpectedTokenHash(recordInput(existing.input))
   ) {
     return completeGuardedReleaseNodeInvocation(
