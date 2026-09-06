@@ -10,7 +10,7 @@
   },
   "status": "completed",
   "startedAt": "2026-09-06T06:36:56.228Z",
-  "completedAt": "2026-09-06T12:32:01.000Z",
+  "completedAt": "2026-09-06T12:44:15.000Z",
   "agents": [
     {
       "name": "default",
@@ -24,7 +24,7 @@
       "title": "Work",
       "agentName": "default",
       "startedAt": "2026-09-06T06:36:57.017Z",
-      "endedAt": "2026-09-06T12:32:01.000Z",
+      "endedAt": "2026-09-06T12:44:15.000Z",
       "events": [
         {
           "ts": 1788676617017,
@@ -56,7 +56,7 @@
         {
           "ts": 1788688413000,
           "type": "reflection",
-          "content": "Red regressions covered stale release before dispatch, at the no-host fallback, at the socket-owner boundary, during named-provider drain, at atomic completion, in node-completed audit metadata, action shadowing, custom-action classification, migration reservation ownership, registration rollback, and capability pruning. Must-fire retry, drain, reconciliation, and deterministic prune interleavings prove a registered action cannot be rebound by stale name. Six behaviors were reproduced on test-only head 2f6a6afabf2864b4d27283f5e0fb41737aed3656: agent-hosted acceptance had not durably recorded its route and generation before send, migration 0047 left historical accepted registered actions unmarked, explicit tombstones matched only invocation id rather than the immutable tuple, registered node-action acceptance trusted the mutable dispatched capability rather than the invocation action, timeout recovery cleared an accepted pruned route, and a legacy ID-less worker could consume a same-tuple replacement's reservation. Two further P1 regressions failed on exact test-only head bbbe944616c5c35142af8c457c94309488d97fd6: a migration tombstone with intentionally unknown provider ownership admitted its stale worker, and a delayed registered-action authorization accepted a newer attempt after the route returned to the same action/node/provider tuple. Exact product head f5b61e5f3f3bedad435fe9ce7ac314b020d484bb commits the exact action, route, and accepted attempt before either agent- or node-hosted send, requires that exact previously-unaccepted attempt at the socket owner, backfills only historical registered-action deliveries that have acceptance evidence, pins accepted pruned and takeover generations through recovery, conservatively matches unknown legacy provider ownership, binds explicit tombstones to invocation id plus node/provider/name, and fails an ambiguous ID-less collision closed until the replacement supplies its exact invocation id. Focused engine tests pass 4 files / 108 tests. Root lint (13/13), test (18/18, including all 70 engine files / 791 tests), and build (9/9) pass after the origin/main restack. TypeScript SDK (22 files / 441 tests), types (7 files / 209 tests), Rust SDK (103 tests plus 5 doc tests), and Rust library clippy were run on product head 2951bcb435a578c4bfc35c4b9b62c4455857a052; those package code and test files are unchanged through the exact product head.",
+          "content": "Red regressions covered stale release before dispatch, at the no-host fallback, at the socket-owner boundary, during named-provider drain, at atomic completion, in node-completed audit metadata, action shadowing, custom-action classification, migration reservation ownership, registration rollback, and capability pruning. Must-fire retry, drain, reconciliation, and deterministic prune interleavings prove a registered action cannot be rebound by stale name. Six behaviors were reproduced on test-only head 2f6a6afabf2864b4d27283f5e0fb41737aed3656: agent-hosted acceptance had not durably recorded its route and generation before send, migration 0047 left historical accepted registered actions unmarked, explicit tombstones matched only invocation id rather than the immutable tuple, registered node-action acceptance trusted the mutable dispatched capability rather than the invocation action, timeout recovery cleared an accepted pruned route, and a legacy ID-less worker could consume a same-tuple replacement's reservation. Two further P1 regressions failed on exact test-only head bbbe944616c5c35142af8c457c94309488d97fd6: a migration tombstone with intentionally unknown provider ownership admitted its stale worker, and a delayed registered-action authorization accepted a newer attempt after the route returned to the same action/node/provider tuple. A rolling-upgrade regression failed on exact test-only head c797a18fe90081ebc06930af8ad9ac0751dcbd46 because the engine still sent the stricter proof under v1, which a legacy owner accepted without the attempt generation. Exact product head 1850bcec9e364d346e7195f40614f95611077fad versions the proof as registered-node-action-v2, rejects v1 explicitly in current owners, commits the exact action, route, and accepted attempt before either agent- or node-hosted send, requires that exact previously-unaccepted attempt at the socket owner, backfills only historical registered-action deliveries that have acceptance evidence, pins accepted pruned and takeover generations through recovery, conservatively matches unknown legacy provider ownership, binds explicit tombstones to invocation id plus node/provider/name, and fails an ambiguous ID-less collision closed until the replacement supplies its exact invocation id. Focused engine tests pass 4 files / 109 tests. Root lint (13/13), test (18/18, including all 70 engine files / 792 tests), and build (9/9) pass after the origin/main restack. TypeScript SDK (22 files / 441 tests), types (7 files / 209 tests), Rust SDK (103 tests plus 5 doc tests), and Rust library clippy were run on product head 2951bcb435a578c4bfc35c4b9b62c4455857a052; those package code and test files are unchanged through the exact product head.",
           "raw": {
             "focalPoints": [
               "generation-identity",
@@ -105,7 +105,8 @@
     "63c1f730d6d2e235c8cfb2792ba808d31fc643f0",
     "1c0bfb2e0552bf387c644e6eae8367448d82fb93",
     "6aef2748c46a3401e5f1077cade3c32dcd10d332",
-    "f5b61e5f3f3bedad435fe9ce7ac314b020d484bb"
+    "f5b61e5f3f3bedad435fe9ce7ac314b020d484bb",
+    "1850bcec9e364d346e7195f40614f95611077fad"
   ],
   "filesChanged": [
     "CHANGELOG.md",
@@ -140,6 +141,6 @@
   "tags": [],
   "_trace": {
     "startRef": "8e36b742ced89d5e2d4be0866a7f641b31e0acfb",
-    "endRef": "f5b61e5f3f3bedad435fe9ce7ac314b020d484bb"
+    "endRef": "1850bcec9e364d346e7195f40614f95611077fad"
   }
 }
