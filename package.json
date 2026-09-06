@@ -32,5 +32,10 @@
     "typescript-eslint": "^8.54.0",
     "vite-node": "^3.2.4",
     "vitest": "^4.0.18"
+  },
+  "overrides": {
+    "@vitejs/devtools-vitest": {
+      "vitest": "^4.0.18"
+    }
   }
 }
