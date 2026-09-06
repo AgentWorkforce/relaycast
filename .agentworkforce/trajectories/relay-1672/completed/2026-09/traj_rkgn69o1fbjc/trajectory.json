@@ -56,7 +56,7 @@
         {
           "ts": 1788688414000,
           "type": "reflection",
-          "content": "Red regressions covered stale release before dispatch, at the no-host fallback, at the socket-owner boundary, during named-provider drain, at atomic completion, in node-completed audit metadata, against user-defined action shadowing, against lifecycle classification of a user-defined release replay, and against guarded and unguarded custom-release completion both before and after capability pruning removes the referenced action row. Three must-fire regressions proved retry, queued drain, and inventory reconciliation previously rebound a pruned registered action by name or left it pending. A deterministic later interleaving pruned the source after retry selected a same-name replacement and failed on head 7a853fcc2d51a2061243538520ec246c85dbd247 by delivering the replacement frame; the exact source-generation handoff now prevents that send, and a companion regression proves a stale concurrent loser cannot fail the winning handoff. Migration regressions proved broad fail-closed settlement previously stranded a native spawn reservation and then could admit its late worker after releasing capacity; another regression proved an unrelated registration could steal a live reservation, while a concurrent-rebind regression proved local release returned and emitted the stale pre-transaction node. A nontransactional capacity regression failed on the prior head with a ghost agent, and a missing-id late worker bypassed its migration tombstone. Exact product head 0d91d76c180ee720120b58af5753e95f1868a71f now acquires capacity before identity writes, compensates the exact identity and slot after a forced later write failure, correlates missing-id tombstones by node/provider/name without blocking unrelated registrations, settles pruned actions as action_deleted, grants reservations only to their exact invocation/name/provider, atomically captures the binding actually reaped, and reran root lint (13/13), test (18/18, including all 70 engine files / 774 tests), and build (9/9). TypeScript SDK (22 files / 441 tests), types (7 files / 209 tests), Rust SDK (103 tests plus 5 doc tests), and Rust library clippy were run on product head 2951bcb435a578c4bfc35c4b9b62c4455857a052; those package code and test files are unchanged through the final product head.",
+          "content": "Red regressions covered stale release before dispatch, at the no-host fallback, at the socket-owner boundary, during named-provider drain, at atomic completion, in node-completed audit metadata, action shadowing, custom-action classification, migration reservation ownership, registration rollback, and capability pruning. Must-fire retry, drain, reconciliation, and deterministic prune interleavings prove a registered action cannot be rebound by stale name. Four later regressions failed on head c39a39584642fc7f98bda2f80420bb1186379f0d: a second rescheduler duplicated a paused retry, a stale failed send terminalized a newer attempt, pruning after provider acceptance converted delivered work to action_deleted, and nameless spawn created an invocation and reserved capacity. Exact product head ffb225fc1b836e57d24004e83055bcf064d37a20 claims action/route/attempt before send, guards failure settlement by that generation, preserves accepted-frame completion after pruning, validates spawn name before durable work, acquires registration capacity before identity writes, compensates the exact identity and slot after a later write failure, and correlates missing-id tombstones by node/provider/name without blocking unrelated registrations. Root lint (13/13), test (18/18, including all 70 engine files / 778 tests), and build (9/9) pass. TypeScript SDK (22 files / 441 tests), types (7 files / 209 tests), Rust SDK (103 tests plus 5 doc tests), and Rust library clippy were run on product head 2951bcb435a578c4bfc35c4b9b62c4455857a052; those package code and test files are unchanged through the final product head.",
           "raw": {
             "focalPoints": [
               "generation-identity",
@@ -77,7 +77,7 @@
     }
   ],
   "retrospective": {
-    "summary": "Added SHA-256 token-generation guarded releases across Relaycast types, engine, OpenAPI, TypeScript SDK, and Rust SDK, with takeover, drain, retry, reconciliation, replay, completion-race, action-shadow, custom-action isolation, migration-capacity, reservation-ownership, concurrent-rebind, and concurrent action-prune regressions plus atomic dispatch/completion enforcement. Immutable invocation provenance and exact source-generation handoff prevent pruning from promoting a custom release to built-in lifecycle authority or dispatching it by stale name. Migration settlement releases native spawn reservations while durable cancellation rejects late workers even without invocation correlation, exact reservation claims prevent unrelated registrations from exceeding capacity, and nontransactional registration acquires capacity before writes with exact-identity compensation.",
+    "summary": "Added SHA-256 token-generation guarded releases across Relaycast types, engine, OpenAPI, TypeScript SDK, and Rust SDK, with takeover, drain, retry, reconciliation, replay, completion-race, action-shadow, migration-capacity, registration-rollback, and concurrent action-prune regressions. Immutable invocation provenance and pre-send action/route/attempt claims prevent stale-name rebinding, duplicate retries, stale-failure clobber, and revocation of accepted frames. Durable migration cancellation rejects late workers even without invocation correlation, reservation claims are exact, and nontransactional registration acquires capacity before writes with exact-identity compensation.",
     "approach": "Standard approach",
     "confidence": 0.9
   },
@@ -98,7 +98,8 @@
     "4e85e36a62577e1ae8e14ecb2401bcf16002a0c1",
     "984c575d11cf25fc16f19182065a671834b6030c",
     "91c791f86a7db00ed29be61a42f9ab931e890c49",
-    "0d91d76c180ee720120b58af5753e95f1868a71f"
+    "0d91d76c180ee720120b58af5753e95f1868a71f",
+    "ffb225fc1b836e57d24004e83055bcf064d37a20"
   ],
   "filesChanged": [
     "CHANGELOG.md",
@@ -130,6 +131,6 @@
   "tags": [],
   "_trace": {
     "startRef": "80ab366048a0634fbf1a8b5301de71dd22c50026",
-    "endRef": "0d91d76c180ee720120b58af5753e95f1868a71f"
+    "endRef": "ffb225fc1b836e57d24004e83055bcf064d37a20"
   }
 }
