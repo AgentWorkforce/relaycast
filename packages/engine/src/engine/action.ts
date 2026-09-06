@@ -1218,14 +1218,57 @@ async function dispatchRelease(args: {
     };
   };
   const failClosed = async (): Promise<never> => {
-    await args.db
-      .update(actionInvocations)
-      .set({ status: 'failed', error: 'agent_host_unavailable', completedAt: new Date() })
-      .where(and(
-        eq(actionInvocations.workspaceId, args.workspaceId),
-        eq(actionInvocations.id, invocation.id),
-        inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
-      ));
+    const completedAt = new Date();
+    if (expectedTokenHash) {
+      const generationStillCurrent = releaseGenerationStillCurrent(
+        args.workspaceId,
+        agent.id,
+        expectedTokenHash,
+      );
+      const results = await runAtomicWrites(args.db, (writeDb) => [
+        writeDb
+          .update(actionInvocations)
+          .set({
+            status: 'failed',
+            error: RELEASE_GENERATION_CONFLICT_CODE,
+            completedAt,
+          })
+          .where(and(
+            eq(actionInvocations.workspaceId, args.workspaceId),
+            eq(actionInvocations.id, invocation.id),
+            inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+            sql`NOT (${generationStillCurrent})`,
+          ))
+          .returning({ id: actionInvocations.id }),
+        writeDb
+          .update(actionInvocations)
+          .set({ status: 'failed', error: 'agent_host_unavailable', completedAt })
+          .where(and(
+            eq(actionInvocations.workspaceId, args.workspaceId),
+            eq(actionInvocations.id, invocation.id),
+            inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+            generationStillCurrent,
+          ))
+          .returning({ id: actionInvocations.id }),
+      ], { requireAtomic: true });
+      const generationConflict = results[0] as Array<{ id: string }>;
+      if (generationConflict.length > 0) {
+        throw codedError(
+          `Agent "${name}" no longer matches the expected token generation`,
+          RELEASE_GENERATION_CONFLICT_CODE,
+          409,
+        );
+      }
+    } else {
+      await args.db
+        .update(actionInvocations)
+        .set({ status: 'failed', error: 'agent_host_unavailable', completedAt })
+        .where(and(
+          eq(actionInvocations.workspaceId, args.workspaceId),
+          eq(actionInvocations.id, invocation.id),
+          inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+        ));
+    }
     throw codedError(
       `Agent "${name}" has no live host node; cannot dispatch release`,
       'agent_host_unavailable',

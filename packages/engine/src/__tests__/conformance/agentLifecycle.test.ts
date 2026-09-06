@@ -210,6 +210,65 @@ describe('agent presence and release lifecycle', () => {
     });
   });
 
+  it('settles a guarded no-host fallback as a generation conflict after takeover', async () => {
+    const ws = await createWorkspace(stack.app, 'hostless-release-generation-race');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'hostless-release-caller');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'hostless-generation-agent');
+    const expectedTokenHash = await sha256Hex(target.token);
+    const replacementTokenHash = 'a'.repeat(64);
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    const originalConnected = nodeConnections.isProviderConnected.bind(nodeConnections);
+    let rotated = false;
+    vi.spyOn(nodeConnections, 'isProviderConnected').mockImplementation((...args) => {
+      if (!rotated) {
+        rotated = true;
+        stack.runtime.handle.sqlite
+          .prepare('UPDATE agents SET token_hash = ? WHERE id = ?')
+          .run(replacementTokenHash, target.agentId);
+      }
+      return originalConnected(...args);
+    });
+
+    const invoke = () => stack.app.request('/v1/actions/release/invoke', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+        'Idempotency-Key': 'hostless-release-generation-race',
+      },
+      body: JSON.stringify({
+        input: {
+          name: target.name,
+          delete_agent: false,
+          expected_token_hash: expectedTokenHash,
+        },
+      }),
+    });
+    const response = await invoke();
+
+    expect(rotated).toBe(true);
+    expect(response.status).toBe(409);
+    expect((await response.json() as { error: { code: string } }).error.code)
+      .toBe('agent_release_generation_conflict');
+    const replay = await invoke();
+    expect(replay.status).toBe(409);
+    expect((await replay.json() as { error: { code: string } }).error.code)
+      .toBe('agent_release_generation_conflict');
+    const [replacement] = await stack.runtime.deps.db
+      .select({ status: agents.status, tokenHash: agents.tokenHash })
+      .from(agents)
+      .where(eq(agents.id, target.agentId));
+    expect(replacement).toEqual({ status: 'active', tokenHash: replacementTokenHash });
+    const [invocation] = await stack.runtime.deps.db
+      .select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'release'),
+      ));
+    expect(invocation).toEqual({ status: 'failed', error: 'agent_release_generation_conflict' });
+  });
+
   it('deletes a hostless agent and its implicit direct node', async () => {
     const ws = await createWorkspace(stack.app, 'hostless-agent-delete');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'delete-me');
