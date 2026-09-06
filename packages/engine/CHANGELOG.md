@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- `inventory.sync` rejects stale or conflicting identity claims individually while renewing valid members, preventing one poisoned entry from expiring an entire node's healthy agents and queuing their deliveries.
+- `inventory.sync` rejects stale or conflicting identity claims individually while renewing valid members, preventing one poisoned entry from expiring an entire node's healthy agents and queuing their deliveries. The missing-agent sweep now runs against every reported name, so a rejected-but-present member keeps its live row and is not marked `offline` with a false `agent.exited`.
 - `sweepTimedOutInvocations` now fails `pending` invocations that never dispatched (`dispatch_attempts = 0`) and are older than `PENDING_INVOCATION_MAX_AGE_MS` (default 72h) with the distinguishing error `never_dispatched_expired`. The existing `handler_unavailable` TTL guard, which requires a dispatched handler connection to observe unreachable, still runs first; the age bound covers the never-dispatched shape it cannot see.
 - `POST /v1/actions/:name/invoke` atomically claims caller-scoped idempotency keys before provider dispatch, waits for a durable dispatch outcome, and replays the original invocation with its immutable handler and node identity, including locally completed releases.
 

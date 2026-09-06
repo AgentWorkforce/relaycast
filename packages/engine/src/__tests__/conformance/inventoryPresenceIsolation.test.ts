@@ -265,6 +265,47 @@ describe('node inventory presence isolation', () => {
     expect(rejected.status).toBe('active');
   });
 
+  it('keeps an active same-node agent online when its own inventory entry reports a wrong agent_id', async () => {
+    const ws = await createWorkspace(stack.app, 'inventory-presence-identity-drift');
+    const sender = await registerAgent(stack.app, ws.workspaceKey, 'drift-sender');
+    const node = await attachNode(ws, 'node_drift', 'drift-node');
+    const sibling = await registerViaNode(node, 'drift-sibling');
+    const drifted = await registerViaNode(node, 'drift-identity');
+
+    // Both rows are live on this node when the mixed snapshot arrives: the
+    // sibling renews cleanly while the drifted member is still running here
+    // but claims a WRONG agent_id for its own registered name. The member is
+    // present — only its identity claim is wrong — so rejecting it must NOT
+    // let the missing-agent sweep take the real live row offline.
+    await syncInventory(node, 'drift-renewal', [
+      sibling,
+      { agentId: 'agt_wrong_identity', name: drifted.name },
+    ]);
+    expect(node.sock.ofType('reply').find((frame) => frame.id === 'drift-renewal')).toMatchObject({
+      ok: true,
+      data: { rebound_agents: 1, rejected_agents: 1 },
+    });
+    expect(node.sock.ofType('error').find((frame) => frame.id === 'drift-renewal')).toBeUndefined();
+
+    const driftedRow = await stack.runtime.handle.db
+      .select({ status: agents.status })
+      .from(agents)
+      .where(and(eq(agents.workspaceId, ws.workspaceId), eq(agents.id, drifted.agentId)));
+    expect(driftedRow).toEqual([{ status: 'active' }]);
+
+    node.sock.received.length = 0;
+    await postFrom(sender.token, 'delivery while one member drifts');
+    expect(node.sock.ofType('deliver').filter((frame) => frame.agent === sibling.name)).toHaveLength(1);
+    await ackFirstDelivery(node, sibling);
+
+    const siblingState = await readAgent(ws, sibling.name);
+    expect(siblingState.status).toBe('active');
+    expect(siblingState.pending_deliveries).toHaveLength(0);
+
+    const driftedState = await readAgent(ws, drifted.name);
+    expect(driftedState.status).toBe('active');
+  });
+
   it('keeps an all-untrusted inventory fail-closed when it also contains an unknown name', async () => {
     const ws = await createWorkspace(stack.app, 'inventory-presence-all-untrusted');
     const conflictingNode = await attachNode(ws, 'node_conflict_only', 'conflicting-node-only');

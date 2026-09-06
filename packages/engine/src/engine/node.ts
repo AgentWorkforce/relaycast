@@ -1580,7 +1580,15 @@ export async function reconcileInventory(
     throw rejectedInventoryErrors[0];
   }
 
-  const names = new Set(acceptedInventoryAgents.map((agent) => agent.name));
+  // A rejected member is still PRESENT on the node — its process reported the
+  // inventory; only its identity claim is stale or conflicting. The missing
+  // sweep below must therefore run against every REPORTED name, not the
+  // accepted subset: excluding a rejected-but-present member there would take
+  // its real live row offline and emit a false `agent.exited`, exactly the
+  // outage shape the isolation change was meant to prevent. Rejected members
+  // stay excluded from reconciliation and delivery readiness via
+  // `acceptedInventoryAgents` / `liveInvocationIds`.
+  const reportedNames = new Set(inventoryAgents.map((agent) => agent.name));
   const liveInvocationIds = new Set(acceptedInventoryAgents.flatMap((agent) => (
     agent.invocation_id ? [agent.invocation_id] : []
   )));
@@ -1677,7 +1685,7 @@ export async function reconcileInventory(
       eq(agents.providerName, providerName),
       eq(agents.status, 'active'),
     ));
-  const missingAgents = nodeAgents.filter((agent) => !names.has(agent.name));
+  const missingAgents = nodeAgents.filter((agent) => !reportedNames.has(agent.name));
   const missing = missingAgents.map((agent) => agent.id);
   if (missing.length > 0) {
     await db
