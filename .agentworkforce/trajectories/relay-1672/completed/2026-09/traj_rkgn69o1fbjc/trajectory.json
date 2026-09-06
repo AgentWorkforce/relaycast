@@ -49,7 +49,7 @@
               "Retain provider-owned reservations indefinitely after migration",
               "Reject late workers by mutable agent name"
             ],
-            "reasoning": "Migration must free otherwise permanent capacity without admitting a worker from an already-terminalized frame. An explicit invocation id binds cancellation and live reservation ownership exactly. For legacy workers without that id, the current live reservation tuple (node, provider, requested name) is the available generation proof and supersedes an older migration tombstone; without a live reservation the tombstone still fails closed."
+            "reasoning": "Migration must free otherwise permanent capacity without admitting a worker from an already-terminalized frame. An explicit invocation id plus node/provider/name tuple binds cancellation and live reservation ownership exactly. A legacy worker without that id may claim an unambiguous live tuple, but once the same tuple has a cancellation tombstone it is indistinguishable from a stale process and must fail closed until the replacement supplies its invocation id."
           },
           "significance": "high"
         },
@@ -77,7 +77,7 @@
     }
   ],
   "retrospective": {
-    "summary": "Added SHA-256 token-generation guarded releases across Relaycast types, engine, OpenAPI, TypeScript SDK, and Rust SDK, with takeover, drain, retry, reconciliation, replay, completion-race, action-shadow, migration-capacity, registration-rollback, and concurrent action-prune regressions. Immutable invocation provenance, pre-send action/route/attempt claims, exact socket-owner authorization, and a durable accepted-attempt generation prevent stale-name rebinding, duplicate retries, stale-failure clobber, and revocation of accepted frames. Explicit migration cancellation remains fail-closed, while a legacy missing-id worker can claim only its current live node/provider/name reservation and a new live generation supersedes an older tuple tombstone. Nontransactional registration acquires capacity before writes with exact-identity compensation while preserving identity-conflict precedence.",
+    "summary": "Added SHA-256 token-generation guarded releases across Relaycast types, engine, OpenAPI, TypeScript SDK, and Rust SDK, with takeover, drain, retry, reconciliation, replay, completion-race, action-shadow, migration-capacity, registration-rollback, and concurrent action-prune regressions. Immutable invocation provenance, pre-send action/route/attempt claims, exact socket-owner authorization, and a durable accepted-attempt generation prevent stale-name rebinding, duplicate retries, stale-failure clobber, and revocation of accepted frames. Agent-hosted and node-hosted action acceptance now commits its route and generation before send, and accepted pruned work remains pinned through timeout recovery. Migration cancellation binds explicit ids to their node/provider/name tuple and requires correlation when a same-tuple tombstone makes an ID-less replacement indistinguishable from a stale worker. Nontransactional registration acquires capacity before writes with exact-identity compensation while preserving identity-conflict precedence.",
     "approach": "Standard approach",
     "confidence": 0.9
   },
