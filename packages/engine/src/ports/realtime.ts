@@ -77,6 +77,18 @@ export interface AgentActionProviderAuthorization {
   recordAttempt: boolean;
 }
 
+/** Exact token-generation proof for a release accepted by the socket owner. */
+export interface ReleaseActionProviderAuthorization {
+  kind: 'release-generation-v1';
+  invocationId: string;
+  agentName: string;
+  expectedTokenHash: string;
+}
+
+export type ActionProviderAuthorization =
+  | AgentActionProviderAuthorization
+  | ReleaseActionProviderAuthorization;
+
 export interface NodeDrainOptions {
   /** Include pending rows whose prior retry deadline has not elapsed yet. */
   includeDeferred?: boolean;
@@ -122,7 +134,7 @@ export interface NodeConnectionRegistry {
     nodeId: string,
     providerName: string,
     message: Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }>,
-    authorization: AgentActionProviderAuthorization,
+    authorization: ActionProviderAuthorization,
   ): Promise<boolean>;
 
   /** True when the node currently has at least one connected provider. */

@@ -2,7 +2,7 @@ import type {
   RealtimeBus,
   ConnectionRegistry,
   NodeConnectionRegistry,
-  AgentActionProviderAuthorization,
+  ActionProviderAuthorization,
   NodeDrainOptions,
   EngineEvent,
   UpgradeArgs,
@@ -11,7 +11,13 @@ import type {
 import type { ObserverToken } from '../../ports/auth.js';
 import { and, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { EngineDb } from '../../ports/database.js';
-import { actions, actionInvocations, observerTokens } from '../../db/schema.js';
+import {
+  actions,
+  actionInvocations,
+  agentNodeBindings,
+  agents,
+  observerTokens,
+} from '../../db/schema.js';
 import { handleNodeControlMessage, handleProviderDisconnect, markNodeOffline } from '../../engine/node.js';
 import { serializeNodeOp } from '../../engine/nodeLock.js';
 import { DEFAULT_PROVIDER_NAME } from '../../engine/nodeProvider.js';
@@ -251,8 +257,69 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     nodeId: string,
     providerName: string,
     message: Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }>,
-    authorization: AgentActionProviderAuthorization,
+    authorization: ActionProviderAuthorization,
   ): Promise<boolean> {
+    if (authorization.kind === 'release-generation-v1') {
+      const releaseInput = message.input;
+      const inputMatches = !!releaseInput
+        && typeof releaseInput === 'object'
+        && !Array.isArray(releaseInput)
+        && releaseInput.name === authorization.agentName
+        && releaseInput.expected_token_hash === authorization.expectedTokenHash;
+      if (
+        message.invocation_id !== authorization.invocationId
+        || message.action !== 'release'
+        || !inputMatches
+      ) {
+        return false;
+      }
+      const [authorized] = await this.db
+        .select({ id: actionInvocations.id })
+        .from(actionInvocations)
+        .innerJoin(agents, and(
+          eq(agents.workspaceId, workspaceId),
+          eq(agents.name, authorization.agentName),
+          eq(agents.tokenHash, authorization.expectedTokenHash),
+          eq(agents.providerName, providerName),
+        ))
+        .innerJoin(agentNodeBindings, and(
+          eq(agentNodeBindings.workspaceId, workspaceId),
+          eq(agentNodeBindings.agentId, agents.id),
+          eq(agentNodeBindings.nodeId, nodeId),
+          eq(agentNodeBindings.status, 'active'),
+        ))
+        .where(and(
+          eq(actionInvocations.workspaceId, workspaceId),
+          eq(actionInvocations.id, authorization.invocationId),
+          eq(actionInvocations.actionName, 'release'),
+          inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked']),
+          eq(actionInvocations.handlerNodeId, nodeId),
+          sql`json_extract(${actionInvocations.input}, '$.expected_token_hash') = ${authorization.expectedTokenHash}`,
+        ));
+      if (!authorized) {
+        await this.db
+          .update(actionInvocations)
+          .set({
+            status: 'failed',
+            error: 'agent_release_generation_conflict',
+            completedAt: new Date(),
+          })
+          .where(and(
+            eq(actionInvocations.workspaceId, workspaceId),
+            eq(actionInvocations.id, authorization.invocationId),
+            inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked']),
+          ));
+        return false;
+      }
+
+      // The authorization query resumes in the same in-process socket owner
+      // that performs this synchronous send. With no await in between, a token
+      // rotation cannot interleave after acceptance but before the frame is
+      // handed to the provider. Remote owners implement this proof inside
+      // their own serialized send boundary.
+      return this.sendToProviderUnchecked(workspaceId, nodeId, providerName, message);
+    }
+
     if (
       message.invocation_id !== authorization.invocationId
       || message.agent_id !== authorization.handlerAgentId

@@ -623,10 +623,11 @@ async function waitForInvocationReplayOutcome(
   ) {
     if (!OPEN_INVOCATION_STATUSES.some((status) => status === current.status)) {
       if (current.status === 'failed') {
+        const errorCode = current.error ?? 'handler_unavailable';
         throw codedError(
           'Action invocation failed before provider dispatch completed',
-          current.error ?? 'handler_unavailable',
-          503,
+          errorCode,
+          errorCode === RELEASE_GENERATION_CONFLICT_CODE ? 409 : 503,
         );
       }
       return current;
@@ -1276,6 +1277,13 @@ async function dispatchRelease(args: {
           `Agent "${name}" no longer matches the expected token generation`,
           RELEASE_GENERATION_CONFLICT_CODE,
           409,
+        );
+      }
+      if (settled?.error === 'node_dispatch_unavailable') {
+        throw codedError(
+          'Node adapter does not support generation-authorized release dispatch',
+          'node_dispatch_unavailable',
+          503,
         );
       }
     }
@@ -2327,40 +2335,55 @@ async function dispatchNodeInvocation(args: {
   reservationHeld?: boolean;
   skipIncrementAttempts?: boolean;
 }): Promise<{ accepted: boolean; pending: boolean; sent: boolean }> {
-  if (isReleaseInvocation(args.action)) {
-    const expectedTokenHash = releaseExpectedTokenHash(args.input);
-    if (expectedTokenHash) {
-      const name = typeof args.input.name === 'string' ? args.input.name : '';
-      const [current] = await args.db
-        .select({ id: agents.id })
-        .from(agents)
-        .where(and(
-          eq(agents.workspaceId, args.workspaceId),
-          eq(agents.name, name),
-          eq(agents.tokenHash, expectedTokenHash),
-          sql`EXISTS (
+  const guardedReleaseHash = isReleaseInvocation(args.action)
+    ? releaseExpectedTokenHash(args.input)
+    : null;
+  if (guardedReleaseHash) {
+    const name = typeof args.input.name === 'string' ? args.input.name : '';
+    const [current] = await args.db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(and(
+        eq(agents.workspaceId, args.workspaceId),
+        eq(agents.name, name),
+        eq(agents.tokenHash, guardedReleaseHash),
+        sql`EXISTS (
             SELECT 1 FROM ${agentNodeBindings}
             WHERE ${agentNodeBindings.workspaceId} = ${args.workspaceId}
               AND ${agentNodeBindings.agentId} = ${agents.id}
               AND ${agentNodeBindings.nodeId} = ${args.nodeId}
               AND ${agentNodeBindings.status} = 'active'
           )`,
+      ));
+    if (!current) {
+      await args.db
+        .update(actionInvocations)
+        .set({
+          status: 'failed',
+          error: RELEASE_GENERATION_CONFLICT_CODE,
+          completedAt: new Date(),
+        })
+        .where(and(
+          eq(actionInvocations.workspaceId, args.workspaceId),
+          eq(actionInvocations.id, args.invocationId),
+          inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
         ));
-      if (!current) {
-        await args.db
-          .update(actionInvocations)
-          .set({
-            status: 'failed',
-            error: RELEASE_GENERATION_CONFLICT_CODE,
-            completedAt: new Date(),
-          })
-          .where(and(
-            eq(actionInvocations.workspaceId, args.workspaceId),
-            eq(actionInvocations.id, args.invocationId),
-            inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
-          ));
-        return { accepted: false, pending: false, sent: false };
-      }
+      return { accepted: false, pending: false, sent: false };
+    }
+    if (!args.registry.sendAuthorizedActionToProvider) {
+      await args.db
+        .update(actionInvocations)
+        .set({
+          status: 'failed',
+          error: 'node_dispatch_unavailable',
+          completedAt: new Date(),
+        })
+        .where(and(
+          eq(actionInvocations.workspaceId, args.workspaceId),
+          eq(actionInvocations.id, args.invocationId),
+          inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+        ));
+      return { accepted: false, pending: false, sent: false };
     }
   }
 
@@ -2399,6 +2422,19 @@ async function dispatchNodeInvocation(args: {
           recordAttempt: !args.skipIncrementAttempts,
         },
       ) ?? false)
+    : guardedReleaseHash
+      ? await (args.registry.sendAuthorizedActionToProvider?.(
+          args.workspaceId,
+          args.nodeId,
+          args.providerName,
+          frame,
+          {
+            kind: 'release-generation-v1',
+            invocationId: args.invocationId,
+            agentName: typeof args.input.name === 'string' ? args.input.name : '',
+            expectedTokenHash: guardedReleaseHash,
+          },
+        ) ?? false)
     : await args.registry.sendToProvider(
         args.workspaceId,
         args.nodeId,
