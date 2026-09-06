@@ -1002,16 +1002,25 @@ async function rejectMigrationCanceledSpawnRegistration(
     agentName: string;
   },
 ): Promise<void> {
+  // Provider ownership added in migration 0030 is intentionally NULL for
+  // legacy rows whose multi-provider owner could not be inferred. Treat that
+  // unknown owner conservatively as matching any provider on the exact node
+  // and agent-name tuple; otherwise a stale worker could escape the migration
+  // tombstone after its reservation was released.
+  const providerCorrelation = or(
+    eq(actionInvocations.dispatchedProvider, registration.providerName),
+    isNull(actionInvocations.dispatchedProvider),
+  );
   const correlation = registration.invocationId
     ? and(
       eq(actionInvocations.id, registration.invocationId),
       eq(actionInvocations.dispatchedNodeId, registration.nodeId),
-      eq(actionInvocations.dispatchedProvider, registration.providerName),
+      providerCorrelation,
       sql`json_extract(${actionInvocations.input}, '$.name') = ${registration.agentName}`,
     )
     : and(
       eq(actionInvocations.dispatchedNodeId, registration.nodeId),
-      eq(actionInvocations.dispatchedProvider, registration.providerName),
+      providerCorrelation,
       sql`json_extract(${actionInvocations.input}, '$.name') = ${registration.agentName}`,
     );
   const [canceled] = await db

@@ -12,7 +12,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Fixed
 
 - `POST /v1/agents/release` accepts `expected_token_hash` and atomically rejects stale generations with 409 `agent_release_generation_conflict` before dispatch or lifecycle mutation.
-- Node-controlled `agent.register` now acquires capacity before writing an agent while preserving `agent_already_exists` precedence, grants legacy hosts that omit `invocation_id` only the matching live reservation tuple, and lets that current generation supersede an older migration tombstone.
+- Node-controlled `agent.register` now acquires capacity before writing an agent while preserving `agent_already_exists` precedence, binds legacy migration tombstones to the exact node/provider/name tuple, treats unknown historical provider ownership conservatively, and requires `invocation_id` when an ID-less same-tuple worker cannot prove its generation.
 - Native `spawn` rejects a missing or empty `input.name` with 400 `invalid_spawn_request` before creating an invocation or reserving capacity.
 - Registered node-action dispatch and retries now atomically claim their exact `action_id`, route, and attempt before provider send and persist the accepted attempt generation at the socket owner; later retries and send-failure settlement are generation-guarded, pruning cannot retarget a name-only frame, and accepted work remains completable. Migration `0047_action_invocation_provider_acceptance.sql` stores the accepted attempt independently of the prunable action foreign key.
 

@@ -90,6 +90,8 @@ export interface RegisteredNodeActionProviderAuthorization {
   kind: 'registered-node-action-v1';
   invocationId: string;
   actionId: string;
+  /** Exact dispatch-attempt generation claimed before entering the socket owner. */
+  dispatchAttempt: number;
   /** Immutable API-level name persisted on the invocation (for example `spawn`). */
   invocationActionName: string;
   /** Exact provider capability being dispatched (for example `spawn:claude`). */

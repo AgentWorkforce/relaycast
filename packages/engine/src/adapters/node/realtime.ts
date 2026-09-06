@@ -343,7 +343,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
         // below so a stale dispatcher cannot mistake a later FK-null prune for
         // work that never reached the provider. Keep the public lifecycle state
         // `dispatched` until the provider reports progress or completion.
-        .set({ providerAcceptedAttempt: actionInvocations.dispatchAttempts })
+        .set({ providerAcceptedAttempt: authorization.dispatchAttempt })
         .where(and(
           eq(actionInvocations.workspaceId, workspaceId),
           eq(actionInvocations.id, authorization.invocationId),
@@ -352,6 +352,11 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
           eq(actionInvocations.actionName, authorization.invocationActionName),
           eq(actionInvocations.dispatchedNodeId, nodeId),
           eq(actionInvocations.dispatchedProvider, providerName),
+          eq(actionInvocations.dispatchAttempts, authorization.dispatchAttempt),
+          or(
+            isNull(actionInvocations.providerAcceptedAttempt),
+            sql`${actionInvocations.providerAcceptedAttempt} <> ${authorization.dispatchAttempt}`,
+          ),
           eq(actionInvocations.status, 'dispatched'),
           sql`EXISTS (
             SELECT 1 FROM ${actions}
