@@ -62,6 +62,21 @@ fn registration_cli_from_hint(cli_hint: Option<&str>, default_cli: &str) -> Stri
         .unwrap_or_else(|| "claude".to_string())
 }
 
+fn api_error_detail(
+    message: String,
+    code: String,
+    request_id: Option<String>,
+    attempts: u32,
+) -> String {
+    let mut detail = format!("{message} (code: {code}");
+    detail.push_str(&format!("; attempts: {attempts}"));
+    if let Some(request_id) = request_id {
+        detail.push_str(&format!("; request_id: {request_id}"));
+    }
+    detail.push(')');
+    detail
+}
+
 /// Errors emitted by [`AgentRegistrationClient`].
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum AgentRegistrationError {
@@ -255,7 +270,8 @@ impl AgentRegistrationClient {
                 status: 429,
                 message,
                 code,
-                ..
+                request_id,
+                attempts,
             }) => {
                 let retry_after_secs = DEFAULT_REGISTRATION_COOLDOWN_SECS;
                 let blocked_until = Instant::now() + Duration::from_secs(retry_after_secs);
@@ -264,18 +280,19 @@ impl AgentRegistrationClient {
                 Err(AgentRegistrationError::RateLimited {
                     agent_name: trimmed_name.to_string(),
                     retry_after_secs,
-                    detail: format!("{message} (code: {code})"),
+                    detail: api_error_detail(message, code, request_id, attempts),
                 })
             }
             Err(RelayError::Api {
                 status,
                 message,
                 code,
-                ..
+                request_id,
+                attempts,
             }) => Err(AgentRegistrationError::Api {
                 agent_name: trimmed_name.to_string(),
                 status,
-                detail: format!("{message} (code: {code})"),
+                detail: api_error_detail(message, code, request_id, attempts),
             }),
             Err(error) => Err(AgentRegistrationError::Transport {
                 agent_name: trimmed_name.to_string(),
@@ -492,6 +509,49 @@ mod tests {
                 assert_eq!(agent_name, "worker-dupe");
             }
             other => panic!("expected AlreadyExists, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn register_agent_token_keeps_terminal_retry_diagnostics_for_callers() {
+        let server = MockServer::start().await;
+        let relay =
+            RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+                .expect("relay init");
+        let client = AgentRegistrationClient::new(relay, "claude");
+
+        Mock::given(method("POST"))
+            .and(path("/v1/agents"))
+            .respond_with(
+                ResponseTemplate::new(503)
+                    .insert_header("retry-after", "0")
+                    .insert_header("x-request-id", "request-374")
+                    .set_body_json(json!({
+                        "ok": false,
+                        "error": {
+                            "code": "database_overloaded",
+                            "message": "registration backend is overloaded"
+                        }
+                    })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let error = client
+            .register_agent_token("worker-374", Some("codex"))
+            .await
+            .expect_err("unkeyed registration must return its first ambiguous 503");
+
+        match error {
+            AgentRegistrationError::Api { status, detail, .. } => {
+                assert_eq!(status, 503);
+                assert!(detail.contains("database_overloaded"));
+                assert!(detail.contains("registration backend is overloaded"));
+                assert!(detail.contains("attempts: 1"));
+                assert!(detail.contains("request_id: request-374"));
+            }
+            other => panic!("expected API diagnostic, got {other}"),
         }
     }
 
