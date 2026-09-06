@@ -207,19 +207,29 @@ describe('action invocation origin migration', () => {
     const sqlite = new Database(':memory:');
     handles.push(sqlite);
     sqlite.exec(`
+      CREATE TABLE nodes (
+        id TEXT PRIMARY KEY,
+        reserved_agents INTEGER NOT NULL DEFAULT 0
+      );
       CREATE TABLE action_invocations (
         id TEXT PRIMARY KEY,
         action_id TEXT DEFAULT NULL,
         action_name TEXT NOT NULL,
         status TEXT NOT NULL,
         error TEXT DEFAULT NULL,
+        dispatched_node_id TEXT DEFAULT NULL,
+        spawn_reserved_at INTEGER DEFAULT NULL,
         completed_at INTEGER DEFAULT NULL
       );
-      INSERT INTO action_invocations (id, action_id, action_name, status) VALUES
-        ('registered_release', 'action_release', 'release', 'dispatched'),
-        ('legacy_open_release', NULL, 'release', 'pending'),
-        ('legacy_completed_release', NULL, 'release', 'completed'),
-        ('legacy_spawn', NULL, 'spawn', 'pending');
+      INSERT INTO nodes (id, reserved_agents) VALUES ('node_a', 2);
+      INSERT INTO action_invocations
+        (id, action_id, action_name, status, dispatched_node_id, spawn_reserved_at)
+      VALUES
+        ('registered_release', 'action_release', 'release', 'dispatched', NULL, NULL),
+        ('legacy_open_release', NULL, 'release', 'pending', NULL, NULL),
+        ('legacy_completed_release', NULL, 'release', 'completed', NULL, NULL),
+        ('legacy_spawn', NULL, 'spawn', 'pending', 'node_a', 1700000000),
+        ('registered_spawn', 'action_spawn', 'spawn', 'pending', 'node_a', 1700000001);
     `);
 
     const migration = readFileSync(
@@ -261,6 +271,25 @@ describe('action invocation origin migration', () => {
         error: null,
         completed: 0,
       },
+      {
+        id: 'registered_spawn',
+        invocation_origin: 'registered_action',
+        status: 'pending',
+        error: null,
+        completed: 0,
+      },
+    ]);
+
+    expect(sqlite.prepare(`
+      SELECT reserved_agents FROM nodes WHERE id = 'node_a'
+    `).get()).toEqual({ reserved_agents: 1 });
+    expect(sqlite.prepare(`
+      SELECT id, spawn_reserved_at FROM action_invocations
+      WHERE id IN ('legacy_spawn', 'registered_spawn')
+      ORDER BY id
+    `).all()).toEqual([
+      { id: 'legacy_spawn', spawn_reserved_at: null },
+      { id: 'registered_spawn', spawn_reserved_at: 1700000001 },
     ]);
 
     expect(() => sqlite.exec(`
