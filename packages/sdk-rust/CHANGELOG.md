@@ -8,10 +8,16 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased - Major]
 
+### Fixed
+
+- `HttpClient::request` no longer sleeps after its final retry attempt, and no longer discards a repeatedly-retried 5xx response into a generic `InvalidResponse("Max retries exceeded")`. The last response's real HTTP status, structured API error code/message (or a raw-body summary if the final response wasn't JSON), correlation/request id, and attempt count are now returned to the caller as a `RelayError::Api`, still reporting as retryable. (#374)
+- A retried 5xx response's `Retry-After` header (delay-seconds form) is now honored for the wait before the next attempt, bounded to 5 seconds so a misconfigured or hostile server can't stall a caller far past the client's own backoff.
+
 ### Changed
 
 - **BREAKING:** `RelayCast::rotate_agent_token` now requires the current agent token; use `take_over_agent` or `recover_agent` to replace an identity you cannot authenticate as.
 - **BREAKING:** `AgentRegistrationClient::register_agent_token` is create-only and returns `AgentRegistrationError::AlreadyExists` on conflicts; use a unique name or persist the token for self-rollover.
+- **BREAKING:** `RelayError::Api` gained `request_id: Option<String>` and `attempts: u32` fields (also exposed via new `RelayError::request_id()`/`RelayError::attempts()` accessors); match arms that destructure it exhaustively need a trailing `..`.
 - `NodeRosterEntry.load` is now `Option<f64>`, matching the API's explicit unreported state; direct-agent heartbeats no longer label a constant utilization as measured.
 
 ### Added

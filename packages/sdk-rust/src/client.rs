@@ -15,7 +15,37 @@ use crate::DEFAULT_BASE_URL;
 
 const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/sdk-rust";
+// One entry per attempt. The delay for the final attempt is never used —
+// there is nothing left to wait for once retries are exhausted.
 const RETRY_BACKOFFS_MS: [u64; 3] = [200, 400, 800];
+// Upper bound on a server-provided `Retry-After` delay so a misconfigured or
+// hostile response can't stall a caller far past the client's own backoff.
+const MAX_RETRY_AFTER_MS: u64 = 5_000;
+const REQUEST_ID_HEADER_CANDIDATES: [&str; 2] = ["x-request-id", "x-correlation-id"];
+
+/// Parse a bounded retry delay (in milliseconds) from a response's
+/// `Retry-After` header. Only the delay-seconds form is supported; malformed
+/// or missing headers fall back to the caller's default backoff.
+fn parse_retry_after_ms(response: &reqwest::Response) -> Option<u64> {
+    let value = response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?;
+    let seconds: u64 = value.trim().parse().ok()?;
+    Some(seconds.saturating_mul(1000).min(MAX_RETRY_AFTER_MS))
+}
+
+/// Extract a correlation/request id from a response, if the server sent one.
+fn extract_request_id(response: &reqwest::Response) -> Option<String> {
+    REQUEST_ID_HEADER_CANDIDATES.iter().find_map(|name| {
+        response
+            .headers()
+            .get(*name)
+            .and_then(|value| value.to_str().ok())
+            .map(|value| value.to_string())
+    })
+}
 
 /// Options for creating an HTTP client.
 #[derive(Debug, Clone)]
@@ -190,6 +220,7 @@ impl HttpClient {
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
         let options = options.unwrap_or_default();
+        let last_attempt = RETRY_BACKOFFS_MS.len() - 1;
 
         for (attempt, backoff) in RETRY_BACKOFFS_MS.iter().enumerate() {
             let mut request = self.build_request(method.clone(), &url, &options);
@@ -204,12 +235,18 @@ impl HttpClient {
 
             let response = request.send().await?;
             let status = response.status().as_u16();
+            let attempts = (attempt + 1) as u32;
 
-            // Retry on 5xx errors
-            if (500..=599).contains(&status) && attempt < RETRY_BACKOFFS_MS.len() {
-                tokio::time::sleep(Duration::from_millis(*backoff)).await;
+            // Retry on 5xx errors, but never after the final attempt: there is
+            // nothing left to wait for, and the caller needs this response's
+            // real diagnostic instead of a swallowed "max retries exceeded".
+            if (500..=599).contains(&status) && attempt < last_attempt {
+                let delay_ms = parse_retry_after_ms(&response).unwrap_or(*backoff);
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                 continue;
             }
+
+            let request_id = extract_request_id(&response);
 
             // Handle 204 No Content
             if status == 204 {
@@ -218,14 +255,38 @@ impl HttpClient {
                 return Ok(empty_json);
             }
 
-            let json: ApiResponse<T> = response.json().await?;
+            let bytes = response.bytes().await?;
+            let json: ApiResponse<T> = match serde_json::from_slice(&bytes) {
+                Ok(json) => json,
+                Err(err) => {
+                    // A non-JSON body from an error status (e.g. a gateway's
+                    // plain-text 502/503/504) still carries a real status; do
+                    // not let a body-parse failure erase it.
+                    if (400..=599).contains(&status) {
+                        return Err(RelayError::Api {
+                            code: "invalid_response_body".to_string(),
+                            message: format!("Server returned a non-JSON {status} response: {err}"),
+                            status,
+                            request_id,
+                            attempts,
+                        });
+                    }
+                    return Err(err.into());
+                }
+            };
 
             if !json.ok {
                 let error = json.error.unwrap_or_else(|| crate::types::ApiErrorInfo {
                     code: "unknown_error".to_string(),
                     message: "Unknown error".to_string(),
                 });
-                return Err(RelayError::api(error.code, error.message, status));
+                return Err(RelayError::Api {
+                    code: error.code,
+                    message: error.message,
+                    status,
+                    request_id,
+                    attempts,
+                });
             }
 
             return json.data.ok_or_else(|| {
@@ -233,10 +294,7 @@ impl HttpClient {
             });
         }
 
-        // This shouldn't be reached, but just in case
-        Err(RelayError::InvalidResponse(
-            "Max retries exceeded".to_string(),
-        ))
+        unreachable!("the retry loop always returns on its final attempt")
     }
 
     fn build_request(&self, method: Method, url: &str, options: &RequestOptions) -> RequestBuilder {

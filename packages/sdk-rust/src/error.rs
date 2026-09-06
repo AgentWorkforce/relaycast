@@ -14,6 +14,11 @@ pub enum RelayError {
         message: String,
         /// The HTTP status code.
         status: u16,
+        /// Correlation/request id echoed by the server, when it sent one.
+        request_id: Option<String>,
+        /// Number of HTTP attempts made (including the one that produced this
+        /// error) before it was returned to the caller.
+        attempts: u32,
     },
 
     /// An HTTP request error.
@@ -48,6 +53,8 @@ impl RelayError {
             code: code.into(),
             message: message.into(),
             status,
+            request_id: None,
+            attempts: 1,
         }
     }
 
@@ -98,6 +105,24 @@ impl RelayError {
     pub fn code(&self) -> Option<&str> {
         match self {
             Self::Api { code, .. } => Some(code),
+            _ => None,
+        }
+    }
+
+    /// Get the correlation/request id the server echoed back, if this is an
+    /// API error and the server sent one.
+    pub fn request_id(&self) -> Option<&str> {
+        match self {
+            Self::Api { request_id, .. } => request_id.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// Get the number of HTTP attempts made before this API error was
+    /// returned to the caller.
+    pub fn attempts(&self) -> Option<u32> {
+        match self {
+            Self::Api { attempts, .. } => Some(*attempts),
             _ => None,
         }
     }
