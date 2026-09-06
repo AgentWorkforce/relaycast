@@ -2569,6 +2569,12 @@ paths:
                     type: boolean
                   data:
                     $ref: '#/components/schemas/LifecycleActionInvocation'
+        '400':
+          description: Invalid release request or malformed token-generation guard
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Agent not found
           content:

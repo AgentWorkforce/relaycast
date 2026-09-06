@@ -11,6 +11,7 @@ import {
 } from './harness.js';
 import { actions, actionInvocations, agents, nodeProviders, nodes } from '../../db/schema.js';
 import { NODE_LIVENESS_TTL_MS, PROVIDER_ATTACH_LIVENESS_MS } from '../../engine/placement.js';
+import { drainNodeInvocations } from '../../index.js';
 
 type Cap = { name: string; kind?: string; global?: boolean; queue?: boolean };
 
@@ -408,6 +409,67 @@ describe('node providers', () => {
 
     expect(deliverFramesOfType(py.sock, 'message.created').length).toBeGreaterThanOrEqual(1);
     expect(deliverFramesOfType(rb.sock, 'message.created')).toHaveLength(0);
+  });
+
+  it('drains a guarded release back to the named provider that owns its generation', async () => {
+    const ws = await createWorkspace(stack.app, 'np-release-drain-owner');
+    await enrollNode(ws, 'node_a', 'alpha');
+    const py = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'py', []);
+    await py.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'register-release-drain-worker',
+      type: 'agent.register',
+      name: 'release-drain-worker',
+      session_ref: 'pty://py/release-drain-worker',
+    }));
+    const [worker] = await stack.runtime.handle.db
+      .select({ id: agents.id, name: agents.name, tokenHash: agents.tokenHash })
+      .from(agents)
+      .where(and(
+        eq(agents.workspaceId, ws.workspaceId),
+        eq(agents.name, 'release-drain-worker'),
+      ));
+    expect(worker).toBeTruthy();
+
+    await stack.runtime.handle.db.insert(actionInvocations).values({
+      id: 'inv_named_provider_release_drain',
+      workspaceId: ws.workspaceId,
+      actionName: 'release',
+      callerName: 'workspace',
+      handlerNodeId: 'node_a',
+      input: {
+        name: worker.name,
+        delete_agent: true,
+        expected_token_hash: worker.tokenHash,
+      },
+      status: 'pending',
+      dispatchedNodeId: 'node_a',
+      dispatchedProvider: 'py',
+      attemptedNodeIds: ['node_a'],
+      dispatchAttempts: 1,
+    });
+
+    py.sock.received.length = 0;
+    const drained = await drainNodeInvocations(
+      stack.runtime.handle.db,
+      stack.runtime.realtime,
+      ws.workspaceId,
+      'node_a',
+    );
+
+    expect(drained).toBe(1);
+    expect(py.sock.ofType('action.invoke')).toEqual([
+      expect.objectContaining({
+        invocation_id: 'inv_named_provider_release_drain',
+        action: 'release',
+        input: expect.objectContaining({ expected_token_hash: worker.tokenHash }),
+      }),
+    ]);
+    const [invocation] = await stack.runtime.handle.db
+      .select({ status: actionInvocations.status, provider: actionInvocations.dispatchedProvider })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, 'inv_named_provider_release_drain'));
+    expect(invocation).toEqual({ status: 'dispatched', provider: 'py' });
   });
 
   it('keeps one provider inventory from offlining agents or rescheduling invocations owned by another', async () => {

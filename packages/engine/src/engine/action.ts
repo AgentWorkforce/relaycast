@@ -617,10 +617,23 @@ async function waitForInvocationReplayOutcome(
 ): Promise<InvocationRow> {
   let current = invocation;
   const deadline = Date.now() + 500;
-  while (
-    !current.dispatchedNodeId
-    && !(options.acceptDispatchStarted && current.dispatchAttempts > 0)
-  ) {
+  while (true) {
+    // A guarded release can lose its generation CAS after provider dispatch.
+    // Surface that durable terminal conflict before the generic dispatched-row
+    // replay shortcut, otherwise the same idempotency key changes 409 into 201.
+    if (current.status === 'failed' && current.error === RELEASE_GENERATION_CONFLICT_CODE) {
+      throw codedError(
+        'Action invocation failed because the release generation changed',
+        RELEASE_GENERATION_CONFLICT_CODE,
+        409,
+      );
+    }
+    if (
+      current.dispatchedNodeId
+      || (options.acceptDispatchStarted && current.dispatchAttempts > 0)
+    ) {
+      return current;
+    }
     if (!OPEN_INVOCATION_STATUSES.some((status) => status === current.status)) {
       if (current.status === 'failed') {
         const errorCode = current.error ?? 'handler_unavailable';
@@ -654,7 +667,6 @@ async function waitForInvocationReplayOutcome(
     }
     current = updated;
   }
-  return current;
 }
 
 /**
@@ -1175,7 +1187,7 @@ async function dispatchRelease(args: {
     const generationConflict = results[0] as Array<{ id: string }>;
     const completed = results.at(-2) as Array<{ id: string }>;
 
-    if (generationConflict.length > 0 || completed.length === 0) {
+    if (expectedTokenHash && (generationConflict.length > 0 || completed.length === 0)) {
       throw codedError(
         `Agent "${name}" no longer matches the expected token generation`,
         RELEASE_GENERATION_CONFLICT_CODE,
@@ -1260,6 +1272,22 @@ async function dispatchRelease(args: {
     action: 'release',
     input,
   });
+
+  // Some socket owners durably record or complete an accepted frame before
+  // this process resumes to stamp its own dispatch attempt. Return that
+  // terminal winner instead of treating the failed post-send stamp as a
+  // rejected send and entering local fallback.
+  if (dispatched.settled) {
+    if (dispatched.settled.status === 'failed') {
+      const errorCode = dispatched.settled.error ?? 'handler_unavailable';
+      throw codedError(
+        'Release invocation failed after provider dispatch',
+        errorCode,
+        errorCode === RELEASE_GENERATION_CONFLICT_CODE ? 409 : 503,
+      );
+    }
+    return invocationAck(dispatched.settled, { actionName: 'release' });
+  }
 
   // The provider can disconnect between the liveness check and send. Complete
   // the DB lifecycle locally instead of creating an ownerless pending request.
@@ -2334,7 +2362,12 @@ async function dispatchNodeInvocation(args: {
   retryAfterAt?: Date | null;
   reservationHeld?: boolean;
   skipIncrementAttempts?: boolean;
-}): Promise<{ accepted: boolean; pending: boolean; sent: boolean }> {
+}): Promise<{
+  accepted: boolean;
+  pending: boolean;
+  sent: boolean;
+  settled?: InvocationRow;
+}> {
   const guardedReleaseHash = isReleaseInvocation(args.action)
     ? releaseExpectedTokenHash(args.input)
     : null;
@@ -2442,6 +2475,24 @@ async function dispatchNodeInvocation(args: {
         frame,
       );
 
+  if (!sent && guardedReleaseHash) {
+    // An adapter compiled against the older owner-authorization contract may
+    // expose the method but reject the new proof kind. Settle any still-open
+    // row before the caller considers local fallback, so a guarded delete can
+    // never degrade to an unguarded lifecycle mutation.
+    await args.db
+      .update(actionInvocations)
+      .set({
+        status: 'failed',
+        error: 'node_dispatch_unavailable',
+        completedAt: new Date(),
+      })
+      .where(and(
+        eq(actionInvocations.workspaceId, args.workspaceId),
+        eq(actionInvocations.id, args.invocationId),
+        inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      ));
+  }
   if (!sent) return { accepted: false, pending: false, sent: false };
 
   const pending = !!args.pending || !connectedBefore;
@@ -2459,6 +2510,18 @@ async function dispatchNodeInvocation(args: {
       actionId: args.actionId,
     },
   );
+  if (!accepted && guardedReleaseHash) {
+    const [settled] = await args.db
+      .select()
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, args.workspaceId),
+        eq(actionInvocations.id, args.invocationId),
+      ));
+    if (settled && !OPEN_INVOCATION_STATUSES.some((status) => status === settled.status)) {
+      return { accepted: false, pending: false, sent: true, settled };
+    }
+  }
   return { accepted, pending, sent: true };
 }
 
@@ -2538,6 +2601,7 @@ export async function drainNodeInvocations(
       input: actionInvocations.input,
       spawnReservedAt: actionInvocations.spawnReservedAt,
       dispatchedNodeId: actionInvocations.dispatchedNodeId,
+      dispatchedProvider: actionInvocations.dispatchedProvider,
       handlerNodeId: actions.handlerNodeId,
       handlerProvider: actions.handlerProvider,
       handlerAgentId: agents.id,
@@ -2587,10 +2651,12 @@ export async function drainNodeInvocations(
       ? row.handlerAgentProvider ?? DEFAULT_PROVIDER_NAME
       : row.handlerNodeId
         ? row.handlerProvider ?? DEFAULT_PROVIDER_NAME
-        : shadowProvider
-          ?? (isSpawnInvocation(row.actionName)
-            ? (await capacityProviderName(db, workspaceId, nodeId, dispatchActionNameForInvocation(row.actionName, input))) ?? DEFAULT_PROVIDER_NAME
-            : DEFAULT_PROVIDER_NAME);
+        : isReleaseInvocation(row.actionName)
+          ? row.dispatchedProvider ?? DEFAULT_PROVIDER_NAME
+          : shadowProvider
+            ?? (isSpawnInvocation(row.actionName)
+              ? (await capacityProviderName(db, workspaceId, nodeId, dispatchActionNameForInvocation(row.actionName, input))) ?? DEFAULT_PROVIDER_NAME
+              : DEFAULT_PROVIDER_NAME);
     const nativeSpawn = isSpawnInvocation(row.actionName) && !shadowProvider;
 
     // Skip draining to a provider that is disconnected or whose heartbeat says
