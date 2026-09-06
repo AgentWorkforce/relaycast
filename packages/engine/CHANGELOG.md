@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- `POST /v1/agents/release` accepts `expected_token_hash` and atomically rejects stale generations with 409 `agent_release_generation_conflict` before dispatch or lifecycle mutation.
 
 ## [8.4.0] - 2026-09-05
 

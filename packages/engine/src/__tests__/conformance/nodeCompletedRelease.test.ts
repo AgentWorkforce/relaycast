@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { attachDirectNodeSocket, createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
-import { actionInvocations, agents, messages } from '../../db/schema.js';
+import { actionInvocations, agentNodeBindings, agents, messages, nodes } from '../../db/schema.js';
+import { sha256Hex } from '../../lib/crypto.js';
 
 /**
  * `relaycast#309` gave the LOCAL release path (`dispatchRelease` ->
@@ -35,11 +36,11 @@ describe('node-completed release preserves attributed history', () => {
     expect(res.status).toBe(201);
   }
 
-  async function release(workspaceKey: string, name: string) {
+  async function release(workspaceKey: string, name: string, expectedTokenHash?: string) {
     const res = await stack.app.request('/v1/agents/release', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${workspaceKey}` },
-      body: JSON.stringify({ name, delete_agent: true }),
+      body: JSON.stringify({ name, delete_agent: true, expected_token_hash: expectedTokenHash }),
     });
     expect(res.status).toBe(201);
     return (await res.json()) as { data: { status: string; invocation_id: string } };
@@ -53,10 +54,29 @@ describe('node-completed release preserves attributed history', () => {
     await post(target.token, 'this message must keep its author');
     // A LIVE node binding is what routes the release through
     // `applyReleaseCompletionEffect` instead of the local tombstone path.
-    const { handle } = await attachDirectNodeSocket(stack, ws.workspaceId, target);
+    const { sock, handle } = await attachDirectNodeSocket(stack, ws.workspaceId, target);
 
-    const { data } = await release(ws.workspaceKey, target.name);
+    const { data } = await release(ws.workspaceKey, target.name, await sha256Hex(target.token));
     expect(data.status).toBe('dispatched');
+    const [beforeCompletion] = await stack.runtime.deps.db
+      .select({
+        status: actionInvocations.status,
+        dispatchedNodeId: actionInvocations.dispatchedNodeId,
+        dispatchedProvider: actionInvocations.dispatchedProvider,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, data.invocation_id));
+    const [beforeBinding] = await stack.runtime.deps.db
+      .select({ nodeId: agentNodeBindings.nodeId, status: agentNodeBindings.status })
+      .from(agentNodeBindings)
+      .where(and(
+        eq(agentNodeBindings.workspaceId, ws.workspaceId),
+        eq(agentNodeBindings.agentId, target.agentId),
+      ));
+    expect({ beforeCompletion, beforeBinding }).toMatchObject({
+      beforeCompletion: { status: 'dispatched', dispatchedNodeId: beforeBinding.nodeId },
+      beforeBinding: { status: 'active' },
+    });
 
     // Drive the node side of the handshake: this is what the broker does.
     await handle.handleMessage(JSON.stringify({
@@ -65,6 +85,7 @@ describe('node-completed release preserves attributed history', () => {
       invocation_id: data.invocation_id,
       output: { released: true },
     }));
+    expect(sock.ofType('error')).toEqual([]);
 
     const [invocation] = await stack.runtime.deps.db
       .select({ status: actionInvocations.status })
@@ -133,5 +154,79 @@ describe('node-completed release preserves attributed history', () => {
         .from(agents)
         .where(and(eq(agents.workspaceId, ws.workspaceId), eq(agents.name, target.name))),
     ).toHaveLength(0);
+  });
+
+  it('does not apply a guarded completion to a same-id takeover generation', async () => {
+    const ws = await createWorkspace(stack.app, 'node-release-takeover-race');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'release-race-agent');
+    const expectedTokenHash = await sha256Hex(target.token);
+    const { sock, handle, nodeId } = await attachDirectNodeSocket(stack, ws.workspaceId, target);
+
+    const { data } = await release(ws.workspaceKey, target.name, expectedTokenHash);
+    expect(data.status).toBe('dispatched');
+    expect(sock.ofType('action.invoke').at(-1)).toMatchObject({
+      action: 'release',
+      input: {
+        name: target.name,
+        delete_agent: true,
+        expected_token_hash: expectedTokenHash,
+      },
+    });
+
+    const takeover = await stack.app.request(`/v1/agents/${target.name}/takeover`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+      body: JSON.stringify({
+        expected_agent_id: target.agentId,
+        actor: 'release-cas-test',
+        reason: 'replace after release dispatch',
+        session_ref: 'session-replacement',
+        node_id: 'node-replacement',
+      }),
+    });
+    expect(takeover.status).toBe(200);
+    const [afterTakeover] = await stack.runtime.deps.db
+      .select({ tokenHash: agents.tokenHash })
+      .from(agents)
+      .where(eq(agents.id, target.agentId));
+
+    await handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'action.result',
+      invocation_id: data.invocation_id,
+      output: { released: true },
+    }));
+
+    const [invocation] = await stack.runtime.deps.db
+      .select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, data.invocation_id));
+    expect(invocation).toEqual({ status: 'failed', error: 'agent_release_generation_conflict' });
+    const [replacement] = await stack.runtime.deps.db
+      .select({ name: agents.name, status: agents.status, tokenHash: agents.tokenHash })
+      .from(agents)
+      .where(eq(agents.id, target.agentId));
+    expect(replacement).toMatchObject({
+      name: target.name,
+      status: 'active',
+      tokenHash: afterTakeover.tokenHash,
+    });
+    const [node] = await stack.runtime.deps.db
+      .select({ activeAgents: nodes.activeAgents })
+      .from(nodes)
+      .where(eq(nodes.id, nodeId));
+    expect(node.activeAgents).toBe(1);
+    const [binding] = await stack.runtime.deps.db
+      .select({ status: agentNodeBindings.status })
+      .from(agentNodeBindings)
+      .where(and(
+        eq(agentNodeBindings.workspaceId, ws.workspaceId),
+        eq(agentNodeBindings.agentId, target.agentId),
+        eq(agentNodeBindings.nodeId, nodeId),
+      ));
+    expect(binding.status).toBe('active');
   });
 });

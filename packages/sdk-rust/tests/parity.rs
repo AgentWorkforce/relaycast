@@ -269,7 +269,8 @@ async fn spawn_and_release_methods_use_expected_endpoints() {
         .and(body_json(json!({
             "name": "WorkerOne",
             "reason": "task completed",
-            "delete_agent": true
+            "delete_agent": true,
+            "expected_token_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         })))
         .respond_with(ok(json!({
             "invocation_id": "inv_release_1",
@@ -290,11 +291,14 @@ async fn spawn_and_release_methods_use_expected_endpoints() {
         .await;
 
     let released = relay
-        .release_agent(ReleaseAgentRequest {
-            name: "WorkerOne".to_string(),
-            reason: Some("task completed".to_string()),
-            delete_agent: Some(true),
-        })
+        .release_agent_if_token_hash(
+            ReleaseAgentRequest {
+                name: "WorkerOne".to_string(),
+                reason: Some("task completed".to_string()),
+                delete_agent: Some(true),
+            },
+            "a".repeat(64),
+        )
         .await
         .expect("release_agent failed");
     assert_eq!(released.invocation_id, "inv_release_1");

@@ -17,6 +17,7 @@ import type { NodeConnectionRegistry, NodeDrainOptions } from '../ports/realtime
 import { runAtomic, runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { claimSpawnNode, chooseNodeForAction, isNodeLive, releaseNodeCapacity, reserveNodeCapacity } from './placement.js';
 import { DEFAULT_PROVIDER_NAME, capacityProviderName, getProvider, isProviderLive } from './nodeProvider.js';
+import { AGENT_TOKEN_HASH_PATTERN } from '@relaycast/types';
 
 type Db = ReturnType<typeof getDb>;
 type ActionRow = typeof actions.$inferSelect;
@@ -90,6 +91,34 @@ function isSpawnInvocation(actionName: string): boolean {
 
 function isReleaseInvocation(actionName: string): boolean {
   return actionName === 'release';
+}
+
+const RELEASE_GENERATION_CONFLICT_CODE = 'agent_release_generation_conflict';
+
+function releaseExpectedTokenHash(input: Record<string, unknown>): string | null {
+  const value = input.expected_token_hash;
+  if (value === undefined) return null;
+  if (typeof value !== 'string' || !AGENT_TOKEN_HASH_PATTERN.test(value)) {
+    throw codedError(
+      'release action input.expected_token_hash must be a lowercase SHA-256 hash',
+      'invalid_release_request',
+      400,
+    );
+  }
+  return value;
+}
+
+function releaseGenerationStillCurrent(
+  workspaceId: string,
+  agentId: string,
+  expectedTokenHash: string | null,
+) {
+  return sql`EXISTS (
+    SELECT 1 FROM ${agents}
+    WHERE ${agents.workspaceId} = ${workspaceId}
+      AND ${agents.id} = ${agentId}
+      ${expectedTokenHash ? sql`AND ${agents.tokenHash} = ${expectedTokenHash}` : sql``}
+  )`;
 }
 
 function dispatchActionNameForInvocation(actionName: string, input: Record<string, unknown>): string {
@@ -944,12 +973,30 @@ async function dispatchRelease(args: {
   if (!name) {
     throw codedError('release action input.name is required', 'invalid_release_request', 400);
   }
+  const expectedTokenHash = releaseExpectedTokenHash(input);
 
   const [agent] = await args.db
     .select()
     .from(agents)
-    .where(and(eq(agents.workspaceId, args.workspaceId), eq(agents.name, name)));
+    .where(and(
+      eq(agents.workspaceId, args.workspaceId),
+      eq(agents.name, name),
+      ...(expectedTokenHash ? [eq(agents.tokenHash, expectedTokenHash)] : []),
+    ));
   if (!agent) {
+    if (expectedTokenHash) {
+      const [sameName] = await args.db
+        .select({ id: agents.id })
+        .from(agents)
+        .where(and(eq(agents.workspaceId, args.workspaceId), eq(agents.name, name)));
+      if (sameName) {
+        throw codedError(
+          `Agent "${name}" no longer matches the expected token generation`,
+          RELEASE_GENERATION_CONFLICT_CODE,
+          409,
+        );
+      }
+    }
     throw codedError(`Agent "${name}" not found`, 'agent_not_found', 404);
   }
   const { invocation, replayed } = await createInvocation(args.db, args.workspaceId, null, {
@@ -979,9 +1026,38 @@ async function dispatchRelease(args: {
         AND ${actionInvocations.id} = ${invocation.id}
         AND ${actionInvocations.status} IN ('pending', 'dispatched', 'invoked')
     )`;
+    const invocationCompleted = sql`EXISTS (
+      SELECT 1 FROM ${actionInvocations}
+      WHERE ${actionInvocations.workspaceId} = ${args.workspaceId}
+        AND ${actionInvocations.id} = ${invocation.id}
+        AND ${actionInvocations.status} = 'completed'
+    )`;
+    const generationStillCurrent = releaseGenerationStillCurrent(
+      args.workspaceId,
+      agent.id,
+      expectedTokenHash,
+    );
 
     const results = await runAtomicWrites(args.db, (writeDb) => {
       const writes: AtomicWrite[] = [];
+
+      // If the optional generation lease no longer matches, settle the
+      // invocation as a durable conflict in the same atomic unit in which all
+      // lifecycle mutations are conditioned to no-op.
+      writes.push(writeDb
+        .update(actionInvocations)
+        .set({
+          status: 'failed',
+          error: RELEASE_GENERATION_CONFLICT_CODE,
+          completedAt,
+        })
+        .where(and(
+          eq(actionInvocations.workspaceId, args.workspaceId),
+          eq(actionInvocations.id, invocation.id),
+          inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+          expectedTokenHash ? sql`NOT (${generationStillCurrent})` : sql`0`,
+        ))
+        .returning({ id: actionInvocations.id }));
 
       // Resolve the active binding in this atomic unit instead of from a
       // pre-transaction snapshot. A concurrent rebind therefore decrements
@@ -994,6 +1070,7 @@ async function dispatchRelease(args: {
         .where(and(
           eq(nodes.workspaceId, args.workspaceId),
           invocationIsOpen,
+          generationStillCurrent,
           sql`EXISTS (
             SELECT 1 FROM ${agentNodeBindings}
             WHERE ${agentNodeBindings.workspaceId} = ${args.workspaceId}
@@ -1011,67 +1088,32 @@ async function dispatchRelease(args: {
           eq(agentNodeBindings.agentId, agent.id),
           eq(agentNodeBindings.status, 'active'),
           invocationIsOpen,
-        )));
-
-      // This helper is only used for delete_agent releases. Non-delete
-      // releases fail closed when no live host can receive the invocation.
-      //
-      // Tombstone-rename rather than DELETE (relaycast#309). Four FKs reference
-      // `agents.id` without `onDelete` — channels.created_by (schema.ts:455),
-      // messages.agent_id (:503), files.uploaded_by (:666),
-      // webhooks.created_by (:759) — so a bare DELETE is refused for any agent
-      // that has ever spoken, and inside this atomic unit that refusal aborts
-      // the binding update and the invocation completion along with it. Cascade
-      // is not an option either: it would destroy the agent's message history,
-      // and `messages.agent_id` is NOT NULL so `set null` cannot apply.
-      //
-      // Renaming frees the unique `(workspace_id, name)` immediately while
-      // every FK target stays valid and every message keeps its sender.
-      writes.push(writeDb
-        .update(agents)
-        .set({
-          name: releasedName,
-          handle: `@${releasedName}`,
-          status: RELEASED_AGENT_STATUS,
-          // The row survives, so its credential must not. `token_hash` is
-          // NOT NULL UNIQUE and cannot be cleared, so rotate it to a value
-          // nobody holds; the released agent's old token stops authenticating.
-          tokenHash: releasedTokenHash,
-          // Clear the rotation grace slot too, otherwise any token issued by
-          // the last live rotation would keep authenticating for its grace
-          // window on an agent that is supposed to be gone. See 0035_agent_token_grace.
-          previousTokenHash: null,
-          previousTokenExpiresAt: null,
-          // Same `release` shape the dispatched path writes, so an audit does
-          // not have to know which path released the agent.
-          metadata: sql`json_patch(COALESCE(${agents.metadata}, '{}'), ${JSON.stringify({
-            release: {
-              reason: typeof input.reason === 'string' ? input.reason : null,
-              released_at: completedAt.toISOString(),
-              previous_name: agent.name,
-            },
-          })})`,
-        })
-        .where(and(
-          eq(agents.workspaceId, args.workspaceId),
-          eq(agents.id, agent.id),
-          invocationIsOpen,
+          generationStillCurrent,
         )));
       // `channel_members` and `dm_participants` cascade on DELETE; the
       // tombstone's UPDATE does not fire that cascade, so drop the memberships
       // in the SAME atomic unit or the released agent stays a delivery target.
       writes.push(writeDb
         .delete(channelMembers)
-        .where(eq(channelMembers.agentId, agent.id)));
+        .where(and(
+          eq(channelMembers.agentId, agent.id),
+          invocationIsOpen,
+          generationStillCurrent,
+        )));
       writes.push(writeDb
         .delete(dmParticipants)
-        .where(eq(dmParticipants.agentId, agent.id)));
+        .where(and(
+          eq(dmParticipants.agentId, agent.id),
+          invocationIsOpen,
+          generationStillCurrent,
+        )));
       writes.push(writeDb
         .delete(nodes)
         .where(and(
           eq(nodes.workspaceId, args.workspaceId),
           eq(nodes.id, `node_direct_${agent.id}`),
           invocationIsOpen,
+          generationStillCurrent,
         )));
 
       writes.push(writeDb
@@ -1095,12 +1137,50 @@ async function dispatchRelease(args: {
           eq(actionInvocations.workspaceId, args.workspaceId),
           eq(actionInvocations.id, invocation.id),
           inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+          generationStillCurrent,
         ))
         .returning({ id: actionInvocations.id }));
 
+      // Tombstone after the invocation has won its completion CAS. The whole
+      // batch/transaction rolls back together, while this ordering lets the
+      // success predicate inspect the still-current token hash before we rotate
+      // it to an unusable released credential.
+      writes.push(writeDb
+        .update(agents)
+        .set({
+          name: releasedName,
+          handle: `@${releasedName}`,
+          status: RELEASED_AGENT_STATUS,
+          tokenHash: releasedTokenHash,
+          previousTokenHash: null,
+          previousTokenExpiresAt: null,
+          metadata: sql`json_patch(COALESCE(${agents.metadata}, '{}'), ${JSON.stringify({
+            release: {
+              reason: typeof input.reason === 'string' ? input.reason : null,
+              released_at: completedAt.toISOString(),
+              previous_name: agent.name,
+            },
+          })})`,
+        })
+        .where(and(
+          eq(agents.workspaceId, args.workspaceId),
+          eq(agents.id, agent.id),
+          ...(expectedTokenHash ? [eq(agents.tokenHash, expectedTokenHash)] : []),
+          invocationCompleted,
+        )));
+
       return writes;
-    });
-    const completed = results.at(-1) as Array<{ id: string }>;
+    }, expectedTokenHash ? { requireAtomic: true } : undefined);
+    const generationConflict = results[0] as Array<{ id: string }>;
+    const completed = results.at(-2) as Array<{ id: string }>;
+
+    if (generationConflict.length > 0 || completed.length === 0) {
+      throw codedError(
+        `Agent "${name}" no longer matches the expected token generation`,
+        RELEASE_GENERATION_CONFLICT_CODE,
+        409,
+      );
+    }
 
     // External completion effects belong after the durable atomic unit: an
     // aborted local reap must never publish agent.exited.
@@ -1750,6 +1830,246 @@ function publicInvocation(row: InvocationRow) {
   };
 }
 
+async function completeGuardedReleaseNodeInvocation(
+  db: Db,
+  workspaceId: string,
+  nodeId: string,
+  providerName: string,
+  invocation: Pick<InvocationRow, 'id' | 'actionName' | 'input'>,
+  data: { output?: unknown },
+  deps?: InvocationCompletionDeps,
+): Promise<ReturnType<typeof publicInvocation> | null> {
+  const input = recordInput(invocation.input);
+  const name = typeof input.name === 'string' ? input.name : null;
+  const expectedTokenHash = releaseExpectedTokenHash(input);
+  if (!name || !expectedTokenHash) return null;
+
+  const [agent] = await db
+    .select()
+    .from(agents)
+    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, name)));
+  if (!agent) {
+    const [failed] = await db
+      .update(actionInvocations)
+      .set({
+        status: 'failed',
+        error: RELEASE_GENERATION_CONFLICT_CODE,
+        completedAt: new Date(),
+        spawnReservedAt: null,
+      })
+      .where(and(
+        eq(actionInvocations.workspaceId, workspaceId),
+        eq(actionInvocations.id, invocation.id),
+        eq(actionInvocations.dispatchedNodeId, nodeId),
+        eq(actionInvocations.dispatchedProvider, providerName),
+        inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      ))
+      .returning();
+    return failed ? publicInvocation(failed) : null;
+  }
+
+  const completedAt = new Date();
+  const generationStillCurrent = releaseGenerationStillCurrent(
+    workspaceId,
+    agent.id,
+    expectedTokenHash,
+  );
+  const activeBindingStillCurrent = sql`EXISTS (
+    SELECT 1 FROM ${agentNodeBindings}
+    WHERE ${agentNodeBindings.workspaceId} = ${workspaceId}
+      AND ${agentNodeBindings.agentId} = ${agent.id}
+      AND ${agentNodeBindings.nodeId} = ${nodeId}
+      AND ${agentNodeBindings.status} = 'active'
+  )`;
+  const invocationIsOpen = sql`EXISTS (
+    SELECT 1 FROM ${actionInvocations}
+    WHERE ${actionInvocations.workspaceId} = ${workspaceId}
+      AND ${actionInvocations.id} = ${invocation.id}
+      AND ${actionInvocations.dispatchedNodeId} = ${nodeId}
+      AND ${actionInvocations.dispatchedProvider} = ${providerName}
+      AND ${actionInvocations.status} IN ('pending', 'dispatched', 'invoked')
+  )`;
+  const invocationCompleted = sql`EXISTS (
+    SELECT 1 FROM ${actionInvocations}
+    WHERE ${actionInvocations.workspaceId} = ${workspaceId}
+      AND ${actionInvocations.id} = ${invocation.id}
+      AND ${actionInvocations.dispatchedNodeId} = ${nodeId}
+      AND ${actionInvocations.dispatchedProvider} = ${providerName}
+      AND ${actionInvocations.status} = 'completed'
+  )`;
+  const releaseCanApply = sql`(${generationStillCurrent}) AND (${activeBindingStillCurrent})`;
+  const releasedName = releasedAgentName(agent.name, agent.id);
+  const releasedTokenHash = await sha256Hex(`released:${agent.id}:${randomHex(16)}`);
+  let successIndex = -1;
+
+  const results = await runAtomicWrites(db, (writeDb) => {
+    const writes: AtomicWrite[] = [];
+
+    // The conflict settlement comes first. In a sequential SQLite batch it
+    // closes the invocation before every mutation below if either the token
+    // generation or node binding changed; on transactional adapters the same
+    // statement ordering and rollback guarantee apply.
+    writes.push(writeDb
+      .update(actionInvocations)
+      .set({
+        status: 'failed',
+        error: RELEASE_GENERATION_CONFLICT_CODE,
+        completedAt,
+        spawnReservedAt: null,
+      })
+      .where(and(
+        eq(actionInvocations.workspaceId, workspaceId),
+        eq(actionInvocations.id, invocation.id),
+        eq(actionInvocations.dispatchedNodeId, nodeId),
+        eq(actionInvocations.dispatchedProvider, providerName),
+        inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+        sql`NOT (${releaseCanApply})`,
+      ))
+      .returning());
+
+    writes.push(writeDb
+      .update(nodes)
+      .set({
+        activeAgents: sql`CASE WHEN ${nodes.activeAgents} > 0 THEN ${nodes.activeAgents} - 1 ELSE 0 END`,
+      })
+      .where(and(
+        eq(nodes.workspaceId, workspaceId),
+        eq(nodes.id, nodeId),
+        invocationIsOpen,
+        generationStillCurrent,
+        activeBindingStillCurrent,
+      )));
+
+    writes.push(writeDb
+      .update(agentNodeBindings)
+      .set({ status: 'inactive', updatedAt: completedAt })
+      .where(and(
+        eq(agentNodeBindings.workspaceId, workspaceId),
+        eq(agentNodeBindings.agentId, agent.id),
+        eq(agentNodeBindings.nodeId, nodeId),
+        eq(agentNodeBindings.status, 'active'),
+        invocationIsOpen,
+        generationStillCurrent,
+      )));
+
+    if (input.delete_agent === true) {
+      writes.push(writeDb
+        .delete(channelMembers)
+        .where(and(
+          eq(channelMembers.agentId, agent.id),
+          invocationIsOpen,
+          generationStillCurrent,
+        )));
+      writes.push(writeDb
+        .delete(dmParticipants)
+        .where(and(
+          eq(dmParticipants.agentId, agent.id),
+          invocationIsOpen,
+          generationStillCurrent,
+        )));
+    }
+
+    successIndex = writes.length;
+    writes.push(writeDb
+      .update(actionInvocations)
+      .set({
+        output: data.output ?? null,
+        error: null,
+        status: 'completed',
+        completedAt,
+        spawnReservedAt: null,
+      })
+      .where(and(
+        eq(actionInvocations.workspaceId, workspaceId),
+        eq(actionInvocations.id, invocation.id),
+        eq(actionInvocations.dispatchedNodeId, nodeId),
+        eq(actionInvocations.dispatchedProvider, providerName),
+        inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+        generationStillCurrent,
+      ))
+      .returning());
+
+    const currentAgent = and(
+      eq(agents.workspaceId, workspaceId),
+      eq(agents.id, agent.id),
+      eq(agents.name, name),
+      eq(agents.tokenHash, expectedTokenHash),
+      invocationCompleted,
+    );
+    if (input.delete_agent === true) {
+      writes.push(writeDb
+        .update(agents)
+        .set({
+          name: releasedName,
+          handle: `@${releasedName}`,
+          status: RELEASED_AGENT_STATUS,
+          tokenHash: releasedTokenHash,
+          previousTokenHash: null,
+          previousTokenExpiresAt: null,
+          locationType: 'self_connected',
+          locationNodeId: null,
+          lastSeen: completedAt,
+        })
+        .where(currentAgent));
+    } else {
+      const existingMetadata = agent.metadata ?? {};
+      const { spawn: _spawn, cli: _cli, ...restMetadata } = existingMetadata;
+      writes.push(writeDb
+        .update(agents)
+        .set({
+          status: 'offline',
+          locationType: 'self_connected',
+          locationNodeId: null,
+          lastSeen: completedAt,
+          metadata: {
+            ...restMetadata,
+            release: {
+              reason: typeof input.reason === 'string' ? input.reason : null,
+              released_at: completedAt.toISOString(),
+            },
+          },
+        })
+        .where(currentAgent));
+    }
+
+    if (input.delete_agent === true) {
+      // Deleting the implicit node clears action_invocations.dispatched_node_id
+      // via its FK. Do this only after the owned completion and agent CAS have
+      // both succeeded, or their node predicates could no longer match.
+      writes.push(writeDb
+        .delete(nodes)
+        .where(and(
+          eq(nodes.workspaceId, workspaceId),
+          eq(nodes.id, `node_direct_${agent.id}`),
+          sql`EXISTS (
+            SELECT 1 FROM ${actionInvocations}
+            WHERE ${actionInvocations.workspaceId} = ${workspaceId}
+              AND ${actionInvocations.id} = ${invocation.id}
+              AND ${actionInvocations.status} = 'completed'
+          )`,
+        )));
+    }
+
+    return writes;
+  }, { requireAtomic: true });
+
+  const completed = results[successIndex] as InvocationRow[];
+  const generationConflict = results[0] as InvocationRow[];
+  const settled = completed[0] ?? generationConflict[0];
+  if (!settled) return null;
+
+  if (completed[0] && deps) {
+    await emitAgentExitedEffects(deps, workspaceId, {
+      agentId: agent.id,
+      agentName: agent.name,
+      nodeId,
+      invocationId: fleetInvocationId(agent.metadata),
+      reason: 'released',
+    });
+  }
+  return publicInvocation(settled);
+}
+
 async function applyReleaseCompletionEffect(
   db: Db,
   workspaceId: string,
@@ -1991,6 +2311,43 @@ async function dispatchNodeInvocation(args: {
   reservationHeld?: boolean;
   skipIncrementAttempts?: boolean;
 }): Promise<{ accepted: boolean; pending: boolean; sent: boolean }> {
+  if (isReleaseInvocation(args.action)) {
+    const expectedTokenHash = releaseExpectedTokenHash(args.input);
+    if (expectedTokenHash) {
+      const name = typeof args.input.name === 'string' ? args.input.name : '';
+      const [current] = await args.db
+        .select({ id: agents.id })
+        .from(agents)
+        .where(and(
+          eq(agents.workspaceId, args.workspaceId),
+          eq(agents.name, name),
+          eq(agents.tokenHash, expectedTokenHash),
+          sql`EXISTS (
+            SELECT 1 FROM ${agentNodeBindings}
+            WHERE ${agentNodeBindings.workspaceId} = ${args.workspaceId}
+              AND ${agentNodeBindings.agentId} = ${agents.id}
+              AND ${agentNodeBindings.nodeId} = ${args.nodeId}
+              AND ${agentNodeBindings.status} = 'active'
+          )`,
+        ));
+      if (!current) {
+        await args.db
+          .update(actionInvocations)
+          .set({
+            status: 'failed',
+            error: RELEASE_GENERATION_CONFLICT_CODE,
+            completedAt: new Date(),
+          })
+          .where(and(
+            eq(actionInvocations.workspaceId, args.workspaceId),
+            eq(actionInvocations.id, args.invocationId),
+            inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+          ));
+        return { accepted: false, pending: false, sent: false };
+      }
+    }
+  }
+
   const frame = {
     v: 1 as const,
     type: 'action.invoke' as const,
@@ -2579,6 +2936,22 @@ export async function completeNodeInvocation(
     } catch {
       // Fall through and fail the invocation if no eligible node exists.
     }
+  }
+
+  if (
+    !data.error
+    && isReleaseInvocation(existing.actionName)
+    && releaseExpectedTokenHash(recordInput(existing.input))
+  ) {
+    return completeGuardedReleaseNodeInvocation(
+      db,
+      workspaceId,
+      nodeId,
+      providerName,
+      existing,
+      data,
+      deps,
+    );
   }
 
   const [updated] = await db

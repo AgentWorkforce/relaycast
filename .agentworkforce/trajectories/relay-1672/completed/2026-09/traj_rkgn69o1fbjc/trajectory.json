@@ -1,0 +1,77 @@
+{
+  "id": "traj_rkgn69o1fbjc",
+  "version": 1,
+  "task": {
+    "title": "Make Relaycast release cleanup generation-safe",
+    "source": {
+      "system": "plain",
+      "id": "Relay #1672"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-09-06T06:36:56.228Z",
+  "completedAt": "2026-09-06T07:01:46.031Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-09-06T06:36:57.017Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_biww2b8qk4mt",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-09-06T06:36:57.017Z",
+      "endedAt": "2026-09-06T07:01:46.031Z",
+      "events": [
+        {
+          "ts": 1788676617017,
+          "type": "decision",
+          "content": "Use a SHA-256 token-generation verifier for release compare-and-swap: Use a SHA-256 token-generation verifier for release compare-and-swap",
+          "raw": {
+            "question": "Use a SHA-256 token-generation verifier for release compare-and-swap",
+            "chosen": "Use a SHA-256 token-generation verifier for release compare-and-swap",
+            "alternatives": [],
+            "reasoning": "Relaycast takeover deliberately preserves the agent ID while rotating the credential, so the ID cannot distinguish process generations. Persisting and comparing only the token hash binds cleanup to the exact issued generation without storing or transmitting the raw token."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1788678105665,
+          "type": "reflection",
+          "content": "Red tests reproduced stale release before dispatch and after node dispatch; exact token-hash guards now fail closed at route, dispatch, and atomic completion while legacy unguarded callers remain compatible. Full engine, package, SDK, and Rust verification is green.",
+          "raw": {
+            "focalPoints": [
+              "generation-identity",
+              "atomicity",
+              "compatibility"
+            ],
+            "confidence": 0.9
+          },
+          "significance": "high",
+          "tags": [
+            "focal:generation-identity",
+            "focal:atomicity",
+            "focal:compatibility",
+            "confidence:0.9"
+          ]
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Added SHA-256 token-generation guarded releases across Relaycast types, engine, OpenAPI, TypeScript SDK, and Rust SDK, with takeover/race regressions and atomic dispatch/completion enforcement.",
+    "approach": "Standard approach",
+    "confidence": 0.9
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "80ab366048a0634fbf1a8b5301de71dd22c50026",
+    "endRef": "80ab366048a0634fbf1a8b5301de71dd22c50026"
+  }
+}
