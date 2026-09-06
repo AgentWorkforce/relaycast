@@ -99,6 +99,16 @@ function isBuiltinReleaseInvocation(
   return invocation.invocationOrigin === 'builtin' && isReleaseInvocation(invocation.actionName);
 }
 
+function isDeletedRegisteredActionInvocation(
+  invocation: Pick<InvocationRow, 'actionId' | 'invocationOrigin'>,
+): boolean {
+  // For a registered-action origin, actionId is cleared only by the FK when its
+  // exact action row is deleted. The immutable origin prevents that orphan
+  // from being mistaken for a built-in, and this predicate prevents it from
+  // being rebound by name during drain/retry/reconciliation.
+  return invocation.invocationOrigin === 'registered_action' && invocation.actionId === null;
+}
+
 const RELEASE_GENERATION_CONFLICT_CODE = 'agent_release_generation_conflict';
 
 function releaseExpectedTokenHash(input: Record<string, unknown>): string | null {
@@ -2736,6 +2746,10 @@ export async function drainNodeInvocations(
 
   let drained = 0;
   for (const row of rows) {
+    if (isDeletedRegisteredActionInvocation(row)) {
+      await failOpenInvocationRows(db, workspaceId, [row.id], 'action_deleted');
+      continue;
+    }
     const targetAgent = row.handlerAgentId
       && row.handlerAgentName
       && row.handlerAgentLocationType === 'via_node'
@@ -2838,6 +2852,10 @@ export async function rescheduleNodeInvocation(
   invocation: RetryableInvocationRow,
   opts: { allowAttemptedFallback?: boolean; retryAfterAt?: Date | null } = {},
 ) {
+  if (isDeletedRegisteredActionInvocation(invocation)) {
+    await failOpenInvocationRows(db, invocation.workspaceId, [invocation.id], 'action_deleted');
+    return false;
+  }
   // Only release capacity the invocation actually holds. A shadowed spawn
   // dropped its native reservation at dispatch (spawnReservedAt is null), so it
   // must not release capacity that now belongs to another spawn.

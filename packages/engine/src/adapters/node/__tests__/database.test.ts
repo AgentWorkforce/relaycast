@@ -203,7 +203,7 @@ describe('action invocation handler snapshot migration', () => {
 });
 
 describe('action invocation origin migration', () => {
-  it('preserves registered provenance and fails ambiguous open releases closed', () => {
+  it('preserves registered provenance and fails ambiguous open invocations closed', () => {
     const sqlite = new Database(':memory:');
     handles.push(sqlite);
     sqlite.exec(`
@@ -250,9 +250,9 @@ describe('action invocation origin migration', () => {
       {
         id: 'legacy_spawn',
         invocation_origin: 'legacy_unknown',
-        status: 'pending',
-        error: null,
-        completed: 0,
+        status: 'failed',
+        error: 'invocation_origin_unavailable',
+        completed: 1,
       },
       {
         id: 'registered_release',

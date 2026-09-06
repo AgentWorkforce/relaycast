@@ -12,6 +12,7 @@ import {
 import { actions, actionInvocations, agents, nodeProviders, nodes } from '../../db/schema.js';
 import { NODE_LIVENESS_TTL_MS, PROVIDER_ATTACH_LIVENESS_MS } from '../../engine/placement.js';
 import { drainNodeInvocations } from '../../index.js';
+import { rescheduleInvocationsForLostNode } from '../../engine/action.js';
 
 type Cap = { name: string; kind?: string; global?: boolean; queue?: boolean };
 
@@ -77,6 +78,96 @@ describe('node providers', () => {
       handlers_live: true,
     }));
     return { sock, handle };
+  }
+
+  async function setupPrunedReleaseAction(slug: string, queue: boolean) {
+    const ws = await createWorkspace(stack.app, slug);
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    await enrollNode(ws, 'node_a', 'alpha');
+    await enrollNode(ws, 'node_b', 'beta');
+    const alpha = await attachProvider(
+      ws.workspaceId,
+      'node_a',
+      'alpha',
+      'fleet-a',
+      [{ name: 'release', kind: 'action', ...(queue ? { queue: true } : {}) }],
+    );
+    const beta = await attachProvider(
+      ws.workspaceId,
+      'node_b',
+      'beta',
+      'fleet-b',
+      [{ name: 'release', kind: 'action' }],
+    );
+
+    if (queue) {
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.heartbeat',
+        load: 0,
+        active_agents: 0,
+        handlers_live: false,
+      }));
+    }
+
+    alpha.sock.received.length = 0;
+    beta.sock.received.length = 0;
+    const invoked = await stack.app.request('/v1/nodes/alpha/actions/release/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { name: 'custom-target' } }),
+    });
+    expect(invoked.status).toBe(201);
+    const invocationId = (await invoked.json() as { data: { invocation_id: string } }).data.invocation_id;
+    expect(alpha.sock.ofType('action.invoke')).toHaveLength(queue ? 0 : 1);
+
+    // The capability snapshot drops the exact action row. action_id is now
+    // null, while immutable provenance must keep this invocation tied to the
+    // deleted registration rather than the live same-name action on beta.
+    await alpha.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'node.heartbeat',
+      load: 0,
+      active_agents: 0,
+      handlers_live: !queue,
+      capabilities: [],
+    }));
+    const [pruned] = await stack.runtime.handle.db
+      .select({
+        actionId: actionInvocations.actionId,
+        invocationOrigin: actionInvocations.invocationOrigin,
+        status: actionInvocations.status,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(pruned).toMatchObject({
+      actionId: null,
+      invocationOrigin: 'registered_action',
+      status: queue ? 'pending' : 'dispatched',
+    });
+    beta.sock.received.length = 0;
+
+    return { ws, alpha, beta, invocationId };
+  }
+
+  async function expectDeletedActionFailure(invocationId: string) {
+    const [invocation] = await stack.runtime.handle.db
+      .select({
+        actionId: actionInvocations.actionId,
+        invocationOrigin: actionInvocations.invocationOrigin,
+        status: actionInvocations.status,
+        error: actionInvocations.error,
+        completedAt: actionInvocations.completedAt,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(invocation).toMatchObject({
+      actionId: null,
+      invocationOrigin: 'registered_action',
+      status: 'failed',
+      error: 'action_deleted',
+    });
+    expect(invocation.completedAt).toBeInstanceOf(Date);
   }
 
   it('keeps a mixed finite and unbounded provider aggregate unlimited with unreported load', async () => {
@@ -471,6 +562,64 @@ describe('node providers', () => {
       .from(actionInvocations)
       .where(eq(actionInvocations.id, 'inv_named_provider_release_drain'));
     expect(invocation).toEqual({ status: 'dispatched', provider: 'py' });
+  });
+
+  it('fails a pruned registered action instead of retrying it onto a same-name replacement', async () => {
+    const { ws, beta, invocationId } = await setupPrunedReleaseAction(
+      'np-pruned-action-retry',
+      false,
+    );
+
+    const rescheduled = await rescheduleInvocationsForLostNode(
+      stack.runtime.handle.db,
+      stack.runtime.realtime,
+      ws.workspaceId,
+      'node_a',
+    );
+
+    expect(rescheduled).toBe(0);
+    expect(beta.sock.ofType('action.invoke')).toHaveLength(0);
+    await expectDeletedActionFailure(invocationId);
+  });
+
+  it('fails a queued pruned registered action during drain without dispatching it by name', async () => {
+    const { ws, alpha, beta, invocationId } = await setupPrunedReleaseAction(
+      'np-pruned-action-drain',
+      true,
+    );
+
+    const drained = await drainNodeInvocations(
+      stack.runtime.handle.db,
+      stack.runtime.realtime,
+      ws.workspaceId,
+      'node_a',
+      { includeDeferred: true },
+    );
+
+    expect(drained).toBe(0);
+    expect(alpha.sock.ofType('action.invoke')).toHaveLength(0);
+    expect(beta.sock.ofType('action.invoke')).toHaveLength(0);
+    await expectDeletedActionFailure(invocationId);
+  });
+
+  it('fails a pruned registered action during inventory reconciliation without replacing its handler', async () => {
+    const { alpha, beta, invocationId } = await setupPrunedReleaseAction(
+      'np-pruned-action-reconcile',
+      false,
+    );
+
+    await alpha.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'inventory-after-action-prune',
+      type: 'inventory.sync',
+      agents: [],
+    }));
+
+    expect(alpha.sock.ofType('reply').find(
+      (frame) => frame.id === 'inventory-after-action-prune',
+    )).toMatchObject({ ok: true, data: { rescheduled_invocations: 0 } });
+    expect(beta.sock.ofType('action.invoke')).toHaveLength(0);
+    await expectDeletedActionFailure(invocationId);
   });
 
   it('keeps one provider inventory from offlining agents or rescheduling invocations owned by another', async () => {

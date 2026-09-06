@@ -12,13 +12,13 @@ UPDATE action_invocations
 SET invocation_origin = 'registered_action'
 WHERE action_id IS NOT NULL;
 
--- An open pre-migration release with no action reference is ambiguous: it may
--- be a built-in release or a pruned custom action. Fail it closed rather than
--- let later completion infer destructive lifecycle authority from its name.
+-- Any open pre-migration row with no action reference is ambiguous: it may be
+-- a built-in invocation or an already-pruned registered action. Fail it closed
+-- rather than let retry/drain bind it by name to a different handler (or let a
+-- release acquire destructive lifecycle authority).
 UPDATE action_invocations
 SET status = 'failed',
     error = 'invocation_origin_unavailable',
     completed_at = unixepoch()
-WHERE action_name = 'release'
-  AND action_id IS NULL
+WHERE action_id IS NULL
   AND status IN ('pending', 'dispatched', 'invoked');
