@@ -1582,10 +1582,6 @@ export async function reconcileInventory(
   inventoryAgents: FleetInventoryAgent[],
   completionDeps?: InvocationCompletionDeps,
 ) {
-  const names = new Set(inventoryAgents.map((agent) => agent.name));
-  const liveInvocationIds = new Set(inventoryAgents.flatMap((agent) => (
-    agent.invocation_id ? [agent.invocation_id] : []
-  )));
   let completedInvocations = 0;
   const [node] = await db
     .select()
@@ -1593,25 +1589,31 @@ export async function reconcileInventory(
     .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
   if (!node) throw codedError(`Node "${nodeId}" not found`, 'node_not_found', 404);
 
-  // Pre-validate every item against the current state BEFORE mutating anything,
-  // so a conflict on a later item can't leave earlier items partially
-  // reconciled (the control handler turns a throw into an error reply). Existing
-  // rows are cached for reuse in the apply pass below.
+  // Validate the whole snapshot before applying it, but isolate rejected
+  // members from valid siblings. A single stale/conflicting identity must stay
+  // fail-closed without preventing every other live worker on the node from
+  // renewing its presence lease. Existing rows are cached for the apply pass.
   const existingByName = new Map<string, typeof agents.$inferSelect>();
+  const acceptedInventoryAgents: FleetInventoryAgent[] = [];
+  const rejectedInventoryErrors: Array<ReturnType<typeof codedError>> = [];
+  let acceptedExistingAgentCount = 0;
   for (const item of inventoryAgents) {
     const [existing] = await db
       .select()
       .from(agents)
       .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, item.name)));
-    if (!existing) continue;
+    if (!existing) {
+      acceptedInventoryAgents.push(item);
+      continue;
+    }
+    let rejection: ReturnType<typeof codedError> | undefined;
     if (existing.providerName !== providerName) {
-      throw codedError(
+      rejection = codedError(
         `Agent "${item.name}" belongs to provider "${existing.providerName}"`,
         'agent_provider_conflict',
         409,
       );
-    }
-    if (existing.status === 'active') {
+    } else if (existing.status === 'active') {
       const [boundNode] = await db
         .select()
         .from(nodes)
@@ -1633,18 +1635,56 @@ export async function reconcileInventory(
           existing_location_type: existing.locationType,
           existing_location_node_id: existing.locationNodeId,
         });
-        throw codedError(`Agent "${item.name}" is already active on another live location`, 'agent_location_conflict', 409);
+        rejection = codedError(
+          `Agent "${item.name}" is already active on another live location`,
+          'agent_location_conflict',
+          409,
+        );
       }
     }
-    if (existing.id !== item.agent_id) {
-      throw codedError(
+    if (!rejection && existing.id !== item.agent_id) {
+      rejection = codedError(
         `Inventory identity for agent "${item.name}" does not match its registered agent_id`,
         'agent_identity_mismatch',
         409,
       );
     }
+    if (rejection) {
+      console.warn('[node.inventory] isolated rejected member', {
+        workspace_id: workspaceId,
+        node_id: nodeId,
+        provider_name: providerName,
+        agent_id: item.agent_id,
+        agent_name: item.name,
+        code: rejection.code,
+      });
+      rejectedInventoryErrors.push(rejection);
+      continue;
+    }
+    acceptedInventoryAgents.push(item);
+    acceptedExistingAgentCount++;
     existingByName.set(item.name, existing);
   }
+
+  // Preserve the existing all-or-nothing error contract when the snapshot has
+  // no trustworthy member to apply. Mixed snapshots instead renew the valid
+  // subset and report how many members were rejected.
+  if (acceptedExistingAgentCount === 0 && rejectedInventoryErrors.length > 0) {
+    throw rejectedInventoryErrors[0];
+  }
+
+  // A rejected member is still PRESENT on the node — its process reported the
+  // inventory; only its identity claim is stale or conflicting. The missing
+  // sweep below must therefore run against every REPORTED name, not the
+  // accepted subset: excluding a rejected-but-present member there would take
+  // its real live row offline and emit a false `agent.exited`, exactly the
+  // outage shape the isolation change was meant to prevent. Rejected members
+  // stay excluded from reconciliation and delivery readiness via
+  // `acceptedInventoryAgents` / `liveInvocationIds`.
+  const reportedNames = new Set(inventoryAgents.map((agent) => agent.name));
+  const liveInvocationIds = new Set(acceptedInventoryAgents.flatMap((agent) => (
+    agent.invocation_id ? [agent.invocation_id] : []
+  )));
 
   const openInvocations = await db
     .select({
@@ -1671,7 +1711,7 @@ export async function reconcileInventory(
 
   const reconciledAgentIds: string[] = [];
   const newlyRoutedAgentIds: string[] = [];
-  for (const item of inventoryAgents) {
+  for (const item of acceptedInventoryAgents) {
     const existing = existingByName.get(item.name);
     if (existing) {
       const activeNodeIds = await activeBindingNodeIdsForAgent(db, workspaceId, existing.id);
@@ -1738,7 +1778,7 @@ export async function reconcileInventory(
       eq(agents.providerName, providerName),
       eq(agents.status, 'active'),
     ));
-  const missingAgents = nodeAgents.filter((agent) => !names.has(agent.name));
+  const missingAgents = nodeAgents.filter((agent) => !reportedNames.has(agent.name));
   const missing = missingAgents.map((agent) => agent.id);
   if (missing.length > 0) {
     await db
@@ -1782,6 +1822,7 @@ export async function reconcileInventory(
   return {
     reply: {
       rebound_agents: reconciledAgentIds.length,
+      rejected_agents: rejectedInventoryErrors.length,
       open_invocations: openInvocations.length,
       completed_invocations: completedInvocations,
       rescheduled_invocations: rescheduledInvocations,

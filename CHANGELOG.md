@@ -49,6 +49,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
+- Fleet inventory reconciliation isolates stale or conflicting members, so one bad identity can no longer expire every healthy sibling on the same node and strand their inbound deliveries. A member whose own entry is rejected stays online: it is excluded from renewal and delivery readiness, but the missing-agent sweep no longer mistakes it for a departed agent and emits a false `agent.exited`.
 - Never-dispatched pending action invocations are now bounded by absolute age (default 72h), so stale spawn queues can no longer drain into live agents that evict an existing resident under the same name.
 - Retried action invocations reuse the original invocation instead of executing a provider action twice, wait for a durable dispatch outcome, and preserve locally completed release routing identity.
 
