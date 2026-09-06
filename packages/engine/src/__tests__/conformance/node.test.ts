@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { drainNodeInvocations, sweepTimedOutInvocations } from '../../index.js';
 import {
   makeNodeStack,
@@ -1150,6 +1150,32 @@ describe('node adapter conformance', () => {
         dispatchedProvider: 'default',
         spawnReservedAt: new Date(),
       });
+      await db.insert(actionInvocations).values([
+        {
+          id: 'inv_canceled_unknown_provider_exact',
+          workspaceId: ws.workspaceId,
+          actionName: 'spawn:claude',
+          invocationOrigin: 'legacy_unknown',
+          input: { name: 'unknown-provider-exact' },
+          status: 'failed',
+          error: 'invocation_origin_unavailable',
+          dispatchedNodeId: 'node_canceled_spawn',
+          dispatchedProvider: null,
+          completedAt: new Date(),
+        },
+        {
+          id: 'inv_canceled_unknown_provider_idless',
+          workspaceId: ws.workspaceId,
+          actionName: 'spawn:claude',
+          invocationOrigin: 'legacy_unknown',
+          input: { name: 'unknown-provider-idless' },
+          status: 'failed',
+          error: 'invocation_origin_unavailable',
+          dispatchedNodeId: 'node_canceled_spawn',
+          dispatchedProvider: null,
+          completedAt: new Date(),
+        },
+      ]);
       await db
         .update(nodes)
         .set({ reservedAgents: 1 })
@@ -1172,6 +1198,39 @@ describe('node adapter conformance', () => {
         .select()
         .from(agents)
         .where(and(eq(agents.workspaceId, ws.workspaceId), eq(agents.name, 'late-worker'))))
+        .toHaveLength(0);
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'unknown-provider-exact',
+        type: 'agent.register',
+        name: 'unknown-provider-exact',
+        invocation_id: 'inv_canceled_unknown_provider_exact',
+        session_ref: 'pty://alpha/unknown-provider-exact',
+      }));
+      expect(alpha.sock.ofType('error').at(-1)).toMatchObject({
+        id: 'unknown-provider-exact',
+        code: 'spawn_invocation_canceled',
+      });
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'unknown-provider-idless',
+        type: 'agent.register',
+        name: 'unknown-provider-idless',
+        session_ref: 'pty://alpha/unknown-provider-idless',
+      }));
+      expect(alpha.sock.ofType('error').at(-1)).toMatchObject({
+        id: 'unknown-provider-idless',
+        code: 'spawn_invocation_canceled',
+      });
+      expect(await db
+        .select()
+        .from(agents)
+        .where(and(
+          eq(agents.workspaceId, ws.workspaceId),
+          sql`${agents.name} IN ('unknown-provider-exact', 'unknown-provider-idless')`,
+        )))
         .toHaveLength(0);
 
       await alpha.handle.handleMessage(JSON.stringify({

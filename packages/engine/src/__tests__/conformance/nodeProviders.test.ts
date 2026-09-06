@@ -1077,6 +1077,7 @@ describe('node providers', () => {
         actionId: action!.id,
         invocationActionName: 'release',
         actionName: 'release',
+        dispatchAttempt: 1,
       },
     )).toBe(false);
     expect(beta.sock.ofType('action.invoke')).toHaveLength(0);
@@ -1085,6 +1086,86 @@ describe('node providers', () => {
       .from(actionInvocations)
       .where(eq(actionInvocations.id, 'inv_action_name_mismatch'));
     expect(rejected.providerAcceptedAttempt).toBeNull();
+  });
+
+  it('rejects stale registered-action authorization after the route returns to the same tuple', async () => {
+    const { ws, beta } = await setupPrunedReleaseAction(
+      'np-stale-action-acceptance-attempt',
+      false,
+      false,
+    );
+    const [action] = await stack.runtime.handle.db
+      .select({ id: actions.id })
+      .from(actions)
+      .where(and(
+        eq(actions.workspaceId, ws.workspaceId),
+        eq(actions.handlerNodeId, 'node_b'),
+        eq(actions.name, 'release'),
+      ));
+    expect(action?.id).toBeTruthy();
+    await stack.runtime.handle.db.insert(actionInvocations).values({
+      id: 'inv_stale_action_acceptance_attempt',
+      workspaceId: ws.workspaceId,
+      actionId: action!.id,
+      actionName: 'release',
+      invocationOrigin: 'registered_action',
+      input: {},
+      status: 'dispatched',
+      dispatchedNodeId: 'node_b',
+      dispatchedProvider: 'fleet-b',
+      dispatchAttempts: 2,
+    });
+    beta.sock.received.length = 0;
+    const frame = {
+      v: 1 as const,
+      type: 'action.invoke' as const,
+      invocation_id: 'inv_stale_action_acceptance_attempt',
+      action: 'release',
+      input: {},
+    };
+    const authorization = {
+      kind: 'registered-node-action-v1' as const,
+      invocationId: 'inv_stale_action_acceptance_attempt',
+      actionId: action!.id,
+      invocationActionName: 'release',
+      actionName: 'release',
+    };
+
+    // This proof represents an authorization captured for attempt 1 being
+    // resumed after recovery returned attempt 2 to the identical route tuple.
+    expect(await stack.runtime.realtime.sendAuthorizedActionToProvider!(
+      ws.workspaceId,
+      'node_b',
+      'fleet-b',
+      frame,
+      { ...authorization, dispatchAttempt: 1 },
+    )).toBe(false);
+    expect(beta.sock.ofType('action.invoke')).toHaveLength(0);
+
+    expect(await stack.runtime.realtime.sendAuthorizedActionToProvider!(
+      ws.workspaceId,
+      'node_b',
+      'fleet-b',
+      frame,
+      { ...authorization, dispatchAttempt: 2 },
+    )).toBe(true);
+    expect(beta.sock.ofType('action.invoke')).toHaveLength(1);
+
+    // Acceptance itself is a CAS: replaying the same authorization cannot
+    // deliver the provider frame twice.
+    expect(await stack.runtime.realtime.sendAuthorizedActionToProvider!(
+      ws.workspaceId,
+      'node_b',
+      'fleet-b',
+      frame,
+      { ...authorization, dispatchAttempt: 2 },
+    )).toBe(false);
+    expect(beta.sock.ofType('action.invoke')).toHaveLength(1);
+    const [accepted] = await stack.runtime.handle.db
+      .select({ providerAcceptedAttempt: actionInvocations.providerAcceptedAttempt })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, 'inv_stale_action_acceptance_attempt'));
+    expect(accepted.providerAcceptedAttempt).toBe(2);
   });
 
   it('does not deliver a claimed action after pruning replaces its exact identity', async () => {
