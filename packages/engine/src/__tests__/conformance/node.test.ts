@@ -1193,13 +1193,14 @@ describe('node adapter conformance', () => {
 
       await alpha.handle.handleMessage(JSON.stringify({
         v: 1,
-        id: 'unrelated-register-without-id',
+        id: 'canceled-id-wrong-tuple',
         type: 'agent.register',
         name: 'unrelated-worker',
+        invocation_id: 'inv_canceled_legacy_spawn',
         session_ref: 'pty://alpha/unrelated-worker',
       }));
       expect(alpha.sock.ofType('reply').at(-1)).toMatchObject({
-        id: 'unrelated-register-without-id',
+        id: 'canceled-id-wrong-tuple',
         ok: true,
       });
       const [node] = await db
@@ -1208,15 +1209,19 @@ describe('node adapter conformance', () => {
         .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_canceled_spawn')));
       expect(node).toEqual({ activeAgents: 1, reservedAgents: 1 });
 
-      // A newer live spawn establishes a fresh tuple generation. A legacy
-      // worker may still omit invocation_id, but the old migration tombstone
-      // must no longer poison the same node/provider/name forever.
+      // A newer live spawn for the same tuple is not enough to distinguish its
+      // worker from the stale canceled process. An ID-less registration must
+      // fail closed without consuming the replacement reservation; the exact
+      // new invocation id is the generation proof that permits registration.
       const replacement = await stack.app.request('/v1/actions/spawn/invoke', {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
         body: JSON.stringify({ input: { cli: 'claude', name: 'late-worker', task: 'replacement' } }),
       });
       expect(replacement.status).toBe(201);
+      const replacementInvocationId = (await replacement.json() as {
+        data: { invocation_id: string };
+      }).data.invocation_id;
       await alpha.handle.handleMessage(JSON.stringify({
         v: 1,
         id: 'fresh-register-without-id',
@@ -1224,8 +1229,26 @@ describe('node adapter conformance', () => {
         name: 'late-worker',
         session_ref: 'pty://alpha/late-worker-fresh',
       }));
-      expect(alpha.sock.ofType('reply').at(-1)).toMatchObject({
+      expect(alpha.sock.ofType('error').at(-1)).toMatchObject({
         id: 'fresh-register-without-id',
+        code: 'spawn_invocation_canceled',
+      });
+      const [afterStale] = await db
+        .select({ activeAgents: nodes.activeAgents, reservedAgents: nodes.reservedAgents })
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_canceled_spawn')));
+      expect(afterStale).toEqual({ activeAgents: 1, reservedAgents: 2 });
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'fresh-register-with-exact-id',
+        type: 'agent.register',
+        name: 'late-worker',
+        invocation_id: replacementInvocationId,
+        session_ref: 'pty://alpha/late-worker-fresh',
+      }));
+      expect(alpha.sock.ofType('reply').at(-1)).toMatchObject({
+        id: 'fresh-register-with-exact-id',
         ok: true,
       });
       const [afterFresh] = await db
@@ -1875,6 +1898,7 @@ describe('node adapter conformance', () => {
         workspaceId: ws.workspaceId,
         actionId: action!.id,
         actionName: 'agent-echo',
+        invocationOrigin: 'registered_action',
         callerId: caller.agentId,
         callerName: caller.name,
         handlerAgentId,

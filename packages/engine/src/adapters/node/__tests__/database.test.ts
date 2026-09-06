@@ -300,6 +300,48 @@ describe('action invocation origin migration', () => {
   });
 });
 
+describe('action invocation provider acceptance migration', () => {
+  it('preserves accepted historical generations without claiming pending work', () => {
+    const sqlite = new Database(':memory:');
+    handles.push(sqlite);
+    sqlite.exec(`
+      CREATE TABLE action_invocations (
+        id TEXT PRIMARY KEY,
+        action_id TEXT DEFAULT NULL,
+        invocation_origin TEXT NOT NULL,
+        status TEXT NOT NULL,
+        dispatch_attempts INTEGER NOT NULL DEFAULT 0
+      );
+      INSERT INTO action_invocations
+        (id, action_id, invocation_origin, status, dispatch_attempts)
+      VALUES
+        ('accepted_dispatched', 'action_1', 'registered_action', 'dispatched', 2),
+        ('accepted_invoked', 'action_2', 'registered_action', 'invoked', 1),
+        ('pending_registered', 'action_3', 'registered_action', 'pending', 1),
+        ('builtin_dispatched', NULL, 'builtin', 'dispatched', 3),
+        ('unattempted_registered', 'action_4', 'registered_action', 'dispatched', 0);
+    `);
+
+    const migration = readFileSync(
+      new URL('../../../db/migrations/0047_action_invocation_provider_acceptance.sql', import.meta.url),
+      'utf8',
+    );
+    sqlite.exec(migration);
+
+    expect(sqlite.prepare(`
+      SELECT id, provider_accepted_attempt
+      FROM action_invocations
+      ORDER BY id
+    `).all()).toEqual([
+      { id: 'accepted_dispatched', provider_accepted_attempt: 2 },
+      { id: 'accepted_invoked', provider_accepted_attempt: 1 },
+      { id: 'builtin_dispatched', provider_accepted_attempt: null },
+      { id: 'pending_registered', provider_accepted_attempt: null },
+      { id: 'unattempted_registered', provider_accepted_attempt: null },
+    ]);
+  });
+});
+
 describe('session_ref lookup migration', () => {
   it('backfills the indexed key and durable payload-free session ledger', () => {
     const sqlite = new Database(':memory:');

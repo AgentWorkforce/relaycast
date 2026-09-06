@@ -12,7 +12,11 @@ import {
 import { actions, actionInvocations, agents, nodeProviders, nodes } from '../../db/schema.js';
 import { NODE_LIVENESS_TTL_MS, PROVIDER_ATTACH_LIVENESS_MS } from '../../engine/placement.js';
 import { drainNodeInvocations } from '../../index.js';
-import { rescheduleInvocationsForLostNode, rescheduleNodeInvocation } from '../../engine/action.js';
+import {
+  rescheduleInvocationsForLostNode,
+  rescheduleNodeInvocation,
+  sweepTimedOutInvocations,
+} from '../../engine/action.js';
 
 type Cap = { name: string; kind?: string; global?: boolean; queue?: boolean };
 
@@ -963,6 +967,111 @@ describe('node providers', () => {
       dispatchedNodeId: 'node_b',
       dispatchedProvider: 'fleet-b',
     });
+  });
+
+  it('keeps an accepted pruned generation pinned through the timeout sweep', async () => {
+    const { ws, alpha, beta, invocationId } = await setupPrunedReleaseAction(
+      'np-accepted-action-timeout',
+      false,
+    );
+    await stack.runtime.handle.db
+      .update(actionInvocations)
+      .set({ dispatchedAt: new Date(0), retryAfterAt: new Date(0) })
+      .where(eq(actionInvocations.id, invocationId));
+
+    expect(await sweepTimedOutInvocations(
+      stack.runtime.handle.db,
+      stack.runtime.realtime,
+      { timeoutMs: 0 },
+    )).toBe(0);
+    expect(beta.sock.ofType('action.invoke')).toHaveLength(0);
+    const [preserved] = await stack.runtime.handle.db
+      .select({
+        status: actionInvocations.status,
+        dispatchedNodeId: actionInvocations.dispatchedNodeId,
+        dispatchedProvider: actionInvocations.dispatchedProvider,
+        providerAcceptedAttempt: actionInvocations.providerAcceptedAttempt,
+        dispatchAttempts: actionInvocations.dispatchAttempts,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(preserved).toMatchObject({
+      status: 'dispatched',
+      dispatchedNodeId: 'node_a',
+      dispatchedProvider: 'fleet-a',
+    });
+    expect(preserved.providerAcceptedAttempt).toBe(preserved.dispatchAttempts);
+
+    await alpha.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'action.result',
+      invocation_id: invocationId,
+      output: { original_generation: true },
+    }));
+    const [completed] = await stack.runtime.handle.db
+      .select({ status: actionInvocations.status, output: actionInvocations.output })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(completed).toEqual({
+      status: 'completed',
+      output: { original_generation: true },
+    });
+  });
+
+  it('rejects a registered action acceptance when the invocation name is not the claimed identity', async () => {
+    const { ws, beta } = await setupPrunedReleaseAction(
+      'np-action-name-acceptance-cas',
+      false,
+      false,
+    );
+    const [action] = await stack.runtime.handle.db
+      .select({ id: actions.id })
+      .from(actions)
+      .where(and(
+        eq(actions.workspaceId, ws.workspaceId),
+        eq(actions.handlerNodeId, 'node_b'),
+        eq(actions.name, 'release'),
+      ));
+    expect(action?.id).toBeTruthy();
+    await stack.runtime.handle.db.insert(actionInvocations).values({
+      id: 'inv_action_name_mismatch',
+      workspaceId: ws.workspaceId,
+      actionId: action!.id,
+      actionName: 'not-release',
+      invocationOrigin: 'registered_action',
+      input: {},
+      status: 'dispatched',
+      dispatchedNodeId: 'node_b',
+      dispatchedProvider: 'fleet-b',
+      dispatchAttempts: 1,
+    });
+    beta.sock.received.length = 0;
+
+    expect(await stack.runtime.realtime.sendAuthorizedActionToProvider!(
+      ws.workspaceId,
+      'node_b',
+      'fleet-b',
+      {
+        v: 1,
+        type: 'action.invoke',
+        invocation_id: 'inv_action_name_mismatch',
+        action: 'release',
+        input: {},
+      },
+      {
+        kind: 'registered-node-action-v1',
+        invocationId: 'inv_action_name_mismatch',
+        actionId: action!.id,
+        invocationActionName: 'release',
+        actionName: 'release',
+      },
+    )).toBe(false);
+    expect(beta.sock.ofType('action.invoke')).toHaveLength(0);
+    const [rejected] = await stack.runtime.handle.db
+      .select({ providerAcceptedAttempt: actionInvocations.providerAcceptedAttempt })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, 'inv_action_name_mismatch'));
+    expect(rejected.providerAcceptedAttempt).toBeNull();
   });
 
   it('does not deliver a claimed action after pruning replaces its exact identity', async () => {
