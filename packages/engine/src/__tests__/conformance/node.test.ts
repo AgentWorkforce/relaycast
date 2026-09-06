@@ -2226,6 +2226,30 @@ describe('node adapter conformance', () => {
         (frame) => frame.invocation_id === invokeBody.data.invocation_id,
       )).toMatchObject({ action: 'release', input });
 
+      // Provider capability refreshes prune dropped action rows. Because the
+      // invocation FK uses ON DELETE SET NULL, lifecycle origin must survive
+      // independently while this already-dispatched custom action completes.
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.heartbeat',
+        load: 0,
+        load_reported: true,
+        active_agents: 1,
+        handlers_live: true,
+        capabilities: [],
+      }));
+      const [prunedInvocation] = await stack.runtime.handle.db
+        .select({
+          actionId: actionInvocations.actionId,
+          invocationOrigin: actionInvocations.invocationOrigin,
+        })
+        .from(actionInvocations)
+        .where(eq(actionInvocations.id, invokeBody.data.invocation_id));
+      expect(prunedInvocation).toEqual({
+        actionId: null,
+        invocationOrigin: 'registered_action',
+      });
+
       await alpha.handle.handleMessage(JSON.stringify({
         v: 1,
         type: 'action.result',
@@ -2236,6 +2260,7 @@ describe('node adapter conformance', () => {
       const [invocation] = await stack.runtime.handle.db
         .select({
           actionId: actionInvocations.actionId,
+          invocationOrigin: actionInvocations.invocationOrigin,
           status: actionInvocations.status,
           output: actionInvocations.output,
           error: actionInvocations.error,
@@ -2243,7 +2268,8 @@ describe('node adapter conformance', () => {
         .from(actionInvocations)
         .where(eq(actionInvocations.id, invokeBody.data.invocation_id));
       expect(invocation).toEqual({
-        actionId: expect.any(String),
+        actionId: null,
+        invocationOrigin: 'registered_action',
         status: 'completed',
         output: { custom_release: 'completed' },
         error: null,

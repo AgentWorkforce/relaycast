@@ -1039,6 +1039,13 @@ export const actionInvocations = sqliteTable(
       .references(() => workspaces.id, { onDelete: 'cascade' }),
     actionId: text('action_id').references(() => actions.id, { onDelete: 'set null' }),
     actionName: text('action_name').notNull(),
+    // Immutable invocation provenance. action_id is a mutable FK that becomes
+    // null when a materialized provider action is pruned, so it cannot safely
+    // distinguish built-in lifecycle work from a user action with the same name.
+    invocationOrigin: text('invocation_origin')
+      .$type<'legacy_unknown' | 'registered_action' | 'builtin'>()
+      .notNull()
+      .default('legacy_unknown'),
     callerId: text('caller_id').references(() => agents.id, { onDelete: 'set null' }),
     callerName: text('caller_name'),
     // Immutable response snapshots for idempotent replay. Deliberately not

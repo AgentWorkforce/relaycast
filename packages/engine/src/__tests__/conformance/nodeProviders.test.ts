@@ -435,6 +435,7 @@ describe('node providers', () => {
       id: 'inv_named_provider_release_drain',
       workspaceId: ws.workspaceId,
       actionName: 'release',
+      invocationOrigin: 'builtin',
       callerName: 'workspace',
       handlerNodeId: 'node_a',
       input: {

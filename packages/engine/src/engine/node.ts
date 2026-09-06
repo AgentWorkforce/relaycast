@@ -1651,6 +1651,7 @@ export async function reconcileInventory(
       id: actionInvocations.id,
       workspaceId: actionInvocations.workspaceId,
       actionId: actionInvocations.actionId,
+      invocationOrigin: actionInvocations.invocationOrigin,
       actionName: actionInvocations.actionName,
       callerId: actionInvocations.callerId,
       input: actionInvocations.input,

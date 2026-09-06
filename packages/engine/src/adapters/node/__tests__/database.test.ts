@@ -202,6 +202,75 @@ describe('action invocation handler snapshot migration', () => {
   });
 });
 
+describe('action invocation origin migration', () => {
+  it('preserves registered provenance and fails ambiguous open releases closed', () => {
+    const sqlite = new Database(':memory:');
+    handles.push(sqlite);
+    sqlite.exec(`
+      CREATE TABLE action_invocations (
+        id TEXT PRIMARY KEY,
+        action_id TEXT DEFAULT NULL,
+        action_name TEXT NOT NULL,
+        status TEXT NOT NULL,
+        error TEXT DEFAULT NULL,
+        completed_at INTEGER DEFAULT NULL
+      );
+      INSERT INTO action_invocations (id, action_id, action_name, status) VALUES
+        ('registered_release', 'action_release', 'release', 'dispatched'),
+        ('legacy_open_release', NULL, 'release', 'pending'),
+        ('legacy_completed_release', NULL, 'release', 'completed'),
+        ('legacy_spawn', NULL, 'spawn', 'pending');
+    `);
+
+    const migration = readFileSync(
+      new URL('../../../db/migrations/0046_action_invocation_origin.sql', import.meta.url),
+      'utf8',
+    );
+    sqlite.exec(migration);
+
+    expect(sqlite.prepare(`
+      SELECT id, invocation_origin, status, error, completed_at IS NOT NULL AS completed
+      FROM action_invocations
+      ORDER BY id
+    `).all()).toEqual([
+      {
+        id: 'legacy_completed_release',
+        invocation_origin: 'legacy_unknown',
+        status: 'completed',
+        error: null,
+        completed: 0,
+      },
+      {
+        id: 'legacy_open_release',
+        invocation_origin: 'legacy_unknown',
+        status: 'failed',
+        error: 'invocation_origin_unavailable',
+        completed: 1,
+      },
+      {
+        id: 'legacy_spawn',
+        invocation_origin: 'legacy_unknown',
+        status: 'pending',
+        error: null,
+        completed: 0,
+      },
+      {
+        id: 'registered_release',
+        invocation_origin: 'registered_action',
+        status: 'dispatched',
+        error: null,
+        completed: 0,
+      },
+    ]);
+
+    expect(() => sqlite.exec(`
+      INSERT INTO action_invocations
+        (id, action_name, status, invocation_origin)
+      VALUES ('invalid_origin', 'release', 'pending', 'invented');
+    `)).toThrow();
+  });
+});
+
 describe('session_ref lookup migration', () => {
   it('backfills the indexed key and durable payload-free session ledger', () => {
     const sqlite = new Database(':memory:');
