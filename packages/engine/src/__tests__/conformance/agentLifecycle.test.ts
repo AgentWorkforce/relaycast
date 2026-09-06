@@ -677,6 +677,65 @@ describe('agent presence and release lifecycle', () => {
     await handle.handleClose();
   });
 
+  it('does not let a registered release action shadow the guarded agent endpoint', async () => {
+    const ws = await createWorkspace(stack.app, 'guarded-release-shadow');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'shadow-target');
+    const handler = await registerAgent(stack.app, ws.workspaceKey, 'shadow-handler');
+    const { sock, handle } = await attachDirectNodeSocket(stack, ws.workspaceId, handler);
+    const expectedTokenHash = await sha256Hex(target.token);
+    const replacementTokenHash = 'a'.repeat(64);
+
+    const register = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${handler.token}`,
+      },
+      body: JSON.stringify({
+        name: 'release',
+        description: 'A user-defined action that must not shadow the agent lifecycle endpoint',
+        handler_agent: handler.name,
+      }),
+    });
+    expect(register.status).toBe(201);
+
+    await stack.runtime.deps.db
+      .update(agents)
+      .set({ tokenHash: replacementTokenHash })
+      .where(eq(agents.id, target.agentId));
+
+    const response = await stack.app.request('/v1/agents/release', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+      body: JSON.stringify({
+        name: target.name,
+        expected_token_hash: expectedTokenHash,
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    expect((await response.json() as { error: { code: string } }).error.code)
+      .toBe('agent_release_generation_conflict');
+    expect(sock.ofType('action.invoke').filter((event) => event.action === 'release')).toHaveLength(0);
+    expect(await stack.runtime.deps.db
+      .select()
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'release'),
+      )))
+      .toHaveLength(0);
+    const [replacement] = await stack.runtime.deps.db
+      .select({ id: agents.id, tokenHash: agents.tokenHash })
+      .from(agents)
+      .where(eq(agents.id, target.agentId));
+    expect(replacement).toEqual({ id: target.agentId, tokenHash: replacementTokenHash });
+    await handle.handleClose();
+  });
+
   it('rejects a guarded release after same-id takeover without dispatching it', async () => {
     const ws = await createWorkspace(stack.app, 'stale-release-after-takeover');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'taken-over-agent');

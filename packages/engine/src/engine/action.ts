@@ -1373,6 +1373,34 @@ async function dispatchRelease(args: {
   };
 }
 
+/**
+ * Agent-lifecycle release used by `POST /v1/agents/release`. Unlike the
+ * generic action endpoint, this path must always enforce the built-in release
+ * lifecycle and its optional generation guard; a user-defined `release`
+ * action must not be able to shadow it.
+ */
+export async function dispatchAgentRelease(
+  db: Db,
+  workspaceId: string,
+  data: {
+    input?: Record<string, unknown>;
+    caller_id?: string;
+    caller_name?: string;
+  },
+  options: {
+    nodeConnections?: NodeConnectionRegistry;
+    completionDeps?: InvocationCompletionDeps;
+  } = {},
+) {
+  return dispatchRelease({
+    db,
+    registry: options.nodeConnections,
+    completionDeps: options.completionDeps,
+    workspaceId,
+    data,
+  });
+}
+
 function spawnResult(
   invocation: InvocationRow,
   nodeId: string,

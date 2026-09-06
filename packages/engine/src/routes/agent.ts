@@ -955,10 +955,9 @@ agentRoutes.post(
         delete_agent: delete_agent === true,
         ...(expected_token_hash ? { expected_token_hash } : {}),
       };
-      const result = await actionEngine.invokeAction(
+      const result = await actionEngine.dispatchAgentRelease(
         db,
         workspace.id,
-        'release',
         {
           input,
           caller_id: callerAgent?.id,
