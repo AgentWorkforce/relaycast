@@ -1,6 +1,6 @@
 //! HTTP client for the RelayCast API.
 
-use reqwest::{Client, Method, RequestBuilder};
+use reqwest::{header::HeaderMap, Client, Method, RequestBuilder};
 use serde::{de::DeserializeOwned, Serialize};
 use std::time::Duration;
 
@@ -15,7 +15,93 @@ use crate::DEFAULT_BASE_URL;
 
 const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/sdk-rust";
+// One entry per attempt. The delay for the final attempt is never used —
+// there is nothing left to wait for once retries are exhausted.
 const RETRY_BACKOFFS_MS: [u64; 3] = [200, 400, 800];
+// Upper bound on a server-provided `Retry-After` delay so a misconfigured or
+// hostile response can't stall a caller far past the client's own backoff.
+const MAX_RETRY_AFTER_MS: u64 = 5_000;
+const MAX_ERROR_BODY_SUMMARY_CHARS: usize = 512;
+const MAX_REQUEST_ID_CHARS: usize = 256;
+const REQUEST_ID_HEADER_CANDIDATES: [&str; 2] = ["x-request-id", "x-correlation-id"];
+
+/// Parse a bounded retry delay (in milliseconds) from a response's
+/// `Retry-After` header. Only the delay-seconds form is supported; malformed
+/// or missing headers fall back to the caller's default backoff.
+fn parse_retry_after_ms(headers: &HeaderMap) -> Option<u64> {
+    let value = headers.get(reqwest::header::RETRY_AFTER)?.to_str().ok()?;
+    let seconds: u64 = value.trim().parse().ok()?;
+    Some(seconds.saturating_mul(1000).min(MAX_RETRY_AFTER_MS))
+}
+
+fn retry_delay_ms(headers: &HeaderMap, fallback_ms: u64) -> u64 {
+    parse_retry_after_ms(headers).unwrap_or(fallback_ms)
+}
+
+fn request_is_retryable(method: &Method, options: &RequestOptions) -> bool {
+    matches!(
+        *method,
+        Method::GET | Method::HEAD | Method::OPTIONS | Method::TRACE | Method::PUT | Method::DELETE
+    ) || options.idempotency_key.is_some()
+}
+
+fn should_retry_server_error(
+    method: &Method,
+    options: &RequestOptions,
+    status: u16,
+    attempt: usize,
+    last_attempt: usize,
+) -> bool {
+    request_is_retryable(method, options) && (500..=599).contains(&status) && attempt < last_attempt
+}
+
+/// Extract a correlation/request id from a response, if the server sent one.
+fn extract_request_id(headers: &HeaderMap) -> Option<String> {
+    REQUEST_ID_HEADER_CANDIDATES.iter().find_map(|name| {
+        headers
+            .get(*name)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| {
+                let value = value.trim();
+                let value: String = value
+                    .chars()
+                    .filter(|character| !character.is_control())
+                    .take(MAX_REQUEST_ID_CHARS)
+                    .collect();
+                (!value.is_empty()).then_some(value)
+            })
+    })
+}
+
+/// Return a bounded, single-line, lossy summary suitable for an error message.
+///
+/// Gateway errors are often HTML or plain text. Keeping a small diagnostic
+/// excerpt is materially more useful than a serde parse error, but response
+/// bodies must not be allowed to create multi-line logs or unbounded errors.
+fn error_body_summary(bytes: &[u8]) -> String {
+    let decoded = String::from_utf8_lossy(bytes);
+    let mut characters = decoded.chars().map(|character| {
+        if character.is_control() || matches!(character, '\u{2028}' | '\u{2029}') {
+            ' '
+        } else {
+            character
+        }
+    });
+    let summary: String = characters
+        .by_ref()
+        .take(MAX_ERROR_BODY_SUMMARY_CHARS)
+        .collect();
+    let truncated = characters.next().is_some();
+    let summary = summary.trim();
+
+    if summary.is_empty() {
+        "<empty>".to_string()
+    } else if truncated {
+        format!("{summary}…")
+    } else {
+        summary.to_string()
+    }
+}
 
 /// Options for creating an HTTP client.
 #[derive(Debug, Clone)]
@@ -190,6 +276,7 @@ impl HttpClient {
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
         let options = options.unwrap_or_default();
+        let last_attempt = RETRY_BACKOFFS_MS.len() - 1;
 
         for (attempt, backoff) in RETRY_BACKOFFS_MS.iter().enumerate() {
             let mut request = self.build_request(method.clone(), &url, &options);
@@ -204,12 +291,18 @@ impl HttpClient {
 
             let response = request.send().await?;
             let status = response.status().as_u16();
+            let attempts = (attempt + 1) as u32;
 
-            // Retry on 5xx errors
-            if (500..=599).contains(&status) && attempt < RETRY_BACKOFFS_MS.len() {
-                tokio::time::sleep(Duration::from_millis(*backoff)).await;
+            // Retry on 5xx errors, but never after the final attempt: there is
+            // nothing left to wait for, and the caller needs this response's
+            // real diagnostic instead of a swallowed "max retries exceeded".
+            if should_retry_server_error(&method, &options, status, attempt, last_attempt) {
+                let delay_ms = retry_delay_ms(response.headers(), *backoff);
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                 continue;
             }
+
+            let request_id = extract_request_id(response.headers());
 
             // Handle 204 No Content
             if status == 204 {
@@ -218,14 +311,41 @@ impl HttpClient {
                 return Ok(empty_json);
             }
 
-            let json: ApiResponse<T> = response.json().await?;
+            let bytes = response.bytes().await?;
+            let json: ApiResponse<T> = match serde_json::from_slice(&bytes) {
+                Ok(json) => json,
+                Err(err) => {
+                    // A non-JSON body from an error status (e.g. a gateway's
+                    // plain-text 502/503/504) still carries a real status; do
+                    // not let a body-parse failure erase it.
+                    if (400..=599).contains(&status) {
+                        return Err(RelayError::Api {
+                            code: "invalid_response_body".to_string(),
+                            message: format!(
+                                "Server returned a non-JSON {status} response: {err}; body: {}",
+                                error_body_summary(&bytes)
+                            ),
+                            status,
+                            request_id,
+                            attempts,
+                        });
+                    }
+                    return Err(err.into());
+                }
+            };
 
             if !json.ok {
                 let error = json.error.unwrap_or_else(|| crate::types::ApiErrorInfo {
                     code: "unknown_error".to_string(),
                     message: "Unknown error".to_string(),
                 });
-                return Err(RelayError::api(error.code, error.message, status));
+                return Err(RelayError::Api {
+                    code: error.code,
+                    message: error.message,
+                    status,
+                    request_id,
+                    attempts,
+                });
             }
 
             return json.data.ok_or_else(|| {
@@ -233,10 +353,7 @@ impl HttpClient {
             });
         }
 
-        // This shouldn't be reached, but just in case
-        Err(RelayError::InvalidResponse(
-            "Max retries exceeded".to_string(),
-        ))
+        unreachable!("the retry loop always returns on its final attempt")
     }
 
     fn build_request(&self, method: Method, url: &str, options: &RequestOptions) -> RequestBuilder {
@@ -313,5 +430,73 @@ impl HttpClient {
     pub async fn delete(&self, path: &str, options: Option<RequestOptions>) -> Result<()> {
         self.request::<()>(Method::DELETE, path, None::<()>, None, options)
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        error_body_summary, extract_request_id, parse_retry_after_ms, retry_delay_ms,
+        should_retry_server_error, RequestOptions, MAX_RETRY_AFTER_MS,
+    };
+    use reqwest::header::{HeaderMap, HeaderValue};
+    use reqwest::Method;
+
+    #[test]
+    fn retry_after_is_bounded_without_a_wall_clock_wait() {
+        let mut headers = HeaderMap::new();
+        headers.insert("retry-after", HeaderValue::from_static("3600"));
+        assert_eq!(parse_retry_after_ms(&headers), Some(MAX_RETRY_AFTER_MS));
+
+        headers.insert("retry-after", HeaderValue::from_static("0"));
+        assert_eq!(retry_delay_ms(&headers, 200), 0);
+
+        assert!(should_retry_server_error(
+            &Method::GET,
+            &RequestOptions::default(),
+            503,
+            1,
+            2
+        ));
+        assert!(!should_retry_server_error(
+            &Method::GET,
+            &RequestOptions::default(),
+            503,
+            2,
+            2
+        ));
+        assert!(!should_retry_server_error(
+            &Method::POST,
+            &RequestOptions::default(),
+            503,
+            0,
+            2
+        ));
+        assert!(should_retry_server_error(
+            &Method::POST,
+            &RequestOptions::with_idempotency_key("retry-374"),
+            503,
+            0,
+            2
+        ));
+    }
+
+    #[test]
+    fn response_metadata_is_trimmed_bounded_and_single_line() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-request-id", HeaderValue::from_static("  request-374  "));
+        assert_eq!(extract_request_id(&headers).as_deref(), Some("request-374"));
+        headers.remove("x-request-id");
+        headers.insert(
+            "x-correlation-id",
+            HeaderValue::from_static(" correlation-374 "),
+        );
+        assert_eq!(
+            extract_request_id(&headers).as_deref(),
+            Some("correlation-374")
+        );
+
+        let summary = error_body_summary("gateway marker-374\nnext\u{2028}line\u{2029}".as_bytes());
+        assert_eq!(summary, "gateway marker-374 next line");
     }
 }

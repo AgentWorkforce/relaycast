@@ -8,10 +8,17 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased - Major]
 
+### Fixed
+
+- Retryable HTTP failures retain the final status, API error, request metadata, and attempt count after retries are exhausted.
+- Retried 5xx responses honor a bounded `Retry-After` delay.
+
 ### Changed
 
+- Automatic 5xx retries require an idempotent request or an idempotency key.
 - **BREAKING:** `RelayCast::rotate_agent_token` now requires the current agent token; use `take_over_agent` or `recover_agent` to replace an identity you cannot authenticate as.
 - **BREAKING:** `AgentRegistrationClient::register_agent_token` is create-only and returns `AgentRegistrationError::AlreadyExists` on conflicts; use a unique name or persist the token for self-rollover.
+- **BREAKING:** `RelayError::Api` gained `request_id: Option<String>` and `attempts: u32` fields (also exposed via new `RelayError::request_id()`/`RelayError::attempts()` accessors); match arms that destructure it exhaustively need a trailing `..`.
 - `NodeRosterEntry.load` is now `Option<f64>`, matching the API's explicit unreported state; direct-agent heartbeats no longer label a constant utilization as measured.
 
 ### Added
