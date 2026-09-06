@@ -93,6 +93,12 @@ function isReleaseInvocation(actionName: string): boolean {
   return actionName === 'release';
 }
 
+function isBuiltinReleaseInvocation(
+  invocation: Pick<InvocationRow, 'actionName' | 'actionId'>,
+): boolean {
+  return invocation.actionId === null && isReleaseInvocation(invocation.actionName);
+}
+
 const RELEASE_GENERATION_CONFLICT_CODE = 'agent_release_generation_conflict';
 
 function releaseExpectedTokenHash(input: Record<string, unknown>): string | null {
@@ -622,7 +628,7 @@ async function waitForInvocationReplayOutcome(
     // Surface that durable terminal conflict before the generic dispatched-row
     // replay shortcut, otherwise the same idempotency key changes 409 into 201.
     if (
-      isReleaseInvocation(current.actionName)
+      isBuiltinReleaseInvocation(current)
       && current.status === 'failed'
       && current.error === RELEASE_GENERATION_CONFLICT_CODE
     ) {
@@ -644,7 +650,7 @@ async function waitForInvocationReplayOutcome(
         throw codedError(
           'Action invocation failed before provider dispatch completed',
           errorCode,
-          isReleaseInvocation(current.actionName) && errorCode === RELEASE_GENERATION_CONFLICT_CODE ? 409 : 503,
+          isBuiltinReleaseInvocation(current) && errorCode === RELEASE_GENERATION_CONFLICT_CODE ? 409 : 503,
         );
       }
       return current;

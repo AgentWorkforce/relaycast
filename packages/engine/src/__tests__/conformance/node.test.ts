@@ -2107,30 +2107,30 @@ describe('node adapter conformance', () => {
       expect(alpha.sock.ofType('action.invoke').filter((event) => event.action.startsWith('spawn'))).toHaveLength(1);
     });
 
-    it('does not classify a non-release replay error as a release generation conflict', async () => {
-      const ws = await createWorkspace(stack.app, 'fleet-node-action-failed-replay-ws');
+    it('does not classify a user-defined release replay as a lifecycle generation conflict', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-custom-release-failed-replay-ws');
       const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
       const alpha = await enrollAndAttachNode(ws, {
         id: 'node_alpha',
         name: 'alpha',
-        capabilities: [capability('offline-action', 'action')],
+        capabilities: [capability('release', 'action')],
         load: 0,
       });
       await stack.runtime.handle.db
         .update(actions)
-        .set({ handlerProvider: 'offline-action-provider' })
+        .set({ handlerProvider: 'offline-release-provider' })
         .where(and(
           eq(actions.workspaceId, ws.workspaceId),
           eq(actions.handlerNodeId, 'node_alpha'),
-          eq(actions.name, 'offline-action'),
+          eq(actions.name, 'release'),
         ));
 
-      const invoke = () => stack.app.request('/v1/actions/offline-action/invoke', {
+      const invoke = () => stack.app.request('/v1/actions/release/invoke', {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
           authorization: `Bearer ${caller.token}`,
-          'Idempotency-Key': 'failed-node-action-replay',
+          'Idempotency-Key': 'failed-custom-release-replay',
         },
         body: JSON.stringify({ input: { value: 'one' } }),
       });
@@ -2146,7 +2146,7 @@ describe('node adapter conformance', () => {
         .set({ error: 'agent_release_generation_conflict' })
         .where(and(
           eq(actionInvocations.workspaceId, ws.workspaceId),
-          eq(actionInvocations.actionName, 'offline-action'),
+          eq(actionInvocations.actionName, 'release'),
         ));
 
       const replay = await invoke();
@@ -2157,19 +2157,21 @@ describe('node adapter conformance', () => {
         .select({
           status: actionInvocations.status,
           error: actionInvocations.error,
+          actionId: actionInvocations.actionId,
           dispatchedNodeId: actionInvocations.dispatchedNodeId,
         })
         .from(actionInvocations)
         .where(and(
           eq(actionInvocations.workspaceId, ws.workspaceId),
-          eq(actionInvocations.actionName, 'offline-action'),
+          eq(actionInvocations.actionName, 'release'),
         ));
       expect(rows).toEqual([{
         status: 'failed',
         error: 'agent_release_generation_conflict',
+        actionId: expect.any(String),
         dispatchedNodeId: null,
       }]);
-      expect(alpha.sock.ofType('action.invoke').filter((event) => event.action === 'offline-action')).toHaveLength(0);
+      expect(alpha.sock.ofType('action.invoke').filter((event) => event.action === 'release')).toHaveLength(0);
     });
 
     it('classifies a keyed node-action replay from its durable claim after the action is deleted', async () => {
