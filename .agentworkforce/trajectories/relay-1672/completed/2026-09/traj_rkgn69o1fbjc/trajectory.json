@@ -41,7 +41,7 @@
         {
           "ts": 1788678105665,
           "type": "reflection",
-          "content": "Red regressions covered stale release before dispatch, at the no-host fallback, at the socket-owner boundary, during named-provider drain, at atomic completion, in node-completed audit metadata, against user-defined action shadowing, and against lifecycle classification of a user-defined release replay. Exact product head da79986f776393aa491a85450b2474d2c0b2bdc5 reran root lint, test (including all 70 engine files / 761 tests), and build. TypeScript SDK (22 files / 441 tests), types (7 files / 209 tests), Rust SDK (103 tests plus 5 doc tests), and Rust library clippy were run on product head 2951bcb435a578c4bfc35c4b9b62c4455857a052; those package code and test files are unchanged through the final product head.",
+          "content": "Red regressions covered stale release before dispatch, at the no-host fallback, at the socket-owner boundary, during named-provider drain, at atomic completion, in node-completed audit metadata, against user-defined action shadowing, against lifecycle classification of a user-defined release replay, and against guarded and unguarded successful custom-release completion mutating the named agent. Exact product head 2e61bfccdb0247a58f8a6bf8742d59162580a1ab reran root lint, test (including all 70 engine files / 763 tests), and build. TypeScript SDK (22 files / 441 tests), types (7 files / 209 tests), Rust SDK (103 tests plus 5 doc tests), and Rust library clippy were run on product head 2951bcb435a578c4bfc35c4b9b62c4455857a052; those package code and test files are unchanged through the final product head.",
           "raw": {
             "focalPoints": [
               "generation-identity",
@@ -62,7 +62,7 @@
     }
   ],
   "retrospective": {
-    "summary": "Added SHA-256 token-generation guarded releases across Relaycast types, engine, OpenAPI, TypeScript SDK, and Rust SDK, with takeover, drain, replay, completion-race, and action-shadow regressions plus atomic dispatch/completion enforcement.",
+    "summary": "Added SHA-256 token-generation guarded releases across Relaycast types, engine, OpenAPI, TypeScript SDK, and Rust SDK, with takeover, drain, replay, completion-race, action-shadow, and custom-action isolation regressions plus atomic dispatch/completion enforcement.",
     "approach": "Standard approach",
     "confidence": 0.9
   },
@@ -76,7 +76,8 @@
     "cd935897bd3ea9de39f98844c5e7e768653cc84e",
     "7e91c060bce63dd6340977c548f7ee3fc4f071d4",
     "e0f7757c17e4f9d85b079190e8734c6d5846430c",
-    "da79986f776393aa491a85450b2474d2c0b2bdc5"
+    "da79986f776393aa491a85450b2474d2c0b2bdc5",
+    "2e61bfccdb0247a58f8a6bf8742d59162580a1ab"
   ],
   "filesChanged": [
     "CHANGELOG.md",
@@ -89,6 +90,7 @@
     "packages/engine/src/__tests__/conformance/node.test.ts",
     "packages/engine/src/adapters/node/realtime.ts",
     "packages/engine/src/engine/action.ts",
+    "packages/engine/src/engine/node.ts",
     "packages/engine/src/ports/realtime.ts",
     "packages/engine/src/routes/agent.ts",
     "packages/sdk-rust/CHANGELOG.md",
@@ -103,6 +105,6 @@
   "tags": [],
   "_trace": {
     "startRef": "80ab366048a0634fbf1a8b5301de71dd22c50026",
-    "endRef": "da79986f776393aa491a85450b2474d2c0b2bdc5"
+    "endRef": "2e61bfccdb0247a58f8a6bf8742d59162580a1ab"
   }
 }
