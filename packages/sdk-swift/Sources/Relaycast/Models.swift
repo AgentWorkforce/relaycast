@@ -1249,7 +1249,11 @@ public struct CompleteInvocationRequest: Codable, Equatable, Sendable {
 }
 
 public struct ActionInvocation: Codable, Equatable, Sendable {
-    public let id: String
+    /// The hosted API identifies an invocation as `invocation_id` on every
+    /// route that returns this record (invoke ack, status poll, completion),
+    /// matching ``InvokeActionResult``. A plain `id` is accepted as an alias so
+    /// a record echoed by another surface still decodes.
+    public let invocationId: String
     public let actionName: String?
     public let status: String
     public let input: [String: JSONValue]?
@@ -1257,6 +1261,44 @@ public struct ActionInvocation: Codable, Equatable, Sendable {
     public let error: String?
     public let createdAt: String?
     public let updatedAt: String?
+    public let completedAt: String?
+    public let durationMs: Int?
+
+    private enum CodingKeys: String, CodingKey {
+        case invocationId, id, actionName, status, input, output, error, createdAt, updatedAt, completedAt, durationMs
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let invocationId = try container.decodeIfPresent(String.self, forKey: .invocationId) {
+            self.invocationId = invocationId
+        } else {
+            self.invocationId = try container.decode(String.self, forKey: .id)
+        }
+        actionName = try container.decodeIfPresent(String.self, forKey: .actionName)
+        status = try container.decode(String.self, forKey: .status)
+        input = try container.decodeIfPresent([String: JSONValue].self, forKey: .input)
+        output = try container.decodeIfPresent([String: JSONValue].self, forKey: .output)
+        error = try container.decodeIfPresent(String.self, forKey: .error)
+        createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
+        updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
+        completedAt = try container.decodeIfPresent(String.self, forKey: .completedAt)
+        durationMs = try container.decodeIfPresent(Int.self, forKey: .durationMs)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(invocationId, forKey: .invocationId)
+        try container.encodeIfPresent(actionName, forKey: .actionName)
+        try container.encode(status, forKey: .status)
+        try container.encodeIfPresent(input, forKey: .input)
+        try container.encodeIfPresent(output, forKey: .output)
+        try container.encodeIfPresent(error, forKey: .error)
+        try container.encodeIfPresent(createdAt, forKey: .createdAt)
+        try container.encodeIfPresent(updatedAt, forKey: .updatedAt)
+        try container.encodeIfPresent(completedAt, forKey: .completedAt)
+        try container.encodeIfPresent(durationMs, forKey: .durationMs)
+    }
 }
 
 // MARK: - Directory, routing, A2A, certification, console
