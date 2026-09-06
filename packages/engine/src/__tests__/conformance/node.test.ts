@@ -2107,7 +2107,7 @@ describe('node adapter conformance', () => {
       expect(alpha.sock.ofType('action.invoke').filter((event) => event.action.startsWith('spawn'))).toHaveLength(1);
     });
 
-    it('replays a pre-dispatch node-action failure as 503 instead of a failed 201', async () => {
+    it('does not classify a non-release replay error as a release generation conflict', async () => {
       const ws = await createWorkspace(stack.app, 'fleet-node-action-failed-replay-ws');
       const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
       const alpha = await enrollAndAttachNode(ws, {
@@ -2136,18 +2136,39 @@ describe('node adapter conformance', () => {
       });
 
       const first = await invoke();
-      const replay = await invoke();
-      expect([first.status, replay.status]).toEqual([503, 503]);
+      expect(first.status).toBe(503);
       expect((await first.json() as { error: { code: string } }).error.code).toBe('handler_unavailable');
-      expect((await replay.json() as { error: { code: string } }).error.code).toBe('handler_unavailable');
+
+      // Error strings belong to handlers outside the built-in release path too.
+      // A collision with the lifecycle code must retain generic replay status.
+      await stack.runtime.handle.db
+        .update(actionInvocations)
+        .set({ error: 'agent_release_generation_conflict' })
+        .where(and(
+          eq(actionInvocations.workspaceId, ws.workspaceId),
+          eq(actionInvocations.actionName, 'offline-action'),
+        ));
+
+      const replay = await invoke();
+      expect(replay.status).toBe(503);
+      expect((await replay.json() as { error: { code: string } }).error.code)
+        .toBe('agent_release_generation_conflict');
       const rows = await stack.runtime.handle.db
-        .select({ status: actionInvocations.status, dispatchedNodeId: actionInvocations.dispatchedNodeId })
+        .select({
+          status: actionInvocations.status,
+          error: actionInvocations.error,
+          dispatchedNodeId: actionInvocations.dispatchedNodeId,
+        })
         .from(actionInvocations)
         .where(and(
           eq(actionInvocations.workspaceId, ws.workspaceId),
           eq(actionInvocations.actionName, 'offline-action'),
         ));
-      expect(rows).toEqual([{ status: 'failed', dispatchedNodeId: null }]);
+      expect(rows).toEqual([{
+        status: 'failed',
+        error: 'agent_release_generation_conflict',
+        dispatchedNodeId: null,
+      }]);
       expect(alpha.sock.ofType('action.invoke').filter((event) => event.action === 'offline-action')).toHaveLength(0);
     });
 

@@ -621,7 +621,11 @@ async function waitForInvocationReplayOutcome(
     // A guarded release can lose its generation CAS after provider dispatch.
     // Surface that durable terminal conflict before the generic dispatched-row
     // replay shortcut, otherwise the same idempotency key changes 409 into 201.
-    if (current.status === 'failed' && current.error === RELEASE_GENERATION_CONFLICT_CODE) {
+    if (
+      isReleaseInvocation(current.actionName)
+      && current.status === 'failed'
+      && current.error === RELEASE_GENERATION_CONFLICT_CODE
+    ) {
       throw codedError(
         'Action invocation failed because the release generation changed',
         RELEASE_GENERATION_CONFLICT_CODE,
@@ -640,7 +644,7 @@ async function waitForInvocationReplayOutcome(
         throw codedError(
           'Action invocation failed before provider dispatch completed',
           errorCode,
-          errorCode === RELEASE_GENERATION_CONFLICT_CODE ? 409 : 503,
+          isReleaseInvocation(current.actionName) && errorCode === RELEASE_GENERATION_CONFLICT_CODE ? 409 : 503,
         );
       }
       return current;
