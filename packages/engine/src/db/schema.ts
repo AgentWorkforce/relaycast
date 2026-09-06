@@ -1060,6 +1060,10 @@ export const actionInvocations = sqliteTable(
     durationMs: integer('duration_ms'),
     dispatchedNodeId: text('dispatched_node_id').references(() => nodes.id, { onDelete: 'set null' }),
     dispatchedAt: integer('dispatched_at', { mode: 'timestamp' }),
+    // Dispatch-attempt generation accepted atomically by the socket owner.
+    // Unlike action_id, this survives capability pruning without granting a
+    // later retry generation the previous attempt's acceptance.
+    providerAcceptedAttempt: integer('provider_accepted_attempt'),
     spawnReservedAt: integer('spawn_reserved_at', { mode: 'timestamp' }),
     attemptedNodeIds: text('attempted_node_ids', { mode: 'json' }).$type<string[]>().notNull().default([]),
     dispatchAttempts: integer('dispatch_attempts').notNull().default(0),

@@ -1119,11 +1119,12 @@ describe('node adapter conformance', () => {
 
     it('rejects a late agent registration for a migration-canceled spawn', async () => {
       const ws = await createWorkspace(stack.app, 'fleet-canceled-legacy-spawn');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
       const alpha = await enrollAndAttachNode(ws, {
         id: 'node_canceled_spawn',
         name: 'canceled-spawn',
         capabilities: [capability('spawn:claude', 'spawn')],
-        maxAgents: 2,
+        maxAgents: 3,
       });
       const db = stack.runtime.handle.db;
       await db.insert(actionInvocations).values({
@@ -1206,6 +1207,32 @@ describe('node adapter conformance', () => {
         .from(nodes)
         .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_canceled_spawn')));
       expect(node).toEqual({ activeAgents: 1, reservedAgents: 1 });
+
+      // A newer live spawn establishes a fresh tuple generation. A legacy
+      // worker may still omit invocation_id, but the old migration tombstone
+      // must no longer poison the same node/provider/name forever.
+      const replacement = await stack.app.request('/v1/actions/spawn/invoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: { cli: 'claude', name: 'late-worker', task: 'replacement' } }),
+      });
+      expect(replacement.status).toBe(201);
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'fresh-register-without-id',
+        type: 'agent.register',
+        name: 'late-worker',
+        session_ref: 'pty://alpha/late-worker-fresh',
+      }));
+      expect(alpha.sock.ofType('reply').at(-1)).toMatchObject({
+        id: 'fresh-register-without-id',
+        ok: true,
+      });
+      const [afterFresh] = await db
+        .select({ activeAgents: nodes.activeAgents, reservedAgents: nodes.reservedAgents })
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_canceled_spawn')));
+      expect(afterFresh).toEqual({ activeAgents: 2, reservedAgents: 2 });
     });
 
     it('lets only the matching spawn registration consume its reserved node slot', async () => {
@@ -1270,6 +1297,41 @@ describe('node adapter conformance', () => {
         .from(nodes)
         .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_owned_reservation')));
       expect(completed).toEqual({ activeAgents: 1, reservedAgents: 0 });
+    });
+
+    it('lets a legacy worker claim its exact spawn reservation without an invocation id', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-legacy-spawn-reservation');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_legacy_reservation',
+        name: 'legacy-reservation',
+        capabilities: [capability('spawn:claude', 'spawn')],
+        maxAgents: 1,
+      });
+
+      const spawn = await stack.app.request('/v1/actions/spawn/invoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: { cli: 'claude', name: 'legacy-worker', task: 'say hi' } }),
+      });
+      expect(spawn.status).toBe(201);
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'legacy-owned-register',
+        type: 'agent.register',
+        name: 'legacy-worker',
+        session_ref: 'pty://alpha/legacy-worker',
+      }));
+      expect(alpha.sock.ofType('reply').at(-1)).toMatchObject({
+        id: 'legacy-owned-register',
+        ok: true,
+      });
+      const [node] = await stack.runtime.handle.db
+        .select({ activeAgents: nodes.activeAgents, reservedAgents: nodes.reservedAgents })
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_legacy_reservation')));
+      expect(node).toEqual({ activeAgents: 1, reservedAgents: 1 });
     });
 
     it('registers a node, dispatches spawn, completes from action.result, fires triggers, and reschedules on node death', async () => {
@@ -2612,10 +2674,9 @@ describe('node adapter conformance', () => {
       const freshPromise = invoke();
       await frameSentPromise;
 
-      // Provider acceptance has already happened, and the pre-send claim made
-      // that route/attempt durable. Explicit deletion terminally cancels the
-      // row, but a keyed replay must preserve the accepted 201 instead of
-      // reporting a pre-dispatch failure or executing the action again.
+      // Provider acceptance has already happened. Explicit deletion removes
+      // the registration, but cannot revoke that accepted generation; a keyed
+      // replay preserves its 201 and the route-owned result can still complete.
       const deleted = await stack.app.request('/v1/actions/vanishing-action', {
         method: 'DELETE',
         headers: { authorization: `Bearer ${ws.workspaceKey}` },
@@ -2626,7 +2687,16 @@ describe('node adapter conformance', () => {
       expect(replay.status).toBe(201);
 
       resumeSend();
-      await freshPromise;
+      expect((await freshPromise).status).toBe(201);
+      const invocationId = alpha.sock.ofType('action.invoke')
+        .find((event) => event.action === 'vanishing-action')?.invocation_id;
+      expect(invocationId).toBeTruthy();
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'action.result',
+        invocation_id: invocationId,
+        output: { accepted_before_prune: true },
+      }));
       const rows = await stack.runtime.handle.db
         .select({
           status: actionInvocations.status,
@@ -2641,8 +2711,8 @@ describe('node adapter conformance', () => {
           eq(actionInvocations.actionName, 'vanishing-action'),
         ));
       expect(rows).toEqual([{
-        status: 'failed',
-        error: 'action_deleted',
+        status: 'completed',
+        error: null,
         handlerAgentId: null,
         handlerNodeId: 'node_alpha',
         dispatchedNodeId: 'node_alpha',

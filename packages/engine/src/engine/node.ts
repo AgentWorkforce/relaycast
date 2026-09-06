@@ -933,7 +933,7 @@ async function activeBindingNodeIdsForAgent(db: Db, workspaceId: string, agentId
 }
 
 interface SpawnReservationClaim {
-  invocationId: string;
+  invocationId?: string;
   providerName: string;
   agentName: string;
 }
@@ -944,11 +944,20 @@ async function reserveNodeAgentSlot(
   node: NodeRow,
   claim?: SpawnReservationClaim,
 ): Promise<void> {
+  const reservationCorrelation = claim?.invocationId
+    ? eq(actionInvocations.id, claim.invocationId)
+    : claim
+      ? and(
+        eq(actionInvocations.dispatchedNodeId, node.id),
+        eq(actionInvocations.dispatchedProvider, claim.providerName),
+        sql`json_extract(${actionInvocations.input}, '$.name') = ${claim.agentName}`,
+      )
+      : sql`0`;
   const ownsSpawnReservation = claim
     ? sql`EXISTS (
         SELECT 1 FROM ${actionInvocations}
         WHERE ${actionInvocations.workspaceId} = ${workspaceId}
-          AND ${actionInvocations.id} = ${claim.invocationId}
+          AND ${reservationCorrelation}
           AND ${actionInvocations.status} IN ('pending', 'dispatched', 'invoked')
           AND ${actionInvocations.spawnReservedAt} IS NOT NULL
           AND ${actionInvocations.dispatchedNodeId} = ${node.id}
@@ -993,6 +1002,27 @@ async function rejectMigrationCanceledSpawnRegistration(
     agentName: string;
   },
 ): Promise<void> {
+  if (!registration.invocationId) {
+    const [liveReservation] = await db
+      .select({ id: actionInvocations.id })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, workspaceId),
+        eq(actionInvocations.dispatchedNodeId, registration.nodeId),
+        eq(actionInvocations.dispatchedProvider, registration.providerName),
+        sql`json_extract(${actionInvocations.input}, '$.name') = ${registration.agentName}`,
+        inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked']),
+        isNotNull(actionInvocations.spawnReservedAt),
+        or(
+          eq(actionInvocations.actionName, 'spawn'),
+          sql`${actionInvocations.actionName} LIKE 'spawn:%'`,
+        ),
+      ));
+    // Legacy providers cannot echo an invocation id. In that protocol the
+    // currently live reservation is the only generation proof available, and
+    // it supersedes any older migration tombstone for the same tuple.
+    if (liveReservation) return;
+  }
   const correlation = registration.invocationId
     ? eq(actionInvocations.id, registration.invocationId)
     : and(
@@ -1418,11 +1448,11 @@ export async function registerAgentViaNode(
     // D1 has no interactive transaction, so acquire capacity before the first
     // durable agent or membership write. Any later failure compensates both
     // the exact new identity and the slot rather than leaving a ghost agent.
-    await reserveNodeAgentSlot(tx, workspaceId, node, message.invocation_id ? {
+    await reserveNodeAgentSlot(tx, workspaceId, node, {
       invocationId: message.invocation_id,
       providerName,
       agentName: message.name,
-    } : undefined);
+    });
     reservedTargetSlot = true;
     try {
       const [result] = await tx
@@ -1545,11 +1575,11 @@ export async function recoverAgentViaNode(
     // any agent/location mutation. A full node now fails with the incumbent
     // row and bindings untouched; a later failure releases this reservation.
     if (!targetWasActive) {
-      await reserveNodeAgentSlot(tx, workspaceId, node, message.invocation_id ? {
+      await reserveNodeAgentSlot(tx, workspaceId, node, {
         invocationId: message.invocation_id,
         providerName,
         agentName: message.name,
-      } : undefined);
+      });
       reservedTargetSlot = true;
     }
     try {
@@ -1771,6 +1801,7 @@ export async function reconcileInventory(
       status: actionInvocations.status,
       dispatchedNodeId: actionInvocations.dispatchedNodeId,
       dispatchedProvider: actionInvocations.dispatchedProvider,
+      providerAcceptedAttempt: actionInvocations.providerAcceptedAttempt,
       spawnReservedAt: actionInvocations.spawnReservedAt,
       attemptedNodeIds: actionInvocations.attemptedNodeIds,
       dispatchAttempts: actionInvocations.dispatchAttempts,
@@ -1797,11 +1828,11 @@ export async function reconcileInventory(
       let reservedTargetSlot = false;
       try {
         if (!targetWasActive) {
-          await reserveNodeAgentSlot(db, workspaceId, node, item.invocation_id ? {
+          await reserveNodeAgentSlot(db, workspaceId, node, {
             invocationId: item.invocation_id,
             providerName,
             agentName: item.name,
-          } : undefined);
+          });
           reservedTargetSlot = true;
         }
         await db

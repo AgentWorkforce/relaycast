@@ -256,4 +256,34 @@ describe('node-completed release preserves attributed history', () => {
       ));
     expect(binding.status).toBe('active');
   });
+
+  it('settles a malformed persisted release generation as a durable conflict', async () => {
+    const ws = await createWorkspace(stack.app, 'node-release-corrupt-generation');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'corrupt-release-target');
+    const { sock, handle } = await attachDirectNodeSocket(stack, ws.workspaceId, target);
+    const { data } = await release(ws.workspaceKey, target.name, await sha256Hex(target.token));
+    await stack.runtime.deps.db
+      .update(actionInvocations)
+      .set({ input: { name: target.name, expected_token_hash: 'corrupt-persisted-hash' } })
+      .where(eq(actionInvocations.id, data.invocation_id));
+
+    await handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'action.result',
+      invocation_id: data.invocation_id,
+      output: { released: true },
+    }));
+
+    expect(sock.ofType('error')).toHaveLength(0);
+    const [invocation] = await stack.runtime.deps.db
+      .select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, data.invocation_id));
+    expect(invocation).toEqual({ status: 'failed', error: 'agent_release_generation_conflict' });
+    const [preserved] = await stack.runtime.deps.db
+      .select({ id: agents.id, name: agents.name, status: agents.status })
+      .from(agents)
+      .where(eq(agents.id, target.agentId));
+    expect(preserved).toMatchObject({ id: target.agentId, name: target.name, status: 'active' });
+  });
 });

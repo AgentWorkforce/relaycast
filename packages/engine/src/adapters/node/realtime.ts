@@ -292,8 +292,18 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
           eq(actionInvocations.workspaceId, workspaceId),
           eq(actionInvocations.id, authorization.invocationId),
           eq(actionInvocations.actionName, 'release'),
+          eq(actionInvocations.invocationOrigin, 'builtin'),
           inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked']),
-          eq(actionInvocations.handlerNodeId, nodeId),
+          or(
+            and(
+              isNull(actionInvocations.dispatchedNodeId),
+              eq(actionInvocations.handlerNodeId, nodeId),
+            ),
+            and(
+              eq(actionInvocations.dispatchedNodeId, nodeId),
+              eq(actionInvocations.dispatchedProvider, providerName),
+            ),
+          ),
           sql`json_extract(${actionInvocations.input}, '$.expected_token_hash') = ${authorization.expectedTokenHash}`,
         ));
       if (!authorized) {
@@ -327,10 +337,13 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       ) {
         return false;
       }
-      const [authorized] = await this.db
-        .select({ id: actionInvocations.id })
-        .from(actionInvocations)
-        .innerJoin(actions, eq(actionInvocations.actionId, actions.id))
+      const [accepted] = await this.db
+        .update(actionInvocations)
+        // Commit an immutable acceptance marker before the synchronous handoff
+        // below so a stale dispatcher cannot mistake a later FK-null prune for
+        // work that never reached the provider. Keep the public lifecycle state
+        // `dispatched` until the provider reports progress or completion.
+        .set({ providerAcceptedAttempt: actionInvocations.dispatchAttempts })
         .where(and(
           eq(actionInvocations.workspaceId, workspaceId),
           eq(actionInvocations.id, authorization.invocationId),
@@ -338,17 +351,21 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
           eq(actionInvocations.actionId, authorization.actionId),
           eq(actionInvocations.dispatchedNodeId, nodeId),
           eq(actionInvocations.dispatchedProvider, providerName),
-          inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked']),
-          eq(actions.workspaceId, workspaceId),
-          eq(actions.id, authorization.actionId),
-          eq(actions.name, authorization.actionName),
-          eq(actions.handlerNodeId, nodeId),
-          eq(actions.handlerProvider, providerName),
-          eq(actions.isActive, true),
-        ));
-      if (!authorized) return false;
+          eq(actionInvocations.status, 'dispatched'),
+          sql`EXISTS (
+            SELECT 1 FROM ${actions}
+            WHERE ${actions.workspaceId} = ${workspaceId}
+              AND ${actions.id} = ${authorization.actionId}
+              AND ${actions.name} = ${authorization.actionName}
+              AND ${actions.handlerNodeId} = ${nodeId}
+              AND COALESCE(${actions.handlerProvider}, ${DEFAULT_PROVIDER_NAME}) = ${providerName}
+              AND ${actions.isActive} = 1
+          )`,
+        ))
+        .returning({ id: actionInvocations.id });
+      if (!accepted) return false;
 
-      // No await occurs after the exact identity read resumes and before the
+      // No await occurs after the exact identity update resumes and before the
       // synchronous socket handoff. A prune/replacement must therefore win
       // before authorization or after this frame has already been accepted.
       return this.sendToProviderUnchecked(workspaceId, nodeId, providerName, message);

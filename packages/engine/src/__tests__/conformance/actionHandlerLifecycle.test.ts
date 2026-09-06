@@ -149,6 +149,22 @@ describe('agent-published action lifecycle', () => {
     });
     expect(invoke.status).toBe(201);
     expect(sock.ofType('action.invoke').at(-1)).toMatchObject({ action: 'work', input: { job: 1 } });
+
+    // Legacy HTTP-created node actions stored the default provider as null.
+    // Dispatch and socket-owner authorization must normalize that value the
+    // same way rather than accepting the route and dropping its frame.
+    await stack.runtime.handle.db
+      .update(actions)
+      .set({ handlerProvider: null })
+      .where(and(eq(actions.workspaceId, ws.workspaceId), eq(actions.name, 'work')));
+    sock.received.length = 0;
+    const legacyInvoke = await stack.app.request('/v1/actions/work/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { job: 2 } }),
+    });
+    expect(legacyInvoke.status).toBe(201);
+    expect(sock.ofType('action.invoke').at(-1)).toMatchObject({ action: 'work', input: { job: 2 } });
   });
 
   it('invoking an action whose handler points at a dead connection fails fast with handler_unavailable', async () => {

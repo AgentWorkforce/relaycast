@@ -1005,6 +1005,100 @@ describe('agent presence and release lifecycle', () => {
     await handle.handleClose();
   });
 
+  it('authorizes a guarded release against its current dispatched route after a handoff', async () => {
+    const ws = await createWorkspace(stack.app, 'release-generation-route-handoff');
+    const oldHost = await registerAgent(stack.app, ws.workspaceKey, 'old-release-host');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'release-route-target');
+    const oldNode = await attachDirectNodeSocket(stack, ws.workspaceId, oldHost);
+    const currentNode = await attachDirectNodeSocket(stack, ws.workspaceId, target);
+    const expectedTokenHash = await sha256Hex(target.token);
+    const invocationId = 'inv_release_route_handoff';
+    await stack.runtime.deps.db.insert(actionInvocations).values({
+      id: invocationId,
+      workspaceId: ws.workspaceId,
+      actionName: 'release',
+      invocationOrigin: 'builtin',
+      input: { name: target.name, expected_token_hash: expectedTokenHash },
+      status: 'dispatched',
+      handlerNodeId: oldNode.nodeId,
+      dispatchedNodeId: currentNode.nodeId,
+      dispatchedProvider: 'default',
+      attemptedNodeIds: [oldNode.nodeId, currentNode.nodeId],
+      dispatchAttempts: 2,
+    });
+
+    const sent = await stack.runtime.realtime.sendAuthorizedActionToProvider(
+      ws.workspaceId,
+      currentNode.nodeId,
+      'default',
+      {
+        v: 1,
+        type: 'action.invoke',
+        invocation_id: invocationId,
+        action: 'release',
+        input: { name: target.name, expected_token_hash: expectedTokenHash },
+      },
+      {
+        kind: 'release-generation-v1',
+        invocationId,
+        agentName: target.name,
+        expectedTokenHash,
+      },
+    );
+
+    expect(sent).toBe(true);
+    expect(currentNode.sock.ofType('action.invoke')).toHaveLength(1);
+    expect(oldNode.sock.ofType('action.invoke')).toHaveLength(0);
+  });
+
+  it('does not accept a release-generation proof for a registered action', async () => {
+    const ws = await createWorkspace(stack.app, 'release-generation-origin-boundary');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'release-origin-target');
+    const targetNode = await attachDirectNodeSocket(stack, ws.workspaceId, target);
+    const expectedTokenHash = await sha256Hex(target.token);
+    const invocationId = 'inv_registered_release_generation';
+    await stack.runtime.deps.db.insert(actionInvocations).values({
+      id: invocationId,
+      workspaceId: ws.workspaceId,
+      actionName: 'release',
+      invocationOrigin: 'registered_action',
+      input: { name: target.name, expected_token_hash: expectedTokenHash },
+      status: 'dispatched',
+      handlerNodeId: targetNode.nodeId,
+      dispatchedNodeId: targetNode.nodeId,
+      dispatchedProvider: 'default',
+      attemptedNodeIds: [targetNode.nodeId],
+      dispatchAttempts: 1,
+    });
+
+    const sent = await stack.runtime.realtime.sendAuthorizedActionToProvider(
+      ws.workspaceId,
+      targetNode.nodeId,
+      'default',
+      {
+        v: 1,
+        type: 'action.invoke',
+        invocation_id: invocationId,
+        action: 'release',
+        input: { name: target.name, expected_token_hash: expectedTokenHash },
+      },
+      {
+        kind: 'release-generation-v1',
+        invocationId,
+        agentName: target.name,
+        expectedTokenHash,
+      },
+    );
+
+    expect(sent).toBe(false);
+    expect(targetNode.sock.ofType('action.invoke')).toHaveLength(0);
+    const [invocation] = await stack.runtime.deps.db
+      .select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(invocation).toEqual({ status: 'failed', error: 'agent_release_generation_conflict' });
+  });
+
   it('replays a guarded release completion conflict as the same 409 after dispatch', async () => {
     const ws = await createWorkspace(stack.app, 'release-generation-completion-replay');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'release-completion-caller');
