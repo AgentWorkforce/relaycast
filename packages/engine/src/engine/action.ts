@@ -2061,6 +2061,13 @@ async function completeGuardedReleaseNodeInvocation(
           locationType: 'self_connected',
           locationNodeId: null,
           lastSeen: completedAt,
+          metadata: sql`json_patch(COALESCE(${agents.metadata}, '{}'), ${JSON.stringify({
+            release: {
+              reason: typeof input.reason === 'string' ? input.reason : null,
+              released_at: completedAt.toISOString(),
+              previous_name: agent.name,
+            },
+          })})`,
         })
         .where(currentAgent));
     } else {

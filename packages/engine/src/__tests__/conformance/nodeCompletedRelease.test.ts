@@ -36,11 +36,21 @@ describe('node-completed release preserves attributed history', () => {
     expect(res.status).toBe(201);
   }
 
-  async function release(workspaceKey: string, name: string, expectedTokenHash?: string) {
+  async function release(
+    workspaceKey: string,
+    name: string,
+    expectedTokenHash?: string,
+    reason?: string,
+  ) {
     const res = await stack.app.request('/v1/agents/release', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${workspaceKey}` },
-      body: JSON.stringify({ name, delete_agent: true, expected_token_hash: expectedTokenHash }),
+      body: JSON.stringify({
+        name,
+        delete_agent: true,
+        expected_token_hash: expectedTokenHash,
+        reason,
+      }),
     });
     expect(res.status).toBe(201);
     return (await res.json()) as { data: { status: string; invocation_id: string } };
@@ -56,7 +66,12 @@ describe('node-completed release preserves attributed history', () => {
     // `applyReleaseCompletionEffect` instead of the local tombstone path.
     const { sock, handle } = await attachDirectNodeSocket(stack, ws.workspaceId, target);
 
-    const { data } = await release(ws.workspaceKey, target.name, await sha256Hex(target.token));
+    const { data } = await release(
+      ws.workspaceKey,
+      target.name,
+      await sha256Hex(target.token),
+      'release with audit trail',
+    );
     expect(data.status).toBe('dispatched');
     const [beforeCompletion] = await stack.runtime.deps.db
       .select({
@@ -103,12 +118,24 @@ describe('node-completed release preserves attributed history', () => {
 
     // The row survives as a tombstone so history keeps its author.
     const [tombstone] = await stack.runtime.deps.db
-      .select({ name: agents.name, status: agents.status, tokenHash: agents.tokenHash })
+      .select({
+        name: agents.name,
+        status: agents.status,
+        tokenHash: agents.tokenHash,
+        metadata: agents.metadata,
+      })
       .from(agents)
       .where(eq(agents.id, target.agentId));
     expect(tombstone).toMatchObject({
       name: `${target.name}#released-${target.agentId}`,
       status: 'released',
+      metadata: {
+        release: {
+          reason: 'release with audit trail',
+          released_at: expect.any(String),
+          previous_name: target.name,
+        },
+      },
     });
 
     // Attribution intact, and the old credential is dead.
