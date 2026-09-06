@@ -631,8 +631,11 @@ authenticated activity renews the lease. Releasing an agent dispatches to its
 live host when one exists. If the host is absent or offline, a normal release
 fails explicitly with `agent_host_unavailable` instead of creating an ownerless
 pending invocation. A `delete_agent` request can be completed locally in that
-case: Relaycast deactivates bindings and deletes the record and its implicit
-direct node.
+case: Relaycast deactivates bindings, frees the live name, and removes its
+implicit direct node. Cleanup callers that retain the issued agent token can
+send its SHA-256 hash as `expected_token_hash`; Relaycast then rejects a stale
+release with `agent_release_generation_conflict` before dispatch or completion,
+so a same-name takeover is left untouched.
 
 Fleet node presence is also published to workspace-key observer streams as the
 ephemeral `node.online`, `node.heartbeat`, and `node.offline` events. Each

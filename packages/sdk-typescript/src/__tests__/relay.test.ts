@@ -531,6 +531,28 @@ describe('RelayCast', () => {
       const [url] = mockFetch.mock.calls[0]!;
       expect(url).toBe('https://cast.agentrelay.com/v1/agents/a%2Fb');
     });
+
+    it('release() sends the token-generation guard as snake_case', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      const expectedTokenHash = 'a'.repeat(64);
+
+      mockFetch.mockImplementation(() => mockResponse({ status: 'completed' }));
+      await relay.agents.release({
+        name: 'Worker',
+        deleteAgent: true,
+        expectedTokenHash,
+      });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/agents/release');
+      expect(init.method).toBe('POST');
+      expect(init.body).toBe(JSON.stringify({
+        name: 'Worker',
+        delete_agent: true,
+        expected_token_hash: expectedTokenHash,
+      }));
+    });
   });
 
   describe('a2a', () => {

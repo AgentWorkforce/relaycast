@@ -11,6 +11,12 @@ import {
 } from './harness.js';
 import { actions, actionInvocations, agents, nodeProviders, nodes } from '../../db/schema.js';
 import { NODE_LIVENESS_TTL_MS, PROVIDER_ATTACH_LIVENESS_MS } from '../../engine/placement.js';
+import { drainNodeInvocations } from '../../index.js';
+import {
+  rescheduleInvocationsForLostNode,
+  rescheduleNodeInvocation,
+  sweepTimedOutInvocations,
+} from '../../engine/action.js';
 
 type Cap = { name: string; kind?: string; global?: boolean; queue?: boolean };
 
@@ -76,6 +82,129 @@ describe('node providers', () => {
       handlers_live: true,
     }));
     return { sock, handle };
+  }
+
+  async function setupPrunedReleaseAction(slug: string, queue: boolean, prune = true) {
+    const ws = await createWorkspace(stack.app, slug);
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    await enrollNode(ws, 'node_a', 'alpha');
+    await enrollNode(ws, 'node_b', 'beta');
+    const alpha = await attachProvider(
+      ws.workspaceId,
+      'node_a',
+      'alpha',
+      'fleet-a',
+      [{ name: 'release', kind: 'action', ...(queue ? { queue: true } : {}) }],
+    );
+    const beta = await attachProvider(
+      ws.workspaceId,
+      'node_b',
+      'beta',
+      'fleet-b',
+      [{ name: 'release', kind: 'action' }],
+    );
+
+    if (queue) {
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.heartbeat',
+        load: 0,
+        active_agents: 0,
+        handlers_live: false,
+      }));
+    }
+
+    alpha.sock.received.length = 0;
+    beta.sock.received.length = 0;
+    const invoked = await stack.app.request('/v1/nodes/alpha/actions/release/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { name: 'custom-target' } }),
+    });
+    expect(invoked.status).toBe(201);
+    const invocationId = (await invoked.json() as { data: { invocation_id: string } }).data.invocation_id;
+    expect(alpha.sock.ofType('action.invoke')).toHaveLength(queue ? 0 : 1);
+
+    const [originalAction] = await stack.runtime.handle.db
+      .select({ id: actions.id })
+      .from(actions)
+      .where(and(
+        eq(actions.workspaceId, ws.workspaceId),
+        eq(actions.handlerNodeId, 'node_a'),
+        eq(actions.name, 'release'),
+      ));
+    expect(originalAction?.id).toBeTruthy();
+
+    // The capability snapshot drops the exact action row. action_id is now
+    // null, while immutable provenance must keep this invocation tied to the
+    // deleted registration rather than the live same-name action on beta.
+    if (prune) {
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.heartbeat',
+        load: 0,
+        active_agents: 0,
+        handlers_live: !queue,
+        capabilities: [],
+      }));
+      const [pruned] = await stack.runtime.handle.db
+        .select({
+          actionId: actionInvocations.actionId,
+          invocationOrigin: actionInvocations.invocationOrigin,
+          status: actionInvocations.status,
+        })
+        .from(actionInvocations)
+        .where(eq(actionInvocations.id, invocationId));
+      expect(pruned).toMatchObject({
+        actionId: null,
+        invocationOrigin: 'registered_action',
+        status: queue ? 'pending' : 'dispatched',
+      });
+    }
+    beta.sock.received.length = 0;
+
+    return { ws, alpha, beta, invocationId, originalActionId: originalAction!.id };
+  }
+
+  async function expectDeletedActionFailure(invocationId: string) {
+    const [invocation] = await stack.runtime.handle.db
+      .select({
+        actionId: actionInvocations.actionId,
+        invocationOrigin: actionInvocations.invocationOrigin,
+        status: actionInvocations.status,
+        error: actionInvocations.error,
+        completedAt: actionInvocations.completedAt,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(invocation).toMatchObject({
+      actionId: null,
+      invocationOrigin: 'registered_action',
+      status: 'failed',
+      error: 'action_deleted',
+    });
+    expect(invocation.completedAt).toBeInstanceOf(Date);
+  }
+
+  async function expectAcceptedActionPreserved(invocationId: string) {
+    const [invocation] = await stack.runtime.handle.db
+      .select({
+        actionId: actionInvocations.actionId,
+        invocationOrigin: actionInvocations.invocationOrigin,
+        status: actionInvocations.status,
+        error: actionInvocations.error,
+        providerAcceptedAttempt: actionInvocations.providerAcceptedAttempt,
+        dispatchAttempts: actionInvocations.dispatchAttempts,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(invocation).toMatchObject({
+      actionId: null,
+      invocationOrigin: 'registered_action',
+      status: 'dispatched',
+      error: null,
+    });
+    expect(invocation.providerAcceptedAttempt).toBe(invocation.dispatchAttempts);
   }
 
   it('keeps a mixed finite and unbounded provider aggregate unlimited with unreported load', async () => {
@@ -329,6 +458,42 @@ describe('node providers', () => {
     expect(broker.sock.ofType('action.invoke')).toHaveLength(0);
   });
 
+  it('rejects native spawn without a non-empty agent name before reserving capacity', async () => {
+    const ws = await createWorkspace(stack.app, 'np-spawn-name-required');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    await enrollNode(ws, 'node_a', 'alpha');
+    const broker = await attachProvider(
+      ws.workspaceId,
+      'node_a',
+      'alpha',
+      'default',
+      [{ name: 'spawn:claude', kind: 'capacity' }],
+      { maxAgents: 1 },
+    );
+
+    const response = await stack.app.request('/v1/actions/spawn/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { cli: 'claude' } }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(broker.sock.ofType('action.invoke')).toHaveLength(0);
+    expect(await stack.runtime.handle.db
+      .select()
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'spawn'),
+      )))
+      .toHaveLength(0);
+    const [node] = await stack.runtime.handle.db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_a')));
+    expect(node.reservedAgents).toBe(0);
+  });
+
   it('gates capability liveness per provider', async () => {
     const ws = await createWorkspace(stack.app, 'np-liveness');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
@@ -408,6 +573,785 @@ describe('node providers', () => {
 
     expect(deliverFramesOfType(py.sock, 'message.created').length).toBeGreaterThanOrEqual(1);
     expect(deliverFramesOfType(rb.sock, 'message.created')).toHaveLength(0);
+  });
+
+  it('drains a guarded release back to the named provider that owns its generation', async () => {
+    const ws = await createWorkspace(stack.app, 'np-release-drain-owner');
+    await enrollNode(ws, 'node_a', 'alpha');
+    const py = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'py', []);
+    await py.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'register-release-drain-worker',
+      type: 'agent.register',
+      name: 'release-drain-worker',
+      session_ref: 'pty://py/release-drain-worker',
+    }));
+    const [worker] = await stack.runtime.handle.db
+      .select({ id: agents.id, name: agents.name, tokenHash: agents.tokenHash })
+      .from(agents)
+      .where(and(
+        eq(agents.workspaceId, ws.workspaceId),
+        eq(agents.name, 'release-drain-worker'),
+      ));
+    expect(worker).toBeTruthy();
+
+    await stack.runtime.handle.db.insert(actionInvocations).values({
+      id: 'inv_named_provider_release_drain',
+      workspaceId: ws.workspaceId,
+      actionName: 'release',
+      invocationOrigin: 'builtin',
+      callerName: 'workspace',
+      handlerNodeId: 'node_a',
+      input: {
+        name: worker.name,
+        delete_agent: true,
+        expected_token_hash: worker.tokenHash,
+      },
+      status: 'pending',
+      dispatchedNodeId: 'node_a',
+      dispatchedProvider: 'py',
+      attemptedNodeIds: ['node_a'],
+      dispatchAttempts: 1,
+    });
+
+    py.sock.received.length = 0;
+    const drained = await drainNodeInvocations(
+      stack.runtime.handle.db,
+      stack.runtime.realtime,
+      ws.workspaceId,
+      'node_a',
+    );
+
+    expect(drained).toBe(1);
+    expect(py.sock.ofType('action.invoke')).toEqual([
+      expect.objectContaining({
+        invocation_id: 'inv_named_provider_release_drain',
+        action: 'release',
+        input: expect.objectContaining({ expected_token_hash: worker.tokenHash }),
+      }),
+    ]);
+    const [invocation] = await stack.runtime.handle.db
+      .select({ status: actionInvocations.status, provider: actionInvocations.dispatchedProvider })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, 'inv_named_provider_release_drain'));
+    expect(invocation).toEqual({ status: 'dispatched', provider: 'py' });
+  });
+
+  it('preserves an accepted pruned action instead of retrying it onto a same-name replacement', async () => {
+    const { ws, beta, invocationId } = await setupPrunedReleaseAction(
+      'np-pruned-action-retry',
+      false,
+    );
+
+    const rescheduled = await rescheduleInvocationsForLostNode(
+      stack.runtime.handle.db,
+      stack.runtime.realtime,
+      ws.workspaceId,
+      'node_a',
+    );
+
+    expect(rescheduled).toBe(0);
+    expect(beta.sock.ofType('action.invoke')).toHaveLength(0);
+    await expectAcceptedActionPreserved(invocationId);
+  });
+
+  it('preserves the prior accepted generation when a replacement prunes before authorization', async () => {
+    const { ws, beta, invocationId, originalActionId } = await setupPrunedReleaseAction(
+      'np-concurrent-pruned-action-retry',
+      false,
+      false,
+    );
+    const registry = stack.runtime.realtime;
+    const originalConnected = registry.isProviderConnected.bind(registry);
+    let pruned = false;
+    vi.spyOn(registry, 'isProviderConnected').mockImplementation((workspaceId, nodeId, providerName) => {
+      if (!pruned && nodeId === 'node_b') {
+        pruned = true;
+        stack.runtime.handle.sqlite
+          .prepare('DELETE FROM actions WHERE workspace_id = ? AND id = ?')
+          .run(ws.workspaceId, originalActionId);
+      }
+      return originalConnected(workspaceId, nodeId, providerName);
+    });
+
+    const rescheduled = await rescheduleInvocationsForLostNode(
+      stack.runtime.handle.db,
+      registry,
+      ws.workspaceId,
+      'node_a',
+    );
+
+    expect(pruned).toBe(true);
+    expect(rescheduled).toBe(0);
+    expect(beta.sock.ofType('action.invoke')).toHaveLength(0);
+    await expectAcceptedActionPreserved(invocationId);
+  });
+
+  it('does not fail a concurrent registered-action handoff winner', async () => {
+    const { ws, beta, invocationId, originalActionId } = await setupPrunedReleaseAction(
+      'np-concurrent-action-handoff-winner',
+      false,
+      false,
+    );
+    const db = stack.runtime.handle.db;
+    const [retrySnapshot] = await db
+      .select()
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    const [replacement] = await db
+      .select({ id: actions.id })
+      .from(actions)
+      .where(and(
+        eq(actions.workspaceId, ws.workspaceId),
+        eq(actions.handlerNodeId, 'node_b'),
+        eq(actions.name, 'release'),
+      ));
+    expect(retrySnapshot.actionId).toBe(originalActionId);
+    expect(replacement?.id).toBeTruthy();
+
+    // A competing retry wins the exact source→replacement CAS first.
+    stack.runtime.handle.sqlite.prepare(`
+      UPDATE action_invocations
+      SET action_id = ?, dispatched_node_id = 'node_b', dispatched_provider = 'fleet-b'
+      WHERE id = ?
+    `).run(replacement!.id, invocationId);
+    beta.sock.received.length = 0;
+
+    const rescheduled = await rescheduleNodeInvocation(db, stack.runtime.realtime, retrySnapshot);
+
+    expect(rescheduled).toBe(false);
+    expect(beta.sock.ofType('action.invoke')).toHaveLength(0);
+    const [winner] = await db
+      .select({
+        actionId: actionInvocations.actionId,
+        status: actionInvocations.status,
+        error: actionInvocations.error,
+        dispatchedNodeId: actionInvocations.dispatchedNodeId,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(winner).toEqual({
+      actionId: replacement!.id,
+      status: 'dispatched',
+      error: null,
+      dispatchedNodeId: 'node_b',
+    });
+  });
+
+  it('claims the retry route before send so a second lost-node rescheduler cannot duplicate it', async () => {
+    const { ws, beta, invocationId } = await setupPrunedReleaseAction(
+      'np-concurrent-action-route-claim',
+      false,
+      false,
+    );
+    const registry = stack.runtime.realtime;
+    const originalSend = registry.sendAuthorizedActionToProvider!.bind(registry);
+    let releaseFirst!: () => void;
+    let markFirstStarted!: () => void;
+    const firstStarted = new Promise<void>((resolve) => { markFirstStarted = resolve; });
+    const firstRelease = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    let pauseFirst = true;
+    vi.spyOn(registry, 'sendAuthorizedActionToProvider').mockImplementation(async (
+      workspaceId,
+      nodeId,
+      providerName,
+      message,
+      authorization,
+    ) => {
+      if (pauseFirst && nodeId === 'node_b' && message.type === 'action.invoke') {
+        pauseFirst = false;
+        markFirstStarted();
+        await firstRelease;
+      }
+      return originalSend(workspaceId, nodeId, providerName, message, authorization);
+    });
+
+    const firstRetry = rescheduleInvocationsForLostNode(
+      stack.runtime.handle.db,
+      registry,
+      ws.workspaceId,
+      'node_a',
+    );
+    await firstStarted;
+    const secondRetry = await rescheduleInvocationsForLostNode(
+      stack.runtime.handle.db,
+      registry,
+      ws.workspaceId,
+      'node_a',
+    );
+    releaseFirst();
+
+    expect(await firstRetry).toBe(1);
+    expect(secondRetry).toBe(0);
+    expect(beta.sock.ofType('action.invoke')).toHaveLength(1);
+    const [invocation] = await stack.runtime.handle.db
+      .select({
+        status: actionInvocations.status,
+        dispatchedNodeId: actionInvocations.dispatchedNodeId,
+        dispatchAttempts: actionInvocations.dispatchAttempts,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(invocation).toEqual({
+      status: 'dispatched',
+      dispatchedNodeId: 'node_b',
+      dispatchAttempts: 2,
+    });
+  });
+
+  it('does not let a stale failed send terminalize a newer registered-action attempt', async () => {
+    const { ws, invocationId } = await setupPrunedReleaseAction(
+      'np-stale-action-send-failure',
+      false,
+      false,
+    );
+    const registry = stack.runtime.realtime;
+    let releaseSend!: () => void;
+    let markSendStarted!: () => void;
+    const sendStarted = new Promise<void>((resolve) => { markSendStarted = resolve; });
+    const sendRelease = new Promise<void>((resolve) => { releaseSend = resolve; });
+    vi.spyOn(registry, 'sendAuthorizedActionToProvider').mockImplementation(async (
+      _workspaceId,
+      nodeId,
+      _providerName,
+      message,
+    ) => {
+      if (nodeId === 'node_b' && message.type === 'action.invoke') {
+        markSendStarted();
+        await sendRelease;
+        return false;
+      }
+      return false;
+    });
+
+    const staleRetry = rescheduleInvocationsForLostNode(
+      stack.runtime.handle.db,
+      registry,
+      ws.workspaceId,
+      'node_a',
+    );
+    await sendStarted;
+    const [claimed] = await stack.runtime.handle.db
+      .select({
+        actionId: actionInvocations.actionId,
+        dispatchAttempts: actionInvocations.dispatchAttempts,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    await stack.runtime.handle.db
+      .update(actionInvocations)
+      .set({
+        status: 'dispatched',
+        error: null,
+        dispatchedNodeId: 'node_b',
+        dispatchedProvider: 'fleet-b',
+        dispatchAttempts: claimed.dispatchAttempts + 1,
+      })
+      .where(eq(actionInvocations.id, invocationId));
+    releaseSend();
+
+    expect(await staleRetry).toBe(0);
+    const [winner] = await stack.runtime.handle.db
+      .select({
+        actionId: actionInvocations.actionId,
+        status: actionInvocations.status,
+        error: actionInvocations.error,
+        dispatchedNodeId: actionInvocations.dispatchedNodeId,
+        dispatchedProvider: actionInvocations.dispatchedProvider,
+        dispatchAttempts: actionInvocations.dispatchAttempts,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(winner).toEqual({
+      actionId: claimed.actionId,
+      status: 'dispatched',
+      error: null,
+      dispatchedNodeId: 'node_b',
+      dispatchedProvider: 'fleet-b',
+      dispatchAttempts: claimed.dispatchAttempts + 1,
+    });
+  });
+
+  it('preserves an accepted registered-action attempt when its capability is pruned afterward', async () => {
+    const { ws, beta, invocationId } = await setupPrunedReleaseAction(
+      'np-accepted-action-prune',
+      false,
+      false,
+    );
+    const registry = stack.runtime.realtime;
+    const [staleRetrySnapshot] = await stack.runtime.handle.db
+      .select()
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    const originalSend = registry.sendAuthorizedActionToProvider!.bind(registry);
+    let releaseAccepted!: () => void;
+    let markAccepted!: () => void;
+    const accepted = new Promise<void>((resolve) => { markAccepted = resolve; });
+    const acceptedRelease = new Promise<void>((resolve) => { releaseAccepted = resolve; });
+    let pauseFirst = true;
+    vi.spyOn(registry, 'sendAuthorizedActionToProvider').mockImplementation(async (
+      workspaceId,
+      nodeId,
+      providerName,
+      message,
+      authorization,
+    ) => {
+      const sent = await originalSend(workspaceId, nodeId, providerName, message, authorization);
+      if (pauseFirst && nodeId === 'node_b' && message.type === 'action.invoke') {
+        pauseFirst = false;
+        markAccepted();
+        await acceptedRelease;
+      }
+      return sent;
+    });
+
+    const retry = rescheduleInvocationsForLostNode(
+      stack.runtime.handle.db,
+      registry,
+      ws.workspaceId,
+      'node_a',
+    );
+    await accepted;
+    const [claimed] = await stack.runtime.handle.db
+      .select({ actionId: actionInvocations.actionId })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    await stack.runtime.handle.db
+      .delete(actions)
+      .where(and(eq(actions.workspaceId, ws.workspaceId), eq(actions.id, claimed.actionId!)));
+    expect(await rescheduleNodeInvocation(
+      stack.runtime.handle.db,
+      registry,
+      staleRetrySnapshot,
+    )).toBe(false);
+    const [stillAccepted] = await stack.runtime.handle.db
+      .select({
+        status: actionInvocations.status,
+        error: actionInvocations.error,
+        providerAcceptedAttempt: actionInvocations.providerAcceptedAttempt,
+        dispatchAttempts: actionInvocations.dispatchAttempts,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(stillAccepted).toEqual({
+      status: 'dispatched',
+      error: null,
+      providerAcceptedAttempt: expect.any(Number),
+      dispatchAttempts: expect.any(Number),
+    });
+    expect(stillAccepted.providerAcceptedAttempt).toBe(stillAccepted.dispatchAttempts);
+    releaseAccepted();
+
+    expect(await retry).toBe(1);
+    expect(beta.sock.ofType('action.invoke')).toHaveLength(1);
+    await beta.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'action.result',
+      invocation_id: invocationId,
+      output: { accepted: true },
+    }));
+    const [completed] = await stack.runtime.handle.db
+      .select({
+        actionId: actionInvocations.actionId,
+        status: actionInvocations.status,
+        error: actionInvocations.error,
+        dispatchedNodeId: actionInvocations.dispatchedNodeId,
+        dispatchedProvider: actionInvocations.dispatchedProvider,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(completed).toEqual({
+      actionId: null,
+      status: 'completed',
+      error: null,
+      dispatchedNodeId: 'node_b',
+      dispatchedProvider: 'fleet-b',
+    });
+  });
+
+  it('keeps an accepted pruned generation pinned through the timeout sweep', async () => {
+    const { ws, alpha, beta, invocationId } = await setupPrunedReleaseAction(
+      'np-accepted-action-timeout',
+      false,
+    );
+    // Remove the only same-name fallback. The historical timeout path then
+    // reached its generic "no placement" reset and erased the accepted route.
+    await beta.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'node.heartbeat',
+      load: 0,
+      active_agents: 0,
+      handlers_live: true,
+      capabilities: [],
+    }));
+    await stack.runtime.handle.db
+      .update(actionInvocations)
+      .set({
+        dispatchedAt: new Date(Date.now() - 60_000),
+        retryAfterAt: new Date(Date.now() - 60_000),
+      })
+      .where(eq(actionInvocations.id, invocationId));
+
+    expect(await sweepTimedOutInvocations(
+      stack.runtime.handle.db,
+      stack.runtime.realtime,
+      { timeoutMs: 0 },
+    )).toBe(0);
+    expect(beta.sock.ofType('action.invoke')).toHaveLength(0);
+    const [preserved] = await stack.runtime.handle.db
+      .select({
+        status: actionInvocations.status,
+        dispatchedNodeId: actionInvocations.dispatchedNodeId,
+        dispatchedProvider: actionInvocations.dispatchedProvider,
+        providerAcceptedAttempt: actionInvocations.providerAcceptedAttempt,
+        dispatchAttempts: actionInvocations.dispatchAttempts,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(preserved).toMatchObject({
+      status: 'dispatched',
+      dispatchedNodeId: 'node_a',
+      dispatchedProvider: 'fleet-a',
+    });
+    expect(preserved.providerAcceptedAttempt).toBe(preserved.dispatchAttempts);
+
+    await alpha.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'action.result',
+      invocation_id: invocationId,
+      output: { original_generation: true },
+    }));
+    const [completed] = await stack.runtime.handle.db
+      .select({ status: actionInvocations.status, output: actionInvocations.output })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(completed).toEqual({
+      status: 'completed',
+      output: { original_generation: true },
+    });
+  });
+
+  it('rejects a registered action acceptance when the invocation name is not the claimed identity', async () => {
+    const { ws, beta } = await setupPrunedReleaseAction(
+      'np-action-name-acceptance-cas',
+      false,
+      false,
+    );
+    const [action] = await stack.runtime.handle.db
+      .select({ id: actions.id })
+      .from(actions)
+      .where(and(
+        eq(actions.workspaceId, ws.workspaceId),
+        eq(actions.handlerNodeId, 'node_b'),
+        eq(actions.name, 'release'),
+      ));
+    expect(action?.id).toBeTruthy();
+    await stack.runtime.handle.db.insert(actionInvocations).values({
+      id: 'inv_action_name_mismatch',
+      workspaceId: ws.workspaceId,
+      actionId: action!.id,
+      actionName: 'not-release',
+      invocationOrigin: 'registered_action',
+      input: {},
+      status: 'dispatched',
+      dispatchedNodeId: 'node_b',
+      dispatchedProvider: 'fleet-b',
+      dispatchAttempts: 1,
+    });
+    beta.sock.received.length = 0;
+
+    expect(await stack.runtime.realtime.sendAuthorizedActionToProvider!(
+      ws.workspaceId,
+      'node_b',
+      'fleet-b',
+      {
+        v: 1,
+        type: 'action.invoke',
+        invocation_id: 'inv_action_name_mismatch',
+        action: 'release',
+        input: {},
+      },
+      {
+        kind: 'registered-node-action-v2',
+        invocationId: 'inv_action_name_mismatch',
+        actionId: action!.id,
+        invocationActionName: 'release',
+        actionName: 'release',
+        dispatchAttempt: 1,
+      },
+    )).toBe(false);
+    expect(beta.sock.ofType('action.invoke')).toHaveLength(0);
+    const [rejected] = await stack.runtime.handle.db
+      .select({ providerAcceptedAttempt: actionInvocations.providerAcceptedAttempt })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, 'inv_action_name_mismatch'));
+    expect(rejected.providerAcceptedAttempt).toBeNull();
+  });
+
+  it('rejects stale registered-action authorization after the route returns to the same tuple', async () => {
+    const { ws, beta } = await setupPrunedReleaseAction(
+      'np-stale-action-acceptance-attempt',
+      false,
+      false,
+    );
+    const [action] = await stack.runtime.handle.db
+      .select({ id: actions.id })
+      .from(actions)
+      .where(and(
+        eq(actions.workspaceId, ws.workspaceId),
+        eq(actions.handlerNodeId, 'node_b'),
+        eq(actions.name, 'release'),
+      ));
+    expect(action?.id).toBeTruthy();
+    await stack.runtime.handle.db.insert(actionInvocations).values({
+      id: 'inv_stale_action_acceptance_attempt',
+      workspaceId: ws.workspaceId,
+      actionId: action!.id,
+      actionName: 'release',
+      invocationOrigin: 'registered_action',
+      input: {},
+      status: 'dispatched',
+      dispatchedNodeId: 'node_b',
+      dispatchedProvider: 'fleet-b',
+      dispatchAttempts: 2,
+    });
+    beta.sock.received.length = 0;
+    const frame = {
+      v: 1 as const,
+      type: 'action.invoke' as const,
+      invocation_id: 'inv_stale_action_acceptance_attempt',
+      action: 'release',
+      input: {},
+    };
+    const authorization = {
+      kind: 'registered-node-action-v2' as const,
+      invocationId: 'inv_stale_action_acceptance_attempt',
+      actionId: action!.id,
+      invocationActionName: 'release',
+      actionName: 'release',
+    };
+
+    // This proof represents an authorization captured for attempt 1 being
+    // resumed after recovery returned attempt 2 to the identical route tuple.
+    expect(await stack.runtime.realtime.sendAuthorizedActionToProvider!(
+      ws.workspaceId,
+      'node_b',
+      'fleet-b',
+      frame,
+      { ...authorization, dispatchAttempt: 1 },
+    )).toBe(false);
+    expect(beta.sock.ofType('action.invoke')).toHaveLength(0);
+
+    expect(await stack.runtime.realtime.sendAuthorizedActionToProvider!(
+      ws.workspaceId,
+      'node_b',
+      'fleet-b',
+      frame,
+      { ...authorization, dispatchAttempt: 2 },
+    )).toBe(true);
+    expect(beta.sock.ofType('action.invoke')).toHaveLength(1);
+
+    // Acceptance itself is a CAS: replaying the same authorization cannot
+    // deliver the provider frame twice.
+    expect(await stack.runtime.realtime.sendAuthorizedActionToProvider!(
+      ws.workspaceId,
+      'node_b',
+      'fleet-b',
+      frame,
+      { ...authorization, dispatchAttempt: 2 },
+    )).toBe(false);
+    expect(beta.sock.ofType('action.invoke')).toHaveLength(1);
+    const [accepted] = await stack.runtime.handle.db
+      .select({ providerAcceptedAttempt: actionInvocations.providerAcceptedAttempt })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, 'inv_stale_action_acceptance_attempt'));
+    expect(accepted.providerAcceptedAttempt).toBe(2);
+  });
+
+  it('uses a new proof kind so legacy registered-action owners fail closed', async () => {
+    const { ws, invocationId } = await setupPrunedReleaseAction(
+      'np-legacy-action-authorization-owner',
+      false,
+      false,
+    );
+    const registry = stack.runtime.realtime;
+    let receivedKind: string | undefined;
+    vi.spyOn(registry, 'sendAuthorizedActionToProvider').mockImplementation(async (
+      _workspaceId,
+      _nodeId,
+      _providerName,
+      _message,
+      authorization,
+    ) => {
+      receivedKind = authorization.kind;
+      // Model an owner compiled against the v1 contract: it recognizes v1
+      // without an attempt generation, but rejects every unknown proof kind.
+      return authorization.kind === 'registered-node-action-v1';
+    });
+
+    const rescheduled = await rescheduleInvocationsForLostNode(
+      stack.runtime.handle.db,
+      registry,
+      ws.workspaceId,
+      'node_a',
+    );
+
+    expect(receivedKind).toBe('registered-node-action-v2');
+    expect(rescheduled).toBe(0);
+    const [failed] = await stack.runtime.handle.db
+      .select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(failed).toEqual({ status: 'failed', error: 'node_dispatch_unavailable' });
+  });
+
+  it('does not deliver a claimed action after pruning replaces its exact identity', async () => {
+    const { ws, beta, invocationId } = await setupPrunedReleaseAction(
+      'np-prune-before-action-authorization',
+      false,
+      false,
+    );
+    const registry = stack.runtime.realtime;
+    const originalSend = registry.sendAuthorizedActionToProvider!.bind(registry);
+    let releaseSend!: () => void;
+    let markSendStarted!: () => void;
+    const sendStarted = new Promise<void>((resolve) => { markSendStarted = resolve; });
+    const sendRelease = new Promise<void>((resolve) => { releaseSend = resolve; });
+    let pauseFirst = true;
+    vi.spyOn(registry, 'sendAuthorizedActionToProvider').mockImplementation(async (...args) => {
+      if (
+        pauseFirst
+        && args[1] === 'node_b'
+        && args[3].type === 'action.invoke'
+        && args[4].kind === 'registered-node-action-v2'
+      ) {
+        pauseFirst = false;
+        markSendStarted();
+        await sendRelease;
+      }
+      return originalSend(...args);
+    });
+
+    const retry = rescheduleInvocationsForLostNode(
+      stack.runtime.handle.db,
+      registry,
+      ws.workspaceId,
+      'node_a',
+    );
+    await sendStarted;
+    const [claimed] = await stack.runtime.handle.db
+      .select({ actionId: actionInvocations.actionId })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    await stack.runtime.handle.db
+      .delete(actions)
+      .where(and(eq(actions.workspaceId, ws.workspaceId), eq(actions.id, claimed.actionId!)));
+    await beta.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'node.heartbeat',
+      load: 0,
+      active_agents: 0,
+      handlers_live: true,
+      capabilities: [{ name: 'release', kind: 'action' }],
+    }));
+    const [replacement] = await stack.runtime.handle.db
+      .select({ id: actions.id })
+      .from(actions)
+      .where(and(
+        eq(actions.workspaceId, ws.workspaceId),
+        eq(actions.handlerNodeId, 'node_b'),
+        eq(actions.name, 'release'),
+      ));
+    expect(replacement.id).not.toBe(claimed.actionId);
+    releaseSend();
+
+    expect(await retry).toBe(0);
+    expect(beta.sock.ofType('action.invoke')).toHaveLength(0);
+    await expectDeletedActionFailure(invocationId);
+  });
+
+  it('reports a pre-authorization action prune consistently to the request and replay', async () => {
+    const ws = await createWorkspace(stack.app, 'np-action-prune-request-outcome');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    await enrollNode(ws, 'node_a', 'alpha');
+    await attachProvider(ws.workspaceId, 'node_a', 'alpha', undefined, [{ name: 'prune-before-auth', kind: 'action' }]);
+    const registry = stack.runtime.realtime;
+    const originalSend = registry.sendAuthorizedActionToProvider!.bind(registry);
+    let releaseAuthorization!: () => void;
+    let markAuthorizationStarted!: () => void;
+    const authorizationStarted = new Promise<void>((resolve) => { markAuthorizationStarted = resolve; });
+    const authorizationRelease = new Promise<void>((resolve) => { releaseAuthorization = resolve; });
+    let pauseFirst = true;
+    vi.spyOn(registry, 'sendAuthorizedActionToProvider').mockImplementation(async (...args) => {
+      if (pauseFirst && args[3].action === 'prune-before-auth') {
+        pauseFirst = false;
+        markAuthorizationStarted();
+        await authorizationRelease;
+      }
+      return originalSend(...args);
+    });
+
+    const invoke = () => stack.app.request('/v1/actions/prune-before-auth/invoke', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+        'Idempotency-Key': 'prune-before-auth-request',
+      },
+      body: JSON.stringify({ input: { work: true } }),
+    });
+    const firstPromise = invoke();
+    await authorizationStarted;
+    await stack.runtime.handle.db
+      .delete(actions)
+      .where(and(eq(actions.workspaceId, ws.workspaceId), eq(actions.name, 'prune-before-auth')));
+    releaseAuthorization();
+
+    const first = await firstPromise;
+    const replay = await invoke();
+    expect([first.status, replay.status]).toEqual([503, 503]);
+    await expect(first.json()).resolves.toMatchObject({ error: { code: 'action_deleted' } });
+    await expect(replay.json()).resolves.toMatchObject({ error: { code: 'action_deleted' } });
+  });
+
+  it('fails a queued pruned registered action during drain without dispatching it by name', async () => {
+    const { ws, alpha, beta, invocationId } = await setupPrunedReleaseAction(
+      'np-pruned-action-drain',
+      true,
+    );
+
+    const drained = await drainNodeInvocations(
+      stack.runtime.handle.db,
+      stack.runtime.realtime,
+      ws.workspaceId,
+      'node_a',
+      { includeDeferred: true },
+    );
+
+    expect(drained).toBe(0);
+    expect(alpha.sock.ofType('action.invoke')).toHaveLength(0);
+    expect(beta.sock.ofType('action.invoke')).toHaveLength(0);
+    await expectDeletedActionFailure(invocationId);
+  });
+
+  it('preserves an accepted pruned action during inventory reconciliation', async () => {
+    const { alpha, beta, invocationId } = await setupPrunedReleaseAction(
+      'np-pruned-action-reconcile',
+      false,
+    );
+
+    await alpha.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'inventory-after-action-prune',
+      type: 'inventory.sync',
+      agents: [],
+    }));
+
+    expect(alpha.sock.ofType('reply').find(
+      (frame) => frame.id === 'inventory-after-action-prune',
+    )).toMatchObject({ ok: true, data: { rescheduled_invocations: 0 } });
+    expect(beta.sock.ofType('action.invoke')).toHaveLength(0);
+    await expectAcceptedActionPreserved(invocationId);
   });
 
   it('keeps one provider inventory from offlining agents or rescheduling invocations owned by another', async () => {
@@ -649,6 +1593,26 @@ describe('node providers', () => {
     expect(sock.ofType('error').at(-1)).toMatchObject({ code: 'action_name_conflict' });
   });
 
+  it('returns the agent-hosted action when a local node fallback has the same name', async () => {
+    const ws = await createWorkspace(stack.app, 'np-action-detail-precedence');
+    await enrollNode(ws, 'node_a', 'alpha');
+    await attachProvider(ws.workspaceId, 'node_a', 'alpha', undefined, [{ name: 'resolve-me', kind: 'action' }]);
+    const helper = await registerAgent(stack.app, ws.workspaceKey, 'detail-helper');
+    const register = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${helper.token}` },
+      body: JSON.stringify({ name: 'resolve-me', description: 'agent wins', handler_agent: helper.name }),
+    });
+    expect(register.status).toBe(201);
+
+    const response = await stack.app.request('/v1/actions/resolve-me', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    expect(response.status).toBe(200);
+    expect((await response.json() as { data: { handler_agent: string | null; handler_node: string | null } }).data)
+      .toMatchObject({ handler_agent: helper.name, handler_node: null });
+  });
+
   it('routes context.update to the provider hosting the agent, not a phantom node default', async () => {
     const ws = await createWorkspace(stack.app, 'np-context');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
@@ -744,6 +1708,93 @@ describe('node providers', () => {
     expect(reply).toMatchObject({ ok: true, id: 'spawn-1' });
     expect(typeof reply.data?.invocation_id).toBe('string');
     expect(reply.data?.handler_node_id).toBe('node_a');
+  });
+
+  it('keeps shadow-spawn capacity owned by the delegated native invocation', async () => {
+    const ws = await createWorkspace(stack.app, 'np-shadow-delegated-reservation');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    await enrollNode(ws, 'node_a', 'alpha');
+    const broker = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'default', [
+      { name: 'spawn:claude', kind: 'capacity' },
+      { name: 'spawn:codex', kind: 'capacity' },
+    ], { maxAgents: 2 });
+    const policy = await attachProvider(
+      ws.workspaceId,
+      'node_a',
+      'alpha',
+      'policy',
+      [{ name: 'spawn:claude', kind: 'action' }],
+      { maxAgents: 0 },
+    );
+    await stack.runtime.handle.db
+      .update(nodes)
+      .set({ maxAgents: 2 })
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_a')));
+
+    const codexResponse = await stack.app.request('/v1/actions/spawn/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { cli: 'codex', name: 'codex-reserved' } }),
+    });
+    expect(codexResponse.status).toBe(201);
+    const codexInvocationId = (await codexResponse.json() as { data: { invocation_id: string } }).data.invocation_id;
+
+    const shadowResponse = await stack.app.request('/v1/actions/spawn/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { cli: 'claude', name: 'shadow-outer' } }),
+    });
+    expect(shadowResponse.status).toBe(201);
+    const shadowInvocationId = (await shadowResponse.json() as { data: { invocation_id: string } }).data.invocation_id;
+
+    await policy.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'delegate-shadow-spawn',
+      type: 'node.spawn',
+      input: { cli: 'claude', name: 'shadow-delegated' },
+    }));
+    const delegatedReply = policy.sock.ofType('reply').at(-1) as {
+      ok?: boolean;
+      data?: { invocation_id?: string };
+    };
+    expect(delegatedReply).toMatchObject({ ok: true, id: 'delegate-shadow-spawn' });
+    const delegatedInvocationId = delegatedReply.data?.invocation_id;
+    expect(delegatedInvocationId).toBeTruthy();
+
+    const [reserved] = await stack.runtime.handle.db
+      .select({ value: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_a')));
+    expect(reserved.value).toBe(2);
+
+    await policy.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'register-with-shadow-outer',
+      type: 'agent.register',
+      name: 'shadow-outer',
+      invocation_id: shadowInvocationId,
+    }));
+    expect(policy.sock.ofType('error').at(-1)).toMatchObject({
+      id: 'register-with-shadow-outer',
+      code: 'node_capacity_exceeded',
+    });
+
+    await broker.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'register-delegated-shadow',
+      type: 'agent.register',
+      name: 'shadow-delegated',
+      invocation_id: delegatedInvocationId,
+    }));
+    expect(broker.sock.ofType('reply').at(-1)).toMatchObject({ id: 'register-delegated-shadow', ok: true });
+    await broker.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'register-native-codex',
+      type: 'agent.register',
+      name: 'codex-reserved',
+      invocation_id: codexInvocationId,
+    }));
+    expect(broker.sock.ofType('reply').at(-1)).toMatchObject({ id: 'register-native-codex', ok: true });
   });
 
   // ctx.sendMessage posts through the canonical message route with a node token

@@ -16,7 +16,14 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Fixed
+
+- Guarded agent releases now compare the exact issued-token generation before dispatch and completion, so stale cleanup cannot release a same-name takeover.
+- Fleet registration now acquires capacity before durable agent writes while preserving `agent_already_exists` precedence, binds cancellation and reservation claims to the exact node/provider/name tuple, and requires invocation correlation when a stale canceled worker is otherwise indistinguishable from its replacement.
+- Native spawn rejects a missing or empty agent name before creating an invocation or reserving node capacity.
+- Registered agent- and node-action dispatch now atomically persists the exact action, route, and accepted attempt at the socket owner; retries cannot duplicate execution, stale send failures cannot clobber a newer winner, and pruning or timeout recovery cannot retarget or revoke accepted work across same-name replacements.
 
 ## [8.4.0] - 2026-09-05
 
@@ -390,7 +397,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased - Minor]: https://github.com/AgentWorkforce/relaycast/compare/v8.3.1...HEAD
+[Unreleased - Minor]: https://github.com/AgentWorkforce/relaycast/compare/v8.4.0...HEAD
 [6.0.3]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.2...v6.0.3
 [6.0.2]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.1...v6.0.2
 [6.0.1]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.0...v6.0.1

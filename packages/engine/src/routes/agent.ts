@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
-import { AgentTypeSchema, CliTypeSchema } from '@relaycast/types';
+import { AGENT_TOKEN_HASH_PATTERN, AgentTypeSchema, CliTypeSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { requireWorkspaceKey, requireAuth, requireAgentToken, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -121,6 +121,7 @@ const releaseAgentSchema = z.object({
   name: z.string().min(1),
   reason: z.string().nullable().optional(),
   delete_agent: z.boolean().optional(),
+  expected_token_hash: z.string().regex(AGENT_TOKEN_HASH_PATTERN).optional(),
 });
 
 const listSessionEventsQuerySchema = z.object({
@@ -946,17 +947,17 @@ agentRoutes.post(
       if (!parsed.ok) {
         return parsed.response;
       }
-      const { name, reason, delete_agent } = parsed.data;
+      const { name, reason, delete_agent, expected_token_hash } = parsed.data;
 
       const input = {
         name,
         reason: reason ?? null,
         delete_agent: delete_agent === true,
+        ...(expected_token_hash ? { expected_token_hash } : {}),
       };
-      const result = await actionEngine.invokeAction(
+      const result = await actionEngine.dispatchAgentRelease(
         db,
         workspace.id,
-        'release',
         {
           input,
           caller_id: callerAgent?.id,

@@ -1,0 +1,146 @@
+{
+  "id": "traj_rkgn69o1fbjc",
+  "version": 1,
+  "task": {
+    "title": "Make Relaycast release cleanup generation-safe",
+    "source": {
+      "system": "plain",
+      "id": "Relay #1672"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-09-06T06:36:56.228Z",
+  "completedAt": "2026-09-06T12:44:15.000Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-09-06T06:36:57.017Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_biww2b8qk4mt",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-09-06T06:36:57.017Z",
+      "endedAt": "2026-09-06T12:44:15.000Z",
+      "events": [
+        {
+          "ts": 1788676617017,
+          "type": "decision",
+          "content": "Use a SHA-256 token-generation verifier for release compare-and-swap: Use a SHA-256 token-generation verifier for release compare-and-swap",
+          "raw": {
+            "question": "Use a SHA-256 token-generation verifier for release compare-and-swap",
+            "chosen": "Use a SHA-256 token-generation verifier for release compare-and-swap",
+            "alternatives": [],
+            "reasoning": "Relaycast takeover deliberately preserves the agent ID while rotating the credential, so the ID cannot distinguish process generations. Persisting and comparing only the token hash binds cleanup to the exact issued generation without storing or transmitting the raw token."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1788688413000,
+          "type": "decision",
+          "content": "Bind released spawn capacity to durable cancellation and exact reservation ownership: Bind released spawn capacity to durable cancellation and exact reservation ownership",
+          "raw": {
+            "question": "Bind released spawn capacity to durable cancellation and exact reservation ownership",
+            "chosen": "Bind released spawn capacity to durable cancellation and exact reservation ownership",
+            "alternatives": [
+              "Retain provider-owned reservations indefinitely after migration",
+              "Reject late workers by mutable agent name"
+            ],
+            "reasoning": "Migration must free otherwise permanent capacity without admitting a worker from an already-terminalized frame. An explicit invocation id plus node/provider/name tuple binds cancellation and live reservation ownership exactly. A legacy worker without that id may claim an unambiguous live tuple, but once the same tuple has a cancellation tombstone it is indistinguishable from a stale process and must fail closed until the replacement supplies its invocation id."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1788688413000,
+          "type": "reflection",
+          "content": "Red regressions covered stale release before dispatch, at the no-host fallback, at the socket-owner boundary, during named-provider drain, at atomic completion, in node-completed audit metadata, action shadowing, custom-action classification, migration reservation ownership, registration rollback, and capability pruning. Must-fire retry, drain, reconciliation, and deterministic prune interleavings prove a registered action cannot be rebound by stale name. Six behaviors were reproduced on test-only head 2f6a6afabf2864b4d27283f5e0fb41737aed3656: agent-hosted acceptance had not durably recorded its route and generation before send, migration 0047 left historical accepted registered actions unmarked, explicit tombstones matched only invocation id rather than the immutable tuple, registered node-action acceptance trusted the mutable dispatched capability rather than the invocation action, timeout recovery cleared an accepted pruned route, and a legacy ID-less worker could consume a same-tuple replacement's reservation. Two further P1 regressions failed on exact test-only head bbbe944616c5c35142af8c457c94309488d97fd6: a migration tombstone with intentionally unknown provider ownership admitted its stale worker, and a delayed registered-action authorization accepted a newer attempt after the route returned to the same action/node/provider tuple. A rolling-upgrade regression failed on exact test-only head c797a18fe90081ebc06930af8ad9ac0751dcbd46 because the engine still sent the stricter proof under v1, which a legacy owner accepted without the attempt generation. Exact product head 1850bcec9e364d346e7195f40614f95611077fad versions the proof as registered-node-action-v2, rejects v1 explicitly in current owners, commits the exact action, route, and accepted attempt before either agent- or node-hosted send, requires that exact previously-unaccepted attempt at the socket owner, backfills only historical registered-action deliveries that have acceptance evidence, pins accepted pruned and takeover generations through recovery, conservatively matches unknown legacy provider ownership, binds explicit tombstones to invocation id plus node/provider/name, and fails an ambiguous ID-less collision closed until the replacement supplies its exact invocation id. Focused engine tests pass 4 files / 109 tests. Root lint (13/13), test (18/18, including all 70 engine files / 792 tests), and build (9/9) pass after the origin/main restack. TypeScript SDK (22 files / 441 tests), types (7 files / 209 tests), Rust SDK (103 tests plus 5 doc tests), and Rust library clippy were run on product head 2951bcb435a578c4bfc35c4b9b62c4455857a052; those package code and test files are unchanged through the exact product head.",
+          "raw": {
+            "focalPoints": [
+              "generation-identity",
+              "atomicity",
+              "compatibility"
+            ],
+            "confidence": 0.9
+          },
+          "significance": "high",
+          "tags": [
+            "focal:generation-identity",
+            "focal:atomicity",
+            "focal:compatibility",
+            "confidence:0.9"
+          ]
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Added SHA-256 token-generation guarded releases across Relaycast types, engine, OpenAPI, TypeScript SDK, and Rust SDK, with takeover, drain, retry, reconciliation, replay, completion-race, action-shadow, migration-capacity, registration-rollback, and concurrent action-prune regressions. Immutable invocation provenance, pre-send action/route/attempt claims, exact socket-owner authorization, and a durable accepted-attempt generation prevent stale-name rebinding, duplicate retries, stale-failure clobber, and revocation of accepted frames. Agent-hosted and node-hosted action acceptance now commits its route and generation before send, and accepted pruned work remains pinned through timeout recovery. Migration cancellation binds explicit ids to their node/provider/name tuple and requires correlation when a same-tuple tombstone makes an ID-less replacement indistinguishable from a stale worker. Nontransactional registration acquires capacity before writes with exact-identity compensation while preserving identity-conflict precedence.",
+    "approach": "Standard approach",
+    "confidence": 0.9
+  },
+  "commits": [
+    "2951bcb435a578c4bfc35c4b9b62c4455857a052",
+    "fd4208e84a45661a4dd58468e918ef879e2c57dc",
+    "99c31ea9d4b9298e43d6da0b726f1a20119467a8",
+    "0b8c5cc44acef0fbde5e88c6e35d2b5c20dddec0",
+    "038af6af9ad61e53e08790fb5ffa3051f3017951",
+    "90b9711882460236c52a3a03f4025bf5361b8eeb",
+    "cd935897bd3ea9de39f98844c5e7e768653cc84e",
+    "7e91c060bce63dd6340977c548f7ee3fc4f071d4",
+    "e0f7757c17e4f9d85b079190e8734c6d5846430c",
+    "da79986f776393aa491a85450b2474d2c0b2bdc5",
+    "2e61bfccdb0247a58f8a6bf8742d59162580a1ab",
+    "64b199b0e2cf72fc913a1882e1771bb67dd92420",
+    "f6a219f0ebc3f6db6a3a517588802f4316c774cd",
+    "4e85e36a62577e1ae8e14ecb2401bcf16002a0c1",
+    "984c575d11cf25fc16f19182065a671834b6030c",
+    "91c791f86a7db00ed29be61a42f9ab931e890c49",
+    "0d91d76c180ee720120b58af5753e95f1868a71f",
+    "ffb225fc1b836e57d24004e83055bcf064d37a20",
+    "3a3d17733494f4c00573b5496a1653f80e4585c5",
+    "acf543c95d8a69f881d8fd160248ca38593719cb",
+    "63c1f730d6d2e235c8cfb2792ba808d31fc643f0",
+    "1c0bfb2e0552bf387c644e6eae8367448d82fb93",
+    "6aef2748c46a3401e5f1077cade3c32dcd10d332",
+    "f5b61e5f3f3bedad435fe9ce7ac314b020d484bb",
+    "1850bcec9e364d346e7195f40614f95611077fad"
+  ],
+  "filesChanged": [
+    "CHANGELOG.md",
+    "README.md",
+    "openapi.yaml",
+    "packages/engine/CHANGELOG.md",
+    "packages/engine/src/__tests__/conformance/agentLifecycle.test.ts",
+    "packages/engine/src/__tests__/conformance/actionHandlerLifecycle.test.ts",
+    "packages/engine/src/__tests__/conformance/agentNodeExitEvents.test.ts",
+    "packages/engine/src/__tests__/conformance/nodeCompletedRelease.test.ts",
+    "packages/engine/src/__tests__/conformance/nodeProviders.test.ts",
+    "packages/engine/src/__tests__/conformance/node.test.ts",
+    "packages/engine/src/adapters/node/__tests__/database.test.ts",
+    "packages/engine/src/adapters/node/realtime.ts",
+    "packages/engine/src/db/migrations/0046_action_invocation_origin.sql",
+    "packages/engine/src/db/migrations/0047_action_invocation_provider_acceptance.sql",
+    "packages/engine/src/db/schema.ts",
+    "packages/engine/src/engine/action.ts",
+    "packages/engine/src/engine/node.ts",
+    "packages/engine/src/engine/nodeProvider.ts",
+    "packages/engine/src/ports/realtime.ts",
+    "packages/engine/src/routes/agent.ts",
+    "packages/sdk-rust/CHANGELOG.md",
+    "packages/sdk-rust/src/relay.rs",
+    "packages/sdk-rust/tests/parity.rs",
+    "packages/sdk-typescript/CHANGELOG.md",
+    "packages/sdk-typescript/src/__tests__/relay.test.ts",
+    "packages/types/CHANGELOG.md",
+    "packages/types/src/agent.ts"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "8e36b742ced89d5e2d4be0866a7f641b31e0acfb",
+    "endRef": "1850bcec9e364d346e7195f40614f95611077fad"
+  }
+}

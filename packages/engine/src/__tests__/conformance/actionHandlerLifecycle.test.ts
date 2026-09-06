@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq, inArray } from 'drizzle-orm';
 import {
   makeNodeStack,
@@ -149,6 +149,22 @@ describe('agent-published action lifecycle', () => {
     });
     expect(invoke.status).toBe(201);
     expect(sock.ofType('action.invoke').at(-1)).toMatchObject({ action: 'work', input: { job: 1 } });
+
+    // Legacy HTTP-created node actions stored the default provider as null.
+    // Dispatch and socket-owner authorization must normalize that value the
+    // same way rather than accepting the route and dropping its frame.
+    await stack.runtime.handle.db
+      .update(actions)
+      .set({ handlerProvider: null })
+      .where(and(eq(actions.workspaceId, ws.workspaceId), eq(actions.name, 'work')));
+    sock.received.length = 0;
+    const legacyInvoke = await stack.app.request('/v1/actions/work/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { job: 2 } }),
+    });
+    expect(legacyInvoke.status).toBe(201);
+    expect(sock.ofType('action.invoke').at(-1)).toMatchObject({ action: 'work', input: { job: 2 } });
   });
 
   it('invoking an action whose handler points at a dead connection fails fast with handler_unavailable', async () => {
@@ -242,7 +258,7 @@ describe('agent-published action lifecycle', () => {
     });
   });
 
-  it('a handler takeover fails invocations in flight toward the previous handler', async () => {
+  it('a handler takeover preserves work already accepted by the previous handler', async () => {
     const ws = await createWorkspace(stack.app, 'action-takeover-inflight');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'worker');
     const oldIdentity = await registerAgent(stack.app, ws.workspaceKey, 'orchestrator-run1');
@@ -255,7 +271,6 @@ describe('agent-published action lifecycle', () => {
     });
     expect(first.status).toBe(201);
 
-    const callerNode = await attachDirectNodeSocket(stack, ws.workspaceId, caller);
     const oldNode = await attachDirectNodeSocket(stack, ws.workspaceId, oldIdentity);
     const invoke = await stack.app.request('/v1/actions/crm.get_person_batch/invoke', {
       method: 'POST',
@@ -266,9 +281,9 @@ describe('agent-published action lifecycle', () => {
     const invocationId = (await invoke.json() as { data: { invocation_id: string } }).data.invocation_id;
     expect(oldNode.sock.ofType('action.invoke')).toHaveLength(1);
 
-    // A different identity takes over the action while the old invocation is
-    // still in flight: the stranded invocation must fail (its completion auth
-    // and routing now point at the new handler), and the caller must hear it.
+    // A different identity takes over the action after the old handler has
+    // accepted the frame. That exact route remains authoritative until its
+    // provider completes; takeover applies only to future invocations.
     const second = await stack.app.request('/v1/actions', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${newIdentity.token}` },
@@ -277,16 +292,30 @@ describe('agent-published action lifecycle', () => {
     expect(second.status).toBe(200);
 
     const [row] = await stack.runtime.handle.db
-      .select({ status: actionInvocations.status, error: actionInvocations.error })
+      .select({
+        actionId: actionInvocations.actionId,
+        status: actionInvocations.status,
+        error: actionInvocations.error,
+        providerAcceptedAttempt: actionInvocations.providerAcceptedAttempt,
+        dispatchAttempts: actionInvocations.dispatchAttempts,
+      })
       .from(actionInvocations)
       .where(eq(actionInvocations.id, invocationId));
-    expect(row).toMatchObject({ status: 'failed', error: 'handler_unavailable' });
-
-    await new Promise((r) => setTimeout(r, 50));
-    const failed = deliverFramesOfType(callerNode.sock, 'action.failed');
-    expect(failed.length).toBeGreaterThanOrEqual(1);
-    expect((failed.at(-1)!.payload as { data: Record<string, unknown> }).data).toMatchObject({
+    expect(row).toMatchObject({ actionId: null, status: 'dispatched', error: null });
+    expect(row.providerAcceptedAttempt).toBe(row.dispatchAttempts);
+    await oldNode.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'action.result',
       invocation_id: invocationId,
+      output: { accepted_before_takeover: true },
+    }));
+    const [completedOld] = await stack.runtime.handle.db
+      .select({ status: actionInvocations.status, output: actionInvocations.output })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(completedOld).toEqual({
+      status: 'completed',
+      output: { accepted_before_takeover: true },
     });
 
     // A re-register by the SAME handler (the common register-on-connect no-op)
@@ -320,7 +349,7 @@ describe('agent-published action lifecycle', () => {
     expect(['pending', 'dispatched']).toContain(row2.status);
   });
 
-  it('deleting an action fails its open invocations and notifies the caller', async () => {
+  it('deleting an action before provider acceptance fails its invocation and notifies the caller', async () => {
     const ws = await createWorkspace(stack.app, 'action-delete-inflight');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'worker');
     const handler = await registerAgent(stack.app, ws.workspaceKey, 'orchestrator');
@@ -334,19 +363,43 @@ describe('agent-published action lifecycle', () => {
 
     const callerNode = await attachDirectNodeSocket(stack, ws.workspaceId, caller);
     await attachDirectNodeSocket(stack, ws.workspaceId, handler);
-    const invoke = await stack.app.request('/v1/actions/crm.get_person_batch/invoke', {
+    const registry = stack.runtime.realtime;
+    const originalSend = registry.sendAuthorizedActionToProvider!.bind(registry);
+    let releaseAuthorization!: () => void;
+    let markAuthorizationStarted!: () => void;
+    const authorizationStarted = new Promise<void>((resolve) => { markAuthorizationStarted = resolve; });
+    const authorizationRelease = new Promise<void>((resolve) => { releaseAuthorization = resolve; });
+    let pause = true;
+    vi.spyOn(registry, 'sendAuthorizedActionToProvider').mockImplementation(async (...args) => {
+      if (pause && args[4].kind === 'agent-action-v1') {
+        pause = false;
+        markAuthorizationStarted();
+        await authorizationRelease;
+      }
+      return originalSend(...args);
+    });
+    const invokePromise = stack.app.request('/v1/actions/crm.get_person_batch/invoke', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
       body: JSON.stringify({ input: { batchSize: 5 } }),
     });
-    expect(invoke.status).toBe(201);
-    const invocationId = (await invoke.json() as { data: { invocation_id: string } }).data.invocation_id;
+    await authorizationStarted;
+    const [open] = await stack.runtime.handle.db
+      .select({ id: actionInvocations.id })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'crm.get_person_batch'),
+      ));
+    const invocationId = open.id;
 
     const del = await stack.app.request('/v1/actions/crm.get_person_batch', {
       method: 'DELETE',
       headers: { authorization: `Bearer ${ws.workspaceKey}` },
     });
     expect(del.status).toBe(204);
+    releaseAuthorization();
+    expect((await invokePromise).status).toBe(503);
 
     // The open invocation is terminally failed (action delete sets actionId
     // null, which would otherwise orphan it outside the TTL sweep's join).
@@ -362,6 +415,115 @@ describe('agent-published action lifecycle', () => {
     expect((failed.at(-1)!.payload as { data: Record<string, unknown> }).data).toMatchObject({
       invocation_id: invocationId,
       error: 'action_deleted',
+    });
+  });
+
+  it('keeps an accepted agent-hosted generation completable after its action is replaced', async () => {
+    const ws = await createWorkspace(stack.app, 'agent-action-accepted-generation');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'worker');
+    const handler = await registerAgent(stack.app, ws.workspaceKey, 'orchestrator');
+    const replacement = await registerAgent(stack.app, ws.workspaceKey, 'replacement');
+    const register = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${handler.token}` },
+      body: registerBody('orchestrator'),
+    });
+    expect(register.status).toBe(201);
+    const originalActionId = (await register.json() as { data: { id: string } }).data.id;
+    const handlerNode = await attachDirectNodeSocket(stack, ws.workspaceId, handler);
+
+    const registry = stack.runtime.realtime;
+    const originalSend = registry.sendAuthorizedActionToProvider!.bind(registry);
+    let releaseAccepted!: () => void;
+    let markAccepted!: () => void;
+    const accepted = new Promise<void>((resolve) => { markAccepted = resolve; });
+    const acceptedRelease = new Promise<void>((resolve) => { releaseAccepted = resolve; });
+    let pause = true;
+    vi.spyOn(registry, 'sendAuthorizedActionToProvider').mockImplementation(async (...args) => {
+      const sent = await originalSend(...args);
+      if (pause && args[4].kind === 'agent-action-v1') {
+        pause = false;
+        markAccepted();
+        await acceptedRelease;
+      }
+      return sent;
+    });
+
+    const invokePromise = stack.app.request('/v1/actions/crm.get_person_batch/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { batchSize: 5 } }),
+    });
+    await accepted;
+    const [acceptedRow] = await stack.runtime.handle.db
+      .select({
+        id: actionInvocations.id,
+        dispatchedNodeId: actionInvocations.dispatchedNodeId,
+        dispatchedProvider: actionInvocations.dispatchedProvider,
+        providerAcceptedAttempt: actionInvocations.providerAcceptedAttempt,
+        dispatchAttempts: actionInvocations.dispatchAttempts,
+      })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionId, originalActionId),
+      ));
+    expect(acceptedRow).toMatchObject({
+      dispatchedNodeId: handlerNode.nodeId,
+      dispatchedProvider: 'default',
+    });
+    expect(acceptedRow.providerAcceptedAttempt).toBe(acceptedRow.dispatchAttempts);
+
+    await stack.runtime.handle.db
+      .delete(actions)
+      .where(and(eq(actions.workspaceId, ws.workspaceId), eq(actions.id, originalActionId)));
+    const replace = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${replacement.token}` },
+      body: registerBody('replacement'),
+    });
+    expect(replace.status).toBe(201);
+    await stack.runtime.handle.db
+      .update(actionInvocations)
+      .set({ dispatchedAt: new Date(0), retryAfterAt: new Date(0) })
+      .where(eq(actionInvocations.id, acceptedRow.id));
+
+    expect(await sweepTimedOutInvocations(
+      stack.runtime.handle.db,
+      registry,
+      { timeoutMs: 0 },
+    )).toBe(0);
+    const [preserved] = await stack.runtime.handle.db
+      .select({
+        actionId: actionInvocations.actionId,
+        status: actionInvocations.status,
+        dispatchedNodeId: actionInvocations.dispatchedNodeId,
+        dispatchedProvider: actionInvocations.dispatchedProvider,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, acceptedRow.id));
+    expect(preserved).toEqual({
+      actionId: null,
+      status: 'dispatched',
+      dispatchedNodeId: handlerNode.nodeId,
+      dispatchedProvider: 'default',
+    });
+
+    await handlerNode.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'action.result',
+      invocation_id: acceptedRow.id,
+      output: { original_generation: true },
+    }));
+    releaseAccepted();
+    expect((await invokePromise).status).toBe(201);
+    const [completed] = await stack.runtime.handle.db
+      .select({ status: actionInvocations.status, output: actionInvocations.output })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, acceptedRow.id));
+    expect(completed).toEqual({
+      status: 'completed',
+      output: { original_generation: true },
     });
   });
 

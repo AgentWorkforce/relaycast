@@ -4,6 +4,7 @@ use crate::agent::AgentClient;
 use crate::client::{ClientOptions, HttpClient};
 use crate::error::{RelayError, Result};
 use crate::types::*;
+use serde::Serialize;
 
 use crate::DEFAULT_BASE_URL;
 
@@ -540,6 +541,35 @@ impl RelayCast {
     ) -> Result<ReleaseAgentResponse> {
         self.client
             .post("/v1/agents/release", Some(request), None)
+            .await
+    }
+
+    /// Release only while the agent still owns the exact issued-token hash.
+    ///
+    /// The raw token is never sent in this request. Relaycast returns a 409
+    /// conflict without dispatching or mutating the agent when its token has
+    /// rotated since `expected_token_hash` was captured.
+    pub async fn release_agent_if_token_hash(
+        &self,
+        request: ReleaseAgentRequest,
+        expected_token_hash: String,
+    ) -> Result<ReleaseAgentResponse> {
+        #[derive(Serialize)]
+        struct GuardedReleaseAgentRequest {
+            #[serde(flatten)]
+            request: ReleaseAgentRequest,
+            expected_token_hash: String,
+        }
+
+        self.client
+            .post(
+                "/v1/agents/release",
+                Some(GuardedReleaseAgentRequest {
+                    request,
+                    expected_token_hash,
+                }),
+                None,
+            )
             .await
     }
 

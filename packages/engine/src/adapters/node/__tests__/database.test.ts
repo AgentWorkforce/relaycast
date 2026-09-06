@@ -202,6 +202,146 @@ describe('action invocation handler snapshot migration', () => {
   });
 });
 
+describe('action invocation origin migration', () => {
+  it('preserves registered provenance and fails ambiguous open invocations closed', () => {
+    const sqlite = new Database(':memory:');
+    handles.push(sqlite);
+    sqlite.exec(`
+      CREATE TABLE nodes (
+        id TEXT PRIMARY KEY,
+        reserved_agents INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE action_invocations (
+        id TEXT PRIMARY KEY,
+        action_id TEXT DEFAULT NULL,
+        action_name TEXT NOT NULL,
+        status TEXT NOT NULL,
+        error TEXT DEFAULT NULL,
+        dispatched_node_id TEXT DEFAULT NULL,
+        spawn_reserved_at INTEGER DEFAULT NULL,
+        completed_at INTEGER DEFAULT NULL
+      );
+      INSERT INTO nodes (id, reserved_agents) VALUES ('node_a', 2);
+      INSERT INTO action_invocations
+        (id, action_id, action_name, status, dispatched_node_id, spawn_reserved_at)
+      VALUES
+        ('registered_release', 'action_release', 'release', 'dispatched', NULL, NULL),
+        ('legacy_open_release', NULL, 'release', 'pending', NULL, NULL),
+        ('legacy_completed_release', NULL, 'release', 'completed', NULL, NULL),
+        ('legacy_spawn', NULL, 'spawn', 'pending', 'node_a', 1700000000),
+        ('registered_spawn', 'action_spawn', 'spawn', 'pending', 'node_a', 1700000001);
+    `);
+
+    const migration = readFileSync(
+      new URL('../../../db/migrations/0046_action_invocation_origin.sql', import.meta.url),
+      'utf8',
+    );
+    sqlite.exec(migration);
+
+    expect(sqlite.prepare(`
+      SELECT id, invocation_origin, status, error, completed_at IS NOT NULL AS completed
+      FROM action_invocations
+      ORDER BY id
+    `).all()).toEqual([
+      {
+        id: 'legacy_completed_release',
+        invocation_origin: 'legacy_unknown',
+        status: 'completed',
+        error: null,
+        completed: 0,
+      },
+      {
+        id: 'legacy_open_release',
+        invocation_origin: 'legacy_unknown',
+        status: 'failed',
+        error: 'invocation_origin_unavailable',
+        completed: 1,
+      },
+      {
+        id: 'legacy_spawn',
+        invocation_origin: 'legacy_unknown',
+        status: 'failed',
+        error: 'invocation_origin_unavailable',
+        completed: 1,
+      },
+      {
+        id: 'registered_release',
+        invocation_origin: 'registered_action',
+        status: 'dispatched',
+        error: null,
+        completed: 0,
+      },
+      {
+        id: 'registered_spawn',
+        invocation_origin: 'registered_action',
+        status: 'pending',
+        error: null,
+        completed: 0,
+      },
+    ]);
+
+    expect(sqlite.prepare(`
+      SELECT reserved_agents FROM nodes WHERE id = 'node_a'
+    `).get()).toEqual({ reserved_agents: 1 });
+    expect(sqlite.prepare(`
+      SELECT id, spawn_reserved_at FROM action_invocations
+      WHERE id IN ('legacy_spawn', 'registered_spawn')
+      ORDER BY id
+    `).all()).toEqual([
+      { id: 'legacy_spawn', spawn_reserved_at: null },
+      { id: 'registered_spawn', spawn_reserved_at: 1700000001 },
+    ]);
+
+    expect(() => sqlite.exec(`
+      INSERT INTO action_invocations
+        (id, action_name, status, invocation_origin)
+      VALUES ('invalid_origin', 'release', 'pending', 'invented');
+    `)).toThrow();
+  });
+});
+
+describe('action invocation provider acceptance migration', () => {
+  it('preserves accepted historical generations without claiming pending work', () => {
+    const sqlite = new Database(':memory:');
+    handles.push(sqlite);
+    sqlite.exec(`
+      CREATE TABLE action_invocations (
+        id TEXT PRIMARY KEY,
+        action_id TEXT DEFAULT NULL,
+        invocation_origin TEXT NOT NULL,
+        status TEXT NOT NULL,
+        dispatch_attempts INTEGER NOT NULL DEFAULT 0
+      );
+      INSERT INTO action_invocations
+        (id, action_id, invocation_origin, status, dispatch_attempts)
+      VALUES
+        ('accepted_dispatched', 'action_1', 'registered_action', 'dispatched', 2),
+        ('accepted_invoked', 'action_2', 'registered_action', 'invoked', 1),
+        ('pending_registered', 'action_3', 'registered_action', 'pending', 1),
+        ('builtin_dispatched', NULL, 'builtin', 'dispatched', 3),
+        ('unattempted_registered', 'action_4', 'registered_action', 'dispatched', 0);
+    `);
+
+    const migration = readFileSync(
+      new URL('../../../db/migrations/0047_action_invocation_provider_acceptance.sql', import.meta.url),
+      'utf8',
+    );
+    sqlite.exec(migration);
+
+    expect(sqlite.prepare(`
+      SELECT id, provider_accepted_attempt
+      FROM action_invocations
+      ORDER BY id
+    `).all()).toEqual([
+      { id: 'accepted_dispatched', provider_accepted_attempt: 2 },
+      { id: 'accepted_invoked', provider_accepted_attempt: 1 },
+      { id: 'builtin_dispatched', provider_accepted_attempt: null },
+      { id: 'pending_registered', provider_accepted_attempt: null },
+      { id: 'unattempted_registered', provider_accepted_attempt: null },
+    ]);
+  });
+});
+
 describe('session_ref lookup migration', () => {
   it('backfills the indexed key and durable payload-free session ledger', () => {
     const sqlite = new Database(':memory:');

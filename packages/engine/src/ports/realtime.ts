@@ -77,6 +77,44 @@ export interface AgentActionProviderAuthorization {
   recordAttempt: boolean;
 }
 
+/** Exact token-generation proof for a release accepted by the socket owner. */
+export interface ReleaseActionProviderAuthorization {
+  kind: 'release-generation-v1';
+  invocationId: string;
+  agentName: string;
+  expectedTokenHash: string;
+}
+
+/** Legacy registered action proof, retained only so current owners fail it closed. */
+export interface LegacyRegisteredNodeActionProviderAuthorization {
+  kind: 'registered-node-action-v1';
+  invocationId: string;
+  actionId: string;
+  /** Immutable API-level name persisted on the invocation (for example `spawn`). */
+  invocationActionName: string;
+  /** Exact provider capability being dispatched (for example `spawn:claude`). */
+  actionName: string;
+}
+
+/** Exact registered node-action identity and attempt accepted by the socket owner. */
+export interface RegisteredNodeActionProviderAuthorization {
+  kind: 'registered-node-action-v2';
+  invocationId: string;
+  actionId: string;
+  /** Exact dispatch-attempt generation claimed before entering the socket owner. */
+  dispatchAttempt: number;
+  /** Immutable API-level name persisted on the invocation (for example `spawn`). */
+  invocationActionName: string;
+  /** Exact provider capability being dispatched (for example `spawn:claude`). */
+  actionName: string;
+}
+
+export type ActionProviderAuthorization =
+  | AgentActionProviderAuthorization
+  | ReleaseActionProviderAuthorization
+  | LegacyRegisteredNodeActionProviderAuthorization
+  | RegisteredNodeActionProviderAuthorization;
+
 export interface NodeDrainOptions {
   /** Include pending rows whose prior retry deadline has not elapsed yet. */
   includeDeferred?: boolean;
@@ -109,9 +147,10 @@ export interface NodeConnectionRegistry {
   ): Promise<boolean>;
 
   /**
-   * Send an agent-hosted `action.invoke` only after the socket owner verifies
-   * that the durable invocation is open and the action still names the same
-   * handler. The owner also records provider acceptance before resolving.
+   * Send an `action.invoke` only after the socket owner verifies that the
+   * durable invocation is open and the exact action or release generation
+   * still owns the route. The owner also records acceptance before resolving
+   * when the selected authorization kind requires it.
    *
    * Optional for adapter source compatibility, but agent-hosted dispatch fails
    * closed when it is absent. This prevents an older remote adapter from
@@ -122,7 +161,7 @@ export interface NodeConnectionRegistry {
     nodeId: string,
     providerName: string,
     message: Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }>,
-    authorization: AgentActionProviderAuthorization,
+    authorization: ActionProviderAuthorization,
   ): Promise<boolean>;
 
   /** True when the node currently has at least one connected provider. */

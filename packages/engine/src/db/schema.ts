@@ -1039,6 +1039,13 @@ export const actionInvocations = sqliteTable(
       .references(() => workspaces.id, { onDelete: 'cascade' }),
     actionId: text('action_id').references(() => actions.id, { onDelete: 'set null' }),
     actionName: text('action_name').notNull(),
+    // Immutable invocation provenance. action_id is a mutable FK that becomes
+    // null when a materialized provider action is pruned, so it cannot safely
+    // distinguish built-in lifecycle work from a user action with the same name.
+    invocationOrigin: text('invocation_origin')
+      .$type<'legacy_unknown' | 'registered_action' | 'builtin'>()
+      .notNull()
+      .default('legacy_unknown'),
     callerId: text('caller_id').references(() => agents.id, { onDelete: 'set null' }),
     callerName: text('caller_name'),
     // Immutable response snapshots for idempotent replay. Deliberately not
@@ -1053,6 +1060,10 @@ export const actionInvocations = sqliteTable(
     durationMs: integer('duration_ms'),
     dispatchedNodeId: text('dispatched_node_id').references(() => nodes.id, { onDelete: 'set null' }),
     dispatchedAt: integer('dispatched_at', { mode: 'timestamp' }),
+    // Dispatch-attempt generation accepted atomically by the socket owner.
+    // Unlike action_id, this survives capability pruning without granting a
+    // later retry generation the previous attempt's acceptance.
+    providerAcceptedAttempt: integer('provider_accepted_attempt'),
     spawnReservedAt: integer('spawn_reserved_at', { mode: 'timestamp' }),
     attemptedNodeIds: text('attempted_node_ids', { mode: 'json' }).$type<string[]>().notNull().default([]),
     dispatchAttempts: integer('dispatch_attempts').notNull().default(0),

@@ -9,6 +9,7 @@ import {
   registerAgent,
   type TestStack,
 } from './harness.js';
+import { sha256Hex } from '../../lib/crypto.js';
 
 describe('agent presence and release lifecycle', () => {
   let stack: TestStack;
@@ -209,6 +210,65 @@ describe('agent presence and release lifecycle', () => {
     });
   });
 
+  it('settles a guarded no-host fallback as a generation conflict after takeover', async () => {
+    const ws = await createWorkspace(stack.app, 'hostless-release-generation-race');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'hostless-release-caller');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'hostless-generation-agent');
+    const expectedTokenHash = await sha256Hex(target.token);
+    const replacementTokenHash = 'a'.repeat(64);
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    const originalConnected = nodeConnections.isProviderConnected.bind(nodeConnections);
+    let rotated = false;
+    vi.spyOn(nodeConnections, 'isProviderConnected').mockImplementation((...args) => {
+      if (!rotated) {
+        rotated = true;
+        stack.runtime.handle.sqlite
+          .prepare('UPDATE agents SET token_hash = ? WHERE id = ?')
+          .run(replacementTokenHash, target.agentId);
+      }
+      return originalConnected(...args);
+    });
+
+    const invoke = () => stack.app.request('/v1/actions/release/invoke', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+        'Idempotency-Key': 'hostless-release-generation-race',
+      },
+      body: JSON.stringify({
+        input: {
+          name: target.name,
+          delete_agent: false,
+          expected_token_hash: expectedTokenHash,
+        },
+      }),
+    });
+    const response = await invoke();
+
+    expect(rotated).toBe(true);
+    expect(response.status).toBe(409);
+    expect((await response.json() as { error: { code: string } }).error.code)
+      .toBe('agent_release_generation_conflict');
+    const replay = await invoke();
+    expect(replay.status).toBe(409);
+    expect((await replay.json() as { error: { code: string } }).error.code)
+      .toBe('agent_release_generation_conflict');
+    const [replacement] = await stack.runtime.deps.db
+      .select({ status: agents.status, tokenHash: agents.tokenHash })
+      .from(agents)
+      .where(eq(agents.id, target.agentId));
+    expect(replacement).toEqual({ status: 'active', tokenHash: replacementTokenHash });
+    const [invocation] = await stack.runtime.deps.db
+      .select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'release'),
+      ));
+    expect(invocation).toEqual({ status: 'failed', error: 'agent_release_generation_conflict' });
+  });
+
   it('deletes a hostless agent and its implicit direct node', async () => {
     const ws = await createWorkspace(stack.app, 'hostless-agent-delete');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'delete-me');
@@ -225,7 +285,11 @@ describe('agent presence and release lifecycle', () => {
         'content-type': 'application/json',
         authorization: `Bearer ${ws.workspaceKey}`,
       },
-      body: JSON.stringify({ name: target.name, delete_agent: true }),
+      body: JSON.stringify({
+        name: target.name,
+        delete_agent: true,
+        expected_token_hash: await sha256Hex(target.token),
+      }),
     });
     expect(response.status).toBe(201);
     expect((await response.json() as { data: { status: string; handler_node_id: string | null } }).data)
@@ -537,6 +601,97 @@ describe('agent presence and release lifecycle', () => {
       .toHaveLength(0);
   });
 
+  it('records the binding that local reaping actually deactivates after a concurrent rebind', async () => {
+    const ws = await createWorkspace(stack.app, 'hostless-agent-rebind-race');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'rebound-release-agent');
+    for (const [nodeId, name] of [['node_release_old', 'release-old'], ['node_release_new', 'release-new']] as const) {
+      const enrolled = await stack.app.request('/v1/nodes', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+        body: JSON.stringify({ node_id: nodeId, name, role: 'broker', max_agents: 1 }),
+      });
+      expect(enrolled.status).toBe(201);
+    }
+    const bound = await stack.app.request('/v1/nodes/release-old/agents', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ agent_name: target.name }),
+    });
+    expect(bound.status).toBe(201);
+
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    let rebound = false;
+    vi.spyOn(nodeConnections, 'isProviderConnected').mockImplementation(() => {
+      if (!rebound) {
+        rebound = true;
+        const sqlite = stack.runtime.handle.sqlite;
+        sqlite.transaction(() => {
+          sqlite.prepare(`
+            UPDATE agent_node_bindings
+            SET status = 'inactive', updated_at = unixepoch()
+            WHERE workspace_id = ? AND agent_id = ? AND status = 'active'
+          `).run(ws.workspaceId, target.agentId);
+          sqlite.prepare(`
+            INSERT INTO agent_node_bindings (id, workspace_id, agent_id, node_id, status)
+            VALUES (?, ?, ?, 'node_release_new', 'active')
+            ON CONFLICT(agent_id, node_id) DO UPDATE
+            SET status = 'active', updated_at = unixepoch()
+          `).run('binding_release_race', ws.workspaceId, target.agentId);
+          sqlite.prepare(`
+            UPDATE agents
+            SET location_type = 'via_node', location_node_id = 'node_release_new'
+            WHERE workspace_id = ? AND id = ?
+          `).run(ws.workspaceId, target.agentId);
+          sqlite.prepare(`
+            UPDATE nodes
+            SET active_agents = CASE id WHEN 'node_release_old' THEN 0 ELSE 1 END
+            WHERE workspace_id = ? AND id IN ('node_release_old', 'node_release_new')
+          `).run(ws.workspaceId);
+        })();
+      }
+      return false;
+    });
+
+    const response = await stack.app.request('/v1/agents/release', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({
+        name: target.name,
+        delete_agent: true,
+        expected_token_hash: await sha256Hex(target.token),
+      }),
+    });
+    expect(rebound).toBe(true);
+    expect(response.status).toBe(201);
+    expect((await response.json() as { data: { handler_node_id: string | null } }).data.handler_node_id)
+      .toBe('node_release_new');
+
+    const [invocation] = await stack.runtime.deps.db
+      .select({ handlerNodeId: actionInvocations.handlerNodeId })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'release'),
+      ));
+    expect(invocation.handlerNodeId).toBe('node_release_new');
+    const [exited] = await stack.runtime.deps.db
+      .select({ payload: workspaceEvents.payload })
+      .from(workspaceEvents)
+      .where(and(
+        eq(workspaceEvents.workspaceId, ws.workspaceId),
+        eq(workspaceEvents.type, 'agent.exited'),
+      ));
+    expect(JSON.parse(exited.payload)).toMatchObject({ node_id: 'node_release_new' });
+    const nodeRows = await stack.runtime.deps.db
+      .select({ id: nodes.id, activeAgents: nodes.activeAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.role, 'broker')));
+    expect(nodeRows).toEqual(expect.arrayContaining([
+      { id: 'node_release_old', activeAgents: 0 },
+      { id: 'node_release_new', activeAgents: 0 },
+    ]));
+  });
+
   it('rolls back every local reap mutation when invocation completion fails', async () => {
     const ws = await createWorkspace(stack.app, 'hostless-agent-delete-rollback');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'keep-me');
@@ -610,6 +765,554 @@ describe('agent presence and release lifecycle', () => {
     };
     expect(body.data).toMatchObject({ status: 'dispatched', dispatched_node_id: nodeId });
     expect(sock.ofType('action.invoke').at(-1)).toMatchObject({ action: 'release' });
+    await handle.handleClose();
+  });
+
+  it('does not let a registered release action shadow the guarded agent endpoint', async () => {
+    const ws = await createWorkspace(stack.app, 'guarded-release-shadow');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'shadow-target');
+    const handler = await registerAgent(stack.app, ws.workspaceKey, 'shadow-handler');
+    const { sock, handle } = await attachDirectNodeSocket(stack, ws.workspaceId, handler);
+    const expectedTokenHash = await sha256Hex(target.token);
+    const replacementTokenHash = 'a'.repeat(64);
+
+    const register = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${handler.token}`,
+      },
+      body: JSON.stringify({
+        name: 'release',
+        description: 'A user-defined action that must not shadow the agent lifecycle endpoint',
+        handler_agent: handler.name,
+      }),
+    });
+    expect(register.status).toBe(201);
+
+    await stack.runtime.deps.db
+      .update(agents)
+      .set({ tokenHash: replacementTokenHash })
+      .where(eq(agents.id, target.agentId));
+
+    const response = await stack.app.request('/v1/agents/release', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+      body: JSON.stringify({
+        name: target.name,
+        expected_token_hash: expectedTokenHash,
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    expect((await response.json() as { error: { code: string } }).error.code)
+      .toBe('agent_release_generation_conflict');
+    expect(sock.ofType('action.invoke').filter((event) => event.action === 'release')).toHaveLength(0);
+    expect(await stack.runtime.deps.db
+      .select()
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'release'),
+      )))
+      .toHaveLength(0);
+    const [replacement] = await stack.runtime.deps.db
+      .select({ id: agents.id, tokenHash: agents.tokenHash })
+      .from(agents)
+      .where(eq(agents.id, target.agentId));
+    expect(replacement).toEqual({ id: target.agentId, tokenHash: replacementTokenHash });
+    await handle.handleClose();
+  });
+
+  it('rejects a guarded release after same-id takeover without dispatching it', async () => {
+    const ws = await createWorkspace(stack.app, 'stale-release-after-takeover');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'taken-over-agent');
+    const { sock, handle } = await attachDirectNodeSocket(stack, ws.workspaceId, target);
+    const expectedTokenHash = await sha256Hex(target.token);
+
+    const takeover = await stack.app.request(`/v1/agents/${target.name}/takeover`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+      body: JSON.stringify({
+        expected_agent_id: target.agentId,
+        actor: 'release-cas-test',
+        reason: 'replace the process generation',
+        session_ref: 'session-replacement',
+        node_id: 'node-replacement',
+      }),
+    });
+    expect(takeover.status).toBe(200);
+
+    const response = await stack.app.request('/v1/agents/release', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+      body: JSON.stringify({
+        name: target.name,
+        delete_agent: false,
+        expected_token_hash: expectedTokenHash,
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    expect((await response.json() as { error: { code: string } }).error.code)
+      .toBe('agent_release_generation_conflict');
+    expect(sock.ofType('action.invoke').filter((event) => event.action === 'release')).toHaveLength(0);
+    expect(await stack.runtime.deps.db
+      .select()
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'release'),
+      )))
+      .toHaveLength(0);
+    const [replacement] = await stack.runtime.deps.db
+      .select({ id: agents.id, name: agents.name, tokenHash: agents.tokenHash })
+      .from(agents)
+      .where(eq(agents.id, target.agentId));
+    expect(replacement).toMatchObject({ id: target.agentId, name: target.name });
+    expect(replacement.tokenHash).not.toBe(expectedTokenHash);
+    await handle.handleClose();
+  });
+
+  it('revalidates the guarded generation immediately before node dispatch', async () => {
+    const ws = await createWorkspace(stack.app, 'release-generation-dispatch-race');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'dispatch-race-agent');
+    const { sock, handle } = await attachDirectNodeSocket(stack, ws.workspaceId, target);
+    const expectedTokenHash = await sha256Hex(target.token);
+    const replacementTokenHash = 'b'.repeat(64);
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    const originalConnected = nodeConnections.isProviderConnected.bind(nodeConnections);
+    let rotated = false;
+    vi.spyOn(nodeConnections, 'isProviderConnected').mockImplementation((...args) => {
+      if (!rotated) {
+        rotated = true;
+        stack.runtime.handle.sqlite
+          .prepare('UPDATE agents SET token_hash = ? WHERE id = ?')
+          .run(replacementTokenHash, target.agentId);
+      }
+      return originalConnected(...args);
+    });
+
+    const response = await stack.app.request('/v1/agents/release', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+      body: JSON.stringify({
+        name: target.name,
+        delete_agent: false,
+        expected_token_hash: expectedTokenHash,
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    expect((await response.json() as { error: { code: string } }).error.code)
+      .toBe('agent_release_generation_conflict');
+    expect(sock.ofType('action.invoke').filter((event) => event.action === 'release')).toHaveLength(0);
+    const [replacement] = await stack.runtime.deps.db
+      .select({ name: agents.name, status: agents.status, tokenHash: agents.tokenHash })
+      .from(agents)
+      .where(eq(agents.id, target.agentId));
+    expect(replacement).toMatchObject({
+      name: target.name,
+      status: 'active',
+      tokenHash: replacementTokenHash,
+    });
+    const [invocation] = await stack.runtime.deps.db
+      .select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'release'),
+      ));
+    expect(invocation).toEqual({ status: 'failed', error: 'agent_release_generation_conflict' });
+    await handle.handleClose();
+  });
+
+  it('socket owner rejects a takeover at the send boundary and replays the same 409', async () => {
+    const ws = await createWorkspace(stack.app, 'release-generation-owner-race');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'release-owner-caller');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'owner-race-agent');
+    const { sock, handle } = await attachDirectNodeSocket(stack, ws.workspaceId, target);
+    const expectedTokenHash = await sha256Hex(target.token);
+    const replacementTokenHash = 'c'.repeat(64);
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    const originalSend = nodeConnections.sendAuthorizedActionToProvider!.bind(nodeConnections);
+    let rotated = false;
+    vi.spyOn(nodeConnections, 'sendAuthorizedActionToProvider').mockImplementation(async (...args) => {
+      if (!rotated && args[3].action === 'release') {
+        rotated = true;
+        stack.runtime.handle.sqlite
+          .prepare('UPDATE agents SET token_hash = ? WHERE id = ?')
+          .run(replacementTokenHash, target.agentId);
+      }
+      return originalSend(...args);
+    });
+
+    const invoke = () => stack.app.request('/v1/actions/release/invoke', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+        'Idempotency-Key': 'release-generation-owner-race',
+      },
+      body: JSON.stringify({
+        input: {
+          name: target.name,
+          delete_agent: false,
+          expected_token_hash: expectedTokenHash,
+        },
+      }),
+    });
+
+    const first = await invoke();
+    const replay = await invoke();
+    expect([first.status, replay.status]).toEqual([409, 409]);
+    const [firstBody, replayBody] = await Promise.all([
+      first.json() as Promise<{ error: { code: string } }>,
+      replay.json() as Promise<{ error: { code: string } }>,
+    ]);
+    expect(firstBody.error.code).toBe('agent_release_generation_conflict');
+    expect(replayBody.error.code).toBe('agent_release_generation_conflict');
+    expect(sock.ofType('action.invoke').filter((event) => event.action === 'release')).toHaveLength(0);
+    const [replacement] = await stack.runtime.deps.db
+      .select({ name: agents.name, status: agents.status, tokenHash: agents.tokenHash })
+      .from(agents)
+      .where(eq(agents.id, target.agentId));
+    expect(replacement).toMatchObject({
+      name: target.name,
+      status: 'active',
+      tokenHash: replacementTokenHash,
+    });
+    const [invocation] = await stack.runtime.deps.db
+      .select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'release'),
+      ));
+    expect(invocation).toEqual({ status: 'failed', error: 'agent_release_generation_conflict' });
+    await handle.handleClose();
+  });
+
+  it('authorizes a guarded release against its current dispatched route after a handoff', async () => {
+    const ws = await createWorkspace(stack.app, 'release-generation-route-handoff');
+    const oldHost = await registerAgent(stack.app, ws.workspaceKey, 'old-release-host');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'release-route-target');
+    const oldNode = await attachDirectNodeSocket(stack, ws.workspaceId, oldHost);
+    const currentNode = await attachDirectNodeSocket(stack, ws.workspaceId, target);
+    const expectedTokenHash = await sha256Hex(target.token);
+    const invocationId = 'inv_release_route_handoff';
+    await stack.runtime.deps.db.insert(actionInvocations).values({
+      id: invocationId,
+      workspaceId: ws.workspaceId,
+      actionName: 'release',
+      invocationOrigin: 'builtin',
+      input: { name: target.name, expected_token_hash: expectedTokenHash },
+      status: 'dispatched',
+      handlerNodeId: oldNode.nodeId,
+      dispatchedNodeId: currentNode.nodeId,
+      dispatchedProvider: 'default',
+      attemptedNodeIds: [oldNode.nodeId, currentNode.nodeId],
+      dispatchAttempts: 2,
+    });
+
+    const sent = await stack.runtime.realtime.sendAuthorizedActionToProvider(
+      ws.workspaceId,
+      currentNode.nodeId,
+      'default',
+      {
+        v: 1,
+        type: 'action.invoke',
+        invocation_id: invocationId,
+        action: 'release',
+        input: { name: target.name, expected_token_hash: expectedTokenHash },
+      },
+      {
+        kind: 'release-generation-v1',
+        invocationId,
+        agentName: target.name,
+        expectedTokenHash,
+      },
+    );
+
+    expect(sent).toBe(true);
+    expect(currentNode.sock.ofType('action.invoke')).toHaveLength(1);
+    expect(oldNode.sock.ofType('action.invoke')).toHaveLength(0);
+  });
+
+  it('does not accept a release-generation proof for a registered action', async () => {
+    const ws = await createWorkspace(stack.app, 'release-generation-origin-boundary');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'release-origin-target');
+    const targetNode = await attachDirectNodeSocket(stack, ws.workspaceId, target);
+    const expectedTokenHash = await sha256Hex(target.token);
+    const invocationId = 'inv_registered_release_generation';
+    await stack.runtime.deps.db.insert(actionInvocations).values({
+      id: invocationId,
+      workspaceId: ws.workspaceId,
+      actionName: 'release',
+      invocationOrigin: 'registered_action',
+      input: { name: target.name, expected_token_hash: expectedTokenHash },
+      status: 'dispatched',
+      handlerNodeId: targetNode.nodeId,
+      dispatchedNodeId: targetNode.nodeId,
+      dispatchedProvider: 'default',
+      attemptedNodeIds: [targetNode.nodeId],
+      dispatchAttempts: 1,
+    });
+
+    const sent = await stack.runtime.realtime.sendAuthorizedActionToProvider(
+      ws.workspaceId,
+      targetNode.nodeId,
+      'default',
+      {
+        v: 1,
+        type: 'action.invoke',
+        invocation_id: invocationId,
+        action: 'release',
+        input: { name: target.name, expected_token_hash: expectedTokenHash },
+      },
+      {
+        kind: 'release-generation-v1',
+        invocationId,
+        agentName: target.name,
+        expectedTokenHash,
+      },
+    );
+
+    expect(sent).toBe(false);
+    expect(targetNode.sock.ofType('action.invoke')).toHaveLength(0);
+    const [invocation] = await stack.runtime.deps.db
+      .select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(invocation).toEqual({ status: 'failed', error: 'agent_release_generation_conflict' });
+  });
+
+  it('replays a guarded release completion conflict as the same 409 after dispatch', async () => {
+    const ws = await createWorkspace(stack.app, 'release-generation-completion-replay');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'release-completion-caller');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'completion-race-agent');
+    const { handle } = await attachDirectNodeSocket(stack, ws.workspaceId, target);
+    const expectedTokenHash = await sha256Hex(target.token);
+    const replacementTokenHash = 'd'.repeat(64);
+    const invoke = () => stack.app.request('/v1/actions/release/invoke', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+        'Idempotency-Key': 'release-generation-completion-replay',
+      },
+      body: JSON.stringify({
+        input: {
+          name: target.name,
+          delete_agent: true,
+          expected_token_hash: expectedTokenHash,
+        },
+      }),
+    });
+
+    const first = await invoke();
+    expect(first.status).toBe(201);
+    const firstBody = await first.json() as { data: { invocation_id: string } };
+    await stack.runtime.deps.db
+      .update(agents)
+      .set({ tokenHash: replacementTokenHash })
+      .where(eq(agents.id, target.agentId));
+    await handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'action.result',
+      invocation_id: firstBody.data.invocation_id,
+      output: { released: true },
+    }));
+
+    const replay = await invoke();
+    expect(replay.status).toBe(409);
+    expect((await replay.json() as { error: { code: string } }).error.code)
+      .toBe('agent_release_generation_conflict');
+    const [invocation] = await stack.runtime.deps.db
+      .select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, firstBody.data.invocation_id));
+    expect(invocation).toEqual({ status: 'failed', error: 'agent_release_generation_conflict' });
+    await handle.handleClose();
+  });
+
+  it('acknowledges a guarded release completed before the post-send dispatch stamp', async () => {
+    const ws = await createWorkspace(stack.app, 'release-generation-fast-completion');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'fast-completion-agent');
+    const { sock, handle } = await attachDirectNodeSocket(stack, ws.workspaceId, target);
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    const originalSend = nodeConnections.sendAuthorizedActionToProvider!.bind(nodeConnections);
+    vi.spyOn(nodeConnections, 'sendAuthorizedActionToProvider').mockImplementation(async (...args) => {
+      const sent = await originalSend(...args);
+      if (!sent || args[3].action !== 'release') return sent;
+      // A remote socket owner can durably record provider acceptance before
+      // this engine resumes from its authorized send call.
+      await stack.runtime.deps.db
+        .update(actionInvocations)
+        .set({
+          status: 'dispatched',
+          dispatchedNodeId: args[1],
+          dispatchedProvider: args[2],
+        })
+        .where(eq(actionInvocations.id, args[3].invocation_id));
+      await handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'action.result',
+        invocation_id: args[3].invocation_id,
+        output: { released: true },
+      }));
+      return sent;
+    });
+
+    const response = await stack.app.request('/v1/agents/release', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+      body: JSON.stringify({
+        name: target.name,
+        delete_agent: true,
+        expected_token_hash: await sha256Hex(target.token),
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    expect((await response.json() as { data: { status: string } }).data.status).toBe('completed');
+    expect(sock.ofType('action.invoke').filter((event) => event.action === 'release')).toHaveLength(1);
+    const [invocation] = await stack.runtime.deps.db
+      .select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'release'),
+      ));
+    expect(invocation).toEqual({ status: 'completed', error: null });
+    expect(await stack.runtime.deps.db
+      .select()
+      .from(agents)
+      .where(and(eq(agents.workspaceId, ws.workspaceId), eq(agents.name, target.name))))
+      .toHaveLength(0);
+    await handle.handleClose();
+  });
+
+  it('fails closed when the socket owner cannot enforce a guarded release', async () => {
+    const ws = await createWorkspace(stack.app, 'release-generation-owner-required');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'owner-required-agent');
+    const { sock, handle } = await attachDirectNodeSocket(stack, ws.workspaceId, target);
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    const ownerAuthorizedSend = nodeConnections.sendAuthorizedActionToProvider;
+    nodeConnections.sendAuthorizedActionToProvider = undefined;
+    let response!: Response;
+    try {
+      response = await stack.app.request('/v1/agents/release', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${ws.workspaceKey}`,
+        },
+        body: JSON.stringify({
+          name: target.name,
+          delete_agent: true,
+          expected_token_hash: await sha256Hex(target.token),
+        }),
+      });
+    } finally {
+      nodeConnections.sendAuthorizedActionToProvider = ownerAuthorizedSend;
+    }
+
+    expect(response.status).toBe(503);
+    expect((await response.json() as { error: { code: string } }).error.code)
+      .toBe('node_dispatch_unavailable');
+    expect(sock.ofType('action.invoke').filter((event) => event.action === 'release')).toHaveLength(0);
+    const [current] = await stack.runtime.deps.db
+      .select({ name: agents.name, status: agents.status })
+      .from(agents)
+      .where(eq(agents.id, target.agentId));
+    expect(current).toMatchObject({ name: target.name, status: 'active' });
+    await handle.handleClose();
+  });
+
+  it('fails closed when an older socket owner rejects the generation proof', async () => {
+    const ws = await createWorkspace(stack.app, 'release-generation-owner-old-contract');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'old-owner-contract-agent');
+    const { sock, handle } = await attachDirectNodeSocket(stack, ws.workspaceId, target);
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    vi.spyOn(nodeConnections, 'sendAuthorizedActionToProvider').mockResolvedValue(false);
+
+    const response = await stack.app.request('/v1/agents/release', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+      body: JSON.stringify({
+        name: target.name,
+        delete_agent: true,
+        expected_token_hash: await sha256Hex(target.token),
+      }),
+    });
+
+    expect(response.status).toBe(503);
+    expect((await response.json() as { error: { code: string } }).error.code)
+      .toBe('node_dispatch_unavailable');
+    expect(sock.ofType('action.invoke').filter((event) => event.action === 'release')).toHaveLength(0);
+    const [current] = await stack.runtime.deps.db
+      .select({ name: agents.name, status: agents.status })
+      .from(agents)
+      .where(eq(agents.id, target.agentId));
+    expect(current).toMatchObject({ name: target.name, status: 'active' });
+    const [invocation] = await stack.runtime.deps.db
+      .select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'release'),
+      ));
+    expect(invocation).toEqual({ status: 'failed', error: 'node_dispatch_unavailable' });
+    await handle.handleClose();
+  });
+
+  it('rejects a malformed release generation guard without dispatch', async () => {
+    const ws = await createWorkspace(stack.app, 'invalid-release-generation');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'invalid-guard-agent');
+    const { sock, handle } = await attachDirectNodeSocket(stack, ws.workspaceId, target);
+
+    const response = await stack.app.request('/v1/agents/release', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+      body: JSON.stringify({
+        name: target.name,
+        delete_agent: true,
+        expected_token_hash: 'not-a-sha256-hash',
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(sock.ofType('action.invoke').filter((event) => event.action === 'release')).toHaveLength(0);
+    expect(await stack.runtime.deps.db
+      .select()
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'release'),
+      )))
+      .toHaveLength(0);
     await handle.handleClose();
   });
 });

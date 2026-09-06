@@ -2550,6 +2550,13 @@ paths:
                 delete_agent:
                   type: boolean
                   description: If true, permanently delete the agent
+                expected_token_hash:
+                  type: string
+                  pattern: '^[a-f0-9]{64}$'
+                  description: >-
+                    Optional SHA-256 hash of the exact issued agent token. If
+                    the identity has rotated since issuance, the release fails
+                    with 409 and leaves the replacement generation untouched.
       responses:
         '201':
           description: Release dispatched to a live host or completed locally
@@ -2562,8 +2569,20 @@ paths:
                     type: boolean
                   data:
                     $ref: '#/components/schemas/LifecycleActionInvocation'
+        '400':
+          description: Invalid release request or malformed token-generation guard
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Agent not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Agent token generation no longer matches the guarded release
           content:
             application/json:
               schema:

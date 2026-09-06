@@ -24,6 +24,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ### Added
 
 - `RelayCast::create_workspace` now requires explicit provenance, preventing CLI bootstrap workspaces from being mislabeled as SDK-created.
+- `RelayCast::release_agent_if_token_hash` performs generation-safe cleanup without changing the existing `ReleaseAgentRequest` struct.
 
 ## [4.2.0] - 2026-06-24
 
