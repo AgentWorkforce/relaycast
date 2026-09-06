@@ -41,7 +41,7 @@
         {
           "ts": 1788678105665,
           "type": "reflection",
-          "content": "Red regressions covered stale release before dispatch, at the no-host fallback, at the socket-owner boundary, during named-provider drain, at atomic completion, in node-completed audit metadata, and against user-defined action shadowing. Exact product head 7e91c060bce63dd6340977c548f7ee3fc4f071d4 reran root lint, test (including all 70 engine files / 761 tests), and build. TypeScript SDK (22 files / 441 tests), types (7 files / 209 tests), Rust SDK (103 tests plus 5 doc tests), and Rust library clippy were run on product head 2951bcb435a578c4bfc35c4b9b62c4455857a052; those package code and test files are unchanged through the final product head.",
+          "content": "Red regressions covered stale release before dispatch, at the no-host fallback, at the socket-owner boundary, during named-provider drain, at atomic completion, in node-completed audit metadata, against user-defined action shadowing, and against release-specific classification of non-release replay errors. Exact product head e0f7757c17e4f9d85b079190e8734c6d5846430c reran root lint, test (including all 70 engine files / 761 tests), and build. TypeScript SDK (22 files / 441 tests), types (7 files / 209 tests), Rust SDK (103 tests plus 5 doc tests), and Rust library clippy were run on product head 2951bcb435a578c4bfc35c4b9b62c4455857a052; those package code and test files are unchanged through the final product head.",
           "raw": {
             "focalPoints": [
               "generation-identity",
@@ -74,7 +74,8 @@
     "038af6af9ad61e53e08790fb5ffa3051f3017951",
     "90b9711882460236c52a3a03f4025bf5361b8eeb",
     "cd935897bd3ea9de39f98844c5e7e768653cc84e",
-    "7e91c060bce63dd6340977c548f7ee3fc4f071d4"
+    "7e91c060bce63dd6340977c548f7ee3fc4f071d4",
+    "e0f7757c17e4f9d85b079190e8734c6d5846430c"
   ],
   "filesChanged": [
     "CHANGELOG.md",
@@ -84,6 +85,7 @@
     "packages/engine/src/__tests__/conformance/agentLifecycle.test.ts",
     "packages/engine/src/__tests__/conformance/nodeCompletedRelease.test.ts",
     "packages/engine/src/__tests__/conformance/nodeProviders.test.ts",
+    "packages/engine/src/__tests__/conformance/node.test.ts",
     "packages/engine/src/adapters/node/realtime.ts",
     "packages/engine/src/engine/action.ts",
     "packages/engine/src/ports/realtime.ts",
@@ -100,6 +102,6 @@
   "tags": [],
   "_trace": {
     "startRef": "80ab366048a0634fbf1a8b5301de71dd22c50026",
-    "endRef": "7e91c060bce63dd6340977c548f7ee3fc4f071d4"
+    "endRef": "e0f7757c17e4f9d85b079190e8734c6d5846430c"
   }
 }
