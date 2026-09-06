@@ -974,9 +974,22 @@ describe('node providers', () => {
       'np-accepted-action-timeout',
       false,
     );
+    // Remove the only same-name fallback. The historical timeout path then
+    // reached its generic "no placement" reset and erased the accepted route.
+    await beta.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'node.heartbeat',
+      load: 0,
+      active_agents: 0,
+      handlers_live: true,
+      capabilities: [],
+    }));
     await stack.runtime.handle.db
       .update(actionInvocations)
-      .set({ dispatchedAt: new Date(0), retryAfterAt: new Date(0) })
+      .set({
+        dispatchedAt: new Date(Date.now() - 60_000),
+        retryAfterAt: new Date(Date.now() - 60_000),
+      })
       .where(eq(actionInvocations.id, invocationId));
 
     expect(await sweepTimedOutInvocations(

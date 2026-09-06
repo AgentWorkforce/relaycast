@@ -413,13 +413,23 @@ export async function registerAction(
         .returning();
 
       // A refresh that moves the handler to a DIFFERENT agent strands
-      // invocations already in flight toward the previous handler: completion
-      // authorization follows actions.handlerAgentId (the old handler's
-      // completion would 403) and the timeout sweep would redeliver them to the
-      // new handler, which never received the original dispatch. Terminally
-      // fail them; the callers are told after commit.
+      // invocations still waiting for provider acceptance. Once the previous
+      // handler accepted an exact attempt, detach that invocation from the
+      // mutable action row instead: its snapshotted route remains authorized
+      // to complete and timeout recovery cannot retarget it to the replacement.
       let strandedRows: InvocationRow[] = [];
       if (previous && previous.handlerAgentId && previous.handlerAgentId !== handlerAgentId) {
+        await tx
+          .update(actionInvocations)
+          .set({ actionId: null })
+          .where(and(
+            eq(actionInvocations.workspaceId, workspaceId),
+            eq(actionInvocations.actionId, previous.id),
+            eq(actionInvocations.invocationOrigin, 'registered_action'),
+            isNotNull(actionInvocations.providerAcceptedAttempt),
+            sql`${actionInvocations.providerAcceptedAttempt} = ${actionInvocations.dispatchAttempts}`,
+            inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+          ));
         const strandedIds = await openInvocationIdsForActions(tx, workspaceId, [previous.id]);
         strandedRows = await failOpenInvocationRows(tx, workspaceId, strandedIds, 'handler_unavailable');
       }

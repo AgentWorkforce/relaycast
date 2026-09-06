@@ -293,6 +293,7 @@ describe('agent-published action lifecycle', () => {
 
     const [row] = await stack.runtime.handle.db
       .select({
+        actionId: actionInvocations.actionId,
         status: actionInvocations.status,
         error: actionInvocations.error,
         providerAcceptedAttempt: actionInvocations.providerAcceptedAttempt,
@@ -300,7 +301,7 @@ describe('agent-published action lifecycle', () => {
       })
       .from(actionInvocations)
       .where(eq(actionInvocations.id, invocationId));
-    expect(row).toMatchObject({ status: 'dispatched', error: null });
+    expect(row).toMatchObject({ actionId: null, status: 'dispatched', error: null });
     expect(row.providerAcceptedAttempt).toBe(row.dispatchAttempts);
     await oldNode.handle.handleMessage(JSON.stringify({
       v: 1,
