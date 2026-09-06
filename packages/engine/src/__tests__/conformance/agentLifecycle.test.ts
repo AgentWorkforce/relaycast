@@ -648,7 +648,7 @@ describe('agent presence and release lifecycle', () => {
       },
       body: JSON.stringify({
         name: target.name,
-        delete_agent: true,
+        delete_agent: false,
         expected_token_hash: expectedTokenHash,
       }),
     });
@@ -701,7 +701,7 @@ describe('agent presence and release lifecycle', () => {
       },
       body: JSON.stringify({
         name: target.name,
-        delete_agent: true,
+        delete_agent: false,
         expected_token_hash: expectedTokenHash,
       }),
     });

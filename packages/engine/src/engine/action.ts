@@ -1263,6 +1263,22 @@ async function dispatchRelease(args: {
   // The provider can disconnect between the liveness check and send. Complete
   // the DB lifecycle locally instead of creating an ownerless pending request.
   if (!dispatched.accepted) {
+    if (expectedTokenHash) {
+      const [settled] = await args.db
+        .select({ error: actionInvocations.error })
+        .from(actionInvocations)
+        .where(and(
+          eq(actionInvocations.workspaceId, args.workspaceId),
+          eq(actionInvocations.id, invocation.id),
+        ));
+      if (settled?.error === RELEASE_GENERATION_CONFLICT_CODE) {
+        throw codedError(
+          `Agent "${name}" no longer matches the expected token generation`,
+          RELEASE_GENERATION_CONFLICT_CODE,
+          409,
+        );
+      }
+    }
     return input.delete_agent === true ? completeLocally() : failClosed();
   }
 
