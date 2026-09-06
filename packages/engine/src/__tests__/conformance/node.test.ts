@@ -1002,6 +1002,131 @@ describe('node adapter conformance', () => {
       expect(node?.activeAgents).toBe(1);
     });
 
+    it('rejects a late agent registration for a migration-canceled spawn', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-canceled-legacy-spawn');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_canceled_spawn',
+        name: 'canceled-spawn',
+        capabilities: [capability('spawn:claude', 'spawn')],
+        maxAgents: 1,
+      });
+      const db = stack.runtime.handle.db;
+      await db.insert(actionInvocations).values({
+        id: 'inv_canceled_legacy_spawn',
+        workspaceId: ws.workspaceId,
+        actionName: 'spawn:claude',
+        invocationOrigin: 'legacy_unknown',
+        status: 'failed',
+        error: 'invocation_origin_unavailable',
+        dispatchedNodeId: 'node_canceled_spawn',
+        dispatchedProvider: 'default',
+        completedAt: new Date(),
+      });
+      await db.insert(actionInvocations).values({
+        id: 'inv_replacement_spawn',
+        workspaceId: ws.workspaceId,
+        actionName: 'spawn:claude',
+        invocationOrigin: 'builtin',
+        input: { name: 'replacement-worker' },
+        status: 'dispatched',
+        dispatchedNodeId: 'node_canceled_spawn',
+        dispatchedProvider: 'default',
+        spawnReservedAt: new Date(),
+      });
+      await db
+        .update(nodes)
+        .set({ reservedAgents: 1 })
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_canceled_spawn')));
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'late-canceled-register',
+        type: 'agent.register',
+        name: 'late-worker',
+        invocation_id: 'inv_canceled_legacy_spawn',
+        session_ref: 'pty://alpha/late-worker',
+      }));
+
+      expect(alpha.sock.ofType('error').at(-1)).toMatchObject({
+        id: 'late-canceled-register',
+        code: 'spawn_invocation_canceled',
+      });
+      expect(await db
+        .select()
+        .from(agents)
+        .where(and(eq(agents.workspaceId, ws.workspaceId), eq(agents.name, 'late-worker'))))
+        .toHaveLength(0);
+      const [node] = await db
+        .select({ activeAgents: nodes.activeAgents, reservedAgents: nodes.reservedAgents })
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_canceled_spawn')));
+      expect(node).toEqual({ activeAgents: 0, reservedAgents: 1 });
+    });
+
+    it('lets only the matching spawn registration consume its reserved node slot', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-owned-spawn-reservation');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_owned_reservation',
+        name: 'owned-reservation',
+        capabilities: [capability('spawn:claude', 'spawn')],
+        maxAgents: 1,
+      });
+
+      const spawn = await stack.app.request('/v1/actions/spawn/invoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: { cli: 'claude', name: 'reserved-worker', task: 'say hi' } }),
+      });
+      expect(spawn.status).toBe(201);
+      const invocationId = (await spawn.json() as { data: { invocation_id: string } }).data.invocation_id;
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'unclaimed-register',
+        type: 'agent.register',
+        name: 'unclaimed-worker',
+        session_ref: 'pty://alpha/unclaimed-worker',
+      }));
+      expect(alpha.sock.ofType('error').at(-1)).toMatchObject({
+        id: 'unclaimed-register',
+        code: 'node_capacity_exceeded',
+      });
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'owned-register',
+        type: 'agent.register',
+        name: 'reserved-worker',
+        invocation_id: invocationId,
+        session_ref: 'pty://alpha/reserved-worker',
+      }));
+      expect(alpha.sock.ofType('reply').at(-1)).toMatchObject({
+        id: 'owned-register',
+        ok: true,
+      });
+
+      const db = stack.runtime.handle.db;
+      const [reserved] = await db
+        .select({ activeAgents: nodes.activeAgents, reservedAgents: nodes.reservedAgents })
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_owned_reservation')));
+      expect(reserved).toEqual({ activeAgents: 1, reservedAgents: 1 });
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'owned-result',
+        type: 'action.result',
+        invocation_id: invocationId,
+        output: { agent: 'reserved-worker' },
+      }));
+      const [completed] = await db
+        .select({ activeAgents: nodes.activeAgents, reservedAgents: nodes.reservedAgents })
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_owned_reservation')));
+      expect(completed).toEqual({ activeAgents: 1, reservedAgents: 0 });
+    });
+
     it('registers a node, dispatches spawn, completes from action.result, fires triggers, and reschedules on node death', async () => {
       const ws = await createWorkspace(stack.app, 'fleet-node-ws');
       const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');

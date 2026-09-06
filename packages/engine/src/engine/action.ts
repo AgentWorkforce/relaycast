@@ -1057,12 +1057,6 @@ async function dispatchRelease(args: {
     // The release time is preserved in `metadata.release.releasedAt`.
     const releasedName = releasedAgentName(agent.name, agent.id);
     const releasedTokenHash = await sha256Hex(`released:${agent.id}:${randomHex(16)}`);
-    const invocationIsOpen = sql`EXISTS (
-      SELECT 1 FROM ${actionInvocations}
-      WHERE ${actionInvocations.workspaceId} = ${args.workspaceId}
-        AND ${actionInvocations.id} = ${invocation.id}
-        AND ${actionInvocations.status} IN ('pending', 'dispatched', 'invoked')
-    )`;
     const invocationCompleted = sql`EXISTS (
       SELECT 1 FROM ${actionInvocations}
       WHERE ${actionInvocations.workspaceId} = ${args.workspaceId}
@@ -1074,6 +1068,36 @@ async function dispatchRelease(args: {
       agent.id,
       expectedTokenHash,
     );
+    const atomicExitNodeId = sql<string | null>`COALESCE(
+      (
+        SELECT ${agentNodeBindings.nodeId}
+        FROM ${agentNodeBindings}
+        WHERE ${agentNodeBindings.workspaceId} = ${args.workspaceId}
+          AND ${agentNodeBindings.agentId} = ${agent.id}
+          AND ${agentNodeBindings.status} = 'active'
+        ORDER BY
+          CASE
+            WHEN ${agentNodeBindings.nodeId} = (
+              SELECT ${agents.locationNodeId}
+              FROM ${agents}
+              WHERE ${agents.workspaceId} = ${args.workspaceId}
+                AND ${agents.id} = ${agent.id}
+            ) THEN 0
+            WHEN ${agentNodeBindings.nodeId} = ${`node_direct_${agent.id}`} THEN 1
+            ELSE 2
+          END,
+          ${agentNodeBindings.priority} DESC,
+          ${agentNodeBindings.nodeId}
+        LIMIT 1
+      ),
+      (
+        SELECT ${agents.locationNodeId}
+        FROM ${agents}
+        WHERE ${agents.workspaceId} = ${args.workspaceId}
+          AND ${agents.id} = ${agent.id}
+      ),
+      ${exitNodeId}
+    )`;
 
     const results = await runAtomicWrites(args.db, (writeDb) => {
       const writes: AtomicWrite[] = [];
@@ -1096,9 +1120,36 @@ async function dispatchRelease(args: {
         ))
         .returning({ id: actionInvocations.id }));
 
-      // Resolve the active binding in this atomic unit instead of from a
+      // Win completion and snapshot the current binding before deactivating
+      // it. The returned node drives the response and agent.exited event, so a
+      // concurrent rebind cannot leave either pointing at the stale host read
+      // before this atomic unit began.
+      writes.push(writeDb
+        .update(actionInvocations)
+        .set({
+          status: 'completed',
+          handlerNodeId: atomicExitNodeId,
+          output: {
+            released: true,
+            // The roster row is retained as a tombstone so the agent's history
+            // keeps its author; the name is what the caller gets back.
+            deleted: false,
+            reaped_locally: true,
+            released_name: releasedName,
+          },
+          completedAt,
+        })
+        .where(and(
+          eq(actionInvocations.workspaceId, args.workspaceId),
+          eq(actionInvocations.id, invocation.id),
+          inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+          generationStillCurrent,
+        ))
+        .returning({ id: actionInvocations.id, handlerNodeId: actionInvocations.handlerNodeId }));
+
+      // Resolve every active binding in this atomic unit instead of from a
       // pre-transaction snapshot. A concurrent rebind therefore decrements
-      // the node that is actually deactivated below.
+      // exactly the node or nodes that are deactivated below.
       writes.push(writeDb
         .update(nodes)
         .set({
@@ -1106,7 +1157,7 @@ async function dispatchRelease(args: {
         })
         .where(and(
           eq(nodes.workspaceId, args.workspaceId),
-          invocationIsOpen,
+          invocationCompleted,
           generationStillCurrent,
           sql`EXISTS (
             SELECT 1 FROM ${agentNodeBindings}
@@ -1124,7 +1175,7 @@ async function dispatchRelease(args: {
           eq(agentNodeBindings.workspaceId, args.workspaceId),
           eq(agentNodeBindings.agentId, agent.id),
           eq(agentNodeBindings.status, 'active'),
-          invocationIsOpen,
+          invocationCompleted,
           generationStillCurrent,
         )));
       // `channel_members` and `dm_participants` cascade on DELETE; the
@@ -1134,14 +1185,14 @@ async function dispatchRelease(args: {
         .delete(channelMembers)
         .where(and(
           eq(channelMembers.agentId, agent.id),
-          invocationIsOpen,
+          invocationCompleted,
           generationStillCurrent,
         )));
       writes.push(writeDb
         .delete(dmParticipants)
         .where(and(
           eq(dmParticipants.agentId, agent.id),
-          invocationIsOpen,
+          invocationCompleted,
           generationStillCurrent,
         )));
       writes.push(writeDb
@@ -1149,34 +1200,9 @@ async function dispatchRelease(args: {
         .where(and(
           eq(nodes.workspaceId, args.workspaceId),
           eq(nodes.id, `node_direct_${agent.id}`),
-          invocationIsOpen,
+          invocationCompleted,
           generationStillCurrent,
         )));
-
-      writes.push(writeDb
-        .update(actionInvocations)
-        .set({
-          status: 'completed',
-          // This is part of the same atomic unit as completion so a lost 201
-          // replays the exact handler node returned below.
-          handlerNodeId: sql`COALESCE(${actionInvocations.handlerNodeId}, ${exitNodeId})`,
-          output: {
-            released: true,
-            // The roster row is retained as a tombstone so the agent's history
-            // keeps its author; the name is what the caller gets back.
-            deleted: false,
-            reaped_locally: true,
-            released_name: releasedName,
-          },
-          completedAt,
-        })
-        .where(and(
-          eq(actionInvocations.workspaceId, args.workspaceId),
-          eq(actionInvocations.id, invocation.id),
-          inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
-          generationStillCurrent,
-        ))
-        .returning({ id: actionInvocations.id }));
 
       // Tombstone after the invocation has won its completion CAS. The whole
       // batch/transaction rolls back together, while this ordering lets the
@@ -1209,7 +1235,8 @@ async function dispatchRelease(args: {
       return writes;
     }, expectedTokenHash ? { requireAtomic: true } : undefined);
     const generationConflict = results[0] as Array<{ id: string }>;
-    const completed = results.at(-2) as Array<{ id: string }>;
+    const completed = results[1] as Array<{ id: string; handlerNodeId: string | null }>;
+    const completedExitNodeId = completed[0]?.handlerNodeId ?? null;
 
     if (expectedTokenHash && (generationConflict.length > 0 || completed.length === 0)) {
       throw codedError(
@@ -1221,11 +1248,11 @@ async function dispatchRelease(args: {
 
     // External completion effects belong after the durable atomic unit: an
     // aborted local reap must never publish agent.exited.
-    if (completed.length > 0 && args.completionDeps && exitNodeId) {
+    if (completed.length > 0 && args.completionDeps && completedExitNodeId) {
       await emitAgentExitedEffects(args.completionDeps, args.workspaceId, {
         agentId: agent.id,
         agentName: agent.name,
-        nodeId: exitNodeId,
+        nodeId: completedExitNodeId,
         invocationId: fleetInvocationId(agent.metadata),
         reason: 'released',
       });
@@ -1234,7 +1261,7 @@ async function dispatchRelease(args: {
       invocation_id: invocation.id,
       action_name: 'release',
       handler_agent_id: null,
-      handler_node_id: exitNodeId,
+      handler_node_id: completedExitNodeId,
       dispatched_node_id: null,
       input,
       status: 'completed',

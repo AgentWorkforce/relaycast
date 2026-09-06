@@ -21,6 +21,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Fixed
 
 - Guarded agent releases now compare the exact issued-token generation before dispatch and completion, so stale cleanup cannot release a same-name takeover.
+- Fleet registration now preserves native spawn reservations for their exact invocation and rejects late workers from migration-canceled spawns, preventing upgrades or unrelated registrations from exceeding node capacity.
 
 ## [8.4.0] - 2026-09-05
 

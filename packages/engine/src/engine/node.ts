@@ -932,7 +932,34 @@ async function activeBindingNodeIdsForAgent(db: Db, workspaceId: string, agentId
   return rows.map((row) => row.nodeId);
 }
 
-async function reserveNodeAgentSlot(db: Db, workspaceId: string, node: NodeRow): Promise<void> {
+interface SpawnReservationClaim {
+  invocationId: string;
+  providerName: string;
+  agentName: string;
+}
+
+async function reserveNodeAgentSlot(
+  db: Db,
+  workspaceId: string,
+  node: NodeRow,
+  claim?: SpawnReservationClaim,
+): Promise<void> {
+  const ownsSpawnReservation = claim
+    ? sql`EXISTS (
+        SELECT 1 FROM ${actionInvocations}
+        WHERE ${actionInvocations.workspaceId} = ${workspaceId}
+          AND ${actionInvocations.id} = ${claim.invocationId}
+          AND ${actionInvocations.status} IN ('pending', 'dispatched', 'invoked')
+          AND ${actionInvocations.spawnReservedAt} IS NOT NULL
+          AND ${actionInvocations.dispatchedNodeId} = ${node.id}
+          AND ${actionInvocations.dispatchedProvider} = ${claim.providerName}
+          AND (
+            ${actionInvocations.actionName} = 'spawn'
+            OR ${actionInvocations.actionName} LIKE 'spawn:%'
+          )
+          AND json_extract(${actionInvocations.input}, '$.name') = ${claim.agentName}
+      )`
+    : sql`0`;
   const [reserved] = await db
     .update(nodes)
     .set({
@@ -941,11 +968,47 @@ async function reserveNodeAgentSlot(db: Db, workspaceId: string, node: NodeRow):
     .where(and(
       eq(nodes.workspaceId, workspaceId),
       eq(nodes.id, node.id),
-      or(eq(nodes.maxAgents, 0), sql`${nodes.activeAgents} < ${nodes.maxAgents}`),
+      or(
+        eq(nodes.maxAgents, 0),
+        and(ownsSpawnReservation, sql`${nodes.activeAgents} < ${nodes.maxAgents}`),
+        and(
+          sql`NOT (${ownsSpawnReservation})`,
+          sql`${nodes.activeAgents} + ${nodes.reservedAgents} < ${nodes.maxAgents}`,
+        ),
+      ),
     ))
     .returning({ id: nodes.id });
   if (!reserved) {
     throw codedError(`Node "${node.name}" is at capacity`, 'node_capacity_exceeded', 409);
+  }
+}
+
+async function rejectMigrationCanceledSpawnRegistration(
+  db: Db,
+  workspaceId: string,
+  invocationId: string | undefined,
+): Promise<void> {
+  if (!invocationId) return;
+  const [canceled] = await db
+    .select({ id: actionInvocations.id })
+    .from(actionInvocations)
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.id, invocationId),
+      eq(actionInvocations.invocationOrigin, 'legacy_unknown'),
+      eq(actionInvocations.status, 'failed'),
+      eq(actionInvocations.error, 'invocation_origin_unavailable'),
+      or(
+        eq(actionInvocations.actionName, 'spawn'),
+        sql`${actionInvocations.actionName} LIKE 'spawn:%'`,
+      ),
+    ));
+  if (canceled) {
+    throw codedError(
+      `Spawn invocation "${invocationId}" was canceled during migration`,
+      'spawn_invocation_canceled',
+      409,
+    );
   }
 }
 
@@ -1296,6 +1359,7 @@ export async function registerAgentViaNode(
 ): Promise<AgentRegisterReplyData> {
   assertRegistrableAgentName(message.name);
   return runAtomic(db, async (tx) => {
+    await rejectMigrationCanceledSpawnRegistration(tx, workspaceId, message.invocation_id);
     const [node] = await tx
       .select()
       .from(nodes)
@@ -1352,7 +1416,11 @@ export async function registerAgentViaNode(
     let reservedTargetSlot = false;
     try {
       if (!targetWasActive) {
-        await reserveNodeAgentSlot(tx, workspaceId, node);
+        await reserveNodeAgentSlot(tx, workspaceId, node, message.invocation_id ? {
+          invocationId: message.invocation_id,
+          providerName,
+          agentName: message.name,
+        } : undefined);
         reservedTargetSlot = true;
       }
       await upsertAgentNodeBinding(tx, workspaceId, result, nodeId, {
@@ -1436,7 +1504,11 @@ export async function recoverAgentViaNode(
     // any agent/location mutation. A full node now fails with the incumbent
     // row and bindings untouched; a later failure releases this reservation.
     if (!targetWasActive) {
-      await reserveNodeAgentSlot(tx, workspaceId, node);
+      await reserveNodeAgentSlot(tx, workspaceId, node, message.invocation_id ? {
+        invocationId: message.invocation_id,
+        providerName,
+        agentName: message.name,
+      } : undefined);
       reservedTargetSlot = true;
     }
     try {
@@ -1684,7 +1756,11 @@ export async function reconcileInventory(
       let reservedTargetSlot = false;
       try {
         if (!targetWasActive) {
-          await reserveNodeAgentSlot(db, workspaceId, node);
+          await reserveNodeAgentSlot(db, workspaceId, node, item.invocation_id ? {
+            invocationId: item.invocation_id,
+            providerName,
+            agentName: item.name,
+          } : undefined);
           reservedTargetSlot = true;
         }
         await db

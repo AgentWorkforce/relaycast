@@ -601,6 +601,97 @@ describe('agent presence and release lifecycle', () => {
       .toHaveLength(0);
   });
 
+  it('records the binding that local reaping actually deactivates after a concurrent rebind', async () => {
+    const ws = await createWorkspace(stack.app, 'hostless-agent-rebind-race');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'rebound-release-agent');
+    for (const [nodeId, name] of [['node_release_old', 'release-old'], ['node_release_new', 'release-new']] as const) {
+      const enrolled = await stack.app.request('/v1/nodes', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+        body: JSON.stringify({ node_id: nodeId, name, role: 'broker', max_agents: 1 }),
+      });
+      expect(enrolled.status).toBe(201);
+    }
+    const bound = await stack.app.request('/v1/nodes/release-old/agents', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ agent_name: target.name }),
+    });
+    expect(bound.status).toBe(201);
+
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    let rebound = false;
+    vi.spyOn(nodeConnections, 'isProviderConnected').mockImplementation(() => {
+      if (!rebound) {
+        rebound = true;
+        const sqlite = stack.runtime.handle.sqlite;
+        sqlite.transaction(() => {
+          sqlite.prepare(`
+            UPDATE agent_node_bindings
+            SET status = 'inactive', updated_at = unixepoch()
+            WHERE workspace_id = ? AND agent_id = ? AND status = 'active'
+          `).run(ws.workspaceId, target.agentId);
+          sqlite.prepare(`
+            INSERT INTO agent_node_bindings (id, workspace_id, agent_id, node_id, status)
+            VALUES (?, ?, ?, 'node_release_new', 'active')
+            ON CONFLICT(agent_id, node_id) DO UPDATE
+            SET status = 'active', updated_at = unixepoch()
+          `).run('binding_release_race', ws.workspaceId, target.agentId);
+          sqlite.prepare(`
+            UPDATE agents
+            SET location_type = 'via_node', location_node_id = 'node_release_new'
+            WHERE workspace_id = ? AND id = ?
+          `).run(ws.workspaceId, target.agentId);
+          sqlite.prepare(`
+            UPDATE nodes
+            SET active_agents = CASE id WHEN 'node_release_old' THEN 0 ELSE 1 END
+            WHERE workspace_id = ? AND id IN ('node_release_old', 'node_release_new')
+          `).run(ws.workspaceId);
+        })();
+      }
+      return false;
+    });
+
+    const response = await stack.app.request('/v1/agents/release', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({
+        name: target.name,
+        delete_agent: true,
+        expected_token_hash: await sha256Hex(target.token),
+      }),
+    });
+    expect(rebound).toBe(true);
+    expect(response.status).toBe(201);
+    expect((await response.json() as { data: { handler_node_id: string | null } }).data.handler_node_id)
+      .toBe('node_release_new');
+
+    const [invocation] = await stack.runtime.deps.db
+      .select({ handlerNodeId: actionInvocations.handlerNodeId })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'release'),
+      ));
+    expect(invocation.handlerNodeId).toBe('node_release_new');
+    const [exited] = await stack.runtime.deps.db
+      .select({ payload: workspaceEvents.payload })
+      .from(workspaceEvents)
+      .where(and(
+        eq(workspaceEvents.workspaceId, ws.workspaceId),
+        eq(workspaceEvents.type, 'agent.exited'),
+      ));
+    expect(JSON.parse(exited.payload)).toMatchObject({ node_id: 'node_release_new' });
+    const nodeRows = await stack.runtime.deps.db
+      .select({ id: nodes.id, activeAgents: nodes.activeAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.role, 'broker')));
+    expect(nodeRows).toEqual(expect.arrayContaining([
+      { id: 'node_release_old', activeAgents: 0 },
+      { id: 'node_release_new', activeAgents: 0 },
+    ]));
+  });
+
   it('rolls back every local reap mutation when invocation completion fails', async () => {
     const ws = await createWorkspace(stack.app, 'hostless-agent-delete-rollback');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'keep-me');
