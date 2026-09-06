@@ -41,7 +41,7 @@
         {
           "ts": 1788678105665,
           "type": "reflection",
-          "content": "Red regressions covered stale release before dispatch, at the no-host fallback, at the socket-owner boundary, during named-provider drain, at atomic completion, and node-completed audit metadata. Exact product head cd935897bd3ea9de39f98844c5e7e768653cc84e reran root lint, test (including all 70 engine files / 760 tests), and build. TypeScript SDK (22 files / 441 tests), types (7 files / 209 tests), Rust SDK (103 tests plus 5 doc tests), and Rust library clippy were run on product head 2951bcb435a578c4bfc35c4b9b62c4455857a052; those package code and test files are unchanged through the final product head.",
+          "content": "Red regressions covered stale release before dispatch, at the no-host fallback, at the socket-owner boundary, during named-provider drain, at atomic completion, in node-completed audit metadata, and against user-defined action shadowing. Exact product head 7e91c060bce63dd6340977c548f7ee3fc4f071d4 reran root lint, test (including all 70 engine files / 761 tests), and build. TypeScript SDK (22 files / 441 tests), types (7 files / 209 tests), Rust SDK (103 tests plus 5 doc tests), and Rust library clippy were run on product head 2951bcb435a578c4bfc35c4b9b62c4455857a052; those package code and test files are unchanged through the final product head.",
           "raw": {
             "focalPoints": [
               "generation-identity",
@@ -62,7 +62,7 @@
     }
   ],
   "retrospective": {
-    "summary": "Added SHA-256 token-generation guarded releases across Relaycast types, engine, OpenAPI, TypeScript SDK, and Rust SDK, with takeover, drain, replay, and completion-race regressions plus atomic dispatch/completion enforcement.",
+    "summary": "Added SHA-256 token-generation guarded releases across Relaycast types, engine, OpenAPI, TypeScript SDK, and Rust SDK, with takeover, drain, replay, completion-race, and action-shadow regressions plus atomic dispatch/completion enforcement.",
     "approach": "Standard approach",
     "confidence": 0.9
   },
@@ -73,7 +73,8 @@
     "0b8c5cc44acef0fbde5e88c6e35d2b5c20dddec0",
     "038af6af9ad61e53e08790fb5ffa3051f3017951",
     "90b9711882460236c52a3a03f4025bf5361b8eeb",
-    "cd935897bd3ea9de39f98844c5e7e768653cc84e"
+    "cd935897bd3ea9de39f98844c5e7e768653cc84e",
+    "7e91c060bce63dd6340977c548f7ee3fc4f071d4"
   ],
   "filesChanged": [
     "CHANGELOG.md",
@@ -99,6 +100,6 @@
   "tags": [],
   "_trace": {
     "startRef": "80ab366048a0634fbf1a8b5301de71dd22c50026",
-    "endRef": "cd935897bd3ea9de39f98844c5e7e768653cc84e"
+    "endRef": "7e91c060bce63dd6340977c548f7ee3fc4f071d4"
   }
 }
