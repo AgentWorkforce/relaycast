@@ -54,14 +54,17 @@ const probePath = path.join(
   'packages/engine/src/__tests__/conformance/.relayflow-node-inventory-presence.test.ts'
 );
 const configPath = path.join(proofDir, 'vitest.config.mts');
-await mkdir(proofDir, { recursive: true });
-await copyFile(path.join(caseDir, 'probe.test.ts'), probePath);
-await writeFile(
-  configPath,
-  `import { defineConfig } from 'vitest/config';\n\nexport default defineConfig({ test: { environment: 'node', include: ['packages/engine/src/__tests__/conformance/.relayflow-node-inventory-presence.test.ts'] } });\n`
-);
 
 try {
+  // Setup lives inside the try so the finally below always removes the probe
+  // test and .relay-pr-proof/ from the target checkout, even when a later
+  // setup step throws after an earlier one already created files.
+  await mkdir(proofDir, { recursive: true });
+  await copyFile(path.join(caseDir, 'probe.test.ts'), probePath);
+  await writeFile(
+    configPath,
+    `import { defineConfig } from 'vitest/config';\n\nexport default defineConfig({ test: { environment: 'node', include: ['packages/engine/src/__tests__/conformance/.relayflow-node-inventory-presence.test.ts'] } });\n`
+  );
   run(process.execPath, [vitestEntry, 'run', '--config', configPath, '--reporter=verbose'], targetDir);
 } finally {
   await Promise.allSettled([rm(probePath, { force: true }), rm(proofDir, { recursive: true, force: true })]);

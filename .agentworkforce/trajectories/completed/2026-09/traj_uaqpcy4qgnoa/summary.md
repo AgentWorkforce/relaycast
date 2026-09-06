@@ -37,3 +37,12 @@ Reproduced node-wide delivery starvation with an expected-red RelayFlow and fixe
 - Must-not-fire control is green and poisoned-node arm is red with agent_location_conflict before any valid sibling renewal
 - Fix inventory reconciliation at the Relaycast batch boundary by isolating invalid members while preserving fail-closed all-untrusted batches: Fix inventory reconciliation at the Relaycast batch boundary by isolating invalid members while preserving fail-closed all-untrusted batches
 - The exact base/head RelayFlow now proves the production-shaped cursor-aware failure: one conflicting member blocks readiness for two valid siblings, whose authenticated reads become offline with pending deliveries; the head isolates the poison and drains both.
+
+---
+
+## Evidence record (completed-work audit trail)
+
+- **Product commit:** `3cad6e343acf69adb76b5d73cc8d3aae9cf23d0a` (`fix(engine): isolate conflicting inventory members`), based on `dd477eba` (main at branch time).
+- **Follow-up repair commits:** `c26ef054` (`fix(engine): keep rejected-but-present inventory members online` — review P1) and the same-series commit adding the proof-runner try-scope cleanup (review P3).
+- **Complete changed-file list (product commit):** `CHANGELOG.md`, `packages/engine/CHANGELOG.md`, `packages/engine/src/engine/node.ts`, `packages/engine/src/__tests__/conformance/inventoryPresenceIsolation.test.ts`, `tests/relayflows/cases/0902-node-inventory-presence-isolation/{case.json,run.mjs,probe.test.ts}`, `.agentworkforce/trajectories/completed/2026-09/traj_uaqpcy4qgnoa/{summary.md,trajectory.json}`.
+- **Evidence:** red on base `dd477eba` (agent_location_conflict aborts the whole batch, siblings offline with pending deliveries), green on head; engine suite 70 files / 704 tests; `tsc` clean.
