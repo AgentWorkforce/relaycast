@@ -330,7 +330,12 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       return this.sendToProviderUnchecked(workspaceId, nodeId, providerName, message);
     }
 
-    if (authorization.kind === 'registered-node-action-v1') {
+    // V1 carried no dispatch-attempt generation. Reject it explicitly so an
+    // engine upgraded ahead of a remote socket owner cannot mistake the old
+    // proof contract for generation-safe acceptance during a rolling deploy.
+    if (authorization.kind === 'registered-node-action-v1') return false;
+
+    if (authorization.kind === 'registered-node-action-v2') {
       if (
         message.invocation_id !== authorization.invocationId
         || message.action !== authorization.actionName

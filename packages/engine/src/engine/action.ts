@@ -2974,7 +2974,7 @@ async function dispatchNodeInvocation(args: {
           args.providerName,
           frame,
           {
-            kind: 'registered-node-action-v1',
+            kind: 'registered-node-action-v2',
             invocationId: args.invocationId,
             actionId: registeredNodeClaim.actionId,
             dispatchAttempt: registeredNodeClaim.dispatchAttempts,

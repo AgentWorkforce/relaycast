@@ -1072,7 +1072,7 @@ describe('node providers', () => {
         input: {},
       },
       {
-        kind: 'registered-node-action-v1',
+        kind: 'registered-node-action-v2',
         invocationId: 'inv_action_name_mismatch',
         actionId: action!.id,
         invocationActionName: 'release',
@@ -1124,7 +1124,7 @@ describe('node providers', () => {
       input: {},
     };
     const authorization = {
-      kind: 'registered-node-action-v1' as const,
+      kind: 'registered-node-action-v2' as const,
       invocationId: 'inv_stale_action_acceptance_attempt',
       actionId: action!.id,
       invocationActionName: 'release',
@@ -1223,7 +1223,7 @@ describe('node providers', () => {
         pauseFirst
         && args[1] === 'node_b'
         && args[3].type === 'action.invoke'
-        && args[4].kind === 'registered-node-action-v1'
+        && args[4].kind === 'registered-node-action-v2'
       ) {
         pauseFirst = false;
         markSendStarted();

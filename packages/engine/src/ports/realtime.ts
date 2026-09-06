@@ -85,9 +85,20 @@ export interface ReleaseActionProviderAuthorization {
   expectedTokenHash: string;
 }
 
-/** Exact registered node-action identity accepted by the socket owner. */
-export interface RegisteredNodeActionProviderAuthorization {
+/** Legacy registered action proof, retained only so current owners fail it closed. */
+export interface LegacyRegisteredNodeActionProviderAuthorization {
   kind: 'registered-node-action-v1';
+  invocationId: string;
+  actionId: string;
+  /** Immutable API-level name persisted on the invocation (for example `spawn`). */
+  invocationActionName: string;
+  /** Exact provider capability being dispatched (for example `spawn:claude`). */
+  actionName: string;
+}
+
+/** Exact registered node-action identity and attempt accepted by the socket owner. */
+export interface RegisteredNodeActionProviderAuthorization {
+  kind: 'registered-node-action-v2';
   invocationId: string;
   actionId: string;
   /** Exact dispatch-attempt generation claimed before entering the socket owner. */
@@ -101,6 +112,7 @@ export interface RegisteredNodeActionProviderAuthorization {
 export type ActionProviderAuthorization =
   | AgentActionProviderAuthorization
   | ReleaseActionProviderAuthorization
+  | LegacyRegisteredNodeActionProviderAuthorization
   | RegisteredNodeActionProviderAuthorization;
 
 export interface NodeDrainOptions {
