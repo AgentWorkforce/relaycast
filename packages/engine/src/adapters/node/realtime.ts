@@ -349,6 +349,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
           eq(actionInvocations.id, authorization.invocationId),
           eq(actionInvocations.invocationOrigin, 'registered_action'),
           eq(actionInvocations.actionId, authorization.actionId),
+          eq(actionInvocations.actionName, authorization.invocationActionName),
           eq(actionInvocations.dispatchedNodeId, nodeId),
           eq(actionInvocations.dispatchedProvider, providerName),
           eq(actionInvocations.status, 'dispatched'),
@@ -377,51 +378,58 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     ) {
       return false;
     }
-    const [authorized] = await this.db
-      .select({ id: actionInvocations.id })
-      .from(actionInvocations)
-      .innerJoin(actions, eq(actionInvocations.actionId, actions.id))
+    // The socket owner commits the exact action generation, delivery route,
+    // and accepted attempt in one CAS before handing off the frame. Deleting
+    // the action immediately after this point may clear action_id via the FK,
+    // but cannot make cleanup fail or reroute work that the handler owns.
+    const acceptedAttempt = authorization.recordAttempt
+      ? sql`COALESCE(${actionInvocations.dispatchAttempts}, 0) + 1`
+      : actionInvocations.dispatchAttempts;
+    const [accepted] = await this.db
+      .update(actionInvocations)
+      .set({
+        status: 'dispatched',
+        handlerNodeId: sql`COALESCE(${actionInvocations.handlerNodeId}, ${nodeId})`,
+        dispatchedNodeId: nodeId,
+        dispatchedProvider: providerName,
+        dispatchedAt: new Date(),
+        retryAfterAt: null,
+        providerAcceptedAttempt: acceptedAttempt,
+        ...(authorization.recordAttempt ? {
+          attemptedNodeIds: sql`json_insert(COALESCE(${actionInvocations.attemptedNodeIds}, '[]'), '$[#]', ${nodeId})`,
+          dispatchAttempts: acceptedAttempt,
+        } : {}),
+      })
       .where(and(
         eq(actionInvocations.workspaceId, workspaceId),
         eq(actionInvocations.id, authorization.invocationId),
+        eq(actionInvocations.invocationOrigin, 'registered_action'),
+        eq(actionInvocations.actionId, authorization.actionId),
+        eq(actionInvocations.actionName, message.action),
         inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked']),
         eq(actionInvocations.handlerAgentId, authorization.handlerAgentId),
         eq(actionInvocations.handlerNodeId, nodeId),
-        eq(actions.workspaceId, workspaceId),
-        eq(actions.id, authorization.actionId),
-        eq(actions.handlerAgentId, authorization.handlerAgentId),
-        isNull(actions.handlerNodeId),
-      ));
-    if (!authorized) return false;
+        sql`EXISTS (
+          SELECT 1 FROM ${actions}
+          INNER JOIN ${agents}
+            ON ${agents.workspaceId} = ${workspaceId}
+           AND ${agents.id} = ${authorization.handlerAgentId}
+           AND ${agents.status} = 'active'
+           AND ${agents.locationType} = 'via_node'
+           AND ${agents.locationNodeId} = ${nodeId}
+           AND ${agents.providerName} = ${providerName}
+          WHERE ${actions.workspaceId} = ${workspaceId}
+            AND ${actions.id} = ${authorization.actionId}
+            AND ${actions.name} = ${message.action}
+            AND ${actions.handlerAgentId} = ${authorization.handlerAgentId}
+            AND ${actions.handlerNodeId} IS NULL
+            AND ${actions.isActive} = 1
+        )`,
+      ))
+      .returning({ id: actionInvocations.id });
+    if (!accepted) return false;
 
-    if (authorization.recordAttempt) {
-      // Record the attempt BEFORE the socket send: this mutation IS the
-      // authorization decision, re-checked atomically against the same
-      // predicates the read above used. Recording afterwards left a window in
-      // which the handler already held the frame while the row still read
-      // `dispatch_attempts = 0`, so a concurrent request classifying an
-      // undeliverable invocation could fail a dispatch that had in fact
-      // landed. The relaycast-cloud NodeDO orders its own send boundary the
-      // same way.
-      const [recorded] = await this.db
-        .update(actionInvocations)
-        .set({
-          handlerNodeId: sql`COALESCE(${actionInvocations.handlerNodeId}, ${nodeId})`,
-          attemptedNodeIds: sql`json_insert(COALESCE(${actionInvocations.attemptedNodeIds}, '[]'), '$[#]', ${nodeId})`,
-          dispatchAttempts: sql`COALESCE(${actionInvocations.dispatchAttempts}, 0) + 1`,
-        })
-        .where(and(
-          eq(actionInvocations.workspaceId, workspaceId),
-          eq(actionInvocations.id, authorization.invocationId),
-          inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked']),
-          eq(actionInvocations.handlerAgentId, authorization.handlerAgentId),
-          eq(actionInvocations.handlerNodeId, nodeId),
-        ))
-        .returning({ id: actionInvocations.id });
-      if (!recorded) return false;
-    }
-
-    // No await occurs between the authorization decision above resuming and
+    // No await occurs between the acceptance CAS above resuming and
     // this in-process socket owner accepting the frame. Remote owners
     // implement the same serializable contract inside their own send boundary.
     // `action.invoke` is never rejected by the send itself here (an

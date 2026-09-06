@@ -90,6 +90,9 @@ export interface RegisteredNodeActionProviderAuthorization {
   kind: 'registered-node-action-v1';
   invocationId: string;
   actionId: string;
+  /** Immutable API-level name persisted on the invocation (for example `spawn`). */
+  invocationActionName: string;
+  /** Exact provider capability being dispatched (for example `spawn:claude`). */
   actionName: string;
 }
 

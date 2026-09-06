@@ -1002,29 +1002,13 @@ async function rejectMigrationCanceledSpawnRegistration(
     agentName: string;
   },
 ): Promise<void> {
-  if (!registration.invocationId) {
-    const [liveReservation] = await db
-      .select({ id: actionInvocations.id })
-      .from(actionInvocations)
-      .where(and(
-        eq(actionInvocations.workspaceId, workspaceId),
-        eq(actionInvocations.dispatchedNodeId, registration.nodeId),
-        eq(actionInvocations.dispatchedProvider, registration.providerName),
-        sql`json_extract(${actionInvocations.input}, '$.name') = ${registration.agentName}`,
-        inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked']),
-        isNotNull(actionInvocations.spawnReservedAt),
-        or(
-          eq(actionInvocations.actionName, 'spawn'),
-          sql`${actionInvocations.actionName} LIKE 'spawn:%'`,
-        ),
-      ));
-    // Legacy providers cannot echo an invocation id. In that protocol the
-    // currently live reservation is the only generation proof available, and
-    // it supersedes any older migration tombstone for the same tuple.
-    if (liveReservation) return;
-  }
   const correlation = registration.invocationId
-    ? eq(actionInvocations.id, registration.invocationId)
+    ? and(
+      eq(actionInvocations.id, registration.invocationId),
+      eq(actionInvocations.dispatchedNodeId, registration.nodeId),
+      eq(actionInvocations.dispatchedProvider, registration.providerName),
+      sql`json_extract(${actionInvocations.input}, '$.name') = ${registration.agentName}`,
+    )
     : and(
       eq(actionInvocations.dispatchedNodeId, registration.nodeId),
       eq(actionInvocations.dispatchedProvider, registration.providerName),
@@ -1045,6 +1029,10 @@ async function rejectMigrationCanceledSpawnRegistration(
       ),
     ));
   if (canceled) {
+    // An ID-less legacy registration cannot distinguish a stale canceled
+    // worker from a newer reservation for the same tuple. Fail closed until
+    // the replacement echoes its invocation id; otherwise the stale process
+    // can consume the replacement generation's capacity and identity.
     throw codedError(
       `Spawn invocation "${canceled.id}" was canceled during migration`,
       'spawn_invocation_canceled',

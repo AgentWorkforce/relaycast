@@ -111,6 +111,15 @@ function isDeletedRegisteredActionInvocation(
     && invocation.providerAcceptedAttempt !== invocation.dispatchAttempts;
 }
 
+function isAcceptedDeletedRegisteredActionInvocation(
+  invocation: Pick<InvocationRow, 'actionId' | 'invocationOrigin' | 'providerAcceptedAttempt' | 'dispatchAttempts'>,
+): boolean {
+  return invocation.invocationOrigin === 'registered_action'
+    && invocation.actionId === null
+    && invocation.providerAcceptedAttempt !== null
+    && invocation.providerAcceptedAttempt === invocation.dispatchAttempts;
+}
+
 const RELEASE_GENERATION_CONFLICT_CODE = 'agent_release_generation_conflict';
 
 function releaseExpectedTokenHash(input: Record<string, unknown>): string | null {
@@ -2597,7 +2606,7 @@ async function claimRegisteredActionHandoff(
     reservationHeld?: boolean;
     skipIncrementAttempts?: boolean;
   },
-): Promise<{ actionId: string; dispatchAttempts: number } | null> {
+): Promise<{ actionId: string; actionName: string; dispatchAttempts: number } | null> {
   const claimedActionId = args.targetActionId ?? args.expectedActionId;
   const stateFields = args.pending
     ? { status: 'pending' as const, dispatchedAt: null, retryAfterAt: args.retryAfterAt ?? null }
@@ -2651,9 +2660,14 @@ async function claimRegisteredActionHandoff(
     ))
     .returning({
       actionId: actionInvocations.actionId,
+      actionName: actionInvocations.actionName,
       dispatchAttempts: actionInvocations.dispatchAttempts,
     });
-  return claimed?.actionId ? { actionId: claimed.actionId, dispatchAttempts: claimed.dispatchAttempts } : null;
+  return claimed?.actionId ? {
+    actionId: claimed.actionId,
+    actionName: claimed.actionName,
+    dispatchAttempts: claimed.dispatchAttempts,
+  } : null;
 }
 
 async function bindInvocationToRegisteredNodeAction(
@@ -2903,7 +2917,7 @@ async function dispatchNodeInvocation(args: {
   const expectedActionId = args.invocationOrigin === 'registered_action'
     ? (args.expectedActionId ?? args.actionId)
     : null;
-  let registeredNodeClaim: { actionId: string; dispatchAttempts: number } | null = null;
+  let registeredNodeClaim: { actionId: string; actionName: string; dispatchAttempts: number } | null = null;
   if (args.invocationOrigin === 'registered_action' && !args.agent) {
     registeredNodeClaim = expectedActionId
       ? await claimRegisteredActionHandoff(args.db, {
@@ -2953,6 +2967,7 @@ async function dispatchNodeInvocation(args: {
             kind: 'registered-node-action-v1',
             invocationId: args.invocationId,
             actionId: registeredNodeClaim.actionId,
+            invocationActionName: registeredNodeClaim.actionName,
             actionName: args.action,
           },
         ) ?? false)
@@ -3277,6 +3292,13 @@ export async function rescheduleNodeInvocation(
   invocation: RetryableInvocationRow,
   opts: { allowAttemptedFallback?: boolean; retryAfterAt?: Date | null } = {},
 ) {
+  // Once the exact provider accepted this generation, pruning only clears its
+  // materialized action FK. It must not make timeout, disconnect, or inventory
+  // recovery move the invocation to a same-name replacement and invalidate the
+  // original provider's result.
+  if (isAcceptedDeletedRegisteredActionInvocation(invocation)) {
+    return false;
+  }
   if (isDeletedRegisteredActionInvocation(invocation)) {
     await failOpenInvocationRows(db, invocation.workspaceId, [invocation.id], 'action_deleted');
     return false;
