@@ -2,7 +2,7 @@ import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-
 import type { getDb } from '../db/index.js';
 import { actions, actionInvocations, agents, agentNodeBindings, channelMembers, dmParticipants, nodes } from '../db/schema.js';
 import { generateId } from './snowflake.js';
-import { RELEASED_AGENT_STATUS, releasedAgentName } from './agent.js';
+import { assertRegistrableAgentName, RELEASED_AGENT_STATUS, releasedAgentName } from './agent.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { D1_SAFE_IN_QUERY_CHUNK_SIZE } from '../lib/queryChunks.js';
@@ -1509,6 +1509,11 @@ async function dispatchSpawn(args: {
   }
 
   const input = recordInput(args.data.input);
+  const requestedName = typeof input.name === 'string' ? input.name : '';
+  if (requestedName.trim().length === 0) {
+    throw codedError('spawn action input.name is required', 'invalid_spawn_request', 400);
+  }
+  assertRegistrableAgentName(requestedName);
   const capability = dispatchActionNameForInvocation('spawn', input);
 
   const { invocation, replayed } = await createInvocation(args.db, args.workspaceId, null, {
@@ -2526,22 +2531,50 @@ async function claimRegisteredActionHandoff(
     expectedActionId: string;
     targetActionId?: string;
     actionName: string;
+    pending: boolean;
+    retryAfterAt?: Date | null;
+    reservationHeld?: boolean;
+    skipIncrementAttempts?: boolean;
   },
-): Promise<string | null> {
+): Promise<{ actionId: string; dispatchAttempts: number } | null> {
   const claimedActionId = args.targetActionId ?? args.expectedActionId;
+  const stateFields = args.pending
+    ? { status: 'pending' as const, dispatchedAt: null, retryAfterAt: args.retryAfterAt ?? null }
+    : dispatchedStateFields({ retryAfterAt: args.retryAfterAt });
+  const attemptFields = args.skipIncrementAttempts
+    ? {}
+    : {
+      attemptedNodeIds: sql`json_insert(COALESCE(${actionInvocations.attemptedNodeIds}, '[]'), '$[#]', ${args.nodeId})`,
+      dispatchAttempts: sql`COALESCE(${actionInvocations.dispatchAttempts}, 0) + 1`,
+    };
   const [claimed] = await db
     .update(actionInvocations)
-    // This CAS is the durable dispatch linearization point. A retry may hand
-    // off between two live registrations with the same name, but only while
-    // the invocation still owns its exact source generation. If pruning wins,
-    // the FK clears actionId and this update cannot rebind the replacement.
-    .set({ actionId: claimedActionId })
+    // This CAS is the durable dispatch linearization point. Claim the exact
+    // action generation, route, and attempt before awaiting the provider. A
+    // retry may hand off between same-name registrations only while it owns the
+    // source generation; a later rescheduler observes the new route instead of
+    // sending the same attempt again.
+    .set({
+      ...stateFields,
+      handlerNodeId: sql`COALESCE(${actionInvocations.handlerNodeId}, ${args.nodeId})`,
+      dispatchedNodeId: args.nodeId,
+      dispatchedProvider: args.providerName,
+      spawnReservedAt: args.reservationHeld ? new Date() : null,
+      actionId: claimedActionId,
+      ...attemptFields,
+    })
     .where(and(
       eq(actionInvocations.workspaceId, args.workspaceId),
       eq(actionInvocations.id, args.invocationId),
       eq(actionInvocations.invocationOrigin, 'registered_action'),
       eq(actionInvocations.actionId, args.expectedActionId),
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      sql`NOT (
+        ${actionInvocations.actionId} = ${claimedActionId}
+        AND COALESCE(${actionInvocations.dispatchedNodeId}, '') = ${args.nodeId}
+        AND COALESCE(${actionInvocations.dispatchedProvider}, ${DEFAULT_PROVIDER_NAME}) = ${args.providerName}
+        AND ${actionInvocations.status} IN ('dispatched', 'invoked')
+      )`,
       sql`EXISTS (
         SELECT 1 FROM ${actions}
         WHERE ${actions.workspaceId} = ${args.workspaceId}
@@ -2555,8 +2588,11 @@ async function claimRegisteredActionHandoff(
         actionName: args.actionName,
       })] : []),
     ))
-    .returning({ actionId: actionInvocations.actionId });
-  return claimed?.actionId ?? null;
+    .returning({
+      actionId: actionInvocations.actionId,
+      dispatchAttempts: actionInvocations.dispatchAttempts,
+    });
+  return claimed?.actionId ? { actionId: claimed.actionId, dispatchAttempts: claimed.dispatchAttempts } : null;
 }
 
 async function bindInvocationToRegisteredNodeAction(
@@ -2619,6 +2655,34 @@ async function settleDeletedRegisteredAction(
       eq(actionInvocations.id, invocationId),
     ));
   return settled;
+}
+
+async function settleRegisteredActionSendFailure(
+  db: Db,
+  args: {
+    workspaceId: string;
+    invocationId: string;
+    nodeId: string;
+    providerName: string;
+    actionId: string;
+    dispatchAttempts: number;
+  },
+): Promise<InvocationRow | undefined> {
+  const [failed] = await db
+    .update(actionInvocations)
+    .set({ status: 'failed', error: 'node_dispatch_unavailable', completedAt: new Date() })
+    .where(and(
+      eq(actionInvocations.workspaceId, args.workspaceId),
+      eq(actionInvocations.id, args.invocationId),
+      eq(actionInvocations.invocationOrigin, 'registered_action'),
+      eq(actionInvocations.actionId, args.actionId),
+      eq(actionInvocations.dispatchedNodeId, args.nodeId),
+      eq(actionInvocations.dispatchedProvider, args.providerName),
+      eq(actionInvocations.dispatchAttempts, args.dispatchAttempts),
+      inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+    ))
+    .returning();
+  return failed ?? settleDeletedRegisteredAction(db, args.workspaceId, args.invocationId);
 }
 
 async function snapshotInvocationHandlerNode(
@@ -2774,9 +2838,9 @@ async function dispatchNodeInvocation(args: {
   const expectedActionId = args.invocationOrigin === 'registered_action'
     ? (args.expectedActionId ?? args.actionId)
     : null;
-  let registeredNodeClaimedActionId: string | null = null;
+  let registeredNodeClaim: { actionId: string; dispatchAttempts: number } | null = null;
   if (args.invocationOrigin === 'registered_action' && !args.agent) {
-    registeredNodeClaimedActionId = expectedActionId
+    registeredNodeClaim = expectedActionId
       ? await claimRegisteredActionHandoff(args.db, {
         workspaceId: args.workspaceId,
         invocationId: args.invocationId,
@@ -2785,9 +2849,13 @@ async function dispatchNodeInvocation(args: {
         expectedActionId,
         targetActionId: args.actionId ?? undefined,
         actionName: args.action,
+        pending,
+        retryAfterAt: args.retryAfterAt,
+        reservationHeld: args.reservationHeld,
+        skipIncrementAttempts: args.skipIncrementAttempts,
       })
       : null;
-    if (!registeredNodeClaimedActionId) {
+    if (!registeredNodeClaim) {
       const settled = await settleDeletedRegisteredAction(
         args.db,
         args.workspaceId,
@@ -2849,20 +2917,27 @@ async function dispatchNodeInvocation(args: {
       ));
   }
   if (!sent) {
-    if (registeredNodeClaimedActionId) {
-      await args.db
-        .update(actionInvocations)
-        .set({ status: 'failed', error: 'node_dispatch_unavailable', completedAt: new Date() })
-        .where(and(
-          eq(actionInvocations.workspaceId, args.workspaceId),
-          eq(actionInvocations.id, args.invocationId),
-          inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
-        ));
+    if (registeredNodeClaim) {
+      await settleRegisteredActionSendFailure(args.db, {
+        workspaceId: args.workspaceId,
+        invocationId: args.invocationId,
+        nodeId: args.nodeId,
+        providerName: args.providerName,
+        actionId: registeredNodeClaim.actionId,
+        dispatchAttempts: registeredNodeClaim.dispatchAttempts,
+      });
     }
     return { accepted: false, pending: false, sent: false };
   }
 
-  const finalExpectedActionId = registeredNodeClaimedActionId ?? expectedActionId;
+  // Registered node-action state was committed by the pre-send handoff CAS.
+  // Pruning after provider acceptance may clear the action FK, but it cannot
+  // revoke work the provider already received or prevent route-owned completion.
+  if (registeredNodeClaim) {
+    return { accepted: true, pending, sent: true };
+  }
+
+  const finalExpectedActionId = expectedActionId;
   const accepted = await dispatchNodeAttempt(
       args.db,
       args.workspaceId,

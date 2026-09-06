@@ -433,6 +433,42 @@ describe('node providers', () => {
     expect(broker.sock.ofType('action.invoke')).toHaveLength(0);
   });
 
+  it('rejects native spawn without a non-empty agent name before reserving capacity', async () => {
+    const ws = await createWorkspace(stack.app, 'np-spawn-name-required');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    await enrollNode(ws, 'node_a', 'alpha');
+    const broker = await attachProvider(
+      ws.workspaceId,
+      'node_a',
+      'alpha',
+      'default',
+      [{ name: 'spawn:claude', kind: 'capacity' }],
+      { maxAgents: 1 },
+    );
+
+    const response = await stack.app.request('/v1/actions/spawn/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { cli: 'claude' } }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(broker.sock.ofType('action.invoke')).toHaveLength(0);
+    expect(await stack.runtime.handle.db
+      .select()
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'spawn'),
+      )))
+      .toHaveLength(0);
+    const [node] = await stack.runtime.handle.db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_a')));
+    expect(node.reservedAgents).toBe(0);
+  });
+
   it('gates capability liveness per provider', async () => {
     const ws = await createWorkspace(stack.app, 'np-liveness');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
@@ -674,6 +710,205 @@ describe('node providers', () => {
       status: 'dispatched',
       error: null,
       dispatchedNodeId: 'node_b',
+    });
+  });
+
+  it('claims the retry route before send so a second lost-node rescheduler cannot duplicate it', async () => {
+    const { ws, beta, invocationId } = await setupPrunedReleaseAction(
+      'np-concurrent-action-route-claim',
+      false,
+      false,
+    );
+    const registry = stack.runtime.realtime;
+    const originalSend = registry.sendToProvider.bind(registry);
+    let releaseFirst!: () => void;
+    let markFirstStarted!: () => void;
+    const firstStarted = new Promise<void>((resolve) => { markFirstStarted = resolve; });
+    const firstRelease = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    let pauseFirst = true;
+    vi.spyOn(registry, 'sendToProvider').mockImplementation(async (
+      workspaceId,
+      nodeId,
+      providerName,
+      message,
+    ) => {
+      if (pauseFirst && nodeId === 'node_b' && message.type === 'action.invoke') {
+        pauseFirst = false;
+        markFirstStarted();
+        await firstRelease;
+      }
+      return originalSend(workspaceId, nodeId, providerName, message);
+    });
+
+    const firstRetry = rescheduleInvocationsForLostNode(
+      stack.runtime.handle.db,
+      registry,
+      ws.workspaceId,
+      'node_a',
+    );
+    await firstStarted;
+    const secondRetry = await rescheduleInvocationsForLostNode(
+      stack.runtime.handle.db,
+      registry,
+      ws.workspaceId,
+      'node_a',
+    );
+    releaseFirst();
+
+    expect(await firstRetry).toBe(1);
+    expect(secondRetry).toBe(0);
+    expect(beta.sock.ofType('action.invoke')).toHaveLength(1);
+    const [invocation] = await stack.runtime.handle.db
+      .select({
+        status: actionInvocations.status,
+        dispatchedNodeId: actionInvocations.dispatchedNodeId,
+        dispatchAttempts: actionInvocations.dispatchAttempts,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(invocation).toEqual({
+      status: 'dispatched',
+      dispatchedNodeId: 'node_b',
+      dispatchAttempts: 2,
+    });
+  });
+
+  it('does not let a stale failed send terminalize a newer registered-action attempt', async () => {
+    const { ws, invocationId } = await setupPrunedReleaseAction(
+      'np-stale-action-send-failure',
+      false,
+      false,
+    );
+    const registry = stack.runtime.realtime;
+    let releaseSend!: () => void;
+    let markSendStarted!: () => void;
+    const sendStarted = new Promise<void>((resolve) => { markSendStarted = resolve; });
+    const sendRelease = new Promise<void>((resolve) => { releaseSend = resolve; });
+    vi.spyOn(registry, 'sendToProvider').mockImplementation(async (_workspaceId, nodeId, _providerName, message) => {
+      if (nodeId === 'node_b' && message.type === 'action.invoke') {
+        markSendStarted();
+        await sendRelease;
+        return false;
+      }
+      return false;
+    });
+
+    const staleRetry = rescheduleInvocationsForLostNode(
+      stack.runtime.handle.db,
+      registry,
+      ws.workspaceId,
+      'node_a',
+    );
+    await sendStarted;
+    const [claimed] = await stack.runtime.handle.db
+      .select({
+        actionId: actionInvocations.actionId,
+        dispatchAttempts: actionInvocations.dispatchAttempts,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    await stack.runtime.handle.db
+      .update(actionInvocations)
+      .set({
+        status: 'dispatched',
+        error: null,
+        dispatchedNodeId: 'node_b',
+        dispatchedProvider: 'fleet-b',
+        dispatchAttempts: claimed.dispatchAttempts + 1,
+      })
+      .where(eq(actionInvocations.id, invocationId));
+    releaseSend();
+
+    expect(await staleRetry).toBe(0);
+    const [winner] = await stack.runtime.handle.db
+      .select({
+        actionId: actionInvocations.actionId,
+        status: actionInvocations.status,
+        error: actionInvocations.error,
+        dispatchedNodeId: actionInvocations.dispatchedNodeId,
+        dispatchedProvider: actionInvocations.dispatchedProvider,
+        dispatchAttempts: actionInvocations.dispatchAttempts,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(winner).toEqual({
+      actionId: claimed.actionId,
+      status: 'dispatched',
+      error: null,
+      dispatchedNodeId: 'node_b',
+      dispatchedProvider: 'fleet-b',
+      dispatchAttempts: claimed.dispatchAttempts + 1,
+    });
+  });
+
+  it('preserves an accepted registered-action attempt when its capability is pruned afterward', async () => {
+    const { ws, beta, invocationId } = await setupPrunedReleaseAction(
+      'np-accepted-action-prune',
+      false,
+      false,
+    );
+    const registry = stack.runtime.realtime;
+    const originalSend = registry.sendToProvider.bind(registry);
+    let releaseAccepted!: () => void;
+    let markAccepted!: () => void;
+    const accepted = new Promise<void>((resolve) => { markAccepted = resolve; });
+    const acceptedRelease = new Promise<void>((resolve) => { releaseAccepted = resolve; });
+    let pauseFirst = true;
+    vi.spyOn(registry, 'sendToProvider').mockImplementation(async (
+      workspaceId,
+      nodeId,
+      providerName,
+      message,
+    ) => {
+      const sent = await originalSend(workspaceId, nodeId, providerName, message);
+      if (pauseFirst && nodeId === 'node_b' && message.type === 'action.invoke') {
+        pauseFirst = false;
+        markAccepted();
+        await acceptedRelease;
+      }
+      return sent;
+    });
+
+    const retry = rescheduleInvocationsForLostNode(
+      stack.runtime.handle.db,
+      registry,
+      ws.workspaceId,
+      'node_a',
+    );
+    await accepted;
+    const [claimed] = await stack.runtime.handle.db
+      .select({ actionId: actionInvocations.actionId })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    await stack.runtime.handle.db
+      .delete(actions)
+      .where(and(eq(actions.workspaceId, ws.workspaceId), eq(actions.id, claimed.actionId!)));
+    releaseAccepted();
+
+    expect(await retry).toBe(1);
+    expect(beta.sock.ofType('action.invoke')).toHaveLength(1);
+    await beta.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'action.result',
+      invocation_id: invocationId,
+      output: { accepted: true },
+    }));
+    const [completed] = await stack.runtime.handle.db
+      .select({
+        actionId: actionInvocations.actionId,
+        status: actionInvocations.status,
+        error: actionInvocations.error,
+        dispatchedNodeId: actionInvocations.dispatchedNodeId,
+        dispatchedProvider: actionInvocations.dispatchedProvider,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(completed).toEqual({
+      actionId: null,
+      status: 'completed',
+      error: null,
+      dispatchedNodeId: 'node_b',
+      dispatchedProvider: 'fleet-b',
     });
   });
 

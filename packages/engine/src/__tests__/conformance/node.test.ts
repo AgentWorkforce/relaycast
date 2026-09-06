@@ -2600,9 +2600,10 @@ describe('node adapter conformance', () => {
       const freshPromise = invoke();
       await frameSentPromise;
 
-      // The durable claim already snapshots node_alpha, but dispatch state is
-      // still uncommitted. Deletion terminally fails the claim and removes the
-      // current action row that must not be used to classify a later replay.
+      // Provider acceptance has already happened, and the pre-send claim made
+      // that route/attempt durable. Explicit deletion terminally cancels the
+      // row, but a keyed replay must preserve the accepted 201 instead of
+      // reporting a pre-dispatch failure or executing the action again.
       const deleted = await stack.app.request('/v1/actions/vanishing-action', {
         method: 'DELETE',
         headers: { authorization: `Bearer ${ws.workspaceKey}` },
@@ -2610,8 +2611,7 @@ describe('node adapter conformance', () => {
       expect(deleted.status).toBe(204);
 
       const replay = await invoke();
-      expect(replay.status).toBe(503);
-      expect((await replay.json() as { error: { code: string } }).error.code).toBe('action_deleted');
+      expect(replay.status).toBe(201);
 
       resumeSend();
       await freshPromise;
@@ -2633,7 +2633,7 @@ describe('node adapter conformance', () => {
         error: 'action_deleted',
         handlerAgentId: null,
         handlerNodeId: 'node_alpha',
-        dispatchedNodeId: null,
+        dispatchedNodeId: 'node_alpha',
       }]);
       expect(alpha.sock.ofType('action.invoke').filter((event) => event.action === 'vanishing-action')).toHaveLength(1);
     });

@@ -13,7 +13,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - `POST /v1/agents/release` accepts `expected_token_hash` and atomically rejects stale generations with 409 `agent_release_generation_conflict` before dispatch or lifecycle mutation.
 - Node-controlled `agent.register` now acquires capacity before writing an agent, grants an existing reservation only to its exact spawn invocation/name/provider, and rejects migration-canceled workers with 409 `spawn_invocation_canceled` even when legacy hosts omit `invocation_id`.
-- Registered node-action retries now atomically compare and hand off their exact `action_id`; if capability pruning wins, the invocation fails with `action_deleted` without reaching a same-name replacement.
+- Native `spawn` rejects a missing or empty `input.name` with 400 `invalid_spawn_request` before creating an invocation or reserving capacity.
+- Registered node-action dispatch and retries now atomically claim their exact `action_id`, route, and attempt before provider send; later retries and send-failure settlement are generation-guarded, while an accepted frame remains completable after capability pruning.
 
 ## [8.4.0] - 2026-09-05
 
