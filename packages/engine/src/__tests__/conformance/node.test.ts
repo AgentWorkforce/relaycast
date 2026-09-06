@@ -11,9 +11,10 @@ import {
   deliverFramesOfType,
   type TestStack,
 } from './harness.js';
-import { actionInvocations, actions, agentNodeBindings, agents, deliveries, nodeProviders, nodes } from '../../db/schema.js';
+import { actionInvocations, actions, agentNodeBindings, agents, channelMembers, deliveries, nodeProviders, nodes } from '../../db/schema.js';
 import { handleNodeControlMessage } from '../../node-control.js';
 import type { NodeConnectionRegistry } from '../../ports/realtime.js';
+import type { EngineDb, TransactionCapability } from '../../ports/database.js';
 import { sha256Hex } from '../../lib/crypto.js';
 
 function capability(name: string, kind?: string, metadata?: Record<string, unknown>) {
@@ -1002,13 +1003,115 @@ describe('node adapter conformance', () => {
       expect(node?.activeAgents).toBe(1);
     });
 
+    it('leaves no agent or membership when a nontransactional registration loses the capacity CAS', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-d1-register-capacity');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_d1_capacity',
+        name: 'd1-capacity',
+        capabilities: [capability('spawn:claude', 'spawn')],
+        maxAgents: 1,
+      });
+      const db = stack.runtime.handle.db as unknown as EngineDb;
+      await db.insert(actionInvocations).values({
+        id: 'inv_d1_reserved_spawn',
+        workspaceId: ws.workspaceId,
+        actionName: 'spawn:claude',
+        invocationOrigin: 'builtin',
+        input: { name: 'reserved-worker' },
+        status: 'dispatched',
+        dispatchedNodeId: 'node_d1_capacity',
+        dispatchedProvider: 'default',
+        spawnReservedAt: new Date(),
+      });
+      await db
+        .update(nodes)
+        .set({ reservedAgents: 1 })
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_d1_capacity')));
+
+      // Model Cloudflare D1: runAtomic executes sequential statements because
+      // the adapter has no interactive rollback transaction.
+      delete (db as Partial<TransactionCapability>).withTransaction;
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'd1-unrelated-register',
+        type: 'agent.register',
+        name: 'unrelated-worker',
+        session_ref: 'pty://alpha/unrelated-worker',
+      }));
+
+      expect(alpha.sock.ofType('error').at(-1)).toMatchObject({
+        id: 'd1-unrelated-register',
+        code: 'node_capacity_exceeded',
+      });
+      expect(await db
+        .select()
+        .from(agents)
+        .where(and(eq(agents.workspaceId, ws.workspaceId), eq(agents.name, 'unrelated-worker'))))
+        .toHaveLength(0);
+      expect(await db
+        .select()
+        .from(channelMembers)
+        .innerJoin(agents, eq(channelMembers.agentId, agents.id))
+        .where(and(eq(agents.workspaceId, ws.workspaceId), eq(agents.name, 'unrelated-worker'))))
+        .toHaveLength(0);
+      const [node] = await db
+        .select({ activeAgents: nodes.activeAgents, reservedAgents: nodes.reservedAgents })
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_d1_capacity')));
+      expect(node).toEqual({ activeAgents: 0, reservedAgents: 1 });
+    });
+
+    it('compensates the exact identity and slot after a nontransactional post-reservation failure', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-d1-register-compensation');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_d1_compensation',
+        name: 'd1-compensation',
+        capabilities: [],
+        maxAgents: 1,
+      });
+      const db = stack.runtime.handle.db as unknown as EngineDb;
+      delete (db as Partial<TransactionCapability>).withTransaction;
+      stack.runtime.handle.sqlite.exec(`
+        CREATE TRIGGER fail_d1_agent_binding
+        BEFORE INSERT ON agent_node_bindings
+        BEGIN
+          SELECT RAISE(ABORT, 'forced binding failure');
+        END
+      `);
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'd1-failed-after-reservation',
+        type: 'agent.register',
+        name: 'rolled-back-worker',
+        session_ref: 'pty://alpha/rolled-back-worker',
+      }));
+
+      expect(alpha.sock.ofType('error').at(-1)).toMatchObject({
+        id: 'd1-failed-after-reservation',
+        ok: false,
+      });
+      expect(await db
+        .select()
+        .from(agents)
+        .where(and(eq(agents.workspaceId, ws.workspaceId), eq(agents.name, 'rolled-back-worker'))))
+        .toHaveLength(0);
+      expect(await db.select().from(channelMembers)).toHaveLength(0);
+      expect(await db.select().from(agentNodeBindings)).toHaveLength(0);
+      const [node] = await db
+        .select({ activeAgents: nodes.activeAgents, reservedAgents: nodes.reservedAgents })
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_d1_compensation')));
+      expect(node).toEqual({ activeAgents: 0, reservedAgents: 0 });
+    });
+
     it('rejects a late agent registration for a migration-canceled spawn', async () => {
       const ws = await createWorkspace(stack.app, 'fleet-canceled-legacy-spawn');
       const alpha = await enrollAndAttachNode(ws, {
         id: 'node_canceled_spawn',
         name: 'canceled-spawn',
         capabilities: [capability('spawn:claude', 'spawn')],
-        maxAgents: 1,
+        maxAgents: 2,
       });
       const db = stack.runtime.handle.db;
       await db.insert(actionInvocations).values({
@@ -1016,6 +1119,7 @@ describe('node adapter conformance', () => {
         workspaceId: ws.workspaceId,
         actionName: 'spawn:claude',
         invocationOrigin: 'legacy_unknown',
+        input: { name: 'late-worker' },
         status: 'failed',
         error: 'invocation_origin_unavailable',
         dispatchedNodeId: 'node_canceled_spawn',
@@ -1056,11 +1160,40 @@ describe('node adapter conformance', () => {
         .from(agents)
         .where(and(eq(agents.workspaceId, ws.workspaceId), eq(agents.name, 'late-worker'))))
         .toHaveLength(0);
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'late-canceled-register-without-id',
+        type: 'agent.register',
+        name: 'late-worker',
+        session_ref: 'pty://alpha/late-worker',
+      }));
+      expect(alpha.sock.ofType('error').at(-1)).toMatchObject({
+        id: 'late-canceled-register-without-id',
+        code: 'spawn_invocation_canceled',
+      });
+      expect(await db
+        .select()
+        .from(agents)
+        .where(and(eq(agents.workspaceId, ws.workspaceId), eq(agents.name, 'late-worker'))))
+        .toHaveLength(0);
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'unrelated-register-without-id',
+        type: 'agent.register',
+        name: 'unrelated-worker',
+        session_ref: 'pty://alpha/unrelated-worker',
+      }));
+      expect(alpha.sock.ofType('reply').at(-1)).toMatchObject({
+        id: 'unrelated-register-without-id',
+        ok: true,
+      });
       const [node] = await db
         .select({ activeAgents: nodes.activeAgents, reservedAgents: nodes.reservedAgents })
         .from(nodes)
         .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_canceled_spawn')));
-      expect(node).toEqual({ activeAgents: 0, reservedAgents: 1 });
+      expect(node).toEqual({ activeAgents: 1, reservedAgents: 1 });
     });
 
     it('lets only the matching spawn registration consume its reserved node slot', async () => {

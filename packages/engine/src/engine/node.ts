@@ -986,15 +986,26 @@ async function reserveNodeAgentSlot(
 async function rejectMigrationCanceledSpawnRegistration(
   db: Db,
   workspaceId: string,
-  invocationId: string | undefined,
+  registration: {
+    invocationId?: string;
+    nodeId: string;
+    providerName: string;
+    agentName: string;
+  },
 ): Promise<void> {
-  if (!invocationId) return;
+  const correlation = registration.invocationId
+    ? eq(actionInvocations.id, registration.invocationId)
+    : and(
+      eq(actionInvocations.dispatchedNodeId, registration.nodeId),
+      eq(actionInvocations.dispatchedProvider, registration.providerName),
+      sql`json_extract(${actionInvocations.input}, '$.name') = ${registration.agentName}`,
+    );
   const [canceled] = await db
     .select({ id: actionInvocations.id })
     .from(actionInvocations)
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
-      eq(actionInvocations.id, invocationId),
+      correlation,
       eq(actionInvocations.invocationOrigin, 'legacy_unknown'),
       eq(actionInvocations.status, 'failed'),
       eq(actionInvocations.error, 'invocation_origin_unavailable'),
@@ -1005,7 +1016,7 @@ async function rejectMigrationCanceledSpawnRegistration(
     ));
   if (canceled) {
     throw codedError(
-      `Spawn invocation "${invocationId}" was canceled during migration`,
+      `Spawn invocation "${canceled.id}" was canceled during migration`,
       'spawn_invocation_canceled',
       409,
     );
@@ -1359,7 +1370,12 @@ export async function registerAgentViaNode(
 ): Promise<AgentRegisterReplyData> {
   assertRegistrableAgentName(message.name);
   return runAtomic(db, async (tx) => {
-    await rejectMigrationCanceledSpawnRegistration(tx, workspaceId, message.invocation_id);
+    await rejectMigrationCanceledSpawnRegistration(tx, workspaceId, {
+      invocationId: message.invocation_id,
+      nodeId,
+      providerName,
+      agentName: message.name,
+    });
     const [node] = await tx
       .select()
       .from(nodes)
@@ -1380,66 +1396,76 @@ export async function registerAgentViaNode(
     const token = `at_live_${randomHex(16)}`;
     const tokenHash = await sha256Hex(token);
     const now = new Date().toISOString();
-    const [result] = await tx
-      .insert(agents)
-      .values({
-        id: generateId(),
-        workspaceId,
-        name: message.name,
-        handle: `@${message.name}`,
-        type: 'agent',
-        tokenHash,
-        status: 'active',
-        persona: null,
-        metadata: { fleet: { node_id: nodeId, invocation_id: message.invocation_id ?? null, registered_at: now } },
-        locationType: 'via_node',
-        locationNodeId: nodeId,
-        providerName,
-        originNodeId: nodeId,
-        resumable: message.resumable ?? false,
-        sessionRef: message.session_ref ?? null,
-      })
-      .onConflictDoNothing({ target: [agents.workspaceId, agents.name] })
-      .returning();
-
-    if (!result) {
-      throw codedError(
-        `Agent "${message.name}" already exists; use agent.recover with proof of the immutable id`,
-        'agent_already_exists',
-        409,
-      );
-    }
-
-    await autoJoinGeneral(tx, workspaceId, result.id);
-    const activeNodeIds = await activeBindingNodeIdsForAgent(tx, workspaceId, result.id);
-    const targetWasActive = activeNodeIds.includes(nodeId);
+    const agentId = generateId();
     let reservedTargetSlot = false;
+    let createdAgent = false;
+
+    // D1 has no interactive transaction, so acquire capacity before the first
+    // durable agent or membership write. Any later failure compensates both
+    // the exact new identity and the slot rather than leaving a ghost agent.
+    await reserveNodeAgentSlot(tx, workspaceId, node, message.invocation_id ? {
+      invocationId: message.invocation_id,
+      providerName,
+      agentName: message.name,
+    } : undefined);
+    reservedTargetSlot = true;
     try {
-      if (!targetWasActive) {
-        await reserveNodeAgentSlot(tx, workspaceId, node, message.invocation_id ? {
-          invocationId: message.invocation_id,
+      const [result] = await tx
+        .insert(agents)
+        .values({
+          id: agentId,
+          workspaceId,
+          name: message.name,
+          handle: `@${message.name}`,
+          type: 'agent',
+          tokenHash,
+          status: 'active',
+          persona: null,
+          metadata: { fleet: { node_id: nodeId, invocation_id: message.invocation_id ?? null, registered_at: now } },
+          locationType: 'via_node',
+          locationNodeId: nodeId,
           providerName,
-          agentName: message.name,
-        } : undefined);
-        reservedTargetSlot = true;
+          originNodeId: nodeId,
+          resumable: message.resumable ?? false,
+          sessionRef: message.session_ref ?? null,
+        })
+        .onConflictDoNothing({ target: [agents.workspaceId, agents.name] })
+        .returning();
+
+      if (!result) {
+        throw codedError(
+          `Agent "${message.name}" already exists; use agent.recover with proof of the immutable id`,
+          'agent_already_exists',
+          409,
+        );
       }
+
+      createdAgent = true;
+      await autoJoinGeneral(tx, workspaceId, result.id);
       await upsertAgentNodeBinding(tx, workspaceId, result, nodeId, {
         sessionRef: message.session_ref ?? null,
         deactivateExisting: true,
       });
-      await releaseNodeAgentSlots(tx, workspaceId, activeNodeIds.filter((activeNodeId) => activeNodeId !== nodeId));
+      return {
+        agent_id: result.id,
+        name: result.name,
+        token,
+        ...(cursorHandshake ? { delivery_ack_seq: result.deliveryAckSeq } : {}),
+      };
     } catch (err) {
-      if (reservedTargetSlot) {
-        await releaseNodeAgentSlots(tx, workspaceId, [nodeId]);
+      try {
+        if (createdAgent) {
+          await tx
+            .delete(agents)
+            .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId)));
+        }
+      } finally {
+        if (reservedTargetSlot) {
+          await releaseNodeAgentSlots(tx, workspaceId, [nodeId]);
+        }
       }
       throw err;
     }
-    return {
-      agent_id: result.id,
-      name: result.name,
-      token,
-      ...(cursorHandshake ? { delivery_ack_seq: result.deliveryAckSeq } : {}),
-    };
   });
 }
 
