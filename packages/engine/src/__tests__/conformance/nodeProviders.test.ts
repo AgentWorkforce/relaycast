@@ -12,7 +12,7 @@ import {
 import { actions, actionInvocations, agents, nodeProviders, nodes } from '../../db/schema.js';
 import { NODE_LIVENESS_TTL_MS, PROVIDER_ATTACH_LIVENESS_MS } from '../../engine/placement.js';
 import { drainNodeInvocations } from '../../index.js';
-import { rescheduleInvocationsForLostNode } from '../../engine/action.js';
+import { rescheduleInvocationsForLostNode, rescheduleNodeInvocation } from '../../engine/action.js';
 
 type Cap = { name: string; kind?: string; global?: boolean; queue?: boolean };
 
@@ -80,7 +80,7 @@ describe('node providers', () => {
     return { sock, handle };
   }
 
-  async function setupPrunedReleaseAction(slug: string, queue: boolean) {
+  async function setupPrunedReleaseAction(slug: string, queue: boolean, prune = true) {
     const ws = await createWorkspace(stack.app, slug);
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
     await enrollNode(ws, 'node_a', 'alpha');
@@ -121,33 +121,45 @@ describe('node providers', () => {
     const invocationId = (await invoked.json() as { data: { invocation_id: string } }).data.invocation_id;
     expect(alpha.sock.ofType('action.invoke')).toHaveLength(queue ? 0 : 1);
 
+    const [originalAction] = await stack.runtime.handle.db
+      .select({ id: actions.id })
+      .from(actions)
+      .where(and(
+        eq(actions.workspaceId, ws.workspaceId),
+        eq(actions.handlerNodeId, 'node_a'),
+        eq(actions.name, 'release'),
+      ));
+    expect(originalAction?.id).toBeTruthy();
+
     // The capability snapshot drops the exact action row. action_id is now
     // null, while immutable provenance must keep this invocation tied to the
     // deleted registration rather than the live same-name action on beta.
-    await alpha.handle.handleMessage(JSON.stringify({
-      v: 1,
-      type: 'node.heartbeat',
-      load: 0,
-      active_agents: 0,
-      handlers_live: !queue,
-      capabilities: [],
-    }));
-    const [pruned] = await stack.runtime.handle.db
-      .select({
-        actionId: actionInvocations.actionId,
-        invocationOrigin: actionInvocations.invocationOrigin,
-        status: actionInvocations.status,
-      })
-      .from(actionInvocations)
-      .where(eq(actionInvocations.id, invocationId));
-    expect(pruned).toMatchObject({
-      actionId: null,
-      invocationOrigin: 'registered_action',
-      status: queue ? 'pending' : 'dispatched',
-    });
+    if (prune) {
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.heartbeat',
+        load: 0,
+        active_agents: 0,
+        handlers_live: !queue,
+        capabilities: [],
+      }));
+      const [pruned] = await stack.runtime.handle.db
+        .select({
+          actionId: actionInvocations.actionId,
+          invocationOrigin: actionInvocations.invocationOrigin,
+          status: actionInvocations.status,
+        })
+        .from(actionInvocations)
+        .where(eq(actionInvocations.id, invocationId));
+      expect(pruned).toMatchObject({
+        actionId: null,
+        invocationOrigin: 'registered_action',
+        status: queue ? 'pending' : 'dispatched',
+      });
+    }
     beta.sock.received.length = 0;
 
-    return { ws, alpha, beta, invocationId };
+    return { ws, alpha, beta, invocationId, originalActionId: originalAction!.id };
   }
 
   async function expectDeletedActionFailure(invocationId: string) {
@@ -580,6 +592,89 @@ describe('node providers', () => {
     expect(rescheduled).toBe(0);
     expect(beta.sock.ofType('action.invoke')).toHaveLength(0);
     await expectDeletedActionFailure(invocationId);
+  });
+
+  it('fails a registered action when its capability is pruned after retry selects a replacement', async () => {
+    const { ws, beta, invocationId, originalActionId } = await setupPrunedReleaseAction(
+      'np-concurrent-pruned-action-retry',
+      false,
+      false,
+    );
+    const registry = stack.runtime.realtime;
+    const originalConnected = registry.isProviderConnected.bind(registry);
+    let pruned = false;
+    vi.spyOn(registry, 'isProviderConnected').mockImplementation((workspaceId, nodeId, providerName) => {
+      if (!pruned && nodeId === 'node_b') {
+        pruned = true;
+        stack.runtime.handle.sqlite
+          .prepare('DELETE FROM actions WHERE workspace_id = ? AND id = ?')
+          .run(ws.workspaceId, originalActionId);
+      }
+      return originalConnected(workspaceId, nodeId, providerName);
+    });
+
+    const rescheduled = await rescheduleInvocationsForLostNode(
+      stack.runtime.handle.db,
+      registry,
+      ws.workspaceId,
+      'node_a',
+    );
+
+    expect(pruned).toBe(true);
+    expect(rescheduled).toBe(0);
+    expect(beta.sock.ofType('action.invoke')).toHaveLength(0);
+    await expectDeletedActionFailure(invocationId);
+  });
+
+  it('does not fail a concurrent registered-action handoff winner', async () => {
+    const { ws, beta, invocationId, originalActionId } = await setupPrunedReleaseAction(
+      'np-concurrent-action-handoff-winner',
+      false,
+      false,
+    );
+    const db = stack.runtime.handle.db;
+    const [retrySnapshot] = await db
+      .select()
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    const [replacement] = await db
+      .select({ id: actions.id })
+      .from(actions)
+      .where(and(
+        eq(actions.workspaceId, ws.workspaceId),
+        eq(actions.handlerNodeId, 'node_b'),
+        eq(actions.name, 'release'),
+      ));
+    expect(retrySnapshot.actionId).toBe(originalActionId);
+    expect(replacement?.id).toBeTruthy();
+
+    // A competing retry wins the exact source→replacement CAS first.
+    stack.runtime.handle.sqlite.prepare(`
+      UPDATE action_invocations
+      SET action_id = ?, dispatched_node_id = 'node_b', dispatched_provider = 'fleet-b'
+      WHERE id = ?
+    `).run(replacement!.id, invocationId);
+    beta.sock.received.length = 0;
+
+    const rescheduled = await rescheduleNodeInvocation(db, stack.runtime.realtime, retrySnapshot);
+
+    expect(rescheduled).toBe(false);
+    expect(beta.sock.ofType('action.invoke')).toHaveLength(0);
+    const [winner] = await db
+      .select({
+        actionId: actionInvocations.actionId,
+        status: actionInvocations.status,
+        error: actionInvocations.error,
+        dispatchedNodeId: actionInvocations.dispatchedNodeId,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(winner).toEqual({
+      actionId: replacement!.id,
+      status: 'dispatched',
+      error: null,
+      dispatchedNodeId: 'node_b',
+    });
   });
 
   it('fails a queued pruned registered action during drain without dispatching it by name', async () => {

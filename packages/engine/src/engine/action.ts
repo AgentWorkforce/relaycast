@@ -959,6 +959,8 @@ async function dispatchNodeProviderInvocation(args: {
   queue: boolean;
   /** Durable registered-action identity; null is reserved for built-in protocols. */
   actionId: string | null;
+  /** Original invocation identity; retry placement must never replace it by name. */
+  expectedActionId?: string | null;
   /** Immutable provenance; unlike actionId, this survives action-row pruning. */
   invocationOrigin: InvocationRow['invocationOrigin'];
   reservationHeld?: boolean;
@@ -982,12 +984,28 @@ async function dispatchNodeProviderInvocation(args: {
     // The DB is the authoritative offline queue. Do not call sendToProvider
     // here: a connected provider whose heartbeat says handlers_live=false still
     // has a socket, and sendToProvider would deliver the frame immediately.
-    const accepted = await dispatchNodeAttempt(args.db, args.workspaceId, args.invocationId, args.nodeId, {
-      providerName: args.providerName,
-      pending: true,
-      reservationHeld: args.reservationHeld,
-      actionId: args.actionId ?? undefined,
-    });
+    const expectedActionId = args.invocationOrigin === 'registered_action'
+      ? (args.expectedActionId ?? args.actionId)
+      : null;
+    const accepted = await dispatchNodeAttempt(
+      args.db,
+      args.workspaceId,
+      args.invocationId,
+      args.nodeId,
+      {
+        providerName: args.providerName,
+        pending: true,
+        reservationHeld: args.reservationHeld,
+        expectedAction: expectedActionId
+          ? { id: expectedActionId, name: args.action }
+          : undefined,
+        targetActionId: args.actionId ?? undefined,
+      },
+    );
+    if (!accepted && args.invocationOrigin === 'registered_action') {
+      await settleDeletedRegisteredAction(args.db, args.workspaceId, args.invocationId);
+      return { accepted: false, pending: false };
+    }
     return { accepted, pending: true };
   }
   return dispatchNodeInvocation({ ...args });
@@ -1545,21 +1563,35 @@ async function dispatchSpawn(args: {
   if (!args.bypassShadow) {
     const shadow = await fetchNodeAction(args.db, args.workspaceId, nodeId, capability);
     if (shadow && shadow.handlerProvider) {
-      if (!placement.queued) await releaseNodeCapacity(args.db, args.workspaceId, nodeId);
-      const dispatched = await dispatchNodeProviderInvocation({
-        db: args.db,
-        registry: args.registry,
+      const bound = await bindInvocationToRegisteredNodeAction(args.db, {
         workspaceId: args.workspaceId,
         invocationId: invocation.id,
         nodeId,
         providerName: shadow.handlerProvider,
-        action: capability,
-        input,
-        queue: shadow.queue,
         actionId: shadow.id,
-        invocationOrigin: 'registered_action',
+        actionName: capability,
       });
-      return spawnResult(invocation, nodeId, dispatched);
+      if (bound) {
+        if (!placement.queued) await releaseNodeCapacity(args.db, args.workspaceId, nodeId);
+        const dispatched = await dispatchNodeProviderInvocation({
+          db: args.db,
+          registry: args.registry,
+          workspaceId: args.workspaceId,
+          invocationId: invocation.id,
+          nodeId,
+          providerName: shadow.handlerProvider,
+          action: capability,
+          input,
+          queue: shadow.queue,
+          actionId: shadow.id,
+          expectedActionId: shadow.id,
+          invocationOrigin: 'registered_action',
+        });
+        return spawnResult(invocation, nodeId, dispatched);
+      }
+      // The shadow disappeared before its exact identity could be claimed.
+      // Keep the native reservation and continue through native capacity; a
+      // stale shadow snapshot must never receive an unbound invocation.
     }
   }
 
@@ -2403,7 +2435,13 @@ async function dispatchNodeAttempt(
     retryAfterAt?: Date | null;
     reservationHeld?: boolean;
     skipIncrementAttempts?: boolean;
-    actionId?: string;
+    expectedAction?: {
+      id: string;
+      name: string;
+      handlerAgentId?: string;
+    };
+    /** Selected retry target; differs from expectedAction.id during a valid failover. */
+    targetActionId?: string;
   },
 ) {
   const stateFields = opts.pending
@@ -2425,16 +2463,162 @@ async function dispatchNodeAttempt(
       dispatchedNodeId: nodeId,
       dispatchedProvider: opts.providerName,
       spawnReservedAt: opts.reservationHeld ? new Date() : null,
-      ...(opts.actionId ? { actionId: opts.actionId } : {}),
+      ...(opts.targetActionId ? { actionId: opts.targetActionId } : {}),
       ...attemptFields,
     })
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
       eq(actionInvocations.id, invocationId),
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      ...(opts.expectedAction ? [
+        eq(actionInvocations.invocationOrigin, 'registered_action'),
+        eq(actionInvocations.actionId, opts.expectedAction.id),
+        sql`EXISTS (
+          SELECT 1 FROM ${actions}
+          WHERE ${actions.workspaceId} = ${workspaceId}
+            AND ${actions.id} = ${opts.expectedAction.id}
+        )`,
+        ...(opts.targetActionId || opts.expectedAction.handlerAgentId ? [
+          registeredActionDispatchPredicate({
+            workspaceId,
+            nodeId,
+            providerName: opts.providerName,
+            actionId: opts.targetActionId ?? opts.expectedAction.id,
+            actionName: opts.expectedAction.name,
+            handlerAgentId: opts.expectedAction.handlerAgentId,
+          }),
+        ] : []),
+      ] : []),
     ))
     .returning();
   return !!updated;
+}
+
+function registeredActionDispatchPredicate(args: {
+  workspaceId: string;
+  nodeId: string;
+  providerName: string;
+  actionId: string;
+  actionName: string;
+  handlerAgentId?: string;
+}) {
+  const handlerPredicate = args.handlerAgentId
+    ? sql`AND ${actions.handlerAgentId} = ${args.handlerAgentId} AND ${actions.handlerNodeId} IS NULL`
+    : sql`AND ${actions.handlerNodeId} = ${args.nodeId}
+        AND COALESCE(${actions.handlerProvider}, ${DEFAULT_PROVIDER_NAME}) = ${args.providerName}`;
+  return sql`EXISTS (
+    SELECT 1 FROM ${actions}
+    WHERE ${actions.workspaceId} = ${args.workspaceId}
+      AND ${actions.id} = ${args.actionId}
+      AND ${actions.name} = ${args.actionName}
+      AND ${actions.isActive} = 1
+      ${handlerPredicate}
+  )`;
+}
+
+async function claimRegisteredActionHandoff(
+  db: Db,
+  args: {
+    workspaceId: string;
+    invocationId: string;
+    nodeId: string;
+    providerName: string;
+    expectedActionId: string;
+    targetActionId?: string;
+    actionName: string;
+  },
+): Promise<string | null> {
+  const claimedActionId = args.targetActionId ?? args.expectedActionId;
+  const [claimed] = await db
+    .update(actionInvocations)
+    // This CAS is the durable dispatch linearization point. A retry may hand
+    // off between two live registrations with the same name, but only while
+    // the invocation still owns its exact source generation. If pruning wins,
+    // the FK clears actionId and this update cannot rebind the replacement.
+    .set({ actionId: claimedActionId })
+    .where(and(
+      eq(actionInvocations.workspaceId, args.workspaceId),
+      eq(actionInvocations.id, args.invocationId),
+      eq(actionInvocations.invocationOrigin, 'registered_action'),
+      eq(actionInvocations.actionId, args.expectedActionId),
+      inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      sql`EXISTS (
+        SELECT 1 FROM ${actions}
+        WHERE ${actions.workspaceId} = ${args.workspaceId}
+          AND ${actions.id} = ${args.expectedActionId}
+      )`,
+      ...(args.targetActionId ? [registeredActionDispatchPredicate({
+        workspaceId: args.workspaceId,
+        nodeId: args.nodeId,
+        providerName: args.providerName,
+        actionId: args.targetActionId,
+        actionName: args.actionName,
+      })] : []),
+    ))
+    .returning({ actionId: actionInvocations.actionId });
+  return claimed?.actionId ?? null;
+}
+
+async function bindInvocationToRegisteredNodeAction(
+  db: Db,
+  args: {
+    workspaceId: string;
+    invocationId: string;
+    nodeId: string;
+    providerName: string;
+    actionId: string;
+    actionName: string;
+  },
+): Promise<boolean> {
+  const [bound] = await db
+    .update(actionInvocations)
+    .set({ actionId: args.actionId, invocationOrigin: 'registered_action' })
+    .where(and(
+      eq(actionInvocations.workspaceId, args.workspaceId),
+      eq(actionInvocations.id, args.invocationId),
+      eq(actionInvocations.invocationOrigin, 'builtin'),
+      isNull(actionInvocations.actionId),
+      inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      eq(actionInvocations.dispatchAttempts, 0),
+      registeredActionDispatchPredicate(args),
+    ))
+    .returning({ id: actionInvocations.id });
+  return !!bound;
+}
+
+async function settleDeletedRegisteredAction(
+  db: Db,
+  workspaceId: string,
+  invocationId: string,
+): Promise<InvocationRow | undefined> {
+  // A failed handoff can also mean another dispatcher already advanced the
+  // same invocation to a different live action. Fail only the FK-null state
+  // that proves pruning won; never clobber that concurrent dispatch winner.
+  const [failed] = await db
+    .update(actionInvocations)
+    .set({
+      status: 'failed',
+      error: 'action_deleted',
+      completedAt: new Date(),
+      spawnReservedAt: null,
+    })
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.id, invocationId),
+      eq(actionInvocations.invocationOrigin, 'registered_action'),
+      isNull(actionInvocations.actionId),
+      inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+    ))
+    .returning();
+  if (failed) return failed;
+  const [settled] = await db
+    .select()
+    .from(actionInvocations)
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.id, invocationId),
+    ));
+  return settled;
 }
 
 async function snapshotInvocationHandlerNode(
@@ -2499,6 +2683,8 @@ async function dispatchNodeInvocation(args: {
   agent?: { id: string; name: string } | null;
   /** Durable registered-action identity; null is reserved for built-in protocols. */
   actionId: string | null;
+  /** Original invocation identity; retry placement must never replace it by name. */
+  expectedActionId?: string | null;
   /** Immutable provenance; unlike actionId, this survives action-row pruning. */
   invocationOrigin: InvocationRow['invocationOrigin'];
   pending?: boolean;
@@ -2584,6 +2770,32 @@ async function dispatchNodeInvocation(args: {
       );
   if (!snapshotted) return { accepted: false, pending: false, sent: false };
   const connectedBefore = args.registry.isProviderConnected(args.workspaceId, args.nodeId, args.providerName);
+  const pending = !!args.pending || !connectedBefore;
+  const expectedActionId = args.invocationOrigin === 'registered_action'
+    ? (args.expectedActionId ?? args.actionId)
+    : null;
+  let registeredNodeClaimedActionId: string | null = null;
+  if (args.invocationOrigin === 'registered_action' && !args.agent) {
+    registeredNodeClaimedActionId = expectedActionId
+      ? await claimRegisteredActionHandoff(args.db, {
+        workspaceId: args.workspaceId,
+        invocationId: args.invocationId,
+        nodeId: args.nodeId,
+        providerName: args.providerName,
+        expectedActionId,
+        targetActionId: args.actionId ?? undefined,
+        actionName: args.action,
+      })
+      : null;
+    if (!registeredNodeClaimedActionId) {
+      const settled = await settleDeletedRegisteredAction(
+        args.db,
+        args.workspaceId,
+        args.invocationId,
+      );
+      return { accepted: false, pending: false, sent: false, settled };
+    }
+  }
   const sent = args.agent && args.actionId
     ? await (args.registry.sendAuthorizedActionToProvider?.(
         args.workspaceId,
@@ -2636,23 +2848,52 @@ async function dispatchNodeInvocation(args: {
         inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
       ));
   }
-  if (!sent) return { accepted: false, pending: false, sent: false };
+  if (!sent) {
+    if (registeredNodeClaimedActionId) {
+      await args.db
+        .update(actionInvocations)
+        .set({ status: 'failed', error: 'node_dispatch_unavailable', completedAt: new Date() })
+        .where(and(
+          eq(actionInvocations.workspaceId, args.workspaceId),
+          eq(actionInvocations.id, args.invocationId),
+          inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+        ));
+    }
+    return { accepted: false, pending: false, sent: false };
+  }
 
-  const pending = !!args.pending || !connectedBefore;
+  const finalExpectedActionId = registeredNodeClaimedActionId ?? expectedActionId;
   const accepted = await dispatchNodeAttempt(
-    args.db,
-    args.workspaceId,
-    args.invocationId,
-    args.nodeId,
-    {
-      pending,
-      providerName: args.providerName,
-      retryAfterAt: args.retryAfterAt,
-      reservationHeld: args.reservationHeld,
-      skipIncrementAttempts: args.skipIncrementAttempts || !!args.agent,
-      actionId: args.actionId ?? undefined,
-    },
-  );
+      args.db,
+      args.workspaceId,
+      args.invocationId,
+      args.nodeId,
+      {
+        pending,
+        providerName: args.providerName,
+        retryAfterAt: args.retryAfterAt,
+        reservationHeld: args.reservationHeld,
+        skipIncrementAttempts: args.skipIncrementAttempts || !!args.agent,
+        expectedAction: finalExpectedActionId
+          ? {
+            id: finalExpectedActionId,
+            name: args.action,
+            ...(args.agent ? { handlerAgentId: args.agent.id } : {}),
+          }
+          : undefined,
+        targetActionId: args.agent || args.actionId
+          ? finalExpectedActionId ?? undefined
+          : undefined,
+      },
+    );
+  if (!accepted && args.invocationOrigin === 'registered_action') {
+    const settled = await settleDeletedRegisteredAction(
+      args.db,
+      args.workspaceId,
+      args.invocationId,
+    );
+    return { accepted: false, pending: false, sent: true, settled };
+  }
   if (!accepted && guardedReleaseHash) {
     const [settled] = await args.db
       .select()
@@ -2853,6 +3094,7 @@ export async function drainNodeInvocations(
         input,
         agent: targetAgent ? { id: targetAgent.id, name: targetAgent.name } : null,
         actionId: row.actionId,
+        expectedActionId: row.actionId,
         invocationOrigin: row.invocationOrigin,
         retryAfterAt: new Date(Date.now() + ACTION_DISPATCH_TIMEOUT_MS),
         reservationHeld,
@@ -2921,6 +3163,7 @@ export async function rescheduleNodeInvocation(
       input: recordInput(invocation.input),
       agent: { id: targetAgent.agentId, name: targetAgent.agentName },
       actionId: targetAgent.actionId,
+      expectedActionId: invocation.actionId,
       invocationOrigin: invocation.invocationOrigin,
       retryAfterAt: opts.retryAfterAt ?? null,
     });
@@ -2967,6 +3210,7 @@ export async function rescheduleNodeInvocation(
             providerName: target.handlerProvider,
             action: actionToSend,
             actionId: target.id,
+            expectedActionId: invocation.actionId,
             invocationOrigin: invocation.invocationOrigin,
             input,
             queue: target.queue,
@@ -2986,14 +3230,29 @@ export async function rescheduleNodeInvocation(
           ? (await capacityProviderName(db, invocation.workspaceId, placement.node.id, actionToSend)) ?? DEFAULT_PROVIDER_NAME
           : DEFAULT_PROVIDER_NAME;
         if (placement.queued) {
-          await dispatchNodeAttempt(db, invocation.workspaceId, invocation.id, placement.node.id, {
-            providerName,
-            pending: true,
-            retryAfterAt: opts.retryAfterAt ?? null,
-            reservationHeld: false,
-            actionId: target?.id,
-          });
-          return true;
+          const expectedActionId = invocation.invocationOrigin === 'registered_action'
+            ? invocation.actionId
+            : null;
+          const accepted = await dispatchNodeAttempt(
+            db,
+            invocation.workspaceId,
+            invocation.id,
+            placement.node.id,
+            {
+              providerName,
+              pending: true,
+              retryAfterAt: opts.retryAfterAt ?? null,
+              reservationHeld: false,
+              expectedAction: expectedActionId
+                ? { id: expectedActionId, name: actionToSend }
+                : undefined,
+              targetActionId: target?.id,
+            },
+          );
+          if (!accepted && invocation.invocationOrigin === 'registered_action') {
+            await settleDeletedRegisteredAction(db, invocation.workspaceId, invocation.id);
+          }
+          return accepted;
         }
         const dispatched = await dispatchNodeInvocation({
           db,
@@ -3004,6 +3263,7 @@ export async function rescheduleNodeInvocation(
           providerName,
           action: actionToSend,
           actionId: target?.id ?? null,
+          expectedActionId: invocation.actionId,
           invocationOrigin: invocation.invocationOrigin,
           input,
           reservationHeld,
