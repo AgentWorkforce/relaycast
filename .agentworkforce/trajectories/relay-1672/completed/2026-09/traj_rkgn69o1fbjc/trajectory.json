@@ -10,7 +10,7 @@
   },
   "status": "completed",
   "startedAt": "2026-09-06T06:36:56.228Z",
-  "completedAt": "2026-09-06T09:53:33.000Z",
+  "completedAt": "2026-09-06T12:13:56.000Z",
   "agents": [
     {
       "name": "default",
@@ -24,7 +24,7 @@
       "title": "Work",
       "agentName": "default",
       "startedAt": "2026-09-06T06:36:57.017Z",
-      "endedAt": "2026-09-06T09:53:33.000Z",
+      "endedAt": "2026-09-06T12:13:56.000Z",
       "events": [
         {
           "ts": 1788676617017,
@@ -56,7 +56,7 @@
         {
           "ts": 1788688413000,
           "type": "reflection",
-          "content": "Red regressions covered stale release before dispatch, at the no-host fallback, at the socket-owner boundary, during named-provider drain, at atomic completion, in node-completed audit metadata, action shadowing, custom-action classification, migration reservation ownership, registration rollback, and capability pruning. Must-fire retry, drain, reconciliation, and deterministic prune interleavings prove a registered action cannot be rebound by stale name. Four regressions failed on head c39a39584642fc7f98bda2f80420bb1186379f0d: a second rescheduler duplicated a paused retry, a stale failed send terminalized a newer attempt, pruning after provider acceptance converted delivered work to action_deleted, and nameless spawn created an invocation and reserved capacity. Two regressions failed on product head ffb225fc1b836e57d24004e83055bcf064d37a20: a prune and same-name replacement after route claim retargeted the outgoing frame, and an existing agent retried on a full node reported capacity exhaustion instead of identity conflict. Nine valid regressions failed on head d92371976ae8b89fa4ba5040b2cc47be2f0314a2: guarded release rejected its current dispatched route, registered actions rejected the legacy default provider and accepted a same-named registered origin, public action detail disagreed with invocation precedence, malformed persisted release proof escaped without terminal settlement, a legacy missing-id worker could not consume its live reservation, a pre-authorization prune produced inconsistent request/replay outcomes, accepted work could be failed by a stale retry, and an old migration tombstone permanently poisoned a newer live tuple. The finite-capacity shadow regression stayed green after correcting its fixture: the outer policy action intentionally owns no native reservation, while its documented ctx.spawnAgent delegation owns the exact native reservation. Exact product head acf543c95d8a69f881d8fd160248ca38593719cb binds release dispatch to immutable builtin provenance and the current route, normalizes legacy providers, aligns action lookup, settles malformed proofs, propagates terminal pre-send outcomes, binds socket acceptance to the exact durable dispatch-attempt generation through migration 0047, and lets only a current live reservation supersede a legacy tuple tombstone. Root lint (13/13), test (18/18, including all 70 engine files / 786 tests), and build (9/9) pass. TypeScript SDK (22 files / 441 tests), types (7 files / 209 tests), Rust SDK (103 tests plus 5 doc tests), and Rust library clippy were run on product head 2951bcb435a578c4bfc35c4b9b62c4455857a052; those package code and test files are unchanged through the final product head.",
+          "content": "Red regressions covered stale release before dispatch, at the no-host fallback, at the socket-owner boundary, during named-provider drain, at atomic completion, in node-completed audit metadata, action shadowing, custom-action classification, migration reservation ownership, registration rollback, and capability pruning. Must-fire retry, drain, reconciliation, and deterministic prune interleavings prove a registered action cannot be rebound by stale name. Six latest behaviors were reproduced on test-only head 2f6a6afabf2864b4d27283f5e0fb41737aed3656: agent-hosted acceptance had not durably recorded its route and generation before send, migration 0047 left historical accepted registered actions unmarked, explicit tombstones matched only invocation id rather than the immutable tuple, registered node-action acceptance trusted the mutable dispatched capability rather than the invocation action, timeout recovery cleared an accepted pruned route, and a legacy ID-less worker could consume a same-tuple replacement's reservation. Combined product head 6aef2748c46a3401e5f1077cade3c32dcd10d332 commits the exact action, route, and accepted attempt before either agent- or node-hosted send, backfills only historical registered-action deliveries that have acceptance evidence, pins accepted pruned and takeover generations through recovery, binds explicit tombstones to invocation id plus node/provider/name, and fails an ambiguous ID-less collision closed until the replacement supplies its exact invocation id. Focused engine tests pass 4 files / 107 tests. Root lint (13/13), test (18/18, including all 70 engine files / 790 tests), and build (9/9) pass after the origin/main restack. TypeScript SDK (22 files / 441 tests), types (7 files / 209 tests), Rust SDK (103 tests plus 5 doc tests), and Rust library clippy were run on product head 2951bcb435a578c4bfc35c4b9b62c4455857a052; those package code and test files are unchanged through the combined product head.",
           "raw": {
             "focalPoints": [
               "generation-identity",
@@ -101,7 +101,9 @@
     "0d91d76c180ee720120b58af5753e95f1868a71f",
     "ffb225fc1b836e57d24004e83055bcf064d37a20",
     "3a3d17733494f4c00573b5496a1653f80e4585c5",
-    "acf543c95d8a69f881d8fd160248ca38593719cb"
+    "acf543c95d8a69f881d8fd160248ca38593719cb",
+    "63c1f730d6d2e235c8cfb2792ba808d31fc643f0",
+    "1c0bfb2e0552bf387c644e6eae8367448d82fb93"
   ],
   "filesChanged": [
     "CHANGELOG.md",
@@ -135,7 +137,7 @@
   "projectId": "AgentWorkforce/relaycast",
   "tags": [],
   "_trace": {
-    "startRef": "80ab366048a0634fbf1a8b5301de71dd22c50026",
-    "endRef": "acf543c95d8a69f881d8fd160248ca38593719cb"
+    "startRef": "8e36b742ced89d5e2d4be0866a7f641b31e0acfb",
+    "endRef": "6aef2748c46a3401e5f1077cade3c32dcd10d332"
   }
 }
