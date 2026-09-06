@@ -996,6 +996,18 @@ describe('node adapter conformance', () => {
         code: 'node_capacity_exceeded',
       });
 
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'agent-register-duplicate',
+        type: 'agent.register',
+        name: 'worker-one',
+        session_ref: 'pty://alpha/worker-one-retry',
+      }));
+      expect(alpha.sock.ofType('error').at(-1)).toMatchObject({
+        id: 'agent-register-duplicate',
+        code: 'agent_already_exists',
+      });
+
       const [node] = await stack.runtime.handle.db
         .select({ activeAgents: nodes.activeAgents })
         .from(nodes)
@@ -2574,12 +2586,12 @@ describe('node adapter conformance', () => {
       });
 
       const nodeConnections = stack.runtime.deps.nodeConnections!;
-      const originalSend = nodeConnections.sendToProvider.bind(nodeConnections);
+      const originalSend = nodeConnections.sendAuthorizedActionToProvider!.bind(nodeConnections);
       let frameSent!: () => void;
       const frameSentPromise = new Promise<void>((resolve) => { frameSent = resolve; });
       let resumeSend!: () => void;
       const resumeSendPromise = new Promise<void>((resolve) => { resumeSend = resolve; });
-      vi.spyOn(nodeConnections, 'sendToProvider').mockImplementation(async (...args) => {
+      vi.spyOn(nodeConnections, 'sendAuthorizedActionToProvider').mockImplementation(async (...args) => {
         const sent = await originalSend(...args);
         if (args[3].type !== 'action.invoke' || args[3].action !== 'vanishing-action') return sent;
         frameSent();

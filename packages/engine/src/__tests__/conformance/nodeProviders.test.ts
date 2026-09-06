@@ -720,24 +720,25 @@ describe('node providers', () => {
       false,
     );
     const registry = stack.runtime.realtime;
-    const originalSend = registry.sendToProvider.bind(registry);
+    const originalSend = registry.sendAuthorizedActionToProvider!.bind(registry);
     let releaseFirst!: () => void;
     let markFirstStarted!: () => void;
     const firstStarted = new Promise<void>((resolve) => { markFirstStarted = resolve; });
     const firstRelease = new Promise<void>((resolve) => { releaseFirst = resolve; });
     let pauseFirst = true;
-    vi.spyOn(registry, 'sendToProvider').mockImplementation(async (
+    vi.spyOn(registry, 'sendAuthorizedActionToProvider').mockImplementation(async (
       workspaceId,
       nodeId,
       providerName,
       message,
+      authorization,
     ) => {
       if (pauseFirst && nodeId === 'node_b' && message.type === 'action.invoke') {
         pauseFirst = false;
         markFirstStarted();
         await firstRelease;
       }
-      return originalSend(workspaceId, nodeId, providerName, message);
+      return originalSend(workspaceId, nodeId, providerName, message, authorization);
     });
 
     const firstRetry = rescheduleInvocationsForLostNode(
@@ -784,7 +785,12 @@ describe('node providers', () => {
     let markSendStarted!: () => void;
     const sendStarted = new Promise<void>((resolve) => { markSendStarted = resolve; });
     const sendRelease = new Promise<void>((resolve) => { releaseSend = resolve; });
-    vi.spyOn(registry, 'sendToProvider').mockImplementation(async (_workspaceId, nodeId, _providerName, message) => {
+    vi.spyOn(registry, 'sendAuthorizedActionToProvider').mockImplementation(async (
+      _workspaceId,
+      nodeId,
+      _providerName,
+      message,
+    ) => {
       if (nodeId === 'node_b' && message.type === 'action.invoke') {
         markSendStarted();
         await sendRelease;
@@ -848,19 +854,20 @@ describe('node providers', () => {
       false,
     );
     const registry = stack.runtime.realtime;
-    const originalSend = registry.sendToProvider.bind(registry);
+    const originalSend = registry.sendAuthorizedActionToProvider!.bind(registry);
     let releaseAccepted!: () => void;
     let markAccepted!: () => void;
     const accepted = new Promise<void>((resolve) => { markAccepted = resolve; });
     const acceptedRelease = new Promise<void>((resolve) => { releaseAccepted = resolve; });
     let pauseFirst = true;
-    vi.spyOn(registry, 'sendToProvider').mockImplementation(async (
+    vi.spyOn(registry, 'sendAuthorizedActionToProvider').mockImplementation(async (
       workspaceId,
       nodeId,
       providerName,
       message,
+      authorization,
     ) => {
-      const sent = await originalSend(workspaceId, nodeId, providerName, message);
+      const sent = await originalSend(workspaceId, nodeId, providerName, message, authorization);
       if (pauseFirst && nodeId === 'node_b' && message.type === 'action.invoke') {
         pauseFirst = false;
         markAccepted();
@@ -910,6 +917,71 @@ describe('node providers', () => {
       dispatchedNodeId: 'node_b',
       dispatchedProvider: 'fleet-b',
     });
+  });
+
+  it('does not deliver a claimed action after pruning replaces its exact identity', async () => {
+    const { ws, beta, invocationId } = await setupPrunedReleaseAction(
+      'np-prune-before-action-authorization',
+      false,
+      false,
+    );
+    const registry = stack.runtime.realtime;
+    const originalSend = registry.sendAuthorizedActionToProvider!.bind(registry);
+    let releaseSend!: () => void;
+    let markSendStarted!: () => void;
+    const sendStarted = new Promise<void>((resolve) => { markSendStarted = resolve; });
+    const sendRelease = new Promise<void>((resolve) => { releaseSend = resolve; });
+    let pauseFirst = true;
+    vi.spyOn(registry, 'sendAuthorizedActionToProvider').mockImplementation(async (...args) => {
+      if (
+        pauseFirst
+        && args[1] === 'node_b'
+        && args[3].type === 'action.invoke'
+        && args[4].kind === 'registered-node-action-v1'
+      ) {
+        pauseFirst = false;
+        markSendStarted();
+        await sendRelease;
+      }
+      return originalSend(...args);
+    });
+
+    const retry = rescheduleInvocationsForLostNode(
+      stack.runtime.handle.db,
+      registry,
+      ws.workspaceId,
+      'node_a',
+    );
+    await sendStarted;
+    const [claimed] = await stack.runtime.handle.db
+      .select({ actionId: actionInvocations.actionId })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    await stack.runtime.handle.db
+      .delete(actions)
+      .where(and(eq(actions.workspaceId, ws.workspaceId), eq(actions.id, claimed.actionId!)));
+    await beta.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'node.heartbeat',
+      load: 0,
+      active_agents: 0,
+      handlers_live: true,
+      capabilities: [{ name: 'release', kind: 'action' }],
+    }));
+    const [replacement] = await stack.runtime.handle.db
+      .select({ id: actions.id })
+      .from(actions)
+      .where(and(
+        eq(actions.workspaceId, ws.workspaceId),
+        eq(actions.handlerNodeId, 'node_b'),
+        eq(actions.name, 'release'),
+      ));
+    expect(replacement.id).not.toBe(claimed.actionId);
+    releaseSend();
+
+    expect(await retry).toBe(0);
+    expect(beta.sock.ofType('action.invoke')).toHaveLength(0);
+    await expectDeletedActionFailure(invocationId);
   });
 
   it('fails a queued pruned registered action during drain without dispatching it by name', async () => {

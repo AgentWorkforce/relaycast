@@ -21,9 +21,9 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Fixed
 
 - Guarded agent releases now compare the exact issued-token generation before dispatch and completion, so stale cleanup cannot release a same-name takeover.
-- Fleet registration now acquires capacity before durable agent writes, preserves native spawn reservations for their exact invocation, and rejects migration-canceled workers even without invocation correlation, preventing ghost agents and capacity overruns.
+- Fleet registration now acquires capacity before durable agent writes while preserving `agent_already_exists` precedence, preserves native spawn reservations for their exact invocation, and rejects migration-canceled workers even without invocation correlation, preventing ghost agents and capacity overruns.
 - Native spawn rejects a missing or empty agent name before creating an invocation or reserving node capacity.
-- Registered node-action dispatch and retries now claim their exact action, route, and attempt before provider send; concurrent retries cannot duplicate execution, stale send failures cannot clobber a newer winner, and pruning cannot revoke an already accepted frame.
+- Registered node-action dispatch and retries now claim their exact action, route, and attempt before provider send, then revalidate that identity at the socket owner; concurrent retries cannot duplicate execution, stale send failures cannot clobber a newer winner, and pruning cannot retarget or revoke a frame across same-name replacements.
 
 ## [8.4.0] - 2026-09-05
 

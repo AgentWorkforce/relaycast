@@ -1393,6 +1393,21 @@ export async function registerAgentViaNode(
       (capability) => capability.name === FLEET_DELIVERY_CURSOR_CAPABILITY,
     ) ?? false);
 
+    // Preserve the established identity conflict even when this node is full.
+    // A concurrent create after this read is still caught by the unique insert
+    // below, whose reserved slot is then compensated in the catch path.
+    const [existing] = await tx
+      .select({ id: agents.id })
+      .from(agents)
+      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, message.name)));
+    if (existing) {
+      throw codedError(
+        `Agent "${message.name}" already exists; use agent.recover with proof of the immutable id`,
+        'agent_already_exists',
+        409,
+      );
+    }
+
     const token = `at_live_${randomHex(16)}`;
     const tokenHash = await sha256Hex(token);
     const now = new Date().toISOString();

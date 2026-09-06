@@ -2878,6 +2878,19 @@ async function dispatchNodeInvocation(args: {
           recordAttempt: !args.skipIncrementAttempts,
         },
       ) ?? false)
+    : registeredNodeClaim
+      ? await (args.registry.sendAuthorizedActionToProvider?.(
+          args.workspaceId,
+          args.nodeId,
+          args.providerName,
+          frame,
+          {
+            kind: 'registered-node-action-v1',
+            invocationId: args.invocationId,
+            actionId: registeredNodeClaim.actionId,
+            actionName: args.action,
+          },
+        ) ?? false)
     : guardedReleaseHash
       ? await (args.registry.sendAuthorizedActionToProvider?.(
           args.workspaceId,

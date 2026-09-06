@@ -85,9 +85,18 @@ export interface ReleaseActionProviderAuthorization {
   expectedTokenHash: string;
 }
 
+/** Exact registered node-action identity accepted by the socket owner. */
+export interface RegisteredNodeActionProviderAuthorization {
+  kind: 'registered-node-action-v1';
+  invocationId: string;
+  actionId: string;
+  actionName: string;
+}
+
 export type ActionProviderAuthorization =
   | AgentActionProviderAuthorization
-  | ReleaseActionProviderAuthorization;
+  | ReleaseActionProviderAuthorization
+  | RegisteredNodeActionProviderAuthorization;
 
 export interface NodeDrainOptions {
   /** Include pending rows whose prior retry deadline has not elapsed yet. */
@@ -121,9 +130,10 @@ export interface NodeConnectionRegistry {
   ): Promise<boolean>;
 
   /**
-   * Send an agent-hosted `action.invoke` only after the socket owner verifies
-   * that the durable invocation is open and the action still names the same
-   * handler. The owner also records provider acceptance before resolving.
+   * Send an `action.invoke` only after the socket owner verifies that the
+   * durable invocation is open and the exact action or release generation
+   * still owns the route. The owner also records acceptance before resolving
+   * when the selected authorization kind requires it.
    *
    * Optional for adapter source compatibility, but agent-hosted dispatch fails
    * closed when it is absent. This prevents an older remote adapter from

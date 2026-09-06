@@ -320,6 +320,40 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       return this.sendToProviderUnchecked(workspaceId, nodeId, providerName, message);
     }
 
+    if (authorization.kind === 'registered-node-action-v1') {
+      if (
+        message.invocation_id !== authorization.invocationId
+        || message.action !== authorization.actionName
+      ) {
+        return false;
+      }
+      const [authorized] = await this.db
+        .select({ id: actionInvocations.id })
+        .from(actionInvocations)
+        .innerJoin(actions, eq(actionInvocations.actionId, actions.id))
+        .where(and(
+          eq(actionInvocations.workspaceId, workspaceId),
+          eq(actionInvocations.id, authorization.invocationId),
+          eq(actionInvocations.invocationOrigin, 'registered_action'),
+          eq(actionInvocations.actionId, authorization.actionId),
+          eq(actionInvocations.dispatchedNodeId, nodeId),
+          eq(actionInvocations.dispatchedProvider, providerName),
+          inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked']),
+          eq(actions.workspaceId, workspaceId),
+          eq(actions.id, authorization.actionId),
+          eq(actions.name, authorization.actionName),
+          eq(actions.handlerNodeId, nodeId),
+          eq(actions.handlerProvider, providerName),
+          eq(actions.isActive, true),
+        ));
+      if (!authorized) return false;
+
+      // No await occurs after the exact identity read resumes and before the
+      // synchronous socket handoff. A prune/replacement must therefore win
+      // before authorization or after this frame has already been accepted.
+      return this.sendToProviderUnchecked(workspaceId, nodeId, providerName, message);
+    }
+
     if (
       message.invocation_id !== authorization.invocationId
       || message.agent_id !== authorization.handlerAgentId
