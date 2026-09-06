@@ -10,7 +10,7 @@
   },
   "status": "completed",
   "startedAt": "2026-09-06T06:36:56.228Z",
-  "completedAt": "2026-09-06T09:14:20.000Z",
+  "completedAt": "2026-09-06T09:28:25.000Z",
   "agents": [
     {
       "name": "default",
@@ -24,7 +24,7 @@
       "title": "Work",
       "agentName": "default",
       "startedAt": "2026-09-06T06:36:57.017Z",
-      "endedAt": "2026-09-06T09:14:20.000Z",
+      "endedAt": "2026-09-06T09:28:25.000Z",
       "events": [
         {
           "ts": 1788676617017,
@@ -41,7 +41,7 @@
         {
           "ts": 1788678105665,
           "type": "reflection",
-          "content": "Red regressions covered stale release before dispatch, at the no-host fallback, at the socket-owner boundary, during named-provider drain, at atomic completion, in node-completed audit metadata, against user-defined action shadowing, against lifecycle classification of a user-defined release replay, and against guarded and unguarded custom-release completion both before and after capability pruning removes the referenced action row. Three additional must-fire regressions proved retry, queued drain, and inventory reconciliation previously rebound a pruned registered action by name or left it pending. Exact product head f6a219f0ebc3f6db6a3a517588802f4316c774cd settles those invocations as action_deleted and reran root lint, test (including all 70 engine files / 767 tests), and build. The origin migration regression proves safe provenance backfill and fail-closed handling of every ambiguous open legacy invocation. TypeScript SDK (22 files / 441 tests), types (7 files / 209 tests), Rust SDK (103 tests plus 5 doc tests), and Rust library clippy were run on product head 2951bcb435a578c4bfc35c4b9b62c4455857a052; those package code and test files are unchanged through the final product head.",
+          "content": "Red regressions covered stale release before dispatch, at the no-host fallback, at the socket-owner boundary, during named-provider drain, at atomic completion, in node-completed audit metadata, against user-defined action shadowing, against lifecycle classification of a user-defined release replay, and against guarded and unguarded custom-release completion both before and after capability pruning removes the referenced action row. Three additional must-fire regressions proved retry, queued drain, and inventory reconciliation previously rebound a pruned registered action by name or left it pending. The migration upgrade regression proved broad fail-closed settlement previously stranded a native spawn reservation. Exact product head 4e85e36a62577e1ae8e14ecb2401bcf16002a0c1 settles pruned actions as action_deleted, reconciles migration-time native reservations, and reran root lint, test (including all 70 engine files / 767 tests), and build. The origin migration regression proves safe provenance backfill and fail-closed handling of every ambiguous open legacy invocation without leaking capacity. TypeScript SDK (22 files / 441 tests), types (7 files / 209 tests), Rust SDK (103 tests plus 5 doc tests), and Rust library clippy were run on product head 2951bcb435a578c4bfc35c4b9b62c4455857a052; those package code and test files are unchanged through the final product head.",
           "raw": {
             "focalPoints": [
               "generation-identity",
@@ -62,7 +62,7 @@
     }
   ],
   "retrospective": {
-    "summary": "Added SHA-256 token-generation guarded releases across Relaycast types, engine, OpenAPI, TypeScript SDK, and Rust SDK, with takeover, drain, retry, reconciliation, replay, completion-race, action-shadow, and custom-action isolation regressions plus atomic dispatch/completion enforcement. Immutable invocation provenance prevents action pruning from promoting a custom release to built-in lifecycle authority or rebinding it by name.",
+    "summary": "Added SHA-256 token-generation guarded releases across Relaycast types, engine, OpenAPI, TypeScript SDK, and Rust SDK, with takeover, drain, retry, reconciliation, replay, completion-race, action-shadow, custom-action isolation, and migration-capacity regressions plus atomic dispatch/completion enforcement. Immutable invocation provenance prevents action pruning from promoting a custom release to built-in lifecycle authority or rebinding it by name, while migration settlement releases native spawn reservations.",
     "approach": "Standard approach",
     "confidence": 0.9
   },
@@ -79,7 +79,8 @@
     "da79986f776393aa491a85450b2474d2c0b2bdc5",
     "2e61bfccdb0247a58f8a6bf8742d59162580a1ab",
     "64b199b0e2cf72fc913a1882e1771bb67dd92420",
-    "f6a219f0ebc3f6db6a3a517588802f4316c774cd"
+    "f6a219f0ebc3f6db6a3a517588802f4316c774cd",
+    "4e85e36a62577e1ae8e14ecb2401bcf16002a0c1"
   ],
   "filesChanged": [
     "CHANGELOG.md",
@@ -111,6 +112,6 @@
   "tags": [],
   "_trace": {
     "startRef": "80ab366048a0634fbf1a8b5301de71dd22c50026",
-    "endRef": "f6a219f0ebc3f6db6a3a517588802f4316c774cd"
+    "endRef": "4e85e36a62577e1ae8e14ecb2401bcf16002a0c1"
   }
 }
