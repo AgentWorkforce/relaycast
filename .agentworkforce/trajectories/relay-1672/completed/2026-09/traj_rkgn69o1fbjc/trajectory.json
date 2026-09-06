@@ -10,7 +10,7 @@
   },
   "status": "completed",
   "startedAt": "2026-09-06T06:36:56.228Z",
-  "completedAt": "2026-09-06T09:28:25.000Z",
+  "completedAt": "2026-09-06T09:53:33.000Z",
   "agents": [
     {
       "name": "default",
@@ -24,7 +24,7 @@
       "title": "Work",
       "agentName": "default",
       "startedAt": "2026-09-06T06:36:57.017Z",
-      "endedAt": "2026-09-06T09:28:25.000Z",
+      "endedAt": "2026-09-06T09:53:33.000Z",
       "events": [
         {
           "ts": 1788676617017,
@@ -39,9 +39,24 @@
           "significance": "high"
         },
         {
-          "ts": 1788678105665,
+          "ts": 1788688413000,
+          "type": "decision",
+          "content": "Bind released spawn capacity to durable cancellation and exact reservation ownership: Bind released spawn capacity to durable cancellation and exact reservation ownership",
+          "raw": {
+            "question": "Bind released spawn capacity to durable cancellation and exact reservation ownership",
+            "chosen": "Bind released spawn capacity to durable cancellation and exact reservation ownership",
+            "alternatives": [
+              "Retain provider-owned reservations indefinitely after migration",
+              "Reject late workers by mutable agent name"
+            ],
+            "reasoning": "Migration must free otherwise permanent capacity without admitting a worker from an already-terminalized frame. The failed invocation id is an immutable cancellation tombstone, while a live reservation is claimable only by the same invocation, provider, node, and requested agent name. This preserves capacity without reintroducing same-name replacement authority."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1788688414000,
           "type": "reflection",
-          "content": "Red regressions covered stale release before dispatch, at the no-host fallback, at the socket-owner boundary, during named-provider drain, at atomic completion, in node-completed audit metadata, against user-defined action shadowing, against lifecycle classification of a user-defined release replay, and against guarded and unguarded custom-release completion both before and after capability pruning removes the referenced action row. Three additional must-fire regressions proved retry, queued drain, and inventory reconciliation previously rebound a pruned registered action by name or left it pending. The migration upgrade regression proved broad fail-closed settlement previously stranded a native spawn reservation. Exact product head 4e85e36a62577e1ae8e14ecb2401bcf16002a0c1 settles pruned actions as action_deleted, reconciles migration-time native reservations, and reran root lint, test (including all 70 engine files / 767 tests), and build. The origin migration regression proves safe provenance backfill and fail-closed handling of every ambiguous open legacy invocation without leaking capacity. TypeScript SDK (22 files / 441 tests), types (7 files / 209 tests), Rust SDK (103 tests plus 5 doc tests), and Rust library clippy were run on product head 2951bcb435a578c4bfc35c4b9b62c4455857a052; those package code and test files are unchanged through the final product head.",
+          "content": "Red regressions covered stale release before dispatch, at the no-host fallback, at the socket-owner boundary, during named-provider drain, at atomic completion, in node-completed audit metadata, against user-defined action shadowing, against lifecycle classification of a user-defined release replay, and against guarded and unguarded custom-release completion both before and after capability pruning removes the referenced action row. Three must-fire regressions proved retry, queued drain, and inventory reconciliation previously rebound a pruned registered action by name or left it pending. Migration regressions proved broad fail-closed settlement previously stranded a native spawn reservation and then could admit its late worker after releasing capacity; another regression proved an unrelated registration could steal a live reservation, while a concurrent-rebind regression proved local release returned and emitted the stale pre-transaction node. Exact product head 984c575d11cf25fc16f19182065a671834b6030c settles pruned actions as action_deleted, treats migration-failed invocation ids as durable spawn cancellation, grants reservations only to their exact invocation/name/provider, atomically captures the binding actually reaped, and reran root lint, test (including all 70 engine files / 770 tests), build, plus four focused files / 81 tests. TypeScript SDK (22 files / 441 tests), types (7 files / 209 tests), Rust SDK (103 tests plus 5 doc tests), and Rust library clippy were run on product head 2951bcb435a578c4bfc35c4b9b62c4455857a052; those package code and test files are unchanged through the final product head.",
           "raw": {
             "focalPoints": [
               "generation-identity",
@@ -62,7 +77,7 @@
     }
   ],
   "retrospective": {
-    "summary": "Added SHA-256 token-generation guarded releases across Relaycast types, engine, OpenAPI, TypeScript SDK, and Rust SDK, with takeover, drain, retry, reconciliation, replay, completion-race, action-shadow, custom-action isolation, and migration-capacity regressions plus atomic dispatch/completion enforcement. Immutable invocation provenance prevents action pruning from promoting a custom release to built-in lifecycle authority or rebinding it by name, while migration settlement releases native spawn reservations.",
+    "summary": "Added SHA-256 token-generation guarded releases across Relaycast types, engine, OpenAPI, TypeScript SDK, and Rust SDK, with takeover, drain, retry, reconciliation, replay, completion-race, action-shadow, custom-action isolation, migration-capacity, reservation-ownership, and concurrent-rebind regressions plus atomic dispatch/completion enforcement. Immutable invocation provenance prevents action pruning from promoting a custom release to built-in lifecycle authority or rebinding it by name. Migration settlement releases native spawn reservations while durable cancellation rejects late workers, exact reservation claims prevent unrelated registrations from exceeding capacity, and local release responses/events use the binding actually deactivated.",
     "approach": "Standard approach",
     "confidence": 0.9
   },
@@ -80,7 +95,8 @@
     "2e61bfccdb0247a58f8a6bf8742d59162580a1ab",
     "64b199b0e2cf72fc913a1882e1771bb67dd92420",
     "f6a219f0ebc3f6db6a3a517588802f4316c774cd",
-    "4e85e36a62577e1ae8e14ecb2401bcf16002a0c1"
+    "4e85e36a62577e1ae8e14ecb2401bcf16002a0c1",
+    "984c575d11cf25fc16f19182065a671834b6030c"
   ],
   "filesChanged": [
     "CHANGELOG.md",
@@ -112,6 +128,6 @@
   "tags": [],
   "_trace": {
     "startRef": "80ab366048a0634fbf1a8b5301de71dd22c50026",
-    "endRef": "4e85e36a62577e1ae8e14ecb2401bcf16002a0c1"
+    "endRef": "984c575d11cf25fc16f19182065a671834b6030c"
   }
 }

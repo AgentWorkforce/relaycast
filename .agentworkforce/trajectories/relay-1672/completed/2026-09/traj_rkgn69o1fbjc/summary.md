@@ -4,17 +4,17 @@
 > **Task:** Relay #1672
 > **Confidence:** 90%
 > **Started:** September 6, 2026 at 08:36 AM
-> **Completed:** September 6, 2026 at 9:28 AM
+> **Completed:** September 6, 2026 at 9:53 AM
 
 ---
 
 ## Summary
 
-Added SHA-256 token-generation guarded releases across Relaycast types, engine, OpenAPI, TypeScript SDK, and Rust SDK, with takeover, drain, retry, reconciliation, replay, completion-race, action-shadow, and custom-action isolation regressions plus atomic dispatch/completion enforcement. Invocation origin is now immutable across registered-action pruning, so a deleted custom action cannot acquire built-in lifecycle authority or be rebound by name to a replacement handler.
+Added SHA-256 token-generation guarded releases across Relaycast types, engine, OpenAPI, TypeScript SDK, and Rust SDK, with takeover, drain, retry, reconciliation, replay, completion-race, action-shadow, custom-action isolation, migration-capacity, reservation-ownership, and concurrent-rebind regressions plus atomic dispatch/completion enforcement. Invocation origin is now immutable across registered-action pruning, so a deleted custom action cannot acquire built-in lifecycle authority or be rebound by name to a replacement handler. Migration-failed spawn ids are durable cancellation tombstones, live reservations are claimable only by their exact invocation/name/provider, and local release responses/events record the binding actually deactivated.
 
-**Product commits:** `2951bcb435a578c4bfc35c4b9b62c4455857a052`, `fd4208e84a45661a4dd58468e918ef879e2c57dc`, `99c31ea9d4b9298e43d6da0b726f1a20119467a8`, `0b8c5cc44acef0fbde5e88c6e35d2b5c20dddec0`, `038af6af9ad61e53e08790fb5ffa3051f3017951`, `90b9711882460236c52a3a03f4025bf5361b8eeb`, `cd935897bd3ea9de39f98844c5e7e768653cc84e`, `7e91c060bce63dd6340977c548f7ee3fc4f071d4`, `e0f7757c17e4f9d85b079190e8734c6d5846430c`, `da79986f776393aa491a85450b2474d2c0b2bdc5`, `2e61bfccdb0247a58f8a6bf8742d59162580a1ab`, `64b199b0e2cf72fc913a1882e1771bb67dd92420`, `f6a219f0ebc3f6db6a3a517588802f4316c774cd`, `4e85e36a62577e1ae8e14ecb2401bcf16002a0c1`
+**Product commits:** `2951bcb435a578c4bfc35c4b9b62c4455857a052`, `fd4208e84a45661a4dd58468e918ef879e2c57dc`, `99c31ea9d4b9298e43d6da0b726f1a20119467a8`, `0b8c5cc44acef0fbde5e88c6e35d2b5c20dddec0`, `038af6af9ad61e53e08790fb5ffa3051f3017951`, `90b9711882460236c52a3a03f4025bf5361b8eeb`, `cd935897bd3ea9de39f98844c5e7e768653cc84e`, `7e91c060bce63dd6340977c548f7ee3fc4f071d4`, `e0f7757c17e4f9d85b079190e8734c6d5846430c`, `da79986f776393aa491a85450b2474d2c0b2bdc5`, `2e61bfccdb0247a58f8a6bf8742d59162580a1ab`, `64b199b0e2cf72fc913a1882e1771bb67dd92420`, `f6a219f0ebc3f6db6a3a517588802f4316c774cd`, `4e85e36a62577e1ae8e14ecb2401bcf16002a0c1`, `984c575d11cf25fc16f19182065a671834b6030c`
 
-**Attribution range:** `80ab366048a0634fbf1a8b5301de71dd22c50026..4e85e36a62577e1ae8e14ecb2401bcf16002a0c1`
+**Attribution range:** `80ab366048a0634fbf1a8b5301de71dd22c50026..984c575d11cf25fc16f19182065a671834b6030c`
 
 **Changed product files:** `CHANGELOG.md`, `README.md`, `openapi.yaml`, four package changelogs, the engine route/action/realtime contract, schema and migration, Node adapter, five engine conformance suites and migration tests, TypeScript SDK tests, and Rust SDK implementation/parity tests. The exact list is recorded in `trajectory.json`.
 
@@ -29,12 +29,17 @@ Added SHA-256 token-generation guarded releases across Relaycast types, engine, 
 - **Chose:** Use a SHA-256 token-generation verifier for release compare-and-swap
 - **Reasoning:** Relaycast takeover deliberately preserves the agent ID while rotating the credential, so the ID cannot distinguish process generations. Persisting and comparing only the token hash binds cleanup to the exact issued generation without storing or transmitting the raw token.
 
+### Bind released spawn capacity to durable cancellation and exact reservation ownership
+
+- **Chose:** Bind released spawn capacity to durable cancellation and exact reservation ownership
+- **Reasoning:** Migration must free otherwise permanent capacity without admitting a worker from an already-terminalized frame. The failed invocation id is an immutable cancellation tombstone, while a live reservation is claimable only by the same invocation, provider, node, and requested agent name. This preserves capacity without reintroducing same-name replacement authority.
+
 ---
 
 ## Verification provenance
 
-- On exact product head `4e85e36a62577e1ae8e14ecb2401bcf16002a0c1`, this trajectory reran root lint, test (including the full engine suite: 70 files / 767 tests), and build. The upgrade regression failed on the preceding product head with a native spawn reservation stranded at two slots, then passed with migration-time counter reconciliation and marker clearing. Three must-fire regressions for retry, queued drain, and inventory reconciliation each failed on their preceding product head by either rebinding a pruned registered action to a same-name replacement or leaving it pending, then passed by settling the orphaned invocation as `action_deleted`. The two capability-pruning custom-release regressions likewise failed on their preceding product head by deactivating the named agent and binding after `action_id` became null, then passed once immutable invocation provenance replaced mutable-FK inference. The migration regression proves registered provenance is backfilled while all ambiguous open legacy invocations fail closed without leaking native capacity. Earlier custom-release completion, release-action shadow, and replay-classification regressions likewise failed on their preceding product heads and passed after their fixes.
-- On product head `2951bcb435a578c4bfc35c4b9b62c4455857a052`, this trajectory ran the TypeScript SDK (22 files / 441 tests), types package (7 files / 209 tests), Rust SDK (103 tests plus 5 doc tests), and Rust library clippy. Those package code and test files are unchanged through final product head `4e85e36a62577e1ae8e14ecb2401bcf16002a0c1`; later engine-only commits harden lifecycle routing and raise no SDK surface changes.
+- On exact product head `984c575d11cf25fc16f19182065a671834b6030c`, this trajectory reran root lint, test (including the full engine suite: 70 files / 770 tests), and build, plus four focused files / 81 tests. The upgrade regression failed on a preceding product head with a native spawn reservation stranded at two slots, then passed with migration-time counter reconciliation and marker clearing. A later migration regression proved the released provider-owned reservation admitted its late worker beside a replacement reservation, and the live-reservation regression proved an unrelated registration could steal a slot; both now pass through durable cancellation and exact invocation/name/provider ownership. The concurrent-rebind regression proved a local release returned/emitted the stale pre-transaction host and now passes by recording the binding selected inside the atomic completion. Three must-fire regressions for retry, queued drain, and inventory reconciliation each failed on preceding product heads by either rebinding a pruned registered action to a same-name replacement or leaving it pending, then passed by settling the orphaned invocation as `action_deleted`. Earlier custom-release completion, action-shadow, and replay-classification regressions likewise failed on preceding product heads and passed after their fixes.
+- On product head `2951bcb435a578c4bfc35c4b9b62c4455857a052`, this trajectory ran the TypeScript SDK (22 files / 441 tests), types package (7 files / 209 tests), Rust SDK (103 tests plus 5 doc tests), and Rust library clippy. Those package code and test files are unchanged through final product head `984c575d11cf25fc16f19182065a671834b6030c`; later engine-only commits harden lifecycle routing and raise no SDK surface changes.
 
 ## Chapters
 
@@ -47,3 +52,5 @@ Added SHA-256 token-generation guarded releases across Relaycast types, engine, 
 - Built-in lifecycle authority is recorded independently from the nullable action foreign key; provider capability refreshes may prune the referenced custom action without reclassifying its in-flight invocation.
 - Retry, queued drain, and inventory reconciliation fail a pruned registered action as `action_deleted` instead of resolving its stale name to a replacement registration.
 - Migration failure of ambiguous legacy invocations reconciles native spawn reservations before terminalizing the rows, so upgrades cannot strand finite node capacity.
+- Migration-failed spawn ids reject late `agent.register` frames, unrelated registrations cannot consume a live reservation, and the exact matching spawn invocation/name/provider retains its promised slot.
+- Local hostless release captures the current active binding inside the atomic completion and uses that durable node for response replay and `agent.exited`, even when a same-generation rebind wins after the initial host snapshot.
