@@ -733,11 +733,14 @@ const node = await relay.nodes.create({
 await relay.nodes.bindAgent(node.name, { agentName: 'billing-agent' });
 
 // Safe by default: refuses online nodes and nodes with hosted actions.
-await relay.nodes.delete(node.name);
+await relay.nodes.delete(node.id);
 
 // Use only after deliberately choosing to detach a live node and remove its actions.
-await relay.nodes.delete(node.name, { force: true });
+await relay.nodes.delete(node.id, { force: true });
 ```
+
+Node deletion is not retried automatically. If a transport failure makes the
+result ambiguous, check the immutable node id before choosing whether to retry.
 
 The node delivery contract controls how Relaycast sends future deliveries for bound
 agents. Built-in HTTP push auth modes are `none`, `bearer`, `static_headers`, and

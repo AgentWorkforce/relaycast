@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `relay.nodes.delete(name, { force? })` removes a node and returns its cascade details; the safe default refuses online nodes and nodes with hosted actions.
+- `relay.nodes.delete(name, { force? })` removes a node and returns its cascade details; the safe default refuses online nodes and nodes with hosted actions, and the SDK does not replay ambiguous failures.
 
 ## [8.5.0] - 2026-09-06
 
