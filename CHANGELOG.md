@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Node operators can delete one workspace-scoped node through `DELETE /v1/nodes/:name` or `relay.nodes.delete()`, with safe online/action guards, an explicit force option, and no automatic replay of ambiguous SDK failures.
 
 ## [8.5.0] - 2026-09-06
 

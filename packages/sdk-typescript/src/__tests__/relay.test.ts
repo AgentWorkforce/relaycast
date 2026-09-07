@@ -845,6 +845,83 @@ describe('RelayCast', () => {
     });
   });
 
+  describe('nodes', () => {
+    it('delete() URL-encodes the node name, forwards force, and returns cascade details', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse({
+        id: 'node_1',
+        name: 'node/one',
+        deleted: true,
+        cascaded_actions: 2,
+      }));
+
+      const result = await relay.nodes.delete('node/one', { force: true });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/nodes/node%2Fone?force=true');
+      expect(init.method).toBe('DELETE');
+      expect(result).toEqual({
+        id: 'node_1',
+        name: 'node/one',
+        deleted: true,
+        cascadedActions: 2,
+      });
+    });
+
+    it('delete() omits the force query by default', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse({
+        id: 'node_1',
+        name: 'node-one',
+        deleted: true,
+        cascaded_actions: 0,
+      }));
+
+      await relay.nodes.delete('node-one');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/nodes/node-one');
+      expect(init.method).toBe('DELETE');
+    });
+
+    it('delete() does not replay an ambiguous transport failure', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({
+        apiKey: 'rk_live_test123',
+        retryPolicy: { maxRetries: 2, backoffMs: 0, jitter: false },
+      });
+      mockFetch.mockRejectedValue(new Error('response lost'));
+
+      await expect(relay.nodes.delete('node-one')).rejects.toMatchObject({
+        code: 'transport_error',
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('delete() does not replay a retryable server response', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({
+        apiKey: 'rk_live_test123',
+        retryPolicy: { maxRetries: 2, backoffMs: 0, jitter: false },
+      });
+      mockFetch.mockImplementation(() => mockResponse(
+        { code: 'internal_error', message: 'response unavailable' },
+        false,
+        503,
+      ));
+
+      await expect(relay.nodes.delete('node-one')).rejects.toMatchObject({
+        code: 'transport_error',
+        status: 503,
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('error handling', () => {
     it('throws RelayError on API error', async () => {
       const { RelayCast } = await import('../relay.js');

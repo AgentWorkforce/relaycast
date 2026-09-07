@@ -52,6 +52,8 @@ export interface ClientOptions {
 export interface RequestOptions {
   headers?: Record<string, string>;
   schema?: z.ZodType;
+  /** Whether this request may be retried automatically. Defaults to true. */
+  retry?: boolean;
 }
 
 export interface RetryPolicy {
@@ -278,6 +280,7 @@ export class HttpClient {
     const hasBody = body !== undefined && method.toUpperCase() !== 'GET';
     if (hasBody) headers['Content-Type'] = 'application/json';
     const wireBody = hasBody ? decamelizeKeys(body) : undefined;
+    const maxRetries = options?.retry === false ? 0 : this._retryPolicy.maxRetries;
 
     let attempt = 0;
 
@@ -290,7 +293,7 @@ export class HttpClient {
           body: hasBody ? JSON.stringify(wireBody) : undefined,
         });
       } catch (err) {
-        if (attempt < this._retryPolicy.maxRetries) {
+        if (attempt < maxRetries) {
           const waitMs = computeBackoffMs(this._retryPolicy, attempt);
           attempt += 1;
           await sleep(waitMs);
@@ -303,7 +306,7 @@ export class HttpClient {
         );
       }
 
-      if (this._retryPolicy.retryOn.includes(res.status) && attempt < this._retryPolicy.maxRetries) {
+      if (this._retryPolicy.retryOn.includes(res.status) && attempt < maxRetries) {
         const waitMs = res.status === 429
           ? parseRetryAfterMs(res) ?? computeBackoffMs(this._retryPolicy, attempt)
           : computeBackoffMs(this._retryPolicy, attempt);

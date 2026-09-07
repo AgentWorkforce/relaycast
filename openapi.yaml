@@ -235,7 +235,6 @@ components:
             durably swept as `offline`.
         token:
           type: string
-          description: Node token for `/v1/node/ws`.
           description: Agent token (only returned on registration)
         metadata:
           type: object
@@ -1052,6 +1051,26 @@ components:
           properties:
             token:
               type: string
+
+    DeleteNodeResponse:
+      type: object
+      required:
+        - id
+        - name
+        - deleted
+        - cascaded_actions
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        deleted:
+          type: boolean
+          enum: [true]
+        cascaded_actions:
+          type: integer
+          minimum: 0
+          description: Number of node-hosted actions removed with the node.
 
     NodeAgentBinding:
       type: object
@@ -4714,6 +4733,70 @@ paths:
                 $ref: '#/components/schemas/SuccessResponse'
         '404':
           description: Node not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      summary: Delete node
+      description: >
+        Delete one workspace-scoped node by id or name. The deletion cascades
+        its agent bindings and provider attachments; agent records and queued
+        deliveries remain and have their node references cleared. By default,
+        an online node or a node that hosts registered actions is refused.
+        Set `force=true` to explicitly detach an online node and delete its
+        hosted actions. A concurrent heartbeat or action registration returns
+        `node_delete_conflict` instead of deleting newly live state.
+      tags:
+        - Nodes
+      security:
+        - workspaceKey: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: Node id or name. An exact id match takes precedence.
+          schema:
+            type: string
+        - name: force
+          in: query
+          required: false
+          description: Explicitly allow deletion of an online node or node-hosted actions.
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Node deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, data]
+                properties:
+                  ok:
+                    type: boolean
+                    enum: [true]
+                  data:
+                    $ref: '#/components/schemas/DeleteNodeResponse'
+        '401':
+          description: Missing or invalid workspace key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: >
+            `node_not_found` — no matching node exists in the authenticated
+            workspace
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: >
+            `node_online`, `node_has_actions`, or `node_delete_conflict` — the
+            node is unsafe to delete without force, or changed during deletion
           content:
             application/json:
               schema:
