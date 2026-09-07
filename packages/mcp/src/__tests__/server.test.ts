@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createInternalWsClient } from '@relaycast/sdk/internal';
@@ -144,13 +144,32 @@ vi.mock('@relaycast/sdk/internal', () => {
 });
 
 // Import after mock is set up
-import { createRelayMcpServer } from '../server.js';
+import { createRelayMcpServer as createServer } from '../server.js';
+
+const servers: ReturnType<typeof createServer>[] = [];
+function createRelayMcpServer(options: Parameters<typeof createServer>[0]) {
+  const server = createServer(options);
+  servers.push(server);
+  return server;
+}
+
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map((server) => server.close()));
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
 
 describe('createRelayMcpServer', () => {
   let client: Client;
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    vi.stubEnv('DO_NOT_TRACK', '1');
+    // Registration also reads the workspace name through fetch, outside the SDK.
+    // Keep this unit test independent of the hosted API and its network latency.
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({
+      ok: true, data: { name: 'test-workspace' },
+    })));
     const mcpServer = createRelayMcpServer({ apiKey: 'test-key' });
     client = new Client({ name: 'test-client', version: '0.1.0' });
     const [ct, st] = InMemoryTransport.createLinkedPair();
@@ -360,9 +379,14 @@ describe('createRelayMcpServer', () => {
 
   it('retries WS bridge initialization after switching away from a token that failed WS init', async () => {
     const wsFactory = vi.mocked(createInternalWsClient);
+    const retryConnect = vi.fn();
     wsFactory.mockImplementationOnce(() => {
       throw new Error('ws unsupported');
-    });
+    }).mockImplementationOnce(() => ({
+      on: vi.fn().mockReturnValue(() => {}),
+      connect: retryConnect,
+      disconnect: vi.fn(),
+    }) as unknown as ReturnType<typeof createInternalWsClient>);
 
     const bootstrappedServer = createRelayMcpServer({
       apiKey: 'rk_live_bootstrap123',
@@ -386,6 +410,8 @@ describe('createRelayMcpServer', () => {
       arguments: { name: 'retry-bot' },
     });
     expect(registerResult.isError).toBeFalsy();
+    // The tool response completes setSession; assert the retry's connect signal.
     expect(wsFactory).toHaveBeenCalledTimes(2);
+    expect(retryConnect).toHaveBeenCalledTimes(1);
   });
 });
