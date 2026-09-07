@@ -67,6 +67,8 @@ import type {
   BindAgentToNodeRequest,
   CreateNodeRequest,
   CreateNodeResponse,
+  DeleteNodeOptions,
+  DeleteNodeResponse,
   NodeAgentBinding,
   NodeListQuery,
   NodeRosterEntry,
@@ -829,6 +831,14 @@ export class RelayCast {
 
     get: (name: string): Promise<NodeRosterEntry> =>
       this.client.get(`/v1/nodes/${encodeURIComponent(name)}`),
+
+    delete: (name: string, options?: DeleteNodeOptions): Promise<DeleteNodeResponse> =>
+      this.client.request(
+        'DELETE',
+        `/v1/nodes/${encodeURIComponent(name)}`,
+        undefined,
+        options?.force ? { force: 'true' } : undefined,
+      ),
 
     listAgents: (name: string): Promise<NodeAgentBinding[]> =>
       this.client.get(`/v1/nodes/${encodeURIComponent(name)}/agents`),

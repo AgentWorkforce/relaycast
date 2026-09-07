@@ -731,6 +731,12 @@ const node = await relay.nodes.create({
 });
 
 await relay.nodes.bindAgent(node.name, { agentName: 'billing-agent' });
+
+// Safe by default: refuses online nodes and nodes with hosted actions.
+await relay.nodes.delete(node.name);
+
+// Use only after deliberately choosing to detach a live node and remove its actions.
+await relay.nodes.delete(node.name, { force: true });
 ```
 
 The node delivery contract controls how Relaycast sends future deliveries for bound

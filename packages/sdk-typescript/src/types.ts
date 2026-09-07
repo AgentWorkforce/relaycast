@@ -376,6 +376,22 @@ export interface CreateNodeResponse extends NodeRosterEntry {
   token: string;
 }
 
+export interface DeleteNodeOptions {
+  /**
+   * Explicitly detach an online node or delete a node that hosts registered
+   * actions. Omit this for the safe default, which refuses either case.
+   */
+  force?: boolean;
+}
+
+export interface DeleteNodeResponse {
+  id: string;
+  name: string;
+  deleted: true;
+  /** Number of node-hosted actions removed by the deletion. */
+  cascadedActions: number;
+}
+
 export interface NodeAgentBinding {
   id: string;
   agentId: string;
