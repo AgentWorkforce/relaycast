@@ -173,6 +173,7 @@ describe('RelayCast WebSocket identity', () => {
   class MockWebSocket {
     static readonly OPEN = 1;
     static instances: MockWebSocket[] = [];
+    static onCreate: ((socket: MockWebSocket) => void) | undefined;
     onopen: (() => void) | null = null;
     onclose: (() => void) | null = null;
     onmessage: ((event: { data: string }) => void) | null = null;
@@ -183,11 +184,13 @@ describe('RelayCast WebSocket identity', () => {
 
     constructor(readonly url: string) {
       MockWebSocket.instances.push(this);
+      MockWebSocket.onCreate?.(this);
     }
   }
 
   beforeEach(() => {
     MockWebSocket.instances = [];
+    MockWebSocket.onCreate = undefined;
     vi.stubGlobal('WebSocket', MockWebSocket);
   });
 
@@ -221,26 +224,29 @@ describe('RelayCast WebSocket identity', () => {
       agentRelayOrgSlug: 'agentworkforce',
     });
 
+    const opened = new Promise<MockWebSocket>((resolve) => {
+      MockWebSocket.onCreate = (socket) => {
+        if (socket.url.includes('/v1/node/ws')) resolve(socket);
+      };
+    });
     const agent = relay.as('at_live_worker');
     agent.connect();
 
-    // Opening is async behind the token fetch; wait for the socket to appear.
-    for (let i = 0; i < 50 && MockWebSocket.instances.length < 2; i += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
+    try {
+      // Socket construction is the completion signal for the token-fetch path.
+      const agentSocket = await opened;
+      expect(agentSocket, 'agent node socket was never opened').toBeDefined();
+
+      const url = new URL(agentSocket!.url);
+      expect(url.searchParams.get('agent_relay_user_id')).toBe('usr_abc123');
+      expect(url.searchParams.get('agent_relay_machine_id')).toBe('abc123def4567890');
+      expect(url.searchParams.get('agent_relay_org_id')).toBe('org_xyz789');
+      expect(url.searchParams.get('agent_relay_org_slug')).toBe('agentworkforce');
+      expect(url.searchParams.get('agent_relay_distinct_id')).toBe('usr_abc123');
+    } finally {
+      agent.disconnect();
+      relay.disconnect();
     }
-
-    const agentSocket = MockWebSocket.instances.find((ws) => ws.url.includes('/v1/node/ws'));
-    expect(agentSocket, 'agent node socket was never opened').toBeDefined();
-
-    const url = new URL(agentSocket!.url);
-    expect(url.searchParams.get('agent_relay_user_id')).toBe('usr_abc123');
-    expect(url.searchParams.get('agent_relay_machine_id')).toBe('abc123def4567890');
-    expect(url.searchParams.get('agent_relay_org_id')).toBe('org_xyz789');
-    expect(url.searchParams.get('agent_relay_org_slug')).toBe('agentworkforce');
-    expect(url.searchParams.get('agent_relay_distinct_id')).toBe('usr_abc123');
-
-    agent.disconnect();
-    relay.disconnect();
   });
 
   it('exposes one origin carrying every dimension, so new fields reach all sockets', async () => {

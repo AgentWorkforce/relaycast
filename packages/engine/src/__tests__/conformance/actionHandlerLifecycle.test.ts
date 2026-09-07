@@ -29,7 +29,10 @@ function registerBody(handler: string, overrides: Record<string, unknown> = {}) 
 describe('agent-published action lifecycle', () => {
   let stack: TestStack;
   beforeEach(() => { stack = makeNodeStack(); });
-  afterEach(() => stack.close());
+  afterEach(async () => {
+    await stack.close();
+    vi.useRealTimers();
+  });
 
   it('re-registering the same (workspace, name) refreshes the row instead of failing', async () => {
     const ws = await createWorkspace(stack.app, 'action-upsert');
@@ -98,7 +101,7 @@ describe('agent-published action lifecycle', () => {
       body: JSON.stringify({ input: { batchSize: 5 } }),
     });
     expect(invoke.status).toBe(201);
-    await new Promise((r) => setTimeout(r, 50));
+    await stack.settle();
     expect(handlerNode.sock.ofType('action.invoke').at(-1)).toMatchObject({
       action: 'crm.get_person_batch',
       agent_id: newIdentity.agentId,
@@ -249,7 +252,7 @@ describe('agent-published action lifecycle', () => {
     expect(row).toMatchObject({ status: 'failed', error: 'handler_unavailable' });
 
     // The caller received an action.failed event instead of hanging forever.
-    await new Promise((r) => setTimeout(r, 50));
+    await stack.settle();
     const failed = deliverFramesOfType(callerNode.sock, 'action.failed');
     expect(failed.length).toBeGreaterThanOrEqual(1);
     expect((failed.at(-1)!.payload as { data: Record<string, unknown> }).data).toMatchObject({
@@ -409,7 +412,7 @@ describe('agent-published action lifecycle', () => {
       .where(eq(actionInvocations.id, invocationId));
     expect(row).toMatchObject({ status: 'failed', error: 'action_deleted' });
 
-    await new Promise((r) => setTimeout(r, 50));
+    await stack.settle();
     const failed = deliverFramesOfType(callerNode.sock, 'action.failed');
     expect(failed.length).toBeGreaterThanOrEqual(1);
     expect((failed.at(-1)!.payload as { data: Record<string, unknown> }).data).toMatchObject({
@@ -528,6 +531,8 @@ describe('agent-published action lifecycle', () => {
   });
 
   it('the TTL clock starts at the first unreachable observation, not invocation age', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-07T00:00:00Z'));
     const ws = await createWorkspace(stack.app, 'action-ttl-grace');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'worker');
     const handler = await registerAgent(stack.app, ws.workspaceKey, 'orchestrator');
@@ -570,7 +575,7 @@ describe('agent-published action lifecycle', () => {
     expect(row.since).not.toBeNull();
 
     // Still unreachable past the TTL: the next sweep fails it.
-    await new Promise((r) => setTimeout(r, 60));
+    vi.setSystemTime(Date.now() + 51);
     await sweepTimedOutInvocations(stack.runtime.handle.db, stack.runtime.realtime, {
       handlerUnreachableTtlMs: 50,
       completionDeps: stack.runtime.deps,

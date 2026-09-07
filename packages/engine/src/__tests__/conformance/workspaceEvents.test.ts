@@ -47,8 +47,6 @@ async function getEvents(stack: TestStack, token: string, query = ''): Promise<{
   return { status: res.status, body: await res.json() as EventLogResponse };
 }
 
-const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
-
 describe('workspace event log', () => {
   let stack: TestStack;
 
@@ -73,7 +71,7 @@ describe('workspace event log', () => {
       body: JSON.stringify({ text: 'hello log' }),
     });
     expect(post.status).toBe(201);
-    await settle();
+    await stack.settle();
 
     const rows = await stack.runtime.deps.db
       .select()
@@ -113,7 +111,7 @@ describe('workspace event log', () => {
         body: JSON.stringify({ text }),
       });
     }
-    await settle();
+    await stack.settle();
 
     const all = await getEvents(stack, ws.workspaceKey);
     expect(all.status).toBe(200);
@@ -191,7 +189,7 @@ describe('workspace event log', () => {
       headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
       body: JSON.stringify({ text: 'hidden' }),
     });
-    await settle();
+    await stack.settle();
 
     const full = await getEvents(stack, ws.workspaceKey);
     const allEvents = full.body.data!.events;
@@ -263,7 +261,7 @@ describe('workspace event log', () => {
       headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
       body: JSON.stringify({ text: 'visible' }),
     });
-    await settle();
+    await stack.settle();
 
     const scopedToken = await createObserverToken(stack, ws.workspaceKey, {
       name: 'general-only-paging',

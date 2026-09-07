@@ -525,7 +525,7 @@ describe('workspace lifecycle', () => {
     });
 
     expect(response.status).toBe(200);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await stack.settle();
     expect(await stack.runtime.handle.db
       .select()
       .from(workspaces)

@@ -7,6 +7,7 @@ import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../database.js'
 import { DurableEventQueue } from '../event-queue.js';
 import { createNodeRuntime } from '../index.js';
 import { claimDueEvents, enqueueEvent } from '../../../engine/eventQueue.js';
+import { BackgroundTasks } from '../../../__tests__/backgroundTasks.js';
 import { pendingEvents, workspaces, eventSubscriptions } from '../../../db/schema.js';
 
 const HOOK_URL = 'https://hooks.example.test/relay';
@@ -43,22 +44,21 @@ async function pendingRows(db: SqliteDbHandle['db']) {
   return db.select().from(pendingEvents);
 }
 
-async function waitFor(cond: () => Promise<boolean> | boolean, timeoutMs = 5_000): Promise<void> {
-  const start = Date.now();
-  for (;;) {
-    if (await cond()) return;
-    if (Date.now() - start > timeoutMs) throw new Error('condition not met in time');
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-}
-
 function makeQueue(
   db: SqliteDbHandle['db'],
   opts: ConstructorParameters<typeof DurableEventQueue>[2] = {},
   onError: (err: unknown, ctx: Record<string, unknown>) => void = () => {},
-): DurableEventQueue {
-  return new DurableEventQueue(db, onError, { pollIntervalMs: 0, ...opts });
+): DurableEventQueue & { settle(): Promise<void> } {
+  const queue = new DurableEventQueue(db, onError, { pollIntervalMs: 0, ...opts });
+  const tasks = new BackgroundTasks();
+  const poll = queue.poll.bind(queue);
+  queue.poll = () => tasks.track(poll());
+  const observed = Object.assign(queue, { settle: () => tasks.drain() });
+  queues.push(observed);
+  return observed;
 }
+
+const queues: Array<DurableEventQueue & { settle(): Promise<void> }> = [];
 
 const handles: SqliteDbHandle[] = [];
 function track(handle: SqliteDbHandle): SqliteDbHandle {
@@ -66,7 +66,11 @@ function track(handle: SqliteDbHandle): SqliteDbHandle {
   return handle;
 }
 
-afterEach(() => {
+afterEach(async () => {
+  for (const queue of queues.splice(0)) {
+    queue.stop();
+    await queue.settle();
+  }
   vi.unstubAllGlobals();
   for (const handle of handles.splice(0)) {
     try { handle.sqlite.close(); } catch { /* already closed */ }
@@ -90,14 +94,17 @@ describe('DurableEventQueue', () => {
     const queue = makeQueue(db);
     await queue.send({ type: 'message.created', workspaceId: ws, data: { text: 'hi' } });
 
-    // The row is durable as soon as send resolves, while delivery is still in flight.
-    const rows = await pendingRows(db);
-    expect(rows).toHaveLength(1);
-    expect(rows[0].eventType).toBe('message.created');
-    expect(rows[0].status).toBe('pending');
-
-    release();
-    await waitFor(async () => (await pendingRows(db)).length === 0);
+    try {
+      // The row is durable as soon as send resolves, while delivery is still in flight.
+      const rows = await pendingRows(db);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].eventType).toBe('message.created');
+      expect(rows[0].status).toBe('pending');
+    } finally {
+      release();
+      await queue.settle();
+    }
+    expect(await pendingRows(db)).toHaveLength(0);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -117,7 +124,8 @@ describe('DurableEventQueue', () => {
     const queue = makeQueue(db);
     await queue.send({ type: 'message.created', workspaceId: ws, data, outboxId });
 
-    await waitFor(async () => (await pendingRows(db)).length === 0);
+    await queue.settle();
+    expect(await pendingRows(db)).toHaveLength(0);
     // Exactly one delivery — a second row would have produced a second fetch.
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -256,16 +264,21 @@ describe('DurableEventQueue', () => {
       vi.stubGlobal('fetch', fetchMock);
 
       // Second process: a fresh runtime over the same file resumes the outbox.
+      const startup = vi.spyOn(DurableEventQueue.prototype, 'poll');
       const runtime = createNodeRuntime({
         dbPath,
         baseUrl: 'http://localhost:0',
         presence: { sweepIntervalMs: 0 },
         eventQueue: { pollIntervalMs: 0 },
       });
+      const startupWork = startup.mock.results.map((result) => result.value);
+      startup.mockRestore();
       try {
-        await waitFor(async () => (await pendingRows(runtime.deps.db)).length === 0);
+        await Promise.all(startupWork);
+        expect(await pendingRows(runtime.deps.db)).toHaveLength(0);
         expect(fetchMock).toHaveBeenCalledTimes(1);
       } finally {
+        await Promise.all(startupWork);
         runtime.close();
       }
     } finally {
@@ -273,7 +286,8 @@ describe('DurableEventQueue', () => {
     }
   });
 
-  it('preserves an explicit engine retention boundary over the local pruner default', () => {
+  it('preserves an explicit engine retention boundary over the local pruner default', async () => {
+    const startup = vi.spyOn(DurableEventQueue.prototype, 'poll');
     const runtime = createNodeRuntime({
       dbPath: ':memory:',
       baseUrl: 'http://localhost:0',
@@ -284,9 +298,12 @@ describe('DurableEventQueue', () => {
         retention: { defaults: { messageTtlDays: 7 } },
       },
     });
+    const startupWork = startup.mock.results.map((result) => result.value);
+    startup.mockRestore();
     try {
       expect(runtime.deps.config?.retention).toEqual({ messageTtlDays: 45 });
     } finally {
+      await Promise.all(startupWork);
       runtime.close();
     }
   });

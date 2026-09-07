@@ -832,7 +832,7 @@ describe('observer tokens', () => {
     });
     expect(read.status).toBe(200);
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await stack.settle();
     expect(streamOnlySock.ofType('message.created')).toHaveLength(0);
     expect(streamOnlySock.ofType('message.read')).toHaveLength(0);
     expect(sock.ofType('message.created')).toHaveLength(1);
@@ -904,7 +904,7 @@ describe('observer tokens', () => {
     });
     expect(hiddenDmReply.status).toBe(201);
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await stack.settle();
     expect(withoutDmScopeSock.ofType('dm.received')).toHaveLength(0);
     expect(withoutDmScopeSock.ofType('message.read')).toHaveLength(0);
     expect(withoutDmScopeSock.ofType('message.reacted')).toHaveLength(0);
@@ -952,7 +952,7 @@ describe('observer tokens', () => {
     });
     expect(visibleDmReply.status).toBe(201);
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await stack.settle();
     expect(sock.ofType('dm.received')).toHaveLength(1);
     expect(sock.ofType('dm.received')[0]).toMatchObject({
       message: { text: 'dm visible despite channel filters' },

@@ -29,7 +29,9 @@ import { deliverPendingToNode, handleNodeReconnect } from '../../index.js';
 describe('durable delivery api', () => {
   let stack: TestStack;
   beforeEach(() => { stack = makeNodeStack({ ttlMs: 60_000 }); });
-  afterEach(() => stack.close());
+  afterEach(async () => {
+    await stack.close();
+  });
 
   /** Stand up a workspace + channel with alice and bob joined, alice posts one message. */
   async function seed() {
@@ -70,22 +72,9 @@ describe('durable delivery api', () => {
     return ((await res.json()) as { data: Array<Record<string, unknown>> }).data;
   }
 
-  async function waitForAssertion(
-    assertion: () => void | Promise<void>,
-    timeoutMs = 1_000,
-  ) {
-    const started = Date.now();
-    let lastError: unknown;
-    while (Date.now() - started < timeoutMs) {
-      try {
-        await assertion();
-        return;
-      } catch (err) {
-        lastError = err;
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
-    }
-    throw lastError;
+  async function waitForAssertion(assertion: () => void | Promise<void>) {
+    await stack.settle();
+    await assertion();
   }
 
   async function enrollAndAttachNode(
@@ -545,7 +534,7 @@ describe('durable delivery api', () => {
     });
     expect(post.status).toBe(201);
     const messageId = ((await post.json()) as { data: { id: string } }).data.id;
-    await new Promise((r) => setTimeout(r, 50));
+    await stack.settle();
 
     const delivered = node.sock.ofType('deliver');
     expect(delivered).toHaveLength(1);
@@ -1682,7 +1671,7 @@ describe('durable delivery api', () => {
       body: JSON.stringify({ text: 'ack survives reconnect' }),
     });
     expect(post.status).toBe(201);
-    await new Promise((r) => setTimeout(r, 50));
+    await stack.settle();
     expect(node.sock.ofType('deliver')).toHaveLength(1);
 
     await node.handle.handleMessage(JSON.stringify({
@@ -1699,7 +1688,7 @@ describe('durable delivery api', () => {
       type: 'inventory.sync',
       agents: [{ agent_id: bob.agentId, name: 'bob', session_ref: 'sess-bob' }],
     }));
-    await new Promise((r) => setTimeout(r, 50));
+    await stack.settle();
     expect(reconnected.sock.ofType('deliver')).toHaveLength(0);
   });
 
@@ -1776,7 +1765,7 @@ describe('durable delivery api', () => {
     });
     expect(post.status).toBe(201);
     const messageId = ((await post.json()) as { data: { id: string } }).data.id;
-    await new Promise((r) => setTimeout(r, 50));
+    await stack.settle();
     const live = latestDeliverOfType(node.sock, 'message.created');
     expect(live).toMatchObject({ msg_id: messageId });
 
@@ -1787,7 +1776,7 @@ describe('durable delivery api', () => {
       type: 'inventory.sync',
       agents: [{ agent_id: bob.agentId, name: 'bob', session_ref: 'sess-bob' }],
     }));
-    await new Promise((r) => setTimeout(r, 50));
+    await stack.settle();
 
     const replayed = latestDeliverOfType(reconnected.sock, 'message.created');
     expect(replayed).toMatchObject({ msg_id: messageId });
@@ -1860,7 +1849,7 @@ describe('durable delivery api', () => {
     });
     expect(dm.status).toBe(201);
     const messageId = ((await dm.json()) as { data: { id: string } }).data.id;
-    await new Promise((r) => setTimeout(r, 50));
+    await stack.settle();
     const live = latestDeliverOfType(node.sock, 'dm.received');
     expect(live).toMatchObject({ msg_id: messageId });
 
@@ -1871,7 +1860,7 @@ describe('durable delivery api', () => {
       type: 'inventory.sync',
       agents: [{ agent_id: bob.agentId, name: 'bob', session_ref: 'sess-bob' }],
     }));
-    await new Promise((r) => setTimeout(r, 50));
+    await stack.settle();
 
     const replayed = latestDeliverOfType(reconnected.sock, 'dm.received');
     expect(replayed).toMatchObject({ msg_id: messageId });
@@ -1943,7 +1932,7 @@ describe('durable delivery api', () => {
     });
     expect(msg.status).toBe(201);
     const messageId = ((await msg.json()) as { data: { id: string } }).data.id;
-    await new Promise((r) => setTimeout(r, 50));
+    await stack.settle();
     const live = latestDeliverOfType(node.sock, 'group_dm.received');
     expect(live).toMatchObject({ msg_id: messageId });
 
@@ -1954,7 +1943,7 @@ describe('durable delivery api', () => {
       type: 'inventory.sync',
       agents: [{ agent_id: bob.agentId, name: 'bob', session_ref: 'sess-bob' }],
     }));
-    await new Promise((r) => setTimeout(r, 50));
+    await stack.settle();
 
     const replayed = latestDeliverOfType(reconnected.sock, 'group_dm.received');
     expect(replayed).toMatchObject({ msg_id: messageId });
@@ -1988,7 +1977,7 @@ describe('durable delivery api', () => {
     });
     expect(reply.status).toBe(201);
     const messageId = ((await reply.json()) as { data: { id: string } }).data.id;
-    await new Promise((r) => setTimeout(r, 50));
+    await stack.settle();
     const live = latestDeliverOfType(node.sock, 'thread.reply');
     expect(live).toMatchObject({ msg_id: messageId });
 
@@ -1999,7 +1988,7 @@ describe('durable delivery api', () => {
       type: 'inventory.sync',
       agents: [{ agent_id: bob.agentId, name: 'bob', session_ref: 'sess-bob' }],
     }));
-    await new Promise((r) => setTimeout(r, 50));
+    await stack.settle();
 
     const replayed = latestDeliverOfType(reconnected.sock, 'thread.reply');
     expect(replayed).toMatchObject({ msg_id: messageId });
@@ -2019,7 +2008,7 @@ describe('durable delivery api', () => {
       });
       expect(post.status).toBe(201);
     }
-    await new Promise((r) => setTimeout(r, 75));
+    await stack.settle();
     expect(node.sock.ofType('deliver').map((event) => event.seq)).toEqual([1, 2]);
 
     await node.handle.handleMessage(JSON.stringify({
@@ -2053,7 +2042,7 @@ describe('durable delivery api', () => {
       });
       expect(post.status).toBe(201);
     }
-    await new Promise((r) => setTimeout(r, 75));
+    await stack.settle();
     expect(node.sock.ofType('deliver').map((event) => event.seq)).toEqual([1, 2]);
 
     // Ack ONLY seq 2 via the per-delivery REST path, out of order — seq 1 stays queued.
@@ -2075,7 +2064,7 @@ describe('durable delivery api', () => {
       type: 'inventory.sync',
       agents: [{ agent_id: bob.agentId, name: 'bob', session_ref: 'sess-bob' }],
     }));
-    await new Promise((r) => setTimeout(r, 50));
+    await stack.settle();
 
     expect(reconnected.sock.ofType('deliver').map((event) => event.seq)).toEqual([1]);
   });
@@ -2109,7 +2098,7 @@ describe('durable delivery api', () => {
       body: JSON.stringify({ text: 'will expire' }),
     });
     expect(first.status).toBe(201);
-    await new Promise((r) => setTimeout(r, 50)); // let the delivery row land
+    await stack.settle(); // let the delivery row land
     // Deterministically age bob's queued row past its TTL (no wall-clock race on
     // the second-granular unixepoch boundary) without sweeping it — it lingers as
     // an expired-but-present queued row.
@@ -2125,7 +2114,7 @@ describe('durable delivery api', () => {
       body: JSON.stringify({ text: 'fresh' }),
     });
     expect(second.status).toBe(201);
-    await new Promise((r) => setTimeout(r, 75));
+    await stack.settle();
 
     expect(contextUpdatesOfType(aliceSock, 'delivery.failed').filter((event) => {
       const data = event.data as Record<string, unknown> | undefined;
@@ -2142,7 +2131,9 @@ describe('durable delivery api', () => {
     const { sock: aliceSock } = await attachDirectNodeSocket(stack, ws.workspaceId, alice);
     const [item] = await listDeliveries(bob.token);
 
-    await new Promise((r) => setTimeout(r, 5));
+    // SQLite writes TTLs in whole seconds; expire the stored row explicitly.
+    await stack.runtime.deps.db.update(deliveries)
+      .set({ expiresAt: new Date(0) }).where(eq(deliveries.id, item.id));
     const ackRes = await stack.app.request('/v1/deliveries/' + item.id + '/ack', {
       method: 'POST',
       headers: { authorization: 'Bearer ' + bob.token },
@@ -2160,7 +2151,9 @@ describe('durable delivery api', () => {
     const { ws, alice, bob } = await seed();
     const { sock: aliceSock } = await attachDirectNodeSocket(stack, ws.workspaceId, alice);
 
-    await new Promise((r) => setTimeout(r, 1100));
+    await stack.settle();
+    await stack.runtime.deps.db.update(deliveries)
+      .set({ expiresAt: new Date(0) }).where(eq(deliveries.workspaceId, ws.workspaceId));
     expect(await listDeliveries(bob.token)).toHaveLength(0);
     // Non-finite internal overrides must fall back to the production cap instead
     // of turning the bounded loop into a silent no-op.
@@ -2169,7 +2162,7 @@ describe('durable delivery api', () => {
       maxBatches: Number.NaN,
     })).toBe(1);
     expect(await listDeliveries(bob.token, '?status=dead_lettered')).toHaveLength(1);
-    await new Promise((r) => setTimeout(r, 50));
+    await stack.settle();
     await waitForAssertion(() => {
       expect(contextUpdatesOfType(aliceSock, 'delivery.failed').map((event) => event.data)).toEqual(expect.arrayContaining([
         expect.objectContaining({ reason: 'ttl_expired', retryable: false }),
@@ -2279,7 +2272,7 @@ describe('durable delivery api', () => {
     });
 
     expect(await sweepExpiredDeliveries(stack.runtime.deps)).toBe(0);
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await stack.settle();
     expect(contextUpdatesOfType(aliceSock, 'delivery.failed')
       .filter((event) => event.data && (event.data as Record<string, unknown>).reason === 'ttl_expired')).toHaveLength(121);
   });
@@ -2385,7 +2378,7 @@ describe('durable delivery api', () => {
     });
     expect(second.status).toBe(201);
     const secondMessageId = ((await second.json()) as { data: { id: string } }).data.id;
-    await new Promise((r) => setTimeout(r, 75));
+    await stack.settle();
 
     expect(await listDeliveries(bob.token)).toHaveLength(1);
     await waitForAssertion(() => {
