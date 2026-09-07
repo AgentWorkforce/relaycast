@@ -84,7 +84,9 @@ function makeStack(opts: { onKvPut?: (key: string, value: string) => Promise<voi
   return {
     ...stack, app, queue, db: runtime.deps.db,
     settle: async () => { await tasks.drain(); await stack.settle(); },
-    close: async () => { await tasks.drain(); await stack.close(); },
+    close: async () => {
+      try { await tasks.drain(); } finally { await stack.close(); }
+    },
   };
 }
 

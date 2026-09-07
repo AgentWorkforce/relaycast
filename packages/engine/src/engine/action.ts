@@ -1,6 +1,7 @@
 import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { actions, actionInvocations, agents, agentNodeBindings, channelMembers, dmParticipants, nodes } from '../db/schema.js';
+import { waitForPendingInvocationRetry } from './invocationRetry.js';
 import { generateId } from './snowflake.js';
 import { assertRegistrableAgentName, RELEASED_AGENT_STATUS, releasedAgentName } from './agent.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
@@ -712,7 +713,7 @@ async function waitForInvocationReplayOutcome(
       if (options.onDeadline === 'return') return current;
       throw codedError('Idempotent action dispatch is still pending', 'idempotency_unavailable', 503);
     }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await waitForPendingInvocationRetry();
     const [updated] = await db
       .select()
       .from(actionInvocations)

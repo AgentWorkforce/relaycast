@@ -30,8 +30,8 @@ describe('agent-published action lifecycle', () => {
   let stack: TestStack;
   beforeEach(() => { stack = makeNodeStack(); });
   afterEach(async () => {
-    await stack.close();
     vi.useRealTimers();
+    await stack.close();
   });
 
   it('re-registering the same (workspace, name) refreshes the row instead of failing', async () => {

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Awaitable, TypeVar
 
 import httpx
 import pytest
@@ -17,6 +18,15 @@ import respx
 from relay_sdk.node import NodeConnectionClosed, NodeProvider, NodeProviderError, NodeRegistrationError
 
 BASE_URL = "https://engine.test"
+
+T = TypeVar("T")
+
+
+async def wait_for_signal(signal: Awaitable[T], name: str, timeout: float = 1.0) -> T:
+    try:
+        return await asyncio.wait_for(signal, timeout=timeout)
+    except asyncio.TimeoutError as exc:
+        raise AssertionError(f"{name} never arrived within {timeout}s") from exc
 
 
 class FakeConnection:
@@ -54,10 +64,13 @@ class FakeConnection:
     def sent_of_type(self, type_: str) -> list[dict]:
         return [f for f in self.sent if f.get("type") == type_]
 
-    async def wait_sent(self, type_: str) -> None:
-        while not self.sent_of_type(type_):
-            self._sent_changed.clear()
-            await self._sent_changed.wait()
+    async def wait_sent(self, type_: str, timeout: float = 1.0) -> None:
+        async def wait_for_frame() -> None:
+            while not self.sent_of_type(type_):
+                self._sent_changed.clear()
+                await self._sent_changed.wait()
+
+        await wait_for_signal(wait_for_frame(), f"sent {type_} frame", timeout)
 
     def last_register(self) -> dict:
         return self.sent_of_type("node.register")[-1]
@@ -376,7 +389,7 @@ async def test_reconnects_with_new_instance_id_after_unexpected_drop(monkeypatch
 
     monkeypatch.setattr(node, "_resolve_registered", on_registered)
     second.push(accept_all(second_register))
-    await registered.wait()
+    await wait_for_signal(registered.wait(), "reconnect registration")
     assert node.connected is True
 
     await node.stop()
@@ -447,7 +460,7 @@ async def test_handler_can_call_stop_without_deadlocking():
     conn.push({"v": 1, "type": "action.invoke", "invocation_id": "inv-stop", "action": "shutdown", "input": {}})
     # serve() completes promptly (no 5s self-deadlock) and deregister was sent.
     await asyncio.wait_for(task, timeout=2.0)
-    await done.wait()
+    await wait_for_signal(done.wait(), "shutdown handler completion")
     assert len(conn.sent_of_type("node.deregister")) == 1
 
 
@@ -572,3 +585,17 @@ async def test_ctx_node_exposes_name_and_capability_names():
 
     await node.stop()
     await asyncio.wait_for(task, timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_wait_sent_names_missing_frame():
+    conn = FakeConnection("ws://test")
+    with pytest.raises(AssertionError, match="sent node.register frame never arrived"):
+        await conn.wait_sent("node.register", timeout=0.01)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["reconnect registration", "shutdown handler completion"])
+async def test_event_wait_names_missing_signal(name):
+    with pytest.raises(AssertionError, match=f"{name} never arrived"):
+        await wait_for_signal(asyncio.Event().wait(), name, timeout=0.01)

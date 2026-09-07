@@ -1,3 +1,4 @@
+import { waitForSignal } from '../../../../scripts/test-support/signals.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -234,10 +235,9 @@ describe('RelayCast WebSocket identity', () => {
 
     try {
       // Socket construction is the completion signal for the token-fetch path.
-      const agentSocket = await opened;
-      expect(agentSocket, 'agent node socket was never opened').toBeDefined();
+      const agentSocket = await waitForSignal(opened, 'agent node socket construction');
 
-      const url = new URL(agentSocket!.url);
+      const url = new URL(agentSocket.url);
       expect(url.searchParams.get('agent_relay_user_id')).toBe('usr_abc123');
       expect(url.searchParams.get('agent_relay_machine_id')).toBe('abc123def4567890');
       expect(url.searchParams.get('agent_relay_org_id')).toBe('org_xyz789');
