@@ -82,9 +82,15 @@ export function makeNodeStack(options?: {
     close: () => closing ??= (async () => {
       runtime.webhookQueue.stop();
       runtime.presence.stop();
-      await tasks.drain();
-      runtime.close();
-      stacks.delete(stack);
+      try {
+        await tasks.drain();
+      } finally {
+        try {
+          runtime.close();
+        } finally {
+          stacks.delete(stack);
+        }
+      }
     })(),
   };
   stacks.add(stack);
