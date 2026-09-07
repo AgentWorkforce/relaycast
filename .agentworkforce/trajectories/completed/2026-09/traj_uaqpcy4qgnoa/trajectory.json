@@ -101,12 +101,26 @@
     "approach": "Standard approach",
     "confidence": 0.94
   },
-  "commits": [],
-  "filesChanged": [],
+  "commits": [
+    "3cad6e34",
+    "c26ef054",
+    "c201a939"
+  ],
+  "filesChanged": [
+    ".agentworkforce/trajectories/completed/2026-09/traj_uaqpcy4qgnoa/summary.md",
+    ".agentworkforce/trajectories/completed/2026-09/traj_uaqpcy4qgnoa/trajectory.json",
+    "CHANGELOG.md",
+    "packages/engine/CHANGELOG.md",
+    "packages/engine/src/__tests__/conformance/inventoryPresenceIsolation.test.ts",
+    "packages/engine/src/engine/node.ts",
+    "tests/relayflows/cases/0902-node-inventory-presence-isolation/case.json",
+    "tests/relayflows/cases/0902-node-inventory-presence-isolation/probe.test.ts",
+    "tests/relayflows/cases/0902-node-inventory-presence-isolation/run.mjs"
+  ],
   "projectId": "AgentWorkforce/relaycast",
   "tags": [],
   "_trace": {
     "startRef": "dd477eba64dd0f33da0324bc99e3794f2f2b78ae",
-    "endRef": "dd477eba64dd0f33da0324bc99e3794f2f2b78ae"
+    "endRef": "c201a9390bc531f43fc37b5601f818cf5c65cc22"
   }
 }
