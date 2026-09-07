@@ -887,6 +887,39 @@ describe('RelayCast', () => {
       expect(url).toBe('https://cast.agentrelay.com/v1/nodes/node-one');
       expect(init.method).toBe('DELETE');
     });
+
+    it('delete() does not replay an ambiguous transport failure', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({
+        apiKey: 'rk_live_test123',
+        retryPolicy: { maxRetries: 2, backoffMs: 0, jitter: false },
+      });
+      mockFetch.mockRejectedValue(new Error('response lost'));
+
+      await expect(relay.nodes.delete('node-one')).rejects.toMatchObject({
+        code: 'transport_error',
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('delete() does not replay a retryable server response', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({
+        apiKey: 'rk_live_test123',
+        retryPolicy: { maxRetries: 2, backoffMs: 0, jitter: false },
+      });
+      mockFetch.mockImplementation(() => mockResponse(
+        { code: 'internal_error', message: 'response unavailable' },
+        false,
+        503,
+      ));
+
+      await expect(relay.nodes.delete('node-one')).rejects.toMatchObject({
+        code: 'transport_error',
+        status: 503,
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('error handling', () => {

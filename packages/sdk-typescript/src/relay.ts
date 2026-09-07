@@ -838,6 +838,7 @@ export class RelayCast {
         `/v1/nodes/${encodeURIComponent(name)}`,
         undefined,
         options?.force ? { force: 'true' } : undefined,
+        { retry: false },
       ),
 
     listAgents: (name: string): Promise<NodeAgentBinding[]> =>
