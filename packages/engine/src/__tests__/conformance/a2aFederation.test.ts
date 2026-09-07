@@ -1,3 +1,4 @@
+import { waitForSignal } from '../../../../../scripts/test-support/signals.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   MAX_PROOF_BUNDLE_BYTES,
@@ -433,12 +434,15 @@ describe('A2A federation between Relaycast deployments', () => {
     const entered = new Promise<void>((resolve) => { onTransportEntered = resolve; });
     const delayed = sendAndApply('cert-gated-transport', 20);
     try {
-      await entered;
+      await waitForSignal(entered, 'forward A2A RPC POST transport entry');
       expect(wouldAcceptGrant('cert-gated-transport')).toBe(true);
     } finally {
       release();
-      await delayed;
-      transportGate = undefined;
+      try {
+        await waitForSignal(delayed, 'forward A2A RPC POST completion');
+      } finally {
+        transportGate = undefined;
+      }
     }
     expect(wouldAcceptGrant('cert-gated-transport')).toBe(false);
 

@@ -1,3 +1,4 @@
+import { invokeWithConcurrentReplay } from './invocationReplay.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { actionInvocations, agentNodeBindings, agents, nodes, workspaceEvents } from '../../db/schema.js';
@@ -391,40 +392,7 @@ describe('agent presence and release lifecycle', () => {
       body: JSON.stringify({ input: { name: target.name, delete_agent: false } }),
     });
 
-    const freshPromise = invoke();
-    await frameSentPromise;
-    vi.useFakeTimers();
-    let retryScheduled!: () => void;
-    const retrySignal = new Promise<void>((resolve) => { retryScheduled = resolve; });
-    const schedule = globalThis.setTimeout;
-    const timerSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation((callback, delay, ...args) => {
-      const timer = schedule(callback, delay, ...args);
-      if (delay === 10) retryScheduled();
-      return timer;
-    });
-    const replayPromise = invoke();
-    let fresh: Response;
-    let replay: Response;
-    try {
-      // The losing request has reached its pending-claim retry, with time frozen.
-      await Promise.race([
-        retrySignal,
-        replayPromise.then(() => { throw new Error('Replay answered before dispatch completed'); }),
-      ]);
-      resumeSend();
-      fresh = await freshPromise;
-      await vi.runOnlyPendingTimersAsync();
-      replay = await replayPromise;
-    } finally {
-      resumeSend();
-      try {
-        await vi.runOnlyPendingTimersAsync();
-        await Promise.all([freshPromise, replayPromise]);
-      } finally {
-        timerSpy.mockRestore();
-        vi.useRealTimers();
-      }
-    }
+    const [fresh, replay] = await invokeWithConcurrentReplay(invoke, frameSentPromise, resumeSend);
     expect([fresh.status, replay.status]).toEqual([201, 201]);
     expect(replay.headers.get('Idempotency-Replayed')).toBe('true');
     const [freshBody, replayBody] = await Promise.all([

@@ -36,3 +36,15 @@ it('reports failures that settled before drain started', async () => {
   await expect(tasks.drain()).rejects.toMatchObject({ errors: [failure] });
   await expect(tasks.drain()).resolves.toBeUndefined();
 });
+
+it('names background work that never settles', async () => {
+  const tasks = new BackgroundTasks();
+  let release!: () => void;
+  tasks.track(new Promise<void>((resolve) => { release = resolve; }));
+  try {
+    await expect(tasks.drain(10)).rejects.toThrow('background task completion never arrived within 10ms');
+  } finally {
+    release();
+    await tasks.drain();
+  }
+});

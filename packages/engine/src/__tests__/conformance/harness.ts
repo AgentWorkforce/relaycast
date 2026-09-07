@@ -18,15 +18,21 @@ export interface TestStack {
 const stacks = new Set<TestStack>();
 const contextTasks = new WeakMap<object, BackgroundTasks>();
 const sendPresence = nodeContext.sendNodePresenceContext;
+const presenceTrackers = new WeakSet<typeof sendPresence>();
 
 // Presence deliberately detaches node context delivery. Observe its real promise
 // at the exported boundary, including HTTP push and its final database writes.
 function observePresence(): void {
-  if (vi.isMockFunction(nodeContext.sendNodePresenceContext)) return;
-  vi.spyOn(nodeContext, 'sendNodePresenceContext').mockImplementation((deps, ...args) => {
-    const promise = sendPresence(deps, ...args);
+  const current = nodeContext.sendNodePresenceContext;
+  const implementation = vi.isMockFunction(current) ? current.getMockImplementation() : current;
+  if (implementation && presenceTrackers.has(implementation)) return;
+  const send = implementation ?? sendPresence;
+  const tracked: typeof sendPresence = (deps, ...args) => {
+    const promise = send(deps, ...args);
     return contextTasks.get(deps.db)?.track(promise) ?? promise;
-  });
+  };
+  presenceTrackers.add(tracked);
+  vi.spyOn(nodeContext, 'sendNodePresenceContext').mockImplementation(tracked);
 }
 
 afterEach(async () => {

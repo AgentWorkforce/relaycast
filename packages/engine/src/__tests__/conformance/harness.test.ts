@@ -42,3 +42,39 @@ it('waits for the startup poll completion before closing SQLite', async () => {
   }
   expect(stack.runtime.handle.sqlite.open).toBe(false);
 });
+
+it.each(['prior mock', 'reset mock', 'replaced tracking implementation'])(
+  'tracks presence completion after a %s',
+  async (mode) => {
+    const nodeContext = await import('../../engine/nodeContext.js');
+    vi.restoreAllMocks();
+    if (mode === 'replaced tracking implementation') {
+      await makeNodeStack().close();
+    }
+    const presence = vi.spyOn(nodeContext, 'sendNodePresenceContext');
+    if (mode === 'reset mock') vi.resetAllMocks();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    presence.mockImplementation(() => gate);
+    const stack = makeNodeStack();
+    await stack.settle();
+    const sending = nodeContext.sendNodePresenceContext({
+      ...stack.runtime.deps,
+      nodeConnections: stack.runtime.deps.nodeConnections!,
+      workspaceId: 'presence-tracking-test',
+    }, { subjectAgentId: 'subject', event: 'agent.online', data: {} });
+    let closed = false;
+    const closing = stack.close().then(() => { closed = true; });
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(closed, 'close did not await the presence tracking implementation').toBe(false);
+      expect(stack.runtime.handle.sqlite.open).toBe(true);
+    } finally {
+      release();
+      await sending;
+      await closing;
+      vi.restoreAllMocks();
+    }
+    expect(stack.runtime.handle.sqlite.open).toBe(false);
+  },
+);

@@ -20,12 +20,12 @@ export class BackgroundTasks {
     return promise;
   }
 
-  async drain(): Promise<void> {
+  async drain(timeoutMs = 10_000): Promise<void> {
     await waitForSignal((async () => {
       while (this.pending.size) {
         await Promise.allSettled([...this.pending]);
       }
-    })(), 'background task completion');
+    })(), 'background task completion', timeoutMs);
     if (this.failures.length) {
       throw new AggregateError(this.failures.splice(0), 'Background tasks failed');
     }
