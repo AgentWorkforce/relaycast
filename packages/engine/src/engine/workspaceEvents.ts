@@ -80,7 +80,7 @@ export async function appendWorkspaceEvent(
 
 /**
  * Append several events with one monotonic sequence allocation per SQL batch.
- * The MAX(seq) read and all inserts live in the same statement, so concurrent
+ * The high-water lookup and all inserts live in the same statement, so concurrent
  * appenders cannot reserve the same sequence range. Results align with inputs;
  * a failed batch is represented by nulls and does not stop later batches.
  */
@@ -101,6 +101,10 @@ export async function appendWorkspaceEventBatch(
     )`), sql`, `);
 
     try {
+      // A grouped MAX over a join walks all retained events. Seek the end of
+      // the existing (workspace_id, seq) key once per distinct workspace instead.
+      // Materialize before inserting so every event uses the same base even if
+      // SQLite would otherwise inline the CTE and observe this batch's inserts.
       const rows = await db.all<{ workspace_id: string; seq: number }>(sql`
         WITH
           input_events(global_ord, workspace_id, type, channel_id, payload) AS (VALUES ${values}),
@@ -113,13 +117,17 @@ export async function appendWorkspaceEventBatch(
               ) AS workspace_ord
             FROM input_events
           ),
-          bases AS (
+          bases AS MATERIALIZED (
             SELECT
               workspaces.workspace_id,
-              COALESCE(MAX(we.seq), 0) AS base_seq
+              COALESCE((
+                SELECT we.seq
+                FROM workspace_events we
+                WHERE we.workspace_id = workspaces.workspace_id
+                ORDER BY we.seq DESC
+                LIMIT 1
+              ), 0) AS base_seq
             FROM (SELECT DISTINCT workspace_id FROM input_events) workspaces
-            LEFT JOIN workspace_events we ON we.workspace_id = workspaces.workspace_id
-            GROUP BY workspaces.workspace_id
           )
         INSERT INTO workspace_events (workspace_id, seq, type, channel_id, payload)
         SELECT
