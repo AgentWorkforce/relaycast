@@ -22,6 +22,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Node operators can delete one workspace-scoped node through `DELETE /v1/nodes/:name` or `relay.nodes.delete()`, with safe online/action guards, an explicit force option, and no automatic replay of ambiguous SDK failures.
 
+### Fixed
+
+- Agent roster status filters now load only matching rows from the database while preserving read-only, TTL-derived presence.
+
 ## [8.5.0] - 2026-09-06
 
 ### Fixed

@@ -313,26 +313,44 @@ export async function registerAgent(
 }
 
 export async function listAgents(db: Db, workspaceId: string, status?: string) {
+  // Filtering and serialization must use the same instant even if the SELECT
+  // crosses a TTL boundary. Presence is derived; roster reads never sweep.
+  const now = Date.now();
+  const requestedStatus = status === 'online' ? 'active' : status;
+  const conditions = [eq(agents.workspaceId, workspaceId), ne(agents.status, RELEASED_AGENT_STATUS)];
+  // Compare numeric seconds directly: Drizzle's Date encoder truncates to
+  // whole seconds, which would keep a boundary row active for up to 999ms
+  // after effectiveAgentStatus has marked it offline.
+  const cutoff = (now - AGENT_LIVENESS_TTL_MS) / 1_000;
+  if (requestedStatus === 'active') {
+    conditions.push(sql`${agents.status} IN ('active', 'online') AND ${agents.lastSeen} >= ${cutoff}`);
+  } else if (requestedStatus === 'offline') {
+    conditions.push(sql`(${agents.status} = 'offline' OR (
+      ${agents.status} IN ('active', 'online') AND ${agents.lastSeen} < ${cutoff}
+    ))`);
+  } else if (requestedStatus && requestedStatus !== 'all') {
+    conditions.push(eq(agents.status, requestedStatus));
+  }
+
   const rows = await db
     .select()
     .from(agents)
     // Released rows are tombstones retained only to keep history attributable;
     // they are not roster members, so `agent list` must not fill with them.
-    .where(and(eq(agents.workspaceId, workspaceId), ne(agents.status, RELEASED_AGENT_STATUS)));
-  const requestedStatus = status === 'online' ? 'active' : status;
+    .where(and(...conditions));
 
   return rows.map((a) => ({
     id: a.id,
     name: a.name,
     handle: `@${a.name}`,
     type: a.type,
-    status: effectiveAgentStatus(a),
+    status: effectiveAgentStatus(a, now),
     persona: a.persona,
     capabilities: a.capabilities ?? null,
     created_at: a.createdAt.toISOString(),
     last_seen: a.lastSeen.toISOString(),
     metadata: a.metadata,
-  })).filter((agent) => !requestedStatus || requestedStatus === 'all' || agent.status === requestedStatus);
+  }));
 }
 
 export async function getAgentByName(db: Db, workspaceId: string, name: string) {
