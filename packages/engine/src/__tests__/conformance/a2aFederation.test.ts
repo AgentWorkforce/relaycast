@@ -31,20 +31,23 @@ describe('A2A federation between Relaycast deployments', () => {
   let borealis: TestStack;
   let originalFetch: typeof globalThis.fetch;
   let forwardedRpcBytes: number[];
-  let transportDelayMs: number;
+  let transportGate: Promise<void> | undefined;
+  let onTransportEntered: (() => void) | undefined;
 
   beforeEach(() => {
     northwind = makeNodeStack();
     borealis = makeNodeStack();
     originalFetch = globalThis.fetch;
     forwardedRpcBytes = [];
-    transportDelayMs = 0;
+    transportGate = undefined;
+    onTransportEntered = undefined;
 
     globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const request = input instanceof Request ? input : new Request(input, init);
       const url = new URL(request.url);
-      if (url.pathname === '/a2a/rpc' && request.method === 'POST' && transportDelayMs > 0) {
-        await new Promise((resolve) => setTimeout(resolve, transportDelayMs));
+      if (url.pathname === '/a2a/rpc' && request.method === 'POST' && transportGate) {
+        onTransportEntered?.();
+        await transportGate;
       }
       if (url.hostname === 'northwind.example') {
         return northwind.app.request(request);
@@ -312,7 +315,7 @@ describe('A2A federation between Relaycast deployments', () => {
     expect(received).toHaveLength(1);
   });
 
-  it('applies signed revocations in the authenticated reverse direction and reports latency tails', async () => {
+  it('applies signed revocations in the authenticated reverse direction after transport completes', async () => {
     const federation = await connectDeployments();
     const issuer = await generateHybridKeypair();
     const issuerId = 'human:borealis:bob';
@@ -359,7 +362,7 @@ describe('A2A federation between Relaycast deployments', () => {
     const sendAndApply = async (
       certId: string,
       sequence: number,
-    ): Promise<{ latencyMs: number; wire: WireRevocation }> => {
+    ): Promise<WireRevocation> => {
       const signed: RevocationList = {
         issuer_id: issuerId,
         updated_at: Math.floor(Date.now() / 1000) + sequence,
@@ -383,7 +386,6 @@ describe('A2A federation between Relaycast deployments', () => {
           ml_dsa_65: base64StandardEncode(signed.signature.ml_dsa_65),
         },
       };
-      const issuedAt = performance.now();
 
       const sent = await borealis.app.request('/v1/dm', {
         method: 'POST',
@@ -418,33 +420,27 @@ describe('A2A federation between Relaycast deployments', () => {
       expect(await applyIfValid(receivedWire)).toBe(true);
       expect(wouldAcceptGrant(certId)).toBe(false);
 
-      return { latencyMs: performance.now() - issuedAt, wire: receivedWire };
+      return receivedWire;
     };
 
-    const samples: number[] = [];
     let lastWire: WireRevocation | undefined;
     for (let index = 0; index < 20; index += 1) {
-      const result = await sendAndApply(`cert-live-grant-${index}`, index);
-      samples.push(result.latencyMs);
-      lastWire = result.wire;
+      lastWire = await sendAndApply(`cert-live-grant-${index}`, index);
     }
 
-    const sorted = [...samples].sort((left, right) => left - right);
-    const middle = sorted.length / 2;
-    const medianMs = (sorted[middle - 1]! + sorted[middle]!) / 2;
-    const p95Ms = sorted[Math.ceil(sorted.length * 0.95) - 1]!;
-    const maxMs = sorted.at(-1)!;
-    expect(samples).toHaveLength(20);
-
-    transportDelayMs = 75;
-    const delayed = await sendAndApply('cert-injected-delay', 20);
-    transportDelayMs = 0;
-    expect(delayed.latencyMs).toBeGreaterThanOrEqual(60);
-    console.info(
-      `A2A revocation latency: n=${samples.length}, median=${medianMs.toFixed(2)} ms, `
-      + `p95=${p95Ms.toFixed(2)} ms, max=${maxMs.toFixed(2)} ms, `
-      + `injected_transport=75 ms -> ${delayed.latencyMs.toFixed(2)} ms`,
-    );
+    let release!: () => void;
+    transportGate = new Promise<void>((resolve) => { release = resolve; });
+    const entered = new Promise<void>((resolve) => { onTransportEntered = resolve; });
+    const delayed = sendAndApply('cert-gated-transport', 20);
+    try {
+      await entered;
+      expect(wouldAcceptGrant('cert-gated-transport')).toBe(true);
+    } finally {
+      release();
+      await delayed;
+      transportGate = undefined;
+    }
+    expect(wouldAcceptGrant('cert-gated-transport')).toBe(false);
 
     const tampered = {
       ...lastWire!,

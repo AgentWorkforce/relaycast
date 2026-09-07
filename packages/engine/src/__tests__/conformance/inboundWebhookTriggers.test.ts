@@ -83,12 +83,8 @@ describe('inbound webhook message triggers', () => {
   }
 
   async function waitForAction(socket: FakeSocket, actionName: string) {
-    for (let attempt = 0; attempt < 50; attempt += 1) {
-      const frame = socket.ofType('action.invoke').find((event) => event.action === actionName);
-      if (frame) return frame;
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    return undefined;
+    await stack.settle();
+    return socket.ofType('action.invoke').find((event) => event.action === actionName);
   }
 
   it('fires a fleet trigger with the message created by the webhook route', async () => {
@@ -158,7 +154,7 @@ describe('inbound webhook message triggers', () => {
       }),
     });
     expect(response.status).toBe(201);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await stack.settle();
 
     expect(socket.ofType('action.invoke')).toHaveLength(0);
     const [storedTrigger] = await stack.runtime.handle.db

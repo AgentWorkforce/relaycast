@@ -28,9 +28,11 @@ class FakeConnection:
         self.sent: list[dict] = []
         self._incoming: asyncio.Queue[str | None] = asyncio.Queue()
         self.closed = False
+        self._sent_changed = asyncio.Event()
 
     async def send(self, data: str) -> None:
         self.sent.append(json.loads(data))
+        self._sent_changed.set()
 
     async def recv(self) -> str:
         item = await self._incoming.get()
@@ -51,6 +53,11 @@ class FakeConnection:
 
     def sent_of_type(self, type_: str) -> list[dict]:
         return [f for f in self.sent if f.get("type") == type_]
+
+    async def wait_sent(self, type_: str) -> None:
+        while not self.sent_of_type(type_):
+            self._sent_changed.clear()
+            await self._sent_changed.wait()
 
     def last_register(self) -> dict:
         return self.sent_of_type("node.register")[-1]
@@ -105,14 +112,6 @@ def base_kwargs(server: FakeNodeServer, **overrides) -> dict:
     )
     kwargs.update(overrides)
     return kwargs
-
-
-async def wait_until(predicate, timeout: float = 1.0, interval: float = 0.005) -> None:
-    async def _poll():
-        while not predicate():
-            await asyncio.sleep(interval)
-
-    await asyncio.wait_for(_poll(), timeout)
 
 
 @pytest.mark.asyncio
@@ -219,7 +218,8 @@ async def test_invoke_runs_handler_and_replies_with_output():
     await node.wait_registered()
 
     conn.push({"v": 1, "type": "action.invoke", "invocation_id": "inv-1", "action": "run-etl", "input": {"rows": 3}})
-    await wait_until(lambda: len(conn.sent_of_type("action.result")) == 1)
+    await conn.wait_sent("action.result")
+    assert len(conn.sent_of_type("action.result")) == 1
     result = conn.sent_of_type("action.result")[-1]
     assert result == {
         "v": 1,
@@ -247,7 +247,8 @@ async def test_invoke_supports_a_sync_handler():
     await node.wait_registered()
 
     conn.push({"v": 1, "type": "action.invoke", "invocation_id": "inv-sync", "action": "run-etl", "input": {"rows": 2}})
-    await wait_until(lambda: len(conn.sent_of_type("action.result")) == 1)
+    await conn.wait_sent("action.result")
+    assert len(conn.sent_of_type("action.result")) == 1
     result = conn.sent_of_type("action.result")[-1]
     assert result["output"] == {"echoed": {"rows": 2}}
 
@@ -286,7 +287,8 @@ async def test_handler_throw_becomes_error_result_never_dropped():
     await node.wait_registered()
 
     conn.push({"v": 1, "type": "action.invoke", "invocation_id": "inv-err", "action": "run-etl", "input": {}})
-    await wait_until(lambda: len(conn.sent_of_type("action.result")) == 1)
+    await conn.wait_sent("action.result")
+    assert len(conn.sent_of_type("action.result")) == 1
     result = conn.sent_of_type("action.result")[-1]
     assert result == {
         "v": 1,
@@ -311,7 +313,8 @@ async def test_unknown_action_errors_rather_than_dropping():
     await node.wait_registered()
 
     conn.push({"v": 1, "type": "action.invoke", "invocation_id": "inv-x", "action": "nope", "input": {}})
-    await wait_until(lambda: len(conn.sent_of_type("action.result")) == 1)
+    await conn.wait_sent("action.result")
+    assert len(conn.sent_of_type("action.result")) == 1
     result = conn.sent_of_type("action.result")[-1]
     assert result["invocation_id"] == "inv-x"
     assert "nope" in result["error"]
@@ -330,7 +333,7 @@ async def test_finite_heartbeat_is_provider_scoped_without_placeholder_load_or_l
     conn.push(accept_all(conn.last_register()))
     await node.wait_registered()
 
-    await wait_until(lambda: len(conn.sent_of_type("node.heartbeat")) >= 1)
+    await conn.wait_sent("node.heartbeat")
     hb = conn.sent_of_type("node.heartbeat")[-1]
     assert hb["provider"] == {"name": "py", "instance_id": node._instance_id}
     assert "load" not in hb
@@ -343,7 +346,7 @@ async def test_finite_heartbeat_is_provider_scoped_without_placeholder_load_or_l
 
 
 @pytest.mark.asyncio
-async def test_reconnects_with_new_instance_id_after_unexpected_drop():
+async def test_reconnects_with_new_instance_id_after_unexpected_drop(monkeypatch):
     server = FakeNodeServer()
     node = NodeProvider(**base_kwargs(server))
 
@@ -357,15 +360,24 @@ async def test_reconnects_with_new_instance_id_after_unexpected_drop():
     first.drop()
     second = await server.next_connection()
     assert second is not first
-    await wait_until(lambda: len(second.sent_of_type("node.register")) >= 1)
+    await second.wait_sent("node.register")
     second_register = second.last_register()
     assert second_register["name"] == "alpha"
     assert second_register["provider"]["name"] == "py"
     second_instance = second_register["provider"]["instance_id"]
     assert second_instance != first_instance
 
+    registered = asyncio.Event()
+    resolve_registered = node._resolve_registered
+
+    def on_registered(data):
+        resolve_registered(data)
+        registered.set()
+
+    monkeypatch.setattr(node, "_resolve_registered", on_registered)
     second.push(accept_all(second_register))
-    await wait_until(lambda: node.connected is True)
+    await registered.wait()
+    assert node.connected is True
 
     await node.stop()
     await asyncio.wait_for(task, timeout=1.0)
@@ -380,12 +392,12 @@ async def test_reconnects_when_dropped_during_register_handshake():
 
     task = asyncio.create_task(node.serve())
     first = await server.next_connection()
-    await wait_until(lambda: len(first.sent_of_type("node.register")) == 1)
+    await first.wait_sent("node.register")
     first.drop()  # drop before replying to node.register
 
     second = await server.next_connection()
     assert second is not first
-    await wait_until(lambda: len(second.sent_of_type("node.register")) >= 1)
+    await second.wait_sent("node.register")
     second.push(accept_all(second.last_register()))
     await asyncio.wait_for(node.wait_registered(), timeout=1.0)
     assert node.connected is True
@@ -418,13 +430,13 @@ async def test_reconnect_exhaustion_does_not_overwrite_successful_registration()
 async def test_handler_can_call_stop_without_deadlocking():
     server = FakeNodeServer()
     node = NodeProvider(**base_kwargs(server))
-    done: dict = {}
+    done = asyncio.Event()
 
     @node.capability("shutdown")
     async def handler(input, ctx):
         # A handler that triggers shutdown must not deadlock draining its own task.
         await node.stop()
-        done["ok"] = True
+        done.set()
         return "ok"
 
     task = asyncio.create_task(node.serve())
@@ -435,7 +447,7 @@ async def test_handler_can_call_stop_without_deadlocking():
     conn.push({"v": 1, "type": "action.invoke", "invocation_id": "inv-stop", "action": "shutdown", "input": {}})
     # serve() completes promptly (no 5s self-deadlock) and deregister was sent.
     await asyncio.wait_for(task, timeout=2.0)
-    await wait_until(lambda: done.get("ok") is True)
+    await done.wait()
     assert len(conn.sent_of_type("node.deregister")) == 1
 
 
@@ -473,7 +485,8 @@ async def test_spawn_agent_sends_capacity_direct_node_spawn_frame():
     await node.wait_registered()
 
     conn.push({"v": 1, "type": "action.invoke", "invocation_id": "inv-spawn", "action": "spawn:claude", "input": {}})
-    await wait_until(lambda: len(conn.sent_of_type("node.spawn")) == 1)
+    await conn.wait_sent("node.spawn")
+    assert len(conn.sent_of_type("node.spawn")) == 1
     spawn_frame = conn.sent_of_type("node.spawn")[-1]
     assert spawn_frame["input"] == {"cli": "claude", "name": "worker-1"}
     # Capacity-direct: the frame carries no node target; the engine uses the
@@ -489,7 +502,8 @@ async def test_spawn_agent_sends_capacity_direct_node_spawn_frame():
             "data": {"invocation_id": "spawned-1", "status": "dispatched"},
         }
     )
-    await wait_until(lambda: len(conn.sent_of_type("action.result")) == 1)
+    await conn.wait_sent("action.result")
+    assert len(conn.sent_of_type("action.result")) == 1
     assert spawn_result["value"]["invocation_id"] == "spawned-1"
 
     await node.stop()
@@ -517,7 +531,8 @@ async def test_send_message_posts_to_canonical_channel_route():
     await node.wait_registered()
 
     conn.push({"v": 1, "type": "action.invoke", "invocation_id": "inv-msg", "action": "run-etl", "input": {}})
-    await wait_until(lambda: "value" in posted)
+    await conn.wait_sent("action.result")
+    assert len(conn.sent_of_type("action.result")) == 1
     assert posted["value"]["id"] == "m-1"
 
     assert route.called
@@ -549,7 +564,8 @@ async def test_ctx_node_exposes_name_and_capability_names():
     await node.wait_registered()
 
     conn.push({"v": 1, "type": "action.invoke", "invocation_id": "inv-ctx", "action": "run-etl", "input": {}})
-    await wait_until(lambda: "node" in seen)
+    await conn.wait_sent("action.result")
+    assert len(conn.sent_of_type("action.result")) == 1
     assert seen["node"].name == "alpha"
     assert seen["node"].capabilities == ["run-etl"]
     assert seen["invocation_id"] == "inv-ctx"

@@ -1,3 +1,7 @@
+import { afterEach, vi } from 'vitest';
+import { BackgroundTasks } from '../backgroundTasks.js';
+import { DurableEventQueue } from '../../adapters/node/event-queue.js';
+import * as nodeContext from '../../engine/nodeContext.js';
 import type { Hono } from 'hono';
 import { createEngine } from '../../engine.js';
 import { createNodeRuntime, type NodeRuntime, type EngineSocket } from '../../adapters/node/index.js';
@@ -7,8 +11,27 @@ import type { EngineConfig, EntitlementsProvider } from '../../ports/index.js';
 export interface TestStack {
   app: Hono<AppEnv>;
   runtime: NodeRuntime;
-  close(): void;
+  settle(): Promise<void>;
+  close(): Promise<void>;
 }
+
+const stacks = new Set<TestStack>();
+const contextTasks = new WeakMap<object, BackgroundTasks>();
+const sendPresence = nodeContext.sendNodePresenceContext;
+
+// Presence deliberately detaches node context delivery. Observe its real promise
+// at the exported boundary, including HTTP push and its final database writes.
+function observePresence(): void {
+  if (vi.isMockFunction(nodeContext.sendNodePresenceContext)) return;
+  vi.spyOn(nodeContext, 'sendNodePresenceContext').mockImplementation((deps, ...args) => {
+    const promise = sendPresence(deps, ...args);
+    return contextTasks.get(deps.db)?.track(promise) ?? promise;
+  });
+}
+
+afterEach(async () => {
+  await Promise.all([...stacks].map((stack) => stack.close()));
+});
 
 /** Build an in-memory engine on the Node adapter with a fast presence sweep disabled. */
 export function makeNodeStack(options?: {
@@ -18,21 +41,54 @@ export function makeNodeStack(options?: {
   httpPushProxy?: EngineConfig['httpPushProxy'];
   entitlements?: EntitlementsProvider;
 }): TestStack {
-  const runtime = createNodeRuntime({
-    dbPath: ':memory:',
-    baseUrl: 'http://localhost:0',
-    migrate: true,
-    config: {
-      environment: options?.environment ?? 'test',
-      mailbox: options?.mailbox,
-      httpPushProxy: options?.httpPushProxy,
-    },
-    entitlements: options?.entitlements,
-    // Disable the auto-sweep timer; tests drive presence.sweep() explicitly.
-    presence: { ttlMs: options?.ttlMs ?? 60_000, sweepIntervalMs: 0 },
-  });
+  const tasks = new BackgroundTasks();
+  observePresence();
+  // start() launches poll() before createNodeRuntime returns. Capture that exact
+  // promise; calling poll() again would return early while it is already busy.
+  const poll = DurableEventQueue.prototype.poll;
+  DurableEventQueue.prototype.poll = function () {
+    return tasks.track(poll.call(this));
+  };
+  let runtime: NodeRuntime;
+  try {
+    runtime = createNodeRuntime({
+      dbPath: ':memory:',
+      baseUrl: 'http://localhost:0',
+      migrate: true,
+      config: {
+        environment: options?.environment ?? 'test',
+        mailbox: options?.mailbox,
+        httpPushProxy: options?.httpPushProxy,
+      },
+      entitlements: options?.entitlements,
+      // Disable the auto-sweep timer; tests drive presence.sweep() explicitly.
+      eventQueue: { pollIntervalMs: 0 },
+      presence: { ttlMs: options?.ttlMs ?? 60_000, sweepIntervalMs: 0 },
+    });
+  } finally {
+    DurableEventQueue.prototype.poll = poll;
+  }
+  contextTasks.set(runtime.deps.db, tasks);
+  const queuePoll = runtime.webhookQueue.poll.bind(runtime.webhookQueue);
+  runtime.webhookQueue.poll = () => tasks.track(queuePoll());
+  const drainNode = runtime.realtime.drainNode.bind(runtime.realtime);
+  runtime.realtime.drainNode = (...args) => tasks.track(drainNode(...args));
   const app = createEngine(runtime.deps);
-  return { app, runtime, close: () => runtime.close() };
+  tasks.bind(app);
+  let closing: Promise<void> | undefined;
+  const stack: TestStack = {
+    app, runtime,
+    settle: () => tasks.drain(),
+    close: () => closing ??= (async () => {
+      runtime.webhookQueue.stop();
+      runtime.presence.stop();
+      await tasks.drain();
+      runtime.close();
+      stacks.delete(stack);
+    })(),
+  };
+  stacks.add(stack);
+  return stack;
 }
 
 /** A capturing EngineSocket for asserting realtime delivery without a network. */

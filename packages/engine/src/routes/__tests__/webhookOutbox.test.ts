@@ -1,12 +1,12 @@
+import { createEngine } from '../../engine.js';
+import { BackgroundTasks } from '../../__tests__/backgroundTasks.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { createEngine } from '../../engine.js';
-import { createNodeRuntime, type NodeRuntime } from '../../adapters/node/index.js';
 import type { EventQueue, QueuedEvent } from '../../ports/event-queue.js';
 import type { EngineDb } from '../../ports/database.js';
 import { pendingEvents } from '../../db/schema.js';
 import { sweepPendingEvents } from '../../engine/eventQueue.js';
-import { createWorkspace, registerAgent } from '../../__tests__/conformance/harness.js';
+import { createWorkspace, registerAgent, makeNodeStack, type TestStack } from '../../__tests__/conformance/harness.js';
 import type { KeyValueStore } from '../../ports/kv.js';
 
 /**
@@ -61,23 +61,15 @@ class ObservingKv implements KeyValueStore {
   }
 }
 
-interface OutboxStack {
-  app: ReturnType<typeof createEngine>;
-  runtime: NodeRuntime;
+interface OutboxStack extends TestStack {
   queue: CapturingQueue;
   db: EngineDb;
 }
 
 /** Engine on the Node adapter with the webhook queue swapped for a capturing fake. */
 function makeStack(opts: { onKvPut?: (key: string, value: string) => Promise<void> | void } = {}): OutboxStack {
-  const runtime = createNodeRuntime({
-    dbPath: ':memory:',
-    baseUrl: 'http://localhost:0',
-    migrate: true,
-    config: { environment: 'test' },
-    presence: { sweepIntervalMs: 0 },
-    eventQueue: { pollIntervalMs: 0 },
-  });
+  const stack = makeNodeStack();
+  const { runtime } = stack;
   // The real DurableEventQueue would claim + deliver the rows; stop it and
   // inject a fake so the rows stay visible to assertions.
   runtime.webhookQueue.stop();
@@ -86,8 +78,14 @@ function makeStack(opts: { onKvPut?: (key: string, value: string) => Promise<voi
   if (opts.onKvPut) {
     runtime.deps.kv = new ObservingKv(runtime.deps.kv, opts.onKvPut);
   }
+  const tasks = new BackgroundTasks();
   const app = createEngine(runtime.deps);
-  return { app, runtime, queue, db: runtime.deps.db };
+  tasks.bind(app);
+  return {
+    ...stack, app, queue, db: runtime.deps.db,
+    settle: async () => { await tasks.drain(); await stack.settle(); },
+    close: async () => { await tasks.drain(); await stack.close(); },
+  };
 }
 
 const stacks: OutboxStack[] = [];
@@ -96,8 +94,8 @@ function track(stack: OutboxStack): OutboxStack {
   return stack;
 }
 
-afterEach(() => {
-  for (const stack of stacks.splice(0)) stack.runtime.close();
+afterEach(async () => {
+  await Promise.all(stacks.splice(0).map((stack) => stack.close()));
 });
 
 async function postMessage(stack: OutboxStack, headers: Record<string, string> = {}): Promise<Response> {
@@ -124,7 +122,7 @@ describe('engine send path (persist-first outbox)', () => {
     const res = await postMessage(stack);
     expect(res.status).toBe(201);
 
-    await new Promise((r) => setTimeout(r, 25)); // let background sends settle
+    await stack.settle();
 
     const [event] = stack.queue.ofType('message.created');
     expect(event).toBeDefined();
@@ -165,7 +163,7 @@ describe('engine send path (persist-first outbox)', () => {
     const res = await postMessage(stack);
     expect(res.status).toBe(201); // a dead queue never fails the mutation
 
-    await new Promise((r) => setTimeout(r, 25));
+    await stack.settle();
 
     const [event] = stack.queue.ofType('message.created');
     expect(event.outboxId).toBeDefined();
@@ -183,7 +181,7 @@ describe('engine send path (persist-first outbox)', () => {
     const res = await postMessage(stack);
     expect(res.status).toBe(201);
 
-    await new Promise((r) => setTimeout(r, 25));
+    await stack.settle();
 
     const [event] = stack.queue.ofType('message.created');
     const swept = await sweepPendingEvents(stack.db, { limit: 100 });

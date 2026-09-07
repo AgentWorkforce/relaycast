@@ -29,10 +29,14 @@ function capability(name: string, kind?: string, metadata?: Record<string, unkno
 describe('node adapter conformance', () => {
   let stack: TestStack;
   beforeEach(() => { stack = makeNodeStack({ ttlMs: 1_000 }); });
-  afterEach(() => stack.close());
+  afterEach(async () => {
+    await stack.close();
+    vi.useRealTimers();
+  });
 
   describe('presence', () => {
     it('emits agent.status.active on connect and agent.status.offline on sweep', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
       const ws = await createWorkspace(stack.app, 'presence-ws');
       const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
       const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
@@ -45,8 +49,8 @@ describe('node adapter conformance', () => {
       // Bob should have learned Alice (and itself) became active through node-scoped context.
       expect(contextUpdatesOfType(bSock, 'agent.status.active').length).toBeGreaterThanOrEqual(1);
 
-      // Let Alice go stale (ttl 1s) and sweep.
-      await new Promise((r) => setTimeout(r, 1100));
+      // Advance the presence clock past its TTL, then run the real sweep.
+      vi.setSystemTime(Date.now() + 1100);
       await presence.heartbeat(ws.workspaceId, bob.agentId, 'bob'); // keep Bob alive
       bSock.received.length = 0;
       await presence.sweep();
@@ -144,8 +148,8 @@ describe('node adapter conformance', () => {
         nodeDeliveryAdapter: 'ws.node.v1',
       });
 
-      // fanout runs in background; give the event loop a tick.
-      await new Promise((r) => setTimeout(r, 50));
+      // Fanout publishes its completion through waitUntil.
+      await stack.settle();
 
       const delivered = deliverFramesOfType(bobSock, 'message.created');
       expect(delivered).toEqual([
@@ -265,7 +269,7 @@ describe('node adapter conformance', () => {
       expect(rows).toEqual([
         expect.objectContaining({ reason: 'mention' }),
       ]);
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await stack.settle();
       expect(deliverFramesOfType(bobSock, 'message.created')).toEqual([
         expect.objectContaining({
           type: 'deliver',
@@ -339,7 +343,7 @@ describe('node adapter conformance', () => {
       expect(rows).toEqual([
         expect.objectContaining({ reason: 'mention' }),
       ]);
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await stack.settle();
       expect(deliverFramesOfType(bobSock, 'thread.reply')).toEqual([
         expect.objectContaining({
           type: 'deliver',
@@ -376,7 +380,7 @@ describe('node adapter conformance', () => {
         ));
 
       expect(emailRows).toHaveLength(0);
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await stack.settle();
       expect(deliverFramesOfType(bobSock, 'thread.reply')).toHaveLength(0);
     });
 
@@ -392,7 +396,7 @@ describe('node adapter conformance', () => {
       });
       expect(postRes.status).toBeLessThan(300);
       const posted = await postRes.json() as { data: { id: string } };
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await stack.settle();
 
       let [queued] = await stack.runtime.deps.db
         .select({ status: deliveries.status })
@@ -405,7 +409,7 @@ describe('node adapter conformance', () => {
       expect(queued).toMatchObject({ status: 'queued' });
 
       const { sock: bobSock } = await attachDirectNodeSocket(stack, ws.workspaceId, bob);
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await stack.settle();
 
       expect(deliverFramesOfType(bobSock, 'message.created')).toEqual([
         expect.objectContaining({
@@ -1555,7 +1559,7 @@ describe('node adapter conformance', () => {
         body: JSON.stringify({ text: 'ship it' }),
       });
       expect(post.status).toBe(201);
-      await new Promise((r) => setTimeout(r, 75));
+      await stack.settle();
       const triggerInvoke = alpha.sock.ofType('action.invoke').find((event) => event.action === 'echo');
       expect(triggerInvoke).toMatchObject({ action: 'echo' });
 
@@ -1622,7 +1626,7 @@ describe('node adapter conformance', () => {
       });
 
       await alpha.handle.handleClose();
-      await new Promise((r) => setTimeout(r, 25));
+      await stack.settle();
       expect(beta.sock.ofType('action.invoke').at(-1)).toMatchObject({
         invocation_id: echoBody.data.invocation_id,
         action: 'echo',
@@ -1887,7 +1891,7 @@ describe('node adapter conformance', () => {
       // dispatched via the shared transition (dispatched_at + retry_after_at set).
       const alphaSock = new FakeSocket();
       stack.runtime.realtime.attachNodeSocket(ws.workspaceId, 'node_alpha', alphaSock);
-      await new Promise((r) => setTimeout(r, 25));
+      await stack.settle();
       expect(alphaSock.ofType('action.invoke').at(-1)).toMatchObject({ invocation_id: invocationId, action: 'echo' });
 
       const drained = await db
@@ -2204,7 +2208,7 @@ describe('node adapter conformance', () => {
       // without arming retry_after_at so node.register can drain immediately.
       const alphaSock = new FakeSocket();
       const alphaHandle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, 'node_alpha', alphaSock);
-      await new Promise((r) => setTimeout(r, 25));
+      await stack.settle();
       expect(alphaSock.ofType('action.invoke')).toHaveLength(0);
       const stillQueued = await db
         .select()
@@ -2383,16 +2387,38 @@ describe('node adapter conformance', () => {
 
       const freshPromise = invoke();
       await frameSentPromise;
-      let replaySettled = false;
-      const replayPromise = invoke().then((response) => {
-        replaySettled = true;
-        return response;
+      vi.useFakeTimers();
+      let retryScheduled!: () => void;
+      const retrySignal = new Promise<void>((resolve) => { retryScheduled = resolve; });
+      const schedule = globalThis.setTimeout;
+      const timerSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation((callback, delay, ...args) => {
+        const timer = schedule(callback, delay, ...args);
+        if (delay === 10) retryScheduled();
+        return timer;
       });
-      await new Promise((resolve) => setTimeout(resolve, 25));
-      expect(replaySettled).toBe(false);
-
-      resumeSend();
-      const [fresh, replay] = await Promise.all([freshPromise, replayPromise]);
+      const replayPromise = invoke();
+      let fresh: Response;
+      let replay: Response;
+      try {
+        // The losing request has reached its pending-claim retry, with time frozen.
+        await Promise.race([
+          retrySignal,
+          replayPromise.then(() => { throw new Error('Replay answered before dispatch completed'); }),
+        ]);
+        resumeSend();
+        fresh = await freshPromise;
+        await vi.runOnlyPendingTimersAsync();
+        replay = await replayPromise;
+      } finally {
+        resumeSend();
+        try {
+          await vi.runOnlyPendingTimersAsync();
+          await Promise.all([freshPromise, replayPromise]);
+        } finally {
+          timerSpy.mockRestore();
+          vi.useRealTimers();
+        }
+      }
       expect([fresh.status, replay.status]).toEqual([201, 201]);
       expect(replay.headers.get('Idempotency-Replayed')).toBe('true');
       const [freshBody, replayBody] = await Promise.all([
@@ -2834,7 +2860,7 @@ describe('node adapter conformance', () => {
         }),
       ]);
 
-      await new Promise((r) => setTimeout(r, 75));
+      await stack.settle();
       const triggerInvokes = alpha.sock.ofType('action.invoke').filter((event) => event.action === 'echo');
       expect(triggerInvokes).toHaveLength(1);
     });
@@ -3000,13 +3026,8 @@ describe('node adapter conformance', () => {
       expect(spawn.status).toBe(201);
       const invocationId = (await spawn.json() as { data: { invocation_id: string } }).data.invocation_id;
 
-      // Fanout to the workspace stream runs in the request background
-      // lifecycle (best-effort in tests), so poll rather than fixed-sleep.
-      let invoked = observerSock.ofType('action.invoked');
-      for (let i = 0; i < 20 && invoked.length === 0; i += 1) {
-        await new Promise((r) => setTimeout(r, 5));
-        invoked = observerSock.ofType('action.invoked');
-      }
+      await stack.settle();
+      const invoked = observerSock.ofType('action.invoked');
       expect(invoked).toHaveLength(1);
       expect(invoked[0]).toMatchObject({
         type: 'action.invoked',

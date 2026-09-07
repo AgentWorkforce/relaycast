@@ -566,10 +566,8 @@ describe('node providers', () => {
       body: JSON.stringify({ text: 'hello worker' }),
     });
     expect(post.status).toBe(201);
-    // Poll for the async fanout instead of a fixed sleep, to avoid CI flakiness.
-    for (let i = 0; i < 50 && deliverFramesOfType(py.sock, 'message.created').length === 0; i++) {
-      await new Promise((r) => setTimeout(r, 10));
-    }
+    // Await the request fanout completion promise before inspecting frames.
+    await stack.settle();
 
     expect(deliverFramesOfType(py.sock, 'message.created').length).toBeGreaterThanOrEqual(1);
     expect(deliverFramesOfType(rb.sock, 'message.created')).toHaveLength(0);
@@ -1474,9 +1472,7 @@ describe('node providers', () => {
       body: JSON.stringify({ text: 'provider-scoped ack' }),
     });
     expect(post.status).toBe(201);
-    for (let i = 0; i < 50 && deliverFramesOfType(rb.sock, 'message.created').length === 0; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    await stack.settle();
     const delivery = deliverFramesOfType(rb.sock, 'message.created').at(-1) as { seq?: number } | undefined;
     expect(delivery?.seq).toBeGreaterThan(0);
     const upToSeq = delivery?.seq ?? 0;
@@ -1629,9 +1625,7 @@ describe('node providers', () => {
     // A presence change on alice (the subject) fans context out to the agents
     // that host it — worker on py — and never to rb, which hosts none.
     await stack.runtime.presence.heartbeat(ws.workspaceId, alice.agentId, 'alice');
-    for (let i = 0; i < 50 && contextUpdatesOfType(py.sock, 'agent.status.active').length === 0; i++) {
-      await new Promise((r) => setTimeout(r, 10));
-    }
+    await stack.settle();
 
     const pyUpdates = contextUpdatesOfType(py.sock, 'agent.status.active');
     expect(pyUpdates.length).toBeGreaterThanOrEqual(1);
@@ -1832,10 +1826,8 @@ describe('node providers', () => {
     const body = await res.json() as { data: { agent_name: string; text: string } };
     expect(body.data).toMatchObject({ agent_name: 'poster', text: 'etl finished' });
 
-    // Poll for the async fanout instead of a fixed sleep, to avoid CI flakiness.
-    for (let i = 0; i < 50 && deliverFramesOfType(py.sock, 'message.created').length === 0; i++) {
-      await new Promise((r) => setTimeout(r, 10));
-    }
+    // Await the request fanout completion promise before inspecting frames.
+    await stack.settle();
     // Delivery routing came for free from the canonical route.
     expect(deliverFramesOfType(py.sock, 'message.created').length).toBeGreaterThanOrEqual(1);
   });

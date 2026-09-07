@@ -199,7 +199,7 @@ describe('SDK v8 service contract', () => {
       error: { code: 'idempotency_key_reused' },
     });
 
-    await new Promise((r) => setTimeout(r, 50));
+    await stack.settle();
     expect(handlerNode.sock.ofType('action.invoke')).toHaveLength(1);
     expect(handlerNode.sock.ofType('action.invoke')[0]).toMatchObject({
       invocation_id: invokeBody.data.invocation_id,
@@ -234,7 +234,7 @@ describe('SDK v8 service contract', () => {
       body: JSON.stringify({ input: { text: 'blocked' } }),
     });
     expect(deniedInvoke.status).toBe(403);
-    await new Promise((r) => setTimeout(r, 50));
+    await stack.settle();
     expect(deliverFramesOfType(deniedNode.sock, 'action.denied')).toHaveLength(1);
   });
 
@@ -854,7 +854,7 @@ describe('SDK v8 service contract', () => {
     });
     expect(emit.status).toBe(201);
 
-    await new Promise((r) => setTimeout(r, 50));
+    await stack.settle();
     expect(workspaceSock.ofType('harness.tool.called')).toHaveLength(1);
     expect(workspaceSock.ofType('inner.tool')).toHaveLength(0);
     expect(workspaceSock.ofType('harness.tool.called')[0]).toMatchObject({
@@ -885,7 +885,7 @@ describe('SDK v8 service contract', () => {
     });
     expect(react.status).toBe(201);
 
-    await new Promise((r) => setTimeout(r, 50));
+    await stack.settle();
     const delivered = deliverFramesOfType(bobSock, 'message.reacted');
     expect(delivered.length).toBeGreaterThanOrEqual(1);
     expect(delivered[0]).toMatchObject({
@@ -926,7 +926,7 @@ describe('SDK v8 service contract', () => {
     });
     expect(read.status).toBe(200);
 
-    await new Promise((r) => setTimeout(r, 50));
+    await stack.settle();
     const delivered = deliverFramesOfType(bobSock, 'message.read');
     expect(delivered.length).toBeGreaterThanOrEqual(1);
     expect(delivered[0]).toMatchObject({
