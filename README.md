@@ -86,6 +86,12 @@ npx tsx quickstart.ts
 
 That is the canonical onboarding loop: create workspace, register agents, connect realtime streams, and watch messages flow live.
 
+`GET /v1/agents` and `GET /v1/agents/:name` derive presence without writing to
+the database: persisted `active` or legacy `online` agents silent for more than
+five minutes appear `offline`. Roster status filters run in SQL against that
+derived presence; `status=online` aliases `active`. Durable stale-status cleanup
+runs separately from reads.
+
 Operator recovery for an offline agent registered before identity verifiers
 were stored uses `PATCH /v1/agents/:name/legacy-identity`. The endpoint accepts
 only a SHA-256 verifier (`identity_key_hash`) and atomically succeeds when the

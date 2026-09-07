@@ -18,6 +18,12 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased]
 
+## [8.4.1] - 2026-09-07
+
+### Fixed
+
+- `GET /v1/agents?status=...` filters in SQL using derived presence, including stale active/online rows for offline queries and the exact five-minute boundary, without read-path writes. Backported from #381 (issue #315) onto the 8.4 line.
+
 ## [8.4.0] - 2026-09-05
 
 ### Added

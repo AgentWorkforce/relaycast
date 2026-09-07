@@ -2101,8 +2101,10 @@ paths:
       description: >-
         List all agents in the workspace. Active presence is derived from
         server-observed `last_seen` using a five-minute TTL, so stale persisted
-        active rows are returned as offline and swept durably. Observer tokens
-        require `agents:read`.
+        active or legacy online rows are returned as offline. Reads do not write
+        to the database; durable cleanup runs separately. Status filters are
+        applied in SQL against derived presence, with online aliasing active.
+        Observer tokens require `agents:read`.
       tags:
         - Agents
       security:
@@ -2163,7 +2165,9 @@ paths:
   /agents/{name}:
     get:
       summary: Get agent
-      description: Get agent by name. Observer tokens require `agents:read`.
+      description: >-
+        Get agent by name. Presence uses the same five-minute last_seen TTL as
+        the roster, without database writes. Observer tokens require `agents:read`.
       tags:
         - Agents
       security:
