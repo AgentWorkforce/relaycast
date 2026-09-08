@@ -2,6 +2,23 @@ import { describe, expect, it, vi } from 'vitest';
 import { trailingSingleFlight } from '../singleFlight.js';
 
 describe('trailing single flight', () => {
+  it.each([false, true])('honors a queued trigger after failure and propagates the final outcome (fails=%s)', async (fails) => {
+    const flights = new Map<string, { dirty: boolean; promise: Promise<number> }>();
+    let rejectFirst!: (error: Error) => void;
+    const finalError = new Error('final failure');
+    const run = vi.fn()
+      .mockImplementationOnce(() => new Promise<number>((_resolve, reject) => { rejectFirst = reject; }))
+      .mockImplementationOnce(async () => { if (fails) throw finalError; return 2; });
+    const first = trailingSingleFlight(flights, 'node', run);
+    await Promise.resolve();
+    expect(trailingSingleFlight(flights, 'node', run)).toBe(first);
+    rejectFirst(new Error('transient failure'));
+    if (fails) await expect(first).rejects.toBe(finalError);
+    else expect(await first).toBe(2);
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(flights.size).toBe(0);
+  });
+
   it('admits a new trigger in the completion microtask without stale cleanup deleting it', async () => {
     const flights = new Map<string, { dirty: boolean; promise: Promise<number> }>();
     let finishFirst!: (n: number) => void;

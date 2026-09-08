@@ -2,6 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { settlePool } from '../settlePool.js';
 
 describe('rolling all-settled pool', () => {
+  it.each([0, -1, NaN, Infinity, 0.5, 1.5])('rejects invalid concurrency %s before starting tasks', async (concurrency) => {
+    const task = vi.fn().mockResolvedValue(undefined);
+    await expect(settlePool([task], concurrency)).rejects.toThrow('positive finite integer');
+    expect(task).not.toHaveBeenCalled();
+  });
+
   it('uses free slots without waiting for the slowest task, including after failure', async () => {
     const started: number[] = [];
     const finish: Array<() => void> = [];

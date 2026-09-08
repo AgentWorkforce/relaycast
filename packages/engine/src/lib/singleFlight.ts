@@ -12,7 +12,13 @@ export function trailingSingleFlight<K>(
       let count = 0;
       do {
         flight.dirty = false;
-        count += await run();
+        try {
+          count += await run();
+        } catch (error) {
+          // A queued trigger still owns a trailing pass after transient failure.
+          // Never retry without a new trigger, or hide the final failed pass.
+          if (!flight.dirty) throw error;
+        }
       } while (flight.dirty);
       return count;
     } finally {
