@@ -113,12 +113,16 @@ const child = await RelayCast.createWorkspace('job-child', {
 
 Fresh bootstrap callers can use the same contract without an API key, but must
 also present the deployment's bootstrap secret as proof — the idempotency key
-alone is a caller-chosen, non-secret value, so it cannot authorize recovering
-another caller's workspace credentials:
+alone is a caller-chosen value, not a secret by itself, so it cannot authorize
+recovering another caller's workspace credentials. For the same reason, the
+key must be unpredictable: generate it with a CSPRNG (at least 122 bits of
+entropy — the randomness in a v4 UUID — never a job id, timestamp, or
+counter), and persist it alongside the work so a genuine retry reuses the
+exact same value:
 
 ```ts
 const workspace = await RelayCast.createWorkspace('my-project', {
-  idempotencyKey: `bootstrap:${runId}`,
+  idempotencyKey: crypto.randomUUID(),
   bootstrapSecret: process.env.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET,
 });
 ```

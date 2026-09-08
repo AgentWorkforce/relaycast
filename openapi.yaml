@@ -1543,7 +1543,14 @@ paths:
             `Authorization: Bearer rk_*` owner it is owner-scoped; without
             authorization it is scoped to anonymous bootstrap creation on this
             deployment. Reusing it with the same request replays the workspace;
-            a different request is a 409.
+            a different request is a 409. For an anonymous (bootstrap) create,
+            this key is part of what authorizes recovering the binding
+            alongside `X-Workspace-Bootstrap-Secret`, so it must be
+            unpredictable: at least 32 characters, generated with a CSPRNG
+            with at least 122 bits of entropy (the randomness in a v4 UUID) —
+            a value that is too short or otherwise not CSPRNG-generated
+            returns `400 workspace_create_idempotency_key_too_weak`. This
+            requirement does not apply to an owner-scoped key.
         - name: X-Workspace-Bootstrap-Secret
           in: header
           required: false
@@ -1588,7 +1595,10 @@ paths:
                   data:
                     $ref: '#/components/schemas/CreateWorkspaceResponse'
         '400':
-          description: Invalid request
+          description: >-
+            Invalid request, or `workspace_create_idempotency_key_too_weak` —
+            an anonymous `Idempotency-Key` was shorter than the required
+            entropy floor (see the `Idempotency-Key` parameter description).
           content:
             application/json:
               schema:

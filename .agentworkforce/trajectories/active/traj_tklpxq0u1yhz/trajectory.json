@@ -166,6 +166,48 @@
             "focal:publish-workflow",
             "confidence:0.82"
           ]
+        },
+        {
+          "ts": 1788883951393,
+          "type": "decision",
+          "content": "Enforce relaycast#379's >=122-bit anonymous idempotency-key entropy floor (32-char structural minimum) independent of the X-Workspace-Bootstrap-Secret proof: Enforce relaycast#379's >=122-bit anonymous idempotency-key entropy floor (32-char structural minimum) independent of the X-Workspace-Bootstrap-Secret proof",
+          "raw": {
+            "question": "Enforce relaycast#379's >=122-bit anonymous idempotency-key entropy floor (32-char structural minimum) independent of the X-Workspace-Bootstrap-Secret proof",
+            "chosen": "Enforce relaycast#379's >=122-bit anonymous idempotency-key entropy floor (32-char structural minimum) independent of the X-Workspace-Bootstrap-Secret proof",
+            "alternatives": [],
+            "reasoning": "The bootstrap secret proof closes the squatting exploit, but the key itself is still meant to be an unpredictable bearer value per issue #379's original contract -- a low-entropy key used by multiple legitimate secret-holders could still collide, and the public TS/README docs previously showed weak examples (bootstrap:${runId}). Added MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH=32 (guarantees >=122 bits even under worst-case hex encoding), checked structurally before any secret comparison or DB work, with adversarial tests proving weak keys are rejected independently of secret correctness."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1788883951853,
+          "type": "decision",
+          "content": "Add scheduled real-container integration CI (test/container-image-integration.test.mjs + .github/workflows/container-integration.yml): Add scheduled real-container integration CI (test/container-image-integration.test.mjs + .github/workflows/container-integration.yml)",
+          "raw": {
+            "question": "Add scheduled real-container integration CI (test/container-image-integration.test.mjs + .github/workflows/container-integration.yml)",
+            "chosen": "Add scheduled real-container integration CI (test/container-image-integration.test.mjs + .github/workflows/container-integration.yml)",
+            "alternatives": [],
+            "reasoning": "Existing container tests only exercised the entrypoint script/engine in isolation, never the actual built Docker image running as a real container against a persistent volume. Built a real docker build + docker run/stop/start suite covering missing-secret 503, invalid-auth 401, digest-conflict 409, real restart/replay recovery from the persisted volume, and log-redaction -- with a secret-hygiene fix (assert on a boolean, not the raw log text) so a failing redaction test can't itself leak the secret into CI output. Scheduled daily plus PR/push triggers on the paths it covers."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1788883952429,
+          "type": "reflection",
+          "content": "Extended the repair with the remaining independent-review requirements: relaycast#379 entropy floor for anonymous idempotency keys (structural 32-char/>=122-bit minimum, independent of the bootstrap-secret proof, with corrected public TS/README/openapi docs), and scheduled CI that builds and runs the real self-host image against a persistent volume covering restart/replay, missing-secret 503, invalid-auth 401, digest-conflict 409, and log-redaction. Release parity (Dockerfile/docker manifests+lock/RUNBOOK) and exact-commit tagging from the prior pass remain intact and re-verified. All touched suites green: engine 79 files/904 tests, test:release 25/25, test:container 19/19, new test:container-image 5/5 against a real built container, actionlint clean.",
+          "raw": {
+            "focalPoints": [
+              "idempotency-key-entropy",
+              "container-integration-ci"
+            ],
+            "confidence": 0.8
+          },
+          "significance": "high",
+          "tags": [
+            "focal:idempotency-key-entropy",
+            "focal:container-integration-ci",
+            "confidence:0.8"
+          ]
         }
       ]
     }

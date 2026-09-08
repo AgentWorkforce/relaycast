@@ -202,7 +202,21 @@ export interface WorkspaceBootstrapOptions extends WorkspaceIdentityOptions {
   expiresInSeconds?: number;
   /** Creation context recorded once for hosted usage attribution. */
   provenance?: WorkspaceProvenanceOptions;
-  /** Owner-scoped key for crash-safe delegated workspace-create retries. */
+  /**
+   * Crash-safe workspace-create replay key (relaycast#371/#379).
+   *
+   * With `apiKey` set: any value is fine — the owner's API key is the
+   * authorization boundary, so this only needs to be unique per operation
+   * (e.g. a job id).
+   *
+   * Without `apiKey` (anonymous bootstrap): this key, together with
+   * `bootstrapSecret`, is what authorizes recovering the binding, so it
+   * MUST itself be unpredictable — at least 122 bits of entropy (the
+   * randomness in a v4 UUID), generated with a CSPRNG. Never derive it from
+   * a job id, timestamp, or counter. The server enforces a minimum length
+   * but cannot verify true randomness. `crypto.randomUUID()` is a good
+   * default.
+   */
   idempotencyKey?: string;
   /**
    * Deployment bootstrap secret, required alongside `idempotencyKey` for an

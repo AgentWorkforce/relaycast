@@ -14,13 +14,26 @@ import {
   workspaceEvents,
   workspaces,
 } from '../../db/schema.js';
-import { drainFileCleanup, reapExpiredWorkspaces } from '../../engine/workspace.js';
+import { drainFileCleanup, MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH, reapExpiredWorkspaces } from '../../engine/workspace.js';
 import {
   createWorkspace,
   makeNodeStack,
   registerAgent,
   type TestStack,
 } from './harness.js';
+
+// Fixture-only padding, not a real secret: guarantees every anonymous
+// bootstrap Idempotency-Key literal below clears MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH
+// while staying readable. Owner-authenticated keys in this file are
+// unaffected by the floor and are left short.
+const ENTROPY_PAD = '9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e';
+function anonKey(label: string): string {
+  const key = `${label}:${ENTROPY_PAD}`;
+  if (key.length < MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH) {
+    throw new Error(`test fixture key too short: ${key}`);
+  }
+  return key;
+}
 
 async function uploadBlob(stack: TestStack, agentToken: string) {
   const uploadResponse = await stack.app.request('/v1/files/upload', {
@@ -108,7 +121,7 @@ describe('workspace lifecycle', () => {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'Idempotency-Key': 'cloud-job-unauthenticated',
+        'Idempotency-Key': anonKey('cloud-job-unauthenticated'),
         'X-Workspace-Bootstrap-Secret': 'test-bootstrap-secret',
       },
       body: JSON.stringify({ name: 'must-not-create' }),
@@ -120,7 +133,7 @@ describe('workspace lifecycle', () => {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'Idempotency-Key': 'cloud-job-unauthenticated',
+        'Idempotency-Key': anonKey('cloud-job-unauthenticated'),
         'X-Workspace-Bootstrap-Secret': 'test-bootstrap-secret',
       },
       body: JSON.stringify({ name: 'must-not-create' }),
@@ -185,7 +198,7 @@ describe('workspace lifecycle', () => {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'Idempotency-Key': 'auth-absent-379',
+        'Idempotency-Key': anonKey('auth-absent-379'),
         'X-Workspace-Bootstrap-Secret': 'test-bootstrap-secret',
       },
       body: JSON.stringify({ name: 'anonymous-still-works' }),
@@ -198,7 +211,7 @@ describe('workspace lifecycle', () => {
   it('rejects an anonymous idempotency-keyed create that cannot prove the bootstrap secret', async () => {
     const missing = await stack.app.request('/v1/workspaces', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'Idempotency-Key': 'no-proof-379' },
+      headers: { 'content-type': 'application/json', 'Idempotency-Key': anonKey('no-proof-379') },
       body: JSON.stringify({ name: 'no-proof-workspace' }),
     });
     expect(missing.status).toBe(401);
@@ -209,7 +222,7 @@ describe('workspace lifecycle', () => {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'Idempotency-Key': 'wrong-proof-379',
+        'Idempotency-Key': anonKey('wrong-proof-379'),
         'X-Workspace-Bootstrap-Secret': 'not-the-configured-secret',
       },
       body: JSON.stringify({ name: 'wrong-proof-workspace' }),
@@ -220,8 +233,38 @@ describe('workspace lifecycle', () => {
     expect(await stack.runtime.handle.db.select().from(workspaces)).toHaveLength(0);
   });
 
+  it('rejects an anonymous Idempotency-Key below the relaycast#379 entropy floor, even with a correct secret proof', async () => {
+    for (const weakKey of ['a', 'job-123', 'bootstrap:run-1']) {
+      const response = await stack.app.request('/v1/workspaces', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'Idempotency-Key': weakKey,
+          'X-Workspace-Bootstrap-Secret': 'test-bootstrap-secret',
+        },
+        body: JSON.stringify({ name: 'weak-key-http-target' }),
+      });
+      expect(response.status).toBe(400);
+      expect((await response.json() as { error: { code: string } }).error.code)
+        .toBe('workspace_create_idempotency_key_too_weak');
+    }
+    expect(await stack.runtime.handle.db.select().from(workspaces)).toHaveLength(0);
+
+    // Control: a key at the floor length, with the correct secret, succeeds.
+    const ok = await stack.app.request('/v1/workspaces', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'Idempotency-Key': anonKey('at-the-floor-379'),
+        'X-Workspace-Bootstrap-Secret': 'test-bootstrap-secret',
+      },
+      body: JSON.stringify({ name: 'weak-key-http-target' }),
+    });
+    expect(ok.status).toBe(201);
+  });
+
   it('does not let an unproven caller retrieve a workspace another anonymous caller already bootstrapped', async () => {
-    const key = 'squatting-attempt-e2e-379';
+    const key = anonKey('squatting-attempt-e2e-379');
     const body = JSON.stringify({ name: 'squatting-target-e2e' });
     const legitimate = await stack.app.request('/v1/workspaces', {
       method: 'POST',
@@ -284,7 +327,7 @@ describe('workspace lifecycle', () => {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          'Idempotency-Key': 'restart-contract-379',
+          'Idempotency-Key': anonKey('restart-contract-379'),
           'X-Workspace-Bootstrap-Secret': 'stable-test-secret',
         },
         body: JSON.stringify({ name: 'restart-contract' }),
@@ -302,7 +345,7 @@ describe('workspace lifecycle', () => {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          'Idempotency-Key': 'restart-contract-379',
+          'Idempotency-Key': anonKey('restart-contract-379'),
           'X-Workspace-Bootstrap-Secret': 'stable-test-secret',
         },
         body: JSON.stringify({ name: 'restart-contract' }),
@@ -316,7 +359,7 @@ describe('workspace lifecycle', () => {
       // stability across restarts depends on.
       const unproven = await createEngine(restartedRuntime.deps).request('/v1/workspaces', {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'Idempotency-Key': 'restart-contract-379' },
+        headers: { 'content-type': 'application/json', 'Idempotency-Key': anonKey('restart-contract-379') },
         body: JSON.stringify({ name: 'restart-contract' }),
       });
       expect(unproven.status).toBe(401);
@@ -345,7 +388,7 @@ describe('workspace lifecycle', () => {
       expect(authenticated.status).toBe(201);
       const unavailable = await createEngine(unconfiguredRuntime.deps).request('/v1/workspaces', {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'Idempotency-Key': 'missing-secret-379' },
+        headers: { 'content-type': 'application/json', 'Idempotency-Key': anonKey('missing-secret-379') },
         body: JSON.stringify({ name: 'keyed-needs-secret' }),
       });
       expect(unavailable.status).toBe(503);
@@ -362,7 +405,7 @@ describe('workspace lifecycle', () => {
   it('replays anonymous bootstrap creates and terminalizes them on expiry', async () => {
     const headers = {
       'content-type': 'application/json',
-      'Idempotency-Key': 'bootstrap-expiry-379',
+      'Idempotency-Key': anonKey('bootstrap-expiry-379'),
       'X-Workspace-Bootstrap-Secret': 'test-bootstrap-secret',
     };
     const body = JSON.stringify({ name: 'bootstrap-expiry', expires_in_seconds: 60 });
