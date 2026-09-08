@@ -859,6 +859,9 @@ describe('node adapter conformance', () => {
         type: 'agent.deregister',
         agent_id: controlAgentId,
       });
+      expect(brokerSock.ofType('reply').at(-1)).toMatchObject({
+        id: 'control-agent-deregister', ok: true, data: { deregistered: true },
+      });
       const activeBindingsAfterDeregister = await db
         .select({ id: agentNodeBindings.id })
         .from(agentNodeBindings)

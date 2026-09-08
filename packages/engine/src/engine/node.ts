@@ -2346,6 +2346,11 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
       }
       case 'agent.deregister':
         await deregisterAgentViaNode(args.db, args.workspaceId, args.nodeId, message, args.completionDeps);
+        // A caller deleting an owned identity must know the live binding is gone
+        // before invoking release. Older fire-and-forget callers omit the id.
+        if (message.id) {
+          sendControl(args.socket, { v: 1, id: message.id, type: 'reply', ok: true, data: { deregistered: true } });
+        }
         return;
       case 'inventory.sync': {
         const result = await reconcileInventory(
