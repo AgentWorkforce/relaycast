@@ -1333,6 +1333,20 @@ describe('RelayCast', () => {
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
+    it('never sends an anonymous bootstrap secret over remote plaintext HTTP', async () => {
+      const { RelayCast } = await import('../relay.js');
+
+      await expect(RelayCast.createWorkspace('bootstrap-child', {
+        idempotencyKey: 'bootstrap-run-1-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e',
+        bootstrapSecret: 'self-host-deployment-secret',
+        baseUrl: 'http://self-host.example',
+      })).rejects.toMatchObject({
+        statusCode: 400,
+        rawCode: 'workspace_create_bootstrap_base_url_required',
+      });
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
     it('does not forward a bootstrap secret proof for an authenticated create', async () => {
       const { RelayCast } = await import('../relay.js');
       mockFetch.mockImplementation(() =>

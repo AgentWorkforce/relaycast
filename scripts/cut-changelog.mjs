@@ -165,21 +165,21 @@ function fallbackBody(fromTag) {
 
 /**
  * Replace the pending block in `file` with a released heading.
- * @returns the pending release level when the file was cut, otherwise null.
+ * @returns an independent cut indicator and pending release level.
  */
 function cut(file, { fallback = "" } = {}) {
   const changelog = readFileSync(file, "utf-8");
   const match = changelog.match(UNRELEASED);
   if (!match) {
     warn(`${file}: no [Unreleased] heading, skipped`);
-    return null;
+    return { cut: false, level: null };
   }
 
   const curated = match[1].trim();
   const body = curated || fallback;
   if (!body) {
     console.log(`${file}: nothing pending, left unchanged`);
-    return null;
+    return { cut: false, level: null };
   }
 
   const start = match.index;
@@ -193,7 +193,10 @@ function cut(file, { fallback = "" } = {}) {
   console.log(
     `${file}: cut [${version}] (${curated ? "curated" : "from commit subjects"})`,
   );
-  return match[0].match(/\[Unreleased - (Patch|Minor|Major)\]/)?.[1] ?? null;
+  return {
+    cut: true,
+    level: match[0].match(/\[Unreleased - (Patch|Minor|Major)\]/)?.[1] ?? null,
+  };
 }
 
 const fromTag = lastStableTag();
@@ -210,11 +213,11 @@ const packageChangelogs = readdirSync("packages", { withFileTypes: true })
 const levels = [];
 let rootWasCut = false;
 for (const file of ["CHANGELOG.md", ...packageChangelogs]) {
-  const level = cut(file, {
+  const result = cut(file, {
     fallback: file === "CHANGELOG.md" ? fallbackBody(fromTag) : "",
   });
-  if (file === "CHANGELOG.md" && level !== null) rootWasCut = true;
-  if (level) levels.push({ file, level });
+  if (file === "CHANGELOG.md" && result.cut) rootWasCut = true;
+  if (result.level) levels.push({ file, level: result.level });
 }
 
 if (fromTag && rootWasCut) {

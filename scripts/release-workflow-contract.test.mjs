@@ -191,6 +191,29 @@ describe("publish workflow safety contract", () => {
     assert.match(createRelease, /git checkout --theirs/);
   });
 
+  it("validates and restores an existing tag before a cross-day changelog cut", () => {
+    const createRelease = jobBlock("create-release");
+    const reuse = createRelease.indexOf("Reuse an existing release tag before cutting changelogs");
+    const cut = createRelease.indexOf("Cut changelogs");
+    assert.ok(reuse !== -1, "pre-cut tag reuse step not found");
+    assert.ok(cut !== -1 && reuse < cut, "tag reuse must precede the date-sensitive changelog cut");
+    const reuseBlock = createRelease.slice(reuse, cut);
+    assert.match(reuseBlock, /git cat-file -t/);
+    assert.match(reuseBlock, /Relaycast-Source-Commit/);
+    assert.match(reuseBlock, /Relaycast-Source-Tree/);
+    assert.match(reuseBlock, /Relaycast-Package-Provenance-SHA256/);
+    assert.match(reuseBlock, /git reset --hard "\$\{TAG\}\^\{commit\}"/);
+    assert.match(reuseBlock, /REUSE_EXISTING_RELEASE_TAG=true/);
+    assert.match(
+      createRelease.slice(cut),
+      /existing release tag restored; leaving its changelog tree unchanged/,
+    );
+    assert.match(
+      createRelease.slice(cut),
+      /existing release tag restored; leaving its lockfile tree unchanged/,
+    );
+  });
+
   it("escalates permissions per job instead of workflow-wide", () => {
     const topLevelPermissions = workflow.slice(
       workflow.indexOf("\npermissions:"),

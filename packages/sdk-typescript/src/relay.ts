@@ -267,7 +267,7 @@ function resolveWorkspaceLookupOptions(
 export const MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH = 32;
 
 const HOSTED_GATEWAY_HOSTNAME = 'cast.agentrelay.com';
-const SAFE_SELF_HOST_PROTOCOLS = new Set(['http:', 'https:']);
+const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
 
 function validateWorkspaceBootstrapOptions(options: WorkspaceBootstrapOptions): void {
   // Owner-scoped keys are bounded by the authenticated API key and may remain
@@ -320,10 +320,13 @@ function validateWorkspaceBootstrapOptions(options: WorkspaceBootstrapOptions): 
         },
       );
     }
-    if (!SAFE_SELF_HOST_PROTOCOLS.has(baseUrl.protocol)) {
+    const isLoopbackHttp =
+      baseUrl.protocol === 'http:' &&
+      LOOPBACK_HOSTNAMES.has(baseUrl.hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase());
+    if (baseUrl.protocol !== 'https:' && !isLoopbackHttp) {
       throw new RelayError(
         'transport_error',
-        'Anonymous keyed workspace bootstrap requires an HTTP(S) self-hosted baseUrl',
+        'Anonymous keyed workspace bootstrap requires an HTTPS self-hosted baseUrl (or loopback HTTP for local development)',
         {
           statusCode: 400,
           retryable: false,

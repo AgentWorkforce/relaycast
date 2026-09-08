@@ -34,9 +34,9 @@
           "fromTrajectory": "traj_tklpxq0u1yhz"
         },
         {
-          "question": "Enforce relaycast#379's >=122-bit anonymous idempotency-key entropy floor (32-char structural minimum) independent of the X-Workspace-Bootstrap-Secret proof",
-          "chosen": "Enforce relaycast#379's >=122-bit anonymous idempotency-key entropy floor (32-char structural minimum) independent of the X-Workspace-Bootstrap-Secret proof",
-          "reasoning": "The bootstrap secret proof closes the squatting exploit, but the key itself is still meant to be an unpredictable bearer value per issue #379's original contract -- a low-entropy key used by multiple legitimate secret-holders could still collide, and the public TS/README docs previously showed weak examples (bootstrap:${runId}). Added MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH=32 (guarantees >=122 bits even under worst-case hex encoding), checked structurally before any secret comparison or DB work, with adversarial tests proving weak keys are rejected independently of secret correctness.",
+          "question": "Enforce relaycast#379's 32-character structural minimum for anonymous idempotency keys independently of the X-Workspace-Bootstrap-Secret proof",
+          "chosen": "Enforce relaycast#379's 32-character structural minimum for anonymous idempotency keys independently of the X-Workspace-Bootstrap-Secret proof",
+          "reasoning": "The bootstrap secret proof closes the squatting exploit, while the key's 32-character floor is only a structural admission check. It does not prove entropy: callers remain responsible for generating unpredictable values with a CSPRNG. Added MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH=32, checked before any secret comparison or DB work, with adversarial tests proving weak keys are rejected independently of secret correctness.",
           "fromTrajectory": "traj_tklpxq0u1yhz"
         },
         {

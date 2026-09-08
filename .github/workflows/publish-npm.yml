@@ -539,11 +539,54 @@ jobs:
             --commit "$GITHUB_SHA" \
             --tree "$SOURCE_TREE"
 
+      # A retry can cross a UTC date boundary. Validate an already-created
+      # annotated tag before touching changelogs, then restore its exact
+      # release commit/tree so the retry cannot regenerate a date-sensitive
+      # release tree or compare it against the pre-release checkout.
+      - name: Reuse an existing release tag before cutting changelogs
+        run: |
+          NEW_VERSION="${{ needs.build.outputs.new_version }}"
+          TAG="v${NEW_VERSION}"
+          SOURCE_COMMIT="$(node -e 'const p=require("./release-provenance.json"); process.stdout.write(p.sourceCommit)')"
+          SOURCE_TREE="$(node -e 'const p=require("./release-provenance.json"); process.stdout.write(p.sourceTree)')"
+          DIST_TAG="$(node -e 'const p=require("./release-provenance.json"); process.stdout.write(p.distTag)')"
+          PROVENANCE_DIGEST="$(node scripts/release-provenance.mjs digest --manifest release-provenance.json)"
+          git fetch --tags origin
+          if git show-ref --verify --quiet "refs/tags/${TAG}"; then
+            if [ "$(git cat-file -t "${TAG}")" != "tag" ]; then
+              echo "::error::${TAG} is lightweight; refusing to reuse it"
+              exit 1
+            fi
+            TAG_CONTENT="$(git cat-file tag "${TAG}")"
+            if [ "$(git for-each-ref --format='%(contents:subject)' "refs/tags/${TAG}")" != "Release v${NEW_VERSION}" ]; then
+              echo "::error::${TAG} has unexpected release metadata"
+              exit 1
+            fi
+            for required in \
+              "Relaycast-NPM-Dist-Tag: ${DIST_TAG}" \
+              "Relaycast-Source-Commit: ${SOURCE_COMMIT}" \
+              "Relaycast-Source-Tree: ${SOURCE_TREE}" \
+              "Relaycast-Package-Provenance-SHA256: ${PROVENANCE_DIGEST}"; do
+              if ! grep -Fqx "$required" <<<"$TAG_CONTENT"; then
+                echo "::error::${TAG} metadata does not match: ${required%%:*}"
+                exit 1
+              fi
+            done
+            echo "${TAG} metadata is valid; reusing its exact release commit/tree"
+            git reset --hard "${TAG}^{commit}"
+            echo "REUSE_EXISTING_RELEASE_TAG=true" >> "$GITHUB_ENV"
+          fi
+
       # Move the curated [Unreleased] entries under the version being released
       # and restore a bare [Unreleased], so a published version always has a
       # heading. Prereleases are left pending.
       - name: Cut changelogs
-        run: node scripts/cut-changelog.mjs --version "${{ needs.build.outputs.new_version }}"
+        run: |
+          if [ "${REUSE_EXISTING_RELEASE_TAG:-false}" = "true" ]; then
+            echo "existing release tag restored; leaving its changelog tree unchanged"
+          else
+            node scripts/cut-changelog.mjs --version "${{ needs.build.outputs.new_version }}"
+          fi
 
       # docker/package-lock.json only got a placeholder version-field bump in
       # the build job (the published artifact it needs to resolve against
@@ -552,7 +595,12 @@ jobs:
       # for real before this becomes the tagged, committed state.
       - name: Refresh self-host image lockfile
         working-directory: docker
-        run: npm install --package-lock-only --ignore-scripts
+        run: |
+          if [ "${REUSE_EXISTING_RELEASE_TAG:-false}" = "true" ]; then
+            echo "existing release tag restored; leaving its lockfile tree unchanged"
+          else
+            npm install --package-lock-only --ignore-scripts
+          fi
 
       - name: Re-validate release contract with the refreshed lockfile
         run: node scripts/check-release-contract.mjs --version "${{ needs.build.outputs.new_version }}"

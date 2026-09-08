@@ -42,16 +42,21 @@
     }
   ],
   "retrospective": {
-    "summary": "Rejected non-HTTP(S) anonymous bootstrap base URLs before fetch and added ftp/custom-scheme no-network regression coverage; focused SDK, release, build, lint, and container checks passed.",
+    "summary": "Rejected non-HTTP(S) anonymous bootstrap base URLs before fetch and added ftp/custom-scheme no-network regression coverage. The focused SDK, release, build, lint, and container checks were reported by the original run but are not independently captured in this trajectory.",
     "approach": "Standard approach",
     "confidence": 0.92
   },
-  "commits": [],
-  "filesChanged": [],
+  "commits": ["3c774c876dd7ed4f05f769a3bde3fdd502f130b9"],
+  "filesChanged": [
+    ".agentworkforce/trajectories/completed/2026-09/traj_w7fg00qcbzmf/summary.md",
+    ".agentworkforce/trajectories/completed/2026-09/traj_w7fg00qcbzmf/trajectory.json",
+    "packages/sdk-typescript/src/__tests__/relay.test.ts",
+    "packages/sdk-typescript/src/relay.ts"
+  ],
   "projectId": "AgentWorkforce/relaycast",
   "tags": [],
   "_trace": {
     "startRef": "d854d952b8ce74aeae86539f086038785a39269d",
-    "endRef": "d854d952b8ce74aeae86539f086038785a39269d"
+    "endRef": "3c774c876dd7ed4f05f769a3bde3fdd502f130b9"
   }
 }
