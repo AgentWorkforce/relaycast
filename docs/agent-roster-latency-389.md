@@ -55,7 +55,7 @@ rates after the approved rollout before removing the garden timeout stopgap.
 
 The existing workspace index visits released rows before filtering them out.
 Active/online reads also walk stale and unrelated statuses within that workspace.
-Migration 0051 adds `(workspace_id, status, last_seen) WHERE status <> 'released'`.
+Migration 0052 adds `(workspace_id, status, last_seen) WHERE status <> 'released'`.
 The roster query uses the same literal tombstone predicate so prepared queries
 can qualify for the partial index. No forced index hint is needed: an older
 schema still serves the query, but only a migrated schema provides the saving.
