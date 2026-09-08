@@ -232,6 +232,17 @@ describe('workspace lifecycle', () => {
         body: JSON.stringify({ name: 'unkeyed-still-works' }),
       });
       expect(unkeyed.status).toBe(201);
+      const owner = (await unkeyed.json() as { data: { api_key: string } }).data;
+      const authenticated = await createEngine(unconfiguredRuntime.deps).request('/v1/workspaces', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${owner.api_key}`,
+          'Idempotency-Key': 'authenticated-without-bootstrap-secret-379',
+        },
+        body: JSON.stringify({ name: 'authenticated-still-works' }),
+      });
+      expect(authenticated.status).toBe(201);
       const unavailable = await createEngine(unconfiguredRuntime.deps).request('/v1/workspaces', {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'Idempotency-Key': 'missing-secret-379' },

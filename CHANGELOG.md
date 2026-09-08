@@ -23,6 +23,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 - Anonymous bootstrap `POST /v1/workspaces` creates can use an `Idempotency-Key` to recover the same workspace and API key after retries or response loss; digest conflicts, owner-scope crossovers, and terminalized bindings fail closed.
 - Keyed anonymous bootstrap now rejects explicit invalid authorization and requires a stable deployment secret across restarts; unkeyed creates remain compatible.
 
+### Fixed
+
+- Self-hosted Docker and Compose deployments now pass `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` into the engine without logging it.
+
 ## [8.5.4] - 2026-09-08
 
 ### Fixed

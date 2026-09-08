@@ -7,6 +7,8 @@ services:
     command:
       - --base-url
       - ${RELAYCAST_BASE_URL:?Set RELAYCAST_BASE_URL to the public HTTPS origin, for example https://relay.ratifyprotocol.com}
+    environment:
+      RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: ${RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET-}
     init: true
     restart: unless-stopped
     read_only: true

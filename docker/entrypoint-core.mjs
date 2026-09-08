@@ -12,6 +12,9 @@ Options:
   --db <path>        SQLite database file (default: $RELAYCAST_DB_PATH or ./relaycast.db)
   --port <n>         HTTP port inside the container (default: $PORT or 8787)
   --env <name>       Environment label (default: production)
+
+Environment:
+  RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET  Stable secret for anonymous keyed workspace retries
   -h, --help         Show this help
 `;
 
@@ -266,6 +269,22 @@ function optionalNumber(value) {
 }
 
 /**
+ * Build engine configuration from container environment without logging
+ * secrets. An omitted or empty secret remains unset so the engine fails closed
+ * for keyed anonymous creates while preserving unkeyed and authenticated-owner
+ * creation.
+ */
+export function buildEngineConfig(env, mailbox = {}) {
+  return {
+    environment: env.RELAYCAST_ENV ?? 'production',
+    ...(env.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET
+      ? { workspaceBootstrapSecret: env.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET }
+      : {}),
+    ...(Object.keys(mailbox).length > 0 ? { mailbox } : {}),
+  };
+}
+
+/**
  * The pinned Node adapter derives c.req.url from the local socket and ignores
  * X-Forwarded-Proto. A Cloudflare named tunnel terminates TLS before forwarding
  * HTTP over loopback, so without this marker the public A2A card advertises an
@@ -325,10 +344,10 @@ async function launchPinnedEngine(args) {
     dbPath: options.db,
     port: options.port,
     baseUrl: options.baseUrl,
-    config: {
-      environment: options.environment,
-      ...(Object.keys(mailbox).length > 0 ? { mailbox } : {}),
-    },
+    config: buildEngineConfig({
+      ...process.env,
+      RELAYCAST_ENV: options.environment,
+    }, mailbox),
     ...(eventQueue ? { eventQueue } : {}),
   });
 

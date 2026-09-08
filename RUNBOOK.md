@@ -6,7 +6,7 @@ access and does not operate this deployment.
 
 ## Operating boundary
 
-The image contains `@relaycast/engine` **8.0.0** on Node 22.23.2 and stores all
+The image contains `@relaycast/engine` **8.5.3** on Node 22.23.2 and stores all
 state locally in SQLite plus a files directory. It requires an explicit HTTPS
 public origin and exits before starting the engine if `--base-url` is missing,
 plaintext, single-label, an IP literal, loopback, or in the special-use `.local`
@@ -42,6 +42,8 @@ From a clean checkout of this repository:
 test ! -e .env || { echo '.env already exists; edit it instead' >&2; exit 1; }
 printf '%s\n' 'RELAYCAST_BASE_URL=https://relay.ratifyprotocol.com' > .env
 printf '%s\n' 'RELAYCAST_PORT=8787' >> .env
+printf '%s\n' "RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET=$(openssl rand -hex 32)" >> .env
+chmod 600 .env
 docker compose build --pull
 docker compose up -d
 ```
@@ -49,6 +51,10 @@ docker compose up -d
 The Compose variable and the image entrypoint both enforce the public origin.
 The duplicate check is intentional: the engine's upstream fallback is
 `http://localhost:8787`, which is not a valid federation authority.
+Keep `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` in the mode-600 `.env` file across
+restarts. If it is omitted, anonymous keyed workspace creates fail closed with
+`503 workspace_create_idempotency_unavailable`; unkeyed and authenticated-owner
+creates remain available.
 
 Confirm the installed engine, container state, and local health endpoint:
 
@@ -59,7 +65,7 @@ docker compose ps
 curl --fail --silent --show-error http://127.0.0.1:8787/health
 ```
 
-The version command must print `8.0.0`, and Compose should eventually report
+The version command must print `8.5.3`, and Compose should eventually report
 `healthy`. The health response must contain `"ok":true`; its `version` field is
 the gateway/application version, not reliable evidence of the installed engine
 package version.
@@ -81,7 +87,7 @@ Move it into Ratify's secret manager, then securely remove the bootstrap file.
 Do not repeat this command: workspace names are not unique, so a repeat creates
 another workspace and key.
 
-Agent-card discovery works on the standard path from engine 8.0.0. A
+Agent-card discovery works on the standard path from engine 8.5.3. A
 single-tenant deployment — one workspace, which is what this runbook sets up —
 answers the bare well-known URL directly, so a counterparty needs no
 Relaycast-specific query parameter:
@@ -108,9 +114,9 @@ crossing a tenant boundary.
 Earlier engines interpreted the leftmost hostname label as the workspace name,
 so `relay.ratifyprotocol.com` looked for a workspace called `relay` and the bare
 path returned `workspace_not_found`. If you see that on the bare path, check the
-image is on 8.0.0 or later before looking anywhere else.
+image is on 8.5.3 or later before looking anywhere else.
 
-In engine 8.0.0, `POST /v1/workspaces` is intentionally unauthenticated for
+In engine 8.5.3, `POST /v1/workspaces` is intentionally unauthenticated for
 initial bootstrap. The tunnel rule below blocks that exact path before the
 service becomes public; omitting the rule would allow arbitrary public workspace
 creation and unbounded local state growth.

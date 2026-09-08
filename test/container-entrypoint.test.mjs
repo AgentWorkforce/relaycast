@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import {
+  buildEngineConfig,
   installPublicAuthorityMarker,
   isHelpRequest,
   validatedEngineArgs,
@@ -166,6 +167,23 @@ test('recognizes help only when it is an option', () => {
   // Negative control: -h is a legitimate value position, not a help option.
   assert.equal(isHelpRequest(['--db', '-h']), false);
   assert.equal(isHelpRequest(['--env', '-h', '--help']), true);
+});
+
+test('forwards the bootstrap secret without exposing it in container output', () => {
+  const secret = 'stable-container-secret-379';
+  const config = buildEngineConfig({
+    RELAYCAST_ENV: 'production',
+    RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: secret,
+  });
+  assert.deepEqual(config, {
+    environment: 'production',
+    workspaceBootstrapSecret: secret,
+  });
+});
+
+test('omits an unset bootstrap secret so the engine can fail closed', () => {
+  const config = buildEngineConfig({ RELAYCAST_ENV: 'production' });
+  assert.deepEqual(config, { environment: 'production' });
 });
 
 test('normalizes tunnel requests to the validated public HTTPS authority', () => {

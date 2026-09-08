@@ -14,6 +14,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Keyless workspace bootstrap creates now support deployment-scoped crash idempotency with deterministic credential recovery, atomic binding, digest conflicts, and deletion/expiry terminalization.
 - Keyed bootstrap fails closed on explicit invalid authorization and no longer falls back to a process-random secret; configure a stable deployment secret for replay across restarts.
 
+### Fixed
+
+- Self-hosted container deployments now forward the configured workspace bootstrap secret into the engine without logging it.
+
 ## [8.5.4] - 2026-09-08
 
 ### Migration
