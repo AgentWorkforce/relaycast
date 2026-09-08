@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Maintenance migrations reuse obsolete index space before creating replacements, reducing upgrade storage pressure without deleting history or changing retention.
 
 ## [8.5.3] - 2026-09-08
 

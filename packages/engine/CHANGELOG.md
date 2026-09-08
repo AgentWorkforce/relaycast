@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Migration
+
+- Adds migration `0050_compact_maintenance_indexes.sql` to reduce upgrade storage pressure without deleting history. See the [rollout guide](../../docs/compact-maintenance-migrations.md) for migration and rollback requirements.
 
 ## [8.5.3] - 2026-09-08
 
