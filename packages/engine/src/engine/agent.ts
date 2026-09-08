@@ -317,7 +317,9 @@ export async function listAgents(db: Db, workspaceId: string, status?: string) {
   // crosses a TTL boundary. Presence is derived; roster reads never sweep.
   const now = Date.now();
   const requestedStatus = status === 'online' ? 'active' : status;
-  const conditions = [eq(agents.workspaceId, workspaceId), ne(agents.status, RELEASED_AGENT_STATUS)];
+  // Keep the tombstone predicate literal so SQLite can prove this query
+  // qualifies for the partial roster index, including prepared D1 statements.
+  const conditions = [eq(agents.workspaceId, workspaceId), sql`${agents.status} <> 'released'`];
   // Compare numeric seconds directly: Drizzle's Date encoder truncates to
   // whole seconds, which would keep a boundary row active for up to 999ms
   // after effectiveAgentStatus has marked it offline.

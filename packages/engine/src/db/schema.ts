@@ -139,6 +139,13 @@ export const agents = sqliteTable(
     uniqueIndex('agents_workspace_name_unique').on(table.workspaceId, table.name),
     uniqueIndex('agents_workspace_id_unique').on(table.workspaceId, table.id),
     index('idx_agents_workspace').on(table.workspaceId),
+    index('idx_agents_roster')
+      .on(table.workspaceId, table.status, table.lastSeen)
+      .where(sql`${table.status} <> 'released'`),
+    index('idx_agents_location_node_fk').on(table.locationNodeId)
+      .where(sql`${table.locationNodeId} IS NOT NULL`),
+    index('idx_agents_origin_node_fk').on(table.originNodeId)
+      .where(sql`${table.originNodeId} IS NOT NULL`),
     index('idx_agents_token').on(table.tokenHash),
     index('idx_agents_previous_token').on(table.previousTokenHash),
     index('idx_agents_active_last_seen')
@@ -299,6 +306,7 @@ export const nodeProviders = sqliteTable(
   (table) => [
     uniqueIndex('node_providers_node_name_unique').on(table.workspaceId, table.nodeId, table.name),
     index('idx_node_providers_node').on(table.workspaceId, table.nodeId),
+    index('idx_node_providers_node_fk').on(table.nodeId),
   ],
 );
 
@@ -371,6 +379,7 @@ export const agentNodeBindings = sqliteTable(
     index('idx_agent_node_bindings_workspace').on(table.workspaceId, table.status),
     index('idx_agent_node_bindings_agent').on(table.workspaceId, table.agentId, table.status),
     index('idx_agent_node_bindings_node').on(table.workspaceId, table.nodeId, table.status),
+    index('idx_agent_node_bindings_node_fk').on(table.nodeId),
   ],
 );
 
@@ -1187,6 +1196,10 @@ export const deliveries = sqliteTable(
   },
   (table) => [
     uniqueIndex('deliveries_message_agent_unique').on(table.messageId, table.agentId),
+    index('idx_deliveries_location_node_fk').on(table.locationNodeId)
+      .where(sql`${table.locationNodeId} IS NOT NULL`),
+    index('idx_deliveries_route_node_fk').on(table.routeNodeId)
+      .where(sql`${table.routeNodeId} IS NOT NULL`),
     uniqueIndex('idx_deliveries_id_lookup').on(table.id),
     uniqueIndex('deliveries_agent_seq_unique').on(table.workspaceId, table.agentId, table.seq),
     index('idx_deliveries_agent').on(table.agentId, table.createdAt),

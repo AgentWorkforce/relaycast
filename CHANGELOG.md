@@ -26,6 +26,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Fixed
 
 - Self-hosted Docker and Compose deployments now pass `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` into the engine without logging it.
+- Agent roster reads skip released history and seek live status ranges through a workspace-scoped index.
+- Prevent node removal from scanning unrelated retained deliveries and agent records across workspaces.
 
 ## [8.5.4] - 2026-09-08
 
