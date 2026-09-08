@@ -10,6 +10,7 @@
   "scripts": {
     "build": "turbo build",
     "test": "turbo test",
+    "test:release": "node --test scripts/release-contract.test.mjs scripts/release-workflow-contract.test.mjs",
     "test:container": "node --test test/container-entrypoint.test.mjs",
     "lint": "turbo lint",
     "dev": "turbo dev --parallel --filter=@relaycast/observer-dashboard",

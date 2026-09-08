@@ -4,18 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       package:
-        description: "Package to publish"
+        description: "Lockstep package set (single-package publish is disabled)"
         required: true
         type: choice
         options:
           - all
-          - a2a
-          - types
-          - sdk-typescript
-          - cli
-          - mcp
-          - react
-          - openclaw
         default: "all"
       version:
         description: "Version bump type"
@@ -92,6 +85,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Test release workflow contracts
+        run: npm run test:release
+
       - name: Version all packages
         id: bump
         env:
@@ -116,7 +112,7 @@ jobs:
             echo "Bumped version: $VERSION_TYPE -> $NEW_VERSION"
           fi
 
-          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
           echo "New version: $NEW_VERSION"
 
           # Sync all package versions and internal dependencies
@@ -166,6 +162,11 @@ jobs:
         # `edgesOut` failure after every workspace version changes at once.
         run: npm install --package-lock-only --ignore-scripts
 
+      - name: Validate release version, changelog, and generated-source parity
+        env:
+          NEW_VERSION: ${{ steps.bump.outputs.new_version }}
+        run: node scripts/check-release-contract.mjs --version "$NEW_VERSION"
+
       - name: Clean reinstall after version bump
         run: npm ci
 
@@ -185,6 +186,8 @@ jobs:
             package.json
             package-lock.json
             packages/*/package.json
+            packages/sdk-typescript/src/version.ts
+            packages/cli/src/version.ts
             packages/*/dist/
           retention-days: 1
 
@@ -193,7 +196,6 @@ jobs:
     name: Publish ${{ matrix.package }}
     needs: build
     runs-on: ubuntu-latest
-    if: github.event.inputs.package == 'all'
     strategy:
       fail-fast: false
       max-parallel: 5
@@ -240,55 +242,16 @@ jobs:
         working-directory: packages/${{ matrix.package }}
         run: npm publish --access public --provenance --tag ${{ github.event.inputs.tag }} --ignore-scripts
 
-  # Publish a single package (when not "all")
-  publish-single:
-    name: Publish Single Package
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.event.inputs.package != 'all'
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22.22.3"
-          registry-url: "https://registry.npmjs.org"
-
-      - name: Setup npm for trusted publishing
-        run: npm install -g npm@11.19.1
-
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: build-output
-          path: .
-
-      - name: Dry run check
-        if: github.event.inputs.dry_run == 'true'
-        working-directory: packages/${{ github.event.inputs.package }}
-        run: |
-          PACKAGE_NAME=$(node -p "require('./package.json').name")
-          echo "Dry run - would publish ${PACKAGE_NAME}@${{ needs.build.outputs.new_version }}"
-          npm publish --dry-run --access public --tag ${{ github.event.inputs.tag }} --ignore-scripts
-
-      - name: Publish to NPM
-        if: github.event.inputs.dry_run != 'true'
-        working-directory: packages/${{ github.event.inputs.package }}
-        run: npm publish --access public --provenance --tag ${{ github.event.inputs.tag }} --ignore-scripts
-
   # Create git tag and release
   create-release:
     name: Create Release
-    needs: [build, publish-packages, publish-single]
+    needs: [build, publish-packages]
     runs-on: ubuntu-latest
     if: |
       always() &&
       github.event.inputs.dry_run != 'true' &&
       needs.build.result == 'success' &&
-      (needs.publish-packages.result == 'success' || needs.publish-single.result == 'success')
+      needs.publish-packages.result == 'success'
 
     steps:
       - name: Checkout code
@@ -322,6 +285,7 @@ jobs:
           NEW_VERSION="${{ needs.build.outputs.new_version }}"
 
           git add package.json package-lock.json packages/*/package.json
+          git add packages/sdk-typescript/src/version.ts packages/cli/src/version.ts
           git add CHANGELOG.md packages/*/CHANGELOG.md
           if ! git diff --staged --quiet; then
             git commit -m "chore(release): v${NEW_VERSION}"
@@ -369,7 +333,7 @@ jobs:
           git push origin "v${NEW_VERSION}"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.build.outputs.new_version }}
           name: v${{ needs.build.outputs.new_version }}
@@ -405,24 +369,25 @@ jobs:
   # Summary
   summary:
     name: Summary
-    needs: [build, publish-packages, publish-single, create-release]
+    needs: [build, publish-packages, create-release]
     runs-on: ubuntu-latest
     if: always()
 
     steps:
       - name: Summary
         run: |
-          echo "## Publish Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Version**: \`${{ needs.build.outputs.new_version }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Package**: \`${{ github.event.inputs.package }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**NPM Tag**: \`${{ github.event.inputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Dry Run**: \`${{ github.event.inputs.dry_run }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Results" >> $GITHUB_STEP_SUMMARY
-          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Build & Version | ${{ needs.build.result == 'success' && '✅' || '❌' }} ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Publish NPM Packages | ${{ needs.publish-packages.result == 'success' && '✅' || (needs.publish-packages.result == 'skipped' && '⏭️' || '❌') }} ${{ needs.publish-packages.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Publish Single | ${{ needs.publish-single.result == 'success' && '✅' || (needs.publish-single.result == 'skipped' && '⏭️' || '❌') }} ${{ needs.publish-single.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Create Release | ${{ needs.create-release.result == 'success' && '✅' || (needs.create-release.result == 'skipped' && '⏭️' || '❌') }} ${{ needs.create-release.result }} |" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## Publish Summary"
+            echo ""
+            echo "**Version**: \`${{ needs.build.outputs.new_version }}\`"
+            echo "**Package**: \`${{ github.event.inputs.package }}\`"
+            echo "**NPM Tag**: \`${{ github.event.inputs.tag }}\`"
+            echo "**Dry Run**: \`${{ github.event.inputs.dry_run }}\`"
+            echo ""
+            echo "### Results"
+            echo "| Stage | Status |"
+            echo "|-------|--------|"
+            echo "| Build & Version | ${{ needs.build.result == 'success' && '✅' || '❌' }} ${{ needs.build.result }} |"
+            echo "| Publish NPM Packages | ${{ needs.publish-packages.result == 'success' && '✅' || (needs.publish-packages.result == 'skipped' && '⏭️' || '❌') }} ${{ needs.publish-packages.result }} |"
+            echo "| Create Release | ${{ needs.create-release.result == 'success' && '✅' || (needs.create-release.result == 'skipped' && '⏭️' || '❌') }} ${{ needs.create-release.result }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

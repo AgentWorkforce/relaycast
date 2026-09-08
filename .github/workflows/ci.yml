@@ -22,11 +22,12 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup
         with:
-          build: 'true'
+          build: "true"
+      - run: npm run test:release
       - run: npx turbo lint
       - run: npx turbo test
         env:
-          DO_NOT_TRACK: '1'
+          DO_NOT_TRACK: "1"
       - run: npm run test:container
 
   container:

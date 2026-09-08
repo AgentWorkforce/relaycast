@@ -35,6 +35,43 @@
             "reasoning": "The release failed in npm/arborist while resolving all workspaces from a deleted lockfile. On the exact Node 22 toolchain and 8.4.0 manifest transformation, npm install --package-lock-only --ignore-scripts followed by npm ci completed cleanly and retained the reviewed dependency graph."
           },
           "significance": "high"
+        },
+        {
+          "ts": 1788876246052,
+          "type": "decision",
+          "content": "Extended the existing release-workflow trajectory for the 8.6.0 hardening follow-up: Extended the existing release-workflow trajectory for the 8.6.0 hardening follow-up",
+          "raw": {
+            "question": "Extended the existing release-workflow trajectory for the 8.6.0 hardening follow-up",
+            "chosen": "Extended the existing release-workflow trajectory for the 8.6.0 hardening follow-up",
+            "alternatives": [],
+            "reasoning": "Trail reports an already-active release workflow trajectory; preserving it avoids abandoning or overwriting prior release history while recording this directly related repair."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1788877748668,
+          "type": "reflection",
+          "content": "Release hardening now fails closed to lockstep publication, verifies all manifest/lockfile/source constants plus lockstep changelog SemVer before publish, and carries generated version sources into the artifact and release commit. Focused workflow tests, full JavaScript gates, Rust build/test/clippy, actionlint, and an 8.6.0-beta.0 workflow-bump simulation are green. npm publication remains inherently non-transactional across eight packages.",
+          "raw": {
+            "focalPoints": [
+              "release-contract",
+              "lockstep-publish",
+              "changelog",
+              "validation",
+              "residual-risk"
+            ],
+            "adjustments": "Removed the unsafe single-package route and added deterministic pre-publish contract checks plus stable comparison-link updates.",
+            "confidence": 0.94
+          },
+          "significance": "high",
+          "tags": [
+            "focal:release-contract",
+            "focal:lockstep-publish",
+            "focal:changelog",
+            "focal:validation",
+            "focal:residual-risk",
+            "confidence:0.94"
+          ]
         }
       ]
     }
