@@ -244,6 +244,18 @@
             "reasoning": "The uncached full engine suite exposed item undefined because seed() returns before background delivery effects are guaranteed durable; neighboring delivery tests already use stack.settle() as the deterministic contract barrier."
           },
           "significance": "high"
+        },
+        {
+          "ts": 1788892332915,
+          "type": "decision",
+          "content": "Use run-unique Docker image tags and Docker-assigned loopback ports in real-image integration: Use run-unique Docker image tags and Docker-assigned loopback ports in real-image integration",
+          "raw": {
+            "question": "Use run-unique Docker image tags and Docker-assigned loopback ports in real-image integration",
+            "chosen": "Use run-unique Docker image tags and Docker-assigned loopback ports in real-image integration",
+            "alternatives": [],
+            "reasoning": "Parallel proof reproduced both fixed-port contention and shared-tag deletion/build races. Run-unique resources preserve isolation; restarted containers re-resolve their ephemeral host port."
+          },
+          "significance": "high"
         }
       ]
     }
