@@ -38,6 +38,7 @@ export const AgentSkillInputSchema = z.object({
 export type AgentSkillInput = z.infer<typeof AgentSkillInputSchema>;
 
 export const CreateAgentRequestSchema = z.object({
+  auto_join_general: z.boolean().optional(),
   name: z.string(),
   type: AgentTypeSchema.optional(),
   persona: z.string().optional(),

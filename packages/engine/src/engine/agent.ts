@@ -166,6 +166,7 @@ export async function registerAgent(
     persona?: string;
     metadata?: Record<string, unknown>;
     capabilities?: Record<string, unknown>;
+    autoJoinGeneral?: boolean;
     recoveryProofHash?: string;
     workUnitId?: string;
   },
@@ -246,7 +247,7 @@ export async function registerAgent(
         })
         .returning()];
 
-      if (generalChannel) {
+      if (generalChannel && data.autoJoinGeneral !== false) {
         writes.push(writeDb.insert(channelMembers).values({
           channelId: generalChannel.id,
           agentId,
@@ -296,6 +297,10 @@ export async function registerAgent(
       throw codedError(`Agent "${data.name}" already exists in this workspace`, 'agent_already_exists', 409);
     }
     throw insertErr;
+  }
+
+  if (generalChannel && data.autoJoinGeneral !== false) {
+    await invalidateChannelCache(workspaceId, 'general');
   }
 
   return {

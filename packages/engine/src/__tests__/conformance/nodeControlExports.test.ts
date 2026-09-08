@@ -1,8 +1,9 @@
+import { recoverAgentViaNode, registerAgentViaNode } from '../../engine/node.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { handleProviderDisconnect, markNodeOffline } from '../../node-control.js';
-import { makeNodeStack, createWorkspace, FakeSocket, type TestStack } from './harness.js';
-import { nodeProviders, nodes } from '../../db/schema.js';
+import { makeNodeStack, createWorkspace, registerAgent, FakeSocket, type TestStack } from './harness.js';
+import { actionInvocations, channelMembers, nodeProviders, nodes } from '../../db/schema.js';
 
 // The provider-disconnect lifecycle is exported from @relaycast/engine/node-control
 // so an out-of-process socket owner — the relaycast-cloud NodeDO — drives it on
@@ -71,6 +72,66 @@ describe('node-control provider-disconnect exports', () => {
       handlers_live: true,
     }));
   }
+
+  it('node registration opts out of general and invalidates the cache for default joins', async () => {
+    const ws = await createWorkspace(stack.app, 'node-registration-isolation');
+    await enrollNode(ws, 'node-isolation', 'isolation');
+    await attachProvider(ws.workspaceId, 'node-isolation', 'isolation', 'broker', 'spawn');
+    const readGeneral = async () => {
+      const response = await stack.app.request('/v1/channels/general', {
+        headers: { authorization: `Bearer ${ws.workspaceKey}` },
+      });
+      expect(response.status).toBe(200);
+      return (await response.json()).data;
+    };
+    await readGeneral();
+    const isolated = await registerAgentViaNode(db(), ws.workspaceId, 'node-isolation', 'broker', {
+      v: 1, type: 'agent.register', name: 'isolated-node-agent', auto_join_general: false,
+    });
+    expect(await db().select().from(channelMembers).where(eq(channelMembers.agentId, isolated.agent_id))).toEqual([]);
+    await recoverAgentViaNode(db(), ws.workspaceId, 'node-isolation', 'broker', {
+      v: 1, type: 'agent.recover', name: isolated.name, expected_agent_id: isolated.agent_id,
+    });
+    expect(await db().select().from(channelMembers).where(eq(channelMembers.agentId, isolated.agent_id))).toEqual([]);
+    const ordinary = await registerAgentViaNode(db(), ws.workspaceId, 'node-isolation', 'broker', {
+      v: 1, type: 'agent.register', name: 'ordinary-node-agent',
+    });
+    expect((await readGeneral()).members.map((member: { agent_id: string }) => member.agent_id))
+      .toContain(ordinary.agent_id);
+  });
+
+  it.each([true, false])('inventory does not substitute for explicit readiness: verify_ready=%s', async (verified) => {
+    const ws = await createWorkspace(stack.app, `inventory-readiness-${verified}`);
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    await enrollNode(ws, 'node-ready', 'ready');
+    const provider = await attachProvider(ws.workspaceId, 'node-ready', 'ready', 'broker', 'spawn:claude');
+    const response = await stack.app.request('/v1/actions/spawn/invoke', {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { name: 'worker', cli: 'claude', verify_ready: verified } }),
+    });
+    expect(response.status).toBe(201);
+    const invocationId = (await response.json()).data.invocation_id;
+    const agent = await registerAgentViaNode(db(), ws.workspaceId, 'node-ready', 'broker', {
+      v: 1, type: 'agent.register', name: 'worker', invocation_id: invocationId, auto_join_general: false,
+    });
+    await provider.handle.handleMessage(JSON.stringify({
+      v: 1, id: 'inventory', type: 'inventory.sync',
+      agents: [{ agent_id: agent.agent_id, name: agent.name, invocation_id: invocationId, session_ref: 'not-readiness' }],
+    }));
+    expect(provider.sock.ofType('reply').find((frame) => frame.id === 'inventory')).toMatchObject({ ok: true });
+    const [invocation] = await db().select().from(actionInvocations).where(eq(actionInvocations.id, invocationId));
+    expect(invocation.status).toBe(verified ? 'dispatched' : 'completed');
+    if (verified) {
+      await provider.handle.handleMessage(JSON.stringify({ v: 1, id: 'empty-during-cleanup', type: 'inventory.sync', agents: [] }));
+      const [pending] = await db().select().from(actionInvocations).where(eq(actionInvocations.id, invocationId));
+      expect(pending.status).toBe('dispatched');
+      await provider.handle.handleMessage(JSON.stringify({ v: 1, type: 'action.result', invocation_id: invocationId,
+        output: { spawned: true, ready: true, name: agent.name } }));
+      const [finished] = await db().select().from(actionInvocations).where(eq(actionInvocations.id, invocationId));
+      expect(finished.status).toBe('completed');
+      expect(finished.output).toMatchObject({ spawned: true, ready: true });
+    }
+  });
 
   function nodeActiveAgents(workspaceId: string, nodeId: string) {
     return db()
