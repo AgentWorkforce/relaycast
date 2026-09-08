@@ -232,6 +232,18 @@
             "reasoning": "Exact-head Veto found the only remaining warning: mutable action major tags in the new workflow. Immutable pins remove that supply-chain drift surface."
           },
           "significance": "high"
+        },
+        {
+          "ts": 1788891697468,
+          "type": "decision",
+          "content": "Await background delivery settlement before TTL acknowledgement regression reads the mailbox: Await background delivery settlement before TTL acknowledgement regression reads the mailbox",
+          "raw": {
+            "question": "Await background delivery settlement before TTL acknowledgement regression reads the mailbox",
+            "chosen": "Await background delivery settlement before TTL acknowledgement regression reads the mailbox",
+            "alternatives": [],
+            "reasoning": "The uncached full engine suite exposed item undefined because seed() returns before background delivery effects are guaranteed durable; neighboring delivery tests already use stack.settle() as the deterministic contract barrier."
+          },
+          "significance": "high"
         }
       ]
     }
