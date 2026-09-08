@@ -1547,8 +1547,8 @@ paths:
             this key is part of what authorizes recovering the binding
             alongside `X-Workspace-Bootstrap-Secret`. Callers must generate it
             with a CSPRNG (a v4 UUID is suitable). The server enforces only a
-            32-character structural minimum: a shorter value returns `400
-            workspace_create_idempotency_key_too_weak`. This
+            32-character structural minimum: only a shorter value returns
+            `400 workspace_create_idempotency_key_too_weak`. This
             requirement does not apply to an owner-scoped key.
         - name: X-Workspace-Bootstrap-Secret
           in: header
@@ -1597,7 +1597,8 @@ paths:
           description: >-
             Invalid request, or `workspace_create_idempotency_key_too_weak` —
             an anonymous `Idempotency-Key` was shorter than the required
-            entropy floor (see the `Idempotency-Key` parameter description).
+            32-character structural minimum (see the `Idempotency-Key`
+            parameter description).
           content:
             application/json:
               schema:

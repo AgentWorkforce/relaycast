@@ -211,18 +211,18 @@ export interface WorkspaceBootstrapOptions extends WorkspaceIdentityOptions {
    *
    * Without `apiKey` (anonymous bootstrap): this key, together with
    * `bootstrapSecret`, is what authorizes recovering the binding, so it
-   * MUST itself be unpredictable — at least 122 bits of entropy (the
-   * randomness in a v4 UUID), generated with a CSPRNG. Never derive it from
-   * a job id, timestamp, or counter. The server enforces a minimum length
-   * but cannot verify true randomness. `crypto.randomUUID()` is a good
-   * default.
+   * MUST be generated with a CSPRNG. Never derive it from a job id, timestamp,
+   * or counter. The server enforces only a 32-character structural minimum
+   * and cannot verify true randomness. `crypto.randomUUID()` is a good default.
    */
   idempotencyKey?: string;
   /**
    * Deployment bootstrap secret, required alongside `idempotencyKey` for an
    * anonymous (no `apiKey`) create. Proves the caller is authorized to
    * recover an anonymous bootstrap binding — the idempotency key alone is
-   * not secret. Ignored when `apiKey` is set.
+   * not secret. Anonymous keyed callers must set `baseUrl` to their explicit
+   * self-hosted origin; this SDK refuses the hosted gateway to avoid sending a
+   * self-host deployment secret there. Ignored when `apiKey` is set.
    */
   bootstrapSecret?: string;
 }
@@ -266,6 +266,8 @@ function resolveWorkspaceLookupOptions(
 /** Minimum structural length for an anonymous bootstrap replay key. */
 export const MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH = 32;
 
+const HOSTED_GATEWAY_HOSTNAME = 'cast.agentrelay.com';
+
 function validateWorkspaceBootstrapOptions(options: WorkspaceBootstrapOptions): void {
   // Owner-scoped keys are bounded by the authenticated API key and may remain
   // short. Anonymous keys are part of the recovery proof and must satisfy the
@@ -284,6 +286,50 @@ function validateWorkspaceBootstrapOptions(options: WorkspaceBootstrapOptions): 
         rawCode: 'workspace_create_idempotency_key_too_weak',
       },
     );
+  }
+
+  if (
+    !options.apiKey &&
+    options.idempotencyKey !== undefined &&
+    options.bootstrapSecret !== undefined
+  ) {
+    if (!options.baseUrl) {
+      throw new RelayError(
+        'transport_error',
+        'Anonymous keyed workspace bootstrap with a bootstrapSecret requires an explicit self-hosted baseUrl',
+        {
+          statusCode: 400,
+          retryable: false,
+          rawCode: 'workspace_create_bootstrap_base_url_required',
+        },
+      );
+    }
+
+    let hostname: string;
+    try {
+      hostname = new URL(options.baseUrl).hostname.replace(/\.$/, '').toLowerCase();
+    } catch {
+      throw new RelayError(
+        'transport_error',
+        'Anonymous keyed workspace bootstrap requires a valid self-hosted baseUrl',
+        {
+          statusCode: 400,
+          retryable: false,
+          rawCode: 'workspace_create_bootstrap_base_url_required',
+        },
+      );
+    }
+    if (hostname === HOSTED_GATEWAY_HOSTNAME) {
+      throw new RelayError(
+        'transport_error',
+        'Anonymous keyed workspace bootstrap cannot send a bootstrapSecret to the hosted gateway',
+        {
+          statusCode: 400,
+          retryable: false,
+          rawCode: 'workspace_create_bootstrap_base_url_required',
+        },
+      );
+    }
   }
 }
 

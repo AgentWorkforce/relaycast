@@ -115,10 +115,10 @@ Fresh bootstrap callers can use the same contract without an API key, but must
 also present the deployment's bootstrap secret as proof — the idempotency key
 alone is a caller-chosen value, not a secret by itself, so it cannot authorize
 recovering another caller's workspace credentials. For the same reason, the
-key must be unpredictable: generate it with a CSPRNG (at least 122 bits of
-entropy — the randomness in a v4 UUID — never a job id, timestamp, or
-counter), and persist it alongside the work so a genuine retry reuses the
-exact same value:
+key must be generated with a CSPRNG (for example, a v4 UUID or 16 random bytes
+hex-encoded — never a job id, timestamp, or counter), and persist it alongside
+the work so a genuine retry reuses the exact same value. The server only
+enforces a 32-character structural minimum; it cannot verify randomness:
 
 ```ts
 const idempotencyKey = crypto.randomUUID(); // persist with the work; reuse it on retry

@@ -349,7 +349,7 @@ describe('workspace write durability', () => {
     expect(replay.api_key).toBe(created.api_key);
   });
 
-  it('rejects an anonymous bootstrap Idempotency-Key below the entropy floor, even with the correct secret', async () => {
+  it('rejects an anonymous bootstrap Idempotency-Key below the structural floor, even with the correct secret', async () => {
     attachD1Batch({});
     const bootstrapSecret = 'test-bootstrap-secret';
     const requestDigest = await workspaceCreateRequestDigest({ name: 'weak-key-target' });
@@ -357,7 +357,7 @@ describe('workspace write durability', () => {
     // A guessable/short key is rejected on shape alone -- before any DB work
     // or secret comparison -- regardless of whether the caller happens to
     // also present the correct deployment secret. relaycast#379: the key
-    // itself must be unpredictable, not just paired with a secret header.
+    // itself must satisfy the structural floor, not just be paired with a secret header.
     for (const weakKey of [
       'a',
       'job-123',
@@ -366,7 +366,11 @@ describe('workspace write durability', () => {
     ]) {
       await expect(createWorkspace(db, 'weak-key-target', {
         bootstrapSecret, bootstrapSecretProof: bootstrapSecret, idempotencyKey: weakKey, requestDigest,
-      })).rejects.toMatchObject({ code: 'workspace_create_idempotency_key_too_weak', status: 400 });
+      })).rejects.toMatchObject({
+        code: 'workspace_create_idempotency_key_too_weak',
+        status: 400,
+        message: expect.stringContaining('at least 24 random bytes base64url-encoded'),
+      });
     }
     expect(await db.select().from(workspaces)).toHaveLength(0);
 
@@ -383,7 +387,7 @@ describe('workspace write durability', () => {
 
   it('does not weaken an attacker replay attempt just because the guessed key happens to be long enough', async () => {
     // An attacker who can construct a long-enough (but still guessed) key
-    // still cannot pass the bootstrap-secret proof: the entropy floor and
+    // still cannot pass the bootstrap-secret proof: the structural floor and
     // the secret proof are independent, both-required checks, not
     // alternatives to each other.
     attachD1Batch({});

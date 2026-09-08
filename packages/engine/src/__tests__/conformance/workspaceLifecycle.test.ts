@@ -233,7 +233,7 @@ describe('workspace lifecycle', () => {
     expect(await stack.runtime.handle.db.select().from(workspaces)).toHaveLength(0);
   });
 
-  it('rejects an anonymous Idempotency-Key below the relaycast#379 entropy floor, even with a correct secret proof', async () => {
+  it('rejects an anonymous Idempotency-Key below the relaycast#379 structural floor, even with a correct secret proof', async () => {
     for (const weakKey of ['a', 'job-123', 'bootstrap:run-1']) {
       const response = await stack.app.request('/v1/workspaces', {
         method: 'POST',
