@@ -11,6 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Reconnect replay preserves each caller's result and skips deliveries acknowledged, expired, or handed to another provider before sending.
 - Roster reads skip released tombstones; active/online filters seek by workspace, status, and last-seen time.
 - Add migration `0051_node_foreign_key_indexes.sql` so node deletion uses child-key lookups for delivery, agent, binding, and provider foreign keys; preserve existing `SET NULL` and cascade behavior.
 

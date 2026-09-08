@@ -20,6 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
+- Serialize overlapping reconnect replays and honor acknowledgements and provider handoffs before each send.
 - Agent roster reads skip released history and seek live status ranges through a workspace-scoped index.
 - Prevent node removal from scanning unrelated retained deliveries and agent records across workspaces.
 
