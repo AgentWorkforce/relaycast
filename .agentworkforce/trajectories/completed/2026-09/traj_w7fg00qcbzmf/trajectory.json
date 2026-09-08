@@ -1,0 +1,57 @@
+{
+  "id": "traj_w7fg00qcbzmf",
+  "version": 1,
+  "task": {
+    "title": "Fail closed SDK bootstrap secret routing for non-HTTP base URLs",
+    "source": {
+      "system": "plain",
+      "id": "PR #393 repair"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-09-08T20:44:04.634Z",
+  "completedAt": "2026-09-08T20:45:03.426Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-09-08T20:45:03.140Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_uagj3btlda69",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-09-08T20:45:03.140Z",
+      "endedAt": "2026-09-08T20:45:03.426Z",
+      "events": [
+        {
+          "ts": 1788900303141,
+          "type": "decision",
+          "content": "Restricted anonymous bootstrap secret routing to HTTP(S) URLs: Restricted anonymous bootstrap secret routing to HTTP(S) URLs",
+          "raw": {
+            "question": "Restricted anonymous bootstrap secret routing to HTTP(S) URLs",
+            "chosen": "Restricted anonymous bootstrap secret routing to HTTP(S) URLs",
+            "alternatives": [],
+            "reasoning": "A parseable non-hosted URL such as ftp:// reached fetch with the deployment secret; only HTTP(S) may be an explicit self-host API origin."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Rejected non-HTTP(S) anonymous bootstrap base URLs before fetch and added ftp/custom-scheme no-network regression coverage; focused SDK, release, build, lint, and container checks passed.",
+    "approach": "Standard approach",
+    "confidence": 0.92
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "d854d952b8ce74aeae86539f086038785a39269d",
+    "endRef": "d854d952b8ce74aeae86539f086038785a39269d"
+  }
+}

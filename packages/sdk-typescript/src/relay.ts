@@ -267,6 +267,7 @@ function resolveWorkspaceLookupOptions(
 export const MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH = 32;
 
 const HOSTED_GATEWAY_HOSTNAME = 'cast.agentrelay.com';
+const SAFE_SELF_HOST_PROTOCOLS = new Set(['http:', 'https:']);
 
 function validateWorkspaceBootstrapOptions(options: WorkspaceBootstrapOptions): void {
   // Owner-scoped keys are bounded by the authenticated API key and may remain
@@ -305,9 +306,9 @@ function validateWorkspaceBootstrapOptions(options: WorkspaceBootstrapOptions): 
       );
     }
 
-    let hostname: string;
+    let baseUrl: URL;
     try {
-      hostname = new URL(options.baseUrl).hostname.replace(/\.$/, '').toLowerCase();
+      baseUrl = new URL(options.baseUrl);
     } catch {
       throw new RelayError(
         'transport_error',
@@ -319,6 +320,18 @@ function validateWorkspaceBootstrapOptions(options: WorkspaceBootstrapOptions): 
         },
       );
     }
+    if (!SAFE_SELF_HOST_PROTOCOLS.has(baseUrl.protocol)) {
+      throw new RelayError(
+        'transport_error',
+        'Anonymous keyed workspace bootstrap requires an HTTP(S) self-hosted baseUrl',
+        {
+          statusCode: 400,
+          retryable: false,
+          rawCode: 'workspace_create_bootstrap_base_url_required',
+        },
+      );
+    }
+    const hostname = baseUrl.hostname.replace(/\.$/, '').toLowerCase();
     if (hostname === HOSTED_GATEWAY_HOSTNAME) {
       throw new RelayError(
         'transport_error',
