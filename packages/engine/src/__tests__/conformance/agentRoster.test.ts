@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AGENT_LIVENESS_TTL_MS, listAgents } from '../../engine/agent.js';
+import { AGENT_LIVENESS_TTL_MS, RELEASED_AGENT_STATUS, listAgents } from '../../engine/agent.js';
 import { createWorkspace, makeNodeStack, type TestStack } from './harness.js';
 
 // SQLite stores last_seen in whole seconds. Exercise both the exact TTL
@@ -32,6 +32,10 @@ function expectedRoster(offset: number) {
 }
 
 describe('agent roster read contract', () => {
+  it('pins the released status used literally by the query and partial index', () => {
+    expect(RELEASED_AGENT_STATUS).toBe('released');
+  });
+
   let stack: TestStack;
   let workspaceId: string;
   let workspaceKey: string;
@@ -133,5 +137,65 @@ describe('agent roster read contract', () => {
       expect(missing.status).toBe(404);
     }
     expect(snapshot()).toEqual(before);
+  });
+});
+
+describe('agent roster row visits', () => {
+  it('skips released history and seeks live status ranges within one workspace', async () => {
+    const stack = makeNodeStack();
+    const { workspaceId, workspaceKey } = await createWorkspace(stack.app, 'roster-row-visits');
+    const other = await createWorkspace(stack.app, 'other-row-visits');
+    const sqlite = stack.runtime.handle.sqlite;
+    const insert = sqlite.prepare(`
+      INSERT INTO agents (id, workspace_id, name, token_hash, status, last_seen)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    sqlite.transaction(() => {
+      for (const scope of [workspaceId, other.workspaceId]) {
+        for (let n = 0; n < 10_000; n++) {
+          const id = `${scope}-${n}`;
+          insert.run(id, scope, id, id, 'released', CUTOFF - 1);
+        }
+        for (const row of fixtures) {
+          const id = `${scope}-${row.name}`;
+          insert.run(id, scope, row.name, id, row.status, row.lastSeen);
+        }
+        for (let n = 0; n < 1_000; n++) {
+          const id = `${scope}-stale-${n}`;
+          insert.run(id, scope, id, id, 'active', CUTOFF - 1);
+        }
+      }
+    })();
+
+    // A non-deterministic predicate counts candidate visits before hydration;
+    // the view keeps the real indexes available to SQLite's query planner.
+    let visits = 0;
+    sqlite.function('record_roster_visit', () => { visits++; return 1; });
+    sqlite.exec(`
+      ALTER TABLE agents RENAME TO retained_agents;
+      CREATE VIEW agents AS
+        SELECT * FROM retained_agents WHERE record_roster_visit() = 1;
+      PRAGMA query_only = ON;
+    `);
+    vi.spyOn(Date, 'now').mockReturnValue(NOW);
+    try {
+      for (const status of [undefined, 'active', 'online', 'idle', 'blocked', 'waiting', 'released', 'unknown']) {
+        visits = 0;
+        const query = status === undefined ? '' : `?status=${status}`;
+        const response = await stack.app.request(`/v1/agents${query}`, {
+          headers: { authorization: `Bearer ${workspaceKey}` },
+        });
+        expect(response.status).toBe(200);
+        const body = await response.json() as { data: Array<{ name: string; status: string }> };
+        const expectedStatus = status === 'online' ? 'active' : status;
+        const expected = expectedRoster(0).filter(row => !expectedStatus || row.status === expectedStatus);
+        const expectedCount = expected.length + (status === undefined ? 1_000 : 0);
+        expect(body.data).toHaveLength(expectedCount);
+        expect(visits, `candidate visits for status=${status}`).toBe(expectedCount);
+      }
+    } finally {
+      vi.restoreAllMocks();
+      await stack.close();
+    }
   });
 });

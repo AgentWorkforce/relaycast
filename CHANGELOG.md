@@ -21,6 +21,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Fixed
 
 - Serialize overlapping reconnect replays and honor acknowledgements and provider handoffs before each send.
+- Agent roster reads skip released history and seek live status ranges through a workspace-scoped index.
 - Prevent node removal from scanning unrelated retained deliveries and agent records across workspaces.
 
 ## [8.5.4] - 2026-09-08
@@ -434,7 +435,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased - Patch]: https://github.com/AgentWorkforce/relaycast/compare/v8.4.0...HEAD
+[Unreleased - Patch]: https://github.com/AgentWorkforce/relaycast/compare/v8.5.4...HEAD
 [6.0.3]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.2...v6.0.3
 [6.0.2]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.1...v6.0.2
 [6.0.1]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.0...v6.0.1
