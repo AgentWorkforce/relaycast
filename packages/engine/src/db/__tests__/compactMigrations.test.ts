@@ -96,7 +96,7 @@ describe('compact maintenance migration path', () => {
     if (cursorRows.length) handle.sqlite.prepare('INSERT INTO maintenance_cursors VALUES (?,?)').run(cursorRows[0]!.id, cursorRows[0]!.cursor);
     const before = snapshot(handle);
     const beforeConstraints = constraints(handle);
-    expect(runMigrations(handle).applied).toEqual([replacement]);
+    expect(runMigrations(handle).applied).toEqual(files.filter(name => name >= replacement));
     expect(snapshot(handle)).toEqual(before);
     expectConstraintsPreserved(beforeConstraints, constraints(handle));
     expect(handle.sqlite.prepare('SELECT * FROM maintenance_cursors ORDER BY id').all()).toEqual(cursorRows);
