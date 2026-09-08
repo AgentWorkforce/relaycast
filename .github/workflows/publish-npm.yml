@@ -551,6 +551,7 @@ jobs:
           SOURCE_TREE="$(node -e 'const p=require("./release-provenance.json"); process.stdout.write(p.sourceTree)')"
           DIST_TAG="$(node -e 'const p=require("./release-provenance.json"); process.stdout.write(p.distTag)')"
           PROVENANCE_DIGEST="$(node scripts/release-provenance.mjs digest --manifest release-provenance.json)"
+          ENGINE_INTEGRITY="$(node scripts/release-provenance.mjs package --manifest release-provenance.json --package @relaycast/engine --field integrity)"
           git fetch --tags origin
           if git show-ref --verify --quiet "refs/tags/${TAG}"; then
             node scripts/validate-release-tag.mjs \
@@ -559,7 +560,8 @@ jobs:
               --source-tree "$SOURCE_TREE" \
               --version "$NEW_VERSION" \
               --dist-tag "$DIST_TAG" \
-              --provenance-digest "$PROVENANCE_DIGEST"
+              --provenance-digest "$PROVENANCE_DIGEST" \
+              --engine-integrity "$ENGINE_INTEGRITY"
             echo "${TAG} metadata is valid; reusing its exact release commit/tree"
             git reset --hard "${TAG}^{commit}"
             echo "REUSE_EXISTING_RELEASE_TAG=true" >> "$GITHUB_ENV"

@@ -20,13 +20,12 @@ import {
   workspaceCreateRequestDigest,
 } from '../workspace.js';
 
-// Fixture-only padding, not a real secret: guarantees every anonymous
-// bootstrap Idempotency-Key literal below clears MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH
-// while staying readable. Owner-scoped keys in this file are unaffected by
-// the floor and are left short.
-const ENTROPY_PAD = '9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e';
+// Deterministic fixture padding only: it exercises the structural length
+// floor, and is not evidence of entropy or a usable secret. Owner-scoped keys
+// in this file are unaffected by the floor and are left short.
+const STRUCTURAL_PAD = '9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e';
 function anonKey(label: string): string {
-  const key = `${label}:${ENTROPY_PAD}`;
+  const key = `${label}:${STRUCTURAL_PAD}`;
   if (key.length < MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH) {
     throw new Error(`test fixture key too short: ${key}`);
   }
@@ -374,12 +373,14 @@ describe('workspace write durability', () => {
     }
     expect(await db.select().from(workspaces)).toHaveLength(0);
 
-    // Control: a key of exactly the floor length, with the correct secret,
-    // succeeds -- the floor rejects shape, not legitimate high-entropy keys.
+    // Control: a deterministic key of exactly the floor length, with the
+    // correct secret, succeeds. The server checks shape only; callers own
+    // randomness.
+    const structuralKey = 'x'.repeat(MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH);
     const created = await createWorkspace(db, 'weak-key-target', {
       bootstrapSecret,
       bootstrapSecretProof: bootstrapSecret,
-      idempotencyKey: 'x'.repeat(MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH),
+      idempotencyKey: structuralKey,
       requestDigest,
     });
     expect(created.created).toBe(true);

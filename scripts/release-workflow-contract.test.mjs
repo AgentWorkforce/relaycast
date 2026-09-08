@@ -48,8 +48,14 @@ const cutChangelog = fileURLToPath(
   new URL("./cut-changelog.mjs", import.meta.url),
 );
 
-function git(cwd, args) {
-  const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+function git(cwd, args, options = {}) {
+  const result = spawnSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    input: options.input,
+    ...options,
+    env: { ...process.env, ...(options.env ?? {}) },
+  });
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.trim();
 }
@@ -67,7 +73,7 @@ function archiveRevision(revision, target) {
   assert.equal(extracted.status, 0, extracted.stderr?.toString());
 }
 
-function releaseTagFixture({ alteredSource = false } = {}) {
+function releaseTagFixture({ alteredSource = false, mutateReleaseFile } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), "relaycast-release-tag-"));
   archiveRevision("HEAD", root);
   git(root, ["init", "-q"]);
@@ -78,28 +84,37 @@ function releaseTagFixture({ alteredSource = false } = {}) {
   const sourceCommit = git(root, ["rev-parse", "HEAD"]);
   const sourceTree = git(root, ["rev-parse", "HEAD^{tree}"]);
 
-  const changelogFiles = git(root, ["ls-files"])
-    .split("\n")
-    .filter(
-      (file) =>
-        file.endsWith("CHANGELOG.md") && file !== "packages/sdk-rust/CHANGELOG.md",
-    );
-  for (const file of changelogFiles) {
-    const filePath = path.join(root, file);
-    const changelog = readFileSync(filePath, "utf8");
-    writeFileSync(
-      filePath,
-      changelog.replace(
-        /^## \[Unreleased - (?:Patch|Minor|Major)\][\s\S]*?(?=^## \[)/m,
-        "## [Unreleased]\n\n",
-      ),
-    );
+  git(root, ["tag", "v8.5.4"]);
+  const cut = spawnSync(
+    process.execPath,
+    [cutChangelog, "--version", "8.5.5", "--from-tag", "v8.5.4", "--date", "2026-09-09"],
+    { cwd: root, encoding: "utf8" },
+  );
+  assert.equal(cut.status, 0, cut.stderr);
+  if (mutateReleaseFile) {
+    const filePath = path.join(root, mutateReleaseFile);
+    if (mutateReleaseFile === "packages/engine/package.json") {
+      const manifest = JSON.parse(readFileSync(filePath, "utf8"));
+      manifest.scripts = { ...(manifest.scripts ?? {}), postinstall: "echo unauthorized" };
+      writeFileSync(filePath, `${JSON.stringify(manifest, null, 2)}\n`);
+    } else if (mutateReleaseFile === "package-lock.json") {
+      const lock = JSON.parse(readFileSync(filePath, "utf8"));
+      lock.packages["packages/engine"].license = "MIT";
+      writeFileSync(filePath, `${JSON.stringify(lock, null, 2)}\n`);
+    } else {
+      writeFileSync(filePath, `${readFileSync(filePath, "utf8")}\nrelease fixture mutation\n`);
+    }
   }
   if (alteredSource) {
     writeFileSync(path.join(root, "README.md"), "altered application source\n");
   }
   git(root, ["add", "."]);
-  git(root, ["commit", "-qm", "chore(release): v8.5.5"]);
+  git(root, ["commit", "-qm", "chore(release): v8.5.5"], {
+    env: {
+      GIT_AUTHOR_DATE: "2026-09-09T12:00:00Z",
+      GIT_COMMITTER_DATE: "2026-09-09T12:00:00Z",
+    },
+  });
   const tagCommit = git(root, ["rev-parse", "HEAD"]);
   const message = [
     "Release v8.5.5",
@@ -110,7 +125,10 @@ function releaseTagFixture({ alteredSource = false } = {}) {
     "Relaycast-Package-Provenance-SHA256: fixture-digest",
   ].join("\n");
   git(root, ["tag", "-a", "v8.5.5", "-m", message]);
-  return { root, sourceCommit, sourceTree, tagCommit };
+  const engineIntegrity = JSON.parse(
+    readFileSync(path.join(root, "docker/package-lock.json"), "utf8"),
+  ).packages["node_modules/@relaycast/engine"].integrity;
+  return { root, sourceCommit, sourceTree, tagCommit, engineIntegrity };
 }
 
 function validateTag(fixture) {
@@ -130,6 +148,8 @@ function validateTag(fixture) {
       "latest",
       "--provenance-digest",
       "fixture-digest",
+      "--engine-integrity",
+      fixture.engineIntegrity,
     ],
     { cwd: fixture.root, encoding: "utf8" },
   );
@@ -349,6 +369,55 @@ describe("release tag reuse execution", () => {
       git(fixture.root, ["reset", "--hard", "v8.5.5^{commit}"]);
       assert.equal(git(fixture.root, ["rev-parse", "HEAD^{tree}"]), taggedTree);
       assert.equal(fixture.tagCommit, git(fixture.root, ["rev-parse", "HEAD"]));
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  for (const file of [
+    "packages/engine/package.json",
+    "package-lock.json",
+    "Dockerfile",
+    "RUNBOOK.md",
+    "CHANGELOG.md",
+  ]) {
+    it(`rejects an arbitrary edit inside release-allowlisted ${file}`, () => {
+      const fixture = releaseTagFixture({ mutateReleaseFile: file });
+      try {
+        const result = validateTag(fixture);
+        assert.notEqual(result.status, 0);
+        assert.match(
+          `${result.stderr}${result.stdout}`,
+          /outside its exact release transformation|unexpected release edits/,
+        );
+      } finally {
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  it("rejects a release merge commit even when its first parent is the source", () => {
+    const fixture = releaseTagFixture();
+    try {
+      git(fixture.root, ["checkout", "-q", "-b", "release-side", fixture.sourceCommit]);
+      git(fixture.root, ["commit", "--allow-empty", "-qm", "test: side parent"]);
+      const sideCommit = git(fixture.root, ["rev-parse", "HEAD"]);
+      const releaseTree = git(fixture.root, ["rev-parse", "v8.5.5^{tree}"]);
+      const mergeCommit = git(fixture.root, [
+        "commit-tree", releaseTree, "-p", fixture.sourceCommit, "-p", sideCommit,
+      ], { input: "test: merge release\n" });
+      git(fixture.root, ["reset", "--hard", mergeCommit]);
+      git(fixture.root, ["tag", "-d", "v8.5.5"]);
+      const message = [
+        "Release v8.5.5", "", "Relaycast-NPM-Dist-Tag: latest",
+        `Relaycast-Source-Commit: ${fixture.sourceCommit}`,
+        `Relaycast-Source-Tree: ${fixture.sourceTree}`,
+        "Relaycast-Package-Provenance-SHA256: fixture-digest",
+      ].join("\n");
+      git(fixture.root, ["tag", "-a", "v8.5.5", "-m", message]);
+      const result = validateTag(fixture);
+      assert.notEqual(result.status, 0);
+      assert.match(`${result.stderr}${result.stdout}`, /exactly one parent/);
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }

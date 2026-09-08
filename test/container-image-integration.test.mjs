@@ -27,9 +27,8 @@ import test, { after, before, describe } from "node:test";
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const RUN_ID = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const IMAGE_TAG = `relaycast-integration-test:${RUN_ID}`;
-// Fixture value only: exercises the structural idempotency-key floor;
-// callers remain responsible for CSPRNG entropy, and this is never a real
-// deployment secret.
+// Synthetic deployment credential used only by this integration fixture. It
+// proves request wiring and redaction, not secret entropy or production safety.
 const BOOTSTRAP_SECRET = `integration-test-bootstrap-secret-${RUN_ID}`;
 const PRIMARY_CONTAINER = `relaycast-it-primary-${RUN_ID}`;
 const SECONDARY_CONTAINER = `relaycast-it-secondary-${RUN_ID}`;
@@ -186,8 +185,8 @@ async function createWorkspace(
   return { status: response.status, body };
 }
 
-// Structural-length fixture key (callers must provide CSPRNG entropy), not a
-// real secret.
+// Deterministic fixture key for the structural length check; production
+// callers must generate their own idempotency keys with a CSPRNG.
 function freshIdempotencyKey(label) {
   return `${label}-${RUN_ID}-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e`;
 }
