@@ -8,7 +8,6 @@ import { isProviderAgentDeliveryReady } from '../ports/realtime.js';
 import { buildDeliverFrame, buildDeliverPayload, buildMessageCreatedEventData, buildThreadReplyEventData, buildDmReceivedEventData, buildGroupDmReceivedEventData } from './deliveryWire.js';
 import { publicMessageMetadata } from './messageMetadata.js';
 import { toIso } from '../lib/serialize.js';
-import { trailingSingleFlight } from '../lib/singleFlight.js';
 import { readNodeRedriveCandidates } from './nodeRedriveCandidates.js';
 import { fetchAttachmentsBatch, type AttachmentRow } from './attachments.js';
 import type { DeliveryFanoutRecord } from './deliveryWrites.js';
@@ -891,9 +890,16 @@ export interface NodeDeliveryReplayScope {
   agentIds?: readonly string[];
 }
 
-const replayFlights = new WeakMap<NodeConnectionRegistry, Map<string, { dirty: boolean; promise: Promise<number> }>>();
+type ReplayJob = {
+  scope: NodeDeliveryReplayScope;
+  promise: Promise<number>;
+  resolve: (count: number) => void;
+  reject: (error: unknown) => void;
+};
+type ReplayFlight = { pending: Map<string, ReplayJob> };
+const replayFlights = new WeakMap<NodeConnectionRegistry, Map<string, ReplayFlight>>();
 
-/** Coalesce identical triggers at the socket owner, including a trailing replay
+/** Serialize overlapping scopes at the socket owner, including a trailing replay
  * when readiness/cursors changed during an outstanding drain. This is local
  * replay coordination, not a global database admission semaphore. */
 export function deliverPendingToNode(
@@ -905,9 +911,41 @@ export function deliverPendingToNode(
 ): Promise<number> {
   let flights = replayFlights.get(registry);
   if (!flights) { flights = new Map(); replayFlights.set(registry, flights); }
-  const key = JSON.stringify([workspaceId, nodeId, scope.providerName,
-    scope.agentIds ? [...new Set(scope.agentIds)].sort() : null]);
-  return trailingSingleFlight(flights, key, () => replayPendingToNode(db, registry, workspaceId, nodeId, scope));
+  const key = JSON.stringify([workspaceId, nodeId]);
+  const snapshot = { ...scope, agentIds: scope.agentIds ? [...new Set(scope.agentIds)].sort() : undefined };
+  const scopeKey = JSON.stringify([snapshot.providerName, snapshot.agentIds]);
+  let flight = flights.get(key);
+  const existing = flight?.pending.get(scopeKey);
+  if (existing) return existing.promise;
+  let resolve!: ReplayJob['resolve'];
+  let reject!: ReplayJob['reject'];
+  const promise = new Promise<number>((done, fail) => { resolve = done; reject = fail; });
+  const job: ReplayJob = { scope: snapshot, promise, resolve, reject };
+  if (flight) {
+    flight.pending.set(scopeKey, job);
+    return promise;
+  }
+  flight = { pending: new Map([[scopeKey, job]]) };
+  const activeFlight = flight;
+  flights.set(key, activeFlight);
+  void Promise.resolve().then(async () => {
+    try {
+      while (activeFlight.pending.size) {
+        const [pendingKey, pendingJob] = activeFlight.pending.entries().next().value!;
+        // A trigger during this pass queues a new trailing job. Identical
+        // not-yet-started jobs coalesce, but each scope owns its own result.
+        activeFlight.pending.delete(pendingKey);
+        try {
+          pendingJob.resolve(await replayPendingToNode(db, registry, workspaceId, nodeId, pendingJob.scope));
+        } catch (error) {
+          pendingJob.reject(error);
+        }
+      }
+    } finally {
+      if (flights.get(key) === activeFlight) flights.delete(key);
+    }
+  });
+  return promise;
 }
 
 /** Drain a finite per-agent high-water mark in ordered, readiness-checked pages. */
@@ -996,6 +1034,22 @@ async function replayPendingToNode(
       const deliveredIds: string[] = [];
       let interrupted = false;
       for (const row of rows) {
+        // ACKs and handoffs can race attachment hydration or an earlier send.
+        // Revalidate one exact ID without scanning mailbox history.
+        const [current] = await db.select({ id: sql<string>`${deliveries.id}` })
+          .from(sql`${deliveries} INDEXED BY idx_deliveries_id_lookup`)
+          .innerJoin(agents, eq(deliveries.agentId, agents.id))
+          .where(and(
+            eq(deliveries.id, row.delivery.id), eq(deliveries.workspaceId, workspaceId),
+            eq(agents.id, recipient.id), eq(agents.locationType, 'via_node'),
+            eq(agents.locationNodeId, nodeId),
+            recipient.providerName === null
+              ? isNull(agents.providerName) : eq(agents.providerName, recipient.providerName),
+            gt(deliveries.seq, agents.deliveryAckSeq),
+            inArray(deliveries.status, [...ACTIVE_DELIVERY_STATUSES]),
+            sql`(${deliveries.expiresAt} IS NULL OR ${deliveries.expiresAt} > ${Math.floor(Date.now() / 1000)})`,
+          )).limit(1);
+        if (!current) continue;
         if (!ready()) { interrupted = true; break; }
         const { eventType, eventData } = buildRoutableDeliveryEvent(row, attachments.get(row.delivery.messageId) ?? []);
         const sent = await registry.sendToProvider(workspaceId, nodeId, recipient.providerName, buildDeliverFrame({
