@@ -9,7 +9,7 @@
 
 ## Summary
 
-Merged origin/main at v8.5.5, resolved root and engine changelog conflicts, aligned Docker/RUNBOOK/version metadata, and verified build/lint/release contracts.
+Commit 7d0b9e6b merged origin/main at v8.5.5, resolved root and engine changelog conflicts, and aligned Docker, RUNBOOK, and version metadata. Build, lint, and release-contract results were self-reported outside this trajectory and are non-gating here because no command output was captured.
 
 **Approach:** Standard approach
 
@@ -28,4 +28,4 @@ Merged origin/main at v8.5.5, resolved root and engine changelog conflicts, alig
 ### 1. Work
 *Agent: default*
 
-- Merged origin/main non-destructively and kept v8.5.5 released while placing bootstrap idempotency notes in Unreleased - Minor: Merged origin/main non-destructively and kept v8.5.5 released while placing bootstrap idempotency notes in Unreleased - Minor
+- Merged origin/main non-destructively and kept v8.5.5 released while placing bootstrap idempotency notes in Unreleased - Minor
