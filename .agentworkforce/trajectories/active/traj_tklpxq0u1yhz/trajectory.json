@@ -220,6 +220,18 @@
             "reasoning": "node:test does not run after() if before() throws, so a partial setup failure (e.g. secondary container health-check timeout after the primary already started) previously leaked a running container, the built image, and temp volume dirs on every retry -- costly since this suite runs on a daily schedule. Extracted teardown() and wrapped before()'s body in try/catch/rethrow calling it on failure. Verified by deliberately forcing a before() failure (port collision) and confirming docker ps/images/temp dirs were empty afterward, then confirmed the normal 5/5-passing path still works."
           },
           "significance": "high"
+        },
+        {
+          "ts": 1788891284120,
+          "type": "decision",
+          "content": "Pinned new container-integration actions to immutable reviewed SHAs: Pinned new container-integration actions to immutable reviewed SHAs",
+          "raw": {
+            "question": "Pinned new container-integration actions to immutable reviewed SHAs",
+            "chosen": "Pinned new container-integration actions to immutable reviewed SHAs",
+            "alternatives": [],
+            "reasoning": "Exact-head Veto found the only remaining warning: mutable action major tags in the new workflow. Immutable pins remove that supply-chain drift surface."
+          },
+          "significance": "high"
         }
       ]
     }
