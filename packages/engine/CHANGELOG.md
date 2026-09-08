@@ -18,6 +18,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Reserved per-agent subscription channels reject legacy foreign memberships with HTTP 409 before adoption.
 - Agent deletion invalidates cached membership so subscription route checks reflect the released identity.
 - Relayfile ingress preserves authenticated provider event semantics and resource references.
 - Hyphenated mentions resolve the full handle without waking a prefix agent.
