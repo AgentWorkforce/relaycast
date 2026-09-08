@@ -10,6 +10,7 @@ import type {
 import { agents, agentNodeBindings, deliveries as deliveryRows, nodes } from '../db/schema.js';
 import { buildHttpPushHeaders, resolveHttpPushProxy } from '../engine/httpPushDispatch.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
+import { settlePool } from '../lib/settlePool.js';
 import { isProviderAgentDeliveryReady, type EngineDb, type EngineDeps } from '../ports/index.js';
 import { fanoutToAgents } from './fanout.js';
 import { publishEvent, publishEventsToAgents } from '../engine/eventDispatch.js';
@@ -585,9 +586,7 @@ export async function sweepDueNodeDeliveries(
   ];
   // A single cron must not fan out up to 50 simultaneous D1-heavy dispatch
   // pipelines. Preserve independent failure handling and per-agent ordering.
-  for (let offset = 0; offset < tasks.length; offset += 4) {
-    await Promise.allSettled(tasks.slice(offset, offset + 4).map(run => run()));
-  }
+  await settlePool(tasks, 4);
   return due.length;
 }
 

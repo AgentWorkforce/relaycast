@@ -54,12 +54,12 @@ describe('bounded database work with retained history', () => {
       expect(plan).toContain('SEARCH deliveries USING INDEX idx_deliveries_agent_active_seq');
       expect(plan).not.toContain('USE TEMP B-TREE');
     }
-    const hydration = f.queries.filter(q => q.sql.startsWith('select') && q.sql.includes('INDEXED BY sqlite_autoindex_deliveries_1'));
+    const hydration = f.queries.filter(q => q.sql.startsWith('select') && q.sql.includes('INDEXED BY idx_deliveries_id_lookup'));
     expect(hydration).toHaveLength(3);
     for (const query of hydration) {
       expect(query.params.length).toBeLessThan(100);
       const plan = JSON.stringify(f.sqlite.prepare('EXPLAIN QUERY PLAN ' + query.sql).all(...query.params));
-      expect(plan).toContain('SEARCH deliveries USING INDEX sqlite_autoindex_deliveries_1');
+      expect(plan).toContain('SEARCH deliveries USING INDEX idx_deliveries_id_lookup');
     }
   });
 
@@ -104,10 +104,81 @@ describe('bounded database work with retained history', () => {
   it('uses the initial-attempt seek rather than scanning settled history for cron redrive', async () => {
     const f = fixture(10_000, 3);
     expect(await fetchDueNodeDeliveryEvents(f.db)).toHaveLength(3);
-    const query = f.queries.find(q => q.sql.includes('INDEXED BY idx_deliveries_initial_due'))!;
+    const query = f.queries.find(q => q.sql.includes('INDEXED BY idx_deliveries_node_initial') && !q.sql.includes('DESC'))!;
     expect(query).toBeDefined();
     const plan = JSON.stringify(f.sqlite.prepare('EXPLAIN QUERY PLAN ' + query.sql).all(...query.params));
-    expect(plan).toContain('SEARCH deliveries USING INDEX idx_deliveries_initial_due');
+    expect(plan).toContain('SEARCH deliveries USING INDEX idx_deliveries_node_initial');
+  });
+
+  it.each([undefined, 'ws'])('keeps maximum redrive hydration under the D1 bind limit (workspace=%s)', async (workspaceId) => {
+    const f = fixture(0, 200);
+    expect(await fetchDueNodeDeliveryEvents(f.db, { workspaceId, limit: 200 })).toHaveLength(200);
+    expect(f.queries.every(query => query.params.length <= 100)).toBe(true);
+    expect(f.queries.filter(query => query.sql.includes('from "message_attachments"'))).toHaveLength(4);
+  });
+
+  it.each([false, true])('bounds excluded candidates and resumes past expired rows (retry=%s)', async (retry) => {
+    const f = fixture(10_000, 55);
+    f.sqlite.exec(`UPDATE deliveries SET status = 'queued', route_node_kind = 'other' WHERE seq <= 10000;
+      UPDATE deliveries SET expires_at = 1 WHERE seq > 10000 AND seq <= 10050;`);
+    if (retry) f.sqlite.exec('UPDATE deliveries SET next_attempt_at = 1');
+    const opts = { limit: 25 };
+    expect(await fetchDueNodeDeliveryEvents(f.db, opts)).toHaveLength(0);
+    // A new adapter handle reads durable progress, not process-local state.
+    const nextDb = drizzle(f.sqlite, { schema }) as unknown as EngineDb;
+    expect(await fetchDueNodeDeliveryEvents(nextDb, opts)).toHaveLength(0);
+    const due = await fetchDueNodeDeliveryEvents(f.db, opts);
+    expect(due.map(event => event.delivery.seq)).toEqual([10051, 10052, 10053, 10054, 10055]);
+    const index = retry ? 'idx_deliveries_node_retry' : 'idx_deliveries_node_initial';
+    const scans = f.queries.filter(q => q.sql.includes('INDEXED BY ' + index) && !q.sql.includes('DESC'));
+    for (const query of scans) {
+      expect(query.params.at(-1)).toBe(25);
+      expect(f.sqlite.prepare(query.sql).all(...query.params).length).toBeLessThanOrEqual(25);
+      expect(query.sql.split('WHERE')[1]).not.toContain('expires_at');
+      const plan = JSON.stringify(f.sqlite.prepare('EXPLAIN QUERY PLAN ' + query.sql).all(...query.params));
+      expect(plan).toContain('SEARCH deliveries USING INDEX ' + index);
+      expect(plan).not.toContain('USE TEMP B-TREE');
+    }
+  });
+
+  it('seeks scoped redrive without traversing another workspace or advancing its cursor', async () => {
+    const f = fixture(10_000, 3);
+    f.sqlite.exec(`INSERT INTO workspaces(id,name,api_key_hash) VALUES ('other','other','other-key');
+      UPDATE deliveries SET workspace_id = 'other', status = 'queued' WHERE seq <= 10000;`);
+    expect(await fetchDueNodeDeliveryEvents(f.db, { workspaceId: 'ws' })).toHaveLength(3);
+    const query = f.queries.find(q => q.sql.includes('INDEXED BY idx_deliveries_node_initial_workspace') && !q.sql.includes('DESC'))!;
+    const plan = JSON.stringify(f.sqlite.prepare('EXPLAIN QUERY PLAN ' + query.sql).all(...query.params));
+    expect(plan).toContain('workspace_id=?');
+    expect(f.sqlite.prepare("SELECT count(*) AS n FROM maintenance_cursors WHERE id LIKE '%other%'").get()).toEqual({ n: 0 });
+  });
+
+  it('wraps redrive at its captured fence even if more queued rows arrive', async () => {
+    const f = fixture(0, 4);
+    const opts = { limit: 2 };
+    expect((await fetchDueNodeDeliveryEvents(f.db, opts)).map(e => e.delivery.seq)).toEqual([1, 2]);
+    f.sqlite.exec(`INSERT INTO messages(id,workspace_id,channel_id,agent_id,body) VALUES ('0000000005','ws','channel','agent','new');
+      INSERT INTO deliveries(id,workspace_id,message_id,agent_id,status,seq,route_node_kind)
+      VALUES ('d0000000005','ws','0000000005','agent','queued',5,'ws');`);
+    expect((await fetchDueNodeDeliveryEvents(f.db, opts)).map(e => e.delivery.seq)).toEqual([3, 4]);
+    expect((await fetchDueNodeDeliveryEvents(f.db, opts)).map(e => e.delivery.seq)).toEqual([1, 2]);
+  });
+
+  it.each(['{broken', 'null', '{"next":99}', '[]'])('repairs a malformed retention cursor: %s', async (cursor) => {
+    const f = fixture(1, 0);
+    f.sqlite.prepare("INSERT INTO maintenance_cursors(id,cursor) VALUES ('retention-v1',?)").run(cursor);
+    await expect(pruneExpired(f.db)).resolves.toMatchObject({ deliveries: 0 });
+    const saved = f.sqlite.prepare("SELECT cursor FROM maintenance_cursors WHERE id = 'retention-v1'").get() as { cursor: string };
+    expect(JSON.parse(saved.cursor)).toMatchObject({ next: 0, positions: {}, highs: {} });
+  });
+
+  it('rejects invalid retention clocks before mutation when a default or workspace TTL is active', async () => {
+    const f = fixture(1, 0);
+    await expect(pruneExpired(f.db, { now: new Date(NaN) })).rejects.toThrow('Invalid retention clock');
+    expect(f.queries.some(q => /^(DELETE|INSERT|UPDATE)/i.test(q.sql.trim()))).toBe(false);
+    const defaults = { messageTtlDays: null, deliveryTtlDays: null, messageLogTtlDays: null, workspaceEventTtlDays: null };
+    await expect(pruneExpired(f.db, { now: new Date(NaN), defaults })).resolves.toMatchObject({ deliveries: 0 });
+    f.sqlite.exec(`UPDATE workspaces SET retention = '{"message_ttl_days":7}'`);
+    await expect(pruneExpired(f.db, { now: new Date(NaN), defaults })).rejects.toThrow('Invalid retention clock');
   });
 
   it('advances retained-only candidate pages durably and never scans active deliveries for retention', async () => {

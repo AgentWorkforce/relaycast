@@ -1,0 +1,43 @@
+{
+  "id": "compact_rgqh3r8ab36c",
+  "version": 1,
+  "type": "compacted",
+  "compactedAt": "2026-09-08T11:47:09.461Z",
+  "sourceTrajectories": [
+    "traj_wbn1nniel1t7"
+  ],
+  "dateRange": {
+    "start": "2026-09-08T11:32:54.311Z",
+    "end": "2026-09-08T11:47:08.980Z"
+  },
+  "summary": {
+    "totalDecisions": 2,
+    "totalEvents": 2,
+    "uniqueAgents": [
+      "default"
+    ]
+  },
+  "decisionGroups": [
+    {
+      "category": "database",
+      "decisions": [
+        {
+          "question": "Use append-only indexes plus persisted redrive candidate windows",
+          "chosen": "Use append-only indexes plus persisted redrive candidate windows",
+          "reasoning": "LIMIT after expiry filters did not bound reads. Partial route/workspace indexes remove unrelated queues; metadata pages advance durable advisory cursors before hydration, with finite fences to guarantee wraparound. Migration 0049 preserves existing 0048 installations. Replay cleanup is synchronous and owner-conditional; dispatch uses four rolling workers.",
+          "fromTrajectory": "traj_wbn1nniel1t7"
+        },
+        {
+          "question": "Chunk redrive attachment hydration at fifty IDs",
+          "chosen": "Chunk redrive attachment hydration at fifty IDs",
+          "reasoning": "Final bind-budget review found that maximum-size redrive still sent up to 201 attachment query parameters despite chunked delivery hydration. Added scoped and global 200-row regression tests asserting every query stays at or below 100 parameters.",
+          "fromTrajectory": "traj_wbn1nniel1t7"
+        }
+      ]
+    }
+  ],
+  "keyLearnings": [],
+  "keyFindings": [],
+  "filesAffected": [],
+  "commits": []
+}

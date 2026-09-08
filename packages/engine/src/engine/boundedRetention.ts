@@ -46,15 +46,17 @@ const tables: Table[] = [
     keys: ['created_at', 'workspace_id', 'seq'], setting: 'workspace_event_ttl_days',
     fallback: 'workspaceEventTtlDays',
     eligible: 'EXISTS (SELECT 1 FROM workspace_events hw WHERE hw.workspace_id = page.workspace_id AND hw.seq > page.seq LIMIT 1)' },
-  { result: 'readReceipts', name: 'read_receipts', index: 'sqlite_autoindex_read_receipts_1',
+  { result: 'readReceipts', name: 'read_receipts', index: 'idx_read_receipts_retention',
     keys: ['message_id', 'agent_id'],
     eligible: 'NOT EXISTS (SELECT 1 FROM messages m WHERE m.id = page.message_id)' },
 ];
 
+/** Project a candidate onto its table's ordered keyset cursor. */
 function key(row: Candidate, table: Table): (string | number)[] {
   return table.keys.map(k => k === 'length(id)' ? row.id.length : row[k as keyof Candidate] as string | number);
 }
 
+/** Apply exact workspace policy after the bounded candidate read. */
 function expired(row: Candidate, table: Table, defaults: Required<RetentionDefaults>, nowMs: number): boolean {
   if (!row.eligible) return false;
   if (!table.setting || !table.fallback) return true;
@@ -70,6 +72,7 @@ function expired(row: Candidate, table: Table, defaults: Required<RetentionDefau
   return row.created_at * 1000 < cutoff;
 }
 
+/** Construct a bound primary-key predicate without interpolating user SQL. */
 function identity(row: Candidate, table: Table): SQL {
   if (table.result === 'workspaceEvents') return sql`(workspace_id = ${row.workspace_id} AND seq = ${row.seq})`;
   if (table.result === 'readReceipts') return sql`(message_id = ${row.message_id} AND agent_id = ${row.agent_id})`;
@@ -104,8 +107,13 @@ export async function pruneBounded(db: EngineDb, opts: PruneOptions): Promise<Pr
     ${sql.join(ttlTables.map(table => sql.raw(
       `MIN(CASE WHEN json_extract(retention, '$.${table.setting}') > 0 THEN json_extract(retention, '$.${table.setting}') END) AS "${table.result}"`,
     )), sql`, `)} FROM workspaces`);
+  if (!Number.isFinite(nowMs) && [
+    ...Object.values(defaults), ...Object.values(minimums ?? {}),
+  ].some(ttl => typeof ttl === 'number' && Number.isFinite(ttl) && ttl > 0)) {
+    throw new Error('Invalid retention clock: expected a finite Date when a positive TTL is active');
+  }
   const saved = await db.all<{ cursor: string }>(sql`SELECT cursor FROM maintenance_cursors WHERE id = 'retention-v1'`);
-  const parsed = saved[0] ? stateSchema.safeParse(JSON.parse(saved[0].cursor)) : undefined;
+  const parsed = saved[0] ? stateSchema.safeParse(decodeCursor(saved[0].cursor)) : undefined;
   const state: State = parsed?.success ? parsed.data : { next: 0, positions: {}, highs: {} };
   const result: PruneResult = { messages: 0, deliveries: 0, messageLogs: 0, readReceipts: 0, workspaceEvents: 0 };
   const finished = new Set<number>();
@@ -142,14 +150,12 @@ export async function pruneBounded(db: EngineDb, opts: PruneOptions): Promise<Pr
     const predicates: SQL[] = [];
     if (table.predicate) predicates.push(sql.raw(table.predicate));
     if (table.fallback) {
-      {
-        const cutoff = nowMs - Math.min(...positiveTtls) * DAY_MS;
-        if (table.keys[0] === 'length(id)') {
-          const bound = snowflakeIdLowerBound(cutoff);
-          predicates.push(sql`(length(id), id) < (${bound.length}, ${bound})`);
-        } else {
-          predicates.push(sql`created_at < ${Math.ceil(cutoff / 1000)}`);
-        }
+      const cutoff = nowMs - Math.min(...positiveTtls) * DAY_MS;
+      if (table.keys[0] === 'length(id)') {
+        const bound = snowflakeIdLowerBound(cutoff);
+        predicates.push(sql`(length(id), id) < (${bound.length}, ${bound})`);
+      } else {
+        predicates.push(sql`created_at < ${Math.ceil(cutoff / 1000)}`);
       }
     }
     if (cursor?.length === table.keys.length) {
@@ -204,6 +210,12 @@ export async function pruneBounded(db: EngineDb, opts: PruneOptions): Promise<Pr
   return result;
 }
 
+/** Decode advisory scan state; corrupt text restarts a safe traversal. */
+function decodeCursor(raw: string): unknown {
+  try { return JSON.parse(raw); } catch { return undefined; }
+}
+
+/** Clamp caller tuning to the supported finite maintenance budget. */
 function boundedInteger(value: number | undefined, fallback: number, maximum: number): number {
   return value !== undefined && Number.isFinite(value) ? Math.max(1, Math.min(maximum, Math.floor(value))) : fallback;
 }

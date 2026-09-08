@@ -83,6 +83,7 @@ function nextDeliverySeqSql() {
   return sql<number>`MAX(${agents.deliverySeq}, ${agents.deliveryAckSeq}) + 1`;
 }
 
+/** Test live mailbox depth with indexed branches capped at the admission limit. */
 function belowDepthCapSql(workspaceId: string, agentId: unknown, depthCap: number) {
   // Expired-but-not-yet-swept rows are not active mailbox depth: TTL expiry is
   // only swept lazily (GET /deliveries, /inbox, node replay), so an idle/offline

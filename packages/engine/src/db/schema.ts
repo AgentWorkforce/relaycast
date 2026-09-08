@@ -906,6 +906,7 @@ export const readReceipts = sqliteTable(
   (table) => [
     primaryKey({ columns: [table.messageId, table.agentId] }),
     index('idx_read_receipts_message').on(table.messageId),
+    uniqueIndex('idx_read_receipts_retention').on(table.messageId, table.agentId),
     index('idx_read_receipts_agent').on(table.agentId, table.readAt),
   ],
 );
@@ -1187,6 +1188,7 @@ export const deliveries = sqliteTable(
   },
   (table) => [
     uniqueIndex('deliveries_message_agent_unique').on(table.messageId, table.agentId),
+    uniqueIndex('idx_deliveries_id_lookup').on(table.id),
     uniqueIndex('deliveries_agent_seq_unique').on(table.workspaceId, table.agentId, table.seq),
     index('idx_deliveries_agent').on(table.agentId, table.createdAt),
     index('idx_deliveries_agent_status_seq').on(table.workspaceId, table.agentId, table.status, table.seq),
@@ -1208,6 +1210,14 @@ export const deliveries = sqliteTable(
       .where(sql`${table.nextAttemptAt} IS NOT NULL`),
     index('idx_deliveries_initial_due').on(table.status, table.createdAt, table.id)
       .where(sql`${table.nextAttemptAt} IS NULL`),
+    index('idx_deliveries_node_initial').on(table.createdAt, table.id)
+      .where(sql`${table.status} = 'queued' AND ${table.routeNodeKind} IN ('http_push', 'ws', 'fleet_ws', 'direct_ws') AND ${table.nextAttemptAt} IS NULL`),
+    index('idx_deliveries_node_initial_workspace').on(table.workspaceId, table.createdAt, table.id)
+      .where(sql`${table.status} = 'queued' AND ${table.routeNodeKind} IN ('http_push', 'ws', 'fleet_ws', 'direct_ws') AND ${table.nextAttemptAt} IS NULL`),
+    index('idx_deliveries_node_retry').on(table.nextAttemptAt, table.createdAt, table.id)
+      .where(sql`${table.status} = 'queued' AND ${table.routeNodeKind} IN ('http_push', 'ws', 'fleet_ws', 'direct_ws') AND ${table.nextAttemptAt} IS NOT NULL`),
+    index('idx_deliveries_node_retry_workspace').on(table.workspaceId, table.nextAttemptAt, table.createdAt, table.id)
+      .where(sql`${table.status} = 'queued' AND ${table.routeNodeKind} IN ('http_push', 'ws', 'fleet_ws', 'direct_ws') AND ${table.nextAttemptAt} IS NOT NULL`),
     index('idx_deliveries_status').on(table.workspaceId, table.status, table.createdAt),
     index('idx_deliveries_http_push_due').on(table.workspaceId, table.routeNodeKind, table.status, table.nextAttemptAt),
   ],
