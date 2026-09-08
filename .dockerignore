@@ -1,4 +1,5 @@
 *
+!packages/
 !docker/
 !docker/entrypoint.mjs
 !docker/package.json

@@ -15,6 +15,9 @@ export function readReleaseProvenance(path) {
   if (!manifest || typeof manifest !== "object") {
     throw new Error("release provenance must be an object");
   }
+  if (manifest.schema !== 1) {
+    throw new Error("release provenance has an unsupported schema");
+  }
   if (!/^[0-9a-f]{40}$/.test(manifest.sourceCommit ?? "")) {
     throw new Error("release provenance has an invalid source commit");
   }
@@ -75,8 +78,6 @@ export function provenanceDigest(manifest) {
 
 export function assertReusableReleaseTag({
   tagType,
-  tagCommit,
-  releaseCommit,
   tagTree,
   releaseTree,
   tagMessage,
@@ -87,7 +88,6 @@ export function assertReusableReleaseTag({
   packageProvenanceDigest,
 }) {
   if (tagType !== "tag") throw new Error("release tag must be annotated");
-  if (tagCommit !== releaseCommit) throw new Error("release tag commit differs");
   if (tagTree !== releaseTree) throw new Error("release tag tree differs");
   const required = [
     `Release v${version}`,
@@ -113,7 +113,11 @@ function argument(name) {
 
 function optionalArgument(name) {
   const index = process.argv.indexOf(name);
-  return index === -1 ? undefined : process.argv[index + 1];
+  if (index === -1) return undefined;
+  if (!process.argv[index + 1] || process.argv[index + 1].startsWith("--")) {
+    throw new Error(`${name} requires a value`);
+  }
+  return process.argv[index + 1];
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {

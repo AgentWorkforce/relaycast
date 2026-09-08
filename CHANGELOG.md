@@ -20,7 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Added
 
-- Anonymous bootstrap `POST /v1/workspaces` creates can use an `Idempotency-Key` to recover the same workspace and API key after retries or response loss; digest conflicts, owner-scope crossovers, and terminalized bindings fail closed. The caller must also present `X-Workspace-Bootstrap-Secret` matching the deployment's configured secret — the `Idempotency-Key` is a non-secret correlator, so proving the deployment secret is what authorizes recovering the binding and prevents an unrelated caller who guesses or observes the key from retrieving another caller's workspace credentials. An anonymous key must itself be unpredictable — at least 32 characters with at least 122 bits of entropy (a v4 UUID or better), generated with a CSPRNG — and is rejected with `400 workspace_create_idempotency_key_too_weak` otherwise (relaycast#379).
+- Anonymous bootstrap `POST /v1/workspaces` creates can use an `Idempotency-Key` to recover the same workspace and API key after retries or response loss; digest conflicts, owner-scope crossovers, and terminalized bindings fail closed. The caller must also present `X-Workspace-Bootstrap-Secret` matching the deployment's configured secret — the `Idempotency-Key` is a non-secret correlator, so proving the deployment secret is what authorizes recovering the binding and prevents an unrelated caller who guesses or observes the key from retrieving another caller's workspace credentials. Callers must generate anonymous keys with a CSPRNG; the server enforces only a 32-character structural minimum and rejects shorter keys with `400 workspace_create_idempotency_key_too_weak`.
 - Keyed anonymous bootstrap now rejects explicit invalid authorization and requires a stable deployment secret across restarts; unkeyed creates remain compatible.
 
 ### Fixed
@@ -438,7 +438,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased - Minor]: https://github.com/AgentWorkforce/relaycast/compare/v8.5.3...HEAD
+[Unreleased - Minor]: https://github.com/AgentWorkforce/relaycast/compare/v8.5.4...HEAD
 [6.0.3]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.2...v6.0.3
 [6.0.2]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.1...v6.0.2
 [6.0.1]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.0...v6.0.1

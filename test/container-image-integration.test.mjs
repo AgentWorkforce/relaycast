@@ -119,10 +119,39 @@ function containerLogs(name) {
   );
 }
 
-async function waitForHealth(port, { timeoutMs = 30_000 } = {}) {
+function redactBootstrapSecret(value) {
+  return value.replaceAll(BOOTSTRAP_SECRET, "[REDACTED]");
+}
+
+function containerState(name) {
+  const result = sh("docker", ["inspect", "--format", "{{json .State}}", name]);
+  if (result.status !== 0) return undefined;
+  try {
+    return JSON.parse(result.stdout);
+  } catch {
+    return { raw: result.stdout.trim() };
+  }
+}
+
+function healthFailure(name, detail) {
+  const state = containerState(name);
+  const diagnostics = {
+    state,
+    logs: containerLogs(name),
+  };
+  return new Error(
+    `container ${name} ${detail}: ${redactBootstrapSecret(JSON.stringify(diagnostics))}`,
+  );
+}
+
+async function waitForHealth(port, { name, timeoutMs = 30_000 } = {}) {
   const deadline = Date.now() + timeoutMs;
   let lastError;
   while (Date.now() < deadline) {
+    const state = containerState(name);
+    if (state && !state.Running) {
+      throw healthFailure(name, "exited before becoming healthy");
+    }
     try {
       const response = await fetch(`http://127.0.0.1:${port}/health`);
       if (response.ok) {
@@ -134,8 +163,9 @@ async function waitForHealth(port, { timeoutMs = 30_000 } = {}) {
     }
     await sleep(500);
   }
-  throw new Error(
-    `container on port ${port} did not become healthy in time: ${lastError?.message ?? "no response"}`,
+  throw healthFailure(
+    name,
+    `on port ${port} did not become healthy in time: ${lastError?.message ?? "no response"}`,
   );
 }
 
@@ -201,14 +231,14 @@ describe(
           volumeName: primaryVolume,
           secret: BOOTSTRAP_SECRET,
         });
-        await waitForHealth(primaryPort);
+        await waitForHealth(primaryPort, { name: PRIMARY_CONTAINER });
 
         secondaryPort = startContainer({
           name: SECONDARY_CONTAINER,
           volumeName: secondaryVolume,
           secret: undefined,
         });
-        await waitForHealth(secondaryPort);
+        await waitForHealth(secondaryPort, { name: SECONDARY_CONTAINER });
       } catch (error) {
         teardown();
         throw error;
@@ -275,7 +305,7 @@ describe(
 
       stopContainer(PRIMARY_CONTAINER);
       primaryPort = startExistingContainer(PRIMARY_CONTAINER);
-      await waitForHealth(primaryPort);
+      await waitForHealth(primaryPort, { name: PRIMARY_CONTAINER });
 
       const after = await createWorkspace(primaryPort, {
         name: "restart-replay-workspace",

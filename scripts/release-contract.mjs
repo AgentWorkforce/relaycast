@@ -59,6 +59,18 @@ export function assertChangelogSemver(changelog, targetVersion) {
 
   const latest = changelog.match(/^## \[(\d+\.\d+\.\d+)\]/m)?.[1];
   if (!latest) throw new Error("CHANGELOG.md has no stable release heading");
+  // create-release cuts changelogs before refreshing the image lockfile and
+  // performing its final parity check. A successful cut deliberately leaves a
+  // bare pending block above the target heading, so validate that settled
+  // state instead of comparing a release to itself.
+  if (latest === targetVersion) {
+    if (pendingBody) {
+      throw new Error(
+        `CHANGELOG.md already contains ${targetVersion} but still has pending entries`,
+      );
+    }
+    return { latestVersion: latest, pendingLevel, actualLevel: "Released" };
+  }
   const actualLevel = releaseLevel(latest, targetVersion);
   if (pendingLevel && LEVEL_RANK[actualLevel] < LEVEL_RANK[pendingLevel]) {
     throw new Error(
@@ -154,7 +166,11 @@ function assertDockerfileEngineVersion(root, expectedVersion) {
   }
 }
 
-function assertDockerImageManifestVersion(root, expectedVersion) {
+function assertDockerImageManifestVersion(
+  root,
+  expectedVersion,
+  { requireResolvedArtifact = true } = {},
+) {
   const manifestPath = path.join(root, "docker", "package.json");
   const manifest = readJson(manifestPath);
   if (manifest.version !== expectedVersion) {
@@ -182,6 +198,19 @@ function assertDockerImageManifestVersion(root, expectedVersion) {
     throw new Error(
       `${lockPath} node_modules/@relaycast/engine is ${lockedEngine?.version}, expected ${expectedVersion}`,
     );
+  }
+  if (requireResolvedArtifact) {
+    const expectedTarball = `https://registry.npmjs.org/@relaycast/engine/-/engine-${expectedVersion}.tgz`;
+    if (lockedEngine?.resolved !== expectedTarball) {
+      throw new Error(
+        `${lockPath} node_modules/@relaycast/engine resolves ${lockedEngine?.resolved}, expected ${expectedTarball}`,
+      );
+    }
+    if (!/^sha512-[A-Za-z0-9+/]+=*$/.test(lockedEngine?.integrity ?? "")) {
+      throw new Error(
+        `${lockPath} node_modules/@relaycast/engine has no valid registry integrity`,
+      );
+    }
   }
 }
 
@@ -217,7 +246,11 @@ function assertRunbookEngineVersion(root, expectedVersion) {
   }
 }
 
-export function assertRepositoryVersionParity(root, expectedVersion) {
+export function assertRepositoryVersionParity(
+  root,
+  expectedVersion,
+  { requireDockerResolvedArtifact = true } = {},
+) {
   const directories = packageDirectories(root);
   for (const published of PUBLISHED_PACKAGE_DIRS) {
     if (!directories.includes(published)) {
@@ -275,7 +308,9 @@ export function assertRepositoryVersionParity(root, expectedVersion) {
   }
 
   assertDockerfileEngineVersion(root, expectedVersion);
-  assertDockerImageManifestVersion(root, expectedVersion);
+  assertDockerImageManifestVersion(root, expectedVersion, {
+    requireResolvedArtifact: requireDockerResolvedArtifact,
+  });
   assertRunbookEngineVersion(root, expectedVersion);
 
   return {
@@ -313,18 +348,15 @@ export function updateComparisonReferences(
   ];
 
   const lines = changelog.split("\n");
-  const firstDefinition = lines.findIndex((line) =>
-    /^\[[^\]]+\]:\s+\S+/.test(line),
-  );
   const kept = lines.filter((line) => {
     if (/^\[Unreleased(?: - (?:Patch|Minor|Major))?\]:/.test(line))
       return false;
     return !new RegExp(`^\\[${currentVersionPattern}\\]:`).test(line);
   });
-  const insertion =
-    firstDefinition === -1
-      ? kept.length
-      : kept.findIndex((line) => /^\[[^\]]+\]:\s+\S+/.test(line));
+  const firstKeptDefinition = kept.findIndex((line) =>
+    /^\[[^\]]+\]:\s+\S+/.test(line),
+  );
+  const insertion = firstKeptDefinition === -1 ? kept.length : firstKeptDefinition;
   kept.splice(insertion, 0, ...definitions);
   return `${kept.join("\n").replace(/\n*$/, "")}\n`;
 }

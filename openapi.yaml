@@ -181,7 +181,7 @@ components:
           description: Snowflake ID of the workspace
         api_key:
           type: string
-          description: Workspace API key (returned on first creation and on an authenticated idempotent replay)
+          description: Workspace API key (returned on first creation and on an authenticated idempotent replay or an anonymous bootstrap replay with a valid bootstrap-secret proof)
         created_at:
           type: string
           format: date-time
@@ -1545,11 +1545,10 @@ paths:
             deployment. Reusing it with the same request replays the workspace;
             a different request is a 409. For an anonymous (bootstrap) create,
             this key is part of what authorizes recovering the binding
-            alongside `X-Workspace-Bootstrap-Secret`, so it must be
-            unpredictable: at least 32 characters, generated with a CSPRNG
-            with at least 122 bits of entropy (the randomness in a v4 UUID) —
-            a value that is too short or otherwise not CSPRNG-generated
-            returns `400 workspace_create_idempotency_key_too_weak`. This
+            alongside `X-Workspace-Bootstrap-Secret`. Callers must generate it
+            with a CSPRNG (a v4 UUID is suitable). The server enforces only a
+            32-character structural minimum: a shorter value returns `400
+            workspace_create_idempotency_key_too_weak`. This
             requirement does not apply to an owner-scoped key.
         - name: X-Workspace-Bootstrap-Secret
           in: header

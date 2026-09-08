@@ -79,7 +79,7 @@ An anonymous `POST /v1/workspaces` with `Idempotency-Key` needs
 recover the same workspace credential. Generate the secret once:
 
 ```bash
-openssl rand -hex 32
+export RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET="$(openssl rand -hex 32)"
 ```
 
 Store the result in your secret manager or a mode-600 environment file and
@@ -233,6 +233,13 @@ relaycast-engine --db /var/lib/relaycast/relaycast.db --port 8787 \
 
 **systemd** (`/etc/systemd/system/relaycast.service`):
 
+Create the environment file before starting the service:
+
+```bash
+sudo install -d -m 0755 /etc/relaycast
+sudo sh -c 'umask 077; printf "%s\\n" "RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET=$(openssl rand -hex 32)" > /etc/relaycast/relaycast.env'
+```
+
 ```ini
 [Service]
 ExecStart=/usr/local/bin/relaycast-engine --db /var/lib/relaycast/relaycast.db --port 8787 --base-url https://relay.example.com
@@ -248,6 +255,7 @@ WantedBy=multi-user.target
 published):
 
 ```bash
+umask 077
 test ! -e .env || { echo '.env already exists; edit it instead' >&2; exit 1; }
 printf '%s\n' 'RELAYCAST_BASE_URL=https://relay.example.com' > .env
 printf '%s\n' "RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET=$(openssl rand -hex 32)" >> .env

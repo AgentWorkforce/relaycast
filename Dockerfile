@@ -57,6 +57,8 @@ ENV NODE_ENV=production \
     PATH=/opt/relaycast/node_modules/.bin:$PATH
 
 COPY --from=engine-install /opt/relaycast /opt/relaycast
+COPY --from=engine-build /workspace/packages/a2a/dist /opt/relaycast/node_modules/@relaycast/a2a/dist
+COPY --from=engine-build /workspace/packages/types/dist /opt/relaycast/node_modules/@relaycast/types/dist
 COPY --from=engine-build /workspace/packages/engine/dist /opt/relaycast/node_modules/@relaycast/engine/dist
 COPY --chmod=0555 docker/entrypoint.mjs docker/entrypoint-core.mjs /opt/relaycast/
 

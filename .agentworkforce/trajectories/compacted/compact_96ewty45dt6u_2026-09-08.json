@@ -1,0 +1,327 @@
+{
+  "id": "compact_96ewty45dt6u",
+  "version": 1,
+  "type": "compacted",
+  "compactedAt": "2026-09-08T20:15:28.773Z",
+  "sourceTrajectories": [
+    "traj_tklpxq0u1yhz"
+  ],
+  "dateRange": {
+    "start": "2026-09-05T21:56:12.811Z",
+    "end": "2026-09-08T20:05:37.571Z"
+  },
+  "summary": {
+    "totalDecisions": 16,
+    "totalEvents": 19,
+    "uniqueAgents": [
+      "default"
+    ]
+  },
+  "decisionGroups": [
+    {
+      "category": "testing",
+      "decisions": [
+        {
+          "question": "Fix SSRF loopback/IP-literal bypass in docker/entrypoint-core.mjs via a WHATWG-spec IPv4 parser",
+          "chosen": "Fix SSRF loopback/IP-literal bypass in docker/entrypoint-core.mjs via a WHATWG-spec IPv4 parser",
+          "reasoning": "node:net's isIP() only recognizes strict 4-decimal-octet form; disguised spellings (127.1, 0x7f.0.0.1, 0177.0.0.1) passed through as ordinary DNS labels while curl/browsers/glibc still resolve them as loopback/IP literals. Added parseIPv4Like() covering short-form, octal, and hex per-octet spellings, wired into both the loopback check and the generic IP-literal refusal.",
+          "fromTrajectory": "traj_tklpxq0u1yhz"
+        },
+        {
+          "question": "Replace publish-npm.yml's post-publish rebase with tag-then-merge",
+          "chosen": "Replace publish-npm.yml's post-publish rebase with tag-then-merge",
+          "reasoning": "create-release rebased the release commit onto origin/main after packages were already built/tested/published, which could tag a different tree than what was actually published if main advanced during the multi-minute build+publish window. Now the tag is created and pushed immediately after commit, before any reconciliation with main; landing on main afterward uses a merge (never rebase) so the tagged commit's tree is never altered.",
+          "fromTrajectory": "traj_tklpxq0u1yhz"
+        },
+        {
+          "question": "Enforce relaycast#379's >=122-bit anonymous idempotency-key entropy floor (32-char structural minimum) independent of the X-Workspace-Bootstrap-Secret proof",
+          "chosen": "Enforce relaycast#379's >=122-bit anonymous idempotency-key entropy floor (32-char structural minimum) independent of the X-Workspace-Bootstrap-Secret proof",
+          "reasoning": "The bootstrap secret proof closes the squatting exploit, but the key itself is still meant to be an unpredictable bearer value per issue #379's original contract -- a low-entropy key used by multiple legitimate secret-holders could still collide, and the public TS/README docs previously showed weak examples (bootstrap:${runId}). Added MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH=32 (guarantees >=122 bits even under worst-case hex encoding), checked structurally before any secret comparison or DB work, with adversarial tests proving weak keys are rejected independently of secret correctness.",
+          "fromTrajectory": "traj_tklpxq0u1yhz"
+        },
+        {
+          "question": "Fix before()-hook cleanup gap found by independent review: teardown containers/image/volumes on setup failure, not just on normal completion",
+          "chosen": "Fix before()-hook cleanup gap found by independent review: teardown containers/image/volumes on setup failure, not just on normal completion",
+          "reasoning": "node:test does not run after() if before() throws, so a partial setup failure (e.g. secondary container health-check timeout after the primary already started) previously leaked a running container, the built image, and temp volume dirs on every retry -- costly since this suite runs on a daily schedule. Extracted teardown() and wrapped before()'s body in try/catch/rethrow calling it on failure. Verified by deliberately forcing a before() failure (port collision) and confirming docker ps/images/temp dirs were empty afterward, then confirmed the normal 5/5-passing path still works.",
+          "fromTrajectory": "traj_tklpxq0u1yhz"
+        },
+        {
+          "question": "Await background delivery settlement before TTL acknowledgement regression reads the mailbox",
+          "chosen": "Await background delivery settlement before TTL acknowledgement regression reads the mailbox",
+          "reasoning": "The uncached full engine suite exposed item undefined because seed() returns before background delivery effects are guaranteed durable; neighboring delivery tests already use stack.settle() as the deterministic contract barrier.",
+          "fromTrajectory": "traj_tklpxq0u1yhz"
+        }
+      ]
+    },
+    {
+      "category": "api",
+      "decisions": [
+        {
+          "question": "Bind anonymous bootstrap idempotency replay to X-Workspace-Bootstrap-Secret proof, checked in constant time before any DB lookup",
+          "chosen": "Bind anonymous bootstrap idempotency replay to X-Workspace-Bootstrap-Secret proof, checked in constant time before any DB lookup",
+          "reasoning": "Idempotency-Key + request digest are caller-computable, non-secret values; without a caller-presented proof matching the deployment's configured bootstrapSecret, any network peer who guesses/observes a key could retrieve another caller's deterministic workspace API key (workspace squatting). Requiring the proof closes this while keeping replay stable across container restarts for callers who hold the secret.",
+          "fromTrajectory": "traj_tklpxq0u1yhz"
+        },
+        {
+          "question": "Add scheduled real-container integration CI (test/container-image-integration.test.mjs + .github/workflows/container-integration.yml)",
+          "chosen": "Add scheduled real-container integration CI (test/container-image-integration.test.mjs + .github/workflows/container-integration.yml)",
+          "reasoning": "Existing container tests only exercised the entrypoint script/engine in isolation, never the actual built Docker image running as a real container against a persistent volume. Built a real docker build + docker run/stop/start suite covering missing-secret 503, invalid-auth 401, digest-conflict 409, real restart/replay recovery from the persisted volume, and log-redaction -- with a secret-hygiene fix (assert on a boolean, not the raw log text) so a failing redaction test can't itself leak the secret into CI output. Scheduled daily plus PR/push triggers on the paths it covers.",
+          "fromTrajectory": "traj_tklpxq0u1yhz"
+        },
+        {
+          "question": "Use run-unique Docker image tags and Docker-assigned loopback ports in real-image integration",
+          "chosen": "Use run-unique Docker image tags and Docker-assigned loopback ports in real-image integration",
+          "reasoning": "Parallel proof reproduced both fixed-port contention and shared-tag deletion/build races. Run-unique resources preserve isolation; restarted containers re-resolve their ephemeral host port.",
+          "fromTrajectory": "traj_tklpxq0u1yhz"
+        },
+        {
+          "question": "Use Docker-managed named volumes in the real-image CI proof",
+          "chosen": "Use Docker-managed named volumes in the real-image CI proof",
+          "reasoning": "Hosted Linux reproduced a permissions failure because mkdtemp host bind mounts are mode 0700 and the image runs as non-root node. Named volumes preserve the image-owned /data permissions while still proving persistence across restart and can be removed deterministically by name.",
+          "fromTrajectory": "traj_tklpxq0u1yhz"
+        }
+      ]
+    },
+    {
+      "category": "tooling",
+      "decisions": [
+        {
+          "question": "Preserve and refresh the existing lockfile before npm ci",
+          "chosen": "Preserve and refresh the existing lockfile before npm ci",
+          "reasoning": "The release failed in npm/arborist while resolving all workspaces from a deleted lockfile. On the exact Node 22 toolchain and 8.4.0 manifest transformation, npm install --package-lock-only --ignore-scripts followed by npm ci completed cleanly and retained the reviewed dependency graph.",
+          "fromTrajectory": "traj_tklpxq0u1yhz"
+        },
+        {
+          "question": "Add verify-publish job and skip-if-already-published npm publish step for resumable lockstep releases",
+          "chosen": "Add verify-publish job and skip-if-already-published npm publish step for resumable lockstep releases",
+          "reasoning": "The 8-package publish matrix (fail-fast:false) could partially succeed with no automated detection or recovery path, stranding some packages live at a new version while others were missing, with no clear evidence of which. verify-publish independently reconciles the npm registry against the target version with a step-summary table and hard-fails the release gate if anything is missing; the publish step itself now checks npm view before publishing so re-dispatching the same custom_version safely skips already-published packages instead of hard-failing on double-publish.",
+          "fromTrajectory": "traj_tklpxq0u1yhz"
+        },
+        {
+          "question": "Bound npm reruns to build tarball integrity and annotated tag provenance",
+          "chosen": "Bound npm reruns to build tarball integrity and annotated tag provenance",
+          "reasoning": "Version-only registry checks accepted stale or wrong-source packages; immutable tarballs, source/tree identity, and explicit tag trailers fail closed while allowing exact same-attempt recovery.",
+          "fromTrajectory": "traj_tklpxq0u1yhz"
+        }
+      ]
+    },
+    {
+      "category": "other",
+      "decisions": [
+        {
+          "question": "Extended the existing release-workflow trajectory for the 8.6.0 hardening follow-up",
+          "chosen": "Extended the existing release-workflow trajectory for the 8.6.0 hardening follow-up",
+          "reasoning": "Trail reports an already-active release workflow trajectory; preserving it avoids abandoning or overwriting prior release history while recording this directly related repair.",
+          "fromTrajectory": "traj_tklpxq0u1yhz"
+        },
+        {
+          "question": "Extend release-contract.mjs version parity to Dockerfile ARG, docker/package.json+lock, and RUNBOOK.md anchors",
+          "chosen": "Extend release-contract.mjs version parity to Dockerfile ARG, docker/package.json+lock, and RUNBOOK.md anchors",
+          "reasoning": "These self-host container version sources were never covered by the existing parity check and had already drifted stale (8.5.3) against the rebased repo's real released version (8.5.4). Bumped them now and wired publish-npm.yml's version-bump step to keep them in lockstep at every future release; docker/package-lock.json gets a placeholder bump pre-publish and a real npm registry refresh in create-release after verify-publish confirms the engine package is actually live.",
+          "fromTrajectory": "traj_tklpxq0u1yhz"
+        },
+        {
+          "question": "Pinned new container-integration actions to immutable reviewed SHAs",
+          "chosen": "Pinned new container-integration actions to immutable reviewed SHAs",
+          "reasoning": "Exact-head Veto found the only remaining warning: mutable action major tags in the new workflow. Immutable pins remove that supply-chain drift surface.",
+          "fromTrajectory": "traj_tklpxq0u1yhz"
+        }
+      ]
+    },
+    {
+      "category": "database",
+      "decisions": [
+        {
+          "question": "Rebase fix/workspace-create-idempotency-0908 onto origin/main (4581ef38, v8.5.4 + #388) before implementing repair-review fixes",
+          "chosen": "Rebase fix/workspace-create-idempotency-0908 onto origin/main (4581ef38, v8.5.4 + #388) before implementing repair-review fixes",
+          "reasoning": "Branch was 2 commits behind origin/main which cut v8.5.4 and merged compact-maintenance migration #388; rebasing first avoids building the repair on a stale version/changelog baseline",
+          "fromTrajectory": "traj_tklpxq0u1yhz"
+        }
+      ]
+    }
+  ],
+  "keyLearnings": [],
+  "keyFindings": [],
+  "filesAffected": [
+    ".agentworkforce/bounded-d1-0908/compacted/compact_p3vncbjbhj8g_2026-09-08.json",
+    ".agentworkforce/bounded-d1-0908/compacted/compact_p3vncbjbhj8g_2026-09-08.md",
+    ".agentworkforce/bounded-d1-review-0908/compacted/compact_rgqh3r8ab36c_2026-09-08.json",
+    ".agentworkforce/bounded-d1-review-0908/compacted/compact_rgqh3r8ab36c_2026-09-08.md",
+    ".agentworkforce/rc382-review/compacted/compact_dl1hgc4cqlsu_2026-09-07.json",
+    ".agentworkforce/trajectories/active/traj_tklpxq0u1yhz/trajectory.json",
+    ".agentworkforce/trajectories/compacted/compact_7w4qom41t9te_2026-09-07.json",
+    ".agentworkforce/trajectories/compacted/compact_7w4qom41t9te_2026-09-07.md",
+    ".agentworkforce/trajectories/compacted/compact_dl1hgc4cqlsu_2026-09-07.md",
+    ".agentworkforce/trajectories/completed/2026-09/traj_uaqpcy4qgnoa/summary.md",
+    ".agentworkforce/trajectories/completed/2026-09/traj_uaqpcy4qgnoa/trajectory.json",
+    ".agentworkforce/trajectories/relay-1672/completed/2026-09/traj_rkgn69o1fbjc/summary.md",
+    ".agentworkforce/trajectories/relay-1672/completed/2026-09/traj_rkgn69o1fbjc/trajectory.json",
+    ".dockerignore",
+    ".env.example",
+    ".github/workflows/ci.yml",
+    ".github/workflows/container-integration.yml",
+    ".github/workflows/publish-npm.yml",
+    "CHANGELOG.md",
+    "Dockerfile",
+    "README.md",
+    "RUNBOOK.md",
+    "docker-compose.yml",
+    "docker/entrypoint-core.mjs",
+    "docker/package-lock.json",
+    "docker/package.json",
+    "docs/compact-maintenance-migrations.md",
+    "docs/self-hosting.md",
+    "docs/testing/pr-382-review-followup.md",
+    "docs/testing/timing-determinism.md",
+    "openapi.yaml",
+    "package-lock.json",
+    "package.json",
+    "packages/a2a/package.json",
+    "packages/cli/package.json",
+    "packages/cli/src/version.ts",
+    "packages/engine/CHANGELOG.md",
+    "packages/engine/package.json",
+    "packages/engine/src/__tests__/backgroundTasks.test.ts",
+    "packages/engine/src/__tests__/backgroundTasks.ts",
+    "packages/engine/src/__tests__/conformance/a2aFederation.test.ts",
+    "packages/engine/src/__tests__/conformance/actionHandlerLifecycle.test.ts",
+    "packages/engine/src/__tests__/conformance/agentLifecycle.test.ts",
+    "packages/engine/src/__tests__/conformance/agentNodeExitEvents.test.ts",
+    "packages/engine/src/__tests__/conformance/agentRoster.test.ts",
+    "packages/engine/src/__tests__/conformance/delivery.test.ts",
+    "packages/engine/src/__tests__/conformance/harness.test.ts",
+    "packages/engine/src/__tests__/conformance/harness.ts",
+    "packages/engine/src/__tests__/conformance/httpPushEphemeralEvents.test.ts",
+    "packages/engine/src/__tests__/conformance/inboundWebhookTriggers.test.ts",
+    "packages/engine/src/__tests__/conformance/inventoryPresenceIsolation.test.ts",
+    "packages/engine/src/__tests__/conformance/invocationReplay.test.ts",
+    "packages/engine/src/__tests__/conformance/invocationReplay.ts",
+    "packages/engine/src/__tests__/conformance/node.test.ts",
+    "packages/engine/src/__tests__/conformance/nodeCompletedRelease.test.ts",
+    "packages/engine/src/__tests__/conformance/nodeDeliveryContracts.test.ts",
+    "packages/engine/src/__tests__/conformance/nodeProviders.test.ts",
+    "packages/engine/src/__tests__/conformance/observerToken.test.ts",
+    "packages/engine/src/__tests__/conformance/providerAttachDecision.test.ts",
+    "packages/engine/src/__tests__/conformance/rescheduleNodeProvider.test.ts",
+    "packages/engine/src/__tests__/conformance/sdk-contract.test.ts",
+    "packages/engine/src/__tests__/conformance/workspaceEvents.test.ts",
+    "packages/engine/src/__tests__/conformance/workspaceLifecycle.test.ts",
+    "packages/engine/src/adapters/node/__tests__/database.test.ts",
+    "packages/engine/src/adapters/node/__tests__/event-queue.test.ts",
+    "packages/engine/src/adapters/node/database.ts",
+    "packages/engine/src/adapters/node/index.ts",
+    "packages/engine/src/adapters/node/realtime.ts",
+    "packages/engine/src/bin/serve.ts",
+    "packages/engine/src/db/__tests__/compactMigrations.test.ts",
+    "packages/engine/src/db/migrationPlan.ts",
+    "packages/engine/src/db/migrations/0045_workspace_create_idempotency.sql",
+    "packages/engine/src/db/migrations/0046_action_invocation_origin.sql",
+    "packages/engine/src/db/migrations/0047_action_invocation_provider_acceptance.sql",
+    "packages/engine/src/db/migrations/0048_bounded_maintenance.sql",
+    "packages/engine/src/db/migrations/0049_redrive_review_hardening.sql",
+    "packages/engine/src/db/migrations/0050_compact_maintenance_indexes.sql",
+    "packages/engine/src/db/migrations/supersessions.json",
+    "packages/engine/src/db/schema.ts",
+    "packages/engine/src/engine/__tests__/boundedDatabaseWork.test.ts",
+    "packages/engine/src/engine/__tests__/workspace.test.ts",
+    "packages/engine/src/engine/__tests__/workspaceEvents.test.ts",
+    "packages/engine/src/engine/action.ts",
+    "packages/engine/src/engine/agent.ts",
+    "packages/engine/src/engine/boundedRetention.ts",
+    "packages/engine/src/engine/delivery.ts",
+    "packages/engine/src/engine/deliveryWrites.ts",
+    "packages/engine/src/engine/invocationRetry.ts",
+    "packages/engine/src/engine/node.ts",
+    "packages/engine/src/engine/nodeProvider.ts",
+    "packages/engine/src/engine/nodeRedriveCandidates.ts",
+    "packages/engine/src/engine/retention.ts",
+    "packages/engine/src/engine/workspace.ts",
+    "packages/engine/src/engine/workspaceEvents.ts",
+    "packages/engine/src/lib/__tests__/settlePool.test.ts",
+    "packages/engine/src/lib/__tests__/singleFlight.test.ts",
+    "packages/engine/src/lib/crypto.ts",
+    "packages/engine/src/lib/settlePool.ts",
+    "packages/engine/src/lib/singleFlight.ts",
+    "packages/engine/src/ports/index.ts",
+    "packages/engine/src/ports/realtime.ts",
+    "packages/engine/src/routes/__tests__/webhookOutbox.test.ts",
+    "packages/engine/src/routes/agent.ts",
+    "packages/engine/src/routes/deliveryRouting.ts",
+    "packages/engine/src/routes/workspace.ts",
+    "packages/mcp/package.json",
+    "packages/mcp/src/__tests__/server.test.ts",
+    "packages/observer-dashboard/package.json",
+    "packages/openclaw/package.json",
+    "packages/react/package.json",
+    "packages/sdk-python/tests/test_node.py",
+    "packages/sdk-rust/CHANGELOG.md",
+    "packages/sdk-rust/Cargo.toml",
+    "packages/sdk-rust/src/client.rs",
+    "packages/sdk-rust/src/credentials.rs",
+    "packages/sdk-rust/src/error.rs",
+    "packages/sdk-rust/src/registration.rs",
+    "packages/sdk-rust/src/relay.rs",
+    "packages/sdk-rust/tests/client_retry.rs",
+    "packages/sdk-rust/tests/parity.rs",
+    "packages/sdk-typescript/CHANGELOG.md",
+    "packages/sdk-typescript/package.json",
+    "packages/sdk-typescript/src/__tests__/identity.test.ts",
+    "packages/sdk-typescript/src/__tests__/relay.test.ts",
+    "packages/sdk-typescript/src/__tests__/type-safety.test.ts",
+    "packages/sdk-typescript/src/client.ts",
+    "packages/sdk-typescript/src/relay.ts",
+    "packages/sdk-typescript/src/types.ts",
+    "packages/sdk-typescript/src/version.ts",
+    "packages/types/CHANGELOG.md",
+    "packages/types/package.json",
+    "packages/types/src/agent.ts",
+    "scripts/check-release-contract.mjs",
+    "scripts/cut-changelog.mjs",
+    "scripts/measure-compact-migrations.mjs",
+    "scripts/release-contract.mjs",
+    "scripts/release-contract.test.mjs",
+    "scripts/release-provenance.mjs",
+    "scripts/release-workflow-contract.test.mjs",
+    "scripts/test-support/signals.ts",
+    "test/container-entrypoint.test.mjs",
+    "test/container-image-integration.test.mjs",
+    "tests/relayflows/cases/0902-node-inventory-presence-isolation/case.json",
+    "tests/relayflows/cases/0902-node-inventory-presence-isolation/probe.test.ts",
+    "tests/relayflows/cases/0902-node-inventory-presence-isolation/run.mjs"
+  ],
+  "commits": [
+    "35db6a1b",
+    "c0baffdf",
+    "b06514a8",
+    "49bd1c1c",
+    "3ed22d13",
+    "b73eb6ae",
+    "93cfd528",
+    "b51688db",
+    "375c6078",
+    "9916fafd",
+    "1f9ef771",
+    "4a953768",
+    "51023df5",
+    "817fe29e",
+    "4581ef38",
+    "694f2c54",
+    "5d9e51b0",
+    "62a705e0",
+    "13220ab4",
+    "ca5f9867",
+    "e72f4b71",
+    "04fc9bc6",
+    "90e1f14a",
+    "64051ff2",
+    "8bd87250",
+    "bfd51e99",
+    "395f68e4",
+    "43deab18",
+    "8e36b742",
+    "80ab3660",
+    "dcae8177",
+    "36d8aaab",
+    "3b705d04"
+  ]
+}

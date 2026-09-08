@@ -1318,6 +1318,28 @@ describe('RelayCast', () => {
       expect(init.headers['X-Workspace-Bootstrap-Secret']).toBeUndefined();
     });
 
+    it('does not forward a bootstrap secret proof for an unkeyed anonymous create', async () => {
+      const { RelayCast } = await import('../relay.js');
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 201,
+          json: () => Promise.resolve({
+            ok: true,
+            data: { workspace_id: 'ws_child', api_key: 'rk_live_child', created_at: '2024-01-01' },
+          }),
+        }),
+      );
+
+      await RelayCast.createWorkspace('child', {
+        bootstrapSecret: 'must-not-leave-the-process',
+        baseUrl: 'http://localhost:3000',
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.headers['X-Workspace-Bootstrap-Secret']).toBeUndefined();
+    });
+
     it('does not silently downgrade an explicitly empty idempotency key', async () => {
       const { RelayCast } = await import('../relay.js');
       mockFetch.mockImplementation(() =>

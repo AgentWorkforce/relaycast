@@ -82,7 +82,11 @@ function repositoryFixture(version = "8.6.0-beta.0") {
     `${JSON.stringify({
       packages: {
         "": { version },
-        "node_modules/@relaycast/engine": { version },
+        "node_modules/@relaycast/engine": {
+          version,
+          resolved: `https://registry.npmjs.org/@relaycast/engine/-/engine-${version}.tgz`,
+          integrity: "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+        },
       },
     })}\n`,
   );
@@ -114,6 +118,18 @@ describe("release changelog contract", () => {
       () => assertChangelogSemver(changelog(), "8.5.4"),
       /requires a Minor release.*is Patch/,
     );
+  });
+
+  it("accepts the bare pending block left after cutting the target release", () => {
+    const settled = changelog(null, "").replace(
+      "## [8.5.3] - 2026-09-08",
+      "## [8.6.0] - 2026-09-08",
+    );
+    assert.deepEqual(assertChangelogSemver(settled, "8.6.0"), {
+      latestVersion: "8.6.0",
+      pendingLevel: undefined,
+      actualLevel: "Released",
+    });
   });
 
   it("rejects an unclassified non-empty pending changelog", () => {
@@ -256,6 +272,33 @@ describe("release version parity", () => {
     );
   });
 
+  it("rejects an engine lockfile entry that keeps a previous release artifact", () => {
+    const root = repositoryFixture();
+    const lockPath = path.join(root, "docker", "package-lock.json");
+    const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+    lock.packages["node_modules/@relaycast/engine"].resolved =
+      "https://registry.npmjs.org/@relaycast/engine/-/engine-8.5.3.tgz";
+    writeFileSync(lockPath, JSON.stringify(lock));
+    assert.throws(
+      () => assertRepositoryVersionParity(root, "8.6.0-beta.0"),
+      /resolves .*engine-8\.5\.3\.tgz.*engine-8\.6\.0-beta\.0\.tgz/,
+    );
+  });
+
+  it("permits the intentional pre-publish lockfile placeholder only when requested", () => {
+    const root = repositoryFixture();
+    const lockPath = path.join(root, "docker", "package-lock.json");
+    const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+    lock.packages["node_modules/@relaycast/engine"].resolved =
+      "https://registry.npmjs.org/@relaycast/engine/-/engine-8.5.3.tgz";
+    writeFileSync(lockPath, JSON.stringify(lock));
+    assert.doesNotThrow(() =>
+      assertRepositoryVersionParity(root, "8.6.0-beta.0", {
+        requireDockerResolvedArtifact: false,
+      }),
+    );
+  });
+
   it("rejects a RUNBOOK.md engine-version mention that was not bumped", () => {
     const root = repositoryFixture();
     const runbookPath = path.join(root, "RUNBOOK.md");
@@ -313,5 +356,15 @@ describe("comparison references", () => {
       /\n\[Unreleased\]: .*\/compare\/v8\.6\.0\.\.\.HEAD\n/,
     );
     assert.ok(updated.endsWith("\n"));
+  });
+
+  it("appends comparison references after the body when it removes every existing definition", () => {
+    const input = `${changelog()}\n[Unreleased - Minor]: https://example.test/old\n[8.6.0]: https://example.test/old\n`;
+    const updated = updateComparisonReferences(input, {
+      version: "8.6.0",
+      previousVersion: "8.5.3",
+    });
+    assert.ok(updated.indexOf("- Previous") < updated.indexOf("[Unreleased]:"));
+    assert.match(updated, /\[Unreleased\]: .*\n\[8\.6\.0\]: .*\n$/);
   });
 });

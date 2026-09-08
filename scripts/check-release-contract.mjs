@@ -10,6 +10,7 @@ import {
 const args = process.argv.slice(2);
 const versionIndex = args.indexOf("--version");
 const version = versionIndex === -1 ? undefined : args[versionIndex + 1];
+const allowPlaceholderDockerLock = args.includes("--allow-placeholder-docker-lock");
 if (!version) {
   console.error(
     "usage: check-release-contract.mjs --version <x.y.z[-prerelease]>",
@@ -18,7 +19,9 @@ if (!version) {
 }
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const versions = assertRepositoryVersionParity(root, version);
+const versions = assertRepositoryVersionParity(root, version, {
+  requireDockerResolvedArtifact: !allowPlaceholderDockerLock,
+});
 const changelogs = assertRepositoryChangelogSemver(root, version);
 const rootChangelog = changelogs[0];
 console.log(

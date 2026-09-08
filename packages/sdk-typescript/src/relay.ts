@@ -394,7 +394,7 @@ export class RelayCast {
         ...(resolved.idempotencyKey !== undefined
           ? { 'Idempotency-Key': resolved.idempotencyKey }
           : {}),
-        ...(!apiKey && resolved.bootstrapSecret !== undefined
+        ...(!apiKey && resolved.idempotencyKey !== undefined && resolved.bootstrapSecret !== undefined
           ? { 'X-Workspace-Bootstrap-Secret': resolved.bootstrapSecret }
           : {}),
         'X-SDK-Version': SDK_VERSION,

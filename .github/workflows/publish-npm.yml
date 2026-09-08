@@ -243,7 +243,7 @@ jobs:
       - name: Validate release version, changelog, and generated-source parity
         env:
           NEW_VERSION: ${{ steps.bump.outputs.new_version }}
-        run: node scripts/check-release-contract.mjs --version "$NEW_VERSION"
+        run: node scripts/check-release-contract.mjs --version "$NEW_VERSION" --allow-placeholder-docker-lock
 
       - name: Clean reinstall after version bump
         run: npm ci
@@ -600,10 +600,6 @@ jobs:
               echo "::error::${TAG} is lightweight; refusing to reuse it"
               exit 1
             fi
-            if [ "$(git rev-parse "${TAG}^{commit}")" != "$(git rev-parse HEAD)" ]; then
-              echo "::error::${TAG} points at a different release commit"
-              exit 1
-            fi
             if [ "$(git rev-parse "$(printf '%s^{tree}' "$TAG")")" != "$(git rev-parse "$(printf '%s^{tree}' HEAD)")" ]; then
               echo "::error::${TAG} points at a different release tree"
               exit 1
@@ -630,6 +626,10 @@ jobs:
               exit 1
             fi
             echo "${TAG} is the matching annotated release tag; reusing it safely"
+            # A re-run creates the same release tree but a different commit
+            # timestamp. Reuse the already-tagged commit so main and the
+            # GitHub Release continue to point at one stable release identity.
+            git reset --hard "${TAG}^{commit}"
           else
             git tag -a "${TAG}" -F "$TAG_MESSAGE_FILE"
           fi
@@ -668,7 +668,7 @@ jobs:
                 break
               fi
               echo "changelog conflict on ${conflicted}; re-cutting against main"
-              echo "$conflicted" | xargs git checkout --ours --
+              echo "$conflicted" | xargs git checkout --theirs --
               node scripts/cut-changelog.mjs --version "$NEW_VERSION"
               echo "$conflicted" | xargs git add --
               if ! GIT_EDITOR=true git commit --no-edit; then

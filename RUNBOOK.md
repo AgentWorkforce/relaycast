@@ -39,6 +39,7 @@ the public connection.
 From a clean checkout of this repository:
 
 ```bash
+umask 077
 test ! -e .env || { echo '.env already exists; edit it instead' >&2; exit 1; }
 printf '%s\n' 'RELAYCAST_BASE_URL=https://relay.ratifyprotocol.com' > .env
 printf '%s\n' 'RELAYCAST_PORT=8787' >> .env

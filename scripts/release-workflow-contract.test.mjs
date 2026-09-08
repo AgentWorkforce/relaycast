@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import { PUBLISHED_PACKAGE_DIRS } from "./release-contract.mjs";
 import {
   assertPublishedIntegrity,
   assertReusableReleaseTag,
+  readReleaseProvenance,
   assertSourceProvenance,
 } from "./release-provenance.mjs";
 
@@ -48,10 +53,14 @@ describe("publish workflow safety contract", () => {
   it("runs deterministic release checks before any publish job", () => {
     const tests = workflow.indexOf("npm run test:release");
     const validation = workflow.indexOf(
-      'node scripts/check-release-contract.mjs --version "$NEW_VERSION"',
+      'node scripts/check-release-contract.mjs --version "$NEW_VERSION" --allow-placeholder-docker-lock',
     );
     const publishJob = workflow.indexOf("  publish-packages:");
     assert.ok(tests > 0 && validation > tests && publishJob > validation);
+    assert.match(
+      jobBlock("create-release"),
+      /Re-validate release contract with the refreshed lockfile[\s\S]*check-release-contract\.mjs --version/,
+    );
   });
 
   it("carries generated source constants into the release commit", () => {
@@ -59,10 +68,15 @@ describe("publish workflow safety contract", () => {
       "packages/sdk-typescript/src/version.ts",
       "packages/cli/src/version.ts",
     ]) {
-      assert.equal(
-        workflow.split(file).length - 1,
-        2,
-        `${file} must be uploaded and staged`,
+      assert.match(
+        workflow,
+        new RegExp(`path: \\|[\\s\\S]*?${file.replace(/\//g, "\\/")}`),
+        `${file} must be uploaded with build artifacts`,
+      );
+      assert.match(
+        workflow,
+        new RegExp(`git add [^\\n]*${file.replace(/\//g, "\\/")}`),
+        `${file} must be staged in the release commit`,
       );
     }
   });
@@ -158,7 +172,7 @@ describe("publish workflow safety contract", () => {
     assert.match(verify, /dist\.integrity/);
   });
 
-  it("tags the exact built, published, and verified commit instead of rebasing onto a possibly-moved main", () => {
+  it("reuses a matching tagged tree on rerun and tags before reconciling main", () => {
     const createRelease = jobBlock("create-release");
     // Rebasing a release commit after packages have already been published
     // from its pre-rebase tree would tag different code than what was
@@ -173,6 +187,8 @@ describe("publish workflow safety contract", () => {
       tagPush < mainMerge,
       "the tag must be pushed before any attempt to reconcile the release commit with main",
     );
+    assert.match(createRelease, /git reset --hard "\$\{TAG\}\^\{commit\}"/);
+    assert.match(createRelease, /git checkout --theirs/);
   });
 
   it("escalates permissions per job instead of workflow-wide", () => {
@@ -205,10 +221,8 @@ describe("release provenance adversarial cases", () => {
     );
   });
 
-  it("rejects lightweight, wrong-commit, and wrong-tree tag reuse", () => {
+  it("rejects lightweight and wrong-tree tag reuse while allowing a matching rerun tree", () => {
     const common = {
-      tagCommit: "d".repeat(40),
-      releaseCommit: "d".repeat(40),
       tagTree: "e".repeat(40),
       releaseTree: "e".repeat(40),
       tagMessage: [
@@ -230,12 +244,40 @@ describe("release provenance adversarial cases", () => {
       /annotated/,
     );
     assert.throws(
-      () => assertReusableReleaseTag({ tagType: "tag", ...common, tagCommit: "f".repeat(40) }),
-      /commit differs/,
-    );
-    assert.throws(
       () => assertReusableReleaseTag({ tagType: "tag", ...common, tagTree: "f".repeat(40) }),
       /tree differs/,
     );
+  });
+
+  it("rejects unsupported provenance schemas", () => {
+    const manifestPath = new URL("../package.json", import.meta.url);
+    assert.throws(() => readReleaseProvenance(manifestPath), /unsupported schema/);
+  });
+
+  it("rejects a bare optional provenance version instead of skipping its check", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "relaycast-provenance-"));
+    const manifestPath = path.join(directory, "provenance.json");
+    writeFileSync(manifestPath, JSON.stringify(PROVENANCE));
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [
+          fileURLToPath(new URL("./release-provenance.mjs", import.meta.url)),
+          "published",
+          "--manifest",
+          manifestPath,
+          "--package",
+          "@relaycast/types",
+          "--integrity",
+          PROVENANCE.packages[0].integrity,
+          "--version",
+        ],
+        { encoding: "utf8" },
+      );
+      assert.notEqual(result.status, 0);
+      assert.match(`${result.stderr}${result.stdout}`, /--version requires a value/);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

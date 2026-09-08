@@ -15,20 +15,30 @@ on:
   workflow_dispatch: {}
   pull_request:
     paths:
+      - .dockerignore
       - Dockerfile
       - docker/**
-      - packages/engine/src/engine/workspace.ts
-      - packages/engine/src/routes/workspace.ts
+      - package.json
+      - package-lock.json
+      - tsconfig.base.json
+      - packages/a2a/**
+      - packages/engine/**
+      - packages/types/**
       - test/container-image-integration.test.mjs
       - .github/workflows/container-integration.yml
   push:
     branches:
       - main
     paths:
+      - .dockerignore
       - Dockerfile
       - docker/**
-      - packages/engine/src/engine/workspace.ts
-      - packages/engine/src/routes/workspace.ts
+      - package.json
+      - package-lock.json
+      - tsconfig.base.json
+      - packages/a2a/**
+      - packages/engine/**
+      - packages/types/**
       - test/container-image-integration.test.mjs
       - .github/workflows/container-integration.yml
 
@@ -43,6 +53,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4

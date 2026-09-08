@@ -93,11 +93,19 @@ function git(command) {
 
 function lastStableTag() {
   const explicit = flag("from-tag");
-  if (explicit) return explicit;
+  if (explicit) {
+    if (!/^v\d+\.\d+\.\d+$/.test(explicit)) {
+      throw new Error(`--from-tag must be a stable vX.Y.Z tag, got ${explicit}`);
+    }
+    if (explicit === `v${version}`) {
+      throw new Error("--from-tag must precede the release being cut");
+    }
+    return explicit;
+  }
   const tags = git("git tag -l --sort=-v:refname")
     .split("\n")
     .map((tag) => tag.trim())
-    .filter((tag) => /^v\d+\.\d+\.\d+$/.test(tag));
+    .filter((tag) => /^v\d+\.\d+\.\d+$/.test(tag) && tag !== `v${version}`);
   return tags[0];
 }
 
@@ -200,14 +208,16 @@ const packageChangelogs = readdirSync("packages", { withFileTypes: true })
   .sort();
 
 const levels = [];
+let rootWasCut = false;
 for (const file of ["CHANGELOG.md", ...packageChangelogs]) {
   const level = cut(file, {
     fallback: file === "CHANGELOG.md" ? fallbackBody(fromTag) : "",
   });
+  if (file === "CHANGELOG.md" && level !== null) rootWasCut = true;
   if (level) levels.push({ file, level });
 }
 
-if (fromTag) {
+if (fromTag && rootWasCut) {
   const current = readFileSync("CHANGELOG.md", "utf8");
   const withComparisons = updateComparisonReferences(current, {
     version,

@@ -121,8 +121,10 @@ counter), and persist it alongside the work so a genuine retry reuses the
 exact same value:
 
 ```ts
+const idempotencyKey = crypto.randomUUID(); // persist with the work; reuse it on retry
 const workspace = await RelayCast.createWorkspace('my-project', {
-  idempotencyKey: crypto.randomUUID(),
+  baseUrl: 'https://relay.example.com', // your self-hosted deployment
+  idempotencyKey,
   bootstrapSecret: process.env.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET,
 });
 ```
