@@ -11,6 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- Node-control `agent.deregister` acknowledges requests with an ID after teardown, allowing brokers to confirm cleanup before deleting owned identities.
 - `POST /v1/agents/{name}/subscription-channel` provisions an exact identity-bound delivery channel without rotating recipient credentials.
 
 ### Fixed
