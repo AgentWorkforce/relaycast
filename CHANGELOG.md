@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Anonymous bootstrap `POST /v1/workspaces` creates can use an `Idempotency-Key` to recover the same workspace and API key after retries or response loss; digest conflicts, owner-scope crossovers, and terminalized bindings fail closed.
 
 ## [8.5.4] - 2026-09-08
 

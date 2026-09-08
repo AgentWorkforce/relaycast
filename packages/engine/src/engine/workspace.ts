@@ -27,6 +27,8 @@ type CreateWorkspaceOptions =
   | {
       ownerApiKey?: string;
       ownerApiKeyHash?: string;
+      /** Secret used only for anonymous bootstrap idempotency. */
+      bootstrapSecret?: string;
       idempotencyKey?: string;
       requestDigest?: string;
       expiresAt?: Date;
@@ -76,6 +78,15 @@ export async function deriveIdempotentWorkspaceApiKey(
 ): Promise<string> {
   const material = `relaycast:workspace-create:v1:${idempotencyKey}:${requestDigest}`;
   return `rk_live_${(await hmacSha256Hex(material, ownerApiKey)).slice(0, 32)}`;
+}
+
+export async function deriveBootstrapWorkspaceApiKey(
+  bootstrapSecret: string,
+  idempotencyKey: string,
+  requestDigest: string,
+): Promise<string> {
+  const material = `relaycast:workspace-create:v1:${idempotencyKey}:${requestDigest}`;
+  return `rk_live_${(await hmacSha256Hex(material, bootstrapSecret)).slice(0, 32)}`;
 }
 
 function idempotencyConflict(message: string, code = 'workspace_create_idempotency_conflict') {
@@ -189,6 +200,7 @@ export async function createWorkspace(
 ) {
   const providedOwnerApiKeyHash = typeof options === 'string' ? undefined : options?.ownerApiKeyHash;
   const providedOwnerApiKey = typeof options === 'string' ? options : options?.ownerApiKey;
+  const bootstrapSecret = typeof options === 'string' ? undefined : options?.bootstrapSecret;
   const expiresAt = typeof options === 'string' ? undefined : options?.expiresAt;
   const derivedOwnerApiKeyHash = providedOwnerApiKey ? await hashApiKey(providedOwnerApiKey) : undefined;
 
@@ -200,14 +212,9 @@ export async function createWorkspace(
   const createOptions = typeof options === 'string' ? undefined : options;
   const idempotencyKey = createOptions?.idempotencyKey;
   const requestDigest = createOptions?.requestDigest;
+  const ownerIdempotency = Boolean(idempotencyKey && (providedOwnerApiKey || providedOwnerApiKeyHash));
+  const bootstrapIdempotency = Boolean(idempotencyKey && !ownerIdempotency);
 
-  if (idempotencyKey && !providedOwnerApiKey) {
-    throw codedError(
-      'An authenticated owner API key is required when Idempotency-Key is supplied',
-      'workspace_create_idempotency_owner_required',
-      401,
-    );
-  }
   if (idempotencyKey && !requestDigest) {
     throw codedError(
       'A request digest is required for workspace create idempotency',
@@ -216,17 +223,37 @@ export async function createWorkspace(
     );
   }
 
+  if (bootstrapIdempotency && !bootstrapSecret) {
+    throw codedError(
+      'Anonymous workspace create idempotency is not configured on this deployment',
+      'workspace_create_idempotency_unavailable',
+      503,
+    );
+  }
+  if (ownerIdempotency && !providedOwnerApiKey) {
+    throw codedError(
+      'An authenticated owner API key is required when Idempotency-Key is supplied',
+      'workspace_create_idempotency_owner_required',
+      401,
+    );
+  }
+
   const idempotencyKeyHash = idempotencyKey ? await hashApiKey(idempotencyKey) : undefined;
+  const ownerScopeHash = bootstrapIdempotency && idempotencyKey
+    ? await hashApiKey(`bootstrap:${idempotencyKey}`)
+    : ownerApiKeyHash;
   const deterministicApiKey = idempotencyKey && requestDigest
-    ? await deriveIdempotentWorkspaceApiKey(providedOwnerApiKey!, idempotencyKey, requestDigest)
+    ? (providedOwnerApiKey
+      ? await deriveIdempotentWorkspaceApiKey(providedOwnerApiKey, idempotencyKey, requestDigest)
+      : await deriveBootstrapWorkspaceApiKey(bootstrapSecret!, idempotencyKey, requestDigest))
     : undefined;
 
-  if (ownerApiKeyHash && idempotencyKeyHash && requestDigest) {
+  if (ownerScopeHash && idempotencyKeyHash && requestDigest) {
     const [binding] = await db
       .select()
       .from(workspaceCreateIdempotency)
       .where(and(
-        eq(workspaceCreateIdempotency.ownerScopeHash, ownerApiKeyHash),
+        eq(workspaceCreateIdempotency.ownerScopeHash, ownerScopeHash),
         eq(workspaceCreateIdempotency.idempotencyKeyHash, idempotencyKeyHash),
       ));
     if (binding) {
@@ -309,9 +336,9 @@ export async function createWorkspace(
                 topic: 'General discussion',
               })
               .returning(),
-            ...(ownerApiKeyHash && idempotencyKeyHash && requestDigest
+            ...(ownerScopeHash && idempotencyKeyHash && requestDigest
               ? [writeDb.insert(workspaceCreateIdempotency).values({
-                ownerScopeHash: ownerApiKeyHash,
+                ownerScopeHash,
                 idempotencyKeyHash,
                 requestDigest,
                 workspaceId,
@@ -321,9 +348,9 @@ export async function createWorkspace(
           { requireAtomic: true },
         ) as WorkspaceWriteResult;
       } catch (cause) {
-        if (isUniqueConstraintError(cause) && ownerApiKeyHash && idempotencyKeyHash && requestDigest) {
+        if (isUniqueConstraintError(cause) && ownerScopeHash && idempotencyKeyHash && requestDigest) {
           const [binding] = await db.select().from(workspaceCreateIdempotency).where(and(
-            eq(workspaceCreateIdempotency.ownerScopeHash, ownerApiKeyHash),
+            eq(workspaceCreateIdempotency.ownerScopeHash, ownerScopeHash),
             eq(workspaceCreateIdempotency.idempotencyKeyHash, idempotencyKeyHash),
           ));
           if (binding) {

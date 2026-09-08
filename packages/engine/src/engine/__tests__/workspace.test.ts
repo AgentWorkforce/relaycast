@@ -14,6 +14,7 @@ import * as snowflake from '../snowflake.js';
 import {
   createWorkspace,
   deleteWorkspace,
+  deriveBootstrapWorkspaceApiKey,
   deriveIdempotentWorkspaceApiKey,
   workspaceCreateRequestDigest,
 } from '../workspace.js';
@@ -222,6 +223,71 @@ describe('workspace write durability', () => {
     expect(replay.created).toBe(false);
     expect(replay.workspace_id).toBe(created.workspace_id);
     expect(replay.api_key).toBe(created.api_key);
+  });
+
+  it('recovers an anonymous bootstrap key after commit/response loss', async () => {
+    const batchCalls = attachD1Batch({ loseFirstResponse: true });
+    const bootstrapSecret = 'test-bootstrap-secret';
+    const idempotencyKey = 'bootstrap-recovery-379';
+    const requestDigest = await workspaceCreateRequestDigest({ name: 'bootstrap-child', expiresInSeconds: 3_600 });
+    const created = await createWorkspace(db, 'bootstrap-child', {
+      bootstrapSecret,
+      idempotencyKey,
+      requestDigest,
+      expiresAt: new Date(Date.now() + 3_600_000),
+    });
+
+    expect(batchCalls()).toBe(2);
+    expect(created.created).toBe(true);
+    expect(created.api_key).toBe(await deriveBootstrapWorkspaceApiKey(bootstrapSecret, idempotencyKey, requestDigest));
+    expect(await db.select().from(workspaces)).toHaveLength(1);
+    expect(await db.select().from(workspaceCreateIdempotency)).toHaveLength(1);
+
+    const replay = await createWorkspace(db, 'bootstrap-child', {
+      bootstrapSecret,
+      idempotencyKey,
+      requestDigest,
+    });
+    expect(replay.created).toBe(false);
+    expect(replay.workspace_id).toBe(created.workspace_id);
+    expect(replay.api_key).toBe(created.api_key);
+  });
+
+  it('isolates bootstrap bindings from owner bindings and rejects digest conflicts', async () => {
+    attachD1Batch({});
+    const bootstrapSecret = 'test-bootstrap-secret';
+    const idempotencyKey = 'same-key-379';
+    const requestDigest = await workspaceCreateRequestDigest({ name: 'bootstrap-isolation' });
+    const bootstrap = await createWorkspace(db, 'bootstrap-isolation', {
+      bootstrapSecret, idempotencyKey, requestDigest,
+    });
+    const owner = await createWorkspace(db, 'owner-isolation', {
+      ownerApiKey: 'rk_live_owner_379', idempotencyKey, requestDigest,
+    });
+    expect(owner.workspace_id).not.toBe(bootstrap.workspace_id);
+    expect(owner.api_key).not.toBe(bootstrap.api_key);
+
+    const changedDigest = await workspaceCreateRequestDigest({ name: 'bootstrap-changed' });
+    await expect(createWorkspace(db, 'bootstrap-changed', {
+      bootstrapSecret, idempotencyKey, requestDigest: changedDigest,
+    })).rejects.toMatchObject({ code: 'workspace_create_idempotency_conflict', status: 409 });
+    expect(await db.select().from(workspaces)).toHaveLength(2);
+  });
+
+  it('serializes concurrent anonymous bootstrap duplicates', async () => {
+    attachD1Batch({});
+    const bootstrapSecret = 'test-bootstrap-secret';
+    const idempotencyKey = 'bootstrap-concurrent-379';
+    const requestDigest = await workspaceCreateRequestDigest({ name: 'bootstrap-concurrent' });
+    const [first, second] = await Promise.all([
+      createWorkspace(db, 'bootstrap-concurrent', { bootstrapSecret, idempotencyKey, requestDigest }),
+      createWorkspace(db, 'bootstrap-concurrent', { bootstrapSecret, idempotencyKey, requestDigest }),
+    ]);
+    expect(first.workspace_id).toBe(second.workspace_id);
+    expect(first.api_key).toBe(second.api_key);
+    expect(await db.select().from(workspaces)).toHaveLength(1);
+    expect(await db.select().from(channels)).toHaveLength(1);
+    expect(await db.select().from(workspaceCreateIdempotency)).toHaveLength(1);
   });
 
   it('does not treat an unrelated workspace-id collision as own recovery', async () => {

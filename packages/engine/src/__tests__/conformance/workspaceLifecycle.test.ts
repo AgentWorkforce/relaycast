@@ -104,9 +104,16 @@ describe('workspace lifecycle', () => {
       headers: { 'content-type': 'application/json', 'Idempotency-Key': 'cloud-job-unauthenticated' },
       body: JSON.stringify({ name: 'must-not-create' }),
     });
-    expect(unauthenticated.status).toBe(401);
-    expect((await unauthenticated.json() as { error: { code: string } }).error.code)
-      .toBe('workspace_create_idempotency_owner_required');
+    expect(unauthenticated.status).toBe(201);
+    const bootstrap = (await unauthenticated.json() as { data: { workspace_id: string; api_key: string } }).data;
+    expect(bootstrap.api_key).toMatch(/^rk_live_/);
+    const bootstrapReplay = await stack.app.request('/v1/workspaces', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'Idempotency-Key': 'cloud-job-unauthenticated' },
+      body: JSON.stringify({ name: 'must-not-create' }),
+    });
+    expect(bootstrapReplay.status).toBe(200);
+    expect((await bootstrapReplay.json() as { data: unknown }).data).toEqual(bootstrap);
 
     const headers = {
       'content-type': 'application/json',
@@ -136,6 +143,42 @@ describe('workspace lifecycle', () => {
     const afterDelete = await stack.app.request('/v1/workspaces', { method: 'POST', headers, body });
     expect(afterDelete.status).toBe(409);
     expect((await afterDelete.json() as { error: { code: string } }).error.code).toBe('workspace_create_idempotency_terminalized');
+  });
+
+  it('replays anonymous bootstrap creates and terminalizes them on expiry', async () => {
+    const headers = {
+      'content-type': 'application/json',
+      'Idempotency-Key': 'bootstrap-expiry-379',
+    };
+    const body = JSON.stringify({ name: 'bootstrap-expiry', expires_in_seconds: 60 });
+    const first = await stack.app.request('/v1/workspaces', { method: 'POST', headers, body });
+    expect(first.status).toBe(201);
+    const firstData = (await first.json() as { data: { workspace_id: string; api_key: string } }).data;
+
+    const owner = await createWorkspace(stack.app, 'bootstrap-owner');
+    const ownerAttempt = await stack.app.request('/v1/workspaces', {
+      method: 'POST',
+      headers: { ...headers, authorization: `Bearer ${owner.workspaceKey}` },
+      body: JSON.stringify({ name: 'owner-scoped-create' }),
+    });
+    expect(ownerAttempt.status).toBe(201);
+    const ownerData = (await ownerAttempt.json() as { data: { workspace_id: string } }).data;
+    expect(ownerData.workspace_id).not.toBe(firstData.workspace_id);
+
+    const authenticated = await stack.app.request('/v1/activity', {
+      headers: { authorization: `Bearer ${firstData.api_key}` },
+    });
+    expect(authenticated.status).toBe(200);
+
+    await reapExpiredWorkspaces(stack.runtime.handle.db, stack.runtime.deps.files, {
+      now: new Date(Date.now() + 61_000),
+    });
+    const replay = await stack.app.request('/v1/workspaces', { method: 'POST', headers, body });
+    expect(replay.status).toBe(409);
+    expect((await replay.json() as { error: { code: string } }).error.code)
+      .toBe('workspace_create_idempotency_terminalized');
+    expect(await stack.runtime.handle.db.select().from(workspaces)).toHaveLength(2);
+    expect(firstData.api_key).toMatch(/^rk_live_/);
   });
 
   it.each([0, 59, 2_592_001, 60.5])(

@@ -204,10 +204,7 @@ workspaceRoutes.post('/workspaces', async (c) => {
     }
     const db = c.get('db');
     const ownerApiKey = extractOwnerApiKey(c.req.header('Authorization'));
-    if (idempotencyKey) {
-      if (!ownerApiKey) {
-        return jsonError(c, 'workspace_create_idempotency_owner_required', 'An authenticated workspace owner is required when Idempotency-Key is supplied', 401);
-      }
+    if (idempotencyKey && ownerApiKey) {
       const ownerAuth = await c.get('engine').auth.authenticate({ token: ownerApiKey, require: 'workspace', db });
       if (!ownerAuth.ok) {
         return jsonError(c, ownerAuth.code, ownerAuth.message, ownerAuth.status as ContentfulStatusCode);
@@ -226,6 +223,9 @@ workspaceRoutes.post('/workspaces', async (c) => {
       name,
       {
         ...(ownerApiKey ? { ownerApiKey } : {}),
+        ...(idempotencyKey && !ownerApiKey
+          ? { bootstrapSecret: c.get('engine').config.workspaceBootstrapSecret }
+          : {}),
         ...(idempotencyKey ? { idempotencyKey } : {}),
         ...(requestDigest ? { requestDigest } : {}),
         ...(expiresInSeconds

@@ -1492,10 +1492,11 @@ paths:
       summary: Create workspace
       description: >
         Create a workspace and get an API key when a new workspace is created. This operation is
-        idempotent by workspace name for the same bearer workspace key. For delegated creates,
-        provide an `Idempotency-Key`: the authenticated owner, key, and exact request digest are
-        durably bound to one child. Replaying the same request returns the same child key with a
-        `200` response, while changing the request returns `409`. If transient storage attempts are
+        idempotent by workspace name for the same bearer workspace key. For crash-safe creates,
+        provide an `Idempotency-Key`: authenticated requests bind the owner, key, and exact request
+        digest, while anonymous bootstrap requests bind the key to the deployment. Replaying the
+        same request returns the same workspace and usable API key with a `200` response, while
+        changing the request returns `409`. If transient storage attempts are
         exhausted and the server cannot confirm the committed workspace/channel pair, it returns
         `503 workspace_storage_unavailable`; that outcome is indeterminate.
       tags:
@@ -1534,9 +1535,11 @@ paths:
             maxLength: 255
             pattern: '^[\x21-\x7E]+$'
           description: >-
-            Owner-scoped key for crash-safe delegated creation. Requires an
-            authenticated `Authorization: Bearer rk_*` owner. Reusing it with
-            the same request replays the child; a different request is a 409.
+            Crash-safe workspace creation key. With an authenticated
+            `Authorization: Bearer rk_*` owner it is owner-scoped; without
+            authorization it is scoped to anonymous bootstrap creation on this
+            deployment. Reusing it with the same request replays the workspace;
+            a different request is a 409.
       responses:
         '200':
           description: Existing workspace returned (idempotent)
@@ -1575,7 +1578,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
-          description: Missing or invalid owner workspace key for keyed creation
+          description: Invalid owner workspace key for authenticated keyed creation
           content:
             application/json:
               schema:

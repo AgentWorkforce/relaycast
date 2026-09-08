@@ -10,6 +10,7 @@ import { getRequestLogger, toErrorDetails } from './lib/logger.js';
 import { asCodedError, safeClientErrorMessage } from './lib/httpError.js';
 import { jsonError, jsonMalformedBody, jsonNotFound } from './lib/httpResponse.js';
 import { requiredOriginInfo } from './lib/origin.js';
+import { randomHex } from './lib/crypto.js';
 import { emitServerEvent } from './lib/serverTelemetry.js';
 import {
   authenticateNodeWs,
@@ -75,7 +76,13 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     auth: deps.auth,
     entitlements: deps.entitlements,
     telemetry: deps.telemetry,
-    config: deps.config ?? {},
+    config: {
+      ...deps.config,
+      // Hosts should provide a persisted deployment secret. A process secret
+      // keeps anonymous bootstrap idempotency safe for self-contained engine
+      // instances that omit optional configuration.
+      workspaceBootstrapSecret: deps.config?.workspaceBootstrapSecret ?? randomHex(32),
+    },
   };
 
   const app = new Hono<AppEnv>();
