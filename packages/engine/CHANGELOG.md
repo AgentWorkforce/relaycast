@@ -7,7 +7,15 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Roster reads skip released tombstones; active/online filters seek by workspace, status, and last-seen time.
+
+### Migration
+
+- Adds `0051_agent_roster_index.sql`, a partial index on non-released agents. Existing indexes and roster response fields remain compatible.
 
 ## [8.5.4] - 2026-09-08
 

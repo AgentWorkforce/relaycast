@@ -139,6 +139,9 @@ export const agents = sqliteTable(
     uniqueIndex('agents_workspace_name_unique').on(table.workspaceId, table.name),
     uniqueIndex('agents_workspace_id_unique').on(table.workspaceId, table.id),
     index('idx_agents_workspace').on(table.workspaceId),
+    index('idx_agents_roster')
+      .on(table.workspaceId, table.status, table.lastSeen)
+      .where(sql`${table.status} <> 'released'`),
     index('idx_agents_token').on(table.tokenHash),
     index('idx_agents_previous_token').on(table.previousTokenHash),
     index('idx_agents_active_last_seen')

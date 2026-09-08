@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Agent roster reads skip released history and seek live status ranges through a workspace-scoped index.
 
 ## [8.5.4] - 2026-09-08
 

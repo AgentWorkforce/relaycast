@@ -1,0 +1,80 @@
+{
+  "id": "compact_olwxa5gmzkbd",
+  "version": 1,
+  "type": "compacted",
+  "compactedAt": "2026-09-08T17:38:54.230Z",
+  "sourceTrajectories": [
+    "traj_r1uogx1hwaxp"
+  ],
+  "dateRange": {
+    "start": "2026-09-08T17:30:45.013Z",
+    "end": "2026-09-08T17:38:53.896Z"
+  },
+  "summary": {
+    "totalDecisions": 1,
+    "totalEvents": 1,
+    "uniqueAgents": [
+      "default"
+    ]
+  },
+  "decisionGroups": [
+    {
+      "category": "tooling",
+      "decisions": [
+        {
+          "question": "Separate shared executor contention from avoidable roster row visits",
+          "chosen": "Separate shared executor contention from avoidable roster row visits",
+          "reasoning": "Live analytics show old fanout and replay queries averaging seconds; cloud #105 holds their bounded replacements. Add a partial roster index and row-visit regression without claiming recovery or bypassing the rollout capacity gate.",
+          "fromTrajectory": "traj_r1uogx1hwaxp"
+        }
+      ]
+    }
+  ],
+  "keyLearnings": [],
+  "keyFindings": [],
+  "filesAffected": [],
+  "commits": [],
+  "narrative": "This short (8-minute) lead session investigated roster read row-visit costs and contention from shared executor queries. The agent measured production traffic showing the old fanout and replay queries averaging in the seconds, then landed a targeted mitigation: a new partial index migration at `packages/engine/src/db/migrations/0051_agent_roster_index.sql`, a row-visit regression harness in `packages/engine/src/__tests__/conformance/agentRoster.test.ts` (dropping visits from 11,018 to 1,016), and supporting edits to `packages/engine/src/db/schema.ts`, `packages/engine/src/engine/agent.ts`, and the compact migration tests. Critically, the fix was scoped narrowly — it does not claim to resolve executor contention or bypass the rollout capacity gate. The bounded replacements for the slow fanout/replay queries live in cloud PR #105, and that dependency is explicitly recorded rather than duplicated locally. API surface and TTL semantics were preserved. Roster + migration test suites (48 tests) plus typecheck and lint all pass. Artifacts captured under `.agentworkforce/roster-0908/` and `docs/agent-roster-latency-389.{md,json}` document the latency analysis. No commits were made in this session; changes remain in the working tree on branch `fix/agent-roster-read-cost`.",
+  "decisions": [
+    {
+      "question": "How to address roster read cost without overreaching into shared executor contention?",
+      "chosen": "Separate the two problems: land a partial roster index + row-visit regression locally; defer bounded fanout/replay query replacements to cloud PR #105",
+      "reasoning": "Production measurements showed old fanout and replay queries averaging in the seconds — a symptom of shared executor contention that already has a bounded fix in flight in cloud #105. Duplicating that work locally would bypass the rollout capacity gate and conflate two independent problems.",
+      "impact": "Keeps this PR narrowly scoped to an index + regression test (row visits 11,018 → 1,016), preserves API/TTL semantics, and defers to the existing rollout process for the contention fix."
+    }
+  ],
+  "conventions": [
+    {
+      "pattern": "Add a row-visit regression test alongside any index-based read-cost fix",
+      "rationale": "Row-visit counts are a stable, migration-independent signal that a partial index is actually being used; asserting the count (e.g. 11,018 → 1,016) prevents silent regression if the planner or schema drifts.",
+      "scope": "packages/engine/src/__tests__/conformance/agentRoster.test.ts and similar conformance suites"
+    },
+    {
+      "pattern": "Record cross-repo rollout dependencies in the PR/analysis notes rather than reimplementing the fix locally",
+      "rationale": "Bypassing the rollout capacity gate to duplicate a cloud-side fix risks divergence and skips the gating process. Explicit dependency notes keep scopes clean.",
+      "scope": "Engine PRs that touch queries also being reworked in the cloud repo (e.g. cloud #105)"
+    },
+    {
+      "pattern": "Preserve API surface and TTL semantics when landing performance-only changes",
+      "rationale": "Index/migration work should be transparent to callers and cache behavior so it can ship independently of feature changes.",
+      "scope": "packages/engine engine/agent + db layers"
+    }
+  ],
+  "lessons": [
+    {
+      "lesson": "Distinguish shared-executor contention from avoidable per-query row visits before proposing a fix",
+      "context": "Live analytics attributed multi-second latencies to old fanout/replay queries — a systemic contention issue — while the roster read had a separate, index-shaped problem.",
+      "recommendation": "Measure production first, then split the mitigation: fix what you own locally (index + regression) and defer systemic fixes to the owning PR/gate."
+    },
+    {
+      "lesson": "Report scope honestly — do not claim recovery of latencies you did not fix",
+      "context": "The session explicitly refused to claim the index resolved executor contention, since cloud #105 is the actual fix for the slow fanout/replay queries.",
+      "recommendation": "PR descriptions and retrospectives should name exactly which metric moved (row visits) and which did not (end-to-end contention latency)."
+    }
+  ],
+  "openQuestions": [
+    "When does cloud PR #105 (bounded fanout/replay query replacements) land, and should this engine change wait on it or ship independently?",
+    "Are the docs/agent-roster-latency-389.{md,json} artifacts intended to be committed, or kept as local investigation notes under .agentworkforce/?",
+    "No commit was made — is the intent to bundle 0051_agent_roster_index.sql with the roster test + schema/agent.ts edits in a single PR on fix/agent-roster-read-cost?"
+  ]
+}
