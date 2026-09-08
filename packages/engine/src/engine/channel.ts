@@ -150,8 +150,10 @@ export async function listChannels(
 }
 
 export async function getChannel(db: Db, workspaceId: string, name: string) {
-  // Check in-memory cache first
-  const cached = await getCachedChannel(workspaceId, name);
+  // Subscription membership is a launch/lifecycle proof. Read it live even when
+  // a node lifecycle release bypasses the normal channel mutation handlers.
+  const cacheable = !name.startsWith(SUBSCRIPTION_CHANNEL_PREFIX);
+  const cached = cacheable ? await getCachedChannel(workspaceId, name) : null;
   if (cached) return cached;
 
   const [channel] = await db
@@ -194,7 +196,7 @@ export async function getChannel(db: Db, workspaceId: string, name: string) {
   };
 
   // Populate cache
-  await setCachedChannel(workspaceId, name, result);
+  if (cacheable) await setCachedChannel(workspaceId, name, result);
 
   return result;
 }

@@ -56,4 +56,18 @@ describe('agent subscription channels', () => {
     expect((await request(`/v1/channels/${current.name}`, 'PATCH', { metadata: { subscription_agent_id: 'another' } })).status).toBe(403);
   });
 
+  it('reads live membership after a lifecycle release without a host node', async () => {
+    const ws = await createWorkspace(stack.app, 'target-release');
+    await registerAgent(stack.app, ws.workspaceKey, 'released-worker');
+    const headers = { authorization: `Bearer ${ws.workspaceKey}`, 'content-type': 'application/json' };
+    const route = await stack.app.request('/v1/agents/released-worker/subscription-channel', { method: 'POST', headers });
+    const { data: channel } = await route.json();
+    expect(channel.members).toHaveLength(1);
+    const release = await stack.app.request('/v1/agents/release', { method: 'POST', headers,
+      body: JSON.stringify({ name: 'released-worker', delete_agent: true, reason: 'owned process stopped' }) });
+    expect(release.status).toBe(201);
+    const after = await stack.app.request(`/v1/channels/${channel.name}`, { headers });
+    expect((await after.json()).data.members).toHaveLength(0);
+  });
+
 });
