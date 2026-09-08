@@ -8,6 +8,7 @@ import * as inboundWebhookEngine from '../engine/inboundWebhook.js';
 import * as triggerEngine from '../engine/trigger.js';
 import * as channelEngine from '../engine/channel.js';
 import { fanoutToChannel } from './fanout.js';
+import { routeDeliveryOutcomes } from './deliveryRouting.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
@@ -137,9 +138,10 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
     if (!result) {
       return jsonNotFound(c, 'webhook_not_found', 'Webhook not found or inactive');
     }
-    const { workspace_id, channel_id, agent_id, ...responseData } = result;
+    const { workspace_id, channel_id, agent_id, _deliveries, _delivery_rejections, ...responseData } = result;
 
-    const eventData = { ...responseData, channel_id };
+    const eventData = { ...responseData, id: responseData.message_id, channel_id, agent_id };
+    runInBackground(c, routeDeliveryOutcomes(c, _deliveries, 'message.created', eventData, { workspaceId: workspace_id }), 'route webhook deliveries');
     if (channel_id) {
       runInBackground(
         c,

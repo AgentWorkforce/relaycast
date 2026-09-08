@@ -1003,3 +1003,37 @@ Relaycast includes anonymous telemetry.
 ## License
 
 Apache-2.0
+
+
+### Agent subscription delivery
+
+Workspace owners can `POST /v1/agents/{name}/subscription-channel` to obtain an
+idempotent channel whose only permitted member is that exact agent identity.
+The response is a normal channel with its verified `members` list. This operation
+does not rotate the agent token. The `agent-events-` channel prefix is reserved;
+routing metadata cannot be changed and other agents cannot join or be invited.
+An agent recreated under the same name gets a different channel, so old webhook
+subscriptions never transfer to its replacement. Removing the subscription deletes
+its webhook resources; a shared per-agent channel can remain for other resources.
+This is a delivery audience restriction, not a private-channel history API.
+
+Mention handles use ASCII letters, digits, underscores and hyphens. For example,
+`@build-reviewer_2` resolves the full handle, never `build`. Duplicate mentions
+produce one mention delivery. A backslash immediately before `@` escapes it;
+email addresses are not mentions. Mention delivery still requires membership in
+the channel and workspace authorization.
+
+Relayfile events preserve distinct events in FIFO order for members present when
+accepted. Joining later does not backfill old delivery rows. A full recipient
+mailbox causes the entire inbound event to return **503 `mailbox_full`** with
+`Retry-After: 30`; neither a partial message nor partial deliveries are committed.
+The producer must retry the same event ID and retain exhausted attempts in its
+DLQ. No newest-only coalescing is applied. The normal mailbox TTL still applies:
+expired deliveries become inspectable dead letters, not acted-on receipts.
+Operators must drain/retry the DLQ before declaring an event matrix complete.
+
+Explicit `target_node` on built-in spawn honors fleet placement even when a
+legacy workspace-global node action named `spawn` exists; its caller allowlist
+continues to apply. A dispatch acknowledgement does not establish harness readiness.
+
+Verified spawn (`verify_ready: true`) fails with `spawn_target_unavailable` when no connected eligible provider can dispatch the request. Unverified legacy requests retain queue behavior. Relayfile ingress preserves authenticated `providerEventType` and `resourceRef` as `provider_event_type` and `resource_ref` in message metadata, alongside the provider record. Generic file events do not imply PR, CI, or review semantics.

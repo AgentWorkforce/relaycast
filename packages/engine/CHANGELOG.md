@@ -7,7 +7,21 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `POST /v1/agents/{name}/subscription-channel` provisions an exact identity-bound delivery channel without rotating recipient credentials.
+
+### Fixed
+
+- Agent deletion invalidates cached membership so subscription route checks reflect the released identity.
+- Relayfile ingress preserves authenticated provider event semantics and resource references.
+- Hyphenated mentions resolve the full handle without waking a prefix agent.
+- Raw inbound webhooks now create durable agent deliveries.
+- Relayfile ingress rejects full mailboxes atomically so producers can retry unique events without partial delivery.
+- Explicit spawn targets are honored when a legacy global node alias exists, preserving its caller allowlist.
+
 
 ## [8.5.2] - 2026-09-07
 

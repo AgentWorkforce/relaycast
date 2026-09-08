@@ -7,12 +7,46 @@ import { codedError } from '../lib/httpError.js';
 
 type Db = ReturnType<typeof getDb>;
 
+const SUBSCRIPTION_CHANNEL_PREFIX = 'agent-events-';
+
+function assertSubscriptionRecipient(channel: { name: string; metadata: unknown }, agentId: string) {
+  if (channel.name.startsWith(SUBSCRIPTION_CHANNEL_PREFIX) &&
+      (channel.metadata as Record<string, unknown> | null)?.subscription_agent_id !== agentId) {
+    throw codedError('Only the subscription recipient may join this channel', 'subscription_recipient_only', 403);
+  }
+}
+
+/** Owner-managed delivery route. Identity IDs prevent a recreated name inheriting old subscriptions. */
+export async function ensureAgentSubscriptionChannel(db: Db, workspaceId: string, agentName: string) {
+  const [agent] = await db.select().from(agents).where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, agentName)));
+  if (!agent || agent.status === 'released') throw codedError('Recipient agent not found', 'agent_not_found', 404);
+  const name = `${SUBSCRIPTION_CHANNEL_PREFIX}${agent.id}`;
+  await db.insert(channels).values({
+    id: generateId(), workspaceId, name,
+    metadata: { subscription_agent_id: agent.id },
+  }).onConflictDoNothing();
+  const [channel] = await db.select().from(channels).where(and(eq(channels.workspaceId, workspaceId), eq(channels.name, name)));
+  assertSubscriptionRecipient(channel, agent.id);
+  if (channel.isArchived) throw codedError('Subscription channel is archived', 'channel_archived', 409);
+  // Recheck the identity in the INSERT, serialized with tombstoning/removal.
+  // A release between the lookup and this write must never rejoin a tombstone.
+  await db.run(sql`INSERT INTO channel_members (channel_id, agent_id, role)
+    SELECT ${channel.id}, id, 'owner' FROM agents
+    WHERE id = ${agent.id} AND name = ${agentName} AND status != 'released'
+    ON CONFLICT DO NOTHING`);
+  await invalidateChannelCache(workspaceId, name);
+  return getChannel(db, workspaceId, name);
+}
+
 export async function createChannel(
   db: Db,
   workspaceId: string,
   data: { name: string; topic?: string; metadata?: Record<string, unknown> },
   creatorAgentId?: string,
 ) {
+  if (data.name.startsWith(SUBSCRIPTION_CHANNEL_PREFIX)) {
+    throw codedError('Channel prefix is reserved for agent subscriptions', 'reserved_channel_name', 400);
+  }
   // Validate channel name: lowercase alphanumeric + hyphens
   if (!/^[a-z0-9][a-z0-9-]*$/.test(data.name)) {
     throw codedError('Channel name must be lowercase alphanumeric and hyphens, starting with a letter or number', 'invalid_channel_name', 400);
@@ -184,6 +218,9 @@ export async function updateChannel(
     throw codedError('Cannot update an archived channel', 'channel_archived', 400);
   }
 
+  if (name.startsWith(SUBSCRIPTION_CHANNEL_PREFIX) && updates.metadata !== undefined) {
+    throw codedError('Subscription routing metadata is immutable', 'subscription_metadata_immutable', 403);
+  }
   const setClause: Record<string, unknown> = {};
   if (updates.topic !== undefined) setClause.topic = updates.topic;
   if (updates.metadata !== undefined) setClause.metadata = updates.metadata;
@@ -259,6 +296,8 @@ export async function joinChannel(
   if (channel.isArchived) {
     throw codedError('Cannot join an archived channel', 'channel_archived', 400);
   }
+
+  assertSubscriptionRecipient(channel, agentId);
 
   // Check if already a member
   const [existing] = await db
@@ -408,6 +447,8 @@ export async function inviteAgent(
   if (!invitee) {
     throw codedError(`Agent "${inviteeAgentName}" not found`, 'agent_not_found', 404);
   }
+
+  assertSubscriptionRecipient(channel, invitee.id);
 
   // Check if already a member
   const [existing] = await db

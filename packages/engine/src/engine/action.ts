@@ -1601,6 +1601,13 @@ async function dispatchSpawn(args: {
     throw error;
   }
   const nodeId = placement.node.id;
+  const shadow = args.bypassShadow ? null : await fetchNodeAction(args.db, args.workspaceId, nodeId, capability);
+  const capProvider = (await capacityProviderName(args.db, args.workspaceId, nodeId, capability)) ?? DEFAULT_PROVIDER_NAME;
+  if (input.verify_ready === true && (placement.queued || !args.registry.isProviderConnected(args.workspaceId, nodeId, shadow?.handlerProvider ?? capProvider))) {
+    await failNeverDispatchedInvocation(args.db, args.workspaceId, invocation.id, 'spawn_target_unavailable');
+    if (!placement.queued) await releaseNodeCapacity(args.db, args.workspaceId, nodeId);
+    throw codedError('Verified spawn target is not connected and ready to accept work; retry when it is available', 'spawn_target_unavailable', 503);
+  }
   // Placement and the durable idempotency claim are separate writes on D1.
   // Publish the selected response target immediately; a concurrent replay in
   // this narrow interval waits for this snapshot instead of returning null.
@@ -1613,7 +1620,6 @@ async function dispatchSpawn(args: {
   // Capacity-direct delegation (ctx.spawnAgent) bypasses the shadow so a handler
   // that delegates cannot re-enter itself.
   if (!args.bypassShadow) {
-    const shadow = await fetchNodeAction(args.db, args.workspaceId, nodeId, capability);
     if (shadow && shadow.handlerProvider) {
       const bound = await bindInvocationToRegisteredNodeAction(args.db, {
         workspaceId: args.workspaceId,
@@ -1651,7 +1657,6 @@ async function dispatchSpawn(args: {
     }
   }
 
-  const capProvider = (await capacityProviderName(args.db, args.workspaceId, nodeId, capability)) ?? DEFAULT_PROVIDER_NAME;
   const dispatched = await dispatchNodeInvocation({
     db: args.db,
     registry: args.registry,
@@ -1816,7 +1821,18 @@ export async function invokeAction(
     }
   }
 
-  if (!action && actionName === 'spawn') {
+  // Check availableTo access control — deny if caller is absent OR not in the list
+  if (action?.availableTo && action.availableTo.length > 0) {
+    if (!data.caller_name || !action.availableTo.includes(data.caller_name)) {
+      const who = data.caller_name ? `Agent "${data.caller_name}"` : 'Caller';
+      throw codedError(`${who} is not authorized to invoke action "${actionName}"`, 'action_denied', 403);
+    }
+  }
+
+  // Legacy workspace-global broker aliases must not swallow an explicit
+  // target_node. Capacity placement validates that target and its live provider.
+  // Keep the alias ACL above this branch; explicit targeting is not an ACL bypass.
+  if (actionName === 'spawn' && (!action || (action.handlerNodeId && (typeof data.input?.target_node === 'string' || data.input?.verify_ready === true)))) {
     return dispatchSpawn({
       db,
       registry: options.nodeConnections,
@@ -1839,14 +1855,6 @@ export async function invokeAction(
 
   if (!action) {
     throw codedError(`Action "${actionName}" not found`, 'action_not_found', 404);
-  }
-
-  // Check availableTo access control — deny if caller is absent OR not in the list
-  if (action.availableTo && action.availableTo.length > 0) {
-    if (!data.caller_name || !action.availableTo.includes(data.caller_name)) {
-      const who = data.caller_name ? `Agent "${data.caller_name}"` : 'Caller';
-      throw codedError(`${who} is not authorized to invoke action "${actionName}"`, 'action_denied', 403);
-    }
   }
 
   if (action.handlerNodeId) {

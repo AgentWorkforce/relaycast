@@ -3,6 +3,7 @@ import type { getDb } from '../db/index.js';
 import { agents, agentNodeBindings, agentRecoveryCredentials, channels, channelMembers, dmParticipants, actions, deliveries, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
+import { invalidateChannelCache } from './cache.js';
 import { codedError } from '../lib/httpError.js';
 import { directNodeIdForAgent } from './node.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
@@ -614,6 +615,9 @@ export async function deleteAgent(db: Db, workspaceId: string, name: string) {
   // ever spoken, and the caller sees the raw SQL failure with the row id in it.
   // Renaming frees the unique `(workspace_id, name)` immediately while every FK
   // target stays valid and every message keeps its sender.
+  const joinedChannels = await db.select({ name: channels.name }).from(channelMembers)
+    .innerJoin(channels, eq(channels.id, channelMembers.channelId))
+    .where(eq(channelMembers.agentId, agent.id));
   const releasedName = releasedAgentName(agent.name, agent.id);
   // The row survives, so its credential must not. `token_hash` is NOT NULL
   // UNIQUE and cannot be cleared, so rotate it to a value nobody holds.
@@ -661,6 +665,7 @@ export async function deleteAgent(db: Db, workspaceId: string, name: string) {
     writes.push(writeDb.delete(nodes).where(eq(nodes.id, directNodeIdForAgent(agent.id))));
     return writes;
   });
+  await Promise.all(joinedChannels.map(channel => invalidateChannelCache(workspaceId, channel.name)));
   return true;
 }
 

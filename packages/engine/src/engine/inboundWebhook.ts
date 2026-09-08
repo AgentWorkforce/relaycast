@@ -229,6 +229,11 @@ export async function triggerWebhook(
       createdAt,
     );
     if (sessionWrite) writes.push(sessionWrite);
+    writes.push(buildChannelDeliveryWrite(writeDb, {
+      workspaceId: webhook.workspaceId, messageId, channelId: webhook.channelId,
+      senderAgentId: postingAgentId, mode: 'immediate',
+      ttlMs: DEFAULT_MAILBOX_TTL_MS, depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
+    }));
     return writes;
   });
   const [message] = results[0] as (typeof messages.$inferSelect)[];
@@ -239,7 +244,12 @@ export async function triggerWebhook(
     .from(channels)
     .where(eq(channels.id, webhook.channelId));
 
+  const outcomes = await fetchChannelDeliveryOutcomes(db, {
+    messageId, channelId: webhook.channelId, senderAgentId: postingAgentId,
+  });
   return {
+    _deliveries: outcomes.deliveries,
+    _delivery_rejections: outcomes.rejections,
     message_id: message.id,
     agent_id: message.agentId,
     webhook_id: webhook.id,
@@ -328,10 +338,22 @@ export async function triggerIntegrationMessage(
         mode: data.mode === 'steer' ? 'next-tool-call' : 'immediate',
         ttlMs: mailbox.ttlMs,
         depthCap: mailbox.depthCap,
+        rejectOnOverflow: true,
       }),
     );
 
     return writes;
+  }, { requireAtomic: true }).catch((error: unknown) => {
+    let cause = error;
+    const seen = new Set<unknown>();
+    while (cause instanceof Error && !seen.has(cause)) {
+      seen.add(cause);
+      if (/NOT NULL constraint failed: deliveries\.workspace_id/i.test(cause.message)) {
+        throw codedError('A recipient mailbox is full; retry this event after capacity becomes available', 'mailbox_full', 503);
+      }
+      cause = cause.cause;
+    }
+    throw error;
   });
   const [message] = results[0] as (typeof messages.$inferSelect)[];
 
