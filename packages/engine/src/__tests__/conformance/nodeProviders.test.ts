@@ -38,7 +38,39 @@ describe('node providers', () => {
       body: JSON.stringify({ node_id: nodeId, name, role: 'broker', capabilities: [], max_agents: 4, tags: ['test'], version: 'v0' }),
     });
     expect(res.status).toBe(201);
+    return (await res.json() as { data: { token: string } }).data.token;
   }
+
+  it('allows node-owned spawn status reads without exposing other invocations or mutation authority', async () => {
+    const ws = await createWorkspace(stack.app, 'np-spawn-status');
+    const foreign = await createWorkspace(stack.app, 'np-spawn-status-foreign');
+    const token = await enrollNode(ws, 'node_a', 'alpha');
+    await enrollNode(ws, 'node_b', 'beta');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    await stack.runtime.handle.db.insert(actionInvocations).values([
+      { id: 'own-spawn', workspaceId: ws.workspaceId, actionName: 'spawn', dispatchedNodeId: 'node_a', status: 'completed', output: { spawned: true, ready: true } },
+      { id: 'other-node', workspaceId: ws.workspaceId, actionName: 'spawn', dispatchedNodeId: 'node_b', status: 'failed', error: 'private failure' },
+      { id: 'other-action', workspaceId: ws.workspaceId, actionName: 'deploy', dispatchedNodeId: 'node_a', status: 'completed' },
+      { id: 'unassigned', workspaceId: ws.workspaceId, actionName: 'spawn', status: 'pending' },
+      { id: 'foreign', workspaceId: foreign.workspaceId, actionName: 'spawn', status: 'pending' },
+    ]);
+    const get = (name: string, id: string, credential = token) => stack.app.request(`/v1/actions/${name}/invocations/${id}`, {
+      headers: { authorization: `Bearer ${credential}` },
+    });
+    const own = await get('spawn', 'own-spawn');
+    expect(own.status).toBe(200);
+    expect(await own.json()).toMatchObject({ data: { status: 'completed', output: { spawned: true, ready: true } } });
+    for (const [name, id] of [['spawn', 'other-node'], ['deploy', 'other-action'], ['spawn', 'unassigned'], ['spawn', 'foreign']]) {
+      expect((await get(name, id)).status).toBe(404);
+    }
+    expect((await get('spawn', 'other-node', ws.workspaceKey)).status).toBe(200);
+    expect((await get('spawn', 'other-node', caller.token)).status).toBe(200);
+    const mutation = await stack.app.request('/v1/actions/spawn/invocations/own-spawn/complete', {
+      method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ output: { ready: false } }),
+    });
+    expect(mutation.status).toBe(401);
+  });
 
   function attachSocket(workspaceId: string, nodeId: string) {
     const sock = new FakeSocket();
