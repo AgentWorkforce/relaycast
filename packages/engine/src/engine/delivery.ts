@@ -429,22 +429,24 @@ export async function markDeliveriesDelivered(
   deliveryIds: string[],
 ): Promise<number> {
   if (deliveryIds.length === 0) return 0;
-  const updated = await db
-    .update(deliveries)
-    .set({
-      status: 'delivered',
-      nextAttemptAt: null,
-      lastDispatchError: null,
-      deliveredAt: new Date(),
-      updatedAt: new Date(),
-    })
-    .where(and(
-      eq(deliveries.workspaceId, workspaceId),
-      inArray(deliveries.id, deliveryIds),
-      eq(deliveries.status, 'queued'),
-    ))
-    .returning();
-  return updated.length;
+  const now = Math.floor(Date.now() / 1000);
+  let count = 0;
+  for (let offset = 0; offset < deliveryIds.length; offset += 50) {
+    const ids = deliveryIds.slice(offset, offset + 50);
+    // Multiple IDs plus workspace/status predicates can make SQLite choose a
+    // history index. Force the existing ID primary key and stay below D1's
+    // bind limit, including callers with more than one replay page of IDs.
+    const updated = await db.all<{ id: string }>(sql`
+      UPDATE deliveries INDEXED BY sqlite_autoindex_deliveries_1
+      SET status = 'delivered', next_attempt_at = NULL, last_dispatch_error = NULL,
+        delivered_at = ${now}, updated_at = ${now}
+      WHERE workspace_id = ${workspaceId} AND status = 'queued'
+        AND id IN (${sql.join(ids.map(id => sql`${id}`), sql`, `)})
+      RETURNING id
+    `);
+    count += updated.length;
+  }
+  return count;
 }
 
 export interface DeliveryFailureNotice {

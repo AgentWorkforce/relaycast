@@ -61,6 +61,14 @@ describe('bounded database work with retained history', () => {
       const plan = JSON.stringify(f.sqlite.prepare('EXPLAIN QUERY PLAN ' + query.sql).all(...query.params));
       expect(plan).toContain('SEARCH deliveries USING INDEX sqlite_autoindex_deliveries_1');
     }
+    const updates = f.queries.filter(q => q.sql.includes('UPDATE deliveries INDEXED BY sqlite_autoindex_deliveries_1'));
+    expect(updates).toHaveLength(3);
+    for (const query of updates) {
+      expect(query.params.length).toBeLessThan(100);
+      const plan = JSON.stringify(f.sqlite.prepare('EXPLAIN QUERY PLAN ' + query.sql).all(...query.params));
+      expect(plan).toContain('SEARCH deliveries USING INDEX sqlite_autoindex_deliveries_1');
+      expect(plan).not.toContain('idx_deliveries_status');
+    }
   });
 
   it('does not overtake a failed lower sequence and resumes it on the next trigger', async () => {
