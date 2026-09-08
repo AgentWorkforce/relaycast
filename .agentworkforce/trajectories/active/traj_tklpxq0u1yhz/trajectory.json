@@ -256,6 +256,18 @@
             "reasoning": "Parallel proof reproduced both fixed-port contention and shared-tag deletion/build races. Run-unique resources preserve isolation; restarted containers re-resolve their ephemeral host port."
           },
           "significance": "high"
+        },
+        {
+          "ts": 1788893398038,
+          "type": "decision",
+          "content": "Bound npm reruns to build tarball integrity and annotated tag provenance: Bound npm reruns to build tarball integrity and annotated tag provenance",
+          "raw": {
+            "question": "Bound npm reruns to build tarball integrity and annotated tag provenance",
+            "chosen": "Bound npm reruns to build tarball integrity and annotated tag provenance",
+            "alternatives": [],
+            "reasoning": "Version-only registry checks accepted stale or wrong-source packages; immutable tarballs, source/tree identity, and explicit tag trailers fail closed while allowing exact same-attempt recovery."
+          },
+          "significance": "high"
         }
       ]
     }
