@@ -23,6 +23,27 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Explicit spawn targets are honored when a legacy global node alias exists, preserving its caller allowlist.
 
 
+## [8.5.4] - 2026-09-08
+
+### Migration
+
+- Adds migration `0050_compact_maintenance_indexes.sql` to reduce upgrade storage pressure without deleting history. See the [rollout guide](../../docs/compact-maintenance-migrations.md) for migration and rollback requirements.
+
+## [8.5.3] - 2026-09-08
+
+### Fixed
+
+- Node replay hydrates 50-row indexed mailbox pages, coalesces identical triggers, and stops at failed lower sequences; fanout depth checks and initial redrive use predicate-matched indexes.
+- Retention examines bounded candidate pages with durable round-robin cursors and finite traversal fences, preserving workspace TTL overrides and event high-water marks. `batchLimit` now limits candidates (cap 200), `maxBatches` is capped at five, and `maxDurationMs` bounds admission of new pages (default 10s).
+- Scheduled delivery redrive runs at most four dispatch pipelines concurrently.
+- Replay removes its in-flight entry atomically with completion; corrupt retention cursors restart safely and invalid clocks fail clearly before mutation when a positive TTL is active.
+- Redrive scans bounded, resumable metadata windows through route- and workspace-matched indexes before expiry filtering and hydration. A rolling dispatch pool immediately reuses available slots.
+
+### Migration
+
+- Apply `0048_bounded_maintenance.sql` before upgrading: adds replay/retention indexes and the `maintenance_cursors` table. Existing history and TTL policies are unchanged.
+- Also apply append-only `0049_redrive_review_hardening.sql`: adds predicate-matched redrive indexes and explicitly named delivery/read-receipt lookup indexes instead of relying on SQLite autoindex names.
+
 ## [8.5.2] - 2026-09-07
 
 ### Fixed

@@ -1,4 +1,4 @@
-import { eq, and, not, asc, isNull, inArray, notInArray, lte, gt, sql, type SQL } from 'drizzle-orm';
+import { eq, and, not, asc, isNull, inArray, notInArray, lte, gt, sql, getTableColumns, type SQL } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { deliveries, messages, agents, readReceipts, channelMembers, channels, dmConversations } from '../db/schema.js';
 import type { DeliveryStatus } from '@relaycast/types';
@@ -8,12 +8,19 @@ import { isProviderAgentDeliveryReady } from '../ports/realtime.js';
 import { buildDeliverFrame, buildDeliverPayload, buildMessageCreatedEventData, buildThreadReplyEventData, buildDmReceivedEventData, buildGroupDmReceivedEventData } from './deliveryWire.js';
 import { publicMessageMetadata } from './messageMetadata.js';
 import { toIso } from '../lib/serialize.js';
+import { trailingSingleFlight } from '../lib/singleFlight.js';
+import { readNodeRedriveCandidates } from './nodeRedriveCandidates.js';
 import { fetchAttachmentsBatch, type AttachmentRow } from './attachments.js';
 import type { DeliveryFanoutRecord } from './deliveryWrites.js';
 
 type Db = ReturnType<typeof getDb>;
 
 type DeliveryRow = typeof deliveries.$inferSelect;
+// SQL-wrapped columns retain Drizzle's timestamp/boolean decoders when FROM
+// includes an explicit SQLite INDEXED BY clause rather than a table object.
+const indexedDeliveryColumns = Object.fromEntries(
+  Object.entries(getTableColumns(deliveries)).map(([name, column]) => [name, sql`${column}`.mapWith(column)]),
+) as { [K in keyof DeliveryRow]: SQL<DeliveryRow[K]> };
 type DeliveryWithChannel = DeliveryRow & { channelId: string };
 type PendingDeliveryRow = {
   delivery: DeliveryRow;
@@ -417,28 +424,31 @@ export async function ackDeliveriesUpToSeq(
   return { agent_id: agent.id, agent_name: agent.name, up_to_seq: upToSeq, acked: updated.length };
 }
 
+/** Mark still-queued rows delivered using bounded, explicit ID-index writes. */
 export async function markDeliveriesDelivered(
   db: Db,
   workspaceId: string,
   deliveryIds: string[],
 ): Promise<number> {
-  if (deliveryIds.length === 0) return 0;
-  const updated = await db
-    .update(deliveries)
-    .set({
-      status: 'delivered',
-      nextAttemptAt: null,
-      lastDispatchError: null,
-      deliveredAt: new Date(),
-      updatedAt: new Date(),
-    })
-    .where(and(
-      eq(deliveries.workspaceId, workspaceId),
-      inArray(deliveries.id, deliveryIds),
-      eq(deliveries.status, 'queued'),
-    ))
-    .returning();
-  return updated.length;
+  let count = 0;
+  const ids = [...new Set(deliveryIds)];
+  const now = Math.floor(Date.now() / 1000);
+  // Force primary-key writes too: a bounded replay read is not enough if its
+  // status UPDATE chooses a workspace/status index and scans retained history.
+  for (let offset = 0; offset < ids.length; offset += 50) {
+    const page = ids.slice(offset, offset + 50);
+    const updated = await db.all<{ id: string }>(sql`
+      UPDATE deliveries INDEXED BY idx_deliveries_id_lookup
+      SET status = 'delivered', next_attempt_at = NULL, last_dispatch_error = NULL,
+          delivered_at = ${now}, updated_at = ${now}
+      WHERE workspace_id = ${workspaceId}
+        AND id IN (${sql.join(page.map(id => sql`${id}`), sql`, `)})
+        AND status = 'queued'
+      RETURNING id
+    `);
+    count += updated.length;
+  }
+  return count;
 }
 
 export interface DeliveryFailureNotice {
@@ -674,13 +684,15 @@ function fanoutRecordFromDeliveryRow(row: PendingDeliveryRow): DeliveryFanoutRec
 // `WS_NODE_KINDS` in `nodeDeliver.ts`.
 const NODE_REDRIVE_KINDS = ['http_push', 'ws', 'fleet_ws', 'direct_ws'] as const;
 
+/** Hydrate bounded resumable redrive windows; empty windows resume next sweep. */
 export async function fetchDueNodeDeliveryEvents(
   db: Db,
   opts: { workspaceId?: string; now?: Date; limit?: number } = {},
 ): Promise<RoutableDeliveryEvent[]> {
-  const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+  const limit = Number.isFinite(opts.limit) ? Math.min(Math.max(Math.floor(opts.limit!), 1), 200) : 50;
   const now = opts.now ?? new Date();
   const nowSeconds = Math.floor(now.getTime() / 1000);
+  if (!Number.isFinite(nowSeconds)) throw new Error('Invalid node redrive clock: expected a finite Date');
   const conditions = [
     eq(deliveries.status, 'queued'),
     inArray(deliveries.routeNodeKind, [...NODE_REDRIVE_KINDS]),
@@ -690,9 +702,9 @@ export async function fetchDueNodeDeliveryEvents(
     conditions.push(eq(deliveries.workspaceId, opts.workspaceId));
   }
 
-  const fetchRows = (attemptCondition: SQL, queryLimit: number, orderByRetryAt: boolean) => db
+  const fetchRows = (ids: string[]) => db
     .select({
-      delivery: deliveries,
+      delivery: indexedDeliveryColumns,
       recipientAgentName: agents.name,
       body: messages.body,
       blocks: messages.blocks,
@@ -709,32 +721,42 @@ export async function fetchDueNodeDeliveryEvents(
         SELECT a.name FROM agents a WHERE a.id = ${messages.agentId}
       )`,
     })
-    .from(deliveries)
+    .from(sql`${deliveries} INDEXED BY idx_deliveries_id_lookup`)
     .innerJoin(agents, eq(deliveries.agentId, agents.id))
     .innerJoin(messages, eq(deliveries.messageId, messages.id))
     .innerJoin(channels, eq(messages.channelId, channels.id))
     .leftJoin(dmConversations, eq(dmConversations.channelId, messages.channelId))
-    .where(and(...conditions, attemptCondition))
+    .where(and(...conditions, inArray(deliveries.id, ids),
+      sql`(${deliveries.nextAttemptAt} IS NULL OR ${deliveries.nextAttemptAt} <= ${nowSeconds})`))
     .orderBy(
-      ...(orderByRetryAt ? [asc(deliveries.nextAttemptAt)] : []),
+      asc(deliveries.nextAttemptAt),
       asc(deliveries.createdAt),
       asc(deliveries.id),
-    )
-    .limit(queryLimit);
+    );
 
-  // SQLite orders NULL before timestamps, so preserve the former OR query's
-  // ordering by filling the page with never-attempted rows first. Splitting the
-  // branches lets the due-retry half use idx_deliveries_retry_due; a partial
-  // non-NULL index cannot serve an OR that also asks for NULL rows.
-  const neverAttempted = await fetchRows(isNull(deliveries.nextAttemptAt), limit, false);
+  // Scan at most one metadata window per lane. Expiry is checked AFTER LIMIT,
+  // and a durable cursor advances past excluded rows instead of repeatedly
+  // scanning the same prefix. Hydration rechecks mutable eligibility by ID.
+  const neverAttempted = await readNodeRedriveCandidates(db, { workspaceId: opts.workspaceId, retry: false, limit, nowSeconds });
   const dueRetries = neverAttempted.length < limit
-    ? await fetchRows(
-      sql`${deliveries.nextAttemptAt} IS NOT NULL AND ${deliveries.nextAttemptAt} <= ${nowSeconds}`,
-      limit - neverAttempted.length,
-      true,
-    )
+    ? await readNodeRedriveCandidates(db, { workspaceId: opts.workspaceId, retry: true, limit: limit - neverAttempted.length, nowSeconds })
     : [];
-  const rows = [...neverAttempted, ...dueRetries];
+  const ids = [...neverAttempted, ...dueRetries];
+  const rows: Awaited<ReturnType<typeof fetchRows>> = [];
+  for (let offset = 0; offset < ids.length; offset += 50) {
+    rows.push(...await fetchRows(ids.slice(offset, offset + 50)));
+  }
+
+  // Attachment hydration must respect the same bind budget as delivery rows.
+  const fetchRedriveAttachments = async (workspaceId: string, messageIds: string[]) => {
+    const attachments = new Map<string, AttachmentRow[]>();
+    const uniqueIds = [...new Set(messageIds)];
+    for (let offset = 0; offset < uniqueIds.length; offset += 50) {
+      const page = await fetchAttachmentsBatch(db, workspaceId, uniqueIds.slice(offset, offset + 50));
+      for (const [id, items] of page) attachments.set(id, items);
+    }
+    return attachments;
+  };
 
   if (!opts.workspaceId && rows.length > 0) {
     const workspaceAttachments = new Map<string, AttachmentRow[]>();
@@ -742,7 +764,7 @@ export async function fetchDueNodeDeliveryEvents(
       const workspaceMessageIds = rows
         .filter((row) => row.delivery.workspaceId === workspaceId)
         .map((row) => row.delivery.messageId);
-      const batch = await fetchAttachmentsBatch(db, workspaceId, [...new Set(workspaceMessageIds)]);
+      const batch = await fetchRedriveAttachments(workspaceId, workspaceMessageIds);
       for (const [messageId, attachments] of batch) workspaceAttachments.set(messageId, attachments);
     }
     return rows.map((row) => {
@@ -761,7 +783,7 @@ export async function fetchDueNodeDeliveryEvents(
   }
 
   const attachmentsByMessageId = opts.workspaceId
-    ? await fetchAttachmentsBatch(db, opts.workspaceId, [...new Set(rows.map((row) => row.delivery.messageId))])
+    ? await fetchRedriveAttachments(opts.workspaceId, rows.map((row) => row.delivery.messageId))
     : new Map<string, AttachmentRow[]>();
 
   return rows.map((row) => {
@@ -869,95 +891,133 @@ export interface NodeDeliveryReplayScope {
   agentIds?: readonly string[];
 }
 
-export async function deliverPendingToNode(
+const replayFlights = new WeakMap<NodeConnectionRegistry, Map<string, { dirty: boolean; promise: Promise<number> }>>();
+
+/** Coalesce identical triggers at the socket owner, including a trailing replay
+ * when readiness/cursors changed during an outstanding drain. This is local
+ * replay coordination, not a global database admission semaphore. */
+export function deliverPendingToNode(
   db: Db,
   registry: NodeConnectionRegistry,
   workspaceId: string,
   nodeId: string,
   scope: NodeDeliveryReplayScope = {},
 ): Promise<number> {
-  const agentIds = scope.agentIds ? [...new Set(scope.agentIds)] : undefined;
-  if (agentIds?.length === 0) return 0;
-
-  const nowSeconds = Math.floor(Date.now() / 1000);
-  const conditions = [
-    eq(deliveries.workspaceId, workspaceId),
-    eq(agents.locationType, 'via_node'),
-    eq(agents.locationNodeId, nodeId),
-    inArray(deliveries.status, [...ACTIVE_DELIVERY_STATUSES]),
-    gt(deliveries.seq, agents.deliveryAckSeq),
-    sql`(${deliveries.expiresAt} IS NULL OR ${deliveries.expiresAt} > ${nowSeconds})`,
-  ];
-  if (scope.providerName !== undefined) {
-    conditions.push(eq(agents.providerName, scope.providerName));
-  }
-  if (agentIds) {
-    conditions.push(inArray(agents.id, agentIds));
-  }
-
-  const rows = await db
-    .select({
-      delivery: deliveries,
-      recipientAgentName: agents.name,
-      recipientProviderName: agents.providerName,
-      ackSeq: agents.deliveryAckSeq,
-      body: messages.body,
-      blocks: messages.blocks,
-      metadata: messages.metadata,
-      hasAttachments: messages.hasAttachments,
-      threadId: messages.threadId,
-      createdAt: messages.createdAt,
-      channelId: messages.channelId,
-      channelName: channels.name,
-      conversationId: dmConversations.id,
-      dmType: dmConversations.dmType,
-      senderAgentId: messages.agentId,
-      senderAgentName: sql<string | null>`(
-        SELECT a.name FROM agents a WHERE a.id = ${messages.agentId}
-      )`,
-    })
-    .from(deliveries)
-    .innerJoin(agents, eq(deliveries.agentId, agents.id))
-    .innerJoin(messages, eq(deliveries.messageId, messages.id))
-    .innerJoin(channels, eq(messages.channelId, channels.id))
-    .leftJoin(dmConversations, eq(dmConversations.channelId, messages.channelId))
-    .where(and(...conditions))
-    .orderBy(asc(agents.name), asc(deliveries.seq));
-
-  const attachmentsByMessageId = await fetchAttachmentsBatch(db, workspaceId, [...new Set(rows.map((row) => row.delivery.messageId))]);
-
-  const deliveredIds: string[] = [];
-  for (const row of rows) {
-    if (!isProviderAgentDeliveryReady(
-      registry,
-      workspaceId,
-      nodeId,
-      row.recipientProviderName,
-      row.delivery.agentId,
-    )) {
-      continue;
-    }
-    const attachments = attachmentsByMessageId.get(row.delivery.messageId) ?? [];
-    const { eventType, eventData } = buildRoutableDeliveryEvent(row, attachments);
-
-    const sent = await registry.sendToProvider(workspaceId, nodeId, row.recipientProviderName, buildDeliverFrame({
-      delivery_id: row.delivery.id,
-      agent_id: row.delivery.agentId,
-      agent: row.recipientAgentName,
-      msg_id: row.delivery.messageId,
-      seq: row.delivery.seq,
-      mode: wireMode(row.delivery.mode),
-      payload: buildDeliverPayload(eventType, eventData),
-    }));
-    if (sent) deliveredIds.push(row.delivery.id);
-  }
-
-  await markDeliveriesDelivered(db, workspaceId, deliveredIds);
-  return deliveredIds.length;
+  let flights = replayFlights.get(registry);
+  if (!flights) { flights = new Map(); replayFlights.set(registry, flights); }
+  const key = JSON.stringify([workspaceId, nodeId, scope.providerName,
+    scope.agentIds ? [...new Set(scope.agentIds)].sort() : null]);
+  return trailingSingleFlight(flights, key, () => replayPendingToNode(db, registry, workspaceId, nodeId, scope));
 }
 
+/** Drain a finite per-agent high-water mark in ordered, readiness-checked pages. */
+async function replayPendingToNode(
+  db: Db,
+  registry: NodeConnectionRegistry,
+  workspaceId: string,
+  nodeId: string,
+  scope: NodeDeliveryReplayScope = {},
+): Promise<number> {
+  const wantedIds = scope.agentIds ? new Set(scope.agentIds) : undefined;
+  if (wantedIds?.size === 0) return 0;
+
+  // Resolve the small node roster first. A delivery-first join lets SQLite
+  // choose the workspace/status index and scan millions of retained rows.
+  const recipients = await db.select({
+    id: agents.id, name: agents.name, providerName: agents.providerName,
+    ackSeq: agents.deliveryAckSeq,
+  }).from(agents).where(and(
+    eq(agents.workspaceId, workspaceId),
+    eq(agents.locationType, 'via_node'),
+    eq(agents.locationNodeId, nodeId),
+    scope.providerName === undefined ? undefined : eq(agents.providerName, scope.providerName),
+  )).orderBy(asc(agents.name));
+
+  let delivered = 0;
+  for (const recipient of recipients) {
+    if (wantedIds && !wantedIds.has(recipient.id)) continue;
+    const ready = () => isProviderAgentDeliveryReady(
+      registry, workspaceId, nodeId, recipient.providerName, recipient.id,
+    );
+    if (!ready()) continue;
+    // Capture a finite high-water mark: arrivals during replay are handled by
+    // live dispatch/the next reconnect, not an indefinitely growing drain.
+    const [highWater] = await db.select({ seq: deliveries.seq })
+      .from(deliveries).where(and(
+        eq(deliveries.workspaceId, workspaceId), eq(deliveries.agentId, recipient.id),
+      )).orderBy(sql`${deliveries.seq} DESC`).limit(1);
+    if (!highWater) continue;
+    let cursor = recipient.ackSeq;
+    while (cursor < highWater.seq && ready()) {
+      // The literal predicate is essential: SQLite must prove that this
+      // query qualifies for the partial index even with bound parameters.
+      const page = await db.select({ id: sql<string>`${deliveries.id}`, seq: sql<number>`${deliveries.seq}` })
+        .from(sql`${deliveries} INDEXED BY idx_deliveries_agent_active_seq`)
+        .where(and(
+          eq(deliveries.workspaceId, workspaceId), eq(deliveries.agentId, recipient.id),
+          sql`${deliveries.status} IN ('queued', 'delivered')`,
+          gt(deliveries.seq, cursor), lte(deliveries.seq, highWater.seq),
+        )).orderBy(asc(deliveries.seq)).limit(50);
+      if (!page.length) break;
+      cursor = page[page.length - 1]!.seq;
+      // Hydrate only this bounded ID page. Re-check ownership, ACK, expiry and
+      // status here because each await can race a handoff or cumulative ACK.
+      const rows = await db.select({
+        delivery: indexedDeliveryColumns,
+        recipientAgentName: agents.name,
+        recipientProviderName: agents.providerName,
+        ackSeq: agents.deliveryAckSeq,
+        body: messages.body, blocks: messages.blocks, metadata: messages.metadata,
+        hasAttachments: messages.hasAttachments, threadId: messages.threadId,
+        createdAt: messages.createdAt, channelId: messages.channelId,
+        channelName: channels.name, conversationId: dmConversations.id,
+        dmType: dmConversations.dmType, senderAgentId: messages.agentId,
+        senderAgentName: sql<string | null>`(
+          SELECT a.name FROM agents a WHERE a.id = ${messages.agentId}
+        )`,
+      }).from(sql`${deliveries} INDEXED BY idx_deliveries_id_lookup`)
+        .innerJoin(agents, eq(deliveries.agentId, agents.id))
+        .innerJoin(messages, eq(deliveries.messageId, messages.id))
+        .innerJoin(channels, eq(messages.channelId, channels.id))
+        .leftJoin(dmConversations, eq(dmConversations.channelId, messages.channelId))
+        .where(and(
+          inArray(deliveries.id, page.map(row => row.id)),
+          eq(deliveries.workspaceId, workspaceId),
+          eq(agents.locationType, 'via_node'), eq(agents.locationNodeId, nodeId),
+          eq(agents.id, recipient.id),
+          recipient.providerName === null
+            ? isNull(agents.providerName) : eq(agents.providerName, recipient.providerName),
+          inArray(deliveries.status, [...ACTIVE_DELIVERY_STATUSES]),
+          gt(deliveries.seq, agents.deliveryAckSeq),
+          sql`(${deliveries.expiresAt} IS NULL OR ${deliveries.expiresAt} > ${Math.floor(Date.now() / 1000)})`,
+        )).orderBy(asc(deliveries.seq));
+
+      const attachments = await fetchAttachmentsBatch(db, workspaceId, [...new Set(rows.map(row => row.delivery.messageId))]);
+      const deliveredIds: string[] = [];
+      let interrupted = false;
+      for (const row of rows) {
+        if (!ready()) { interrupted = true; break; }
+        const { eventType, eventData } = buildRoutableDeliveryEvent(row, attachments.get(row.delivery.messageId) ?? []);
+        const sent = await registry.sendToProvider(workspaceId, nodeId, recipient.providerName, buildDeliverFrame({
+          delivery_id: row.delivery.id, agent_id: recipient.id,
+          agent: row.recipientAgentName, msg_id: row.delivery.messageId,
+          seq: row.delivery.seq, mode: wireMode(row.delivery.mode),
+          payload: buildDeliverPayload(eventType, eventData),
+        }));
+        // Never send a higher sequence past a failed lower one: a cumulative
+        // ACK for it would make the unsent lower delivery replay-invisible.
+        if (!sent) { interrupted = true; break; }
+        deliveredIds.push(row.delivery.id);
+      }
+      await markDeliveriesDelivered(db, workspaceId, deliveredIds);
+      delivered += deliveredIds.length;
+      if (interrupted) break;
+    }
+  }
+  return delivered;
+}
 /**
- * Resolve the result of a status-guarded transition: when the write landed,
+ * Resolve a status-guarded transition: when the write landed,
  * report the updated row as changed. When it did not (the row was deleted, or a
  * concurrent ack won the race and the row is now terminal), re-read and return
  * the current state as unchanged — never resurrecting it or emitting an event.

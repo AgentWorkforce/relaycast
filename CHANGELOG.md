@@ -33,6 +33,19 @@ Packages without a separate changelog are covered by the cross-package notes bel
 - Explicit spawn targets are honored when a legacy global node alias exists, preserving its caller allowlist.
 
 
+## [8.5.4] - 2026-09-08
+
+### Fixed
+
+- Maintenance migrations reuse obsolete index space before creating replacements, reducing upgrade storage pressure without deleting history or changing retention.
+
+## [8.5.3] - 2026-09-08
+
+### Fixed
+
+- Fleet delivery replay uses indexed mailbox pages; bounded, resumable retention and lower background dispatch concurrency reduce database pressure without shortening retention policies.
+- Replay completion cannot lose a trailing trigger; maintenance recovers corrupt cursors and advances past expired-only redrive windows without scanning unrelated routes.
+
 ## [8.5.2] - 2026-09-07
 
 ### Fixed
@@ -431,7 +444,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased - Minor]: https://github.com/AgentWorkforce/relaycast/compare/v8.4.0...HEAD
+[Unreleased - Patch]: https://github.com/AgentWorkforce/relaycast/compare/v8.4.0...HEAD
 [6.0.3]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.2...v6.0.3
 [6.0.2]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.1...v6.0.2
 [6.0.1]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.0...v6.0.1
