@@ -553,25 +553,13 @@ jobs:
           PROVENANCE_DIGEST="$(node scripts/release-provenance.mjs digest --manifest release-provenance.json)"
           git fetch --tags origin
           if git show-ref --verify --quiet "refs/tags/${TAG}"; then
-            if [ "$(git cat-file -t "${TAG}")" != "tag" ]; then
-              echo "::error::${TAG} is lightweight; refusing to reuse it"
-              exit 1
-            fi
-            TAG_CONTENT="$(git cat-file tag "${TAG}")"
-            if [ "$(git for-each-ref --format='%(contents:subject)' "refs/tags/${TAG}")" != "Release v${NEW_VERSION}" ]; then
-              echo "::error::${TAG} has unexpected release metadata"
-              exit 1
-            fi
-            for required in \
-              "Relaycast-NPM-Dist-Tag: ${DIST_TAG}" \
-              "Relaycast-Source-Commit: ${SOURCE_COMMIT}" \
-              "Relaycast-Source-Tree: ${SOURCE_TREE}" \
-              "Relaycast-Package-Provenance-SHA256: ${PROVENANCE_DIGEST}"; do
-              if ! grep -Fqx "$required" <<<"$TAG_CONTENT"; then
-                echo "::error::${TAG} metadata does not match: ${required%%:*}"
-                exit 1
-              fi
-            done
+            node scripts/validate-release-tag.mjs \
+              --tag "$TAG" \
+              --source-commit "$SOURCE_COMMIT" \
+              --source-tree "$SOURCE_TREE" \
+              --version "$NEW_VERSION" \
+              --dist-tag "$DIST_TAG" \
+              --provenance-digest "$PROVENANCE_DIGEST"
             echo "${TAG} metadata is valid; reusing its exact release commit/tree"
             git reset --hard "${TAG}^{commit}"
             echo "REUSE_EXISTING_RELEASE_TAG=true" >> "$GITHUB_ENV"

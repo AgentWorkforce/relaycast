@@ -446,17 +446,20 @@ export class RelayCast {
     const { apiKey, baseUrl } = resolved;
     const requestBaseUrl = baseUrl ?? 'https://cast.agentrelay.com';
     const identity = resolveAgentRelayIdentity(resolved);
+    const sendsBootstrapSecret =
+      !apiKey && resolved.idempotencyKey !== undefined && resolved.bootstrapSecret !== undefined;
 
     const url = new URL('/v1/workspaces', requestBaseUrl);
     const res = await fetch(url.toString(), {
       method: 'POST',
+      ...(sendsBootstrapSecret ? { redirect: 'error' as const } : {}),
       headers: {
         'Content-Type': 'application/json',
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
         ...(resolved.idempotencyKey !== undefined
           ? { 'Idempotency-Key': resolved.idempotencyKey }
           : {}),
-        ...(!apiKey && resolved.idempotencyKey !== undefined && resolved.bootstrapSecret !== undefined
+        ...(sendsBootstrapSecret
           ? { 'X-Workspace-Bootstrap-Secret': resolved.bootstrapSecret }
           : {}),
         'X-SDK-Version': SDK_VERSION,

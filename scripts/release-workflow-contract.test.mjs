@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,6 +40,100 @@ const workflow = readFileSync(
   new URL("../.github/workflows/publish-npm.yml", import.meta.url),
   "utf8",
 );
+const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
+const validateReleaseTag = fileURLToPath(
+  new URL("./validate-release-tag.mjs", import.meta.url),
+);
+const cutChangelog = fileURLToPath(
+  new URL("./cut-changelog.mjs", import.meta.url),
+);
+
+function git(cwd, args) {
+  const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.trim();
+}
+
+function archiveRevision(revision, target) {
+  const archivePath = `${target}.tar`;
+  const archived = spawnSync("git", ["archive", "-o", archivePath, revision], {
+    cwd: repositoryRoot,
+  });
+  assert.equal(archived.status, 0, archived.stderr?.toString());
+  const extracted = spawnSync("tar", ["-xf", "-", "-C", target], {
+    input: readFileSync(archivePath),
+  });
+  rmSync(archivePath, { force: true });
+  assert.equal(extracted.status, 0, extracted.stderr?.toString());
+}
+
+function releaseTagFixture({ alteredSource = false } = {}) {
+  const root = mkdtempSync(path.join(tmpdir(), "relaycast-release-tag-"));
+  archiveRevision("HEAD", root);
+  git(root, ["init", "-q"]);
+  git(root, ["config", "user.email", "release-test@example.com"]);
+  git(root, ["config", "user.name", "Release Test"]);
+  git(root, ["add", "."]);
+  git(root, ["commit", "-qm", "source"]);
+  const sourceCommit = git(root, ["rev-parse", "HEAD"]);
+  const sourceTree = git(root, ["rev-parse", "HEAD^{tree}"]);
+
+  const changelogFiles = git(root, ["ls-files"])
+    .split("\n")
+    .filter(
+      (file) =>
+        file.endsWith("CHANGELOG.md") && file !== "packages/sdk-rust/CHANGELOG.md",
+    );
+  for (const file of changelogFiles) {
+    const filePath = path.join(root, file);
+    const changelog = readFileSync(filePath, "utf8");
+    writeFileSync(
+      filePath,
+      changelog.replace(
+        /^## \[Unreleased - (?:Patch|Minor|Major)\][\s\S]*?(?=^## \[)/m,
+        "## [Unreleased]\n\n",
+      ),
+    );
+  }
+  if (alteredSource) {
+    writeFileSync(path.join(root, "README.md"), "altered application source\n");
+  }
+  git(root, ["add", "."]);
+  git(root, ["commit", "-qm", "chore(release): v8.5.5"]);
+  const tagCommit = git(root, ["rev-parse", "HEAD"]);
+  const message = [
+    "Release v8.5.5",
+    "",
+    "Relaycast-NPM-Dist-Tag: latest",
+    `Relaycast-Source-Commit: ${sourceCommit}`,
+    `Relaycast-Source-Tree: ${sourceTree}`,
+    "Relaycast-Package-Provenance-SHA256: fixture-digest",
+  ].join("\n");
+  git(root, ["tag", "-a", "v8.5.5", "-m", message]);
+  return { root, sourceCommit, sourceTree, tagCommit };
+}
+
+function validateTag(fixture) {
+  return spawnSync(
+    process.execPath,
+    [
+      validateReleaseTag,
+      "--tag",
+      "v8.5.5",
+      "--source-commit",
+      fixture.sourceCommit,
+      "--source-tree",
+      fixture.sourceTree,
+      "--version",
+      "8.5.5",
+      "--dist-tag",
+      "latest",
+      "--provenance-digest",
+      "fixture-digest",
+    ],
+    { cwd: fixture.root, encoding: "utf8" },
+  );
+}
 
 describe("publish workflow safety contract", () => {
   it("offers lockstep publication only", () => {
@@ -198,10 +298,7 @@ describe("publish workflow safety contract", () => {
     assert.ok(reuse !== -1, "pre-cut tag reuse step not found");
     assert.ok(cut !== -1 && reuse < cut, "tag reuse must precede the date-sensitive changelog cut");
     const reuseBlock = createRelease.slice(reuse, cut);
-    assert.match(reuseBlock, /git cat-file -t/);
-    assert.match(reuseBlock, /Relaycast-Source-Commit/);
-    assert.match(reuseBlock, /Relaycast-Source-Tree/);
-    assert.match(reuseBlock, /Relaycast-Package-Provenance-SHA256/);
+    assert.match(reuseBlock, /validate-release-tag\.mjs/);
     assert.match(reuseBlock, /git reset --hard "\$\{TAG\}\^\{commit\}"/);
     assert.match(reuseBlock, /REUSE_EXISTING_RELEASE_TAG=true/);
     assert.match(
@@ -225,6 +322,76 @@ describe("publish workflow safety contract", () => {
 
     assert.match(jobBlock("publish-packages"), /id-token: write/);
     assert.match(jobBlock("create-release"), /contents: write/);
+  });
+});
+
+describe("release tag reuse execution", () => {
+  it("rejects an annotated tag with correct metadata when its tree alters application source", () => {
+    const fixture = releaseTagFixture({ alteredSource: true });
+    try {
+      const result = validateTag(fixture);
+      assert.notEqual(result.status, 0);
+      assert.match(`${result.stderr}${result.stdout}`, /non-release paths: README\.md/);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses the exact valid tag tree across a simulated UTC-day retry", () => {
+    const fixture = releaseTagFixture();
+    try {
+      const first = validateTag(fixture);
+      assert.equal(first.status, 0, first.stderr);
+      const taggedTree = git(fixture.root, ["rev-parse", "v8.5.5^{tree}"]);
+      git(fixture.root, ["reset", "--hard", fixture.sourceCommit]);
+      const retry = validateTag(fixture);
+      assert.equal(retry.status, 0, retry.stderr);
+      git(fixture.root, ["reset", "--hard", "v8.5.5^{commit}"]);
+      assert.equal(git(fixture.root, ["rev-parse", "HEAD^{tree}"]), taggedTree);
+      assert.equal(fixture.tagCommit, git(fixture.root, ["rev-parse", "HEAD"]));
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("cuts a bare Unreleased block through the CLI fallback and updates comparison references", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "relaycast-cut-cli-"));
+    try {
+      mkdirSync(path.join(root, "packages"));
+      writeFileSync(
+        path.join(root, "CHANGELOG.md"),
+        "# Changelog\n\n## [Unreleased]\n\n## [8.5.5] - 2026-09-08\n\n### Fixed\n\n- Previous\n",
+      );
+      git(root, ["init", "-q"]);
+      git(root, ["config", "user.email", "release-test@example.com"]);
+      git(root, ["config", "user.name", "Release Test"]);
+      git(root, ["add", "."]);
+      git(root, ["commit", "-qm", "chore: base"]);
+      git(root, ["tag", "v8.5.5"]);
+      writeFileSync(path.join(root, "release-note.txt"), "fallback\n");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-qm", "fix: fallback release proof"]);
+
+      const result = spawnSync(
+        process.execPath,
+        [cutChangelog, "--version", "8.6.0", "--from-tag", "v8.5.5", "--date", "2026-09-09"],
+        { cwd: root, encoding: "utf8" },
+      );
+      assert.equal(result.status, 0, result.stderr);
+      const changelog = readFileSync(path.join(root, "CHANGELOG.md"), "utf8");
+      assert.match(changelog, /## \[8\.6\.0\] - 2026-09-09/);
+      assert.match(changelog, /- Fallback release proof/);
+      assert.match(
+        changelog,
+        /\[Unreleased\]: https:\/\/github\.com\/AgentWorkforce\/relaycast\/compare\/v8\.6\.0\.\.\.HEAD/,
+      );
+      assert.match(
+        changelog,
+        /\[8\.6\.0\]: https:\/\/github\.com\/AgentWorkforce\/relaycast\/compare\/v8\.5\.5\.\.\.v8\.6\.0/,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

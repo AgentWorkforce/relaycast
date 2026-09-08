@@ -27,8 +27,8 @@ import test, { after, before, describe } from "node:test";
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const RUN_ID = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const IMAGE_TAG = `relaycast-integration-test:${RUN_ID}`;
-// Fixture value only: high-entropy enough to also exercise the
-// relaycast#379 idempotency-key floor's companion secret, never a real
+// Fixture value only: exercises the structural idempotency-key floor;
+// callers remain responsible for CSPRNG entropy, and this is never a real
 // deployment secret.
 const BOOTSTRAP_SECRET = `integration-test-bootstrap-secret-${RUN_ID}`;
 const PRIMARY_CONTAINER = `relaycast-it-primary-${RUN_ID}`;
@@ -186,7 +186,8 @@ async function createWorkspace(
   return { status: response.status, body };
 }
 
-// >=122-bit-entropy fixture key (relaycast#379's floor), not a real secret.
+// Structural-length fixture key (callers must provide CSPRNG entropy), not a
+// real secret.
 function freshIdempotencyKey(label) {
   return `${label}-${RUN_ID}-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e`;
 }
