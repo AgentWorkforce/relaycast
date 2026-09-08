@@ -23,6 +23,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 - Anonymous bootstrap `POST /v1/workspaces` creates can use an `Idempotency-Key` to recover the same workspace and API key after retries or response loss; digest conflicts, owner-scope crossovers, and terminalized bindings fail closed. The caller must also present `X-Workspace-Bootstrap-Secret` matching the deployment's configured secret — the `Idempotency-Key` is a non-secret correlator, so proving the deployment secret is what authorizes recovering the binding and prevents an unrelated caller who guesses or observes the key from retrieving another caller's workspace credentials. Callers must generate anonymous keys with a CSPRNG; the server enforces only a 32-character structural minimum and rejects shorter keys with `400 workspace_create_idempotency_key_too_weak`.
 - Keyed anonymous bootstrap now rejects explicit invalid authorization and requires a stable deployment secret across restarts; unkeyed creates remain compatible.
 
+## [8.5.5] - 2026-09-08
+
 ### Fixed
 
 - Self-hosted Docker and Compose deployments now pass `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` into the engine without logging it.
