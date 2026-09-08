@@ -2,6 +2,28 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { PUBLISHED_PACKAGE_DIRS } from "./release-contract.mjs";
+import {
+  assertPublishedIntegrity,
+  assertReusableReleaseTag,
+  assertSourceProvenance,
+} from "./release-provenance.mjs";
+
+const PROVENANCE = {
+  schema: 1,
+  sourceCommit: "a".repeat(40),
+  sourceTree: "b".repeat(40),
+  version: "8.6.0",
+  distTag: "latest",
+  packages: [
+    {
+      name: "@relaycast/types",
+      version: "8.6.0",
+      tarball: "release-artifacts/relaycast-types-8.6.0.tgz",
+      integrity: "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+      shasum: "c".repeat(40),
+    },
+  ],
+};
 
 const workflow = readFileSync(
   new URL("../.github/workflows/publish-npm.yml", import.meta.url),
@@ -123,7 +145,17 @@ describe("publish workflow safety contract", () => {
       publishPackages.indexOf("- name: Publish to NPM"),
     );
     assert.match(publishStep, /npm view "\$\{PACKAGE_NAME\}@\$\{NEW_VERSION\}" version/);
-    assert.match(publishStep, /already published; skipping/);
+    assert.match(publishStep, /dist\.integrity/);
+    assert.match(publishStep, /already matches this build; skipping/);
+  });
+
+  it("publishes and reconciles exact build tarballs, never a version-only registry match", () => {
+    const publishPackages = jobBlock("publish-packages");
+    assert.match(publishPackages, /release-provenance\.json/);
+    assert.match(publishPackages, /npm publish "\$GITHUB_WORKSPACE\/\$TARBALL"/);
+    const verify = jobBlock("verify-publish");
+    assert.match(verify, /release-provenance\.mjs published/);
+    assert.match(verify, /dist\.integrity/);
   });
 
   it("tags the exact built, published, and verified commit instead of rebasing onto a possibly-moved main", () => {
@@ -133,7 +165,7 @@ describe("publish workflow safety contract", () => {
     // actually tested and published; this must never reappear.
     assert.doesNotMatch(createRelease, /git rebase/);
 
-    const tagPush = createRelease.indexOf('git push origin "v${NEW_VERSION}"');
+    const tagPush = createRelease.indexOf('git push origin "${TAG}"');
     const mainMerge = createRelease.indexOf("git merge --no-edit origin/main");
     assert.ok(tagPush !== -1, "tag push not found");
     assert.ok(mainMerge !== -1, "main merge reconciliation not found");
@@ -154,5 +186,56 @@ describe("publish workflow safety contract", () => {
 
     assert.match(jobBlock("publish-packages"), /id-token: write/);
     assert.match(jobBlock("create-release"), /contents: write/);
+  });
+});
+
+describe("release provenance adversarial cases", () => {
+  it("rejects stale or wrong-source packages instead of accepting a version-only match", () => {
+    assert.throws(
+      () => assertPublishedIntegrity(PROVENANCE, "@relaycast/types", "sha512-stale"),
+      /different artifact integrity/,
+    );
+    assert.throws(
+      () => assertPublishedIntegrity(PROVENANCE, "@relaycast/types", PROVENANCE.packages[0].integrity, "8.6.1"),
+      /provenance version/,
+    );
+    assert.throws(
+      () => assertSourceProvenance(PROVENANCE, "d".repeat(40), PROVENANCE.sourceTree),
+      /immutable workflow source/,
+    );
+  });
+
+  it("rejects lightweight, wrong-commit, and wrong-tree tag reuse", () => {
+    const common = {
+      tagCommit: "d".repeat(40),
+      releaseCommit: "d".repeat(40),
+      tagTree: "e".repeat(40),
+      releaseTree: "e".repeat(40),
+      tagMessage: [
+        "Release v8.6.0",
+        "Relaycast-NPM-Dist-Tag: latest",
+        `Relaycast-Source-Commit: ${PROVENANCE.sourceCommit}`,
+        `Relaycast-Source-Tree: ${PROVENANCE.sourceTree}`,
+        "Relaycast-Package-Provenance-SHA256: digest",
+      ].join("\n"),
+      version: PROVENANCE.version,
+      distTag: PROVENANCE.distTag,
+      sourceCommit: PROVENANCE.sourceCommit,
+      sourceTree: PROVENANCE.sourceTree,
+      packageProvenanceDigest: "digest",
+    };
+    assert.doesNotThrow(() => assertReusableReleaseTag({ tagType: "tag", ...common }));
+    assert.throws(
+      () => assertReusableReleaseTag({ tagType: "commit", ...common }),
+      /annotated/,
+    );
+    assert.throws(
+      () => assertReusableReleaseTag({ tagType: "tag", ...common, tagCommit: "f".repeat(40) }),
+      /commit differs/,
+    );
+    assert.throws(
+      () => assertReusableReleaseTag({ tagType: "tag", ...common, tagTree: "f".repeat(40) }),
+      /tree differs/,
+    );
   });
 });

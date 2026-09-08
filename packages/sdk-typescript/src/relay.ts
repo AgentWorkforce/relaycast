@@ -263,6 +263,30 @@ function resolveWorkspaceLookupOptions(
   return options ?? {};
 }
 
+/** Minimum structural length for an anonymous bootstrap replay key. */
+export const MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH = 32;
+
+function validateWorkspaceBootstrapOptions(options: WorkspaceBootstrapOptions): void {
+  // Owner-scoped keys are bounded by the authenticated API key and may remain
+  // short. Anonymous keys are part of the recovery proof and must satisfy the
+  // same structural floor as the server before any request is sent.
+  if (
+    !options.apiKey &&
+    options.idempotencyKey !== undefined &&
+    options.idempotencyKey.length < MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH
+  ) {
+    throw new RelayError(
+      'transport_error',
+      `Anonymous Idempotency-Key must be at least ${MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH} characters`,
+      {
+        statusCode: 400,
+        retryable: false,
+        rawCode: 'workspace_create_idempotency_key_too_weak',
+      },
+    );
+  }
+}
+
 export class RelayCast {
   private client: HttpClient;
   private ws: WsClient;
@@ -356,6 +380,7 @@ export class RelayCast {
     options?: string | WorkspaceBootstrapOptions,
   ): Promise<{ data: CreateWorkspaceResponse; statusCode: number }> {
     const resolved = resolveWorkspaceBootstrapOptions(options);
+    validateWorkspaceBootstrapOptions(resolved);
     const { apiKey, baseUrl } = resolved;
     const requestBaseUrl = baseUrl ?? 'https://cast.agentrelay.com';
     const identity = resolveAgentRelayIdentity(resolved);

@@ -1266,15 +1266,29 @@ describe('RelayCast', () => {
       );
 
       await RelayCast.createWorkspace('bootstrap-child', {
-        idempotencyKey: 'bootstrap:run-1',
+        idempotencyKey: 'bootstrap-run-1-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e',
         bootstrapSecret: 'deployment-secret',
         baseUrl: 'http://localhost:3000',
       });
 
       const [, init] = mockFetch.mock.calls[0]!;
       expect(init.headers.Authorization).toBeUndefined();
-      expect(init.headers['Idempotency-Key']).toBe('bootstrap:run-1');
+      expect(init.headers['Idempotency-Key']).toBe('bootstrap-run-1-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e');
       expect(init.headers['X-Workspace-Bootstrap-Secret']).toBe('deployment-secret');
+    });
+
+    it('rejects a short anonymous key before making a request', async () => {
+      const { RelayCast } = await import('../relay.js');
+
+      await expect(RelayCast.createWorkspace('bootstrap-child', {
+        idempotencyKey: 'bootstrap:run-1',
+        bootstrapSecret: 'deployment-secret',
+        baseUrl: 'http://localhost:3000',
+      })).rejects.toMatchObject({
+        statusCode: 400,
+        rawCode: 'workspace_create_idempotency_key_too_weak',
+      });
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it('does not forward a bootstrap secret proof for an authenticated create', async () => {

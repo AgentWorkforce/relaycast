@@ -97,10 +97,16 @@ to bootstrap a workspace on this deployment (your own setup script or
 container entrypoint, for example) — anyone who has it can create or recover
 any anonymous bootstrap workspace on this deployment:
 
+Generate the replay key once per logical create/retry sequence with a CSPRNG;
+keep it unchanged when retrying (a v4 UUID or 16 random bytes encoded as hex
+is suitable):
+
 ```bash
+BOOTSTRAP_IDEMPOTENCY_KEY="$(openssl rand -hex 16)"
+
 curl -s -XPOST http://localhost:8787/v1/workspaces \
   -H 'content-type: application/json' \
-  -H "Idempotency-Key: bootstrap:$(hostname)" \
+  -H "Idempotency-Key: ${BOOTSTRAP_IDEMPOTENCY_KEY}" \
   -H "X-Workspace-Bootstrap-Secret: $RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET" \
   -d '{"name":"my-team"}'
 ```
