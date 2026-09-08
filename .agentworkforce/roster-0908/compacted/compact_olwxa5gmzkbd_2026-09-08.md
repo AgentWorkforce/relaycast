@@ -1,7 +1,7 @@
 # Trajectory Compaction: 2026-09-08 - 2026-09-08
 
 ## Summary
-This short (8-minute) lead session investigated roster read row-visit costs and contention from shared executor queries. The agent measured production traffic showing the old fanout and replay queries averaging in the seconds, then landed a targeted mitigation: a new partial index migration at `packages/engine/src/db/migrations/0051_agent_roster_index.sql`, a row-visit regression harness in `packages/engine/src/__tests__/conformance/agentRoster.test.ts` (dropping visits from 11,018 to 1,016), and supporting edits to `packages/engine/src/db/schema.ts`, `packages/engine/src/engine/agent.ts`, and the compact migration tests. Critically, the fix was scoped narrowly — it does not claim to resolve executor contention or bypass the rollout capacity gate. The bounded replacements for the slow fanout/replay queries live in cloud PR #105, and that dependency is explicitly recorded rather than duplicated locally. API surface and TTL semantics were preserved. Roster + migration test suites (48 tests) plus typecheck and lint all pass. Artifacts captured under `.agentworkforce/roster-0908/` and `docs/agent-roster-latency-389.{md,json}` document the latency analysis. No commits were made in this session; changes remain in the working tree on branch `fix/agent-roster-read-cost`.
+This short (8-minute) lead session investigated roster read row-visit costs and contention from shared executor queries. The agent measured production traffic showing the old fanout and replay queries averaging in the seconds, then landed a targeted mitigation: a new partial index migration at `packages/engine/src/db/migrations/0052_agent_roster_index.sql`, a row-visit regression harness in `packages/engine/src/__tests__/conformance/agentRoster.test.ts` (dropping visits from 11,018 to 1,016), and supporting edits to `packages/engine/src/db/schema.ts`, `packages/engine/src/engine/agent.ts`, and the compact migration tests. Critically, the fix was scoped narrowly — it does not claim to resolve executor contention or bypass the rollout capacity gate. The bounded replacements for the slow fanout/replay queries live in cloud PR #105, and that dependency is explicitly recorded rather than duplicated locally. API surface and TTL semantics were preserved. Roster + migration test suites (48 tests) plus typecheck and lint all pass. Artifacts captured under `.agentworkforce/roster-0908/` and `docs/agent-roster-latency-389.{md,json}` document the latency analysis. No commits were made in this session; changes remain in the working tree on branch `fix/agent-roster-read-cost`.
 
 ## Key Decisions (1)
 | Question | Decision | Impact |
@@ -20,7 +20,7 @@ This short (8-minute) lead session investigated roster read row-visit costs and 
 ## Open Questions
 - When does cloud PR #105 (bounded fanout/replay query replacements) land, and should this engine change wait on it or ship independently?
 - Are the docs/agent-roster-latency-389.{md,json} artifacts intended to be committed, or kept as local investigation notes under .agentworkforce/?
-- No commit was made — is the intent to bundle 0051_agent_roster_index.sql with the roster test + schema/agent.ts edits in a single PR on fix/agent-roster-read-cost?
+- No commit was made — is the intent to bundle 0052_agent_roster_index.sql with the roster test + schema/agent.ts edits in a single PR on fix/agent-roster-read-cost?
 
 ## Stats
 - Sessions: 1, Agents: default, Files: 0, Commits: 0
