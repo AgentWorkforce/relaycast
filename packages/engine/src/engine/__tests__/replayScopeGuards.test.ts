@@ -42,7 +42,7 @@ function fixture(history = 10_000, active = 125) {
 }
 
 describe('mainline replay scope and handoff guards', () => {
-  it('coalesces concurrent triggers and schedules a trailing pass for changed readiness', async () => {
+  it('keeps a distinct result for a trigger arriving during an active replay', async () => {
     const f = fixture(0, 1);
     let finish!: () => void;
     f.send.mockImplementationOnce(() => new Promise<boolean>(resolve => { finish = () => resolve(true); }));
