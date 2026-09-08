@@ -876,7 +876,13 @@ export interface NodeDeliveryReplayScope {
   agentIds?: readonly string[];
 }
 
-type ReplayFlight = { pending: Map<string, NodeDeliveryReplayScope>; promise: Promise<number> };
+type ReplayJob = {
+  scope: NodeDeliveryReplayScope;
+  promise: Promise<number>;
+  resolve: (count: number) => void;
+  reject: (error: unknown) => void;
+};
+type ReplayFlight = { pending: Map<string, ReplayJob> };
 const replayFlights = new WeakMap<NodeConnectionRegistry, Map<string, ReplayFlight>>();
 
 /** Serialize overlapping scopes at the socket owner, including a trailing replay
@@ -894,33 +900,38 @@ export function deliverPendingToNode(
   const key = JSON.stringify([workspaceId, nodeId]);
   const snapshot = { ...scope, agentIds: scope.agentIds ? [...new Set(scope.agentIds)].sort() : undefined };
   const scopeKey = JSON.stringify([snapshot.providerName, snapshot.agentIds]);
-  const existing = flights.get(key);
-  if (existing) {
-    existing.pending.set(scopeKey, snapshot);
-    return existing.promise;
+  let flight = flights.get(key);
+  const existing = flight?.pending.get(scopeKey);
+  if (existing) return existing.promise;
+  let resolve!: ReplayJob['resolve'];
+  let reject!: ReplayJob['reject'];
+  const promise = new Promise<number>((done, fail) => { resolve = done; reject = fail; });
+  const job: ReplayJob = { scope: snapshot, promise, resolve, reject };
+  if (flight) {
+    flight.pending.set(scopeKey, job);
+    return promise;
   }
-  const flight: ReplayFlight = { pending: new Map([[scopeKey, snapshot]]), promise: Promise.resolve(0) };
-  flight.promise = Promise.resolve().then(async () => {
-    let count = 0;
+  flight = { pending: new Map([[scopeKey, job]]) };
+  const activeFlight = flight;
+  flights.set(key, activeFlight);
+  void Promise.resolve().then(async () => {
     try {
-      while (flight.pending.size) {
-        const [pendingKey, pendingScope] = flight.pending.entries().next().value!;
-        flight.pending.delete(pendingKey);
+      while (activeFlight.pending.size) {
+        const [pendingKey, pendingJob] = activeFlight.pending.entries().next().value!;
+        // A trigger during this pass queues a new trailing job. Identical
+        // not-yet-started jobs coalesce, but each scope owns its own result.
+        activeFlight.pending.delete(pendingKey);
         try {
-          count += await replayPendingToNode(db, registry, workspaceId, nodeId, pendingScope);
+          pendingJob.resolve(await replayPendingToNode(db, registry, workspaceId, nodeId, pendingJob.scope));
         } catch (error) {
-          // A newly queued trigger still gets its pass after a transient error;
-          // never retry a failed scope without another explicit trigger.
-          if (!flight.pending.size) throw error;
+          pendingJob.reject(error);
         }
       }
-      return count;
     } finally {
-      if (flights.get(key) === flight) flights.delete(key);
+      if (flights.get(key) === activeFlight) flights.delete(key);
     }
   });
-  flights.set(key, flight);
-  return flight.promise;
+  return promise;
 }
 
 /** Drain a finite per-agent high-water mark in ordered, readiness-checked pages. */

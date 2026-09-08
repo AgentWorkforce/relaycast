@@ -116,7 +116,7 @@ describe('bounded database work with retained history', () => {
     const first = deliverPendingToNode(f.db, f.registry, 'ws', 'node');
     await vi.waitFor(() => expect(f.send).toHaveBeenCalledOnce());
     const second = deliverPendingToNode(f.db, f.registry, 'ws', 'node');
-    expect(second).toBe(first);
+    expect(second).not.toBe(first);
     finish();
     await Promise.all([first, second]);
     expect(f.send).toHaveBeenCalledTimes(2);
@@ -129,12 +129,30 @@ describe('bounded database work with retained history', () => {
     const first = deliverPendingToNode(f.db, f.registry, 'ws', 'node', { agentIds: ['agent'], providerName: 'provider' });
     await vi.waitFor(() => expect(f.send).toHaveBeenCalledOnce());
     const second = deliverPendingToNode(f.db, f.registry, 'ws', 'node');
-    expect(second).toBe(first);
+    expect(second).not.toBe(first);
     await Promise.resolve();
     expect(f.send).toHaveBeenCalledOnce();
     finish();
     await Promise.all([first, second]);
     expect(f.send.mock.calls.map(call => call[3].seq)).toEqual([1, 2, 1, 2]);
+  });
+
+  it('reports errors only to their scope and continues queued work after failure', async () => {
+    const f = fixture(0, 1);
+    let fail!: () => void;
+    f.send.mockImplementationOnce(() => new Promise<boolean>((_resolve, reject) => {
+      fail = () => reject(new Error('first scope failed'));
+    }));
+    const first = deliverPendingToNode(f.db, f.registry, 'ws', 'node', { agentIds: ['agent'] });
+    const firstResult = first.catch(error => error.message);
+    await vi.waitFor(() => expect(f.send).toHaveBeenCalledOnce());
+    const second = deliverPendingToNode(f.db, f.registry, 'ws', 'node');
+    const duplicate = deliverPendingToNode(f.db, f.registry, 'ws', 'node');
+    expect(duplicate).toBe(second);
+    fail();
+    expect(await firstResult).toBe('first scope failed');
+    expect(await second).toBe(1);
+    expect(f.send).toHaveBeenCalledTimes(2);
   });
 
   it('rechecks cumulative ACKs after a send within a hydrated page', async () => {
