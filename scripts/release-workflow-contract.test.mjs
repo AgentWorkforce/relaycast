@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -73,8 +74,81 @@ function archiveRevision(revision, target) {
   assert.equal(extracted.status, 0, extracted.stderr?.toString());
 }
 
-function releaseTagFixture({ alteredSource = false, mutateReleaseFile } = {}) {
+function bumpFixtureVersion(root, version) {
+  const packageDirs = git(root, ["ls-files", "packages/*/package.json"])
+    .split("\n")
+    .filter(Boolean);
+  for (const file of packageDirs) {
+    const manifestPath = path.join(root, file);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.version = version;
+    for (const type of ["dependencies", "devDependencies", "peerDependencies"]) {
+      for (const name of Object.keys(manifest[type] ?? {})) {
+        if (name.startsWith("@relaycast/")) manifest[type][name] = version;
+      }
+    }
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  }
+  const rootLockPath = path.join(root, "package-lock.json");
+  const rootLock = JSON.parse(readFileSync(rootLockPath, "utf8"));
+  for (const [key, entry] of Object.entries(rootLock.packages ?? {})) {
+    if (!/^packages\/[^/]+$/.test(key)) continue;
+    entry.version = version;
+    for (const type of ["dependencies", "devDependencies", "peerDependencies"]) {
+      for (const name of Object.keys(entry[type] ?? {})) {
+        if (name.startsWith("@relaycast/")) entry[type][name] = version;
+      }
+    }
+  }
+  writeFileSync(rootLockPath, `${JSON.stringify(rootLock, null, 2)}\n`);
+  writeFileSync(path.join(root, "packages/sdk-typescript/src/version.ts"), `export const SDK_VERSION = ${JSON.stringify(version)} as const;\n`);
+  writeFileSync(path.join(root, "packages/cli/src/version.ts"), `export const CLI_VERSION = ${JSON.stringify(version)} as const;\n`);
+
+  const dockerfilePath = path.join(root, "Dockerfile");
+  writeFileSync(
+    dockerfilePath,
+    readFileSync(dockerfilePath, "utf8").replace(/^ARG RELAYCAST_ENGINE_VERSION=\S+/m, `ARG RELAYCAST_ENGINE_VERSION=${version}`),
+  );
+  const dockerManifestPath = path.join(root, "docker/package.json");
+  const dockerManifest = JSON.parse(readFileSync(dockerManifestPath, "utf8"));
+  dockerManifest.version = version;
+  dockerManifest.dependencies["@relaycast/engine"] = version;
+  writeFileSync(dockerManifestPath, `${JSON.stringify(dockerManifest, null, 2)}\n`);
+
+  const dockerLockPath = path.join(root, "docker/package-lock.json");
+  const dockerLock = JSON.parse(readFileSync(dockerLockPath, "utf8"));
+  dockerLock.version = version;
+  dockerLock.packages[""].version = version;
+  dockerLock.packages[""].dependencies["@relaycast/engine"] = version;
+  for (const [key, entry] of Object.entries(dockerLock.packages)) {
+    if (!key.startsWith("node_modules/@relaycast/")) continue;
+    const name = key.slice("node_modules/".length);
+    const shortName = name.slice("@relaycast/".length);
+    entry.version = version;
+    entry.resolved = `https://registry.npmjs.org/${name}/-/${shortName}-${version}.tgz`;
+    for (const type of ["dependencies", "devDependencies", "peerDependencies"]) {
+      for (const dependency of Object.keys(entry[type] ?? {})) {
+        if (dependency.startsWith("@relaycast/")) entry[type][dependency] = version;
+      }
+    }
+  }
+  writeFileSync(dockerLockPath, `${JSON.stringify(dockerLock, null, 2)}\n`);
+  const runbookPath = path.join(root, "RUNBOOK.md");
+  let runbook = readFileSync(runbookPath, "utf8");
+  for (const pattern of [
+    /(`@relaycast\/engine`\s+\*\*)\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(\*\*)/,
+    /(version command must print `)\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(`)/,
+    /(from engine )\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(\.)/,
+    /(image is on )\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?( or later)/,
+    /(In engine )\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(,)/,
+  ]) runbook = runbook.replace(pattern, `$1${version}$2`);
+  writeFileSync(runbookPath, runbook);
+}
+
+function releaseTagFixture({ alteredSource = false, mutateReleaseFile, versionBump = false } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), "relaycast-release-tag-"));
+  const version = versionBump ? "8.6.0" : "8.5.5";
+  const fromTag = versionBump ? "v8.5.5" : "v8.5.4";
   archiveRevision("HEAD", root);
   git(root, ["init", "-q"]);
   git(root, ["config", "user.email", "release-test@example.com"]);
@@ -84,10 +158,11 @@ function releaseTagFixture({ alteredSource = false, mutateReleaseFile } = {}) {
   const sourceCommit = git(root, ["rev-parse", "HEAD"]);
   const sourceTree = git(root, ["rev-parse", "HEAD^{tree}"]);
 
-  git(root, ["tag", "v8.5.4"]);
+  git(root, ["tag", fromTag]);
+  if (versionBump) bumpFixtureVersion(root, version);
   const cut = spawnSync(
     process.execPath,
-    [cutChangelog, "--version", "8.5.5", "--from-tag", "v8.5.4", "--date", "2026-09-09"],
+    [cutChangelog, "--version", version, "--from-tag", fromTag, "--date", "2026-09-09"],
     { cwd: root, encoding: "utf8" },
   );
   assert.equal(cut.status, 0, cut.stderr);
@@ -109,7 +184,7 @@ function releaseTagFixture({ alteredSource = false, mutateReleaseFile } = {}) {
     writeFileSync(path.join(root, "README.md"), "altered application source\n");
   }
   git(root, ["add", "."]);
-  git(root, ["commit", "-qm", "chore(release): v8.5.5"], {
+  git(root, ["commit", "-qm", `chore(release): v${version}`], {
     env: {
       GIT_AUTHOR_DATE: "2026-09-09T12:00:00Z",
       GIT_COMMITTER_DATE: "2026-09-09T12:00:00Z",
@@ -117,18 +192,18 @@ function releaseTagFixture({ alteredSource = false, mutateReleaseFile } = {}) {
   });
   const tagCommit = git(root, ["rev-parse", "HEAD"]);
   const message = [
-    "Release v8.5.5",
+    `Release v${version}`,
     "",
     "Relaycast-NPM-Dist-Tag: latest",
     `Relaycast-Source-Commit: ${sourceCommit}`,
     `Relaycast-Source-Tree: ${sourceTree}`,
     "Relaycast-Package-Provenance-SHA256: fixture-digest",
   ].join("\n");
-  git(root, ["tag", "-a", "v8.5.5", "-m", message]);
+  git(root, ["tag", "-a", `v${version}`, "-m", message]);
   const engineIntegrity = JSON.parse(
     readFileSync(path.join(root, "docker/package-lock.json"), "utf8"),
   ).packages["node_modules/@relaycast/engine"].integrity;
-  return { root, sourceCommit, sourceTree, tagCommit, engineIntegrity };
+  return { root, sourceCommit, sourceTree, tagCommit, engineIntegrity, version };
 }
 
 function validateTag(fixture) {
@@ -137,13 +212,13 @@ function validateTag(fixture) {
     [
       validateReleaseTag,
       "--tag",
-      "v8.5.5",
+      `v${fixture.version}`,
       "--source-commit",
       fixture.sourceCommit,
       "--source-tree",
       fixture.sourceTree,
       "--version",
-      "8.5.5",
+      fixture.version,
       "--dist-tag",
       "latest",
       "--provenance-digest",
@@ -374,6 +449,24 @@ describe("release tag reuse execution", () => {
     }
   });
 
+  it("accepts a real version-bumped Docker lockfile and reuses it across a retry", () => {
+    const fixture = releaseTagFixture({ versionBump: true });
+    try {
+      const first = validateTag(fixture);
+      assert.equal(first.status, 0, first.stderr);
+      const lock = JSON.parse(readFileSync(path.join(fixture.root, "docker/package-lock.json"), "utf8"));
+      assert.equal(lock.version, fixture.version);
+      assert.equal(lock.packages[""].version, fixture.version);
+      assert.equal(lock.packages[""].dependencies["@relaycast/engine"], fixture.version);
+      assert.equal(lock.packages["node_modules/@relaycast/engine"].version, fixture.version);
+      git(fixture.root, ["reset", "--hard", fixture.sourceCommit]);
+      const retry = validateTag(fixture);
+      assert.equal(retry.status, 0, retry.stderr);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
   for (const file of [
     "packages/engine/package.json",
     "package-lock.json",
@@ -395,6 +488,76 @@ describe("release tag reuse execution", () => {
       }
     });
   }
+
+  it("rejects a mode-only Dockerfile change", () => {
+    const fixture = releaseTagFixture();
+    try {
+      git(fixture.root, ["checkout", "-q", fixture.sourceCommit]);
+      const releasePatch = spawnSync(
+        "git",
+        ["diff", "--binary", fixture.sourceCommit, "v8.5.5"],
+        { cwd: fixture.root, encoding: "utf8" },
+      );
+      assert.equal(releasePatch.status, 0, releasePatch.stderr);
+      const applied = spawnSync("git", ["apply"], {
+        cwd: fixture.root,
+        input: releasePatch.stdout,
+        encoding: "utf8",
+      });
+      assert.equal(applied.status, 0, applied.stderr);
+      git(fixture.root, ["update-index", "--chmod=+x", "Dockerfile"]);
+      git(fixture.root, ["commit", "-qm", "test: mode-only release mutation"]);
+      git(fixture.root, ["tag", "-d", "v8.5.5"]);
+      const message = [
+        "Release v8.5.5", "", "Relaycast-NPM-Dist-Tag: latest",
+        `Relaycast-Source-Commit: ${fixture.sourceCommit}`,
+        `Relaycast-Source-Tree: ${fixture.sourceTree}`,
+        "Relaycast-Package-Provenance-SHA256: fixture-digest",
+      ].join("\n");
+      git(fixture.root, ["tag", "-a", "v8.5.5", "-m", message]);
+      const result = validateTag(fixture);
+      assert.notEqual(result.status, 0);
+      assert.match(`${result.stderr}${result.stdout}`, /100644|non-regular/);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an allowlisted release path changed to a symlink", () => {
+    const fixture = releaseTagFixture();
+    try {
+      git(fixture.root, ["checkout", "-q", fixture.sourceCommit]);
+      const releasePatch = spawnSync(
+        "git",
+        ["diff", "--binary", fixture.sourceCommit, "v8.5.5"],
+        { cwd: fixture.root, encoding: "utf8" },
+      );
+      assert.equal(releasePatch.status, 0, releasePatch.stderr);
+      const applied = spawnSync("git", ["apply"], {
+        cwd: fixture.root,
+        input: releasePatch.stdout,
+        encoding: "utf8",
+      });
+      assert.equal(applied.status, 0, applied.stderr);
+      git(fixture.root, ["rm", "-q", "Dockerfile"]);
+      symlinkSync("RUNBOOK.md", path.join(fixture.root, "Dockerfile"));
+      git(fixture.root, ["add", "Dockerfile"]);
+      git(fixture.root, ["commit", "-qm", "test: symlink release mutation"]);
+      git(fixture.root, ["tag", "-d", "v8.5.5"]);
+      const message = [
+        "Release v8.5.5", "", "Relaycast-NPM-Dist-Tag: latest",
+        `Relaycast-Source-Commit: ${fixture.sourceCommit}`,
+        `Relaycast-Source-Tree: ${fixture.sourceTree}`,
+        "Relaycast-Package-Provenance-SHA256: fixture-digest",
+      ].join("\n");
+      git(fixture.root, ["tag", "-a", "v8.5.5", "-m", message]);
+      const result = validateTag(fixture);
+      assert.notEqual(result.status, 0);
+      assert.match(`${result.stderr}${result.stdout}`, /non-regular|100644/);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
 
   it("rejects a release merge commit even when its first parent is the source", () => {
     const fixture = releaseTagFixture();

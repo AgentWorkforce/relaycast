@@ -101,8 +101,14 @@ function assertLockDiffIsReleaseOnly(source, actual, version, { docker, engineIn
   }
   walk(before, after, []);
   const allowed = (parts, afterValue) => {
+    if (docker && parts.length === 1 && parts[0] === "version") return afterValue === version;
     if (parts[0] !== "packages") return false;
     const key = parts[1];
+    if (key === "" && docker) {
+      if (parts.length === 3 && parts[2] === "version") return afterValue === version;
+      if (parts.length === 4 && parts[2] === "dependencies" && parts[3] === "@relaycast/engine") return afterValue === version;
+      return false;
+    }
     if (!key) return false;
     if (!docker && packageLockEntryIsWorkspace(key)) {
       if (parts.length === 3 && parts[2] === "version") return afterValue === version;
@@ -130,13 +136,19 @@ function assertLockDiffIsReleaseOnly(source, actual, version, { docker, engineIn
 
 function expectedDockerLock(source, version, engineIntegrity) {
   const lock = JSON.parse(source);
+  lock.version = version;
   const root = lock.packages?.[""];
   if (root) {
     root.version = version;
     if (root.dependencies?.["@relaycast/engine"] !== undefined) root.dependencies["@relaycast/engine"] = version;
   }
   for (const [key, entry] of Object.entries(lock.packages ?? {})) {
-    if (key.startsWith("node_modules/@relaycast/")) updateLockPackageEntry(entry, version);
+    if (key.startsWith("node_modules/@relaycast/")) {
+      updateLockPackageEntry(entry, version);
+      const name = key.slice("node_modules/".length);
+      const shortName = name.slice("@relaycast/".length);
+      entry.resolved = `https://registry.npmjs.org/${name}/-/${shortName}-${version}.tgz`;
+    }
   }
   const engine = lock.packages?.["node_modules/@relaycast/engine"];
   if (engine) {
@@ -144,6 +156,32 @@ function expectedDockerLock(source, version, engineIntegrity) {
     engine.integrity = engineIntegrity;
   }
   return lock;
+}
+
+function treeEntry(cwd, revision, file) {
+  const output = execFileSync("git", ["ls-tree", "-z", revision, "--", file], {
+    cwd,
+    encoding: "utf8",
+  });
+  const line = output.split("\0").find(Boolean);
+  if (!line) return undefined;
+  const match = line.match(/^(\d+) (blob|tree|commit) ([0-9a-f]+)\t(.+)$/);
+  if (!match) throw new Error(`could not parse ${revision} tree entry for ${file}`);
+  return { mode: match[1], type: match[2], object: match[3], path: match[4] };
+}
+
+function assertReleaseFileEntries(cwd, sourceCommit, tagCommit, changedPaths) {
+  for (const file of changedPaths) {
+    const source = treeEntry(cwd, sourceCommit, file);
+    const tagged = treeEntry(cwd, tagCommit, file);
+    if (!source || !tagged) throw new Error(`release tag must retain a tree entry for ${file}`);
+    if (source.mode !== "100644" || source.type !== "blob") {
+      throw new Error(`release source entry for ${file} is not a regular 100644 file`);
+    }
+    if (tagged.mode !== "100644" || tagged.type !== "blob") {
+      throw new Error(`release tag changed ${file} to a non-regular or non-100644 entry`);
+    }
+  }
 }
 
 const RUNBOOK_PATTERNS = [
@@ -253,6 +291,7 @@ export function validateReusableReleaseTag({ cwd = process.cwd(), tag, sourceCom
   if (changedPaths.length === 0) throw new Error("release tag tree has no release changes relative to its source");
   const unexpected = changedPaths.filter((file) => !RELEASE_ONLY_PATHS.some((pattern) => pattern.test(file)));
   if (unexpected.length > 0) throw new Error(`release tag changes non-release paths: ${unexpected.join(", ")}`);
+  assertReleaseFileEntries(cwd, sourceCommit, tagCommit, changedPaths);
   assertExactReleaseTransform({ cwd, sourceCommit, tagCommit, changedPaths, version, engineIntegrity });
 
   const worktree = mkdtempSync(path.join(tmpdir(), "relaycast-release-tag-"));
