@@ -11,6 +11,7 @@ on:
           - all
           - a2a
           - types
+          - engine
           - sdk-typescript
           - cli
           - mcp
@@ -99,7 +100,19 @@ jobs:
           # interpolated into the shell script body.
           CUSTOM_VERSION: ${{ github.event.inputs.custom_version }}
           VERSION_TYPE: ${{ github.event.inputs.version }}
+          PACKAGE_SELECTION: ${{ github.event.inputs.package }}
+          RELEASE_TAG: ${{ github.event.inputs.tag }}
         run: |
+          # Emergency backports must never replace stable tags or push an old
+          # release branch onto main. Publish only the patched engine, retaining
+          # its already-published 8.5.2 dependencies.
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            if [ "$PACKAGE_SELECTION" != "engine" ] || [ "$RELEASE_TAG" != "alpha" ] ||
+               ! [[ "$CUSTOM_VERSION" =~ ^8\.5\.2-hotfix\.[0-9]+$ ]]; then
+              echo "::error::Branch releases require engine, alpha, and 8.5.2-hotfix.N"
+              exit 1
+            fi
+          fi
           # Read current version from types (canonical source)
           CURRENT_VERSION=$(node -p "require('./packages/types/package.json').version")
           echo "Current version: $CURRENT_VERSION"
@@ -124,6 +137,7 @@ jobs:
             const fs = require('fs');
             const path = require('path');
             const version = process.env.NEW_VERSION;
+            const hotfix = process.env.GITHUB_REF !== 'refs/heads/main';
             if (!version) {
               throw new Error('NEW_VERSION is required');
             }
@@ -133,12 +147,13 @@ jobs:
               const pkgPath = path.join(packagesDir, dir, 'package.json');
               if (fs.existsSync(pkgPath)) {
                 const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+                if (hotfix && pkg.name !== '@relaycast/engine') continue;
                 pkg.version = version;
 
                 // Update @relaycast/* dependencies to exact version
                 for (const depType of ['dependencies', 'devDependencies', 'peerDependencies']) {
                   for (const dep of Object.keys(pkg[depType] || {})) {
-                    if (dep.startsWith('@relaycast/')) {
+                    if (!hotfix && dep.startsWith('@relaycast/')) {
                       pkg[depType][dep] = version;
                     }
                   }
@@ -149,6 +164,7 @@ jobs:
               }
             }
 
+            if (hotfix) process.exit(0);
             // Sync package version constants
             const sdkVersionPath = path.join(packagesDir, 'sdk-typescript', 'src', 'version.ts');
             fs.writeFileSync(sdkVersionPath, 'export const SDK_VERSION = ' + JSON.stringify(version) + ' as const;\n');
@@ -286,6 +302,7 @@ jobs:
     runs-on: ubuntu-latest
     if: |
       always() &&
+      github.ref == 'refs/heads/main' &&
       github.event.inputs.dry_run != 'true' &&
       needs.build.result == 'success' &&
       (needs.publish-packages.result == 'success' || needs.publish-single.result == 'success')

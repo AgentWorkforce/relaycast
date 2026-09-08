@@ -2,7 +2,7 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, release/8.5.2]
   workflow_dispatch:
 
 concurrency:
