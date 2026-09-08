@@ -11,6 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Forward-port per-node replay serialization with independent scope results and exact-ID acknowledgement, expiry, and provider-handoff checks before each send.
 - Add migration `0051_node_foreign_key_indexes.sql` so node deletion uses child-key lookups for delivery, agent, binding, and provider foreign keys; preserve existing `SET NULL` and cascade behavior.
 
 ## [8.5.4] - 2026-09-08

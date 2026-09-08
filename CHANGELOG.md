@@ -20,6 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
+- Serialize overlapping reconnect replays and honor acknowledgements and provider handoffs before each send.
 - Prevent node removal from scanning unrelated retained deliveries and agent records across workspaces.
 
 ## [8.5.4] - 2026-09-08
