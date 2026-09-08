@@ -16,7 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+- Add workspace-admin bulk reclamation for stale, unowned agent identities, with default dry-run reports, resumable pages, and protection for broker associations and retained authorship.
 
 ## [8.5.4] - 2026-09-08
 

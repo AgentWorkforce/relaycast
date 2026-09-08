@@ -491,6 +491,7 @@ export const directoryRatings = sqliteTable(
   (table) => [
     uniqueIndex('directory_ratings_agent_rater_unique').on(table.directoryAgentId, table.raterAgentId),
     index('idx_directory_ratings_workspace').on(table.workspaceId, table.createdAt),
+    index('idx_directory_ratings_rater').on(table.raterAgentId),
     index('idx_directory_ratings_directory_agent').on(table.directoryAgentId, table.createdAt),
   ],
 );
@@ -535,6 +536,7 @@ export const routingFailures = sqliteTable(
   (table) => [
     primaryKey({ columns: [table.workspaceId, table.agentId] }),
     index('idx_routing_failures_workspace').on(table.workspaceId, table.updatedAt),
+    index('idx_routing_failures_agent').on(table.agentId),
     index('idx_routing_failures_circuit').on(table.workspaceId, table.circuitOpenUntil),
   ],
 );
@@ -591,6 +593,7 @@ export const channels = sqliteTable(
   (table) => [
     uniqueIndex('channels_workspace_name_unique').on(table.workspaceId, table.name),
     index('idx_channels_workspace').on(table.workspaceId),
+    index('idx_channels_creator').on(table.createdBy),
   ],
 );
 
@@ -651,6 +654,7 @@ export const messages = sqliteTable(
     index('idx_messages_retention').on(sql`length(${table.id})`, table.id),
     index('idx_messages_thread').on(table.threadId, table.id),
     index('idx_messages_workspace').on(table.workspaceId, table.id),
+    index('idx_messages_agent').on(table.agentId),
     index('idx_messages_workspace_session').on(
       table.workspaceId,
       table.sessionRef,
@@ -743,6 +747,7 @@ export const reactions = sqliteTable(
       table.emoji,
     ),
     index('idx_reactions_message').on(table.messageId),
+    index('idx_reactions_agent').on(table.agentId),
   ],
 );
 
@@ -956,6 +961,7 @@ export const webhooks = sqliteTable(
   (table) => [
     uniqueIndex('webhooks_workspace_name_unique').on(table.workspaceId, table.name),
     index('idx_webhooks_workspace').on(table.workspaceId),
+    index('idx_webhooks_creator').on(table.createdBy),
     index('idx_webhooks_token').on(table.tokenHash),
   ],
 );

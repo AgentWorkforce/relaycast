@@ -7,7 +7,9 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+- Add `POST /v1/agents/retention` and `scripts/retain-agents.mts` for bounded, resumable reclamation of stale unowned identities; deletion is explicit and rechecks ownership, age, status, and history references atomically. Apply `0052_agent_retention_indexes.sql` before enabling it; see the [operator guide](../../docs/agent-retention.md).
 
 ## [8.5.4] - 2026-09-08
 

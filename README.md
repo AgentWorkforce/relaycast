@@ -92,6 +92,13 @@ five minutes appear `offline`. Roster status filters run in SQL against that
 derived presence; `status=online` aliases `active`. Durable stale-status cleanup
 runs separately from reads.
 
+Workspace administrators can preview bounded registry reclamation with
+`POST /v1/agents/retention` (`retention_days: 30` by default). Physical deletion
+requires explicit `delete: true`; live/recent agents, every node association,
+and identities referenced by retained authorship are protected. See the
+[retention operator guide](docs/agent-retention.md) for eligibility limits,
+resumable bulk operation, migration requirements, and the dry-run CLI.
+
 Operator recovery for an offline agent registered before identity verifiers
 were stored uses `PATCH /v1/agents/:name/legacy-identity`. The endpoint accepts
 only a SHA-256 verifier (`identity_key_hash`) and atomically succeeds when the

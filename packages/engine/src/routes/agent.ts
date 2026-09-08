@@ -6,6 +6,7 @@ import type { AppEnv } from '../env.js';
 import { requireWorkspaceKey, requireAuth, requireAgentToken, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as agentEngine from '../engine/agent.js';
+import { agentRetentionSchema, retainAgents } from '../engine/agentRetention.js';
 import * as agentIdentityEngine from '../engine/agentIdentity.js';
 import * as nodeEngine from '../engine/node.js';
 import * as actionEngine from '../engine/action.js';
@@ -35,6 +36,22 @@ import { agents } from '../db/schema.js';
 import type { EngineDb } from '../ports/database.js';
 
 export const agentRoutes = new Hono<AppEnv>();
+
+// Explicit workspace-admin maintenance; never run implicitly on roster reads.
+agentRoutes.post('/agents/retention', requireWorkspaceKey, rateLimit, async (c) => {
+  try {
+    const parsed = await parseJsonBody(c, agentRetentionSchema, 'invalid agent retention body');
+    if (!parsed.ok) return parsed.response;
+    const cursor = parsed.data.cursor;
+    if (cursor && (cursor.workspace_id !== c.get('workspace').id
+      || cursor.cutoff > Math.max(0, Math.floor(Date.now() / 1000) - parsed.data.retention_days * 86400))) {
+      return jsonError(c, 'invalid_request', 'Retention cursor does not match workspace or policy', 400);
+    }
+    return jsonOk(c, await retainAgents(c.get('db'), c.get('workspace').id, parsed.data));
+  } catch (err: unknown) {
+    return errorResponse(c, err);
+  }
+});
 
 const skillSchema = z.object({
   id: z.string().min(1).optional(),
