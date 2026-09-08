@@ -1,14 +1,18 @@
 // Synthetic local-only allocation model. Never connects to D1 or copies user data.
-// Usage: node scripts/measure-compact-migrations.mjs [rows=100000] [activeFraction=0.5]
+// Usage: node scripts/measure-compact-migrations.mjs [rows=100000] [activeFraction=0.5] [retryFraction=0.5]
+// retryFraction is the fraction of queued (active) rows with next_attempt_at set.
 import Database from 'better-sqlite3';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const rows = Number(process.argv[2] ?? 100000);
 const activeFraction = Number(process.argv[3] ?? 0.5);
-if (!Number.isInteger(rows) || rows < 1000 || rows > 200000 || !Number.isFinite(activeFraction) || activeFraction < 0 || activeFraction > 1) {
-  throw new Error('Expected 1000..200000 rows and activeFraction 0..1');
+const retryFraction = Number(process.argv[4] ?? 0.5);
+if (!Number.isInteger(rows) || rows < 1000 || rows > 200000 || [activeFraction, retryFraction].some(value => !Number.isFinite(value) || value < 0 || value > 1)) {
+  throw new Error('Expected 1000..200000 rows, activeFraction 0..1, and retryFraction 0..1');
 }
+const activeRows = Math.floor(rows * activeFraction);
+const retryRows = Math.floor(activeRows * retryFraction);
 const directory = fileURLToPath(new URL('../packages/engine/src/db/migrations/', import.meta.url));
 const files = readdirSync(directory).filter(name => name.endsWith('.sql')).sort();
 const sql = name => readFileSync(directory + name, 'utf8');
@@ -20,14 +24,14 @@ db.exec(`INSERT INTO workspaces(id,name,api_key_hash) VALUES ('workspace11','fix
   INSERT INTO agents(id,workspace_id,name,token_hash) VALUES ('agent0000000000000','workspace11','agent','agent-key');
   INSERT INTO channels(id,workspace_id,name) VALUES ('channel','workspace11','general');`);
 const message = db.prepare("INSERT INTO messages(id,workspace_id,channel_id,agent_id,body) VALUES (?,'workspace11','channel','agent0000000000000','synthetic')");
-const delivery = db.prepare(`INSERT INTO deliveries(id,workspace_id,message_id,agent_id,status,seq,route_node_id,route_node_kind,expires_at)
-  VALUES (?,'workspace11',?,'agent0000000000000',?,?,'node0000011','ws',1788000000)`);
+const delivery = db.prepare(`INSERT INTO deliveries(id,workspace_id,message_id,agent_id,status,seq,route_node_id,route_node_kind,expires_at,next_attempt_at)
+  VALUES (?,'workspace11',?,'agent0000000000000',?,?,'node0000011','ws',1788000000,?)`);
 const event = db.prepare("INSERT INTO workspace_events(workspace_id,seq,type,payload) VALUES ('workspace11',?,'message.created','{}')");
 db.transaction(() => {
   for (let n = 1; n <= rows; n++) {
     const id = String(n).padStart(20, '0');
     message.run(id);
-    delivery.run('d_' + id + '_agent0000000000000', id, n / rows <= activeFraction ? 'queued' : 'dead_lettered', n);
+    delivery.run('d_' + id + '_agent0000000000000', id, n <= activeRows ? 'queued' : 'dead_lettered', n, n <= retryRows ? 1787999900 : null);
     if (n % 2 === 0) event.run(n / 2);
   }
 })();
@@ -50,8 +54,14 @@ for (const statement of sql('0050_compact_maintenance_indexes.sql').replace(/^--
 db.exec('COMMIT');
 const legacyGrowth = legacyPeak - baseline;
 const compactGrowth = compactPeak - baseline;
+// Verify actual indexed populations, not just requested scenario fractions.
+const retryIndexRows = Object.fromEntries(['idx_deliveries_node_retry', 'idx_deliveries_node_retry_workspace'].map(index => [index,
+  db.prepare(`SELECT COUNT(*) AS n FROM deliveries INDEXED BY ${index}
+    WHERE status = 'queued' AND route_node_kind IN ('http_push','ws','fleet_ws','direct_ws') AND next_attempt_at IS NOT NULL`).get().n,
+]));
 console.log(JSON.stringify({
-  scenario: { rows, activeFraction, eventRows: rows / 2, deliveryIdBytes: 41, workspaceIdBytes: 11, agentIdBytes: 18 },
+  scenario: { rows, activeFraction, retryFraction, activeRows, retryRows, initialRows: activeRows - retryRows, eventRows: Math.floor(rows / 2), deliveryIdBytes: 41, workspaceIdBytes: 11, agentIdBytes: 18 },
+  retryIndexRows,
   baseline, legacyPeak, compactPeak, legacyGrowth, compactGrowth,
   growthReductionPercent: 100 * (1 - compactGrowth / legacyGrowth),
   projectedCompactGrowthAt8m: compactGrowth * 8000000 / rows,

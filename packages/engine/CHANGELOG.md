@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Migration
 
-- `0050_compact_maintenance_indexes.sql` replaces the unapplied 0048/0049 path and retires six obsolete non-unique indexes before allocating bounded-query indexes. Published SQL stays immutable; Node migration planning validates explicit supersessions and journals only executed SQL. Existing 0048/0049 installations converge without changing rows, TTLs, foreign keys, or unique constraints. See the [rollout guide](../../docs/compact-maintenance-migrations.md).
+- Adds migration `0050_compact_maintenance_indexes.sql` to reduce upgrade storage pressure without deleting history. See the [rollout guide](../../docs/compact-maintenance-migrations.md) for migration and rollback requirements.
 
 ## [8.5.3] - 2026-09-08
 

@@ -46,13 +46,28 @@ retired indexes on a nearly full database.
 ## Capacity and rollout
 
 Run the local-only model with
-`node scripts/measure-compact-migrations.mjs 100000 0.5`.
-It creates synthetic SQLite data, not a production copy. On September 8, 2026:
+`node scripts/measure-compact-migrations.mjs 100000 0.5 0.5`.
+The third argument is the retry fraction within queued rows (default 0.5).
+The model verifies both retry indexes contain the requested population and
+reports actual integer row counts. It creates synthetic SQLite data, not a
+production copy. On September 8, 2026:
 
 | 100k-delivery model | Legacy peak growth | Compact peak growth | Reduction |
 | --- | ---: | ---: | ---: |
 | 50% active | 29,323,264 bytes | 6,672,384 bytes | 77% |
 | 100% active | 36,741,120 bytes | 15,659,008 bytes | 57% |
+
+The two original cases above have **no retry rows**. Review-expanded scenarios:
+
+| Active / retry fraction | Legacy peak growth | Compact peak growth | Reduction |
+| --- | ---: | ---: | ---: |
+| 50% active / 50% retry | 28,037,120 bytes | 6,664,192 bytes | 76% |
+| 100% active / 50% retry | 34,156,544 bytes | 15,683,584 bytes | 54% |
+| 100% active / 100% retry | 31,539,200 bytes | 15,790,080 bytes | 50% |
+
+At eight million deliveries, the all-retry model projects about 1.26 GB growth.
+Production's later read-only check measured 8,977,735,680 bytes; that model plus
+the 500 MB reserve does **not** fit. Do not approve the migration from this model.
 
 Freed pages are reused without VACUUM. These figures measure allocated SQLite
 pages, not D1 execution time, temporary sort space, or the live population's

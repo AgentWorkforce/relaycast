@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
 import { planMigrations } from '../migrationPlan.js';
@@ -41,13 +42,39 @@ function fixture(count = 20) {
   return handle;
 }
 
-/** Compare durable rows/constraints, excluding the intentionally different journal. */
+/** Compare durable rows, excluding the intentionally different journal. */
 function snapshot(handle: SqliteDbHandle) {
   const tables = handle.sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('_engine_migrations','maintenance_cursors') ORDER BY name").all() as { name: string }[];
   return tables.map(({ name }) => {
     const rows = handle.sqlite.prepare(`SELECT * FROM "${name}"`).all().map(row => JSON.stringify(row)).sort();
     return [name, rows.length, createHash('sha256').update(JSON.stringify(rows)).digest('hex')];
   });
+}
+
+/** Preserve every existing table definition, FK, and unique index, not selected names. */
+function constraints(handle: SqliteDbHandle) {
+  const db = handle.sqlite;
+  const tables = db.prepare("SELECT name,sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != '_engine_migrations' ORDER BY name").all() as { name: string; sql: string }[];
+  return tables.map(({ name, sql }) => ({
+    name, sql,
+    foreignKeys: db.pragma(`foreign_key_list("${name}")`),
+    uniqueIndexes: (db.pragma(`index_list("${name}")`) as { name: string; unique: number; origin: string; partial: number }[])
+      .filter(index => index.unique === 1)
+      .map(index => ({ name: index.name, origin: index.origin, partial: index.partial,
+        sql: db.prepare('SELECT sql FROM sqlite_master WHERE type = ? AND name = ?').get('index', index.name),
+        columns: db.pragma(`index_xinfo("${index.name}")`),
+      })).sort((a, b) => a.name.localeCompare(b.name)),
+  }));
+}
+
+function expectConstraintsPreserved(before: ReturnType<typeof constraints>, after: ReturnType<typeof constraints>) {
+  // 0050 may add these redundant named lookup indexes, but must not alter any
+  // original constraint (including a lookup that already existed via 0049).
+  expect(after.filter(table => table.name !== 'maintenance_cursors' || before.some(original => original.name === table.name))
+    .map(table => ({ ...table, uniqueIndexes: table.uniqueIndexes.filter(index =>
+    !['idx_deliveries_id_lookup', 'idx_read_receipts_retention'].includes(index.name)
+      || before.find(original => original.name === table.name)!.uniqueIndexes.some(original => original.name === index.name),
+  ) }))).toEqual(before);
 }
 
 describe('compact maintenance migration path', () => {
@@ -65,9 +92,14 @@ describe('compact maintenance migration path', () => {
       handle.sqlite.exec(ddl(name));
       handle.sqlite.prepare('INSERT INTO _engine_migrations VALUES (?,0)').run(name);
     }
+    const cursorRows = already.includes(older[0]!) ? [{ id: 'fixture', cursor: 'preserve-existing-progress' }] : [];
+    if (cursorRows.length) handle.sqlite.prepare('INSERT INTO maintenance_cursors VALUES (?,?)').run(cursorRows[0]!.id, cursorRows[0]!.cursor);
     const before = snapshot(handle);
+    const beforeConstraints = constraints(handle);
     expect(runMigrations(handle).applied).toEqual([replacement]);
     expect(snapshot(handle)).toEqual(before);
+    expectConstraintsPreserved(beforeConstraints, constraints(handle));
+    expect(handle.sqlite.prepare('SELECT * FROM maintenance_cursors ORDER BY id').all()).toEqual(cursorRows);
     expect(handle.sqlite.pragma('foreign_key_check')).toEqual([]);
     const retained = handle.sqlite.prepare("SELECT name FROM _engine_migrations WHERE name IN (?,?) ORDER BY name").all(...older);
     expect(retained).toEqual([...already].sort().map(name => ({ name })));
@@ -80,6 +112,26 @@ describe('compact maintenance migration path', () => {
     const lookup = JSON.stringify(handle.sqlite.prepare('EXPLAIN QUERY PLAN SELECT id FROM deliveries WHERE message_id = ?').all('0000000000000000001'));
     expect(lookup).toContain('deliveries_message_agent_unique');
     expect(lookup).not.toContain('SCAN deliveries');
+  });
+
+  it('constraint regression guard rejects a dropped unique index and changed foreign key', () => {
+    const handle = fixture();
+    const before = constraints(handle);
+    handle.sqlite.exec('DROP INDEX deliveries_message_agent_unique');
+    expect(() => expectConstraintsPreserved(before, constraints(handle))).toThrow();
+    const changedForeignKey = structuredClone(before);
+    changedForeignKey.find(table => table.name === 'deliveries')!.foreignKeys = [];
+    expect(() => expectConstraintsPreserved(before, changedForeignKey)).toThrow();
+  });
+
+  it.each([0, 0.5, 1])('capacity model populates retry indexes for fraction %s and reports odd row counts accurately', retryFraction => {
+    const script = fileURLToPath(new URL('../../../../../scripts/measure-compact-migrations.mjs', import.meta.url));
+    const result = JSON.parse(execFileSync(process.execPath, [script, '1001', '1', String(retryFraction)], { encoding: 'utf8' }));
+    const expectedRetries = Math.floor(1001 * retryFraction);
+    expect(result.scenario.eventRows).toBe(500);
+    expect(result.scenario.retryRows).toBe(expectedRetries);
+    expect(result.scenario.initialRows).toBe(1001 - expectedRetries);
+    expect(Object.values(result.retryIndexRows)).toEqual([expectedRetries, expectedRetries]);
   });
 
   it('gives the identical schema through legacy and compact paths', () => {
