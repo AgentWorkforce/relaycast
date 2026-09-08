@@ -72,6 +72,18 @@
             "focal:residual-risk",
             "confidence:0.94"
           ]
+        },
+        {
+          "ts": 1788880840683,
+          "type": "decision",
+          "content": "Rebase fix/workspace-create-idempotency-0908 onto origin/main (4581ef38, v8.5.4 + #388) before implementing repair-review fixes: Rebase fix/workspace-create-idempotency-0908 onto origin/main (4581ef38, v8.5.4 + #388) before implementing repair-review fixes",
+          "raw": {
+            "question": "Rebase fix/workspace-create-idempotency-0908 onto origin/main (4581ef38, v8.5.4 + #388) before implementing repair-review fixes",
+            "chosen": "Rebase fix/workspace-create-idempotency-0908 onto origin/main (4581ef38, v8.5.4 + #388) before implementing repair-review fixes",
+            "alternatives": [],
+            "reasoning": "Branch was 2 commits behind origin/main which cut v8.5.4 and merged compact-maintenance migration #388; rebasing first avoids building the repair on a stale version/changelog baseline"
+          },
+          "significance": "high"
         }
       ]
     }
