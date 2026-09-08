@@ -54,7 +54,7 @@ describe('bounded database work with retained history', () => {
       expect(plan).toContain('SEARCH deliveries USING INDEX deliveries_agent_seq_unique');
       expect(plan).not.toContain('USE TEMP B-TREE');
     }
-    const hydration = f.queries.filter(q => q.sql.startsWith('select') && q.sql.includes('INDEXED BY sqlite_autoindex_deliveries_1'));
+    const hydration = f.queries.filter(q => q.sql.startsWith('select') && q.sql.includes('INDEXED BY sqlite_autoindex_deliveries_1') && q.sql.includes('inner join "messages"'));
     expect(hydration).toHaveLength(3);
     for (const query of hydration) {
       expect(query.params.length).toBeLessThan(100);
@@ -120,6 +120,43 @@ describe('bounded database work with retained history', () => {
     finish();
     await Promise.all([first, second]);
     expect(f.send).toHaveBeenCalledTimes(2);
+  });
+
+  it('serializes overlapping node and agent scopes without dropping the trailing scope', async () => {
+    const f = fixture(0, 2);
+    let finish!: () => void;
+    f.send.mockImplementationOnce(() => new Promise<boolean>(resolve => { finish = () => resolve(true); }));
+    const first = deliverPendingToNode(f.db, f.registry, 'ws', 'node', { agentIds: ['agent'], providerName: 'provider' });
+    await vi.waitFor(() => expect(f.send).toHaveBeenCalledOnce());
+    const second = deliverPendingToNode(f.db, f.registry, 'ws', 'node');
+    expect(second).toBe(first);
+    await Promise.resolve();
+    expect(f.send).toHaveBeenCalledOnce();
+    finish();
+    await Promise.all([first, second]);
+    expect(f.send.mock.calls.map(call => call[3].seq)).toEqual([1, 2, 1, 2]);
+  });
+
+  it('rechecks cumulative ACKs after a send within a hydrated page', async () => {
+    const f = fixture(0, 4);
+    f.send.mockImplementation(async (_ws, _node, _provider, frame) => {
+      f.frames.push(frame);
+      if (frame.seq === 1) f.sqlite.exec("UPDATE agents SET delivery_ack_seq = 3 WHERE id = 'agent'");
+      return true;
+    });
+    expect(await deliverPendingToNode(f.db, f.registry, 'ws', 'node')).toBe(2);
+    expect(f.frames.map(frame => frame.seq)).toEqual([1, 4]);
+  });
+
+  it('does not send remaining hydrated rows to the old provider after handoff', async () => {
+    const f = fixture(0, 4);
+    f.send.mockImplementation(async (_ws, _node, _provider, frame) => {
+      f.frames.push(frame);
+      f.sqlite.exec("UPDATE agents SET provider_name = 'new-provider' WHERE id = 'agent'");
+      return true;
+    });
+    expect(await deliverPendingToNode(f.db, f.registry, 'ws', 'node')).toBe(1);
+    expect(f.frames.map(frame => frame.seq)).toEqual([1]);
   });
 
 });

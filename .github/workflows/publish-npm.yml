@@ -106,8 +106,14 @@ jobs:
           # Emergency backports must never replace stable tags or push an old
           # release branch onto main. Publish only the patched engine, retaining
           # its already-published 8.5.2 dependencies.
+          if [ "$GITHUB_REF" = "refs/heads/main" ] &&
+             { [ "$PACKAGE_SELECTION" = "engine" ] || [[ "$CUSTOM_VERSION" == *-hotfix.* ]]; }; then
+            echo "::error::Engine-only and hotfix releases require the maintenance branch"
+            exit 1
+          fi
           if [ "$GITHUB_REF" != "refs/heads/main" ]; then
-            if [ "$PACKAGE_SELECTION" != "engine" ] || [ "$RELEASE_TAG" != "alpha" ] ||
+            if [ "$GITHUB_REF" != "refs/heads/release/8.5.2" ] ||
+               [ "$PACKAGE_SELECTION" != "engine" ] || [ "$RELEASE_TAG" != "alpha" ] ||
                ! [[ "$CUSTOM_VERSION" =~ ^8\.5\.2-hotfix\.[0-9]+$ ]]; then
               echo "::error::Branch releases require engine, alpha, and 8.5.2-hotfix.N"
               exit 1
