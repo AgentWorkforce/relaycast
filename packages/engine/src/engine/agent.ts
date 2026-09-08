@@ -1,9 +1,10 @@
-import { eq, and, gt, lt, ne, sql } from 'drizzle-orm';
+import { eq, and, gt, lt, ne, sql, inArray } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { agents, agentNodeBindings, agentRecoveryCredentials, channels, channelMembers, dmParticipants, actions, deliveries, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
 import { invalidateChannelCache } from './cache.js';
+import { queryInChunks } from '../lib/queryChunks.js';
 import { codedError } from '../lib/httpError.js';
 import { directNodeIdForAgent } from './node.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
@@ -620,9 +621,6 @@ export async function deleteAgent(db: Db, workspaceId: string, name: string) {
   // ever spoken, and the caller sees the raw SQL failure with the row id in it.
   // Renaming frees the unique `(workspace_id, name)` immediately while every FK
   // target stays valid and every message keeps its sender.
-  const joinedChannels = await db.select({ name: channels.name }).from(channelMembers)
-    .innerJoin(channels, eq(channels.id, channelMembers.channelId))
-    .where(eq(channelMembers.agentId, agent.id));
   const releasedName = releasedAgentName(agent.name, agent.id);
   // The row survives, so its credential must not. `token_hash` is NOT NULL
   // UNIQUE and cannot be cleared, so rotate it to a value nobody holds.
@@ -631,7 +629,7 @@ export async function deleteAgent(db: Db, workspaceId: string, name: string) {
   // One atomic unit: a partial apply would leave the agent renamed and
   // credential-rotated while still a channel member — reachable by delivery
   // under a name its owner no longer knows.
-  await runAtomicWrites(db, (writeDb) => {
+  const releaseResults = await runAtomicWrites(db, (writeDb) => {
     const writes: AtomicWrite[] = [];
     writes.push(writeDb
       .update(agents)
@@ -662,7 +660,7 @@ export async function deleteAgent(db: Db, workspaceId: string, name: string) {
       .where(eq(agents.id, agent.id)));
     // `channel_members` and `dm_participants` cascade on DELETE; an UPDATE does
     // not fire that cascade, so a released agent would stay a delivery target.
-    writes.push(writeDb.delete(channelMembers).where(eq(channelMembers.agentId, agent.id)));
+    writes.push(writeDb.delete(channelMembers).where(eq(channelMembers.agentId, agent.id)).returning({ channelId: channelMembers.channelId }));
     writes.push(writeDb.delete(dmParticipants).where(eq(dmParticipants.agentId, agent.id)));
     // Release the node binding so the host's active-agent count is not held by
     // a tombstone, matching the release paths.
@@ -670,6 +668,11 @@ export async function deleteAgent(db: Db, workspaceId: string, name: string) {
     writes.push(writeDb.delete(nodes).where(eq(nodes.id, directNodeIdForAgent(agent.id))));
     return writes;
   });
+  // Capture memberships at deletion, not a preflight read that can race joins.
+  const removed = releaseResults[1] as Array<{ channelId: string }>;
+  const joinedChannels = await queryInChunks(removed.map(row => row.channelId), ids => db
+    .select({ name: channels.name }).from(channels)
+    .where(and(eq(channels.workspaceId, workspaceId), inArray(channels.id, ids))));
   await Promise.all(joinedChannels.map(channel => invalidateChannelCache(workspaceId, channel.name)));
   return true;
 }

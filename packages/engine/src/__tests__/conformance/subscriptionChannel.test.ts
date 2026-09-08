@@ -1,4 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { channelMembers, channels } from '../../db/schema.js';
+import { generateId } from '../../engine/snowflake.js';
+import { deleteAgent } from '../../engine/agent.js';
+import { createChannel, getChannel, joinChannel } from '../../engine/channel.js';
+import type { EngineDb, TransactionCapability } from '../../ports/database.js';
 import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
 
 describe('agent subscription channels', () => {
@@ -68,6 +73,39 @@ describe('agent subscription channels', () => {
     expect(release.status).toBe(201);
     const after = await stack.app.request(`/v1/channels/${channel.name}`, { headers });
     expect((await after.json()).data.members).toHaveLength(0);
+  });
+
+  it('rejects a legacy reserved channel containing a non-recipient without adopting it', async () => {
+    const ws = await createWorkspace(stack.app, 'legacy-route');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'legacy-target');
+    const other = await registerAgent(stack.app, ws.workspaceKey, 'legacy-other');
+    const db = stack.runtime.deps.db;
+    const channelId = generateId();
+    await db.insert(channels).values({ id: channelId, workspaceId: ws.workspaceId,
+      name: `agent-events-${target.agentId}`, metadata: { subscription_agent_id: target.agentId } });
+    await db.insert(channelMembers).values({ channelId, agentId: other.agentId, role: 'member' });
+    const response = await stack.app.request('/v1/agents/legacy-target/subscription-channel', {
+      method: 'POST', headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    expect(response.status).toBe(409);
+    expect((await getChannel(db, ws.workspaceId, `agent-events-${target.agentId}`)).members.map(m => m.agent_id)).toEqual([other.agentId]);
+  });
+
+  it('invalidates a membership cached after release preflight but before its transaction', async () => {
+    const ws = await createWorkspace(stack.app, 'release-late-join');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'late-target');
+    const db = stack.runtime.deps.db as EngineDb & TransactionCapability;
+    await createChannel(db, ws.workspaceId, { name: 'late-channel' });
+    const original = db.withTransaction.bind(db);
+    const hook = vi.spyOn(db, 'withTransaction').mockImplementationOnce(async (fn) => {
+      await joinChannel(db, ws.workspaceId, 'late-channel', target.agentId);
+      expect((await getChannel(db, ws.workspaceId, 'late-channel')).members.map(m => m.agent_id)).toContain(target.agentId);
+      return original(fn);
+    });
+    try {
+      expect(await deleteAgent(db, ws.workspaceId, 'late-target')).toBe(true);
+      expect((await getChannel(db, ws.workspaceId, 'late-channel')).members).toHaveLength(0);
+    } finally { hook.mockRestore(); }
   });
 
 });

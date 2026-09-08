@@ -27,6 +27,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
+- Subscription routes reject conflicting legacy memberships; agent removal invalidates channels actually removed by the release transaction.
+
 - Agent deletion invalidates cached membership so subscription route checks reflect the released identity.
 - Relayfile ingress preserves authenticated provider event semantics and resource references.
 - Hyphenated mentions resolve the full handle without waking a prefix agent.

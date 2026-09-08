@@ -1,4 +1,4 @@
-import { eq, and, sql, inArray } from 'drizzle-orm';
+import { eq, and, sql, inArray, ne } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { channels, channelMembers, agents } from '../db/schema.js';
 import { generateId } from './snowflake.js';
@@ -28,6 +28,10 @@ export async function ensureAgentSubscriptionChannel(db: Db, workspaceId: string
   const [channel] = await db.select().from(channels).where(and(eq(channels.workspaceId, workspaceId), eq(channels.name, name)));
   assertSubscriptionRecipient(channel, agent.id);
   if (channel.isArchived) throw codedError('Subscription channel is archived', 'channel_archived', 409);
+  const [foreignMember] = await db.select({ agentId: channelMembers.agentId }).from(channelMembers)
+    .where(and(eq(channelMembers.channelId, channel.id), ne(channelMembers.agentId, agent.id))).limit(1);
+  if (foreignMember) throw codedError('Existing subscription channel has another recipient', 'subscription_channel_conflict', 409);
+
   // Recheck the identity in the INSERT, serialized with tombstoning/removal.
   // A release between the lookup and this write must never rejoin a tombstone.
   await db.run(sql`INSERT INTO channel_members (channel_id, agent_id, role)
