@@ -154,14 +154,6 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
     : retentionOptions?.defaults?.messageTtlDays ?? null;
   const config: EngineConfig = {
     ...options.config,
-    // A supplied deployment secret is stable across restarts. For local
-    // self-hosting, fall back to the file signing secret (which hosts can
-    // persist via `fileSecret`) or a process secret for backwards-compatible
-    // operation without configuration.
-    workspaceBootstrapSecret:
-      options.config?.workspaceBootstrapSecret
-      ?? options.fileSecret
-      ?? randomBytes(32).toString('hex'),
     retention: options.config?.retention ?? { messageTtlDays },
   };
 

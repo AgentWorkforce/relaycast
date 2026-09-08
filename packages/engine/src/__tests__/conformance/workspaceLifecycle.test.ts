@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createEngine } from '../../engine.js';
+import { createNodeRuntime } from '../../adapters/node/index.js';
 import {
   agents,
   channels,
@@ -143,6 +148,104 @@ describe('workspace lifecycle', () => {
     const afterDelete = await stack.app.request('/v1/workspaces', { method: 'POST', headers, body });
     expect(afterDelete.status).toBe(409);
     expect((await afterDelete.json() as { error: { code: string } }).error.code).toBe('workspace_create_idempotency_terminalized');
+  });
+
+  it.each([
+    'Basic rk_live_malformed',
+    'Bearer',
+    'Bearer at_live_wrong_kind',
+    'Bearer rk_live_missing',
+  ])('does not downgrade %s to anonymous bootstrap', async (authorization) => {
+    const response = await stack.app.request('/v1/workspaces', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization,
+        'Idempotency-Key': `auth-regression-${authorization.slice(0, 6)}`,
+      },
+      body: JSON.stringify({ name: 'must-not-downgrade' }),
+    });
+
+    expect(response.status).toBe(401);
+    expect((await response.json() as { error: { code: string } }).error.code)
+      .toMatch(/unauthorized|invalid/);
+    expect(await stack.runtime.handle.db.select().from(workspaces)).toHaveLength(0);
+  });
+
+  it('keeps anonymous bootstrap available when Authorization is absent', async () => {
+    const response = await stack.app.request('/v1/workspaces', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'Idempotency-Key': 'auth-absent-379' },
+      body: JSON.stringify({ name: 'anonymous-still-works' }),
+    });
+
+    expect(response.status).toBe(201);
+    expect((await response.json() as { data: { api_key: string } }).data.api_key).toMatch(/^rk_/);
+  });
+
+  it('requires a stable bootstrap secret across runtime restarts while preserving unkeyed creates', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'relaycast-bootstrap-secret-'));
+    const dbPath = join(dir, 'relaycast.db');
+    const baseOptions = {
+      dbPath,
+      baseUrl: 'http://localhost:0',
+      migrate: true,
+      eventQueue: { pollIntervalMs: 0 },
+      presence: { ttlMs: 60_000, sweepIntervalMs: 0 },
+    } as const;
+    let firstRuntime: ReturnType<typeof createNodeRuntime> | undefined;
+    let restartedRuntime: ReturnType<typeof createNodeRuntime> | undefined;
+    let unconfiguredRuntime: ReturnType<typeof createNodeRuntime> | undefined;
+    try {
+      firstRuntime = createNodeRuntime({
+        ...baseOptions,
+        config: { environment: 'test', workspaceBootstrapSecret: 'stable-test-secret' },
+      });
+      const first = await createEngine(firstRuntime.deps).request('/v1/workspaces', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'Idempotency-Key': 'restart-contract-379' },
+        body: JSON.stringify({ name: 'restart-contract' }),
+      });
+      expect(first.status).toBe(201);
+      const firstData = (await first.json() as { data: { workspace_id: string; api_key: string } }).data;
+      firstRuntime.close();
+      firstRuntime = undefined;
+
+      restartedRuntime = createNodeRuntime({
+        ...baseOptions,
+        config: { environment: 'test', workspaceBootstrapSecret: 'stable-test-secret' },
+      });
+      const replay = await createEngine(restartedRuntime.deps).request('/v1/workspaces', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'Idempotency-Key': 'restart-contract-379' },
+        body: JSON.stringify({ name: 'restart-contract' }),
+      });
+      expect(replay.status).toBe(200);
+      expect((await replay.json() as { data: unknown }).data).toEqual(firstData);
+      restartedRuntime.close();
+      restartedRuntime = undefined;
+
+      unconfiguredRuntime = createNodeRuntime({ ...baseOptions, config: { environment: 'test' } });
+      const unkeyed = await createEngine(unconfiguredRuntime.deps).request('/v1/workspaces', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'unkeyed-still-works' }),
+      });
+      expect(unkeyed.status).toBe(201);
+      const unavailable = await createEngine(unconfiguredRuntime.deps).request('/v1/workspaces', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'Idempotency-Key': 'missing-secret-379' },
+        body: JSON.stringify({ name: 'keyed-needs-secret' }),
+      });
+      expect(unavailable.status).toBe(503);
+      expect((await unavailable.json() as { error: { code: string } }).error.code)
+        .toBe('workspace_create_idempotency_unavailable');
+    } finally {
+      unconfiguredRuntime?.close();
+      restartedRuntime?.close();
+      firstRuntime?.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('replays anonymous bootstrap creates and terminalizes them on expiry', async () => {

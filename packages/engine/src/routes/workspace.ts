@@ -147,10 +147,18 @@ function inMemoryPublicLookupRateCheck(clientId: string, limit: number) {
   };
 }
 
-function extractOwnerApiKey(authHeader: string | undefined) {
-  if (!authHeader?.startsWith('Bearer ')) return undefined;
+type OwnerAuthorization =
+  | { kind: 'absent' }
+  | { kind: 'invalid' }
+  | { kind: 'workspace'; token: string };
+
+function parseOwnerAuthorization(authHeader: string | undefined): OwnerAuthorization {
+  if (authHeader === undefined) return { kind: 'absent' };
+  if (!authHeader.startsWith('Bearer ')) return { kind: 'invalid' };
   const token = authHeader.slice(7);
-  return token.startsWith('rk_') ? token : undefined;
+  return token.startsWith('rk_')
+    ? { kind: 'workspace', token }
+    : { kind: 'invalid' };
 }
 
 const publicWorkspaceLookupRateLimit = createMiddleware<AppEnv>(async (c, next) => {
@@ -203,7 +211,13 @@ workspaceRoutes.post('/workspaces', async (c) => {
       return jsonError(c, 'invalid_idempotency_key', idempotencyError, 400);
     }
     const db = c.get('db');
-    const ownerApiKey = extractOwnerApiKey(c.req.header('Authorization'));
+    const ownerAuthorization = parseOwnerAuthorization(c.req.header('Authorization'));
+    if (idempotencyKey && ownerAuthorization.kind === 'invalid') {
+      return jsonError(c, 'unauthorized', 'Missing or invalid Authorization header', 401);
+    }
+    const ownerApiKey = ownerAuthorization.kind === 'workspace'
+      ? ownerAuthorization.token
+      : undefined;
     if (idempotencyKey && ownerApiKey) {
       const ownerAuth = await c.get('engine').auth.authenticate({ token: ownerApiKey, require: 'workspace', db });
       if (!ownerAuth.ok) {

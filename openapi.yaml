@@ -1593,8 +1593,10 @@ paths:
           description: >
             `workspace_storage_unavailable` — transient storage attempts were
             exhausted and the committed workspace/channel pair could not be
-            confirmed. The response does not expose database statements or
-            bound parameters.
+            confirmed; or `workspace_create_idempotency_unavailable` — keyed
+            anonymous bootstrap was requested without a configured deployment
+            secret. The response does not expose database statements or bound
+            parameters.
           content:
             application/json:
               schema:

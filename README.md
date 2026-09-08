@@ -125,9 +125,11 @@ the workspace terminalizes its binding; replaying the key cannot accidentally
 create a replacement. Unauthenticated by-name lookup never returns workspace
 credentials.
 
-Self-hosted deployments should persist `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET`
-(or provide `workspaceBootstrapSecret` in the engine config) so recovery remains
-valid after a process restart.
+Keyed anonymous bootstrap requires a stable deployment secret. Self-hosted
+deployments must persist `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` (or provide
+`workspaceBootstrapSecret` in the engine config); deployments without it return
+`503 workspace_create_idempotency_unavailable`. Unkeyed creates remain available
+and continue to generate a fresh API key.
 
 If workspace storage remains unavailable after its transient retries and the
 server cannot confirm the committed workspace/channel pair, creation returns
