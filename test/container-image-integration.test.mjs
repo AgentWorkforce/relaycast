@@ -122,26 +122,39 @@ const dockerOk = dockerAvailable();
 const primaryVolume = dockerOk ? mkdtempSync(join(tmpdir(), 'relaycast-it-primary-')) : undefined;
 const secondaryVolume = dockerOk ? mkdtempSync(join(tmpdir(), 'relaycast-it-secondary-')) : undefined;
 
+function teardown() {
+  if (!dockerOk) return;
+  removeContainerQuiet(PRIMARY_CONTAINER);
+  removeContainerQuiet(SECONDARY_CONTAINER);
+  sh('docker', ['rmi', '--force', IMAGE_TAG]);
+  if (primaryVolume) rmSync(primaryVolume, { recursive: true, force: true });
+  if (secondaryVolume) rmSync(secondaryVolume, { recursive: true, force: true });
+}
+
 describe('self-host image integration (real docker build + real container)', { skip: !dockerOk && 'docker is not available' }, () => {
   before(async () => {
-    const build = sh('docker', ['build', '-f', 'Dockerfile', '-t', IMAGE_TAG, '.']);
-    assert.equal(build.status, 0, `docker build failed: ${build.stderr}`);
+    // node:test does not run after() if before() throws, so a failure
+    // partway through setup (e.g. the primary container started but the
+    // secondary's health check times out) would otherwise leak a running
+    // container, the built image, and the temp volume directories on every
+    // retry -- costly on a runner this suite's own schedule reuses daily.
+    // Best-effort tear down whatever was actually started before rethrowing.
+    try {
+      const build = sh('docker', ['build', '-f', 'Dockerfile', '-t', IMAGE_TAG, '.']);
+      assert.equal(build.status, 0, `docker build failed: ${build.stderr}`);
 
-    startContainer({ name: PRIMARY_CONTAINER, port: PRIMARY_PORT, volumeDir: primaryVolume, secret: BOOTSTRAP_SECRET });
-    await waitForHealth(PRIMARY_PORT);
+      startContainer({ name: PRIMARY_CONTAINER, port: PRIMARY_PORT, volumeDir: primaryVolume, secret: BOOTSTRAP_SECRET });
+      await waitForHealth(PRIMARY_PORT);
 
-    startContainer({ name: SECONDARY_CONTAINER, port: SECONDARY_PORT, volumeDir: secondaryVolume, secret: undefined });
-    await waitForHealth(SECONDARY_PORT);
+      startContainer({ name: SECONDARY_CONTAINER, port: SECONDARY_PORT, volumeDir: secondaryVolume, secret: undefined });
+      await waitForHealth(SECONDARY_PORT);
+    } catch (error) {
+      teardown();
+      throw error;
+    }
   });
 
-  after(() => {
-    if (!dockerOk) return;
-    removeContainerQuiet(PRIMARY_CONTAINER);
-    removeContainerQuiet(SECONDARY_CONTAINER);
-    sh('docker', ['rmi', '--force', IMAGE_TAG]);
-    if (primaryVolume) rmSync(primaryVolume, { recursive: true, force: true });
-    if (secondaryVolume) rmSync(secondaryVolume, { recursive: true, force: true });
-  });
+  after(teardown);
 
   test('a deployment with no bootstrap secret configured fails closed with 503', async () => {
     const key = freshIdempotencyKey('no-secret-configured');

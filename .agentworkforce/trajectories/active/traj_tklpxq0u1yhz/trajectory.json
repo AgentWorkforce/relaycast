@@ -208,6 +208,18 @@
             "focal:container-integration-ci",
             "confidence:0.8"
           ]
+        },
+        {
+          "ts": 1788884248040,
+          "type": "decision",
+          "content": "Fix before()-hook cleanup gap found by independent review: teardown containers/image/volumes on setup failure, not just on normal completion: Fix before()-hook cleanup gap found by independent review: teardown containers/image/volumes on setup failure, not just on normal completion",
+          "raw": {
+            "question": "Fix before()-hook cleanup gap found by independent review: teardown containers/image/volumes on setup failure, not just on normal completion",
+            "chosen": "Fix before()-hook cleanup gap found by independent review: teardown containers/image/volumes on setup failure, not just on normal completion",
+            "alternatives": [],
+            "reasoning": "node:test does not run after() if before() throws, so a partial setup failure (e.g. secondary container health-check timeout after the primary already started) previously leaked a running container, the built image, and temp volume dirs on every retry -- costly since this suite runs on a daily schedule. Extracted teardown() and wrapped before()'s body in try/catch/rethrow calling it on failure. Verified by deliberately forcing a before() failure (port collision) and confirming docker ps/images/temp dirs were empty afterward, then confirmed the normal 5/5-passing path still works."
+          },
+          "significance": "high"
         }
       ]
     }
