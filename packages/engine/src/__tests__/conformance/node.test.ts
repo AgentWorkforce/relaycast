@@ -530,6 +530,14 @@ describe('node adapter conformance', () => {
       await stack.settle();
       expect(beta.sock.ofType('action.invoke')).toHaveLength(1);
       expect(alpha.sock.ofType('action.invoke')).toHaveLength(0);
+      const handlerSpawn = await stack.app.request('/v1/actions/spawn/invoke', {
+        method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: { cli: 'claude', name: 'handler-worker', verify_ready: true } }),
+      });
+      expect(handlerSpawn.status).toBe(201);
+      expect((await handlerSpawn.json()).data.handler_node_id).toBe('node_alpha');
+      await stack.settle();
+      expect(alpha.sock.ofType('action.invoke')).toHaveLength(1);
       const outsider = await registerAgent(stack.app, ws.workspaceKey, 'outsider');
       const denied = await stack.app.request('/v1/actions/spawn/invoke', {
         method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${outsider.token}` },

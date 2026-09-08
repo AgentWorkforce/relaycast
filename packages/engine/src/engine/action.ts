@@ -1832,7 +1832,7 @@ export async function invokeAction(
   // Legacy workspace-global broker aliases must not swallow an explicit
   // target_node. Capacity placement validates that target and its live provider.
   // Keep the alias ACL above this branch; explicit targeting is not an ACL bypass.
-  if (actionName === 'spawn' && (!action || (action.handlerNodeId && (typeof data.input?.target_node === 'string' || data.input?.verify_ready === true)))) {
+  if (actionName === 'spawn' && (!action || (action.handlerNodeId && typeof data.input?.target_node === 'string'))) {
     return dispatchSpawn({
       db,
       registry: options.nodeConnections,

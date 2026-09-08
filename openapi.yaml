@@ -5691,6 +5691,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '503':
+          description: A recipient mailbox is full; no partial message or deliveries were committed
+          headers:
+            Retry-After:
+              description: Retry the event after 30 seconds
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /ws:
     get:

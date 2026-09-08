@@ -5,7 +5,7 @@ import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { generateId } from './snowflake.js';
 import { inboundWebhookMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
-import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
+import { runAtomicWrites, databaseConstraintKind, type AtomicWrite } from '../ports/database.js';
 import { buildChannelDeliveryWrite, fetchChannelDeliveryOutcomes } from './deliveryWrites.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
@@ -153,11 +153,19 @@ export async function deleteWebhook(db: Db, workspaceId: string, webhookId: stri
   return result.length > 0;
 }
 
+function rethrowMailboxError(error: unknown): never {
+  if (databaseConstraintKind(error) === 'mailbox_capacity') {
+    throw codedError('A recipient mailbox is full; retry this event after capacity becomes available', 'mailbox_full', 503);
+  }
+  throw error;
+}
+
 export async function triggerWebhook(
   db: Db,
   webhookId: string,
   token: string | null,
   data: { text?: string; source?: string; author?: string; payload?: Record<string, unknown> },
+  options: { mailbox?: MailboxConfig | ((workspaceId: string) => MailboxConfig) } = {},
 ) {
   // Look up webhook
   const [webhook] = await db
@@ -206,6 +214,9 @@ export async function triggerWebhook(
   // replay-ledger row. Token-protected hooks may opt into replay correlation.
   const sessionRef = webhook.tokenHash ? requireSessionRefFromMetadata(metadata) : null;
   const createdAt = new Date();
+  const mailbox = typeof options.mailbox === 'function' ? options.mailbox(webhook.workspaceId) : options.mailbox ?? {
+    ttlMs: DEFAULT_MAILBOX_TTL_MS, depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
+  };
   const results = await runAtomicWrites(db, (writeDb) => {
     const writes: AtomicWrite[] = [
       writeDb
@@ -232,10 +243,10 @@ export async function triggerWebhook(
     writes.push(buildChannelDeliveryWrite(writeDb, {
       workspaceId: webhook.workspaceId, messageId, channelId: webhook.channelId,
       senderAgentId: postingAgentId, mode: 'immediate',
-      ttlMs: DEFAULT_MAILBOX_TTL_MS, depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
+      ttlMs: mailbox.ttlMs, depthCap: mailbox.depthCap, rejectOnOverflow: true,
     }));
     return writes;
-  });
+  }, { requireAtomic: true }).catch(rethrowMailboxError);
   const [message] = results[0] as (typeof messages.$inferSelect)[];
 
   // Get channel name
@@ -343,18 +354,7 @@ export async function triggerIntegrationMessage(
     );
 
     return writes;
-  }, { requireAtomic: true }).catch((error: unknown) => {
-    let cause = error;
-    const seen = new Set<unknown>();
-    while (cause instanceof Error && !seen.has(cause)) {
-      seen.add(cause);
-      if (/NOT NULL constraint failed: deliveries\.workspace_id/i.test(cause.message)) {
-        throw codedError('A recipient mailbox is full; retry this event after capacity becomes available', 'mailbox_full', 503);
-      }
-      cause = cause.cause;
-    }
-    throw error;
-  });
+  }, { requireAtomic: true }).catch(rethrowMailboxError);
   const [message] = results[0] as (typeof messages.$inferSelect)[];
 
   const [channel] = await db

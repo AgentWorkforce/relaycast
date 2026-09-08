@@ -62,4 +62,31 @@ describe('integration delivery backpressure and join freshness', () => {
     expect(stored.map(m => m.body).sort()).toEqual(events.sort());
   });
 
+  it('raw HTTP hooks reject overflow without storing a partial message and accept the retry', async () => {
+    await stack.close();
+    stack = makeNodeStack({ mailbox: { depthCap: 1 } });
+    const ws = await createWorkspace(stack.app, 'raw-backpressure');
+    const busy = await registerAgent(stack.app, ws.workspaceKey, 'raw-busy');
+    const post = (path: string, token: string, body?: unknown) => stack.app.request(path, {
+      method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+    await post('/v1/channels', busy.token, { name: 'raw-events' });
+    const created = await post('/v1/webhooks', ws.workspaceKey, { channel: 'raw-events' });
+    expect(created.status).toBe(201);
+    const { data: hook } = await created.json();
+    const emit = (text: string) => post(`/v1/hooks/${hook.webhook_id}`, hook.token, { text });
+    expect((await emit('raw-first')).status).toBe(201);
+    const overflow = await emit('raw-second');
+    expect(overflow.status).toBe(503);
+    expect(overflow.headers.get('Retry-After')).toBe('30');
+    expect(await overflow.json()).toMatchObject({ error: { code: 'mailbox_full' } });
+    const stored = await stack.runtime.handle.db.select().from(messages).where(eq(messages.workspaceId, ws.workspaceId));
+    expect(stored.map(m => m.body)).toEqual(['raw-first']);
+    const inbox = await stack.app.request('/v1/deliveries', { headers: { authorization: `Bearer ${busy.token}` } });
+    const { data: deliveries } = await inbox.json();
+    expect((await post(`/v1/deliveries/${deliveries[0].id}/ack`, busy.token)).status).toBe(200);
+    expect((await emit('raw-second')).status).toBe(201);
+  });
+
 });

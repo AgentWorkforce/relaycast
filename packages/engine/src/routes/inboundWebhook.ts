@@ -1,9 +1,10 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
-import { errorResponse } from '../lib/httpError.js';
+import { asCodedError, errorResponse } from '../lib/httpError.js';
 import { requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
 import * as inboundWebhookEngine from '../engine/inboundWebhook.js';
 import * as triggerEngine from '../engine/trigger.js';
 import * as channelEngine from '../engine/channel.js';
@@ -134,6 +135,7 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
         author: author ?? source,
         payload: (payload && typeof payload === 'object') ? payload as Record<string, unknown> : undefined,
       },
+      { mailbox: (workspaceId) => resolveMailboxConfig(c.get('engine').config, workspaceId) },
     );
     if (!result) {
       return jsonNotFound(c, 'webhook_not_found', 'Webhook not found or inactive');
@@ -207,6 +209,7 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
 
     return jsonCreated(c, responseData);
   } catch (err: unknown) {
+    if (asCodedError(err).code === 'mailbox_full') c.header('Retry-After', '30');
     return errorResponse(c, err);
   }
 });

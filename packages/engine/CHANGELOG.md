@@ -19,7 +19,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Relayfile ingress preserves authenticated provider event semantics and resource references.
 - Hyphenated mentions resolve the full handle without waking a prefix agent.
 - Raw inbound webhooks now create durable agent deliveries.
-- Relayfile ingress rejects full mailboxes atomically so producers can retry unique events without partial delivery.
+- Relayfile ingress and raw inbound hooks reject full mailboxes atomically with retry guidance, preserving unique events without partial delivery.
 - Explicit spawn targets are honored when a legacy global node alias exists, preserving its caller allowlist.
 
 

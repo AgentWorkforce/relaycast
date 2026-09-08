@@ -1023,12 +1023,12 @@ produce one mention delivery. A backslash immediately before `@` escapes it;
 email addresses are not mentions. Mention delivery still requires membership in
 the channel and workspace authorization.
 
-Relayfile events preserve distinct events in FIFO order for members present when
+Relayfile events and raw inbound hooks preserve distinct events in FIFO order for members present when
 accepted. Joining later does not backfill old delivery rows. A full recipient
 mailbox causes the entire inbound event to return **503 `mailbox_full`** with
 `Retry-After: 30`; neither a partial message nor partial deliveries are committed.
-The producer must retry the same event ID and retain exhausted attempts in its
-DLQ. No newest-only coalescing is applied. The normal mailbox TTL still applies:
+The Relayfile producer must retry the same event ID and retain exhausted attempts in its
+DLQ. Raw hooks must retry rejected payloads; they do not claim Relayfile event-ID deduplication. No newest-only coalescing is applied. The normal mailbox TTL still applies:
 expired deliveries become inspectable dead letters, not acted-on receipts.
 Operators must drain/retry the DLQ before declaring an event matrix complete.
 
@@ -1037,3 +1037,5 @@ legacy workspace-global node action named `spawn` exists; its caller allowlist
 continues to apply. A dispatch acknowledgement does not establish harness readiness.
 
 Verified spawn (`verify_ready: true`) fails with `spawn_target_unavailable` when no connected eligible provider can dispatch the request. Unverified legacy requests retain queue behavior. Relayfile ingress preserves authenticated `providerEventType` and `resourceRef` as `provider_event_type` and `resource_ref` in message metadata, alongside the provider record. Generic file events do not imply PR, CI, or review semantics.
+
+Readiness requests do not reroute registered global spawn handlers. Only an explicit `target_node` selects fleet placement around a legacy node alias; handlers that receive `verify_ready` must honor its completion contract. A deleted recipient leaves its old route memberless so a replacement cannot inherit delivery. Retire or replace the inventoried producer binding and webhook when deleting a subscriber; channel history remains for audit.
