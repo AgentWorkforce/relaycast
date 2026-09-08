@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import Database, { type RunResult } from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import * as schema from '../../db/schema.js';
+import { planMigrations } from '../../db/migrationPlan.js';
 import type { EngineDb, TransactionCapability } from '../../ports/database.js';
 
 /**
@@ -315,14 +316,15 @@ export function runMigrations(handle: SqliteDbHandle): { applied: string[] } {
   const files = readdirSync(dir)
     .filter((f) => f.endsWith('.sql'))
     .sort();
+  const supersessionsPath = join(dir, 'supersessions.json');
+  const pending = planMigrations(files, done, JSON.parse(readFileSync(supersessionsPath, 'utf8')));
 
   const applied: string[] = [];
   const insert = sqlite.prepare(
     `INSERT INTO _engine_migrations (name, applied_at) VALUES (?, ?)`,
   );
 
-  for (const file of files) {
-    if (done.has(file)) continue;
+  for (const file of pending) {
     // drizzle-kit separates statements with `--> statement-breakpoint`; SQLite's
     // `exec` runs the whole script. Apply the DDL and record the migration as
     // applied in one transaction so a crash mid-migration can't leave the schema
