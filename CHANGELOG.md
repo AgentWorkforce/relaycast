@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Fleet delivery replay uses indexed mailbox pages; bounded, resumable retention and lower background dispatch concurrency reduce database pressure without shortening retention policies.
 
 ## [8.5.2] - 2026-09-07
 

@@ -89,12 +89,20 @@ function belowDepthCapSql(workspaceId: string, agentId: unknown, depthCap: numbe
   // recipient would otherwise keep rejecting new sends as `depth_cap` long after
   // its queued rows should have dead-lettered. Exclude expired rows from the count.
   return sql`(
-    SELECT COUNT(*)
-    FROM deliveries d
-    WHERE d.workspace_id = ${workspaceId}
-      AND d.agent_id = ${agentId}
-      AND d.status IN ('queued', 'delivered')
-      AND (d.expires_at IS NULL OR d.expires_at > unixepoch())
+    SELECT COUNT(*) FROM (
+      SELECT 1 FROM deliveries d INDEXED BY idx_deliveries_agent_active_expiry
+      WHERE d.workspace_id = ${workspaceId}
+        AND d.agent_id = ${agentId}
+        AND d.status IN ('queued', 'delivered')
+        AND d.expires_at IS NULL
+      UNION ALL
+      SELECT 1 FROM deliveries d INDEXED BY idx_deliveries_agent_active_expiry
+      WHERE d.workspace_id = ${workspaceId}
+        AND d.agent_id = ${agentId}
+        AND d.status IN ('queued', 'delivered')
+        AND d.expires_at > unixepoch()
+      LIMIT ${depthCap}
+    )
   ) < ${depthCap}`;
 }
 

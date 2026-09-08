@@ -566,8 +566,8 @@ export async function sweepDueNodeDeliveries(
     wsAgents.push({ workspaceId: event.workspaceId, agentId: event.delivery.agentId });
   }
 
-  await Promise.allSettled([
-    ...httpPushEvents.map((event) => (
+  const tasks = [
+    ...httpPushEvents.map((event) => () => (
       routeDeliveryOutcomesForContext(
         { db: engine.db, workspaceId: event.workspaceId, engine },
         [event.delivery],
@@ -575,14 +575,19 @@ export async function sweepDueNodeDeliveries(
         event.eventData,
       )
     )),
-    ...wsAgents.map((agent) => (
+    ...wsAgents.map((agent) => () => (
       redriveWsBacklogForAgent(
         { db: engine.db, workspaceId: agent.workspaceId, engine },
         agent.agentId,
         now,
       )
     )),
-  ]);
+  ];
+  // A single cron must not fan out up to 50 simultaneous D1-heavy dispatch
+  // pipelines. Preserve independent failure handling and per-agent ordering.
+  for (let offset = 0; offset < tasks.length; offset += 4) {
+    await Promise.allSettled(tasks.slice(offset, offset + 4).map(run => run()));
+  }
   return due.length;
 }
 
