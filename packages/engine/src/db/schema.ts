@@ -648,6 +648,7 @@ export const messages = sqliteTable(
   },
   (table) => [
     index('idx_messages_channel_time').on(table.channelId, table.id),
+    index('idx_messages_retention').on(sql`length(${table.id})`, table.id),
     index('idx_messages_thread').on(table.threadId, table.id),
     index('idx_messages_workspace').on(table.workspaceId, table.id),
     index('idx_messages_workspace_session').on(
@@ -712,6 +713,7 @@ export const messageLogs = sqliteTable(
   (table) => [
     uniqueIndex('message_logs_message_unique').on(table.messageId),
     index('idx_message_logs_workspace_time').on(table.workspaceId, table.id),
+    index('idx_message_logs_retention').on(sql`length(${table.id})`, table.id),
     index('idx_message_logs_agent_time').on(table.agentId, table.id),
     index('idx_message_logs_channel_time').on(table.channelId, table.id),
     index('idx_message_logs_conversation_time').on(table.conversationId, table.id),
@@ -904,6 +906,7 @@ export const readReceipts = sqliteTable(
   (table) => [
     primaryKey({ columns: [table.messageId, table.agentId] }),
     index('idx_read_receipts_message').on(table.messageId),
+    uniqueIndex('idx_read_receipts_retention').on(table.messageId, table.agentId),
     index('idx_read_receipts_agent').on(table.agentId, table.readAt),
   ],
 );
@@ -1185,9 +1188,16 @@ export const deliveries = sqliteTable(
   },
   (table) => [
     uniqueIndex('deliveries_message_agent_unique').on(table.messageId, table.agentId),
+    uniqueIndex('idx_deliveries_id_lookup').on(table.id),
     uniqueIndex('deliveries_agent_seq_unique').on(table.workspaceId, table.agentId, table.seq),
     index('idx_deliveries_agent').on(table.agentId, table.createdAt),
     index('idx_deliveries_agent_status_seq').on(table.workspaceId, table.agentId, table.status, table.seq),
+    index('idx_deliveries_agent_active_seq').on(table.workspaceId, table.agentId, table.seq)
+      .where(sql`${table.status} IN ('queued', 'delivered')`),
+    index('idx_deliveries_agent_active_expiry').on(table.workspaceId, table.agentId, table.expiresAt)
+      .where(sql`${table.status} IN ('queued', 'delivered')`),
+    index('idx_deliveries_settled_retention').on(table.createdAt, table.id)
+      .where(sql`${table.status} IN ('acked', 'failed', 'dead_lettered')`),
     index('idx_deliveries_agent_active_created')
       .on(table.workspaceId, table.agentId, table.createdAt, table.id)
       .where(sql`${table.status} IN ('queued', 'delivered')`),
@@ -1198,6 +1208,16 @@ export const deliveries = sqliteTable(
     index('idx_deliveries_retry_due')
       .on(table.status, table.nextAttemptAt, table.createdAt, table.id)
       .where(sql`${table.nextAttemptAt} IS NOT NULL`),
+    index('idx_deliveries_initial_due').on(table.status, table.createdAt, table.id)
+      .where(sql`${table.nextAttemptAt} IS NULL`),
+    index('idx_deliveries_node_initial').on(table.createdAt, table.id)
+      .where(sql`${table.status} = 'queued' AND ${table.routeNodeKind} IN ('http_push', 'ws', 'fleet_ws', 'direct_ws') AND ${table.nextAttemptAt} IS NULL`),
+    index('idx_deliveries_node_initial_workspace').on(table.workspaceId, table.createdAt, table.id)
+      .where(sql`${table.status} = 'queued' AND ${table.routeNodeKind} IN ('http_push', 'ws', 'fleet_ws', 'direct_ws') AND ${table.nextAttemptAt} IS NULL`),
+    index('idx_deliveries_node_retry').on(table.nextAttemptAt, table.createdAt, table.id)
+      .where(sql`${table.status} = 'queued' AND ${table.routeNodeKind} IN ('http_push', 'ws', 'fleet_ws', 'direct_ws') AND ${table.nextAttemptAt} IS NOT NULL`),
+    index('idx_deliveries_node_retry_workspace').on(table.workspaceId, table.nextAttemptAt, table.createdAt, table.id)
+      .where(sql`${table.status} = 'queued' AND ${table.routeNodeKind} IN ('http_push', 'ws', 'fleet_ws', 'direct_ws') AND ${table.nextAttemptAt} IS NOT NULL`),
     index('idx_deliveries_status').on(table.workspaceId, table.status, table.createdAt),
     index('idx_deliveries_http_push_due').on(table.workspaceId, table.routeNodeKind, table.status, table.nextAttemptAt),
   ],
@@ -1253,5 +1273,12 @@ export const workspaceEvents = sqliteTable(
   (table) => [
     primaryKey({ columns: [table.workspaceId, table.seq] }),
     index('idx_workspace_events_created').on(table.workspaceId, table.createdAt),
+    index('idx_workspace_events_retention').on(table.createdAt, table.workspaceId, table.seq),
   ],
 );
+
+/** Durable scan positions; never used as delivery ACKs or event sequence authority. */
+export const maintenanceCursors = sqliteTable('maintenance_cursors', {
+  id: text('id').primaryKey().notNull(),
+  cursor: text('cursor').notNull(),
+});
