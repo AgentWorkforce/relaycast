@@ -1,7 +1,7 @@
 // Scheduled integration coverage for the actual built self-host Docker image
 // (not the entrypoint script in isolation -- see container-entrypoint.test.mjs
 // for that). This builds the real Dockerfile, runs it as a real container
-// against a persistent host-mounted volume, and drives it entirely over HTTP,
+// against a persistent Docker-managed volume, and drives it entirely over HTTP,
 // the same way an operator would. It is the only place that proves:
 //   - a workspace bootstrapped before a container restart is still recoverable
 //     after the restart, using the same persisted volume and bootstrap secret
@@ -20,9 +20,6 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import test, { after, before, describe } from "node:test";
@@ -68,7 +65,7 @@ function publishedPort(name) {
   return Number(match[1]);
 }
 
-function startContainer({ name, volumeDir, secret }) {
+function startContainer({ name, volumeName, secret }) {
   removeContainerQuiet(name);
   const args = [
     "run",
@@ -79,8 +76,8 @@ function startContainer({ name, volumeDir, secret }) {
     // otherwise-isolated CI/local runs contend and cancel the whole suite.
     "-p",
     "127.0.0.1::8787",
-    "-v",
-    `${volumeDir}:/data`,
+    "--mount",
+    `type=volume,source=${volumeName},target=/data`,
   ];
   if (secret !== undefined) {
     args.push("-e", `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET=${secret}`);
@@ -165,21 +162,16 @@ function freshIdempotencyKey(label) {
 }
 
 const dockerOk = dockerAvailable();
-const primaryVolume = dockerOk
-  ? mkdtempSync(join(tmpdir(), "relaycast-it-primary-"))
-  : undefined;
-const secondaryVolume = dockerOk
-  ? mkdtempSync(join(tmpdir(), "relaycast-it-secondary-"))
-  : undefined;
+const primaryVolume = `relaycast-it-primary-${RUN_ID}`;
+const secondaryVolume = `relaycast-it-secondary-${RUN_ID}`;
 
 function teardown() {
   if (!dockerOk) return;
   removeContainerQuiet(PRIMARY_CONTAINER);
   removeContainerQuiet(SECONDARY_CONTAINER);
   sh("docker", ["rmi", "--force", IMAGE_TAG]);
-  if (primaryVolume) rmSync(primaryVolume, { recursive: true, force: true });
-  if (secondaryVolume)
-    rmSync(secondaryVolume, { recursive: true, force: true });
+  sh("docker", ["volume", "rm", "--force", primaryVolume]);
+  sh("docker", ["volume", "rm", "--force", secondaryVolume]);
 }
 
 describe(
@@ -190,7 +182,7 @@ describe(
       // node:test does not run after() if before() throws, so a failure
       // partway through setup (e.g. the primary container started but the
       // secondary's health check times out) would otherwise leak a running
-      // container, the built image, and the temp volume directories on every
+      // container, the built image, and the named volumes on every
       // retry -- costly on a runner this suite's own schedule reuses daily.
       // Best-effort tear down whatever was actually started before rethrowing.
       try {
@@ -206,14 +198,14 @@ describe(
 
         primaryPort = startContainer({
           name: PRIMARY_CONTAINER,
-          volumeDir: primaryVolume,
+          volumeName: primaryVolume,
           secret: BOOTSTRAP_SECRET,
         });
         await waitForHealth(primaryPort);
 
         secondaryPort = startContainer({
           name: SECONDARY_CONTAINER,
-          volumeDir: secondaryVolume,
+          volumeName: secondaryVolume,
           secret: undefined,
         });
         await waitForHealth(secondaryPort);
