@@ -106,7 +106,11 @@ describe('workspace lifecycle', () => {
     const parent = await createWorkspace(stack.app, 'delegating-parent');
     const unauthenticated = await stack.app.request('/v1/workspaces', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'Idempotency-Key': 'cloud-job-unauthenticated' },
+      headers: {
+        'content-type': 'application/json',
+        'Idempotency-Key': 'cloud-job-unauthenticated',
+        'X-Workspace-Bootstrap-Secret': 'test-bootstrap-secret',
+      },
       body: JSON.stringify({ name: 'must-not-create' }),
     });
     expect(unauthenticated.status).toBe(201);
@@ -114,7 +118,11 @@ describe('workspace lifecycle', () => {
     expect(bootstrap.api_key).toMatch(/^rk_live_/);
     const bootstrapReplay = await stack.app.request('/v1/workspaces', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'Idempotency-Key': 'cloud-job-unauthenticated' },
+      headers: {
+        'content-type': 'application/json',
+        'Idempotency-Key': 'cloud-job-unauthenticated',
+        'X-Workspace-Bootstrap-Secret': 'test-bootstrap-secret',
+      },
       body: JSON.stringify({ name: 'must-not-create' }),
     });
     expect(bootstrapReplay.status).toBe(200);
@@ -172,15 +180,86 @@ describe('workspace lifecycle', () => {
     expect(await stack.runtime.handle.db.select().from(workspaces)).toHaveLength(0);
   });
 
-  it('keeps anonymous bootstrap available when Authorization is absent', async () => {
+  it('keeps anonymous bootstrap available when Authorization is absent and the bootstrap secret is proven', async () => {
     const response = await stack.app.request('/v1/workspaces', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'Idempotency-Key': 'auth-absent-379' },
+      headers: {
+        'content-type': 'application/json',
+        'Idempotency-Key': 'auth-absent-379',
+        'X-Workspace-Bootstrap-Secret': 'test-bootstrap-secret',
+      },
       body: JSON.stringify({ name: 'anonymous-still-works' }),
     });
 
     expect(response.status).toBe(201);
     expect((await response.json() as { data: { api_key: string } }).data.api_key).toMatch(/^rk_/);
+  });
+
+  it('rejects an anonymous idempotency-keyed create that cannot prove the bootstrap secret', async () => {
+    const missing = await stack.app.request('/v1/workspaces', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'Idempotency-Key': 'no-proof-379' },
+      body: JSON.stringify({ name: 'no-proof-workspace' }),
+    });
+    expect(missing.status).toBe(401);
+    expect((await missing.json() as { error: { code: string } }).error.code)
+      .toBe('workspace_create_bootstrap_secret_invalid');
+
+    const wrong = await stack.app.request('/v1/workspaces', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'Idempotency-Key': 'wrong-proof-379',
+        'X-Workspace-Bootstrap-Secret': 'not-the-configured-secret',
+      },
+      body: JSON.stringify({ name: 'wrong-proof-workspace' }),
+    });
+    expect(wrong.status).toBe(401);
+    expect((await wrong.json() as { error: { code: string } }).error.code)
+      .toBe('workspace_create_bootstrap_secret_invalid');
+    expect(await stack.runtime.handle.db.select().from(workspaces)).toHaveLength(0);
+  });
+
+  it('does not let an unproven caller retrieve a workspace another anonymous caller already bootstrapped', async () => {
+    const key = 'squatting-attempt-e2e-379';
+    const body = JSON.stringify({ name: 'squatting-target-e2e' });
+    const legitimate = await stack.app.request('/v1/workspaces', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'Idempotency-Key': key,
+        'X-Workspace-Bootstrap-Secret': 'test-bootstrap-secret',
+      },
+      body,
+    });
+    expect(legitimate.status).toBe(201);
+    const legitimateData = (await legitimate.json() as { data: { workspace_id: string; api_key: string } }).data;
+
+    // A caller who only knows the (non-secret) Idempotency-Key and can
+    // recompute the (fully public) request digest, but does not know the
+    // deployment's bootstrap secret, must not be able to recover the same
+    // workspace or its API key.
+    const attacker = await stack.app.request('/v1/workspaces', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'Idempotency-Key': key },
+      body,
+    });
+    expect(attacker.status).toBe(401);
+    expect((await attacker.json() as { error: { code: string } }).error.code)
+      .toBe('workspace_create_bootstrap_secret_invalid');
+
+    // The legitimate caller can still replay with the correct proof.
+    const replay = await stack.app.request('/v1/workspaces', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'Idempotency-Key': key,
+        'X-Workspace-Bootstrap-Secret': 'test-bootstrap-secret',
+      },
+      body,
+    });
+    expect(replay.status).toBe(200);
+    expect((await replay.json() as { data: unknown }).data).toEqual(legitimateData);
   });
 
   it('requires a stable bootstrap secret across runtime restarts while preserving unkeyed creates', async () => {
@@ -203,7 +282,11 @@ describe('workspace lifecycle', () => {
       });
       const first = await createEngine(firstRuntime.deps).request('/v1/workspaces', {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'Idempotency-Key': 'restart-contract-379' },
+        headers: {
+          'content-type': 'application/json',
+          'Idempotency-Key': 'restart-contract-379',
+          'X-Workspace-Bootstrap-Secret': 'stable-test-secret',
+        },
         body: JSON.stringify({ name: 'restart-contract' }),
       });
       expect(first.status).toBe(201);
@@ -217,11 +300,28 @@ describe('workspace lifecycle', () => {
       });
       const replay = await createEngine(restartedRuntime.deps).request('/v1/workspaces', {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'Idempotency-Key': 'restart-contract-379' },
+        headers: {
+          'content-type': 'application/json',
+          'Idempotency-Key': 'restart-contract-379',
+          'X-Workspace-Bootstrap-Secret': 'stable-test-secret',
+        },
         body: JSON.stringify({ name: 'restart-contract' }),
       });
       expect(replay.status).toBe(200);
       expect((await replay.json() as { data: unknown }).data).toEqual(firstData);
+
+      // A caller who does not present the deployment's bootstrap secret
+      // cannot recover the same replay even after it has been restarted onto
+      // a fresh runtime -- only the secret, not the runtime process, is what
+      // stability across restarts depends on.
+      const unproven = await createEngine(restartedRuntime.deps).request('/v1/workspaces', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'Idempotency-Key': 'restart-contract-379' },
+        body: JSON.stringify({ name: 'restart-contract' }),
+      });
+      expect(unproven.status).toBe(401);
+      expect((await unproven.json() as { error: { code: string } }).error.code)
+        .toBe('workspace_create_bootstrap_secret_invalid');
       restartedRuntime.close();
       restartedRuntime = undefined;
 
@@ -263,6 +363,7 @@ describe('workspace lifecycle', () => {
     const headers = {
       'content-type': 'application/json',
       'Idempotency-Key': 'bootstrap-expiry-379',
+      'X-Workspace-Bootstrap-Secret': 'test-bootstrap-secret',
     };
     const body = JSON.stringify({ name: 'bootstrap-expiry', expires_in_seconds: 60 });
     const first = await stack.app.request('/v1/workspaces', { method: 'POST', headers, body });

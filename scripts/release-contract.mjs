@@ -132,6 +132,91 @@ function readVersionConstant(file, exportName) {
   return match[1];
 }
 
+// Anchored regexes for the self-host container's own version sources, none
+// of which are package.json manifests: a build-time ARG, a second,
+// independently-versioned npm manifest/lockfile pair the container image
+// installs from (docker/), and the operator runbook's prose mentions of the
+// shipped engine version. Each of these has drifted stale before -- the
+// release-contract check that already covers every workspace package.json
+// never looked at them -- so they are asserted here in lockstep with every
+// other version source.
+function assertDockerfileEngineVersion(root, expectedVersion) {
+  const file = path.join(root, "Dockerfile");
+  const source = readFileSync(file, "utf8");
+  const match = source.match(/^ARG RELAYCAST_ENGINE_VERSION=(\S+)/m);
+  if (!match) {
+    throw new Error(`${file} has no ARG RELAYCAST_ENGINE_VERSION default`);
+  }
+  if (match[1] !== expectedVersion) {
+    throw new Error(
+      `${file} ARG RELAYCAST_ENGINE_VERSION is ${match[1]}, expected ${expectedVersion}`,
+    );
+  }
+}
+
+function assertDockerImageManifestVersion(root, expectedVersion) {
+  const manifestPath = path.join(root, "docker", "package.json");
+  const manifest = readJson(manifestPath);
+  if (manifest.version !== expectedVersion) {
+    throw new Error(
+      `${manifestPath} is ${manifest.version}, expected ${expectedVersion}`,
+    );
+  }
+  const enginePin = manifest.dependencies?.["@relaycast/engine"];
+  if (enginePin !== expectedVersion) {
+    throw new Error(
+      `${manifestPath} dependencies["@relaycast/engine"] is ${enginePin}, expected ${expectedVersion}`,
+    );
+  }
+
+  const lockPath = path.join(root, "docker", "package-lock.json");
+  const lock = readJson(lockPath);
+  const lockRoot = lock.packages?.[""];
+  if (lockRoot?.version !== expectedVersion) {
+    throw new Error(
+      `${lockPath} root package version is ${lockRoot?.version}, expected ${expectedVersion}`,
+    );
+  }
+  const lockedEngine = lock.packages?.["node_modules/@relaycast/engine"];
+  if (lockedEngine?.version !== expectedVersion) {
+    throw new Error(
+      `${lockPath} node_modules/@relaycast/engine is ${lockedEngine?.version}, expected ${expectedVersion}`,
+    );
+  }
+}
+
+// Each pattern's sole capture group is the engine version mentioned at that
+// exact anchor. Deliberately specific rather than a general semver scan:
+// RUNBOOK.md also mentions the pinned Node version and loopback IPv4
+// addresses, both of which are also dot-separated digit triples and are not
+// safely distinguishable from a version number by pattern alone.
+const RUNBOOK_SEMVER = "\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?";
+const RUNBOOK_ENGINE_VERSION_ANCHORS = [
+  new RegExp("`@relaycast/engine`\\s+\\*\\*(" + RUNBOOK_SEMVER + ")\\*\\*"),
+  new RegExp("version command must print `(" + RUNBOOK_SEMVER + ")`"),
+  new RegExp("from engine (" + RUNBOOK_SEMVER + ")\\."),
+  new RegExp("image is on (" + RUNBOOK_SEMVER + ") or later"),
+  new RegExp("In engine (" + RUNBOOK_SEMVER + "),"),
+];
+
+function assertRunbookEngineVersion(root, expectedVersion) {
+  const file = path.join(root, "RUNBOOK.md");
+  const source = readFileSync(file, "utf8");
+  for (const pattern of RUNBOOK_ENGINE_VERSION_ANCHORS) {
+    const match = source.match(pattern);
+    if (!match) {
+      throw new Error(
+        `${file} is missing the expected engine-version mention matching ${pattern}`,
+      );
+    }
+    if (match[1] !== expectedVersion) {
+      throw new Error(
+        `${file} "${match[0]}" references ${match[1]}, expected ${expectedVersion}`,
+      );
+    }
+  }
+}
+
 export function assertRepositoryVersionParity(root, expectedVersion) {
   const directories = packageDirectories(root);
   for (const published of PUBLISHED_PACKAGE_DIRS) {
@@ -188,6 +273,10 @@ export function assertRepositoryVersionParity(root, expectedVersion) {
       `CLI_VERSION is ${cliVersion}, expected ${expectedVersion}`,
     );
   }
+
+  assertDockerfileEngineVersion(root, expectedVersion);
+  assertDockerImageManifestVersion(root, expectedVersion);
+  assertRunbookEngineVersion(root, expectedVersion);
 
   return {
     packageCount: directories.length,

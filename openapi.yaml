@@ -1496,7 +1496,11 @@ paths:
         provide an `Idempotency-Key`: authenticated requests bind the owner, key, and exact request
         digest, while anonymous bootstrap requests bind the key to the deployment. Replaying the
         same request returns the same workspace and usable API key with a `200` response, while
-        changing the request returns `409`. If transient storage attempts are
+        changing the request returns `409`. An anonymous (no `Authorization`) request that supplies
+        `Idempotency-Key` must also supply `X-Workspace-Bootstrap-Secret` matching the deployment's
+        configured bootstrap secret; the `Idempotency-Key` alone is a caller-chosen, non-secret
+        correlator, so proving the deployment secret is what authorizes looking up or recovering the
+        binding. If transient storage attempts are
         exhausted and the server cannot confirm the committed workspace/channel pair, it returns
         `503 workspace_storage_unavailable`; that outcome is indeterminate.
       tags:
@@ -1540,6 +1544,18 @@ paths:
             authorization it is scoped to anonymous bootstrap creation on this
             deployment. Reusing it with the same request replays the workspace;
             a different request is a 409.
+        - name: X-Workspace-Bootstrap-Secret
+          in: header
+          required: false
+          schema:
+            type: string
+          description: >-
+            Required alongside `Idempotency-Key` for an anonymous (no
+            `Authorization`) request. Must match the deployment's configured
+            bootstrap secret; a missing or mismatched value returns `401`
+            before any lookup of the idempotency binding. Not used, and not
+            required, for authenticated or unkeyed (no `Idempotency-Key`)
+            creates.
       responses:
         '200':
           description: Existing workspace returned (idempotent)
@@ -1578,7 +1594,10 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
-          description: Invalid owner workspace key for authenticated keyed creation
+          description: >-
+            Invalid owner workspace key for authenticated keyed creation, or
+            `workspace_create_bootstrap_secret_invalid` — an anonymous keyed
+            create did not supply a matching `X-Workspace-Bootstrap-Secret`.
           content:
             application/json:
               schema:

@@ -1,8 +1,8 @@
 {
   "name": "relaycast-self-host-image",
   "private": true,
-  "version": "8.5.3",
+  "version": "8.5.4",
   "dependencies": {
-    "@relaycast/engine": "8.5.3"
+    "@relaycast/engine": "8.5.4"
   }
 }

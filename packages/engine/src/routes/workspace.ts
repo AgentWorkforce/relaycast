@@ -194,7 +194,11 @@ const publicWorkspaceLookupRateLimit = createMiddleware<AppEnv>(async (c, next) 
   await next();
 });
 
-// POST /workspaces - create workspace (no auth required, workspace key optional)
+// POST /workspaces - create workspace (no auth required, workspace key optional).
+// An anonymous create carrying an Idempotency-Key additionally requires
+// X-Workspace-Bootstrap-Secret to match the deployment's configured
+// workspaceBootstrapSecret before any binding lookup or credential recovery
+// runs — see createWorkspace's bootstrap-proof check.
 workspaceRoutes.post('/workspaces', async (c) => {
   try {
     const parsed = await parseJsonBody(c, createWorkspaceSchema, 'name is required');
@@ -238,7 +242,10 @@ workspaceRoutes.post('/workspaces', async (c) => {
       {
         ...(ownerApiKey ? { ownerApiKey } : {}),
         ...(idempotencyKey && !ownerApiKey
-          ? { bootstrapSecret: c.get('engine').config.workspaceBootstrapSecret }
+          ? {
+            bootstrapSecret: c.get('engine').config.workspaceBootstrapSecret,
+            bootstrapSecretProof: c.req.header('X-Workspace-Bootstrap-Secret'),
+          }
           : {}),
         ...(idempotencyKey ? { idempotencyKey } : {}),
         ...(requestDigest ? { requestDigest } : {}),

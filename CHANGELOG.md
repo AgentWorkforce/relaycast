@@ -20,7 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Added
 
-- Anonymous bootstrap `POST /v1/workspaces` creates can use an `Idempotency-Key` to recover the same workspace and API key after retries or response loss; digest conflicts, owner-scope crossovers, and terminalized bindings fail closed.
+- Anonymous bootstrap `POST /v1/workspaces` creates can use an `Idempotency-Key` to recover the same workspace and API key after retries or response loss; digest conflicts, owner-scope crossovers, and terminalized bindings fail closed. The caller must also present `X-Workspace-Bootstrap-Secret` matching the deployment's configured secret — the `Idempotency-Key` is a non-secret correlator, so proving the deployment secret is what authorizes recovering the binding and prevents an unrelated caller who guesses or observes the key from retrieving another caller's workspace credentials.
 - Keyed anonymous bootstrap now rejects explicit invalid authorization and requires a stable deployment secret across restarts; unkeyed creates remain compatible.
 
 ### Fixed

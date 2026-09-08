@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- Keyless workspace bootstrap creates now support deployment-scoped crash idempotency with deterministic credential recovery, atomic binding, digest conflicts, and deletion/expiry terminalization.
+- Keyless workspace bootstrap creates now support deployment-scoped crash idempotency with deterministic credential recovery, atomic binding, digest conflicts, and deletion/expiry terminalization. An anonymous keyed create must present `X-Workspace-Bootstrap-Secret`, matched to the configured secret in constant time before any binding lookup, since the `Idempotency-Key` and request digest alone are caller-computable and not proof of identity.
 - Keyed bootstrap fails closed on explicit invalid authorization and no longer falls back to a process-random secret; configure a stable deployment secret for replay across restarts.
 
 ### Fixed

@@ -232,6 +232,7 @@ describe('workspace write durability', () => {
     const requestDigest = await workspaceCreateRequestDigest({ name: 'bootstrap-child', expiresInSeconds: 3_600 });
     const created = await createWorkspace(db, 'bootstrap-child', {
       bootstrapSecret,
+      bootstrapSecretProof: bootstrapSecret,
       idempotencyKey,
       requestDigest,
       expiresAt: new Date(Date.now() + 3_600_000),
@@ -245,6 +246,7 @@ describe('workspace write durability', () => {
 
     const replay = await createWorkspace(db, 'bootstrap-child', {
       bootstrapSecret,
+      bootstrapSecretProof: bootstrapSecret,
       idempotencyKey,
       requestDigest,
     });
@@ -259,7 +261,7 @@ describe('workspace write durability', () => {
     const idempotencyKey = 'same-key-379';
     const requestDigest = await workspaceCreateRequestDigest({ name: 'bootstrap-isolation' });
     const bootstrap = await createWorkspace(db, 'bootstrap-isolation', {
-      bootstrapSecret, idempotencyKey, requestDigest,
+      bootstrapSecret, bootstrapSecretProof: bootstrapSecret, idempotencyKey, requestDigest,
     });
     const owner = await createWorkspace(db, 'owner-isolation', {
       ownerApiKey: 'rk_live_owner_379', idempotencyKey, requestDigest,
@@ -269,7 +271,7 @@ describe('workspace write durability', () => {
 
     const changedDigest = await workspaceCreateRequestDigest({ name: 'bootstrap-changed' });
     await expect(createWorkspace(db, 'bootstrap-changed', {
-      bootstrapSecret, idempotencyKey, requestDigest: changedDigest,
+      bootstrapSecret, bootstrapSecretProof: bootstrapSecret, idempotencyKey, requestDigest: changedDigest,
     })).rejects.toMatchObject({ code: 'workspace_create_idempotency_conflict', status: 409 });
     expect(await db.select().from(workspaces)).toHaveLength(2);
   });
@@ -280,14 +282,57 @@ describe('workspace write durability', () => {
     const idempotencyKey = 'bootstrap-concurrent-379';
     const requestDigest = await workspaceCreateRequestDigest({ name: 'bootstrap-concurrent' });
     const [first, second] = await Promise.all([
-      createWorkspace(db, 'bootstrap-concurrent', { bootstrapSecret, idempotencyKey, requestDigest }),
-      createWorkspace(db, 'bootstrap-concurrent', { bootstrapSecret, idempotencyKey, requestDigest }),
+      createWorkspace(db, 'bootstrap-concurrent', { bootstrapSecret, bootstrapSecretProof: bootstrapSecret, idempotencyKey, requestDigest }),
+      createWorkspace(db, 'bootstrap-concurrent', { bootstrapSecret, bootstrapSecretProof: bootstrapSecret, idempotencyKey, requestDigest }),
     ]);
     expect(first.workspace_id).toBe(second.workspace_id);
     expect(first.api_key).toBe(second.api_key);
     expect(await db.select().from(workspaces)).toHaveLength(1);
     expect(await db.select().from(channels)).toHaveLength(1);
     expect(await db.select().from(workspaceCreateIdempotency)).toHaveLength(1);
+  });
+
+  it('rejects an anonymous bootstrap replay that cannot prove the deployment secret', async () => {
+    attachD1Batch({});
+    const bootstrapSecret = 'test-bootstrap-secret';
+    const idempotencyKey = 'squatting-attempt-379';
+    const requestDigest = await workspaceCreateRequestDigest({ name: 'squatting-target' });
+
+    // The legitimate caller creates the workspace, proving the secret.
+    const created = await createWorkspace(db, 'squatting-target', {
+      bootstrapSecret, bootstrapSecretProof: bootstrapSecret, idempotencyKey, requestDigest,
+    });
+    expect(created.created).toBe(true);
+
+    // An attacker who has only observed/guessed the same idempotency key and
+    // request digest -- both non-secret, attacker-computable values -- must
+    // not be able to retrieve the workspace or its API key without also
+    // proving the deployment's bootstrap secret.
+    await expect(createWorkspace(db, 'squatting-target', {
+      bootstrapSecret, idempotencyKey, requestDigest, // no bootstrapSecretProof
+    })).rejects.toMatchObject({ code: 'workspace_create_bootstrap_secret_invalid', status: 401 });
+
+    await expect(createWorkspace(db, 'squatting-target', {
+      bootstrapSecret, bootstrapSecretProof: 'wrong-secret', idempotencyKey, requestDigest,
+    })).rejects.toMatchObject({ code: 'workspace_create_bootstrap_secret_invalid', status: 401 });
+
+    // A first-time attacker create attempt under the same key must also fail
+    // closed rather than falling through to create its own workspace: an
+    // unproven caller must never influence bootstrap-scoped state at all.
+    await expect(createWorkspace(db, 'attacker-would-create', {
+      bootstrapSecret,
+      idempotencyKey: 'never-created-379',
+      requestDigest: await workspaceCreateRequestDigest({ name: 'attacker-would-create' }),
+    })).rejects.toMatchObject({ code: 'workspace_create_bootstrap_secret_invalid', status: 401 });
+    expect(await db.select().from(workspaces)).toHaveLength(1);
+
+    // The legitimate caller can still replay indefinitely -- e.g. across
+    // container restarts -- as long as it keeps presenting the same secret.
+    const replay = await createWorkspace(db, 'squatting-target', {
+      bootstrapSecret, bootstrapSecretProof: bootstrapSecret, idempotencyKey, requestDigest,
+    });
+    expect(replay.created).toBe(false);
+    expect(replay.api_key).toBe(created.api_key);
   });
 
   it('does not treat an unrelated workspace-id collision as own recovery', async () => {

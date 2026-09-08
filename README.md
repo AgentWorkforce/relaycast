@@ -111,11 +111,15 @@ const child = await RelayCast.createWorkspace('job-child', {
 });
 ```
 
-Fresh bootstrap callers can use the same contract without an API key:
+Fresh bootstrap callers can use the same contract without an API key, but must
+also present the deployment's bootstrap secret as proof — the idempotency key
+alone is a caller-chosen, non-secret value, so it cannot authorize recovering
+another caller's workspace credentials:
 
 ```ts
 const workspace = await RelayCast.createWorkspace('my-project', {
   idempotencyKey: `bootstrap:${runId}`,
+  bootstrapSecret: process.env.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET,
 });
 ```
 
@@ -128,8 +132,11 @@ credentials.
 Keyed anonymous bootstrap requires a stable deployment secret. Self-hosted
 deployments must persist `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` (or provide
 `workspaceBootstrapSecret` in the engine config); deployments without it return
-`503 workspace_create_idempotency_unavailable`. Unkeyed creates remain available
-and continue to generate a fresh API key.
+`503 workspace_create_idempotency_unavailable`. A caller that omits the secret
+or presents the wrong one gets `401 workspace_create_bootstrap_secret_invalid`
+before any lookup of the idempotency binding — the secret is the deployment's
+to configure and share only with callers it trusts to bootstrap a workspace.
+Unkeyed creates remain available and continue to generate a fresh API key.
 
 If workspace storage remains unavailable after its transient retries and the
 server cannot confirm the committed workspace/channel pair, creation returns

@@ -54,7 +54,105 @@ describe("publish workflow safety contract", () => {
         .matchAll(/^          - (\S+)$/gm),
     ].map((match) => match[1]);
     assert.deepEqual(matrixPackages, PUBLISHED_PACKAGE_DIRS);
-    assert.match(workflow, /needs: \[build, publish-packages\]/);
     assert.match(workflow, /needs\.publish-packages\.result == 'success'/);
+  });
+
+  function jobBlock(name) {
+    const start = workflow.indexOf(`\n  ${name}:\n`);
+    assert.ok(start !== -1, `job "${name}" not found`);
+    // The next line indented at exactly two spaces (a sibling top-level key
+    // or a comment introducing the next job) ends this job's block; a
+    // shallower indent-prefix match would also match every 4+-space step
+    // line inside this same job.
+    const nextMatch = /\n {2}\S/.exec(workflow.slice(start + 1));
+    const next = nextMatch ? start + 1 + nextMatch.index : workflow.length;
+    return workflow.slice(start, next);
+  }
+
+  it("independently reconciles the npm registry before releasing, and creates the release only after that succeeds", () => {
+    const verify = jobBlock("verify-publish");
+    assert.match(verify, /needs: \[build, publish-packages\]/);
+    // Every published package name must actually be checked against the
+    // registry, not just the matrix's own workspace directory names.
+    for (const pkg of [
+      "@relaycast/a2a",
+      "@relaycast/types",
+      "@relaycast/engine",
+      "@relaycast/sdk",
+      "relaycast",
+      "@relaycast/mcp",
+      "@relaycast/react",
+      "@relaycast/openclaw",
+    ]) {
+      assert.match(verify, new RegExp(`"${pkg.replace(/[/]/g, "\\/")}"`));
+    }
+    assert.match(verify, /npm view "\$\{pkg\}@\$\{NEW_VERSION\}" version/);
+    assert.match(verify, /exit 1/);
+
+    const createRelease = jobBlock("create-release");
+    assert.match(createRelease, /needs: \[build, publish-packages, verify-publish\]/);
+    assert.match(createRelease, /needs\.verify-publish\.result == 'success'/);
+  });
+
+  it("never defaults a prerelease version's npm dist-tag to latest", () => {
+    const build = jobBlock("build");
+    assert.match(build, /IS_PRERELEASE=true/);
+    assert.match(
+      build,
+      /IS_PRERELEASE" = "true" \] && \[ "\$REQUESTED_TAG" = "latest" \]/,
+    );
+    assert.match(build, /EFFECTIVE_TAG="next"/);
+    assert.match(build, /effective_tag=\$EFFECTIVE_TAG/);
+
+    const publishPackages = jobBlock("publish-packages");
+    // The actual npm publish invocations must use the computed effective
+    // tag, not the raw, unguarded workflow_dispatch input.
+    assert.doesNotMatch(
+      publishPackages,
+      /npm publish[^\n]*--tag \$\{\{ github\.event\.inputs\.tag \}\}/,
+    );
+    assert.match(
+      publishPackages,
+      /npm publish[^\n]*--tag \$\{\{ needs\.build\.outputs\.effective_tag \}\}/,
+    );
+  });
+
+  it("resumes a partially published matrix instead of hard-failing on an already-published package", () => {
+    const publishPackages = jobBlock("publish-packages");
+    const publishStep = publishPackages.slice(
+      publishPackages.indexOf("- name: Publish to NPM"),
+    );
+    assert.match(publishStep, /npm view "\$\{PACKAGE_NAME\}@\$\{NEW_VERSION\}" version/);
+    assert.match(publishStep, /already published; skipping/);
+  });
+
+  it("tags the exact built, published, and verified commit instead of rebasing onto a possibly-moved main", () => {
+    const createRelease = jobBlock("create-release");
+    // Rebasing a release commit after packages have already been published
+    // from its pre-rebase tree would tag different code than what was
+    // actually tested and published; this must never reappear.
+    assert.doesNotMatch(createRelease, /git rebase/);
+
+    const tagPush = createRelease.indexOf('git push origin "v${NEW_VERSION}"');
+    const mainMerge = createRelease.indexOf("git merge --no-edit origin/main");
+    assert.ok(tagPush !== -1, "tag push not found");
+    assert.ok(mainMerge !== -1, "main merge reconciliation not found");
+    assert.ok(
+      tagPush < mainMerge,
+      "the tag must be pushed before any attempt to reconcile the release commit with main",
+    );
+  });
+
+  it("escalates permissions per job instead of workflow-wide", () => {
+    const topLevelPermissions = workflow.slice(
+      workflow.indexOf("\npermissions:"),
+      workflow.indexOf("\nenv:"),
+    );
+    assert.match(topLevelPermissions, /contents: read/);
+    assert.doesNotMatch(topLevelPermissions, /contents: write/);
+    assert.doesNotMatch(topLevelPermissions, /id-token: write/);
+
+    assert.match(jobBlock("publish-packages"), /id-token: write/);
+    assert.match(jobBlock("create-release"), /contents: write/);
   });
 });

@@ -1,7 +1,7 @@
 import { and, asc, eq, gt, inArray, isNull, like, lte, or, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { workspaces, channels, fileCleanupQueue, workspaceEvents, workspaceCreateIdempotency } from '../db/schema.js';
-import { hmacSha256Hex, randomHex, sha256Hex } from '../lib/crypto.js';
+import { constantTimeEqual, hmacSha256Hex, randomHex, sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
 import { codedError } from '../lib/httpError.js';
 import { D1WriteRetryExhaustedError, retryD1Write } from '../lib/d1Retry.js';
@@ -27,8 +27,17 @@ type CreateWorkspaceOptions =
   | {
       ownerApiKey?: string;
       ownerApiKeyHash?: string;
-      /** Secret used only for anonymous bootstrap idempotency. */
+      /** Deployment-configured secret used to derive the anonymous bootstrap child key. */
       bootstrapSecret?: string;
+      /**
+       * The bootstrap secret as presented by the caller. An anonymous,
+       * idempotency-keyed create must prove it, matching `bootstrapSecret`,
+       * before any binding lookup or credential is returned — otherwise the
+       * `Idempotency-Key` alone (a caller-chosen, non-secret value) would let
+       * any network peer who guesses or observes it retrieve a workspace's
+       * deterministic API key. See createWorkspace's bootstrap-proof check.
+       */
+      bootstrapSecretProof?: string;
       idempotencyKey?: string;
       requestDigest?: string;
       expiresAt?: Date;
@@ -201,6 +210,7 @@ export async function createWorkspace(
   const providedOwnerApiKeyHash = typeof options === 'string' ? undefined : options?.ownerApiKeyHash;
   const providedOwnerApiKey = typeof options === 'string' ? options : options?.ownerApiKey;
   const bootstrapSecret = typeof options === 'string' ? undefined : options?.bootstrapSecret;
+  const bootstrapSecretProof = typeof options === 'string' ? undefined : options?.bootstrapSecretProof;
   const expiresAt = typeof options === 'string' ? undefined : options?.expiresAt;
   const derivedOwnerApiKeyHash = providedOwnerApiKey ? await hashApiKey(providedOwnerApiKey) : undefined;
 
@@ -229,6 +239,27 @@ export async function createWorkspace(
       'workspace_create_idempotency_unavailable',
       503,
     );
+  }
+  // The Idempotency-Key is a caller-chosen, non-secret correlator, not proof
+  // of identity: without this check, any network peer who guesses or
+  // observes a low-entropy or leaked key (plus the fully public request
+  // digest) could replay another caller's anonymous bootstrap create and
+  // receive its deterministic child API key before — or instead of — the
+  // legitimate caller. Only a caller who also proves knowledge of the
+  // deployment's own bootstrap secret may look up or recover a bootstrap
+  // binding. The proof is checked with a constant-time comparison and before
+  // any binding lookup, so neither timing nor a binding's existence leaks to
+  // a caller who does not hold the secret. The container/self-host entrypoint
+  // and any other trusted caller hold the same configured secret, so replay
+  // across restarts stays fully stable for them.
+  if (bootstrapIdempotency && bootstrapSecret) {
+    if (!bootstrapSecretProof || !(await constantTimeEqual(bootstrapSecretProof, bootstrapSecret))) {
+      throw codedError(
+        'A valid workspace bootstrap secret is required for anonymous idempotent workspace creation',
+        'workspace_create_bootstrap_secret_invalid',
+        401,
+      );
+    }
   }
   if (ownerIdempotency && !providedOwnerApiKey) {
     throw codedError(

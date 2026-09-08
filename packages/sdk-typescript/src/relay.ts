@@ -204,6 +204,13 @@ export interface WorkspaceBootstrapOptions extends WorkspaceIdentityOptions {
   provenance?: WorkspaceProvenanceOptions;
   /** Owner-scoped key for crash-safe delegated workspace-create retries. */
   idempotencyKey?: string;
+  /**
+   * Deployment bootstrap secret, required alongside `idempotencyKey` for an
+   * anonymous (no `apiKey`) create. Proves the caller is authorized to
+   * recover an anonymous bootstrap binding — the idempotency key alone is
+   * not secret. Ignored when `apiKey` is set.
+   */
+  bootstrapSecret?: string;
 }
 
 export interface WorkspaceLookupOptions extends WorkspaceIdentityOptions {
@@ -347,6 +354,9 @@ export class RelayCast {
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
         ...(resolved.idempotencyKey !== undefined
           ? { 'Idempotency-Key': resolved.idempotencyKey }
+          : {}),
+        ...(!apiKey && resolved.bootstrapSecret !== undefined
+          ? { 'X-Workspace-Bootstrap-Secret': resolved.bootstrapSecret }
           : {}),
         'X-SDK-Version': SDK_VERSION,
         'X-Relaycast-Origin-Client': SDK_ORIGIN.client,

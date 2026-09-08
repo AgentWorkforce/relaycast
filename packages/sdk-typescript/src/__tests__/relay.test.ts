@@ -1252,6 +1252,58 @@ describe('RelayCast', () => {
       expect(init.headers['Idempotency-Key']).toBe('cloud-job-371');
     });
 
+    it('forwards the bootstrap secret proof for anonymous keyed creates', async () => {
+      const { RelayCast } = await import('../relay.js');
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 201,
+          json: () => Promise.resolve({
+            ok: true,
+            data: { workspace_id: 'ws_bootstrap', api_key: 'rk_live_bootstrap', created_at: '2024-01-01' },
+          }),
+        }),
+      );
+
+      await RelayCast.createWorkspace('bootstrap-child', {
+        idempotencyKey: 'bootstrap:run-1',
+        bootstrapSecret: 'deployment-secret',
+        baseUrl: 'http://localhost:3000',
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.headers.Authorization).toBeUndefined();
+      expect(init.headers['Idempotency-Key']).toBe('bootstrap:run-1');
+      expect(init.headers['X-Workspace-Bootstrap-Secret']).toBe('deployment-secret');
+    });
+
+    it('does not forward a bootstrap secret proof for an authenticated create', async () => {
+      const { RelayCast } = await import('../relay.js');
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 201,
+          json: () => Promise.resolve({
+            ok: true,
+            data: { workspace_id: 'ws_child', api_key: 'rk_live_child', created_at: '2024-01-01' },
+          }),
+        }),
+      );
+
+      await RelayCast.createWorkspace('child', {
+        apiKey: 'rk_live_parent',
+        idempotencyKey: 'cloud-job-371',
+        // An authenticated caller has no reason to also present a bootstrap
+        // secret; passing one anyway must not leak it onto the wire, since
+        // the owner-scoped path never checks it.
+        bootstrapSecret: 'unused-secret',
+        baseUrl: 'http://localhost:3000',
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.headers['X-Workspace-Bootstrap-Secret']).toBeUndefined();
+    });
+
     it('does not silently downgrade an explicitly empty idempotency key', async () => {
       const { RelayCast } = await import('../relay.js');
       mockFetch.mockImplementation(() =>

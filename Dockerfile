@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-ARG RELAYCAST_ENGINE_VERSION=8.5.3
+ARG RELAYCAST_ENGINE_VERSION=8.5.4
 
 # Build the engine from this checkout so a source change is exercised by the
 # self-host image before the matching npm package is published.
@@ -33,7 +33,7 @@ RUN apt-get update \
 WORKDIR /opt/relaycast
 COPY docker/package.json docker/package-lock.json ./
 
-# The lockfile pins @relaycast/engine to 8.5.3 and the source-build setting
+# The lockfile pins @relaycast/engine to 8.5.4 and the source-build setting
 # exercises the C/C++ toolchain for better-sqlite3 on every target architecture.
 ENV npm_config_build_from_source=true
 RUN test "$(node -p "require('./package.json').dependencies['@relaycast/engine']")" = "$RELAYCAST_ENGINE_VERSION" \

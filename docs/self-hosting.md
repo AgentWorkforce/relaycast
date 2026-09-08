@@ -88,6 +88,23 @@ it, put it in a Dockerfile, pass it as a command-line argument, or print it in
 logs. The server only passes it to the HMAC derivation path and never logs or
 stores it.
 
+**The caller must also present the secret.** `Idempotency-Key` is a
+caller-chosen, non-secret value, not proof of identity — every anonymous
+keyed create must send `X-Workspace-Bootstrap-Secret: <the same secret>` or it
+is rejected with `401 workspace_create_bootstrap_secret_invalid` before any
+lookup of the idempotency binding. Only give the secret to callers you trust
+to bootstrap a workspace on this deployment (your own setup script or
+container entrypoint, for example) — anyone who has it can create or recover
+any anonymous bootstrap workspace on this deployment:
+
+```bash
+curl -s -XPOST http://localhost:8787/v1/workspaces \
+  -H 'content-type: application/json' \
+  -H "Idempotency-Key: bootstrap:$(hostname)" \
+  -H "X-Workspace-Bootstrap-Secret: $RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET" \
+  -d '{"name":"my-team"}'
+```
+
 If the variable is omitted or empty, keyed anonymous creates return
 `503 workspace_create_idempotency_unavailable` before creating a workspace;
 unkeyed creates and authenticated-owner idempotency remain available. This is
@@ -237,6 +254,15 @@ The Compose file passes `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` through when it
 is present in `.env`; leaving it unset keeps the fail-closed behavior described
 above. For a direct Docker run, use `--env-file` with the same persisted
 variable.
+
+**`docker compose config` prints resolved secrets in plaintext.** Compose
+resolves `${VAR}` references from `.env` before rendering its config output,
+so `docker compose config` (used for debugging or CI validation) includes the
+literal `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` value in what it prints. Never
+paste that output into a ticket, chat message, or log you don't control, and
+prefer redacting or piping it through something that strips the value (for
+example `docker compose config | sed 's/RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET:.*/RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: <redacted>/'`)
+before sharing it.
 
 The image pins Node and `@relaycast/engine`, persists the database and uploaded
 files in the `relaycast-data` named volume, and refuses to start unless the

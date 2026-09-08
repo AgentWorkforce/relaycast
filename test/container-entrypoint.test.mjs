@@ -72,6 +72,32 @@ test('refuses a loopback --base-url', () => {
   assertAccepted(); // Control: a non-loopback hostname succeeds.
 });
 
+test('refuses disguised loopback IPv4 spellings that node:net.isIP does not recognize', () => {
+  // node:net's isIP() only recognizes the strict 4-decimal-octet form, so a
+  // short, octal, or hex spelling would otherwise pass through DNS-hostname
+  // validation looking like an ordinary label -- curl, browsers, and glibc's
+  // resolver all still parse each of these as 127.0.0.1.
+  for (const baseUrl of [
+    'https://127.1', // short form: last part absorbs the remaining bits
+    'https://127.0.1',
+    'https://0177.0.0.1', // octal first octet (0177 = 127)
+    'https://0x7f.0.0.1', // hex first octet (0x7f = 127)
+  ]) {
+    assertRefused(['--base-url', baseUrl], /loopback IP address/);
+  }
+  assertAccepted(); // Control: a non-loopback hostname succeeds.
+});
+
+test('refuses disguised non-loopback IPv4 spellings as IP literals', () => {
+  for (const baseUrl of [
+    'https://10.1', // short form for 10.0.0.1
+    'https://0x0a000001', // single hex integer for 10.0.0.1
+  ]) {
+    assertRefused(['--base-url', baseUrl], /DNS name; IP literals are forbidden/);
+  }
+  assertAccepted(); // Control: an ordinary DNS authority succeeds.
+});
+
 test('refuses the special-use .local namespace', () => {
   assertRefused(
     ['--base-url', 'https://relay.local'],
@@ -179,6 +205,51 @@ test('forwards the bootstrap secret without exposing it in container output', ()
     environment: 'production',
     workspaceBootstrapSecret: secret,
   });
+});
+
+test('never writes the bootstrap secret to stdout or stderr on the real entrypoint path', async () => {
+  // A shallow assertion on buildEngineConfig's return value (above) proves
+  // the secret reaches the engine config object, but not that it is kept
+  // out of anything actually written to the container's captured output.
+  // This drives the real main() -> launchPinnedEngine() -> buildEngineConfig
+  // path end to end (an unopenable --db forces a fast, deterministic startup
+  // failure instead of binding a real server) and inspects every byte
+  // written to stdout/stderr for the secret.
+  const secret = 'super-secret-container-value-xyz-379';
+  const previousSecret = process.env.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET;
+  process.env.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET = secret;
+
+  const originalStdoutWrite = process.stdout.write.bind(process.stdout);
+  const originalStderrWrite = process.stderr.write.bind(process.stderr);
+  const captured = [];
+  process.stdout.write = (chunk, ...rest) => {
+    captured.push(String(chunk));
+    return true;
+  };
+  process.stderr.write = (chunk, ...rest) => {
+    captured.push(String(chunk));
+    return true;
+  };
+
+  try {
+    const { main } = await import('../docker/entrypoint-core.mjs');
+    await main([
+      '--base-url', 'https://relay.ratifyprotocol.com',
+      '--db', '/relaycast-entrypoint-test-nonexistent-dir/relaycast.db',
+    ]);
+  } finally {
+    process.stdout.write = originalStdoutWrite;
+    process.stderr.write = originalStderrWrite;
+    if (previousSecret === undefined) delete process.env.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET;
+    else process.env.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET = previousSecret;
+    process.exitCode = 0;
+  }
+
+  const output = captured.join('');
+  assert.doesNotMatch(output, new RegExp(secret));
+  // Control: the failure path actually ran and produced output to inspect --
+  // an empty capture would make the assertion above vacuous.
+  assert.match(output, /failed to start/);
 });
 
 test('omits an unset bootstrap secret so the engine can fail closed', () => {

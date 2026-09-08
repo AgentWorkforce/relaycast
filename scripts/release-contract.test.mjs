@@ -63,6 +63,40 @@ function repositoryFixture(version = "8.6.0-beta.0") {
     path.join(root, "package-lock.json"),
     `${JSON.stringify(lock)}\n`,
   );
+
+  writeFileSync(
+    path.join(root, "Dockerfile"),
+    `ARG RELAYCAST_ENGINE_VERSION=${version}\n`,
+  );
+  mkdirSync(path.join(root, "docker"), { recursive: true });
+  writeFileSync(
+    path.join(root, "docker", "package.json"),
+    `${JSON.stringify({
+      name: "relaycast-self-host-image",
+      version,
+      dependencies: { "@relaycast/engine": version },
+    })}\n`,
+  );
+  writeFileSync(
+    path.join(root, "docker", "package-lock.json"),
+    `${JSON.stringify({
+      packages: {
+        "": { version },
+        "node_modules/@relaycast/engine": { version },
+      },
+    })}\n`,
+  );
+  writeFileSync(
+    path.join(root, "RUNBOOK.md"),
+    [
+      `The image contains \`@relaycast/engine\` **${version}** on Node 22.23.2 and stores all`,
+      `The version command must print \`${version}\`, and Compose should eventually report`,
+      `Agent-card discovery works on the standard path from engine ${version}. A`,
+      `image is on ${version} or later before looking anywhere else.`,
+      `In engine ${version}, \`POST /v1/workspaces\` is intentionally unauthenticated for`,
+    ].join("\n"),
+  );
+
   return root;
 }
 
@@ -163,6 +197,91 @@ describe("release version parity", () => {
     assert.throws(
       () => assertRepositoryVersionParity(root, "8.6.0-beta.0"),
       /package-lock\.json packages\/types is 8\.5\.3/,
+    );
+  });
+
+  it("rejects a stale Dockerfile ARG RELAYCAST_ENGINE_VERSION default", () => {
+    const root = repositoryFixture();
+    writeFileSync(
+      path.join(root, "Dockerfile"),
+      "ARG RELAYCAST_ENGINE_VERSION=8.5.3\n",
+    );
+    assert.throws(
+      () => assertRepositoryVersionParity(root, "8.6.0-beta.0"),
+      /ARG RELAYCAST_ENGINE_VERSION is 8\.5\.3, expected 8\.6\.0-beta\.0/,
+    );
+  });
+
+  it("rejects a stale self-host image manifest version", () => {
+    const root = repositoryFixture();
+    writeFileSync(
+      path.join(root, "docker", "package.json"),
+      JSON.stringify({
+        name: "relaycast-self-host-image",
+        version: "8.5.3",
+        dependencies: { "@relaycast/engine": "8.5.3" },
+      }),
+    );
+    assert.throws(
+      () => assertRepositoryVersionParity(root, "8.6.0-beta.0"),
+      /docker\/package\.json is 8\.5\.3, expected 8\.6\.0-beta\.0/,
+    );
+  });
+
+  it("rejects a stale self-host image manifest's engine dependency pin", () => {
+    const root = repositoryFixture();
+    writeFileSync(
+      path.join(root, "docker", "package.json"),
+      JSON.stringify({
+        name: "relaycast-self-host-image",
+        version: "8.6.0-beta.0",
+        dependencies: { "@relaycast/engine": "8.5.3" },
+      }),
+    );
+    assert.throws(
+      () => assertRepositoryVersionParity(root, "8.6.0-beta.0"),
+      /dependencies\["@relaycast\/engine"\] is 8\.5\.3, expected 8\.6\.0-beta\.0/,
+    );
+  });
+
+  it("rejects a stale self-host image lockfile", () => {
+    const root = repositoryFixture();
+    const lockPath = path.join(root, "docker", "package-lock.json");
+    const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+    lock.packages["node_modules/@relaycast/engine"].version = "8.5.3";
+    writeFileSync(lockPath, JSON.stringify(lock));
+    assert.throws(
+      () => assertRepositoryVersionParity(root, "8.6.0-beta.0"),
+      /docker\/package-lock\.json node_modules\/@relaycast\/engine is 8\.5\.3/,
+    );
+  });
+
+  it("rejects a RUNBOOK.md engine-version mention that was not bumped", () => {
+    const root = repositoryFixture();
+    const runbookPath = path.join(root, "RUNBOOK.md");
+    const runbook = readFileSync(runbookPath, "utf8");
+    writeFileSync(
+      runbookPath,
+      runbook.replace(
+        "image is on 8.6.0-beta.0 or later before looking anywhere else.",
+        "image is on 8.5.3 or later before looking anywhere else.",
+      ),
+    );
+    assert.throws(
+      () => assertRepositoryVersionParity(root, "8.6.0-beta.0"),
+      /image is on 8\.5\.3 or later.*references 8\.5\.3, expected 8\.6\.0-beta\.0/,
+    );
+  });
+
+  it("rejects RUNBOOK.md missing an expected engine-version anchor entirely", () => {
+    const root = repositoryFixture();
+    writeFileSync(
+      path.join(root, "RUNBOOK.md"),
+      "Nothing here mentions the engine version at all.",
+    );
+    assert.throws(
+      () => assertRepositoryVersionParity(root, "8.6.0-beta.0"),
+      /RUNBOOK\.md is missing the expected engine-version mention/,
     );
   });
 });

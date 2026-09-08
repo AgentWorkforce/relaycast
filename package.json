@@ -2,7 +2,7 @@
   "name": "relaycast",
   "license": "Apache-2.0",
   "module": "packages/mcp/src/smithery.ts",
-  "packageManager": "npm@10.9.4",
+  "packageManager": "npm@11.19.1",
   "private": true,
   "workspaces": [
     "packages/*"

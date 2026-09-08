@@ -12,10 +12,10 @@ Options:
   --db <path>        SQLite database file (default: $RELAYCAST_DB_PATH or ./relaycast.db)
   --port <n>         HTTP port inside the container (default: $PORT or 8787)
   --env <name>       Environment label (default: production)
+  -h, --help         Show this help
 
 Environment:
   RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET  Stable secret for anonymous keyed workspace retries
-  -h, --help         Show this help
 `;
 
 export class BaseUrlError extends Error {
@@ -63,25 +63,87 @@ function expandedIpv6(hostname) {
   return parts.map((part) => Number.parseInt(part, 16));
 }
 
+// WHATWG URL "IPv4 number parser": each dot-separated part may be decimal,
+// 0x/0X-prefixed hex, or 0-prefixed octal. https://url.spec.whatwg.org/#concept-ipv4-parser
+function parseIPv4Number(part) {
+  if (part === '') return null;
+  let radix = 10;
+  let digits = part;
+  if (/^0x/i.test(digits)) {
+    radix = 16;
+    digits = digits.slice(2);
+  } else if (digits.length > 1 && digits.startsWith('0')) {
+    radix = 8;
+    digits = digits.slice(1);
+  }
+  if (digits === '') return 0;
+  const validDigits =
+    radix === 16 ? /^[0-9a-f]+$/i : radix === 8 ? /^[0-7]+$/ : /^[0-9]+$/;
+  if (!validDigits.test(digits)) return null;
+  const value = Number.parseInt(digits, radix);
+  return Number.isSafeInteger(value) ? value : null;
+}
+
+// Folds a WHATWG-style dotted IPv4 authority (1 to 4 parts, each decimal,
+// octal, or hex, with the last part absorbing the remaining bits) into its
+// 32-bit address, or returns null if hostname is not entirely numeric in
+// that shape. node:net's isIP() only recognizes the strict 4-decimal-octet
+// form, so a numeric authority in any other shape it accepts (127.1,
+// 0x7f000001, 017700000001, a bare decimal integer, ...) would otherwise
+// pass through DNS-hostname validation looking like an ordinary label, while
+// curl, browsers, and glibc's resolver all still parse it as an IP address.
+function parseIPv4Like(hostname) {
+  const parts = hostname.split('.');
+  if (parts.length === 0 || parts.length > 4 || parts.some((part) => part === '')) {
+    return null;
+  }
+
+  const numbers = [];
+  for (const part of parts) {
+    const value = parseIPv4Number(part);
+    if (value === null) return null;
+    numbers.push(value);
+  }
+
+  for (let index = 0; index < numbers.length - 1; index += 1) {
+    if (numbers[index] > 255) return null;
+  }
+  const last = numbers[numbers.length - 1];
+  const maxLast = 256 ** (5 - numbers.length) - 1;
+  if (last > maxLast) return null;
+
+  let ipv4 = last;
+  for (let index = 0; index < numbers.length - 1; index += 1) {
+    ipv4 += numbers[index] * 256 ** (3 - index);
+  }
+  return ipv4 >>> 0;
+}
+
 function isLoopbackHostname(hostname) {
   const host = unbracket(hostname).replace(/\.$/, '').toLowerCase();
   if (host === 'localhost' || host.endsWith('.localhost')) return true;
 
   const ipVersion = isIP(host);
   if (ipVersion === 4) return Number(host.split('.')[0]) === 127;
-  if (ipVersion !== 6) return false;
+  if (ipVersion === 6) {
+    const parts = expandedIpv6(host);
+    if (!parts) return false;
+    if (parts.slice(0, 7).every((part) => part === 0) && parts[7] === 1) {
+      return true;
+    }
 
-  const parts = expandedIpv6(host);
-  if (!parts) return false;
-  if (parts.slice(0, 7).every((part) => part === 0) && parts[7] === 1) {
-    return true;
+    // IPv4-mapped IPv6: ::ffff:127.0.0.0/104. WHATWG URL parsing
+    // canonicalizes the dotted suffix to the final two hexadecimal groups.
+    const isMapped =
+      parts.slice(0, 5).every((part) => part === 0) && parts[5] === 0xffff;
+    return isMapped && parts[6] >> 8 === 127;
   }
 
-  // IPv4-mapped IPv6: ::ffff:127.0.0.0/104. WHATWG URL parsing
-  // canonicalizes the dotted suffix to the final two hexadecimal groups.
-  const isMapped =
-    parts.slice(0, 5).every((part) => part === 0) && parts[5] === 0xffff;
-  return isMapped && parts[6] >> 8 === 127;
+  // Not a strict dotted-quad or colon-hex literal that isIP() recognizes;
+  // check the disguised numeric forms a real HTTP client would still resolve
+  // as an IPv4 address.
+  const ipv4 = parseIPv4Like(host);
+  return ipv4 !== null && ipv4 >>> 24 === 127;
 }
 
 export function validateBaseUrl(value) {
@@ -110,7 +172,7 @@ export function validateBaseUrl(value) {
     );
   }
 
-  if (isIP(hostname) !== 0) {
+  if (isIP(hostname) !== 0 || parseIPv4Like(hostname) !== null) {
     refusal(
       'ip_literal_base_url',
       '--base-url authority must be a DNS name; IP literals are forbidden.',

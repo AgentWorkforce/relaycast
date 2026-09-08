@@ -84,6 +84,88 @@
             "reasoning": "Branch was 2 commits behind origin/main which cut v8.5.4 and merged compact-maintenance migration #388; rebasing first avoids building the repair on a stale version/changelog baseline"
           },
           "significance": "high"
+        },
+        {
+          "ts": 1788882498513,
+          "type": "decision",
+          "content": "Bind anonymous bootstrap idempotency replay to X-Workspace-Bootstrap-Secret proof, checked in constant time before any DB lookup: Bind anonymous bootstrap idempotency replay to X-Workspace-Bootstrap-Secret proof, checked in constant time before any DB lookup",
+          "raw": {
+            "question": "Bind anonymous bootstrap idempotency replay to X-Workspace-Bootstrap-Secret proof, checked in constant time before any DB lookup",
+            "chosen": "Bind anonymous bootstrap idempotency replay to X-Workspace-Bootstrap-Secret proof, checked in constant time before any DB lookup",
+            "alternatives": [],
+            "reasoning": "Idempotency-Key + request digest are caller-computable, non-secret values; without a caller-presented proof matching the deployment's configured bootstrapSecret, any network peer who guesses/observes a key could retrieve another caller's deterministic workspace API key (workspace squatting). Requiring the proof closes this while keeping replay stable across container restarts for callers who hold the secret."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1788882498808,
+          "type": "decision",
+          "content": "Fix SSRF loopback/IP-literal bypass in docker/entrypoint-core.mjs via a WHATWG-spec IPv4 parser: Fix SSRF loopback/IP-literal bypass in docker/entrypoint-core.mjs via a WHATWG-spec IPv4 parser",
+          "raw": {
+            "question": "Fix SSRF loopback/IP-literal bypass in docker/entrypoint-core.mjs via a WHATWG-spec IPv4 parser",
+            "chosen": "Fix SSRF loopback/IP-literal bypass in docker/entrypoint-core.mjs via a WHATWG-spec IPv4 parser",
+            "alternatives": [],
+            "reasoning": "node:net's isIP() only recognizes strict 4-decimal-octet form; disguised spellings (127.1, 0x7f.0.0.1, 0177.0.0.1) passed through as ordinary DNS labels while curl/browsers/glibc still resolve them as loopback/IP literals. Added parseIPv4Like() covering short-form, octal, and hex per-octet spellings, wired into both the loopback check and the generic IP-literal refusal."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1788882499096,
+          "type": "decision",
+          "content": "Extend release-contract.mjs version parity to Dockerfile ARG, docker/package.json+lock, and RUNBOOK.md anchors: Extend release-contract.mjs version parity to Dockerfile ARG, docker/package.json+lock, and RUNBOOK.md anchors",
+          "raw": {
+            "question": "Extend release-contract.mjs version parity to Dockerfile ARG, docker/package.json+lock, and RUNBOOK.md anchors",
+            "chosen": "Extend release-contract.mjs version parity to Dockerfile ARG, docker/package.json+lock, and RUNBOOK.md anchors",
+            "alternatives": [],
+            "reasoning": "These self-host container version sources were never covered by the existing parity check and had already drifted stale (8.5.3) against the rebased repo's real released version (8.5.4). Bumped them now and wired publish-npm.yml's version-bump step to keep them in lockstep at every future release; docker/package-lock.json gets a placeholder bump pre-publish and a real npm registry refresh in create-release after verify-publish confirms the engine package is actually live."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1788882509970,
+          "type": "decision",
+          "content": "Replace publish-npm.yml's post-publish rebase with tag-then-merge: Replace publish-npm.yml's post-publish rebase with tag-then-merge",
+          "raw": {
+            "question": "Replace publish-npm.yml's post-publish rebase with tag-then-merge",
+            "chosen": "Replace publish-npm.yml's post-publish rebase with tag-then-merge",
+            "alternatives": [],
+            "reasoning": "create-release rebased the release commit onto origin/main after packages were already built/tested/published, which could tag a different tree than what was actually published if main advanced during the multi-minute build+publish window. Now the tag is created and pushed immediately after commit, before any reconciliation with main; landing on main afterward uses a merge (never rebase) so the tagged commit's tree is never altered."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1788882510269,
+          "type": "decision",
+          "content": "Add verify-publish job and skip-if-already-published npm publish step for resumable lockstep releases: Add verify-publish job and skip-if-already-published npm publish step for resumable lockstep releases",
+          "raw": {
+            "question": "Add verify-publish job and skip-if-already-published npm publish step for resumable lockstep releases",
+            "chosen": "Add verify-publish job and skip-if-already-published npm publish step for resumable lockstep releases",
+            "alternatives": [],
+            "reasoning": "The 8-package publish matrix (fail-fast:false) could partially succeed with no automated detection or recovery path, stranding some packages live at a new version while others were missing, with no clear evidence of which. verify-publish independently reconciles the npm registry against the target version with a step-summary table and hard-fails the release gate if anything is missing; the publish step itself now checks npm view before publishing so re-dispatching the same custom_version safely skips already-published packages instead of hard-failing on double-publish."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1788882510578,
+          "type": "reflection",
+          "content": "Completed the four-item independent-review repair: rebased onto origin/main (4581ef38), closed the anonymous-bootstrap-secret-proof gap, fixed the disguised-IPv4 SSRF bypass, extended version parity to the self-host container's version sources, and hardened publish-npm.yml for prerelease dist-tag safety, resumable/reconciled publish, and tag-exact-commit ordering. All touched packages pass focused and full test suites (engine 79 files/901 tests, test:release 25/25, test:container 19/19), actionlint is clean on the two in-scope workflows, and a real docker build + compose config validated the version-parity and secret-wiring fixes end to end.",
+          "raw": {
+            "focalPoints": [
+              "bootstrap-auth",
+              "ssrf",
+              "release-contract",
+              "publish-workflow"
+            ],
+            "confidence": 0.82
+          },
+          "significance": "high",
+          "tags": [
+            "focal:bootstrap-auth",
+            "focal:ssrf",
+            "focal:release-contract",
+            "focal:publish-workflow",
+            "confidence:0.82"
+          ]
         }
       ]
     }
