@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AGENT_LIVENESS_TTL_MS, listAgents } from '../../engine/agent.js';
+import { AGENT_LIVENESS_TTL_MS, RELEASED_AGENT_STATUS, listAgents } from '../../engine/agent.js';
 import { createWorkspace, makeNodeStack, type TestStack } from './harness.js';
 
 // SQLite stores last_seen in whole seconds. Exercise both the exact TTL
@@ -32,6 +32,10 @@ function expectedRoster(offset: number) {
 }
 
 describe('agent roster read contract', () => {
+  it('pins the released status used literally by the query and partial index', () => {
+    expect(RELEASED_AGENT_STATUS).toBe('released');
+  });
+
   let stack: TestStack;
   let workspaceId: string;
   let workspaceKey: string;
