@@ -29,6 +29,12 @@ const createTargetSchema = z.object({
   path_glob: z.string().trim().min(1),
 });
 
+const providerRecordEnvelopeSchema = z.object({
+  provider: z.string(), objectType: z.string(), objectId: z.string(),
+  deleted: z.boolean(), connectionId: z.string(),
+  payload: z.record(z.string(), z.unknown()),
+});
+
 const relayfileSnapshotSchema = z.object({
   path: z.string().optional(),
   contentType: z.string().optional(),
@@ -363,7 +369,12 @@ export async function verifyRelayfileSignature(
 }
 
 export function formatRelayfileEventMessage(event: RelayfileEventPublic, provider: string): { text: string; author: string; record: unknown } | null {
-  const record = parseSnapshotRecord(event.snapshot);
+  const stored = parseSnapshotRecord(event.snapshot);
+  const envelope = providerRecordEnvelopeSchema.safeParse(stored);
+  // Cloud's sync writer stores canonical records in a provider envelope.
+  // Unwrap only that complete shape; an ordinary record's payload property
+  // is data. Authenticated event semantics still come exclusively from event.
+  const record = envelope.success && envelope.data.provider === provider ? envelope.data.payload : stored;
   const author = recordAuthor(record) ?? provider;
   const title = recordTitle(record);
   const body = recordBody(record);

@@ -29,6 +29,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
+- Relayfile messages expose provider payloads from Cloud sync envelopes, preserving titles, authors, and terminal PR state for subscribers.
+
 - Subscription routes reject conflicting legacy memberships; agent removal invalidates channels actually removed by the release transaction.
 
 - Agent deletion invalidates cached membership so subscription route checks reflect the released identity.

@@ -1368,6 +1368,7 @@ components:
           type: string
 
     RelayfileInboundEventSnapshot:
+      description: Provider record snapshot. Cloud sync envelopes expose their inner provider payload in message metadata and formatting; provider event semantics still require authenticated top-level event metadata.
       type: object
       properties:
         path:

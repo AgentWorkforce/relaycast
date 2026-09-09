@@ -1064,7 +1064,7 @@ Explicit `target_node` on built-in spawn honors fleet placement even when a
 legacy workspace-global node action named `spawn` exists; its caller allowlist
 continues to apply. A dispatch acknowledgement does not establish harness readiness.
 
-Verified spawn (`verify_ready: true`) fails with `spawn_target_unavailable` when no connected eligible provider can dispatch the request. Unverified legacy requests retain queue behavior. Relayfile ingress preserves authenticated `providerEventType` and `resourceRef` as `provider_event_type` and `resource_ref` in message metadata, alongside the provider record. Generic file events do not imply PR, CI, or review semantics.
+Verified spawn (`verify_ready: true`) fails with `spawn_target_unavailable` when no connected eligible provider can dispatch the request. Unverified legacy requests retain queue behavior. Relayfile ingress preserves authenticated `providerEventType` and `resourceRef` as `provider_event_type` and `resource_ref` in message metadata, alongside the provider record. Generic file events do not imply PR, CI, or review semantics. Cloud sync envelopes are unwrapped to expose their provider payload in message metadata and formatting; this does not promote payload fields into authenticated event semantics.
 
 Readiness requests do not reroute registered global spawn handlers. Only an explicit `target_node` selects fleet placement around a legacy node alias; handlers that receive `verify_ready` must honor its completion contract. A deleted recipient leaves its old route memberless so a replacement cannot inherit delivery. Retire or replace the inventoried producer binding and webhook when deleting a subscriber; channel history remains for audit.
 

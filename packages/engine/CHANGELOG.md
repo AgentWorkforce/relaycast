@@ -20,6 +20,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Relayfile messages expose provider payloads from Cloud sync envelopes, preserving titles, authors, and terminal PR state for subscribers.
+
 - Reserved per-agent subscription channels reject legacy foreign memberships with HTTP 409 before adoption.
 - Agent deletion invalidates cached membership so subscription route checks reflect the released identity.
 - Relayfile ingress preserves authenticated provider event semantics and resource references.

@@ -450,4 +450,13 @@ describe('relayfile inbound bridge', () => {
     expect(message?.text).toContain(`${'x'.repeat(1200)}...`);
     expect(message?.text).not.toContain(longBody);
   });
+  it('exposes terminal provider state from a Cloud sync envelope without treating metadata as authority', () => {
+    const payload = { number: 42, state: 'closed', merged: true, title: 'Fix', user: { login: 'author' } };
+    const snapshot = { content: JSON.stringify({ provider: 'github', objectType: 'pull_request', objectId: '42', deleted: false, connectionId: 'connection', payload }) };
+    const message = formatRelayfileEventMessage({ type: 'file.updated', providerEventType: 'pull_request.closed', path: '/github/repos/a/b/pulls/42__fix/meta.json', snapshot }, 'github');
+    expect(message).toMatchObject({ author: 'author', record: payload, text: expect.stringContaining('Fix') });
+    expect(formatRelayfileEventMessage({ type: 'file.updated', path: '/github/42.json', snapshot }, 'github')?.text).toContain('Github update');
+    expect(formatRelayfileEventMessage({ type: 'file.updated', path: '/github/42.json', snapshot: { content: JSON.stringify({ title: 'Ordinary record', payload }) } }, 'github')?.record).toMatchObject({ title: 'Ordinary record', payload });
+  });
+
 });
