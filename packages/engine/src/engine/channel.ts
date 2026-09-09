@@ -1,4 +1,5 @@
 import { eq, and, sql, inArray, ne } from 'drizzle-orm';
+import { z } from 'zod';
 import type { getDb } from '../db/index.js';
 import { channels, channelMembers, agents } from '../db/schema.js';
 import { generateId } from './snowflake.js';
@@ -8,10 +9,14 @@ import { codedError } from '../lib/httpError.js';
 type Db = ReturnType<typeof getDb>;
 
 const SUBSCRIPTION_CHANNEL_PREFIX = 'agent-events-';
+const subscriptionChannelMetadataSchema = z.object({
+  subscription_agent_id: z.string().min(1),
+});
 
 function assertSubscriptionRecipient(channel: { name: string; metadata: unknown }, agentId: string) {
-  if (channel.name.startsWith(SUBSCRIPTION_CHANNEL_PREFIX) &&
-      (channel.metadata as Record<string, unknown> | null)?.subscription_agent_id !== agentId) {
+  if (!channel.name.startsWith(SUBSCRIPTION_CHANNEL_PREFIX)) return;
+  const metadata = subscriptionChannelMetadataSchema.safeParse(channel.metadata);
+  if (!metadata.success || metadata.data.subscription_agent_id !== agentId) {
     throw codedError('Only the subscription recipient may join this channel', 'subscription_recipient_only', 403);
   }
 }

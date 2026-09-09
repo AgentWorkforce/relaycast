@@ -91,6 +91,24 @@ describe('agent subscription channels', () => {
     expect((await getChannel(db, ws.workspaceId, `agent-events-${target.agentId}`)).members.map(m => m.agent_id)).toEqual([other.agentId]);
   });
 
+  it.each([null, 'invalid', 7, [], {}, { subscription_agent_id: 7 },
+    { subscription_agent_id: '' }, { subscription_agent_id: 'another-agent' }])(
+    'rejects malformed or mismatched legacy subscription metadata: %j', async (metadata) => {
+      const ws = await createWorkspace(stack.app, 'invalid-route');
+      const target = await registerAgent(stack.app, ws.workspaceKey, 'metadata-target');
+      const db = stack.runtime.deps.db;
+      const channelId = generateId();
+      await db.insert(channels).values({ id: channelId, workspaceId: ws.workspaceId,
+        name: `agent-events-${target.agentId}`, metadata });
+      const response = await stack.app.request('/v1/agents/metadata-target/subscription-channel', {
+        method: 'POST', headers: { authorization: `Bearer ${ws.workspaceKey}` },
+      });
+      expect(response.status).toBe(403);
+      expect((await response.json()).error.code).toBe('subscription_recipient_only');
+      expect((await getChannel(db, ws.workspaceId, `agent-events-${target.agentId}`)).members).toHaveLength(0);
+    },
+  );
+
   it('invalidates a membership cached after release preflight but before its transaction', async () => {
     const ws = await createWorkspace(stack.app, 'release-late-join');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'late-target');
