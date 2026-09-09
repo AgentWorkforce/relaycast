@@ -37,6 +37,12 @@ export interface PruneOptions {
   maxBatches?: number;
   /** Clock override for tests. */
   now?: Date;
+  /**
+   * Grace window (days) for expiring long-expired ACTIVE deliveries in bounded
+   * retention. A delivery is eligible when `expires_at * 1000 < nowMs - graceMs`.
+   * Defaults to 7 days.
+   */
+  expiredDeliveryGraceDays?: number;
   /** Deployment-wide TTL fallbacks; see {@link RetentionDefaults}. */
   defaults?: RetentionDefaults;
 }
@@ -45,6 +51,8 @@ export interface PruneOptions {
 export interface PruneResult {
   messages: number;
   deliveries: number;
+  /** Long-expired ACTIVE deliveries (queued/delivered) pruned by bounded retention. */
+  expiredDeliveries: number;
   messageLogs: number;
   readReceipts: number;
   workspaceEvents: number;
