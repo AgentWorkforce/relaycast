@@ -1,7 +1,5 @@
--- relaycast#371/#379: bind delegated and anonymous bootstrap workspace
--- creation to a scoped, request-digested idempotency key. Owner scopes are
--- the hash of the authenticated owner key; bootstrap scopes are the hash of
--- `bootstrap:<idempotency-key>`. The child bearer key is derived at replay
+-- relaycast#371: bind delegated workspace creation to an owner-scoped,
+-- request-digested idempotency key. The child bearer key is derived at replay
 -- time and is never persisted in plaintext.
 CREATE TABLE workspace_create_idempotency (
   owner_scope_hash TEXT NOT NULL,

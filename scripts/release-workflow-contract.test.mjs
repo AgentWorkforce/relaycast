@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -127,9 +129,15 @@ function archiveRevision(revision, target) {
 }
 
 function bumpFixtureVersion(root, version, dockerIntegrities) {
-  const packageDirs = git(root, ["ls-files", "packages/*/package.json"])
-    .split("\n")
-    .filter(Boolean);
+  const packageDirs = readdirSync(path.join(root, "packages"), {
+    withFileTypes: true,
+  })
+    .filter(
+      (entry) =>
+        entry.isDirectory() &&
+        existsSync(path.join(root, "packages", entry.name, "package.json")),
+    )
+    .map((entry) => `packages/${entry.name}/package.json`);
   for (const file of packageDirs) {
     const manifestPath = path.join(root, file);
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
@@ -199,6 +207,20 @@ function bumpFixtureVersion(root, version, dockerIntegrities) {
   writeFileSync(runbookPath, runbook);
 }
 
+function seedFixtureChangelogs(root) {
+  const contents =
+    "# Changelog\n\n## [Unreleased - Patch]\n\n### Fixed\n\n- Release fixture.\n\n## [8.5.4] - 2026-09-08\n\n### Fixed\n\n- Previous release.\n";
+  for (const relativePath of [
+    "CHANGELOG.md",
+    ...PUBLISHED_PACKAGE_DIRS.map(
+      (directory) => `packages/${directory}/CHANGELOG.md`,
+    ),
+  ]) {
+    const changelogPath = path.join(root, relativePath);
+    if (existsSync(changelogPath)) writeFileSync(changelogPath, contents);
+  }
+}
+
 function releaseTagMessage(fixture) {
   return [
     `Release v${fixture.version}`,
@@ -246,9 +268,13 @@ function releaseTagFixture({ alteredSource = false, mutateReleaseFile, versionBu
   git(root, ["init", "-q"]);
   git(root, ["config", "user.email", "release-test@example.com"]);
   git(root, ["config", "user.name", "Release Test"]);
-  if (versionBump) {
-    bumpFixtureVersion(root, "8.5.4", NPM_REGISTRY_DOCKER_INTEGRITIES["8.5.4"]);
-  }
+  const sourceVersion = versionBump ? "8.5.4" : version;
+  bumpFixtureVersion(
+    root,
+    sourceVersion,
+    NPM_REGISTRY_DOCKER_INTEGRITIES[sourceVersion],
+  );
+  seedFixtureChangelogs(root);
   git(root, ["add", "."]);
   git(root, ["commit", "-qm", "source"]);
   const sourceCommit = git(root, ["rev-parse", "HEAD"]);
@@ -359,11 +385,19 @@ describe("publish workflow safety contract", () => {
 
   it("runs deterministic release checks before any publish job", () => {
     const tests = workflow.indexOf("npm run test:release");
+    const migrationImmutability = workflow.indexOf(
+      "node scripts/check-published-engine-migrations.mjs",
+    );
     const validation = workflow.indexOf(
       'node scripts/check-release-contract.mjs --version "$NEW_VERSION" --allow-placeholder-docker-lock',
     );
     const publishJob = workflow.indexOf("  publish-packages:");
-    assert.ok(tests > 0 && validation > tests && publishJob > validation);
+    assert.ok(
+      tests > 0 &&
+        migrationImmutability > tests &&
+        validation > migrationImmutability &&
+        publishJob > validation,
+    );
     assert.match(
       jobBlock("create-release"),
       /Re-validate release contract with the refreshed lockfile[\s\S]*check-release-contract\.mjs --version/,

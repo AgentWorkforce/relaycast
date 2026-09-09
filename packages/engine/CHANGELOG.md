@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Restore migration `0045_workspace_create_idempotency.sql` to its original published bytes and reject future edits to published migrations before NPM release.
 
 ## [8.6.0] - 2026-09-09
 
