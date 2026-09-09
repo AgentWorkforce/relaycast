@@ -1,0 +1,68 @@
+{
+  "id": "traj_rxb2iuc969wf",
+  "version": 1,
+  "task": {
+    "title": "Review and repair Relaycast PR #393 Cubic findings",
+    "source": {
+      "system": "plain",
+      "id": "relaycast#393"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-09-09T01:39:26.630Z",
+  "completedAt": "2026-09-09T01:45:44.681Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-09-09T01:45:43.976Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_t2rjcuybdbie",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-09-09T01:45:43.976Z",
+      "endedAt": "2026-09-09T01:45:44.681Z",
+      "events": [
+        {
+          "ts": 1788918343976,
+          "type": "decision",
+          "content": "Bind retry inputs to immutable registry, source, and tag objects.",
+          "raw": {
+            "question": "How should release retries recover registry tags, prior releases, and the changelog date?",
+            "chosen": "Read the full npm dist-tag object, restrict prior tags to source ancestry, and recover the changelog date from the existing annotated tag.",
+            "alternatives": [],
+            "reasoning": "Dotted tag names are path-ambiguous in npm view; fetched future tags must not alter older release changelogs; a fresh workflow date changes across reruns, while the tag object preserves the exact original cut date. Cloudflare redirect manual handling was already correct."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Repaired Relaycast PR #393 findings: exact dotted dist-tag lookup, ancestry-bound prior stable tags, an immutable changelog date read from the annotated release tag on retries, and historical non-gating attribution for two empty-evidence trajectories. The 70-test release suite and syntax/diff checks passed at product commit 1a46c2ecaff0d17f2a036309ac9c43c60115b665.",
+    "approach": "Standard approach",
+    "confidence": 0.9
+  },
+  "commits": ["1a46c2ecaff0d17f2a036309ac9c43c60115b665"],
+  "filesChanged": [
+    ".agentworkforce/trajectories/completed/2026-09/traj_nqusiho2z3n5/summary.md",
+    ".agentworkforce/trajectories/completed/2026-09/traj_nqusiho2z3n5/trajectory.json",
+    ".agentworkforce/trajectories/completed/2026-09/traj_o912nj2m0waj/summary.md",
+    ".agentworkforce/trajectories/completed/2026-09/traj_o912nj2m0waj/trajectory.json",
+    ".github/workflows/publish-npm.yml",
+    "scripts/cut-changelog.mjs",
+    "scripts/npm-dist-tag.mjs",
+    "scripts/npm-dist-tag.test.mjs",
+    "scripts/release-workflow-contract.test.mjs",
+    "scripts/validate-release-tag.mjs"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "43f7dfaff1a4095849826c8c9aedc86a7c24149d",
+    "endRef": "1a46c2ecaff0d17f2a036309ac9c43c60115b665"
+  }
+}
