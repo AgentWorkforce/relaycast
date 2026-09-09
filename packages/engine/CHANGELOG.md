@@ -14,6 +14,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `pruneExpired` accepts a host-owned `cursorStore` for schema-free bounded rowid candidate scans and a `maxDurationMs` admission budget. Serialize calls and persist state durably; TTL policies are unchanged. In-flight SQL and message cascades are not canceled or write-bounded.
 - Node replay uses bounded, ordered database pages with existing indexes, reducing shared-database contention without requiring schema changes.
 - Opt-in schema-free retention can safely delete active `queued`/`delivered` deliveries after the grace window via a set-based `idx_deliveries_active_expiry` path that skips `delivery.failed` notices (cursorStore v1 rollback compatibility preserved).
+- `sweepDueNodeDeliveries` can now opt into a bounded per-agent `wsBacklogLimit` for redriving `ws-node` backlog rows.
 
 ## [8.5.2] - 2026-09-07
 

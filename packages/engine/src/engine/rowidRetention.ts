@@ -238,11 +238,10 @@ export async function pruneRowidPages(db: EngineDb, opts: PruneOptions & { curso
         const policyGuard = table.setting ? sql`AND (SELECT w.retention FROM workspaces w
           WHERE w.id = ${row.workspace_id}) IS ${row.retention}` : sql``;
         const timeGuard = table.setting && !table.snowflake ? sql`AND created_at = ${row.created_at}` : sql``;
-        // The widened deliveries guard admits both settled and long-expired
-        // active rows, so it no longer implies which rule authorized the
-        // delete. Pin the exact status read: a queued row that gets acked
-        // between the page read and this DELETE must not be removed under the
-        // expiry rule without its own TTL ever being checked.
+        // The deliveries page is guarded as settled-only (default cursor mode),
+        // but the opt-in active recovery path re-checks status/expiry again.
+        // Always pin the exact status read so concurrent status changes
+        // cannot authorize a stale deletion.
         const statusGuard = table.result === 'deliveries' ? sql`AND status = ${row.status}` : sql``;
         return sql`(rowid = ${row._rowid} AND ${identity} ${policyGuard} ${timeGuard} ${statusGuard})`;
       });

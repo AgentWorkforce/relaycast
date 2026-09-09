@@ -1588,11 +1588,12 @@ describe('durable delivery api', () => {
     expect(row3.nextAttemptAt).toBeNull();
   });
 
-  it('sweepDueNodeDeliveries respects wsBacklogLimit ordering and later drains, and a capped undeliverable row fails only after expiry', async () => {
+  it('sweepDueNodeDeliveries respects wsBacklogLimit ordering and later drains, emits no delivery.failed for capped rows, and emits exactly one expiry delivery.failed', async () => {
     const ws = await createWorkspace(stack.app, 'mailbox-ws-sweep-backlog-limit');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
     const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
     const bob = await registerViaNode(node, 'bob');
+    const { sock: aliceSock } = await attachDirectNodeSocket(stack, ws.workspaceId, alice);
 
     // Queue 3 deliveries seq 1..3 by sending 3 messages.
     for (const text of ['one', 'two', 'three']) {
@@ -1616,16 +1617,6 @@ describe('durable delivery api', () => {
       .set({ status: 'queued', nextAttemptAt: null, dispatchAttempts: 0, deliveredAt: null, lastDispatchError: null })
       .where(and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId)));
 
-    // Make the 3rd send throw. With wsBacklogLimit=2, the sweep must not
-    // attempt seq 3 in this invocation.
-    let sendCount = 0;
-    const originalSend = node.sock.send.bind(node.sock);
-    node.sock.send = ((frame: unknown) => {
-      sendCount++;
-      if (sendCount === 3) throw new Error('socket write failed');
-      return originalSend(frame);
-    }) as typeof node.sock.send;
-
     const beforeDeliver = node.sock.ofType('deliver').length;
     const swept = await sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date(), wsBacklogLimit: 2 });
     expect(swept).toBe(3);
@@ -1640,24 +1631,26 @@ describe('durable delivery api', () => {
     expect(row1.status).toBe('delivered');
     expect(row2.status).toBe('delivered');
     expect(row3.status).toBe('queued');
+    expect(contextUpdatesOfType(aliceSock, 'delivery.failed')).toHaveLength(0);
 
-    // Restore send and drain the remaining backlog on the next sweep.
-    node.sock.send = originalSend;
+    // Drain the remaining backlog on the next sweep.
     const secondSwept = await sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date(Date.now() + 1_000) });
     expect(secondSwept).toBe(1);
     const [row3After] = await db.select().from(deliveries).where(seq3);
     expect(row3After.status).toBe('delivered');
 
-    // Expiry check: reset seq3 again, then fast-forward beyond TTL expiry
-    // so sweepExpiredDeliveries dead-letters it (one expiry failure).
-    await db.update(deliveries).set({ status: 'queued', nextAttemptAt: null, dispatchAttempts: 0, deliveredAt: null, lastDispatchError: null })
-      .where(seq3);
+    // Expiry check: reset seq3 again, expire it, then sweepExpiredDeliveries
+    // should dead-letter it and emit exactly one delivery.failed.
+    await db.update(deliveries).set({
+      status: 'queued', nextAttemptAt: null, dispatchAttempts: 0, deliveredAt: null, lastDispatchError: null, expiresAt: new Date(Date.now() - 60_000),
+    }).where(seq3);
     await stack.settle();
-    const expiredNow = new Date(Date.now() + 120 * 86_400_000);
+    const expiredNow = new Date(Date.now() + 60_000);
     const expired = await sweepExpiredDeliveries(stack.runtime.deps, { now: expiredNow, maxBatches: 5 });
     expect(expired).toBeGreaterThanOrEqual(1);
     const [row3Dead] = await db.select().from(deliveries).where(seq3);
     expect(row3Dead.status).toBe('dead_lettered');
+    expect(contextUpdatesOfType(aliceSock, 'delivery.failed')).toHaveLength(1);
   });
 
   it('honors recorded route metadata when live binding changes before fanout', async () => {

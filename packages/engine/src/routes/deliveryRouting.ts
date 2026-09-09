@@ -554,7 +554,11 @@ export async function sweepDueNodeDeliveries(
   opts: { workspaceId?: string; now?: Date; limit?: number; wsBacklogLimit?: number } = {},
 ): Promise<number> {
   const now = opts.now ?? new Date();
-  const due = await deliveryEngine.fetchDueNodeDeliveryEvents(engine.db, { ...opts, now });
+  const due = await deliveryEngine.fetchDueNodeDeliveryEvents(engine.db, {
+    workspaceId: opts.workspaceId,
+    limit: opts.limit,
+    now,
+  });
 
   const httpPushEvents: typeof due = [];
   const wsAgents: { workspaceId: string; agentId: string }[] = [];

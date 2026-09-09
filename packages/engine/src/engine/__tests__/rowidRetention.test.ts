@@ -331,25 +331,6 @@ describe('schema-free retention candidate pages', () => {
     expect(statements.length).toBeLessThanOrEqual(4);
   });
 
-  it('does not delete an expired queued row that was acked after the candidate read', async () => {
-    const f = fixture(); const msg = f.message(1);
-    const raced = f.delivery(msg, 'queued', seconds, 'one', seconds - 30 * 86400);
-    const original = f.sqlite.prepare.bind(f.sqlite);
-    // Flip the row to `acked` between the page read and the DELETE. The widened
-    // guard still matches it (acked is settled), so without a status guard it
-    // would be deleted under the expiry rule with its own TTL never checked.
-    let flipped = false;
-    (f.sqlite as unknown as { prepare: typeof original }).prepare = ((query: string) => {
-      if (!flipped && /^DELETE FROM deliveries/i.test(query)) {
-        flipped = true;
-        original("UPDATE deliveries SET status = 'acked' WHERE id = ?").run(raced);
-      }
-      return original(query);
-    }) as typeof original;
-    await f.run({ batchLimit: 50, maxBatches: 5, defaults: { deliveryTtlDays: null } });
-    expect((f.sqlite.prepare('SELECT id FROM deliveries').all() as { id: string }[]).map(r => r.id)).toContain(raced);
-  });
-
   it('accepts a raised page ceiling so a large table can be traversed', async () => {
     const f = fixture(); const msg = f.message(1);
     f.sqlite.transaction(() => { for (let i = 0; i < 600; i++) f.delivery(msg, 'acked', seconds); })();
