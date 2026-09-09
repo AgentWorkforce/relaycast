@@ -1252,6 +1252,150 @@ describe('RelayCast', () => {
       expect(init.headers['Idempotency-Key']).toBe('cloud-job-371');
     });
 
+    it('forwards the bootstrap secret proof for anonymous keyed creates', async () => {
+      const { RelayCast } = await import('../relay.js');
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 201,
+          json: () => Promise.resolve({
+            ok: true,
+            data: { workspace_id: 'ws_bootstrap', api_key: 'rk_live_bootstrap', created_at: '2024-01-01' },
+          }),
+        }),
+      );
+
+      await RelayCast.createWorkspace('bootstrap-child', {
+        idempotencyKey: 'bootstrap-run-1-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e',
+        bootstrapSecret: 'deployment-secret',
+        baseUrl: 'http://localhost:3000',
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.headers.Authorization).toBeUndefined();
+      expect(init.headers['Idempotency-Key']).toBe('bootstrap-run-1-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e');
+      expect(init.headers['X-Workspace-Bootstrap-Secret']).toBe('deployment-secret');
+    });
+
+    it('rejects a short anonymous key before making a request', async () => {
+      const { RelayCast } = await import('../relay.js');
+
+      await expect(RelayCast.createWorkspace('bootstrap-child', {
+        idempotencyKey: 'bootstrap:run-1',
+        bootstrapSecret: 'deployment-secret',
+        baseUrl: 'http://localhost:3000',
+      })).rejects.toMatchObject({
+        statusCode: 400,
+        rawCode: 'workspace_create_idempotency_key_too_weak',
+      });
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('never sends an anonymous bootstrap secret without an explicit self-hosted base URL', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const options = {
+        idempotencyKey: 'bootstrap-run-1-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e',
+        bootstrapSecret: 'self-host-deployment-secret',
+      };
+
+      await expect(RelayCast.createWorkspace('bootstrap-child', options)).rejects.toMatchObject({
+        statusCode: 400,
+        rawCode: 'workspace_create_bootstrap_base_url_required',
+      });
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('never sends an anonymous bootstrap secret to an explicit hosted gateway URL', async () => {
+      const { RelayCast } = await import('../relay.js');
+
+      await expect(RelayCast.createWorkspace('bootstrap-child', {
+        idempotencyKey: 'bootstrap-run-1-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e',
+        bootstrapSecret: 'self-host-deployment-secret',
+        baseUrl: 'https://CAST.AGENTRELAY.COM./',
+      })).rejects.toMatchObject({
+        statusCode: 400,
+        rawCode: 'workspace_create_bootstrap_base_url_required',
+      });
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it.each(['ftp:', 'custom:'])('never sends an anonymous bootstrap secret to a %s URL', async (protocol) => {
+      const { RelayCast } = await import('../relay.js');
+
+      await expect(RelayCast.createWorkspace('bootstrap-child', {
+        idempotencyKey: 'bootstrap-run-1-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e',
+        bootstrapSecret: 'self-host-deployment-secret',
+        baseUrl: `${protocol}//self-host.example`,
+      })).rejects.toMatchObject({
+        statusCode: 400,
+        rawCode: 'workspace_create_bootstrap_base_url_required',
+      });
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('never sends an anonymous bootstrap secret over remote plaintext HTTP', async () => {
+      const { RelayCast } = await import('../relay.js');
+
+      await expect(RelayCast.createWorkspace('bootstrap-child', {
+        idempotencyKey: 'bootstrap-run-1-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e',
+        bootstrapSecret: 'self-host-deployment-secret',
+        baseUrl: 'http://self-host.example',
+      })).rejects.toMatchObject({
+        statusCode: 400,
+        rawCode: 'workspace_create_bootstrap_base_url_required',
+      });
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('does not forward a bootstrap secret proof for an authenticated create', async () => {
+      const { RelayCast } = await import('../relay.js');
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 201,
+          json: () => Promise.resolve({
+            ok: true,
+            data: { workspace_id: 'ws_child', api_key: 'rk_live_child', created_at: '2024-01-01' },
+          }),
+        }),
+      );
+
+      await RelayCast.createWorkspace('child', {
+        apiKey: 'rk_live_parent',
+        idempotencyKey: 'cloud-job-371',
+        // An authenticated caller has no reason to also present a bootstrap
+        // secret; passing one anyway must not leak it onto the wire, since
+        // the owner-scoped path never checks it.
+        bootstrapSecret: 'unused-secret',
+        baseUrl: 'http://localhost:3000',
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.headers['X-Workspace-Bootstrap-Secret']).toBeUndefined();
+    });
+
+    it('does not forward a bootstrap secret proof for an unkeyed anonymous create', async () => {
+      const { RelayCast } = await import('../relay.js');
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 201,
+          json: () => Promise.resolve({
+            ok: true,
+            data: { workspace_id: 'ws_child', api_key: 'rk_live_child', created_at: '2024-01-01' },
+          }),
+        }),
+      );
+
+      await RelayCast.createWorkspace('child', {
+        bootstrapSecret: 'must-not-leave-the-process',
+        baseUrl: 'http://localhost:3000',
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.headers['X-Workspace-Bootstrap-Secret']).toBeUndefined();
+    });
+
     it('does not silently downgrade an explicitly empty idempotency key', async () => {
       const { RelayCast } = await import('../relay.js');
       mockFetch.mockImplementation(() =>

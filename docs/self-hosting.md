@@ -64,12 +64,60 @@ Flags take precedence over environment variables.
 | `--base-url <url>` | — | `http://localhost:<port>` | Public origin. **Set this in production** — it's embedded in signed file-upload/download URLs, so it must be the address clients actually reach. |
 | `--env <name>` | `RELAYCAST_ENV` | `production` | Environment label used in logs. |
 | — | `RELAYCAST_MESSAGE_TTL_DAYS` | unset (keep forever) | Opt in to pruning message history after this many days. Unset, `0`, or negative keeps messages forever. Per-workspace `retention` settings override this; operational tables (deliveries, message logs) prune at 90 days regardless. |
+| — | `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` | unset (fail closed) | Stable deployment secret for anonymous keyed workspace retries. Generate once with `openssl rand -hex 32` and persist it across restarts. |
 
 **Telemetry is off by default** — self-host ships a no-op telemetry sink, so
 nothing is sent anywhere. (There is no PostHog/analytics in self-host.)
 
 Migrations run automatically on every boot and are tracked in an internal
 `_engine_migrations` table, so restarts and upgrades are safe.
+
+### Anonymous keyed workspace retries
+
+An anonymous `POST /v1/workspaces` with `Idempotency-Key` needs
+`RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` so a retry after a response loss can
+recover the same workspace credential. Generate the secret once:
+
+```bash
+export RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET="$(openssl rand -hex 32)"
+```
+
+Store the result in your secret manager or a mode-600 environment file and
+reuse that exact value for every restart of the same deployment. Never commit
+it, put it in a Dockerfile, pass it as a command-line argument, or print it in
+logs. The server only passes it to the HMAC derivation path and never logs or
+stores it.
+
+**The caller must also present the secret.** `Idempotency-Key` is a
+caller-chosen, non-secret value, not proof of identity — every anonymous
+keyed create must send `X-Workspace-Bootstrap-Secret: <the same secret>` or it
+is rejected with `401 workspace_create_bootstrap_secret_invalid` before any
+lookup of the idempotency binding. Only give the secret to callers you trust
+to bootstrap a workspace on this deployment (your own setup script or
+container entrypoint, for example) — anyone who has it can create or recover
+any anonymous bootstrap workspace on this deployment:
+
+Generate the replay key once per logical create/retry sequence with a CSPRNG;
+keep it unchanged when retrying (a v4 UUID or 16 random bytes encoded as hex
+is suitable):
+
+```bash
+BOOTSTRAP_IDEMPOTENCY_KEY="$(openssl rand -hex 16)"
+
+curl -s -XPOST http://localhost:8787/v1/workspaces \
+  -H 'content-type: application/json' \
+  -H "Idempotency-Key: ${BOOTSTRAP_IDEMPOTENCY_KEY}" \
+  -H "X-Workspace-Bootstrap-Secret: $RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET" \
+  -d '{"name":"my-team"}'
+```
+
+If the variable is omitted or empty, keyed anonymous creates return
+`503 workspace_create_idempotency_unavailable` before creating a workspace;
+unkeyed creates and authenticated-owner idempotency remain available. This is
+intentional fail-closed behavior. Existing anonymous bindings also cannot be
+replayed after a secret change, because deriving a different child key would
+not be safe; rotate only after outstanding retries have drained, or accept
+that old bindings will fail closed with a conflict.
 
 ---
 
@@ -185,9 +233,17 @@ relaycast-engine --db /var/lib/relaycast/relaycast.db --port 8787 \
 
 **systemd** (`/etc/systemd/system/relaycast.service`):
 
+Create the environment file before starting the service:
+
+```bash
+sudo install -d -m 0755 /etc/relaycast
+sudo sh -c 'umask 077; printf "%s\\n" "RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET=$(openssl rand -hex 32)" > /etc/relaycast/relaycast.env'
+```
+
 ```ini
 [Service]
 ExecStart=/usr/local/bin/relaycast-engine --db /var/lib/relaycast/relaycast.db --port 8787 --base-url https://relay.example.com
+EnvironmentFile=-/etc/relaycast/relaycast.env
 Restart=always
 User=relaycast
 WorkingDirectory=/var/lib/relaycast
@@ -199,11 +255,28 @@ WantedBy=multi-user.target
 published):
 
 ```bash
+umask 077
 test ! -e .env || { echo '.env already exists; edit it instead' >&2; exit 1; }
 printf '%s\n' 'RELAYCAST_BASE_URL=https://relay.example.com' > .env
+printf '%s\n' "RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET=$(openssl rand -hex 32)" >> .env
+chmod 600 .env
 docker compose build --pull
 docker compose up -d
 ```
+
+The Compose file passes `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` through when it
+is present in `.env`; leaving it unset keeps the fail-closed behavior described
+above. For a direct Docker run, use `--env-file` with the same persisted
+variable.
+
+**`docker compose config` prints resolved secrets in plaintext.** Compose
+resolves `${VAR}` references from `.env` before rendering its config output,
+so `docker compose config` (used for debugging or CI validation) includes the
+literal `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` value in what it prints. Never
+paste that output into a ticket, chat message, or log you don't control, and
+prefer redacting or piping it through something that strips the value (for
+example `docker compose config | sed 's/RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET:.*/RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: <redacted>/'`)
+before sharing it.
 
 The image pins Node and `@relaycast/engine`, persists the database and uploaded
 files in the `relaycast-data` named volume, and refuses to start unless the

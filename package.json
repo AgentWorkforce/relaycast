@@ -2,7 +2,7 @@
   "name": "relaycast",
   "license": "Apache-2.0",
   "module": "packages/mcp/src/smithery.ts",
-  "packageManager": "npm@10.9.4",
+  "packageManager": "npm@11.19.1",
   "private": true,
   "workspaces": [
     "packages/*"
@@ -10,7 +10,9 @@
   "scripts": {
     "build": "turbo build",
     "test": "turbo test",
+    "test:release": "node --test scripts/check-published-engine-migrations.test.mjs scripts/npm-dist-tag.test.mjs scripts/release-contract.test.mjs scripts/release-workflow-contract.test.mjs",
     "test:container": "node --test test/container-entrypoint.test.mjs",
+    "test:container-image": "node --test test/container-image-integration.test.mjs",
     "lint": "turbo lint",
     "dev": "turbo dev --parallel --filter=@relaycast/observer-dashboard",
     "e2e": "npx tsx scripts/e2e.ts",

@@ -1,0 +1,78 @@
+name: Self-Host Container Integration
+
+# Builds the real Dockerfile and runs it as a real container against a
+# persistent volume, driving it entirely over HTTP -- the only place that
+# exercises the actual built image rather than the entrypoint script or the
+# engine in isolation. See test/container-image-integration.test.mjs for the
+# full scenario list (bootstrap-secret restart/replay, missing-secret 503,
+# invalid-auth 401, digest-conflict 409, and log-redaction).
+on:
+  schedule:
+    # 06:00 UTC daily. A scheduled, not just PR-triggered, run catches drift
+    # between this image and its own dependencies (base image updates,
+    # published @relaycast/engine versions) even when no PR touches this repo.
+    - cron: "0 6 * * *"
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - .dockerignore
+      - Dockerfile
+      - docker/**
+      - package.json
+      - package-lock.json
+      - tsconfig.base.json
+      - packages/a2a/**
+      - packages/engine/**
+      - packages/types/**
+      - test/container-image-integration.test.mjs
+      - .github/workflows/container-integration.yml
+  push:
+    branches:
+      - main
+    paths:
+      - .dockerignore
+      - Dockerfile
+      - docker/**
+      - package.json
+      - package-lock.json
+      - tsconfig.base.json
+      - packages/a2a/**
+      - packages/engine/**
+      - packages/types/**
+      - test/container-image-integration.test.mjs
+      - .github/workflows/container-integration.yml
+
+permissions:
+  contents: read
+
+jobs:
+  container-integration:
+    name: Build and test the real image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.22.3"
+
+      - name: Run container integration tests
+        run: npm run test:container-image
+
+      # Redacts the test's own fixture bootstrap-secret pattern before
+      # printing anything: if the log-redaction test itself is what failed,
+      # this must not be the thing that leaks the secret into CI output.
+      - name: Show docker state on failure
+        if: failure()
+        run: |
+          docker ps -a --filter "name=relaycast-it-" || true
+          for name in $(docker ps -a --filter "name=relaycast-it-" --format "{{.Names}}"); do
+            echo "::group::docker logs $name (bootstrap-secret fixture redacted)"
+            docker logs "$name" 2>&1 | sed -E 's/integration-test-bootstrap-secret-[A-Za-z0-9_-]+/[REDACTED]/g' || true
+            echo "::endgroup::"
+          done

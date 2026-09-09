@@ -181,7 +181,7 @@ components:
           description: Snowflake ID of the workspace
         api_key:
           type: string
-          description: Workspace API key (returned on first creation and on an authenticated idempotent replay)
+          description: Workspace API key (returned on first creation and on an authenticated idempotent replay or an anonymous bootstrap replay with a valid bootstrap-secret proof)
         created_at:
           type: string
           format: date-time
@@ -1563,10 +1563,15 @@ paths:
       summary: Create workspace
       description: >
         Create a workspace and get an API key when a new workspace is created. This operation is
-        idempotent by workspace name for the same bearer workspace key. For delegated creates,
-        provide an `Idempotency-Key`: the authenticated owner, key, and exact request digest are
-        durably bound to one child. Replaying the same request returns the same child key with a
-        `200` response, while changing the request returns `409`. If transient storage attempts are
+        idempotent by workspace name for the same bearer workspace key. For crash-safe creates,
+        provide an `Idempotency-Key`: authenticated requests bind the owner, key, and exact request
+        digest, while anonymous bootstrap requests bind the key to the deployment. Replaying the
+        same request returns the same workspace and usable API key with a `200` response, while
+        changing the request returns `409`. An anonymous (no `Authorization`) request that supplies
+        `Idempotency-Key` must also supply `X-Workspace-Bootstrap-Secret` matching the deployment's
+        configured bootstrap secret; the `Idempotency-Key` alone is a caller-chosen, non-secret
+        correlator, so proving the deployment secret is what authorizes looking up or recovering the
+        binding. If transient storage attempts are
         exhausted and the server cannot confirm the committed workspace/channel pair, it returns
         `503 workspace_storage_unavailable`; that outcome is indeterminate.
       tags:
@@ -1605,9 +1610,29 @@ paths:
             maxLength: 255
             pattern: '^[\x21-\x7E]+$'
           description: >-
-            Owner-scoped key for crash-safe delegated creation. Requires an
-            authenticated `Authorization: Bearer rk_*` owner. Reusing it with
-            the same request replays the child; a different request is a 409.
+            Crash-safe workspace creation key. With an authenticated
+            `Authorization: Bearer rk_*` owner it is owner-scoped; without
+            authorization it is scoped to anonymous bootstrap creation on this
+            deployment. Reusing it with the same request replays the workspace;
+            a different request is a 409. For an anonymous (bootstrap) create,
+            this key is part of what authorizes recovering the binding
+            alongside `X-Workspace-Bootstrap-Secret`. Callers must generate it
+            with a CSPRNG (a v4 UUID is suitable). The server enforces only a
+            32-character structural minimum: only a shorter value returns
+            `400 workspace_create_idempotency_key_too_weak`. This
+            requirement does not apply to an owner-scoped key.
+        - name: X-Workspace-Bootstrap-Secret
+          in: header
+          required: false
+          schema:
+            type: string
+          description: >-
+            Required alongside `Idempotency-Key` for an anonymous (no
+            `Authorization`) request. Must match the deployment's configured
+            bootstrap secret; a missing or mismatched value returns `401`
+            before any lookup of the idempotency binding. Not used, and not
+            required, for authenticated or unkeyed (no `Idempotency-Key`)
+            creates.
       responses:
         '200':
           description: Existing workspace returned (idempotent)
@@ -1640,13 +1665,20 @@ paths:
                   data:
                     $ref: '#/components/schemas/CreateWorkspaceResponse'
         '400':
-          description: Invalid request
+          description: >-
+            Invalid request, or `workspace_create_idempotency_key_too_weak` —
+            an anonymous `Idempotency-Key` was shorter than the required
+            32-character structural minimum (see the `Idempotency-Key`
+            parameter description).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
-          description: Missing or invalid owner workspace key for keyed creation
+          description: >-
+            Invalid owner workspace key for authenticated keyed creation, or
+            `workspace_create_bootstrap_secret_invalid` — an anonymous keyed
+            create did not supply a matching `X-Workspace-Bootstrap-Secret`.
           content:
             application/json:
               schema:
@@ -1661,8 +1693,10 @@ paths:
           description: >
             `workspace_storage_unavailable` — transient storage attempts were
             exhausted and the committed workspace/channel pair could not be
-            confirmed. The response does not expose database statements or
-            bound parameters.
+            confirmed; or `workspace_create_idempotency_unavailable` — keyed
+            anonymous bootstrap was requested without a configured deployment
+            secret. The response does not expose database statements or bound
+            parameters.
           content:
             application/json:
               schema:

@@ -55,7 +55,7 @@ export interface NodeRuntimeOptions {
   entitlements?: EntitlementsProvider;
   /** Override the telemetry sink (default: no-op). */
   telemetry?: TelemetrySink;
-  /** Engine config (environment, version, workspace-stream default, etc.). */
+  /** Engine config (environment, version, workspace-stream default, etc.). Persist `workspaceBootstrapSecret` for replay across restarts. */
   config?: EngineConfig;
   /** Presence TTL / sweep tuning (tests use short windows). */
   presence?: InProcessPresenceOptions;
