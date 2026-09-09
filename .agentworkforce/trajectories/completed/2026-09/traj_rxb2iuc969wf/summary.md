@@ -10,7 +10,7 @@
 
 ## Summary
 
-Repaired Relaycast PR #393 findings: exact dotted dist-tag lookup, ancestry-bound prior stable tags, an immutable changelog date read from the annotated release tag on retries, and historical non-gating attribution for two empty-evidence trajectories. The 70-test release suite and syntax/diff checks passed at product commit 1a46c2ecaff0d17f2a036309ac9c43c60115b665.
+Repaired Relaycast PR #393 findings: exact dotted dist-tag lookup, ancestry-bound prior stable tags, an immutable changelog date read from the annotated release tag on retries, Workers-compatible manual rejection of anonymous bootstrap redirects, and historical non-gating attribution for two empty-evidence trajectories. The Node 22 release suite passed 70/70 and the SDK suite passed 457/457 through product commit 38eaa7078f15eb3f57e1d8a0da3c8a78e83f5ff4.
 
 **Approach:** Standard approach
 
@@ -20,7 +20,7 @@ Repaired Relaycast PR #393 findings: exact dotted dist-tag lookup, ancestry-boun
 
 ### Bind retry inputs to immutable registry, source, and tag objects
 - **Chose:** Read the full npm dist-tag object, restrict prior tags to source ancestry, and recover the changelog date from the existing annotated tag.
-- **Reasoning:** Dotted tag names are path-ambiguous in npm view; fetched future tags must not alter older release changelogs; a fresh workflow date changes across reruns, while the tag object preserves the exact original cut date. Cloudflare redirect manual handling was already correct.
+- **Reasoning:** Dotted tag names are path-ambiguous in npm view; fetched future tags must not alter older release changelogs; a fresh workflow date changes across reruns, while the tag object preserves the exact original cut date. Cloudflare Workers reject `redirect: error`, so secret-bearing bootstrap requests use manual mode and reject redirect responses before parsing.
 
 ---
 

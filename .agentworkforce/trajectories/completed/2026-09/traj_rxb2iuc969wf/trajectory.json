@@ -34,7 +34,7 @@
             "question": "How should release retries recover registry tags, prior releases, and the changelog date?",
             "chosen": "Read the full npm dist-tag object, restrict prior tags to source ancestry, and recover the changelog date from the existing annotated tag.",
             "alternatives": [],
-            "reasoning": "Dotted tag names are path-ambiguous in npm view; fetched future tags must not alter older release changelogs; a fresh workflow date changes across reruns, while the tag object preserves the exact original cut date. Cloudflare redirect manual handling was already correct."
+            "reasoning": "Dotted tag names are path-ambiguous in npm view; fetched future tags must not alter older release changelogs; a fresh workflow date changes across reruns, while the tag object preserves the exact original cut date. Cloudflare Workers reject redirect: error, so secret-bearing bootstrap requests use manual mode and reject redirect responses before parsing."
           },
           "significance": "high"
         }
@@ -42,17 +42,22 @@
     }
   ],
   "retrospective": {
-    "summary": "Repaired Relaycast PR #393 findings: exact dotted dist-tag lookup, ancestry-bound prior stable tags, an immutable changelog date read from the annotated release tag on retries, and historical non-gating attribution for two empty-evidence trajectories. The 70-test release suite and syntax/diff checks passed at product commit 1a46c2ecaff0d17f2a036309ac9c43c60115b665.",
+    "summary": "Repaired Relaycast PR #393 findings: exact dotted dist-tag lookup, ancestry-bound prior stable tags, an immutable changelog date read from the annotated release tag on retries, Workers-compatible manual rejection of anonymous bootstrap redirects, and historical non-gating attribution for two empty-evidence trajectories. The Node 22 release suite passed 70/70 and the SDK suite passed 457/457 through product commit 38eaa7078f15eb3f57e1d8a0da3c8a78e83f5ff4.",
     "approach": "Standard approach",
     "confidence": 0.9
   },
-  "commits": ["1a46c2ecaff0d17f2a036309ac9c43c60115b665"],
+  "commits": [
+    "1a46c2ecaff0d17f2a036309ac9c43c60115b665",
+    "38eaa7078f15eb3f57e1d8a0da3c8a78e83f5ff4"
+  ],
   "filesChanged": [
     ".agentworkforce/trajectories/completed/2026-09/traj_nqusiho2z3n5/summary.md",
     ".agentworkforce/trajectories/completed/2026-09/traj_nqusiho2z3n5/trajectory.json",
     ".agentworkforce/trajectories/completed/2026-09/traj_o912nj2m0waj/summary.md",
     ".agentworkforce/trajectories/completed/2026-09/traj_o912nj2m0waj/trajectory.json",
     ".github/workflows/publish-npm.yml",
+    "packages/sdk-typescript/src/__tests__/bootstrap-redirect.test.ts",
+    "packages/sdk-typescript/src/relay.ts",
     "scripts/cut-changelog.mjs",
     "scripts/npm-dist-tag.mjs",
     "scripts/npm-dist-tag.test.mjs",
@@ -63,6 +68,6 @@
   "tags": [],
   "_trace": {
     "startRef": "43f7dfaff1a4095849826c8c9aedc86a7c24149d",
-    "endRef": "1a46c2ecaff0d17f2a036309ac9c43c60115b665"
+    "endRef": "38eaa7078f15eb3f57e1d8a0da3c8a78e83f5ff4"
   }
 }
