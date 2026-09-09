@@ -299,6 +299,28 @@ describe('schema-free retention candidate pages', () => {
     expect(flipped).toBe(true);
   });
 
+  it('opt-in active expiry recovery skips status-transition races by rechecking queued/delivered at DELETE time', async () => {
+    const f = fixture(); const msg = f.message(1);
+    const toFlip = f.delivery(msg, 'queued', seconds, 'one', seconds - 20 * 86400);
+    const executeAll = f.db.all.bind(f.db);
+    let flipped = false;
+    const spy = vi.spyOn(f.db, 'all').mockImplementation((query: unknown) => {
+      const text = f.db.dialect.sqlToQuery(query as never).sql;
+      if (!flipped && text.toLowerCase().includes('idx_deliveries_active_expiry')) {
+        flipped = true;
+        // Leave the active set by transitioning to a settled status right
+        // before the indexed-candidate subquery is mutated by the outer DELETE.
+        f.sqlite.prepare(`UPDATE deliveries SET status = 'acked' WHERE id = ?`).run(toFlip);
+      }
+      return executeAll(query as never);
+    });
+
+    await f.run({ activeExpiryRecovery: true, expiredDeliveryGraceDays: 7, maxBatches: 4, batchLimit: 200 });
+    spy.mockRestore();
+    expect(f.sqlite.prepare('SELECT id FROM deliveries WHERE id=?').get(toFlip)).toBeTruthy();
+    expect(flipped).toBe(true);
+  });
+
   it('opt-in active expiry recovery has hard worst-case DELETE statement count < 1000', async () => {
     const f = fixture(); const msg = f.message(1);
     for (let i = 0; i < 9000; i++) f.delivery(msg, 'delivered', seconds, 'one', seconds - 20 * 86400);

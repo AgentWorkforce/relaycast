@@ -181,12 +181,12 @@ export async function pruneRowidPages(db: EngineDb, opts: PruneOptions & { curso
   // Opt-in active expiry recovery BEFORE the rowid crawl so a slow scan
   // cannot starve active cleanup.
   if (activeExpiryRecovery) {
-    const maxBatches = opts.activeExpiryRecoveryMaxBatches ?? MAX_ACTIVE_EXPIRY_RECOVERY_BATCHES;
+    const maxBatches = bounded(opts.activeExpiryRecoveryMaxBatches, MAX_ACTIVE_EXPIRY_RECOVERY_BATCHES, MAX_ACTIVE_EXPIRY_RECOVERY_BATCHES);
     result.deliveries += await recoverExpiredActiveDeliveriesSetBased(
       db,
       now,
       grace,
-      { maxBatches: Math.min(Math.max(Math.floor(maxBatches), 1), MAX_ACTIVE_EXPIRY_RECOVERY_BATCHES) },
+      { maxBatches },
     );
   }
   for (let step = 0; step < pages && Date.now() < deadline; step++) {
