@@ -9,6 +9,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [8.6.0] - 2026-09-09
+
+### Changed
+
+- Workspace creation responses support the same API-key recovery contract for anonymous bootstrap idempotency replays.
+
 ## [8.5.0] - 2026-09-06
 
 ### Added

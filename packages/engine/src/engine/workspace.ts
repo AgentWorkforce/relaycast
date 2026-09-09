@@ -1,7 +1,7 @@
 import { and, asc, eq, gt, inArray, isNull, like, lte, or, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { workspaces, channels, fileCleanupQueue, workspaceEvents, workspaceCreateIdempotency } from '../db/schema.js';
-import { hmacSha256Hex, randomHex, sha256Hex } from '../lib/crypto.js';
+import { constantTimeEqual, hmacSha256Hex, randomHex, sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
 import { codedError } from '../lib/httpError.js';
 import { D1WriteRetryExhaustedError, retryD1Write } from '../lib/d1Retry.js';
@@ -27,6 +27,34 @@ type CreateWorkspaceOptions =
   | {
       ownerApiKey?: string;
       ownerApiKeyHash?: string;
+      /** Deployment-configured secret used to derive the anonymous bootstrap child key. */
+      bootstrapSecret?: string;
+      /**
+       * The bootstrap secret as presented by the caller. An anonymous,
+       * idempotency-keyed create must prove it, matching `bootstrapSecret`,
+       * before any binding lookup or credential is returned — otherwise the
+       * `Idempotency-Key` alone (a caller-chosen, non-secret value) would let
+       * any network peer who guesses or observes it retrieve a workspace's
+       * deterministic API key. See createWorkspace's bootstrap-proof check.
+       */
+      bootstrapSecretProof?: string;
+      /**
+       * Crash-safe workspace-create replay key (relaycast#371/#379).
+       *
+       * Owner-scoped (an `ownerApiKey`/`ownerApiKeyHash` is present): any
+       * value accepted by `parseIdempotencyKey` is fine — the owner's API
+       * key is the authorization boundary, so the key itself only needs to
+       * be unique per logical operation (e.g. a job id).
+       *
+       * Anonymous bootstrap (no owner key): the key is scoped to the
+       * deployment, not to a caller, and — together with
+       * `X-Workspace-Bootstrap-Secret` — is what recovers or replays the
+       * binding. Generate it with a CSPRNG, never a derived or guessable
+       * value such as a job id, timestamp, or counter. A v4 UUID, 16 random
+       * bytes hex-encoded, or at least 24 random bytes base64url-encoded meet
+       * the 32-character structural minimum. `createWorkspace` cannot verify
+       * true randomness; callers are responsible for using a CSPRNG.
+       */
       idempotencyKey?: string;
       requestDigest?: string;
       expiresAt?: Date;
@@ -41,6 +69,16 @@ export const DEFAULT_WORKSPACE_REAP_LIMIT = 25;
 export const DEFAULT_FILE_CLEANUP_LIMIT = 90;
 const MAX_FILE_CLEANUP_LIMIT = 90;
 const FILE_CLEANUP_RETRY_MS = 30_000;
+
+/**
+ * Structural length floor for an anonymous bootstrap Idempotency-Key
+ * (relaycast#379). A 32-character value can still be predictable, so the
+ * server cannot infer or enforce entropy from this check. Callers must use a
+ * CSPRNG (see the idempotencyKey doc comment above). This floor only applies
+ * to the anonymous bootstrap path; an owner-scoped idempotency key is
+ * protected by the owner's API key instead.
+ */
+export const MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH = 32;
 
 function hashApiKey(apiKey: string): Promise<string> {
   return sha256Hex(apiKey);
@@ -76,6 +114,15 @@ export async function deriveIdempotentWorkspaceApiKey(
 ): Promise<string> {
   const material = `relaycast:workspace-create:v1:${idempotencyKey}:${requestDigest}`;
   return `rk_live_${(await hmacSha256Hex(material, ownerApiKey)).slice(0, 32)}`;
+}
+
+export async function deriveBootstrapWorkspaceApiKey(
+  bootstrapSecret: string,
+  idempotencyKey: string,
+  requestDigest: string,
+): Promise<string> {
+  const material = `relaycast:workspace-create:v1:${idempotencyKey}:${requestDigest}`;
+  return `rk_live_${(await hmacSha256Hex(material, bootstrapSecret)).slice(0, 32)}`;
 }
 
 function idempotencyConflict(message: string, code = 'workspace_create_idempotency_conflict') {
@@ -189,6 +236,8 @@ export async function createWorkspace(
 ) {
   const providedOwnerApiKeyHash = typeof options === 'string' ? undefined : options?.ownerApiKeyHash;
   const providedOwnerApiKey = typeof options === 'string' ? options : options?.ownerApiKey;
+  const bootstrapSecret = typeof options === 'string' ? undefined : options?.bootstrapSecret;
+  const bootstrapSecretProof = typeof options === 'string' ? undefined : options?.bootstrapSecretProof;
   const expiresAt = typeof options === 'string' ? undefined : options?.expiresAt;
   const derivedOwnerApiKeyHash = providedOwnerApiKey ? await hashApiKey(providedOwnerApiKey) : undefined;
 
@@ -200,14 +249,9 @@ export async function createWorkspace(
   const createOptions = typeof options === 'string' ? undefined : options;
   const idempotencyKey = createOptions?.idempotencyKey;
   const requestDigest = createOptions?.requestDigest;
+  const ownerIdempotency = Boolean(idempotencyKey && (providedOwnerApiKey || providedOwnerApiKeyHash));
+  const bootstrapIdempotency = Boolean(idempotencyKey && !ownerIdempotency);
 
-  if (idempotencyKey && !providedOwnerApiKey) {
-    throw codedError(
-      'An authenticated owner API key is required when Idempotency-Key is supplied',
-      'workspace_create_idempotency_owner_required',
-      401,
-    );
-  }
   if (idempotencyKey && !requestDigest) {
     throw codedError(
       'A request digest is required for workspace create idempotency',
@@ -216,17 +260,71 @@ export async function createWorkspace(
     );
   }
 
+  // relaycast#379: an anonymous bootstrap Idempotency-Key stands in for a
+  // caller identity — together with X-Workspace-Bootstrap-Secret, it is
+  // part of what authorizes recovering a binding. Callers must generate it
+  // with a CSPRNG; this length-only structural floor is checked before any
+  // secret or database work and cannot prove the key was actually random.
+  if (bootstrapIdempotency && idempotencyKey!.length < MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH) {
+    throw codedError(
+      `Anonymous Idempotency-Key must be at least ${MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH} characters. Generate it with a CSPRNG, such as a v4 UUID, 16 random bytes hex-encoded, or at least 24 random bytes base64url-encoded.`,
+      'workspace_create_idempotency_key_too_weak',
+      400,
+    );
+  }
+
+  if (bootstrapIdempotency && !bootstrapSecret) {
+    throw codedError(
+      'Anonymous workspace create idempotency is not configured on this deployment',
+      'workspace_create_idempotency_unavailable',
+      503,
+    );
+  }
+  // The Idempotency-Key is a caller-chosen, non-secret correlator, not proof
+  // of identity: without this check, any network peer who guesses or
+  // observes a low-entropy or leaked key (plus the fully public request
+  // digest) could replay another caller's anonymous bootstrap create and
+  // receive its deterministic child API key before — or instead of — the
+  // legitimate caller. Only a caller who also proves knowledge of the
+  // deployment's own bootstrap secret may look up or recover a bootstrap
+  // binding. The proof is checked with a constant-time comparison and before
+  // any binding lookup, so neither timing nor a binding's existence leaks to
+  // a caller who does not hold the secret. The container/self-host entrypoint
+  // and any other trusted caller hold the same configured secret, so replay
+  // across restarts stays fully stable for them.
+  if (bootstrapIdempotency && bootstrapSecret) {
+    if (!bootstrapSecretProof || !(await constantTimeEqual(bootstrapSecretProof, bootstrapSecret))) {
+      throw codedError(
+        'A valid workspace bootstrap secret is required for anonymous idempotent workspace creation',
+        'workspace_create_bootstrap_secret_invalid',
+        401,
+      );
+    }
+  }
+  if (ownerIdempotency && !providedOwnerApiKey) {
+    throw codedError(
+      'An authenticated owner API key is required when Idempotency-Key is supplied',
+      'workspace_create_idempotency_owner_required',
+      401,
+    );
+  }
+
   const idempotencyKeyHash = idempotencyKey ? await hashApiKey(idempotencyKey) : undefined;
+  const ownerScopeHash = bootstrapIdempotency && idempotencyKey
+    ? await hashApiKey(`bootstrap:${idempotencyKey}`)
+    : ownerApiKeyHash;
   const deterministicApiKey = idempotencyKey && requestDigest
-    ? await deriveIdempotentWorkspaceApiKey(providedOwnerApiKey!, idempotencyKey, requestDigest)
+    ? (providedOwnerApiKey
+      ? await deriveIdempotentWorkspaceApiKey(providedOwnerApiKey, idempotencyKey, requestDigest)
+      : await deriveBootstrapWorkspaceApiKey(bootstrapSecret!, idempotencyKey, requestDigest))
     : undefined;
 
-  if (ownerApiKeyHash && idempotencyKeyHash && requestDigest) {
+  if (ownerScopeHash && idempotencyKeyHash && requestDigest) {
     const [binding] = await db
       .select()
       .from(workspaceCreateIdempotency)
       .where(and(
-        eq(workspaceCreateIdempotency.ownerScopeHash, ownerApiKeyHash),
+        eq(workspaceCreateIdempotency.ownerScopeHash, ownerScopeHash),
         eq(workspaceCreateIdempotency.idempotencyKeyHash, idempotencyKeyHash),
       ));
     if (binding) {
@@ -309,9 +407,9 @@ export async function createWorkspace(
                 topic: 'General discussion',
               })
               .returning(),
-            ...(ownerApiKeyHash && idempotencyKeyHash && requestDigest
+            ...(ownerScopeHash && idempotencyKeyHash && requestDigest
               ? [writeDb.insert(workspaceCreateIdempotency).values({
-                ownerScopeHash: ownerApiKeyHash,
+                ownerScopeHash,
                 idempotencyKeyHash,
                 requestDigest,
                 workspaceId,
@@ -321,9 +419,9 @@ export async function createWorkspace(
           { requireAtomic: true },
         ) as WorkspaceWriteResult;
       } catch (cause) {
-        if (isUniqueConstraintError(cause) && ownerApiKeyHash && idempotencyKeyHash && requestDigest) {
+        if (isUniqueConstraintError(cause) && ownerScopeHash && idempotencyKeyHash && requestDigest) {
           const [binding] = await db.select().from(workspaceCreateIdempotency).where(and(
-            eq(workspaceCreateIdempotency.ownerScopeHash, ownerApiKeyHash),
+            eq(workspaceCreateIdempotency.ownerScopeHash, ownerScopeHash),
             eq(workspaceCreateIdempotency.idempotencyKeyHash, idempotencyKeyHash),
           ));
           if (binding) {

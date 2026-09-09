@@ -39,6 +39,31 @@ Packages without a separate changelog are covered by the cross-package notes bel
 - Explicit spawn targets are honored when a legacy global node alias exists, preserving its caller allowlist.
 
 
+## [8.6.1] - 2026-09-09
+
+### Fixed
+
+- NPM releases now preserve every stable and prerelease engine migration byte-for-byte, including the canonical `0045_workspace_create_idempotency.sql` artifact.
+
+## [8.6.0] - 2026-09-09
+
+### Added
+
+- Anonymous bootstrap `POST /v1/workspaces` creates can use an `Idempotency-Key` to recover the same workspace and API key after retries or response loss; digest conflicts, owner-scope crossovers, and terminalized bindings fail closed. The caller must also present `X-Workspace-Bootstrap-Secret` matching the deployment's configured secret — the `Idempotency-Key` is a non-secret correlator, so proving the deployment secret is what authorizes recovering the binding and prevents an unrelated caller who guesses or observes the key from retrieving another caller's workspace credentials. Callers must generate anonymous keys with a CSPRNG; the server enforces only a 32-character structural minimum and rejects shorter keys with `400 workspace_create_idempotency_key_too_weak`.
+- Keyed anonymous bootstrap now rejects explicit invalid authorization and requires a stable deployment secret across restarts; unkeyed creates remain compatible.
+
+### Fixed
+
+- Self-hosted Docker and Compose deployments now pass `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` into the engine without logging it.
+
+## [8.5.5] - 2026-09-08
+
+### Fixed
+
+- Serialize overlapping reconnect replays and honor acknowledgements and provider handoffs before each send.
+- Agent roster reads skip released history and seek live status ranges through a workspace-scoped index.
+- Prevent node removal from scanning unrelated retained deliveries and agent records across workspaces.
+
 ## [8.5.4] - 2026-09-08
 
 ### Fixed
@@ -450,7 +475,9 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased - Patch]: https://github.com/AgentWorkforce/relaycast/compare/v8.4.0...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v8.6.1...HEAD
+[8.6.1]: https://github.com/AgentWorkforce/relaycast/compare/v8.6.0...v8.6.1
+[8.6.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.5.5...v8.6.0
 [6.0.3]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.2...v6.0.3
 [6.0.2]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.1...v6.0.2
 [6.0.1]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.0...v6.0.1

@@ -54,9 +54,13 @@ describe('bounded database work with retained history', () => {
       expect(plan).toContain('SEARCH deliveries USING INDEX idx_deliveries_agent_active_seq');
       expect(plan).not.toContain('USE TEMP B-TREE');
     }
-    const hydration = f.queries.filter(q => q.sql.startsWith('select') && q.sql.includes('INDEXED BY idx_deliveries_id_lookup'));
+    const idReads = f.queries.filter(q => q.sql.startsWith('select') && q.sql.includes('INDEXED BY idx_deliveries_id_lookup'));
+    const hydration = idReads.filter(q => q.sql.includes('inner join "messages"'));
     expect(hydration).toHaveLength(3);
-    for (const query of hydration) {
+    const revalidation = idReads.filter(q => !q.sql.includes('inner join "messages"'));
+    expect(revalidation).toHaveLength(125);
+    for (const query of revalidation) expect(query.params.at(-1)).toBe(1);
+    for (const query of idReads) {
       expect(query.params.length).toBeLessThan(100);
       const plan = JSON.stringify(f.sqlite.prepare('EXPLAIN QUERY PLAN ' + query.sql).all(...query.params));
       expect(plan).toContain('SEARCH deliveries USING INDEX idx_deliveries_id_lookup');
@@ -95,7 +99,7 @@ describe('bounded database work with retained history', () => {
     const first = deliverPendingToNode(f.db, f.registry, 'ws', 'node');
     await vi.waitFor(() => expect(f.send).toHaveBeenCalledOnce());
     const second = deliverPendingToNode(f.db, f.registry, 'ws', 'node');
-    expect(second).toBe(first);
+    expect(second).not.toBe(first);
     finish();
     await Promise.all([first, second]);
     expect(f.send).toHaveBeenCalledTimes(2);

@@ -9,6 +9,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [8.6.0] - 2026-09-09
+
+### Changed
+
+- Workspace bootstrap `idempotencyKey` can now be used without an existing `apiKey` to recover an anonymous create safely.
+
 ## [8.5.1] - 2026-09-07
 
 ### Added

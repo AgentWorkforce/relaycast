@@ -202,8 +202,29 @@ export interface WorkspaceBootstrapOptions extends WorkspaceIdentityOptions {
   expiresInSeconds?: number;
   /** Creation context recorded once for hosted usage attribution. */
   provenance?: WorkspaceProvenanceOptions;
-  /** Owner-scoped key for crash-safe delegated workspace-create retries. */
+  /**
+   * Crash-safe workspace-create replay key (relaycast#371/#379).
+   *
+   * With `apiKey` set: any value is fine — the owner's API key is the
+   * authorization boundary, so this only needs to be unique per operation
+   * (e.g. a job id).
+   *
+   * Without `apiKey` (anonymous bootstrap): this key, together with
+   * `bootstrapSecret`, is what authorizes recovering the binding, so it
+   * MUST be generated with a CSPRNG. Never derive it from a job id, timestamp,
+   * or counter. The server enforces only a 32-character structural minimum
+   * and cannot verify true randomness. `crypto.randomUUID()` is a good default.
+   */
   idempotencyKey?: string;
+  /**
+   * Deployment bootstrap secret, required alongside `idempotencyKey` for an
+   * anonymous (no `apiKey`) create. Proves the caller is authorized to
+   * recover an anonymous bootstrap binding — the idempotency key alone is
+   * not secret. Anonymous keyed callers must set `baseUrl` to their explicit
+   * self-hosted origin; this SDK refuses the hosted gateway to avoid sending a
+   * self-host deployment secret there. Ignored when `apiKey` is set.
+   */
+  bootstrapSecret?: string;
 }
 
 export interface WorkspaceLookupOptions extends WorkspaceIdentityOptions {
@@ -240,6 +261,92 @@ function resolveWorkspaceLookupOptions(
     return { baseUrl: options };
   }
   return options ?? {};
+}
+
+/** Minimum structural length for an anonymous bootstrap replay key. */
+export const MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH = 32;
+
+const HOSTED_GATEWAY_HOSTNAME = 'cast.agentrelay.com';
+const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
+
+function validateWorkspaceBootstrapOptions(options: WorkspaceBootstrapOptions): void {
+  // Owner-scoped keys are bounded by the authenticated API key and may remain
+  // short. Anonymous keys are part of the recovery proof and must satisfy the
+  // same structural floor as the server before any request is sent.
+  if (
+    !options.apiKey &&
+    options.idempotencyKey !== undefined &&
+    options.idempotencyKey.length < MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH
+  ) {
+    throw new RelayError(
+      'transport_error',
+      `Anonymous Idempotency-Key must be at least ${MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH} characters`,
+      {
+        statusCode: 400,
+        retryable: false,
+        rawCode: 'workspace_create_idempotency_key_too_weak',
+      },
+    );
+  }
+
+  if (
+    !options.apiKey &&
+    options.idempotencyKey !== undefined &&
+    options.bootstrapSecret !== undefined
+  ) {
+    if (!options.baseUrl) {
+      throw new RelayError(
+        'transport_error',
+        'Anonymous keyed workspace bootstrap with a bootstrapSecret requires an explicit self-hosted baseUrl',
+        {
+          statusCode: 400,
+          retryable: false,
+          rawCode: 'workspace_create_bootstrap_base_url_required',
+        },
+      );
+    }
+
+    let baseUrl: URL;
+    try {
+      baseUrl = new URL(options.baseUrl);
+    } catch {
+      throw new RelayError(
+        'transport_error',
+        'Anonymous keyed workspace bootstrap requires a valid self-hosted baseUrl',
+        {
+          statusCode: 400,
+          retryable: false,
+          rawCode: 'workspace_create_bootstrap_base_url_required',
+        },
+      );
+    }
+    const isLoopbackHttp =
+      baseUrl.protocol === 'http:' &&
+      LOOPBACK_HOSTNAMES.has(baseUrl.hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase());
+    if (baseUrl.protocol !== 'https:' && !isLoopbackHttp) {
+      throw new RelayError(
+        'transport_error',
+        'Anonymous keyed workspace bootstrap requires an HTTPS self-hosted baseUrl (or loopback HTTP for local development)',
+        {
+          statusCode: 400,
+          retryable: false,
+          rawCode: 'workspace_create_bootstrap_base_url_required',
+        },
+      );
+    }
+    const hostname = baseUrl.hostname.replace(/\.$/, '').toLowerCase();
+    if (hostname === HOSTED_GATEWAY_HOSTNAME) {
+      throw new RelayError(
+        'transport_error',
+        'Anonymous keyed workspace bootstrap cannot send a bootstrapSecret to the hosted gateway',
+        {
+          statusCode: 400,
+          retryable: false,
+          rawCode: 'workspace_create_bootstrap_base_url_required',
+        },
+      );
+    }
+  }
 }
 
 export class RelayCast {
@@ -335,18 +442,25 @@ export class RelayCast {
     options?: string | WorkspaceBootstrapOptions,
   ): Promise<{ data: CreateWorkspaceResponse; statusCode: number }> {
     const resolved = resolveWorkspaceBootstrapOptions(options);
+    validateWorkspaceBootstrapOptions(resolved);
     const { apiKey, baseUrl } = resolved;
     const requestBaseUrl = baseUrl ?? 'https://cast.agentrelay.com';
     const identity = resolveAgentRelayIdentity(resolved);
+    const sendsBootstrapSecret =
+      !apiKey && resolved.idempotencyKey !== undefined && resolved.bootstrapSecret !== undefined;
 
     const url = new URL('/v1/workspaces', requestBaseUrl);
     const res = await fetch(url.toString(), {
       method: 'POST',
+      ...(sendsBootstrapSecret ? { redirect: 'manual' as const } : {}),
       headers: {
         'Content-Type': 'application/json',
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
         ...(resolved.idempotencyKey !== undefined
           ? { 'Idempotency-Key': resolved.idempotencyKey }
+          : {}),
+        ...(sendsBootstrapSecret
+          ? { 'X-Workspace-Bootstrap-Secret': resolved.bootstrapSecret }
           : {}),
         'X-SDK-Version': SDK_VERSION,
         'X-Relaycast-Origin-Client': SDK_ORIGIN.client,
@@ -361,6 +475,17 @@ export class RelayCast {
         provenance: toWorkspaceProvenanceInput(resolved.provenance),
       }),
     });
+
+    if (
+      sendsBootstrapSecret &&
+      (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400))
+    ) {
+      throw new RelayError(
+        'transport_error',
+        'Refusing to follow an anonymous bootstrap redirect',
+        { statusCode: res.status, retryable: false },
+      );
+    }
 
     let parsed: unknown;
     try {

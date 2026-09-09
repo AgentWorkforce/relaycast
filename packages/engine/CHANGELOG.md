@@ -29,6 +29,35 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Explicit spawn targets are honored when a legacy global node alias exists, preserving its caller allowlist.
 
 
+## [8.6.1] - 2026-09-09
+
+### Fixed
+
+- Restore migration `0045_workspace_create_idempotency.sql` to its original published bytes and reject future edits across stable and prerelease NPM streams.
+
+## [8.6.0] - 2026-09-09
+
+### Added
+
+- Keyless workspace bootstrap creates now support deployment-scoped crash idempotency with deterministic credential recovery, atomic binding, digest conflicts, and deletion/expiry terminalization. An anonymous keyed create must present `X-Workspace-Bootstrap-Secret`, matched to the configured secret in constant time before any binding lookup, since the `Idempotency-Key` and request digest alone are caller-computable and not proof of identity. Callers must generate anonymous keys with a CSPRNG; the server enforces only a 32-character structural minimum and rejects shorter keys with `400 workspace_create_idempotency_key_too_weak` before any secret comparison or database work.
+- Keyed bootstrap fails closed on explicit invalid authorization and no longer falls back to a process-random secret; configure a stable deployment secret for replay across restarts.
+
+### Fixed
+
+- Self-hosted container deployments now forward the configured workspace bootstrap secret into the engine without logging it.
+
+## [8.5.5] - 2026-09-08
+
+### Fixed
+
+- Reconnect replay preserves each caller's result and skips deliveries acknowledged, expired, or handed to another provider before sending.
+- Roster reads skip released tombstones; active/online filters seek by workspace, status, and last-seen time.
+- Add migration `0051_node_foreign_key_indexes.sql` so node deletion uses child-key lookups for delivery, agent, binding, and provider foreign keys; preserve existing `SET NULL` and cascade behavior.
+
+### Migration
+
+- Adds `0052_agent_roster_index.sql`, a partial index on non-released agents. Existing indexes and roster response fields remain compatible.
+
 ## [8.5.4] - 2026-09-08
 
 ### Migration

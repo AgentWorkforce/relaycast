@@ -110,6 +110,12 @@ export interface EngineConfig {
    */
   relayfileInboundSecret?: string;
   /**
+   * Deployment secret used to derive credentials for anonymous, keyed
+   * workspace bootstrap creates. Hosts should persist this value so a replay
+   * after a process restart recovers the same child credential.
+   */
+  workspaceBootstrapSecret?: string;
+  /**
    * Optional egress proxy for http_push node delivery. When set, nodes that
    * register with `delivery.use_proxy: true` have their webhook POST routed
    * through this forwarder instead of hitting the destination directly — the
