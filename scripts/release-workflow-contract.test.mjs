@@ -84,6 +84,19 @@ function git(cwd, args, options = {}) {
   return result.stdout.trim();
 }
 
+// Git may still be settling a temporary object/lock entry when a fixture is
+// removed, especially on hosted Linux runners. Retry the recursive removal so
+// a transient ENOTEMPTY/EBUSY does not turn an otherwise passing contract test
+// into a false failure.
+function removeTemporaryDirectory(directory) {
+  rmSync(directory, {
+    recursive: true,
+    force: true,
+    maxRetries: 20,
+    retryDelay: 100,
+  });
+}
+
 function archiveRevision(revision, target) {
   const archivePath = `${target}.tar`;
   const archived = spawnSync("git", ["archive", "-o", archivePath, revision], {
@@ -547,7 +560,7 @@ describe("release tag reuse execution", () => {
       assert.notEqual(result.status, 0);
       assert.match(`${result.stderr}${result.stdout}`, /non-release paths: README\.md/);
     } finally {
-      rmSync(fixture.root, { recursive: true, force: true });
+      removeTemporaryDirectory(fixture.root);
     }
   });
 
@@ -564,7 +577,7 @@ describe("release tag reuse execution", () => {
       assert.equal(git(fixture.root, ["rev-parse", "HEAD^{tree}"]), taggedTree);
       assert.equal(fixture.tagCommit, git(fixture.root, ["rev-parse", "HEAD"]));
     } finally {
-      rmSync(fixture.root, { recursive: true, force: true });
+      removeTemporaryDirectory(fixture.root);
     }
   });
 
@@ -575,7 +588,7 @@ describe("release tag reuse execution", () => {
       const result = validateTag(fixture);
       assert.equal(result.status, 0, result.stderr);
     } finally {
-      rmSync(fixture.root, { recursive: true, force: true });
+      removeTemporaryDirectory(fixture.root);
     }
   });
 
@@ -603,7 +616,7 @@ describe("release tag reuse execution", () => {
       const retry = validateTag(fixture);
       assert.equal(retry.status, 0, retry.stderr);
     } finally {
-      rmSync(fixture.root, { recursive: true, force: true });
+      removeTemporaryDirectory(fixture.root);
     }
   });
 
@@ -618,7 +631,7 @@ describe("release tag reuse execution", () => {
         /refs\/tags\/v8\.5\.5$/,
       );
     } finally {
-      rmSync(fixture.root, { recursive: true, force: true });
+      removeTemporaryDirectory(fixture.root);
     }
   });
 
@@ -658,7 +671,7 @@ describe("release tag reuse execution", () => {
         );
         assert.notEqual(localTag.status, 0, "invalid fresh local tag must be deleted");
       } finally {
-        rmSync(fixture.root, { recursive: true, force: true });
+        removeTemporaryDirectory(fixture.root);
       }
     });
   }
@@ -673,7 +686,7 @@ describe("release tag reuse execution", () => {
       assert.notEqual(result.status, 0);
       assert.match(`${result.stderr}${result.stdout}`, /provenance digest does not match/);
     } finally {
-      rmSync(fixture.root, { recursive: true, force: true });
+      removeTemporaryDirectory(fixture.root);
     }
   });
 
@@ -695,7 +708,7 @@ describe("release tag reuse execution", () => {
           /outside its exact release transformation|unexpected release edits/,
         );
       } finally {
-        rmSync(fixture.root, { recursive: true, force: true });
+        removeTemporaryDirectory(fixture.root);
       }
     });
   }
@@ -724,7 +737,7 @@ describe("release tag reuse execution", () => {
       assert.notEqual(result.status, 0);
       assert.match(`${result.stderr}${result.stdout}`, /100644|non-regular/);
     } finally {
-      rmSync(fixture.root, { recursive: true, force: true });
+      removeTemporaryDirectory(fixture.root);
     }
   });
 
@@ -754,7 +767,7 @@ describe("release tag reuse execution", () => {
       assert.notEqual(result.status, 0);
       assert.match(`${result.stderr}${result.stdout}`, /non-regular|100644/);
     } finally {
-      rmSync(fixture.root, { recursive: true, force: true });
+      removeTemporaryDirectory(fixture.root);
     }
   });
 
@@ -775,7 +788,7 @@ describe("release tag reuse execution", () => {
       assert.notEqual(result.status, 0);
       assert.match(`${result.stderr}${result.stdout}`, /exactly one parent/);
     } finally {
-      rmSync(fixture.root, { recursive: true, force: true });
+      removeTemporaryDirectory(fixture.root);
     }
   });
 
@@ -815,7 +828,7 @@ describe("release tag reuse execution", () => {
         /\[8\.6\.0\]: https:\/\/github\.com\/AgentWorkforce\/relaycast\/compare\/v8\.5\.5\.\.\.v8\.6\.0/,
       );
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      removeTemporaryDirectory(root);
     }
   });
 });
@@ -899,7 +912,7 @@ describe("release provenance adversarial cases", () => {
       assert.notEqual(result.status, 0);
       assert.match(`${result.stderr}${result.stdout}`, /--version requires a value/);
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      removeTemporaryDirectory(directory);
     }
   });
 });
