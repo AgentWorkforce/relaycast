@@ -11,6 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `pruneExpired` accepts a host-owned `cursorStore` for schema-free bounded rowid candidate scans and a `maxDurationMs` admission budget. Serialize calls and persist state durably; TTL policies are unchanged. In-flight SQL and message cascades are not canceled or write-bounded.
 - Node replay uses bounded, ordered database pages with existing indexes, reducing shared-database contention without requiring schema changes.
 
 ## [8.5.2] - 2026-09-07
