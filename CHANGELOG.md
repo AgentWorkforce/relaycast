@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- NPM releases now preserve every stable and prerelease engine migration byte-for-byte, including the canonical `0045_workspace_create_idempotency.sql` artifact.
 
 ## [8.6.0] - 2026-09-09
 

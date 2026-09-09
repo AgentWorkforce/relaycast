@@ -10,7 +10,7 @@
   "scripts": {
     "build": "turbo build",
     "test": "turbo test",
-    "test:release": "node --test scripts/npm-dist-tag.test.mjs scripts/release-contract.test.mjs scripts/release-workflow-contract.test.mjs",
+    "test:release": "node --test scripts/check-published-engine-migrations.test.mjs scripts/npm-dist-tag.test.mjs scripts/release-contract.test.mjs scripts/release-workflow-contract.test.mjs",
     "test:container": "node --test test/container-entrypoint.test.mjs",
     "test:container-image": "node --test test/container-image-integration.test.mjs",
     "lint": "turbo lint",
