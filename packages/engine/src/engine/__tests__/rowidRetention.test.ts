@@ -203,7 +203,7 @@ describe('schema-free retention candidate pages', () => {
     const f = fixture(); const msg = f.message(1);
     const staleQueued = f.delivery(msg, 'queued', seconds, 'one', seconds - 30 * 86400);
     const staleDelivered = f.delivery(msg, 'delivered', seconds, 'one', seconds - 30 * 86400);
-    expect((await f.run({ batchLimit: 50, maxBatches: 5 })).deliveries).toBe(2);
+    expect((await f.run({ batchLimit: 50, maxBatches: 5, activeExpiryRecovery: true })).deliveries).toBe(2);
     const left = f.sqlite.prepare('SELECT id FROM deliveries').all() as { id: string }[];
     expect(left.map(r => r.id)).not.toContain(staleQueued);
     expect(left.map(r => r.id)).not.toContain(staleDelivered);
@@ -228,11 +228,11 @@ describe('schema-free retention candidate pages', () => {
     // delivery_ttl_days disabled: only the expiry rule can authorize this.
     const stale = f.delivery(msg, 'queued', seconds, 'one', seconds - 10 * 86400);
     expect((await f.run({
-      batchLimit: 50, maxBatches: 5, expiredDeliveryGraceDays: 30,
+      batchLimit: 50, maxBatches: 5, expiredDeliveryGraceDays: 30, activeExpiryRecovery: true,
       defaults: { deliveryTtlDays: null },
     })).deliveries).toBe(0);
     expect((await f.run({
-      batchLimit: 50, maxBatches: 5, expiredDeliveryGraceDays: 7,
+      batchLimit: 50, maxBatches: 5, expiredDeliveryGraceDays: 7, activeExpiryRecovery: true,
       defaults: { deliveryTtlDays: null },
     })).deliveries).toBe(1);
     expect((f.sqlite.prepare('SELECT id FROM deliveries').all() as { id: string }[]).map(r => r.id)).not.toContain(stale);
@@ -333,7 +333,7 @@ describe('schema-free retention candidate pages', () => {
     f.sqlite.transaction(() => { for (let i = 0; i < 600; i++) f.delivery(msg, 'acked', seconds); })();
     await f.run({ batchLimit: 500, maxBatches: 1 });
     const reads = f.queries.filter(q => q.sql.includes('FROM deliveries NOT INDEXED') && q.sql.includes('WITH page'));
-    // Previously clamped to 200; the host may now ask for more.
-    expect(reads.some(q => q.params.at(-1) === 500)).toBe(true);
+    // Rowid mode ceilings remain fixed at 200 rows/page.
+    expect(reads.some(q => q.params.at(-1) === 200)).toBe(true);
   });
 });

@@ -77,6 +77,12 @@ export interface PruneOptions {
    * Opt-in cleanup after the grace window skips `delivery.failed` notices.
    */
   activeExpiryRecovery?: boolean;
+  /**
+   * Cursor mode only: max set-based recovery batches for active `queued`/
+   * `delivered` rows (capped at 4). Only used when `activeExpiryRecovery`
+   * is enabled.
+   */
+  activeExpiryRecoveryMaxBatches?: number;
   /** Clock override for tests. */
   now?: Date;
   /** Deployment-wide TTL fallbacks; see {@link RetentionDefaults}. */

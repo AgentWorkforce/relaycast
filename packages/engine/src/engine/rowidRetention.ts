@@ -47,24 +47,12 @@ const settled = "deliveries.status IN ('acked', 'failed', 'dead_lettered')";
 // Table-qualified: `workspaces` also has an `expires_at`, and the outer page
 // query joins it, so a bare column is ambiguous there. The page builder rewrites
 // `deliveries.` to `page.` for the SELECT and leaves it intact for the DELETE.
-const active = "deliveries.status IN ('queued', 'delivered')";
-// A `queued` or `delivered` delivery whose `expires_at` has long passed is
-// covered by no `delivery_ttl_days` policy at ANY value — the settled guard
-// cannot see it — so before this it was unreclaimable and simply accumulated.
-// On production 2026-09-09, 4,409,692 of 4,409,767 queued deliveries were
-// already past `expires_at`, in a 9.9GB database against D1's 10GB cap.
-//
-// Deliberately widens the EXISTING deliveries guard rather than adding a second
-// table entry: this scan is an unindexed rowid crawl, so a second entry would
-// double the crawl cost for the largest table in the database to reap rows the
-// same pass already walks past.
 const DEFAULT_EXPIRED_DELIVERY_GRACE_DAYS = 7;
-function buildTables(opts: { activeExpiryRecovery: boolean }) : Table[] {
-  // Rowid scan is intentionally optimized to avoid unindexed full-table reads
-  // when callers opt into set-based active expiry recovery.
-  const reapableDeliveries = opts.activeExpiryRecovery
-    ? settled
-    : `(${settled} OR (${active} AND deliveries.expires_at IS NOT NULL))`;
+function buildTables(_opts: { activeExpiryRecovery: boolean }) : Table[] {
+  // Deliveries deletion in cursor mode is settled-only by default.
+  // Active queued/delivered cleanup (after grace) is opt-in and handled
+  // exclusively by the set-based recovery path.
+  const reapableDeliveries = settled;
   return [
     { name: 'messages', result: 'messages', columns: 'id, workspace_id',
       setting: 'message_ttl_days', fallback: 'messageTtlDays', snowflake: true,
@@ -105,14 +93,14 @@ async function recoverExpiredActiveDeliveriesSetBased(
       WHERE (
         status IN ('queued', 'delivered')
         AND expires_at IS NOT NULL
-        AND expires_at <= ${cutoffSeconds}
+        AND expires_at < ${cutoffSeconds}
       )
       AND id IN (
         SELECT id
         FROM deliveries INDEXED BY idx_deliveries_active_expiry
         WHERE status IN ('queued', 'delivered')
           AND expires_at IS NOT NULL
-          AND expires_at <= ${cutoffSeconds}
+          AND expires_at < ${cutoffSeconds}
         ORDER BY expires_at, id
         LIMIT ${ACTIVE_EXPIRY_RECOVERY_DELETE_LIMIT}
       )
@@ -168,16 +156,13 @@ function expired(
 export async function pruneRowidPages(db: EngineDb, opts: PruneOptions & { cursorStore: RetentionCursorStore }): Promise<PruneResult> {
   const now = (opts.now ?? new Date()).getTime();
   if (!Number.isFinite(now)) throw new Error('Invalid retention clock');
-  // Ceilings, not defaults: the defaults stay 200/5 so no existing caller
-  // changes behaviour, but a host that has measured its own budget can now ask
-  // for more. At 200 rows/page this unindexed crawl needs ~43k pages for one
-  // traversal of an 8.65M-row deliveries table — about a month of 5-minute
-  // crons, far longer than the table takes to fill.
+  // Preserve existing cursor-mode ceilings exactly: 200 rows/page and 5
+  // batches/table.
   const activeExpiryRecovery = opts.activeExpiryRecovery === true;
   const tables = buildTables({ activeExpiryRecovery });
 
-  const limit = bounded(opts.batchLimit, 200, 1_000);
-  const pages = bounded(opts.maxBatches, 5, 20) * tables.length;
+  const limit = bounded(opts.batchLimit, 200, 200);
+  const pages = bounded(opts.maxBatches, 5, 5) * tables.length;
   const deadline = Date.now() + bounded(opts.maxDurationMs, 10_000, 30_000);
   const defaults: Required<RetentionDefaults> = {
     messageTtlDays: null, deliveryTtlDays: 90, messageLogTtlDays: 90, workspaceEventTtlDays: 30,
@@ -192,6 +177,18 @@ export async function pruneRowidPages(db: EngineDb, opts: PruneOptions & { curso
   const save = () => opts.cursorStore.save(structuredClone(state));
   const result: PruneResult = { messages: 0, deliveries: 0, messageLogs: 0, readReceipts: 0, workspaceEvents: 0 };
   const finished = new Set<number>();
+
+  // Opt-in active expiry recovery BEFORE the rowid crawl so a slow scan
+  // cannot starve active cleanup.
+  if (activeExpiryRecovery) {
+    const maxBatches = opts.activeExpiryRecoveryMaxBatches ?? MAX_ACTIVE_EXPIRY_RECOVERY_BATCHES;
+    result.deliveries += await recoverExpiredActiveDeliveriesSetBased(
+      db,
+      now,
+      grace,
+      { maxBatches: Math.min(Math.max(Math.floor(maxBatches), 1), MAX_ACTIVE_EXPIRY_RECOVERY_BATCHES) },
+    );
+  }
   for (let step = 0; step < pages && Date.now() < deadline; step++) {
     const index = state.next;
     state.next = (index + 1) % tables.length;
@@ -260,18 +257,5 @@ export async function pruneRowidPages(db: EngineDb, opts: PruneOptions & { curso
     if (finished.size === tables.length) break;
   }
 
-  // Opt-in set-based recovery for active deliveries that have passed the
-  // expiry grace window: this intentionally skips emitting `delivery.failed`
-  // notices (unlike the scheduled expiry sweep).
-  if (activeExpiryRecovery) {
-    const deleted = await recoverExpiredActiveDeliveriesSetBased(
-      db,
-      now,
-      grace,
-      { maxBatches: Math.min(bounded(opts.maxBatches, 5, 20), MAX_ACTIVE_EXPIRY_RECOVERY_BATCHES) },
-    );
-    // These deletes bypass the rowid scan's accounting; add them explicitly.
-    result.deliveries += deleted;
-  }
   return result;
 }
