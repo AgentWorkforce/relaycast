@@ -452,7 +452,7 @@ export class RelayCast {
     const url = new URL('/v1/workspaces', requestBaseUrl);
     const res = await fetch(url.toString(), {
       method: 'POST',
-      ...(sendsBootstrapSecret ? { redirect: 'error' as const } : {}),
+      ...(sendsBootstrapSecret ? { redirect: 'manual' as const } : {}),
       headers: {
         'Content-Type': 'application/json',
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
@@ -475,6 +475,17 @@ export class RelayCast {
         provenance: toWorkspaceProvenanceInput(resolved.provenance),
       }),
     });
+
+    if (
+      sendsBootstrapSecret &&
+      (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400))
+    ) {
+      throw new RelayError(
+        'transport_error',
+        'Refusing to follow an anonymous bootstrap redirect',
+        { statusCode: res.status, retryable: false },
+      );
+    }
 
     let parsed: unknown;
     try {

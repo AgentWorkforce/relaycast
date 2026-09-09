@@ -1,5 +1,5 @@
 import { createServer, type Server } from 'node:http';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RelayCast } from '../relay.js';
 
 const servers: Server[] = [];
@@ -18,7 +18,28 @@ async function close(server: Server): Promise<void> {
 
 describe('anonymous bootstrap redirect safety', () => {
   afterEach(async () => {
+    vi.unstubAllGlobals();
     await Promise.all(servers.splice(0).map(close));
+  });
+
+  it('uses Workers-compatible manual redirect handling and rejects before parsing', async () => {
+    const fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      expect(init?.redirect).toBe('manual');
+      return new Response(null, {
+        status: 307,
+        headers: { location: 'https://attacker.invalid/v1/workspaces' },
+      });
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(
+      RelayCast.createWorkspace('redirected', {
+        idempotencyKey: 'bootstrap-run-1-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e',
+        bootstrapSecret: 'do-not-forward',
+        baseUrl: 'http://127.0.0.1:43117',
+      }),
+    ).rejects.toThrow('Refusing to follow an anonymous bootstrap redirect');
+    expect(fetch).toHaveBeenCalledOnce();
   });
 
   it('fails closed on a redirect and never sends the bootstrap secret to the redirected server', async () => {
