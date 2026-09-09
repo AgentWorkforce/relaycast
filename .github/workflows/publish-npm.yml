@@ -4,18 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       package:
-        description: "Package to publish"
+        description: "Lockstep package set (single-package publish is disabled)"
         required: true
         type: choice
         options:
           - all
-          - a2a
-          - types
-          - sdk-typescript
-          - cli
-          - mcp
-          - react
-          - openclaw
         default: "all"
       version:
         description: "Version bump type"
@@ -54,9 +47,11 @@ concurrency:
   group: publish-package
   cancel-in-progress: false
 
+# Least privilege: the workflow default is read-only. Only the jobs that
+# actually need to publish (id-token, for npm OIDC/provenance) or push a
+# commit/tag/release (contents: write) escalate, each on its own job below.
 permissions:
-  contents: write
-  id-token: write
+  contents: read
 
 env:
   NPM_CONFIG_FUND: false
@@ -68,6 +63,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       new_version: ${{ steps.bump.outputs.new_version }}
+      is_prerelease: ${{ steps.bump.outputs.is_prerelease }}
+      effective_tag: ${{ steps.bump.outputs.effective_tag }}
+      release_date: ${{ steps.bump.outputs.release_date }}
 
     steps:
       - name: Checkout code
@@ -91,6 +89,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Test release workflow contracts
+        run: npm run test:release
 
       - name: Version all packages
         id: bump
@@ -116,8 +117,29 @@ jobs:
             echo "Bumped version: $VERSION_TYPE -> $NEW_VERSION"
           fi
 
-          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
           echo "New version: $NEW_VERSION"
+
+          # A prerelease version (patch/minor/major-pre*, or a custom_version
+          # containing a "-<identifier>" suffix) must never default the npm
+          # dist-tag to "latest": that would make `npm install @relaycast/x`
+          # resolve every consumer onto an unreleased prerelease build.
+          case "$NEW_VERSION" in
+            *-*) IS_PRERELEASE=true ;;
+            *) IS_PRERELEASE=false ;;
+          esac
+          echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
+
+          REQUESTED_TAG="${{ github.event.inputs.tag }}"
+          if [ "$IS_PRERELEASE" = "true" ] && [ "$REQUESTED_TAG" = "latest" ]; then
+            EFFECTIVE_TAG="next"
+            echo "::warning::prerelease version $NEW_VERSION requested npm dist-tag 'latest'; overriding to '$EFFECTIVE_TAG' so it cannot become the default install target"
+          else
+            EFFECTIVE_TAG="$REQUESTED_TAG"
+          fi
+          echo "effective_tag=$EFFECTIVE_TAG" >> "$GITHUB_OUTPUT"
+          echo "Effective npm dist-tag: $EFFECTIVE_TAG (requested: $REQUESTED_TAG, prerelease: $IS_PRERELEASE)"
+          echo "release_date=$(date -u +%F)" >> "$GITHUB_OUTPUT"
 
           # Sync all package versions and internal dependencies
           NEW_VERSION="$NEW_VERSION" node <<'NODE'
@@ -158,6 +180,60 @@ jobs:
               fs.writeFileSync(cliVersionPath, 'export const CLI_VERSION = ' + JSON.stringify(version) + ' as const;\n');
               console.log('CLI_VERSION -> ' + version);
             }
+
+            // Self-host container version sources. docker/package-lock.json
+            // is only given a placeholder version-field bump here: it pins
+            // the *published* npm registry artifact (resolved URL + integrity
+            // hash), which does not exist yet at this point in the release.
+            // create-release replaces this placeholder with a real refresh
+            // once publish-packages has actually published this version.
+            const dockerfilePath = 'Dockerfile';
+            const dockerfile = fs.readFileSync(dockerfilePath, 'utf8');
+            const updatedDockerfile = dockerfile.replace(
+              /^ARG RELAYCAST_ENGINE_VERSION=\S+/m,
+              'ARG RELAYCAST_ENGINE_VERSION=' + version,
+            );
+            if (updatedDockerfile === dockerfile) {
+              throw new Error('Dockerfile ARG RELAYCAST_ENGINE_VERSION default not found to bump');
+            }
+            fs.writeFileSync(dockerfilePath, updatedDockerfile);
+            console.log('Dockerfile ARG RELAYCAST_ENGINE_VERSION -> ' + version);
+
+            const dockerManifestPath = path.join('docker', 'package.json');
+            const dockerManifest = JSON.parse(fs.readFileSync(dockerManifestPath, 'utf8'));
+            dockerManifest.version = version;
+            if (dockerManifest.dependencies && dockerManifest.dependencies['@relaycast/engine']) {
+              dockerManifest.dependencies['@relaycast/engine'] = version;
+            }
+            fs.writeFileSync(dockerManifestPath, JSON.stringify(dockerManifest, null, 2) + '\n');
+            console.log('docker/package.json -> ' + version);
+
+            const dockerLockPath = path.join('docker', 'package-lock.json');
+            const dockerLock = JSON.parse(fs.readFileSync(dockerLockPath, 'utf8'));
+            if (dockerLock.packages?.['']) dockerLock.packages[''].version = version;
+            if (dockerLock.packages?.['node_modules/@relaycast/engine']) {
+              dockerLock.packages['node_modules/@relaycast/engine'].version = version;
+            }
+            fs.writeFileSync(dockerLockPath, JSON.stringify(dockerLock, null, 2) + '\n');
+            console.log('docker/package-lock.json version fields -> ' + version + ' (placeholder; refreshed for real in create-release)');
+
+            const runbookPath = 'RUNBOOK.md';
+            let runbook = fs.readFileSync(runbookPath, 'utf8');
+            const runbookAnchors = [
+              /(`@relaycast\/engine`\s+\*\*)\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(\*\*)/,
+              /(version command must print `)\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(`)/,
+              /(from engine )\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(\.)/,
+              /(image is on )\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?( or later)/,
+              /(In engine )\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(,)/,
+            ];
+            for (const pattern of runbookAnchors) {
+              if (!pattern.test(runbook)) {
+                throw new Error('RUNBOOK.md missing expected engine-version anchor: ' + pattern);
+              }
+              runbook = runbook.replace(pattern, '$1' + version + '$2');
+            }
+            fs.writeFileSync(runbookPath, runbook);
+            console.log('RUNBOOK.md engine-version anchors -> ' + version);
           NODE
 
       - name: Refresh lockfile after version bump
@@ -165,6 +241,11 @@ jobs:
         # metadata. Re-resolving from an empty lockfile can trip npm/arborist's
         # `edgesOut` failure after every workspace version changes at once.
         run: npm install --package-lock-only --ignore-scripts
+
+      - name: Validate release version, changelog, and generated-source parity
+        env:
+          NEW_VERSION: ${{ steps.bump.outputs.new_version }}
+        run: node scripts/check-release-contract.mjs --version "$NEW_VERSION" --allow-placeholder-docker-lock
 
       - name: Clean reinstall after version bump
         run: npm ci
@@ -177,6 +258,55 @@ jobs:
         env:
           DO_NOT_TRACK: "1"
 
+      # Publish the exact bytes produced by this immutable source checkout.
+      # The manifest is also used by resumed matrix jobs and the release tag
+      # to prove that registry state and git metadata describe this build.
+      - name: Pack packages and write release provenance
+        env:
+          RELEASE_VERSION: ${{ steps.bump.outputs.new_version }}
+          RELEASE_TAG: ${{ steps.bump.outputs.effective_tag }}
+        run: |
+          mkdir -p release-artifacts
+          node <<'NODE'
+            const { execFileSync, execSync } = require('node:child_process');
+            const fs = require('node:fs');
+            const path = require('node:path');
+
+            const dirs = ['a2a', 'types', 'engine', 'sdk-typescript', 'cli', 'mcp', 'react', 'openclaw'];
+            const artifactDir = path.resolve('release-artifacts');
+            const packages = [];
+            for (const dir of dirs) {
+              const packageDir = path.resolve('packages', dir);
+              const manifest = JSON.parse(fs.readFileSync(path.join(packageDir, 'package.json'), 'utf8'));
+              const packed = JSON.parse(execFileSync(
+                'npm',
+                ['pack', '--json', '--ignore-scripts', '--pack-destination', artifactDir],
+                { cwd: packageDir, encoding: 'utf8' },
+              ));
+              const packMetadata = packed[manifest.name] ?? Object.values(packed)[0];
+              if (!packMetadata || typeof packMetadata !== 'object') {
+                throw new Error(`npm pack returned no metadata for ${manifest.name}`);
+              }
+              packages.push({
+                name: manifest.name,
+                version: manifest.version,
+                tarball: path.join('release-artifacts', path.basename(packMetadata.filename)),
+                integrity: packMetadata.integrity,
+                shasum: packMetadata.shasum,
+              });
+            }
+            const sourceCommit = process.env.GITHUB_SHA;
+            const sourceTree = execSync(`git rev-parse ${sourceCommit}^{tree}`, { encoding: 'utf8' }).trim();
+            fs.writeFileSync('release-provenance.json', JSON.stringify({
+              schema: 1,
+              sourceCommit,
+              sourceTree,
+              version: process.env.RELEASE_VERSION,
+              distTag: process.env.RELEASE_TAG,
+              packages,
+            }, null, 2) + '\n');
+          NODE
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -185,7 +315,15 @@ jobs:
             package.json
             package-lock.json
             packages/*/package.json
+            packages/sdk-typescript/src/version.ts
+            packages/cli/src/version.ts
             packages/*/dist/
+            Dockerfile
+            docker/package.json
+            docker/package-lock.json
+            RUNBOOK.md
+            release-provenance.json
+            release-artifacts/
           retention-days: 1
 
   # Publish all packages in parallel
@@ -193,7 +331,9 @@ jobs:
     name: Publish ${{ matrix.package }}
     needs: build
     runs-on: ubuntu-latest
-    if: github.event.inputs.package == 'all'
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       max-parallel: 5
@@ -227,26 +367,74 @@ jobs:
           name: build-output
           path: .
 
+      - name: Validate immutable release artifacts
+        run: |
+          SOURCE_TREE="$(git rev-parse "$GITHUB_SHA^{tree}")"
+          node scripts/release-provenance.mjs source \
+            --manifest release-provenance.json \
+            --commit "$GITHUB_SHA" \
+            --tree "$SOURCE_TREE"
+          node scripts/release-provenance.mjs release \
+            --manifest release-provenance.json \
+            --version "${{ needs.build.outputs.new_version }}" \
+            --dist-tag "${{ needs.build.outputs.effective_tag }}"
+
       - name: Dry run check
         if: github.event.inputs.dry_run == 'true'
         working-directory: packages/${{ matrix.package }}
         run: |
           PACKAGE_NAME=$(node -p "require('./package.json').name")
+          TARBALL="$(node "$GITHUB_WORKSPACE/scripts/release-provenance.mjs" package --manifest "$GITHUB_WORKSPACE/release-provenance.json" --package "$PACKAGE_NAME" --field tarball)"
           echo "Dry run - would publish ${PACKAGE_NAME}@${{ needs.build.outputs.new_version }}"
-          npm publish --dry-run --access public --tag ${{ github.event.inputs.tag }} --ignore-scripts
+          npm publish "$GITHUB_WORKSPACE/$TARBALL" --dry-run --access public --tag ${{ needs.build.outputs.effective_tag }} --ignore-scripts
 
+      # Resumable: if a prior attempt already published this exact tarball,
+      # skip it. A same-version package with a different integrity is a hard
+      # failure: it came from a different source tree and must never be
+      # silently treated as a successful release.
       - name: Publish to NPM
         if: github.event.inputs.dry_run != 'true'
         working-directory: packages/${{ matrix.package }}
-        run: npm publish --access public --provenance --tag ${{ github.event.inputs.tag }} --ignore-scripts
+        run: |
+          PACKAGE_NAME=$(node -p "require('./package.json').name")
+          NEW_VERSION="${{ needs.build.outputs.new_version }}"
+          TARBALL="$(node "$GITHUB_WORKSPACE/scripts/release-provenance.mjs" package --manifest "$GITHUB_WORKSPACE/release-provenance.json" --package "$PACKAGE_NAME" --field tarball)"
+          if npm view "${PACKAGE_NAME}@${NEW_VERSION}" version >/dev/null 2>&1; then
+            ACTUAL_INTEGRITY="$(npm view "${PACKAGE_NAME}@${NEW_VERSION}" dist.integrity 2>/dev/null || true)"
+            node "$GITHUB_WORKSPACE/scripts/release-provenance.mjs" published \
+              --manifest "$GITHUB_WORKSPACE/release-provenance.json" \
+              --package "$PACKAGE_NAME" \
+              --integrity "$ACTUAL_INTEGRITY" \
+              --version "$NEW_VERSION"
+            echo "${PACKAGE_NAME}@${NEW_VERSION} already matches this build; skipping (resumed run)"
+          else
+            npm publish "$GITHUB_WORKSPACE/$TARBALL" --access public --provenance --tag ${{ needs.build.outputs.effective_tag }} --ignore-scripts
+          fi
+          # Publishing and package identity are not enough: npm dist-tags are
+          # independently mutable. Poll the tag set atomically by npm publish
+          # until the registry reports its exact version. OIDC trusted
+          # publishing does not authorize npm dist-tag rewrites, so a resumed
+          # run fails closed if that mapping was moved or removed. For
+          # next/beta/alpha, this command never addresses or moves latest.
+          node "$GITHUB_WORKSPACE/scripts/npm-dist-tag.mjs" verify \
+            --package "$PACKAGE_NAME" \
+            --version "$NEW_VERSION" \
+            --tag "${{ needs.build.outputs.effective_tag }}" \
+            --attempts 5 \
+            --delay-ms 5000
 
-  # Publish a single package (when not "all")
-  publish-single:
-    name: Publish Single Package
-    needs: build
+  # Independently reconciles the npm registry against what this release
+  # attempted to publish, rather than trusting the matrix job's own status
+  # alone. This is the authoritative "did every package actually land"
+  # signal create-release gates on, and it leaves a clear, per-package
+  # pass/fail table in the run summary an operator can act on. The publish
+  # step above only treats an already-published package as a no-op after an
+  # exact integrity match, so stale or wrong-source registry state fails closed.
+  verify-publish:
+    name: Verify all packages published
+    needs: [build, publish-packages]
     runs-on: ubuntu-latest
-    if: github.event.inputs.package != 'all'
-
+    if: always() && needs.build.result == 'success' && github.event.inputs.dry_run != 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -257,38 +445,109 @@ jobs:
           node-version: "22.22.3"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Setup npm for trusted publishing
-        run: npm install -g npm@11.19.1
-
-      - name: Download build artifacts
+      - name: Download release provenance
         uses: actions/download-artifact@v4
         with:
           name: build-output
           path: .
 
-      - name: Dry run check
-        if: github.event.inputs.dry_run == 'true'
-        working-directory: packages/${{ github.event.inputs.package }}
+      - name: Validate immutable release artifacts
         run: |
-          PACKAGE_NAME=$(node -p "require('./package.json').name")
-          echo "Dry run - would publish ${PACKAGE_NAME}@${{ needs.build.outputs.new_version }}"
-          npm publish --dry-run --access public --tag ${{ github.event.inputs.tag }} --ignore-scripts
+          SOURCE_TREE="$(git rev-parse "$GITHUB_SHA^{tree}")"
+          node scripts/release-provenance.mjs source \
+            --manifest release-provenance.json \
+            --commit "$GITHUB_SHA" \
+            --tree "$SOURCE_TREE"
+          node scripts/release-provenance.mjs release \
+            --manifest release-provenance.json \
+            --version "${{ needs.build.outputs.new_version }}" \
+            --dist-tag "${{ needs.build.outputs.effective_tag }}"
 
-      - name: Publish to NPM
-        if: github.event.inputs.dry_run != 'true'
-        working-directory: packages/${{ github.event.inputs.package }}
-        run: npm publish --access public --provenance --tag ${{ github.event.inputs.tag }} --ignore-scripts
+      - name: Reconcile published packages against the target version
+        run: |
+          NEW_VERSION="${{ needs.build.outputs.new_version }}"
+          DIST_TAG="${{ needs.build.outputs.effective_tag }}"
+          PACKAGES=(
+            "@relaycast/a2a"
+            "@relaycast/types"
+            "@relaycast/engine"
+            "@relaycast/sdk"
+            "relaycast"
+            "@relaycast/mcp"
+            "@relaycast/react"
+            "@relaycast/openclaw"
+          )
+          {
+            echo "## Publish reconciliation for v${NEW_VERSION}"
+            echo ""
+            echo "| Package | Published |"
+            echo "|---------|-----------|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          # A handful of short retries absorb ordinary npm registry read
+          # propagation delay immediately after publish, so this reconciler
+          # does not raise a false "missing" alarm for a package that in fact
+          # published successfully moments earlier.
+          missing=()
+          for pkg in "${PACKAGES[@]}"; do
+            found=false
+            for check_attempt in 1 2 3 4 5; do
+              if npm view "${pkg}@${NEW_VERSION}" version >/dev/null 2>&1; then
+                actual_integrity="$(npm view "${pkg}@${NEW_VERSION}" dist.integrity 2>/dev/null || true)"
+                if node scripts/release-provenance.mjs published --manifest release-provenance.json --package "$pkg" --integrity "$actual_integrity" --version "$NEW_VERSION"; then
+                  # Independent verification is read-only: the publish matrix
+                  # must already have reconciled the requested mutable tag.
+                  # Missing, stale, unavailable, or ambiguous responses fail
+                  # closed after a bounded propagation window.
+                  if node scripts/npm-dist-tag.mjs verify \
+                    --package "$pkg" \
+                    --version "$NEW_VERSION" \
+                    --tag "$DIST_TAG" \
+                    --attempts 5 \
+                    --delay-ms 5000; then
+                    found=true
+                    break
+                  fi
+                  echo "${pkg}@${NEW_VERSION} has no verified ${DIST_TAG} dist-tag mapping" >&2
+                  break
+                fi
+                echo "${pkg}@${NEW_VERSION} exists with a non-matching artifact; refusing to reconcile it" >&2
+                break
+              fi
+              sleep $(( check_attempt * 5 ))
+            done
+            if [ "$found" = "true" ]; then
+              echo "| ${pkg} | done |" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "| ${pkg} | MISSING |" >> "$GITHUB_STEP_SUMMARY"
+              missing+=("$pkg")
+            fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            {
+              echo ""
+              echo "**${#missing[@]} package(s) not published at v${NEW_VERSION}: ${missing[*]}**"
+              echo ""
+              echo "A prior package is either missing or has a different immutable artifact; the release is blocked until the source/version is reconciled."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::${#missing[@]} package(s) missing at v${NEW_VERSION}: ${missing[*]}"
+            exit 1
+          fi
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "All ${#PACKAGES[@]} packages confirmed published at v${NEW_VERSION}." >> "$GITHUB_STEP_SUMMARY"
 
   # Create git tag and release
   create-release:
     name: Create Release
-    needs: [build, publish-packages, publish-single]
+    needs: [build, publish-packages, verify-publish]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     if: |
       always() &&
       github.event.inputs.dry_run != 'true' &&
       needs.build.result == 'success' &&
-      (needs.publish-packages.result == 'success' || needs.publish-single.result == 'success')
+      needs.publish-packages.result == 'success' &&
+      needs.verify-publish.result == 'success'
 
     steps:
       - name: Checkout code
@@ -308,11 +567,74 @@ jobs:
         with:
           node-version: "22.22.3"
 
+      - name: Validate immutable release source
+        run: |
+          SOURCE_TREE="$(git rev-parse "$GITHUB_SHA^{tree}")"
+          node scripts/release-provenance.mjs source \
+            --manifest release-provenance.json \
+            --commit "$GITHUB_SHA" \
+            --tree "$SOURCE_TREE"
+          node scripts/release-provenance.mjs release \
+            --manifest release-provenance.json \
+            --version "${{ needs.build.outputs.new_version }}" \
+            --dist-tag "${{ needs.build.outputs.effective_tag }}"
+
+      # A retry can cross a UTC date boundary. Validate an already-created
+      # annotated tag before touching changelogs, then restore its exact
+      # release commit/tree so the retry cannot regenerate a date-sensitive
+      # release tree or compare it against the pre-release checkout.
+      - name: Reuse an existing release tag before cutting changelogs
+        run: |
+          NEW_VERSION="${{ needs.build.outputs.new_version }}"
+          TAG="v${NEW_VERSION}"
+          SOURCE_COMMIT="$(node -e 'const p=require("./release-provenance.json"); process.stdout.write(p.sourceCommit)')"
+          SOURCE_TREE="$(node -e 'const p=require("./release-provenance.json"); process.stdout.write(p.sourceTree)')"
+          DIST_TAG="$(node -e 'const p=require("./release-provenance.json"); process.stdout.write(p.distTag)')"
+          PROVENANCE_DIGEST="$(node scripts/release-provenance.mjs digest --manifest release-provenance.json)"
+          git fetch --tags origin
+          if git show-ref --verify --quiet "refs/tags/${TAG}"; then
+            node scripts/validate-release-tag.mjs \
+              --tag "$TAG" \
+              --source-commit "$SOURCE_COMMIT" \
+              --source-tree "$SOURCE_TREE" \
+              --version "$NEW_VERSION" \
+              --dist-tag "$DIST_TAG" \
+              --provenance-digest "$PROVENANCE_DIGEST" \
+              --provenance-manifest release-provenance.json \
+              --print-release-date > "$RUNNER_TEMP/relaycast-release-date"
+            echo "RELEASE_DATE=$(cat \"$RUNNER_TEMP/relaycast-release-date\")" >> "$GITHUB_ENV"
+            echo "${TAG} metadata is valid; reusing its exact release commit/tree"
+            git reset --hard "${TAG}^{commit}"
+            echo "REUSE_EXISTING_RELEASE_TAG=true" >> "$GITHUB_ENV"
+          fi
+
       # Move the curated [Unreleased] entries under the version being released
       # and restore a bare [Unreleased], so a published version always has a
       # heading. Prereleases are left pending.
       - name: Cut changelogs
-        run: node scripts/cut-changelog.mjs --version "${{ needs.build.outputs.new_version }}"
+        run: |
+          if [ "${REUSE_EXISTING_RELEASE_TAG:-false}" = "true" ]; then
+            echo "existing release tag restored; leaving its changelog tree unchanged"
+          else
+            node scripts/cut-changelog.mjs --version "${{ needs.build.outputs.new_version }}" --date "${{ needs.build.outputs.release_date }}"
+          fi
+
+      # docker/package-lock.json only got a placeholder version-field bump in
+      # the build job (the published artifact it needs to resolve against
+      # did not exist yet). verify-publish has now confirmed every package,
+      # including @relaycast/engine, is live at this version, so refresh it
+      # for real before this becomes the tagged, committed state.
+      - name: Refresh self-host image lockfile
+        working-directory: docker
+        run: |
+          if [ "${REUSE_EXISTING_RELEASE_TAG:-false}" = "true" ]; then
+            echo "existing release tag restored; leaving its lockfile tree unchanged"
+          else
+            npm install --package-lock-only --ignore-scripts
+          fi
+
+      - name: Re-validate release contract with the refreshed lockfile
+        run: node scripts/check-release-contract.mjs --version "${{ needs.build.outputs.new_version }}"
 
       - name: Commit and tag
         run: |
@@ -322,57 +644,158 @@ jobs:
           NEW_VERSION="${{ needs.build.outputs.new_version }}"
 
           git add package.json package-lock.json packages/*/package.json
+          git add packages/sdk-typescript/src/version.ts packages/cli/src/version.ts
+          git add Dockerfile docker/package.json docker/package-lock.json RUNBOOK.md
           git add CHANGELOG.md packages/*/CHANGELOG.md
           if ! git diff --staged --quiet; then
             git commit -m "chore(release): v${NEW_VERSION}"
-            # main can advance during the (multi-minute) build — e.g. a
-            # concurrent SDK publish — so rebase onto the latest main and retry
-            # to avoid non-fast-forward rejections. Version metadata rebases
-            # cleanly; a changelog can conflict when a PR curated [Unreleased]
-            # during the build, so take main's copy and re-cut it rather than
-            # failing a release whose packages are already published.
-            pushed=false
-            for attempt in 1 2 3 4 5; do
-              git fetch origin main
-              if ! git rebase origin/main; then
-                conflicted=$(git diff --name-only --diff-filter=U)
-                if [ -z "$conflicted" ] || echo "$conflicted" | grep -qvE '(^|/)CHANGELOG\.md$'; then
-                  git rebase --abort
-                  echo "::error::rebase onto origin/main failed (unexpected conflict)"
-                  exit 1
-                fi
-                echo "changelog conflict on ${conflicted}; re-cutting against main"
-                # During a rebase --ours is the upstream side (origin/main).
-                echo "$conflicted" | xargs git checkout --ours --
-                node scripts/cut-changelog.mjs --version "$NEW_VERSION"
-                echo "$conflicted" | xargs git add --
-                if ! GIT_EDITOR=true git rebase --continue; then
-                  git rebase --abort
-                  echo "::error::failed to resolve changelog conflict during rebase"
-                  exit 1
-                fi
-              fi
+          fi
+
+          # Tag and push the tag immediately, before any attempt below to
+          # reconcile with a possibly-moved main: the tag must point at
+          # exactly the tree that was built, tested, published, and verified
+          # above — never at a tree later altered by rebasing this release
+          # commit onto a moved main, which would tag different code than
+          # what was actually tested and published. A tag is
+          # content-addressed and does not need to be a fast-forward of
+          # anything, so this is always safe to do first.
+          SOURCE_COMMIT="$(node -e 'const p=require("./release-provenance.json"); process.stdout.write(p.sourceCommit)')"
+          SOURCE_TREE="$(node -e 'const p=require("./release-provenance.json"); process.stdout.write(p.sourceTree)')"
+          DIST_TAG="$(node -e 'const p=require("./release-provenance.json"); process.stdout.write(p.distTag)')"
+          RELEASE_DATE="${RELEASE_DATE:-${{ needs.build.outputs.release_date }}}"
+          PROVENANCE_DIGEST="$(node scripts/release-provenance.mjs digest --manifest release-provenance.json)"
+          TAG="v${NEW_VERSION}"
+          CREATED_LOCAL_TAG=false
+          TAG_MESSAGE_FILE="$(mktemp)"
+          cat > "$TAG_MESSAGE_FILE" <<EOF
+          Release v${NEW_VERSION}
+
+          Relaycast-NPM-Dist-Tag: ${DIST_TAG}
+          Relaycast-Source-Commit: ${SOURCE_COMMIT}
+          Relaycast-Source-Tree: ${SOURCE_TREE}
+          Relaycast-Release-Date: ${RELEASE_DATE}
+          Relaycast-Package-Provenance-SHA256: ${PROVENANCE_DIGEST}
+          EOF
+          git fetch --tags origin
+          if git show-ref --verify --quiet "refs/tags/${TAG}"; then
+            if [ "$(git cat-file -t "refs/tags/${TAG}")" != "tag" ]; then
+              echo "::error::${TAG} is lightweight; refusing to reuse it"
+              exit 1
+            fi
+            if [ "$(git rev-parse "$(printf '%s^{tree}' "$TAG")")" != "$(git rev-parse "$(printf '%s^{tree}' HEAD)")" ]; then
+              echo "::error::${TAG} points at a different release tree"
+              exit 1
+            fi
+            if [ "$(git for-each-ref --format='%(contents:subject)' "refs/tags/${TAG}")" != "Release v${NEW_VERSION}" ]; then
+              echo "::error::${TAG} has unexpected release metadata"
+              exit 1
+            fi
+            TAG_CONTENT="$(git cat-file tag "${TAG}")"
+            if ! grep -Fqx "Relaycast-NPM-Dist-Tag: ${DIST_TAG}" <<<"$TAG_CONTENT"; then
+              echo "::error::${TAG} npm dist-tag metadata does not match"
+              exit 1
+            fi
+            if ! grep -Fqx "Relaycast-Source-Commit: ${SOURCE_COMMIT}" <<<"$TAG_CONTENT"; then
+              echo "::error::${TAG} source commit metadata does not match"
+              exit 1
+            fi
+            if ! grep -Fqx "Relaycast-Source-Tree: ${SOURCE_TREE}" <<<"$TAG_CONTENT"; then
+              echo "::error::${TAG} source tree metadata does not match"
+              exit 1
+            fi
+            if ! grep -Fqx "Relaycast-Package-Provenance-SHA256: ${PROVENANCE_DIGEST}" <<<"$TAG_CONTENT"; then
+              echo "::error::${TAG} package provenance does not match"
+              exit 1
+            fi
+            echo "${TAG} is the matching annotated release tag; reusing it safely"
+            # A re-run creates the same release tree but a different commit
+            # timestamp. Reuse the already-tagged commit so main and the
+            # GitHub Release continue to point at one stable release identity.
+            git reset --hard "${TAG}^{commit}"
+          else
+            git tag -a "${TAG}" -F "$TAG_MESSAGE_FILE"
+            CREATED_LOCAL_TAG=true
+          fi
+
+          # The local tag is the first object that binds the release tree to
+          # the provenance digest. Validate the exact same release transform
+          # used on retry before any remote ref can be created. If this run
+          # created a bad local tag, remove it; never delete a fetched tag.
+          if ! node scripts/validate-release-tag.mjs \
+            --tag "$TAG" \
+            --source-commit "$SOURCE_COMMIT" \
+            --source-tree "$SOURCE_TREE" \
+            --version "$NEW_VERSION" \
+            --dist-tag "$DIST_TAG" \
+            --provenance-digest "$PROVENANCE_DIGEST" \
+            --provenance-manifest release-provenance.json; then
+            if [ "$CREATED_LOCAL_TAG" = "true" ]; then
+              git tag -d "$TAG"
+            fi
+            echo "::error::${TAG} failed exact local validation; no remote tag was pushed"
+            exit 1
+          fi
+          git push origin "${TAG}"
+
+          # Best-effort: land the same, already-tagged release commit on
+          # main too. main can advance during the (multi-minute)
+          # build/publish/verify sequence — e.g. a concurrent PR merge — so
+          # this merges (never rebases) origin/main into a new commit on top
+          # of the release commit, which stays reachable and byte-identical
+          # to what was tagged either way. A changelog conflict is resolved
+          # by taking main's copy and re-cutting it, the same policy as
+          # before. Any other conflict, or exhausting retries, leaves this
+          # release — already tagged and published — intact but main out of
+          # sync: a recoverable, clearly-flagged follow-up, not grounds to
+          # report the release itself as failed.
+          pushed=false
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            merge_base="$(git merge-base HEAD origin/main)"
+            main_head="$(git rev-parse origin/main)"
+            if [ "$merge_base" = "$main_head" ]; then
               if git push origin HEAD:main; then
                 pushed=true
                 break
               fi
               echo "push rejected (main moved); retry ${attempt}"
               sleep $(( attempt * 3 ))
-            done
-            if [ "$pushed" != "true" ]; then
-              echo "::error::failed to push release commit to main after retries"
-              exit 1
+              continue
             fi
+            if ! git merge --no-edit origin/main; then
+              conflicted=$(git diff --name-only --diff-filter=U)
+              if [ -z "$conflicted" ] || echo "$conflicted" | grep -qvE '(^|/)CHANGELOG\.md$'; then
+                git merge --abort
+                echo "::warning::could not merge origin/main onto the release commit (unexpected conflict outside CHANGELOG.md); v${NEW_VERSION} is tagged and published, but main was not updated — land the release commit manually"
+                break
+              fi
+              echo "changelog conflict on ${conflicted}; re-cutting against main"
+              echo "$conflicted" | xargs git checkout --theirs --
+              node scripts/cut-changelog.mjs --version "$NEW_VERSION" --date "$RELEASE_DATE"
+              git add CHANGELOG.md packages/*/CHANGELOG.md
+              if ! GIT_EDITOR=true git commit --no-edit; then
+                git merge --abort
+                echo "::warning::failed to resolve changelog conflict merging onto main; v${NEW_VERSION} is tagged and published, but main was not updated — land the release commit manually"
+                break
+              fi
+            fi
+            if git push origin HEAD:main; then
+              pushed=true
+              break
+            fi
+            echo "push rejected (main moved); retry ${attempt}"
+            sleep $(( attempt * 3 ))
+          done
+          if [ "$pushed" != "true" ]; then
+            echo "::warning::release v${NEW_VERSION} is tagged and its packages are published, but the release commit could not be landed on main after retries — land it manually"
           fi
 
-          git tag -a "v${NEW_VERSION}" -m "Release v${NEW_VERSION}"
-          git push origin "v${NEW_VERSION}"
-
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.build.outputs.new_version }}
           name: v${{ needs.build.outputs.new_version }}
+          prerelease: ${{ needs.build.outputs.is_prerelease == 'true' }}
           body: |
             ## Relaycast v${{ needs.build.outputs.new_version }}
 
@@ -405,24 +828,28 @@ jobs:
   # Summary
   summary:
     name: Summary
-    needs: [build, publish-packages, publish-single, create-release]
+    needs: [build, publish-packages, verify-publish, create-release]
     runs-on: ubuntu-latest
     if: always()
 
     steps:
       - name: Summary
         run: |
-          echo "## Publish Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Version**: \`${{ needs.build.outputs.new_version }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Package**: \`${{ github.event.inputs.package }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**NPM Tag**: \`${{ github.event.inputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Dry Run**: \`${{ github.event.inputs.dry_run }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Results" >> $GITHUB_STEP_SUMMARY
-          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Build & Version | ${{ needs.build.result == 'success' && '✅' || '❌' }} ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Publish NPM Packages | ${{ needs.publish-packages.result == 'success' && '✅' || (needs.publish-packages.result == 'skipped' && '⏭️' || '❌') }} ${{ needs.publish-packages.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Publish Single | ${{ needs.publish-single.result == 'success' && '✅' || (needs.publish-single.result == 'skipped' && '⏭️' || '❌') }} ${{ needs.publish-single.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Create Release | ${{ needs.create-release.result == 'success' && '✅' || (needs.create-release.result == 'skipped' && '⏭️' || '❌') }} ${{ needs.create-release.result }} |" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## Publish Summary"
+            echo ""
+            echo "**Version**: \`${{ needs.build.outputs.new_version }}\`"
+            echo "**Package**: \`${{ github.event.inputs.package }}\`"
+            echo "**Requested NPM Tag**: \`${{ github.event.inputs.tag }}\`"
+            echo "**Effective NPM Tag**: \`${{ needs.build.outputs.effective_tag }}\`"
+            echo "**Prerelease**: \`${{ needs.build.outputs.is_prerelease }}\`"
+            echo "**Dry Run**: \`${{ github.event.inputs.dry_run }}\`"
+            echo ""
+            echo "### Results"
+            echo "| Stage | Status |"
+            echo "|-------|--------|"
+            echo "| Build & Version | ${{ needs.build.result == 'success' && '✅' || '❌' }} ${{ needs.build.result }} |"
+            echo "| Publish NPM Packages | ${{ needs.publish-packages.result == 'success' && '✅' || (needs.publish-packages.result == 'skipped' && '⏭️' || '❌') }} ${{ needs.publish-packages.result }} |"
+            echo "| Verify Publish | ${{ needs.verify-publish.result == 'success' && '✅' || (needs.verify-publish.result == 'skipped' && '⏭️' || '❌') }} ${{ needs.verify-publish.result }} |"
+            echo "| Create Release | ${{ needs.create-release.result == 'success' && '✅' || (needs.create-release.result == 'skipped' && '⏭️' || '❌') }} ${{ needs.create-release.result }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -147,10 +147,18 @@ function inMemoryPublicLookupRateCheck(clientId: string, limit: number) {
   };
 }
 
-function extractOwnerApiKey(authHeader: string | undefined) {
-  if (!authHeader?.startsWith('Bearer ')) return undefined;
+type OwnerAuthorization =
+  | { kind: 'absent' }
+  | { kind: 'invalid' }
+  | { kind: 'workspace'; token: string };
+
+function parseOwnerAuthorization(authHeader: string | undefined): OwnerAuthorization {
+  if (authHeader === undefined) return { kind: 'absent' };
+  if (!authHeader.startsWith('Bearer ')) return { kind: 'invalid' };
   const token = authHeader.slice(7);
-  return token.startsWith('rk_') ? token : undefined;
+  return token.startsWith('rk_')
+    ? { kind: 'workspace', token }
+    : { kind: 'invalid' };
 }
 
 const publicWorkspaceLookupRateLimit = createMiddleware<AppEnv>(async (c, next) => {
@@ -186,7 +194,11 @@ const publicWorkspaceLookupRateLimit = createMiddleware<AppEnv>(async (c, next) 
   await next();
 });
 
-// POST /workspaces - create workspace (no auth required, workspace key optional)
+// POST /workspaces - create workspace (no auth required, workspace key optional).
+// An anonymous create carrying an Idempotency-Key additionally requires
+// X-Workspace-Bootstrap-Secret to match the deployment's configured
+// workspaceBootstrapSecret before any binding lookup or credential recovery
+// runs — see createWorkspace's bootstrap-proof check.
 workspaceRoutes.post('/workspaces', async (c) => {
   try {
     const parsed = await parseJsonBody(c, createWorkspaceSchema, 'name is required');
@@ -203,11 +215,14 @@ workspaceRoutes.post('/workspaces', async (c) => {
       return jsonError(c, 'invalid_idempotency_key', idempotencyError, 400);
     }
     const db = c.get('db');
-    const ownerApiKey = extractOwnerApiKey(c.req.header('Authorization'));
-    if (idempotencyKey) {
-      if (!ownerApiKey) {
-        return jsonError(c, 'workspace_create_idempotency_owner_required', 'An authenticated workspace owner is required when Idempotency-Key is supplied', 401);
-      }
+    const ownerAuthorization = parseOwnerAuthorization(c.req.header('Authorization'));
+    if (idempotencyKey && ownerAuthorization.kind === 'invalid') {
+      return jsonError(c, 'unauthorized', 'Missing or invalid Authorization header', 401);
+    }
+    const ownerApiKey = ownerAuthorization.kind === 'workspace'
+      ? ownerAuthorization.token
+      : undefined;
+    if (idempotencyKey && ownerApiKey) {
       const ownerAuth = await c.get('engine').auth.authenticate({ token: ownerApiKey, require: 'workspace', db });
       if (!ownerAuth.ok) {
         return jsonError(c, ownerAuth.code, ownerAuth.message, ownerAuth.status as ContentfulStatusCode);
@@ -226,6 +241,12 @@ workspaceRoutes.post('/workspaces', async (c) => {
       name,
       {
         ...(ownerApiKey ? { ownerApiKey } : {}),
+        ...(idempotencyKey && !ownerApiKey
+          ? {
+            bootstrapSecret: c.get('engine').config.workspaceBootstrapSecret,
+            bootstrapSecretProof: c.req.header('X-Workspace-Bootstrap-Secret'),
+          }
+          : {}),
         ...(idempotencyKey ? { idempotencyKey } : {}),
         ...(requestDigest ? { requestDigest } : {}),
         ...(expiresInSeconds

@@ -85,6 +85,9 @@ async function main(): Promise<void> {
     baseUrl,
     config: {
       environment: opts.environment,
+      ...(process.env.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET
+        ? { workspaceBootstrapSecret: process.env.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET }
+        : {}),
       ...(Object.keys(mailbox).length > 0 ? { mailbox } : {}),
     },
     ...(eventQueue ? { eventQueue } : {}),

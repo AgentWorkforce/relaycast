@@ -2129,6 +2129,7 @@ describe('durable delivery api', () => {
 
     const { ws, alice, bob } = await seed();
     const { sock: aliceSock } = await attachDirectNodeSocket(stack, ws.workspaceId, alice);
+    await stack.settle();
     const [item] = await listDeliveries(bob.token);
 
     // SQLite writes TTLs in whole seconds; expire the stored row explicitly.

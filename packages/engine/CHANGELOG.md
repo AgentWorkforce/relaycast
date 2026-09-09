@@ -7,7 +7,16 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Keyless workspace bootstrap creates now support deployment-scoped crash idempotency with deterministic credential recovery, atomic binding, digest conflicts, and deletion/expiry terminalization. An anonymous keyed create must present `X-Workspace-Bootstrap-Secret`, matched to the configured secret in constant time before any binding lookup, since the `Idempotency-Key` and request digest alone are caller-computable and not proof of identity. Callers must generate anonymous keys with a CSPRNG; the server enforces only a 32-character structural minimum and rejects shorter keys with `400 workspace_create_idempotency_key_too_weak` before any secret comparison or database work.
+- Keyed bootstrap fails closed on explicit invalid authorization and no longer falls back to a process-random secret; configure a stable deployment secret for replay across restarts.
+
+### Fixed
+
+- Self-hosted container deployments now forward the configured workspace bootstrap secret into the engine without logging it.
 
 ## [8.5.5] - 2026-09-08
 
