@@ -7,7 +7,9 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Minor]
+## [Unreleased]
+
+## [8.7.0] - 2026-09-09
 
 ### Added
 
@@ -32,7 +34,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Raw inbound webhooks now create durable agent deliveries.
 - Relayfile ingress and raw inbound hooks reject full mailboxes atomically with retry guidance, preserving unique events without partial delivery.
 - Explicit spawn targets are honored when a legacy global node alias exists, preserving its caller allowlist.
-
 
 ## [8.6.1] - 2026-09-09
 

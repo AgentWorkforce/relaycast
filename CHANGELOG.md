@@ -16,7 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Minor]
+## [Unreleased]
+
+## [8.7.0] - 2026-09-09
 
 ### Added
 
@@ -42,7 +44,6 @@ Packages without a separate changelog are covered by the cross-package notes bel
 - Raw inbound webhooks now create durable agent deliveries.
 - Relayfile ingress and raw inbound hooks reject full mailboxes atomically with retry guidance, preserving unique events without partial delivery.
 - Explicit spawn targets are honored when a legacy global node alias exists, preserving its caller allowlist.
-
 
 ## [8.6.1] - 2026-09-09
 
@@ -480,7 +481,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v8.6.1...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v8.7.0...HEAD
+[8.7.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.6.1...v8.7.0
 [8.6.1]: https://github.com/AgentWorkforce/relaycast/compare/v8.6.0...v8.6.1
 [8.6.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.5.5...v8.6.0
 [6.0.3]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.2...v6.0.3
