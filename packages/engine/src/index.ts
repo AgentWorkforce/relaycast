@@ -47,6 +47,7 @@ export * as schema from './db/schema.js';
 // Webhook delivery + scheduled-task helpers adapters wire to their queue/cron.
 export { deliverEvent } from './engine/eventDelivery.js';
 export { runA2aHealthChecks } from './engine/a2a-health.js';
+export type { RetentionCursorStore, RowidRetentionState } from './engine/rowidRetention.js';
 
 // Node delivery redrive: queue/cron-backed deployments call this from a
 // scheduled handler to retry queued node deliveries (http_push and ws-node)

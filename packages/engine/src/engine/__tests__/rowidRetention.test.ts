@@ -1,0 +1,197 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
+import * as schema from '../../db/schema.js';
+import type { EngineDb } from '../../ports/database.js';
+import { pruneExpired, type PruneOptions } from '../retention.js';
+import type { RetentionCursorStore, RowidRetentionState } from '../rowidRetention.js';
+import { snowflakeIdLowerBound } from '../snowflake.js';
+
+const now = new Date('2026-09-09T14:00:00Z');
+const seconds = Math.floor(now.getTime() / 1000);
+const old = seconds - 110 * 86400;
+const handles: SqliteDbHandle[] = [];
+afterEach(() => { for (const handle of handles.splice(0)) handle.sqlite.close(); vi.useRealTimers(); });
+
+function fixture() {
+  const handle = getSqliteDb(':memory:'); handles.push(handle); runMigrations(handle);
+  const queries: Array<{ sql: string; params: unknown[] }> = [];
+  const db = drizzle(handle.sqlite, { schema, logger: { logQuery: (sql, params) => queries.push({ sql, params }) } }) as unknown as EngineDb;
+  for (const ws of ['one', 'two']) {
+    handle.sqlite.prepare('INSERT INTO workspaces(id,name,api_key_hash) VALUES (?,?,?)').run(ws, ws, ws);
+    handle.sqlite.prepare('INSERT INTO agents(id,workspace_id,name,token_hash) VALUES (?,?,?,?)').run(ws, ws, ws, ws);
+    handle.sqlite.prepare('INSERT INTO channels(id,workspace_id,name) VALUES (?,?,?)').run(ws, ws, ws);
+  }
+  let sequence = 0;
+  const message = (days = 110, ws = 'one', thread: string | null = null) => {
+    const id = String(BigInt(snowflakeIdLowerBound(now.getTime() - days * 86400000)) + BigInt(++sequence));
+    handle.sqlite.prepare('INSERT INTO messages(id,workspace_id,channel_id,agent_id,body,thread_id) VALUES (?,?,?,?,?,?)').run(id, ws, ws, ws, 'body', thread);
+    return id;
+  };
+  const delivery = (msg: string, status = 'acked', created = old, ws = 'one') => {
+    const id = `delivery-${++sequence}`;
+    // A distinct agent is needed for each message/agent delivery uniqueness.
+    const agent = `agent-${sequence}`;
+    handle.sqlite.prepare('INSERT INTO agents(id,workspace_id,name,token_hash) VALUES (?,?,?,?)').run(agent, ws, agent, agent);
+    handle.sqlite.prepare('INSERT INTO deliveries(id,workspace_id,message_id,agent_id,seq,status,created_at) VALUES (?,?,?,?,?,?,?)').run(id, ws, msg, agent, sequence, status, created);
+    return id;
+  };
+  let state: RowidRetentionState | undefined;
+  const store: RetentionCursorStore = {
+    load: vi.fn(async () => structuredClone(state)),
+    save: vi.fn(async (value) => { state = structuredClone(value); }),
+  };
+  const run = (opts: PruneOptions = {}) => pruneExpired(db, { cursorStore: store, batchLimit: 2, maxBatches: 1, now, ...opts });
+  return { ...handle, db, queries, message, delivery, store, run, state: () => state };
+}
+
+describe('schema-free retention candidate pages', () => {
+  it('bounds reads through retained history, advances cursors and issues no no-op writes', async () => {
+    const f = fixture(); const msg = f.message(1);
+    f.sqlite.transaction(() => { for (let i = 0; i < 1000; i++) f.delivery(msg, 'acked', seconds); })();
+    expect((await f.run()).deliveries).toBe(0);
+    expect(f.queries.filter(q => /^DELETE/i.test(q.sql))).toEqual([]);
+    const first = f.state()!.tables.deliveries!.cursor;
+    await f.run();
+    expect(f.state()!.tables.deliveries!.cursor).toBeGreaterThan(first!);
+    expect(f.queries.filter(q => /^DELETE/i.test(q.sql))).toEqual([]);
+    const reads = f.queries.filter(q => q.sql.includes('FROM deliveries NOT INDEXED') && q.sql.includes('WITH page'));
+    expect(reads.length).toBe(2);
+    expect(reads.every(q => q.sql.includes('AS MATERIALIZED') && q.params.at(-1) === 2)).toBe(true);
+    const plan = f.sqlite.prepare('EXPLAIN QUERY PLAN ' + reads[1]!.sql).all(...reads[1]!.params) as Array<{ detail: string }>;
+    expect(plan.some(row => /SEARCH deliveries USING INTEGER PRIMARY KEY/.test(row.detail))).toBe(true);
+    expect(f.sqlite.prepare("SELECT count(*) n FROM sqlite_master WHERE name='maintenance_cursors'").get()).toEqual({ n: 0 });
+  });
+
+  it('preserves policy overrides, unsettled rows, messages and sequence counters', async () => {
+    const f = fixture();
+    const a = f.message(), b = f.message(110, 'two');
+    f.sqlite.prepare('UPDATE workspaces SET retention=? WHERE id=?').run(JSON.stringify({ delivery_ttl_days: null }), 'two');
+    const expired = [f.delivery(a), f.delivery(a, 'failed'), f.delivery(a, 'dead_lettered')];
+    const kept = [f.delivery(a, 'queued'), f.delivery(a, 'delivered'), f.delivery(a, 'acked', seconds), f.delivery(b, 'acked', old, 'two')];
+    const counters = f.sqlite.prepare('SELECT id,delivery_seq,delivery_ack_seq FROM agents ORDER BY id').all();
+    for (let i = 0; i < 5; i++) await f.run();
+    const remaining = f.sqlite.prepare('SELECT id FROM deliveries ORDER BY id').all() as Array<{ id: string }>;
+    expect(remaining.map(r => r.id).sort()).toEqual(kept.sort());
+    expect(remaining.some(r => expired.includes(r.id))).toBe(false);
+    expect(f.sqlite.prepare('SELECT count(*) n FROM messages').get()).toEqual({ n: 2 });
+    expect(f.sqlite.prepare('SELECT id,delivery_seq,delivery_ack_seq FROM agents ORDER BY id').all()).toEqual(counters);
+  });
+
+  it('uses bounded variable counts and rowid seeks for multi-row deletes', async () => {
+    const f = fixture(); const msg = f.message(1);
+    for (let i = 0; i < 23; i++) f.delivery(msg);
+    expect((await f.run({ batchLimit: 200 })).deliveries).toBe(23);
+    const deletes = f.queries.filter(q => q.sql.startsWith('DELETE FROM deliveries'));
+    expect(deletes.length).toBe(3);
+    for (const query of deletes) {
+      expect(query.params.length).toBeLessThanOrEqual(100);
+      const plan = JSON.stringify(f.sqlite.prepare('EXPLAIN QUERY PLAN ' + query.sql).all(...query.params));
+      expect(plan).toMatch(/SEARCH deliveries USING INTEGER PRIMARY KEY/);
+      expect(plan).not.toMatch(/SCAN deliveries|USING INDEX idx_deliveries/);
+    }
+  });
+
+  it('retains event high-water, live receipts, and thread parents until replies expire', async () => {
+    const f = fixture(); const parent = f.message(), reply = f.message(110, 'one', parent);
+    for (let seq = 1; seq <= 3; seq++) f.sqlite.prepare("INSERT INTO workspace_events(workspace_id,seq,type,payload,created_at) VALUES ('one',?,'test','{}',?)").run(seq, old);
+    f.sqlite.prepare("INSERT INTO read_receipts(message_id,agent_id) VALUES (?,'one')").run(parent);
+    const result = await f.run({ batchLimit: 200, defaults: { messageTtlDays: 30 } });
+    expect(result.messages).toBe(1);
+    expect(f.sqlite.prepare('SELECT id FROM messages').all()).toEqual([{ id: parent }]);
+    expect(f.sqlite.prepare('SELECT seq FROM workspace_events').all()).toEqual([{ seq: 3 }]);
+    expect(f.sqlite.prepare('SELECT message_id FROM read_receipts').all()).toEqual([{ message_id: parent }]);
+    await f.run({ batchLimit: 200, defaults: { messageTtlDays: 30 } });
+    expect(f.sqlite.prepare('SELECT id FROM messages').all()).toEqual([]);
+    expect(reply).not.toEqual(parent);
+    expect(f.sqlite.pragma('foreign_key_check')).toEqual([]);
+  });
+
+  it('wraps a finite high-water even while new rows arrive, revisiting retained rows', async () => {
+    const f = fixture(); const msg = f.message(1);
+    const retained = f.delivery(msg, 'delivered'); f.delivery(msg); f.delivery(msg);
+    await f.run(); const high = f.state()!.tables.deliveries!.high;
+    for (let i = 0; i < 4; i++) f.delivery(msg);
+    await f.run();
+    expect(f.state()!.tables.deliveries).toBeUndefined();
+    f.sqlite.prepare("UPDATE deliveries SET status='acked' WHERE id=?").run(retained);
+    await f.run();
+    expect(f.sqlite.prepare('SELECT id FROM deliveries WHERE id=?').get(retained)).toBeUndefined();
+    expect(high).toBe(3);
+  });
+
+  it('prunes orphaned workspace events under the default policy while keeping high-water', async () => {
+    const f = fixture();
+    for (let seq = 1; seq <= 2; seq++) f.sqlite.prepare("INSERT INTO workspace_events(workspace_id,seq,type,payload,created_at) VALUES ('missing-workspace',?,'test','{}',?)").run(seq, old);
+    expect((await f.run()).workspaceEvents).toBe(1);
+    expect(f.sqlite.prepare("SELECT seq FROM workspace_events WHERE workspace_id='missing-workspace'").all()).toEqual([{ seq: 2 }]);
+  });
+
+  it('persists table fairness but not candidate progress after an ambiguous failure', async () => {
+    const f = fixture(); const msg = f.message();
+    const execute = f.db.all.bind(f.db);
+    const spy = vi.spyOn(f.db, 'all').mockImplementation((query) => {
+      const text = f.db.dialect.sqlToQuery(query as never).sql;
+      if (text.startsWith('DELETE FROM messages')) throw new Error('D1 failure');
+      return execute(query);
+    });
+    await expect(f.run({ defaults: { messageTtlDays: 30 } })).rejects.toThrow('D1 failure');
+    expect(f.state()!.next).toBe(1);
+    expect(f.state()!.tables.messages?.cursor).toBeUndefined();
+    spy.mockRestore();
+    await f.run({ defaults: { messageTtlDays: 30 } });
+    expect(f.sqlite.prepare('SELECT id FROM messages WHERE id=?').get(msg)).toBeUndefined();
+  });
+
+  it('awaits an admitted write but stops new SQL after the elapsed budget', async () => {
+    const f = fixture(); for (let i = 0; i < 11; i++) f.message();
+    vi.useFakeTimers(); vi.setSystemTime(now);
+    const execute = f.db.all.bind(f.db);
+    vi.spyOn(f.db, 'all').mockImplementation((query) => {
+      const result = execute(query);
+      if (f.db.dialect.sqlToQuery(query as never).sql.startsWith('DELETE FROM messages')) vi.advanceTimersByTime(11_000);
+      return result;
+    });
+    expect((await f.run({ batchLimit: 200, defaults: { messageTtlDays: 30 } })).messages).toBe(10);
+    expect(f.queries.filter(q => q.sql.startsWith('DELETE')).length).toBe(1);
+    expect(f.state()!.tables.messages?.cursor).toBeUndefined();
+    expect(f.state()!.next).toBe(1);
+  });
+
+  it('fails closed on corrupt durable state, invalid clocks and cursor persistence errors', async () => {
+    const f = fixture();
+    await expect(f.run({ now: new Date(NaN) })).rejects.toThrow('Invalid retention clock');
+    vi.mocked(f.store.load).mockResolvedValueOnce({ version: 9 });
+    await expect(f.run()).rejects.toThrow();
+    vi.mocked(f.store.save).mockRejectedValueOnce(new Error('storage unavailable'));
+    await expect(f.run()).rejects.toThrow('storage unavailable');
+    expect(f.queries).toEqual([]);
+  });
+
+  it.each(['policy', 'status', 'rowid', 'created_at'])(
+    'rechecks %s at mutation time rather than deleting from a stale candidate', async (change) => {
+      const f = fixture(); const msg = f.message(); const id = f.delivery(msg);
+      const execute = f.db.all.bind(f.db);
+      let changed = false;
+      vi.spyOn(f.db, 'all').mockImplementation((query) => {
+        const text = f.db.dialect.sqlToQuery(query as never).sql;
+        if (text.startsWith('DELETE FROM deliveries') && !changed) {
+          changed = true;
+          if (change === 'policy') f.sqlite.prepare("UPDATE workspaces SET retention=? WHERE id='one'").run(JSON.stringify({ delivery_ttl_days: null }));
+          if (change === 'status') f.sqlite.prepare("UPDATE deliveries SET status='queued' WHERE id=?").run(id);
+          if (change === 'created_at') f.sqlite.prepare('UPDATE deliveries SET created_at=? WHERE id=?').run(seconds, id);
+          if (change === 'rowid') {
+            const row = f.sqlite.prepare('SELECT rowid AS r FROM deliveries WHERE id=?').get(id) as { r: number };
+            f.sqlite.prepare('DELETE FROM deliveries WHERE id=?').run(id);
+            const replacement = f.delivery(msg);
+            expect(f.sqlite.prepare('SELECT rowid AS r FROM deliveries WHERE id=?').get(replacement)).toEqual(row);
+          }
+        }
+        return execute(query);
+      });
+      expect((await f.run()).deliveries).toBe(0);
+      expect(changed).toBe(true);
+      expect(f.sqlite.prepare('SELECT count(*) n FROM deliveries').get()).toEqual({ n: 1 });
+    },
+  );
+});

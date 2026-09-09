@@ -12,6 +12,7 @@ import {
   type WorkspaceRetentionSettings,
 } from '../db/schema.js';
 import { snowflakeIdLowerBound } from './snowflake.js';
+import { pruneRowidPages, type RetentionCursorStore } from './rowidRetention.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -53,6 +54,10 @@ export interface RetentionDefaults {
 }
 
 export interface PruneOptions {
+  /** Optional schema-free, candidate-bounded mode. Host must serialize callers and durably persist this cursor outside D1. */
+  cursorStore?: RetentionCursorStore;
+  /** Admission budget for cursor mode; does not cancel in-flight SQL. Default 10s, capped at 30s. */
+  maxDurationMs?: number;
   /** Max rows deleted per table per batch (the SQL LIMIT). Default 200. */
   batchLimit?: number;
   /** Max batches per table per call, bounding total work per run. Default 5. */
@@ -210,6 +215,7 @@ interface PrunePass {
  * successive runs.
  */
 export async function pruneExpired(db: Db, opts: PruneOptions = {}): Promise<PruneResult> {
+  if (opts.cursorStore) return pruneRowidPages(db, { ...opts, cursorStore: opts.cursorStore });
   const now = opts.now ?? new Date();
   const batchLimit = Math.max(1, opts.batchLimit ?? DEFAULT_BATCH_LIMIT);
   const maxBatches = Math.max(1, opts.maxBatches ?? DEFAULT_MAX_BATCHES);
