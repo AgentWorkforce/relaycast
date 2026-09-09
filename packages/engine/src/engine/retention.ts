@@ -58,9 +58,9 @@ export interface PruneOptions {
   cursorStore?: RetentionCursorStore;
   /** Admission budget for cursor mode; does not cancel in-flight SQL. Default 10s, capped at 30s. */
   maxDurationMs?: number;
-  /** Max rows deleted per table per batch (the SQL LIMIT). Default 200, capped at 1000 in cursor mode. */
+  /** Max rows deleted per table per batch (the SQL LIMIT). Default and hard cap 200 in cursor mode. */
   batchLimit?: number;
-  /** Max batches per table per call, bounding total work per run. Default 5, capped at 20 in cursor mode. */
+  /** Max batches per table per call, bounding total work per run. Default and hard cap 5 in cursor mode. */
   maxBatches?: number;
   /**
    * How long a `queued` / `delivered` delivery must have been past its
@@ -70,9 +70,10 @@ export interface PruneOptions {
    */
   expiredDeliveryGraceDays?: number;
   /**
-   * Cursor mode only: after the grace window, switch active `queued`/
-   * `delivered` recovery from the widened rowid scan to a set-based DELETE
-   * using `idx_deliveries_active_expiry`.
+   * Cursor mode only: after the grace window, recover active `queued`/
+   * `delivered` rows with a set-based DELETE using
+   * `idx_deliveries_active_expiry`. The default rowid scan remains
+   * settled-only.
    *
    * Opt-in cleanup after the grace window skips `delivery.failed` notices.
    */

@@ -4,7 +4,11 @@ import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/
 import * as schema from '../../db/schema.js';
 import type { EngineDb } from '../../ports/database.js';
 import { pruneExpired, type PruneOptions } from '../retention.js';
-import type { RetentionCursorStore, RowidRetentionState } from '../rowidRetention.js';
+import {
+  ROWID_RETENTION_D1_QUERY_CEILING,
+  type RetentionCursorStore,
+  type RowidRetentionState,
+} from '../rowidRetention.js';
 import { snowflakeIdLowerBound } from '../snowflake.js';
 
 const now = new Date('2026-09-09T14:00:00Z');
@@ -212,14 +216,16 @@ describe('schema-free retention candidate pages', () => {
   it('keeps an active delivery inside its expiry grace window', async () => {
     const f = fixture(); const msg = f.message(1);
     const recent = f.delivery(msg, 'queued', seconds, 'one', seconds - 2 * 86400);
-    expect((await f.run({ batchLimit: 50, maxBatches: 5, expiredDeliveryGraceDays: 7 })).deliveries).toBe(0);
+    expect((await f.run({
+      batchLimit: 50, maxBatches: 5, expiredDeliveryGraceDays: 7, activeExpiryRecovery: true,
+    })).deliveries).toBe(0);
     expect((f.sqlite.prepare('SELECT id FROM deliveries').all() as { id: string }[]).map(r => r.id)).toContain(recent);
   });
 
   it('never reaps an active delivery with no expires_at, however old', async () => {
     const f = fixture(); const msg = f.message(1);
     const immortal = f.delivery(msg, 'queued', old, 'one', null);
-    expect((await f.run({ batchLimit: 50, maxBatches: 5 })).deliveries).toBe(0);
+    expect((await f.run({ batchLimit: 50, maxBatches: 5, activeExpiryRecovery: true })).deliveries).toBe(0);
     expect((f.sqlite.prepare('SELECT id FROM deliveries').all() as { id: string }[]).map(r => r.id)).toContain(immortal);
   });
 
@@ -321,14 +327,20 @@ describe('schema-free retention candidate pages', () => {
     expect(flipped).toBe(true);
   });
 
-  it('opt-in active expiry recovery has hard worst-case DELETE statement count < 1000', async () => {
+  it('keeps the hard worst-case D1 statement ceiling below 1000 and counts every issued query', async () => {
     const f = fixture(); const msg = f.message(1);
-    for (let i = 0; i < 9000; i++) f.delivery(msg, 'delivered', seconds, 'one', seconds - 20 * 86400);
-    await f.run({ activeExpiryRecovery: true, expiredDeliveryGraceDays: 7, maxBatches: 4, batchLimit: 200 });
-    const statements = f.queries.filter(q => /^DELETE FROM deliveries/i.test(q.sql));
-    // Rowid scan for active is disabled in this mode, so only the set-based recovery deletes should happen.
-    expect(statements.length).toBeLessThan(1000);
-    expect(statements.length).toBeLessThanOrEqual(4);
+    // Four full indexed recovery batches, followed by five full cursor pages
+    // of settled deliveries. The exported ceiling additionally derives the
+    // same maximum independently for every one of the five retention tables.
+    for (let i = 0; i < 4000; i++) f.delivery(msg, 'delivered', seconds, 'one', seconds - 20 * 86400);
+    for (let i = 0; i < 1000; i++) f.delivery(msg, 'acked', old);
+    await f.run({ activeExpiryRecovery: true, expiredDeliveryGraceDays: 7, maxBatches: 5, batchLimit: 200 });
+    expect(ROWID_RETENTION_D1_QUERY_CEILING).toBe(534);
+    expect(ROWID_RETENTION_D1_QUERY_CEILING).toBeLessThan(1000);
+    expect(f.queries.length).toBeLessThanOrEqual(ROWID_RETENTION_D1_QUERY_CEILING);
+    expect(f.queries.filter(q => q.sql.includes('idx_deliveries_active_expiry'))).toHaveLength(4);
+    expect(f.queries.filter(q => q.sql.includes('FROM deliveries NOT INDEXED') && q.sql.includes('WITH page'))).toHaveLength(5);
+    expect(f.queries.filter(q => /^DELETE FROM deliveries NOT INDEXED/i.test(q.sql))).toHaveLength(100);
   });
 
   it('accepts a raised page ceiling so a large table can be traversed', async () => {

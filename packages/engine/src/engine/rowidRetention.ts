@@ -48,17 +48,15 @@ const settled = "deliveries.status IN ('acked', 'failed', 'dead_lettered')";
 // query joins it, so a bare column is ambiguous there. The page builder rewrites
 // `deliveries.` to `page.` for the SELECT and leaves it intact for the DELETE.
 const DEFAULT_EXPIRED_DELIVERY_GRACE_DAYS = 7;
-function buildTables(_opts: { activeExpiryRecovery: boolean }) : Table[] {
-  // Deliveries deletion in cursor mode is settled-only by default.
-  // Active queued/delivered cleanup (after grace) is opt-in and handled
-  // exclusively by the set-based recovery path.
-  const reapableDeliveries = settled;
-  return [
+// Deliveries deletion in cursor mode is settled-only by default. Active
+// queued/delivered cleanup is opt-in and handled exclusively by the indexed,
+// set-based recovery path below.
+const tables: Table[] = [
     { name: 'messages', result: 'messages', columns: 'id, workspace_id',
       setting: 'message_ttl_days', fallback: 'messageTtlDays', snowflake: true,
       guard: 'NOT EXISTS (SELECT 1 FROM messages replies WHERE replies.thread_id = messages.id)' },
     { name: 'deliveries', result: 'deliveries', columns: 'id, workspace_id, created_at, status, expires_at',
-      setting: 'delivery_ttl_days', fallback: 'deliveryTtlDays', guard: reapableDeliveries },
+      setting: 'delivery_ttl_days', fallback: 'deliveryTtlDays', guard: settled },
     { name: 'message_logs', result: 'messageLogs', columns: 'id, workspace_id',
       setting: 'message_log_ttl_days', fallback: 'messageLogTtlDays', snowflake: true, guard: '1' },
     { name: 'workspace_events', result: 'workspaceEvents', columns: 'workspace_id, seq, created_at',
@@ -66,11 +64,27 @@ function buildTables(_opts: { activeExpiryRecovery: boolean }) : Table[] {
       guard: 'EXISTS (SELECT 1 FROM workspace_events hw WHERE hw.workspace_id = workspace_events.workspace_id AND hw.seq > workspace_events.seq LIMIT 1)' },
     { name: 'read_receipts', result: 'readReceipts', columns: 'message_id, agent_id',
       guard: 'NOT EXISTS (SELECT 1 FROM messages m WHERE m.id = read_receipts.message_id)' },
-  ];
-}
+];
 
 const MAX_ACTIVE_EXPIRY_RECOVERY_BATCHES = 4;
 const ACTIVE_EXPIRY_RECOVERY_DELETE_LIMIT = 1000;
+const ROWID_PAGE_LIMIT = 200;
+const ROWID_MAX_BATCHES_PER_TABLE = 5;
+const ROWID_DELETE_CHUNK_SIZE = 10;
+
+/** Hard D1 statement ceiling for one cursor-mode retention invocation.
+ *
+ * Per table: one high-water SELECT, then at most five page SELECTs and twenty
+ * ten-row DELETEs per page. The opt-in active recovery adds at most four
+ * indexed set-based DELETEs. cursorStore persistence is host-owned, not D1.
+ */
+export const ROWID_RETENTION_D1_QUERY_CEILING =
+  tables.length * (
+    1
+    + ROWID_MAX_BATCHES_PER_TABLE
+    + ROWID_MAX_BATCHES_PER_TABLE * Math.ceil(ROWID_PAGE_LIMIT / ROWID_DELETE_CHUNK_SIZE)
+  )
+  + MAX_ACTIVE_EXPIRY_RECOVERY_BATCHES;
 
 async function recoverExpiredActiveDeliveriesSetBased(
   db: EngineDb,
@@ -118,17 +132,7 @@ function bounded(value: number | undefined, fallback: number, max: number): numb
 
 function expired(
   row: Candidate, table: Table, defaults: Required<RetentionDefaults>, now: number,
-  expiredDeliveryGraceDays: number,
 ): boolean {
-  // Active deliveries are judged on their own expiry, not on a workspace TTL:
-  // no `delivery_ttl_days` value can express "this queued row is dead". Checked
-  // before the `!table.setting` fallthrough below, which returns true
-  // unconditionally and would otherwise delete live, unexpired deliveries.
-  if (table.result === 'deliveries' && (row.status === 'queued' || row.status === 'delivered')) {
-    if (row.expires_at == null) return false;
-    const grace = Math.max(0, Math.floor(expiredDeliveryGraceDays * 86_400_000));
-    return row.expires_at * 1000 < now - grace;
-  }
   if (!table.setting || !table.fallback) return true;
   const settings = row.retention ? JSON.parse(row.retention) as WorkspaceRetentionSettings : {};
   const override = settings?.[table.setting];
@@ -159,10 +163,8 @@ export async function pruneRowidPages(db: EngineDb, opts: PruneOptions & { curso
   // Preserve existing cursor-mode ceilings exactly: 200 rows/page and 5
   // batches/table.
   const activeExpiryRecovery = opts.activeExpiryRecovery === true;
-  const tables = buildTables({ activeExpiryRecovery });
-
-  const limit = bounded(opts.batchLimit, 200, 200);
-  const pages = bounded(opts.maxBatches, 5, 5) * tables.length;
+  const limit = bounded(opts.batchLimit, ROWID_PAGE_LIMIT, ROWID_PAGE_LIMIT);
+  const pages = bounded(opts.maxBatches, ROWID_MAX_BATCHES_PER_TABLE, ROWID_MAX_BATCHES_PER_TABLE) * tables.length;
   const deadline = Date.now() + bounded(opts.maxDurationMs, 10_000, 30_000);
   const defaults: Required<RetentionDefaults> = {
     messageTtlDays: null, deliveryTtlDays: 90, messageLogTtlDays: 90, workspaceEventTtlDays: 30,
@@ -216,12 +218,12 @@ export async function pruneRowidPages(db: EngineDb, opts: PruneOptions & { curso
     for (const row of page) safeRowid.parse(row._rowid);
     // Keep exact row identities alongside rowid: SQLite may reuse a deleted
     // rowid between the candidate read and a later DELETE.
-      const removable = page.filter(row => row.eligible && expired(row, table, defaults, now, grace));
+    const removable = page.filter(row => row.eligible && expired(row, table, defaults, now));
     // At most seven bindings per row, kept below D1's 100-variable limit.
     // Small atomic chunks also avoid one subrequest per retained-history row.
-    for (let offset = 0; offset < removable.length; offset += 10) {
+    for (let offset = 0; offset < removable.length; offset += ROWID_DELETE_CHUNK_SIZE) {
       if (Date.now() >= deadline) { await save(); return result; }
-      const chunk = removable.slice(offset, offset + 10);
+      const chunk = removable.slice(offset, offset + ROWID_DELETE_CHUNK_SIZE);
       const guarded = chunk.map(row => {
         const identity = table.result === 'workspaceEvents'
           ? sql`workspace_id = ${row.workspace_id} AND seq = ${row.seq}`
