@@ -28,12 +28,12 @@ function fixture() {
     handle.sqlite.prepare('INSERT INTO messages(id,workspace_id,channel_id,agent_id,body,thread_id) VALUES (?,?,?,?,?,?)').run(id, ws, ws, ws, 'body', thread);
     return id;
   };
-  const delivery = (msg: string, status = 'acked', created = old, ws = 'one') => {
+  const delivery = (msg: string, status = 'acked', created = old, ws = 'one', expires: number | null = null) => {
     const id = `delivery-${++sequence}`;
     // A distinct agent is needed for each message/agent delivery uniqueness.
     const agent = `agent-${sequence}`;
     handle.sqlite.prepare('INSERT INTO agents(id,workspace_id,name,token_hash) VALUES (?,?,?,?)').run(agent, ws, agent, agent);
-    handle.sqlite.prepare('INSERT INTO deliveries(id,workspace_id,message_id,agent_id,seq,status,created_at) VALUES (?,?,?,?,?,?,?)').run(id, ws, msg, agent, sequence, status, created);
+    handle.sqlite.prepare('INSERT INTO deliveries(id,workspace_id,message_id,agent_id,seq,status,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?)').run(id, ws, msg, agent, sequence, status, created, expires);
     return id;
   };
   let state: RowidRetentionState | undefined;
@@ -194,4 +194,75 @@ describe('schema-free retention candidate pages', () => {
       expect(f.sqlite.prepare('SELECT count(*) n FROM deliveries').get()).toEqual({ n: 1 });
     },
   );
+
+  // Regression for the 2026-09-09 capacity incident: `queued` / `delivered`
+  // deliveries past `expires_at` are covered by no `delivery_ttl_days` value,
+  // so before this they were unreclaimable at any TTL. 4,409,692 of 4,409,767
+  // queued rows on production were already expired.
+  it('reaps queued and delivered rows long past expires_at', async () => {
+    const f = fixture(); const msg = f.message(1);
+    const staleQueued = f.delivery(msg, 'queued', seconds, 'one', seconds - 30 * 86400);
+    const staleDelivered = f.delivery(msg, 'delivered', seconds, 'one', seconds - 30 * 86400);
+    expect((await f.run({ batchLimit: 50, maxBatches: 5 })).deliveries).toBe(2);
+    const left = f.sqlite.prepare('SELECT id FROM deliveries').all() as { id: string }[];
+    expect(left.map(r => r.id)).not.toContain(staleQueued);
+    expect(left.map(r => r.id)).not.toContain(staleDelivered);
+  });
+
+  it('keeps an active delivery inside its expiry grace window', async () => {
+    const f = fixture(); const msg = f.message(1);
+    const recent = f.delivery(msg, 'queued', seconds, 'one', seconds - 2 * 86400);
+    expect((await f.run({ batchLimit: 50, maxBatches: 5, expiredDeliveryGraceDays: 7 })).deliveries).toBe(0);
+    expect((f.sqlite.prepare('SELECT id FROM deliveries').all() as { id: string }[]).map(r => r.id)).toContain(recent);
+  });
+
+  it('never reaps an active delivery with no expires_at, however old', async () => {
+    const f = fixture(); const msg = f.message(1);
+    const immortal = f.delivery(msg, 'queued', old, 'one', null);
+    expect((await f.run({ batchLimit: 50, maxBatches: 5 })).deliveries).toBe(0);
+    expect((f.sqlite.prepare('SELECT id FROM deliveries').all() as { id: string }[]).map(r => r.id)).toContain(immortal);
+  });
+
+  it('honours the grace window boundary rather than any workspace TTL', async () => {
+    const f = fixture(); const msg = f.message(1);
+    // delivery_ttl_days disabled: only the expiry rule can authorize this.
+    const stale = f.delivery(msg, 'queued', seconds, 'one', seconds - 10 * 86400);
+    expect((await f.run({
+      batchLimit: 50, maxBatches: 5, expiredDeliveryGraceDays: 30,
+      defaults: { deliveryTtlDays: null },
+    })).deliveries).toBe(0);
+    expect((await f.run({
+      batchLimit: 50, maxBatches: 5, expiredDeliveryGraceDays: 7,
+      defaults: { deliveryTtlDays: null },
+    })).deliveries).toBe(1);
+    expect((f.sqlite.prepare('SELECT id FROM deliveries').all() as { id: string }[]).map(r => r.id)).not.toContain(stale);
+  });
+
+  it('does not delete an expired queued row that was acked after the candidate read', async () => {
+    const f = fixture(); const msg = f.message(1);
+    const raced = f.delivery(msg, 'queued', seconds, 'one', seconds - 30 * 86400);
+    const original = f.sqlite.prepare.bind(f.sqlite);
+    // Flip the row to `acked` between the page read and the DELETE. The widened
+    // guard still matches it (acked is settled), so without a status guard it
+    // would be deleted under the expiry rule with its own TTL never checked.
+    let flipped = false;
+    (f.sqlite as unknown as { prepare: typeof original }).prepare = ((query: string) => {
+      if (!flipped && /^DELETE FROM deliveries/i.test(query)) {
+        flipped = true;
+        original("UPDATE deliveries SET status = 'acked' WHERE id = ?").run(raced);
+      }
+      return original(query);
+    }) as typeof original;
+    await f.run({ batchLimit: 50, maxBatches: 5, defaults: { deliveryTtlDays: null } });
+    expect((f.sqlite.prepare('SELECT id FROM deliveries').all() as { id: string }[]).map(r => r.id)).toContain(raced);
+  });
+
+  it('accepts a raised page ceiling so a large table can be traversed', async () => {
+    const f = fixture(); const msg = f.message(1);
+    f.sqlite.transaction(() => { for (let i = 0; i < 600; i++) f.delivery(msg, 'acked', seconds); })();
+    await f.run({ batchLimit: 500, maxBatches: 1 });
+    const reads = f.queries.filter(q => q.sql.includes('FROM deliveries NOT INDEXED') && q.sql.includes('WITH page'));
+    // Previously clamped to 200; the host may now ask for more.
+    expect(reads.some(q => q.params.at(-1) === 500)).toBe(true);
+  });
 });

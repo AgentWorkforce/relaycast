@@ -58,10 +58,17 @@ export interface PruneOptions {
   cursorStore?: RetentionCursorStore;
   /** Admission budget for cursor mode; does not cancel in-flight SQL. Default 10s, capped at 30s. */
   maxDurationMs?: number;
-  /** Max rows deleted per table per batch (the SQL LIMIT). Default 200. */
+  /** Max rows deleted per table per batch (the SQL LIMIT). Default 200, capped at 1000 in cursor mode. */
   batchLimit?: number;
-  /** Max batches per table per call, bounding total work per run. Default 5. */
+  /** Max batches per table per call, bounding total work per run. Default 5, capped at 20 in cursor mode. */
   maxBatches?: number;
+  /**
+   * How long a `queued` / `delivered` delivery must have been past its
+   * `expires_at` before retention may reap it. Independent of
+   * `delivery_ttl_days`, which cannot express this class at any value.
+   * Cursor mode only. Default 7 days.
+   */
+  expiredDeliveryGraceDays?: number;
   /** Clock override for tests. */
   now?: Date;
   /** Deployment-wide TTL fallbacks; see {@link RetentionDefaults}. */

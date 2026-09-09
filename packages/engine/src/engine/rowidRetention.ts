@@ -26,6 +26,7 @@ type Candidate = {
   id: string;
   workspace_id: string;
   created_at: number;
+  expires_at: number | null;
   seq: number;
   message_id: string;
   agent_id: string;
@@ -42,13 +43,29 @@ type Table = {
   snowflake?: boolean;
   guard: string;
 };
-const settled = "status IN ('acked', 'failed', 'dead_lettered')";
+const settled = "deliveries.status IN ('acked', 'failed', 'dead_lettered')";
+// Table-qualified: `workspaces` also has an `expires_at`, and the outer page
+// query joins it, so a bare column is ambiguous there. The page builder rewrites
+// `deliveries.` to `page.` for the SELECT and leaves it intact for the DELETE.
+const active = "deliveries.status IN ('queued', 'delivered')";
+// A `queued` or `delivered` delivery whose `expires_at` has long passed is
+// covered by no `delivery_ttl_days` policy at ANY value — the settled guard
+// cannot see it — so before this it was unreclaimable and simply accumulated.
+// On production 2026-09-09, 4,409,692 of 4,409,767 queued deliveries were
+// already past `expires_at`, in a 9.9GB database against D1's 10GB cap.
+//
+// Deliberately widens the EXISTING deliveries guard rather than adding a second
+// table entry: this scan is an unindexed rowid crawl, so a second entry would
+// double the crawl cost for the largest table in the database to reap rows the
+// same pass already walks past.
+const reapableDeliveries = `(${settled} OR (${active} AND deliveries.expires_at IS NOT NULL))`;
+const DEFAULT_EXPIRED_DELIVERY_GRACE_DAYS = 7;
 const tables: Table[] = [
   { name: 'messages', result: 'messages', columns: 'id, workspace_id',
     setting: 'message_ttl_days', fallback: 'messageTtlDays', snowflake: true,
     guard: 'NOT EXISTS (SELECT 1 FROM messages replies WHERE replies.thread_id = messages.id)' },
-  { name: 'deliveries', result: 'deliveries', columns: 'id, workspace_id, created_at, status',
-    setting: 'delivery_ttl_days', fallback: 'deliveryTtlDays', guard: settled },
+  { name: 'deliveries', result: 'deliveries', columns: 'id, workspace_id, created_at, status, expires_at',
+    setting: 'delivery_ttl_days', fallback: 'deliveryTtlDays', guard: reapableDeliveries },
   { name: 'message_logs', result: 'messageLogs', columns: 'id, workspace_id',
     setting: 'message_log_ttl_days', fallback: 'messageLogTtlDays', snowflake: true, guard: '1' },
   { name: 'workspace_events', result: 'workspaceEvents', columns: 'workspace_id, seq, created_at',
@@ -62,7 +79,19 @@ function bounded(value: number | undefined, fallback: number, max: number): numb
   return value !== undefined && Number.isFinite(value) ? Math.max(1, Math.min(max, Math.floor(value))) : fallback;
 }
 
-function expired(row: Candidate, table: Table, defaults: Required<RetentionDefaults>, now: number): boolean {
+function expired(
+  row: Candidate, table: Table, defaults: Required<RetentionDefaults>, now: number,
+  expiredDeliveryGraceDays: number,
+): boolean {
+  // Active deliveries are judged on their own expiry, not on a workspace TTL:
+  // no `delivery_ttl_days` value can express "this queued row is dead". Checked
+  // before the `!table.setting` fallthrough below, which returns true
+  // unconditionally and would otherwise delete live, unexpired deliveries.
+  if (table.result === 'deliveries' && (row.status === 'queued' || row.status === 'delivered')) {
+    if (row.expires_at == null) return false;
+    const grace = Math.max(0, Math.floor(expiredDeliveryGraceDays * 86_400_000));
+    return row.expires_at * 1000 < now - grace;
+  }
   if (!table.setting || !table.fallback) return true;
   const settings = row.retention ? JSON.parse(row.retention) as WorkspaceRetentionSettings : {};
   const override = settings?.[table.setting];
@@ -90,13 +119,19 @@ function expired(row: Candidate, table: Table, defaults: Required<RetentionDefau
 export async function pruneRowidPages(db: EngineDb, opts: PruneOptions & { cursorStore: RetentionCursorStore }): Promise<PruneResult> {
   const now = (opts.now ?? new Date()).getTime();
   if (!Number.isFinite(now)) throw new Error('Invalid retention clock');
-  const limit = bounded(opts.batchLimit, 200, 200);
-  const pages = bounded(opts.maxBatches, 5, 5) * tables.length;
+  // Ceilings, not defaults: the defaults stay 200/5 so no existing caller
+  // changes behaviour, but a host that has measured its own budget can now ask
+  // for more. At 200 rows/page this unindexed crawl needs ~43k pages for one
+  // traversal of an 8.65M-row deliveries table — about a month of 5-minute
+  // crons, far longer than the table takes to fill.
+  const limit = bounded(opts.batchLimit, 200, 1_000);
+  const pages = bounded(opts.maxBatches, 5, 20) * tables.length;
   const deadline = Date.now() + bounded(opts.maxDurationMs, 10_000, 30_000);
   const defaults: Required<RetentionDefaults> = {
     messageTtlDays: null, deliveryTtlDays: 90, messageLogTtlDays: 90, workspaceEventTtlDays: 30,
     ...Object.fromEntries(Object.entries(opts.defaults ?? {}).filter(([, value]) => value !== undefined)),
   };
+  const grace = opts.expiredDeliveryGraceDays ?? DEFAULT_EXPIRED_DELIVERY_GRACE_DAYS;
   const saved = await opts.cursorStore.load();
   // Corrupt state is an error, not permission to restart expensive work or
   // drop an unknown future cursor format during a rollback.
@@ -132,7 +167,7 @@ export async function pruneRowidPages(db: EngineDb, opts: PruneOptions & { curso
     for (const row of page) safeRowid.parse(row._rowid);
     // Keep exact row identities alongside rowid: SQLite may reuse a deleted
     // rowid between the candidate read and a later DELETE.
-    const removable = page.filter(row => row.eligible && expired(row, table, defaults, now));
+      const removable = page.filter(row => row.eligible && expired(row, table, defaults, now, grace));
     // At most seven bindings per row, kept below D1's 100-variable limit.
     // Small atomic chunks also avoid one subrequest per retained-history row.
     for (let offset = 0; offset < removable.length; offset += 10) {
@@ -154,7 +189,13 @@ export async function pruneRowidPages(db: EngineDb, opts: PruneOptions & { curso
         const policyGuard = table.setting ? sql`AND (SELECT w.retention FROM workspaces w
           WHERE w.id = ${row.workspace_id}) IS ${row.retention}` : sql``;
         const timeGuard = table.setting && !table.snowflake ? sql`AND created_at = ${row.created_at}` : sql``;
-        return sql`(rowid = ${row._rowid} AND ${identity} ${policyGuard} ${timeGuard})`;
+        // The widened deliveries guard admits both settled and long-expired
+        // active rows, so it no longer implies which rule authorized the
+        // delete. Pin the exact status read: a queued row that gets acked
+        // between the page read and this DELETE must not be removed under the
+        // expiry rule without its own TTL ever being checked.
+        const statusGuard = table.result === 'deliveries' ? sql`AND status = ${row.status}` : sql``;
+        return sql`(rowid = ${row._rowid} AND ${identity} ${policyGuard} ${timeGuard} ${statusGuard})`;
       });
       const deleted = await db.all(sql`DELETE FROM ${sql.raw(table.name)} NOT INDEXED
         WHERE (${sql.join(guarded, sql` OR `)}) AND ${sql.raw(table.guard)} RETURNING 1`);
