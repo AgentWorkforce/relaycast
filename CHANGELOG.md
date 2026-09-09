@@ -22,6 +22,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Hosts can bound retention candidate scans with persisted rowid cursors without schema changes, preserving workspace TTLs and table fairness.
 - Node replay uses bounded, ordered database pages with existing indexes, reducing shared-database contention without requiring schema changes.
+- Opt-in schema-free retention can safely delete active `queued`/`delivered` deliveries after the grace window without emitting `delivery.failed` notices (preserving rollback compatibility for `cursorStore` v1).
 
 ## [8.5.2] - 2026-09-07
 

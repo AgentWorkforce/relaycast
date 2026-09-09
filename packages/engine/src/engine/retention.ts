@@ -69,6 +69,14 @@ export interface PruneOptions {
    * Cursor mode only. Default 7 days.
    */
   expiredDeliveryGraceDays?: number;
+  /**
+   * Cursor mode only: after the grace window, switch active `queued`/
+   * `delivered` recovery from the widened rowid scan to a set-based DELETE
+   * using `idx_deliveries_active_expiry`.
+   *
+   * Opt-in cleanup after the grace window skips `delivery.failed` notices.
+   */
+  activeExpiryRecovery?: boolean;
   /** Clock override for tests. */
   now?: Date;
   /** Deployment-wide TTL fallbacks; see {@link RetentionDefaults}. */

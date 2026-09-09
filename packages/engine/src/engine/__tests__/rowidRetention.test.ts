@@ -238,6 +238,77 @@ describe('schema-free retention candidate pages', () => {
     expect((f.sqlite.prepare('SELECT id FROM deliveries').all() as { id: string }[]).map(r => r.id)).not.toContain(stale);
   });
 
+  it('opt-in active expiry recovery uses idx_deliveries_active_expiry and caps DELETE rows per call', async () => {
+    const f = fixture(); const msg = f.message(1);
+    // 5,000 expired queued deliveries; recovery caps at 4,000 rows per call.
+    for (let i = 0; i < 5000; i++) f.delivery(msg, 'queued', seconds, 'one', seconds - 10 * 86400);
+    const result = await f.run({ activeExpiryRecovery: true, expiredDeliveryGraceDays: 7, maxBatches: 4, batchLimit: 200 });
+    expect(result.deliveries).toBeLessThanOrEqual(4000);
+    expect(f.sqlite.prepare('SELECT count(*) n FROM deliveries').get()).toEqual({ n: 5000 - result.deliveries });
+
+    const hasIndexMarker = f.queries.some((q) => q.sql.toLowerCase().includes('idx_deliveries_active_expiry'));
+    expect(hasIndexMarker).toBe(true);
+
+    const recoveryDeletes = f.queries.filter((q) => /^DELETE/i.test(q.sql) && q.sql.toLowerCase().includes('from deliveries'));
+    expect(recoveryDeletes.length).toBeLessThanOrEqual(4);
+
+    // Ensure the planner uses the index (not a scan).
+    const idxQuery = f.queries.find((q) => q.sql.toLowerCase().includes('idx_deliveries_active_expiry'));
+    expect(idxQuery).toBeTruthy();
+    const explain = f.sqlite.prepare('EXPLAIN QUERY PLAN ' + idxQuery!.sql).all(...idxQuery!.params) as Array<{ detail: string }>;
+    expect(explain.some((row) => /USING INDEX idx_deliveries_active_expiry/.test(row.detail))).toBe(true);
+  });
+
+  it('opt-in active expiry recovery preserves NULL expires_at, live active rows, and settled deliveries', async () => {
+    const f = fixture(); const msg = f.message(1);
+    const nullExpires = f.delivery(msg, 'queued', seconds, 'one', null);
+    const inGrace = f.delivery(msg, 'queued', seconds, 'one', seconds - 3 * 86400); // within 7-day grace
+    // Settled deliveries are pruned by delivery TTL, independent of grace.
+    // Pick an unexpired acked row so we can verify the grace recovery
+    // doesn't delete it.
+    const settledAcked = f.delivery(msg, 'acked', seconds - 10 * 86400, 'one', seconds - 10 * 86400);
+    const expiredQueued = f.delivery(msg, 'queued', seconds, 'one', seconds - 20 * 86400);
+
+    await f.run({ activeExpiryRecovery: true, expiredDeliveryGraceDays: 7, maxBatches: 4 });
+
+    const remaining = f.sqlite.prepare('SELECT id,status,expires_at FROM deliveries').all() as Array<{ id: string; status: string; expires_at: number | null }>;
+    const cutoffSeconds = Math.floor((seconds * 1000 - 7 * 86400_000) / 1000);
+    expect(remaining.some(r => r.id === nullExpires)).toBe(true);
+    expect(remaining.some(r => r.id === inGrace && r.expires_at !== null && r.expires_at > cutoffSeconds && r.status === 'queued')).toBe(true);
+    expect(remaining.some(r => r.id === settledAcked)).toBe(true);
+    expect(remaining.some(r => r.id === expiredQueued)).toBe(false);
+  });
+
+  it('opt-in active expiry recovery skips expiry-extension races by rechecking expires_at at DELETE time', async () => {
+    const f = fixture(); const msg = f.message(1);
+    const toFlip = f.delivery(msg, 'queued', seconds, 'one', seconds - 20 * 86400);
+    const executeAll = f.db.all.bind(f.db);
+    let flipped = false;
+    const spy = vi.spyOn(f.db, 'all').mockImplementation((query: unknown) => {
+      const text = f.db.dialect.sqlToQuery(query as never).sql;
+      if (!flipped && text.toLowerCase().includes('idx_deliveries_active_expiry')) {
+        flipped = true;
+        f.sqlite.prepare(`UPDATE deliveries SET expires_at = ${seconds + 30} WHERE id = ?`).run(toFlip);
+      }
+      return executeAll(query as never);
+    });
+
+    await f.run({ activeExpiryRecovery: true, expiredDeliveryGraceDays: 7, maxBatches: 4, batchLimit: 200 });
+    spy.mockRestore();
+    expect(f.sqlite.prepare('SELECT id FROM deliveries WHERE id=?').get(toFlip)).toBeTruthy();
+    expect(flipped).toBe(true);
+  });
+
+  it('opt-in active expiry recovery has hard worst-case DELETE statement count < 1000', async () => {
+    const f = fixture(); const msg = f.message(1);
+    for (let i = 0; i < 9000; i++) f.delivery(msg, 'delivered', seconds, 'one', seconds - 20 * 86400);
+    await f.run({ activeExpiryRecovery: true, expiredDeliveryGraceDays: 7, maxBatches: 4, batchLimit: 200 });
+    const statements = f.queries.filter(q => /^DELETE FROM deliveries/i.test(q.sql));
+    // Rowid scan for active is disabled in this mode, so only the set-based recovery deletes should happen.
+    expect(statements.length).toBeLessThan(1000);
+    expect(statements.length).toBeLessThanOrEqual(4);
+  });
+
   it('does not delete an expired queued row that was acked after the candidate read', async () => {
     const f = fixture(); const msg = f.message(1);
     const raced = f.delivery(msg, 'queued', seconds, 'one', seconds - 30 * 86400);

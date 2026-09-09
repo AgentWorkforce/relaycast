@@ -58,22 +58,71 @@ const active = "deliveries.status IN ('queued', 'delivered')";
 // table entry: this scan is an unindexed rowid crawl, so a second entry would
 // double the crawl cost for the largest table in the database to reap rows the
 // same pass already walks past.
-const reapableDeliveries = `(${settled} OR (${active} AND deliveries.expires_at IS NOT NULL))`;
 const DEFAULT_EXPIRED_DELIVERY_GRACE_DAYS = 7;
-const tables: Table[] = [
-  { name: 'messages', result: 'messages', columns: 'id, workspace_id',
-    setting: 'message_ttl_days', fallback: 'messageTtlDays', snowflake: true,
-    guard: 'NOT EXISTS (SELECT 1 FROM messages replies WHERE replies.thread_id = messages.id)' },
-  { name: 'deliveries', result: 'deliveries', columns: 'id, workspace_id, created_at, status, expires_at',
-    setting: 'delivery_ttl_days', fallback: 'deliveryTtlDays', guard: reapableDeliveries },
-  { name: 'message_logs', result: 'messageLogs', columns: 'id, workspace_id',
-    setting: 'message_log_ttl_days', fallback: 'messageLogTtlDays', snowflake: true, guard: '1' },
-  { name: 'workspace_events', result: 'workspaceEvents', columns: 'workspace_id, seq, created_at',
-    setting: 'workspace_event_ttl_days', fallback: 'workspaceEventTtlDays',
-    guard: 'EXISTS (SELECT 1 FROM workspace_events hw WHERE hw.workspace_id = workspace_events.workspace_id AND hw.seq > workspace_events.seq LIMIT 1)' },
-  { name: 'read_receipts', result: 'readReceipts', columns: 'message_id, agent_id',
-    guard: 'NOT EXISTS (SELECT 1 FROM messages m WHERE m.id = read_receipts.message_id)' },
-];
+function buildTables(opts: { activeExpiryRecovery: boolean }) : Table[] {
+  // Rowid scan is intentionally optimized to avoid unindexed full-table reads
+  // when callers opt into set-based active expiry recovery.
+  const reapableDeliveries = opts.activeExpiryRecovery
+    ? settled
+    : `(${settled} OR (${active} AND deliveries.expires_at IS NOT NULL))`;
+  return [
+    { name: 'messages', result: 'messages', columns: 'id, workspace_id',
+      setting: 'message_ttl_days', fallback: 'messageTtlDays', snowflake: true,
+      guard: 'NOT EXISTS (SELECT 1 FROM messages replies WHERE replies.thread_id = messages.id)' },
+    { name: 'deliveries', result: 'deliveries', columns: 'id, workspace_id, created_at, status, expires_at',
+      setting: 'delivery_ttl_days', fallback: 'deliveryTtlDays', guard: reapableDeliveries },
+    { name: 'message_logs', result: 'messageLogs', columns: 'id, workspace_id',
+      setting: 'message_log_ttl_days', fallback: 'messageLogTtlDays', snowflake: true, guard: '1' },
+    { name: 'workspace_events', result: 'workspaceEvents', columns: 'workspace_id, seq, created_at',
+      setting: 'workspace_event_ttl_days', fallback: 'workspaceEventTtlDays',
+      guard: 'EXISTS (SELECT 1 FROM workspace_events hw WHERE hw.workspace_id = workspace_events.workspace_id AND hw.seq > workspace_events.seq LIMIT 1)' },
+    { name: 'read_receipts', result: 'readReceipts', columns: 'message_id, agent_id',
+      guard: 'NOT EXISTS (SELECT 1 FROM messages m WHERE m.id = read_receipts.message_id)' },
+  ];
+}
+
+const MAX_ACTIVE_EXPIRY_RECOVERY_BATCHES = 4;
+const ACTIVE_EXPIRY_RECOVERY_DELETE_LIMIT = 1000;
+
+async function recoverExpiredActiveDeliveriesSetBased(
+  db: EngineDb,
+  nowMs: number,
+  graceDays: number,
+  opts: { maxBatches: number },
+): Promise<number> {
+  const graceMs = Math.max(0, Math.floor(graceDays * 86_400_000));
+  const cutoffMs = nowMs - graceMs;
+  const cutoffSeconds = Math.floor(cutoffMs / 1000);
+
+  // Use the existing index that already narrows to only active (queued/delivered).
+  // We still re-check queued/delivered + expires_at in the outer DELETE predicate
+  // to avoid expiry-extension races between selecting candidate ids and deleting.
+  const batches = Math.max(1, Math.min(Math.floor(opts.maxBatches), MAX_ACTIVE_EXPIRY_RECOVERY_BATCHES));
+  let deleted = 0;
+  for (let batch = 0; batch < batches; batch++) {
+    const changed = await db.all<{ _id: string }>(sql`
+      DELETE FROM deliveries
+      WHERE (
+        status IN ('queued', 'delivered')
+        AND expires_at IS NOT NULL
+        AND expires_at <= ${cutoffSeconds}
+      )
+      AND id IN (
+        SELECT id
+        FROM deliveries INDEXED BY idx_deliveries_active_expiry
+        WHERE status IN ('queued', 'delivered')
+          AND expires_at IS NOT NULL
+          AND expires_at <= ${cutoffSeconds}
+        ORDER BY expires_at, id
+        LIMIT ${ACTIVE_EXPIRY_RECOVERY_DELETE_LIMIT}
+      )
+      RETURNING id AS _id
+    `);
+    deleted += changed.length;
+    if (changed.length < ACTIVE_EXPIRY_RECOVERY_DELETE_LIMIT) break;
+  }
+  return deleted;
+}
 
 function bounded(value: number | undefined, fallback: number, max: number): number {
   return value !== undefined && Number.isFinite(value) ? Math.max(1, Math.min(max, Math.floor(value))) : fallback;
@@ -124,6 +173,9 @@ export async function pruneRowidPages(db: EngineDb, opts: PruneOptions & { curso
   // for more. At 200 rows/page this unindexed crawl needs ~43k pages for one
   // traversal of an 8.65M-row deliveries table — about a month of 5-minute
   // crons, far longer than the table takes to fill.
+  const activeExpiryRecovery = opts.activeExpiryRecovery === true;
+  const tables = buildTables({ activeExpiryRecovery });
+
   const limit = bounded(opts.batchLimit, 200, 1_000);
   const pages = bounded(opts.maxBatches, 5, 20) * tables.length;
   const deadline = Date.now() + bounded(opts.maxDurationMs, 10_000, 30_000);
@@ -206,6 +258,20 @@ export async function pruneRowidPages(db: EngineDb, opts: PruneOptions & { curso
     } else position.cursor = page.at(-1)!._rowid;
     await save();
     if (finished.size === tables.length) break;
+  }
+
+  // Opt-in set-based recovery for active deliveries that have passed the
+  // expiry grace window: this intentionally skips emitting `delivery.failed`
+  // notices (unlike the scheduled expiry sweep).
+  if (activeExpiryRecovery) {
+    const deleted = await recoverExpiredActiveDeliveriesSetBased(
+      db,
+      now,
+      grace,
+      { maxBatches: Math.min(bounded(opts.maxBatches, 5, 20), MAX_ACTIVE_EXPIRY_RECOVERY_BATCHES) },
+    );
+    // These deletes bypass the rowid scan's accounting; add them explicitly.
+    result.deliveries += deleted;
   }
   return result;
 }
