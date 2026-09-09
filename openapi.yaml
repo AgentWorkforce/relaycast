@@ -1368,6 +1368,7 @@ components:
           type: string
 
     RelayfileInboundEventSnapshot:
+      description: Provider record snapshot. Cloud sync envelopes expose their inner provider payload in message metadata and formatting; provider event semantics still require authenticated top-level event metadata.
       type: object
       properties:
         path:
@@ -1398,6 +1399,12 @@ components:
           type: string
         provider:
           type: string
+        providerEventType:
+          type: string
+          description: Authenticated provider semantic type, for example pull_request.closed. Preserved without inferring semantics from file.updated.
+        resourceRef:
+          type: string
+          description: Authenticated provider resource reference preserved in message metadata.
         correlationId:
           type: string
         timestamp:
@@ -2273,6 +2280,58 @@ paths:
         '204':
           description: Agent deleted
 
+  /agents/{name}/subscription-channel:
+    post:
+      summary: Ensure an exact agent subscription delivery channel
+      description: |
+        Workspace-owner operation. Idempotently returns a channel bound to the
+        agent's immutable identity ID and joins that identity. Other agents
+        cannot join or be invited. Does not rotate the recipient token. A
+        replacement registered under the same name gets a different channel.
+        The agent-events- prefix and routing metadata are reserved. This limits
+        delivery membership; it does not introduce private history access. Returns
+        404 if the recipient is released before membership is established.
+      tags: [Agents]
+      security:
+        - workspaceKey: []
+      parameters:
+        - in: path
+          name: name
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Channel with verified recipient membership
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, data]
+                properties:
+                  ok: { type: boolean, enum: [true] }
+                  data:
+                    type: object
+                    required: [id, name, members, member_count]
+                    properties:
+                      id: { type: string }
+                      name: { type: string }
+                      member_count: { type: integer, enum: [1] }
+                      members:
+                        type: array
+                        minItems: 1
+                        maxItems: 1
+                        items:
+                          type: object
+                          properties:
+                            agent_id: { type: string }
+                            agent_name: { type: string }
+        '401':
+          description: Workspace key required
+        '404':
+          description: Recipient identity not found
+        '409':
+          description: Subscription channel archived
+
   /agents/{name}/legacy-identity:
     patch:
       summary: Atomically claim a legacy agent identity
@@ -2887,7 +2946,7 @@ paths:
   /channels/{name}/mute:
     post:
       summary: Mute a channel
-      description: Mute a channel for the authenticated agent. Muted channels suppress ordinary message delivery rows and realtime pushes, but explicit @mentions still create mention deliveries. The agent remains a member and still receives system/control events (member joins, channel updates, mute confirmations). Agent identity is derived from the agent token — no request body needed.
+      description: Mute a channel for the authenticated agent. Mention handles include ASCII letters, digits, underscores and hyphens; escaped and email-address @ signs are not mentions. Muted channels suppress ordinary message delivery rows and realtime pushes, but explicit @mentions still create mention deliveries. The agent remains a member and still receives system/control events (member joins, channel updates, mute confirmations). Agent identity is derived from the agent token — no request body needed.
       tags:
         - Channels
       security:
@@ -5418,6 +5477,9 @@ paths:
         HMAC-authenticated callback used by relayfile to inject matching provider
         file events into a Relaycast channel. The HMAC input is
         `X-Relay-Timestamp + "." + raw request body`, signed with SHA-256.
+        A full recipient mailbox returns 503 mailbox_full with Retry-After: 30;
+        the producer must retry the same event ID. The message and all delivery
+        rows roll back together, so no recipient is silently skipped.
       tags:
         - Relayfile
       parameters:
@@ -5512,7 +5574,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: Relayfile inbound bridge or idempotency storage is unavailable
+          description: A recipient mailbox is full (mailbox_full), or the inbound bridge/idempotency storage is unavailable
+          headers:
+            Retry-After:
+              description: For mailbox_full, retry the same event ID after 30 seconds
+              schema:
+                type: integer
+                example: 30
           content:
             application/json:
               schema:
@@ -5625,6 +5693,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '503':
+          description: A recipient mailbox is full; no partial message or deliveries were committed
+          headers:
+            Retry-After:
+              description: Retry the event after 30 seconds
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /ws:
     get:

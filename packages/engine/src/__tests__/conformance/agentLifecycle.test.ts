@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
-import { actionInvocations, agentNodeBindings, agents, nodes, workspaceEvents } from '../../db/schema.js';
+import { actionInvocations, agentNodeBindings, agents, channelMembers, nodes, workspaceEvents } from '../../db/schema.js';
 import { AGENT_LIVENESS_TTL_MS, sweepStaleAgents } from '../../engine/agent.js';
 import {
   attachDirectNodeSocket,
@@ -16,6 +16,29 @@ describe('agent presence and release lifecycle', () => {
 
   beforeEach(() => { stack = makeNodeStack(); });
   afterEach(() => stack.close());
+
+  it('suppresses implicit membership by explicit registration contract and invalidates default membership cache', async () => {
+    const ws = await createWorkspace(stack.app, 'registration-isolation');
+    const readGeneral = async () => {
+      const response = await stack.app.request('/v1/channels/general', {
+        headers: { authorization: `Bearer ${ws.workspaceKey}` },
+      });
+      expect(response.status).toBe(200);
+      return (await response.json()).data;
+    };
+    await readGeneral(); // Prime the cache before registration.
+    const response = await stack.app.request('/v1/agents', {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ name: 'isolated', auto_join_general: false }),
+    });
+    expect(response.status).toBe(201);
+    const isolated = (await response.json()).data;
+    expect(await stack.runtime.deps.db.select().from(channelMembers)
+      .where(eq(channelMembers.agentId, isolated.id))).toEqual([]);
+    const ordinary = await registerAgent(stack.app, ws.workspaceKey, 'ordinary');
+    expect((await readGeneral()).members.map((member: { agent_id: string }) => member.agent_id))
+      .toContain(ordinary.agentId);
+  });
 
   it('derives stale presence without writing during a roster read', async () => {
     const ws = await createWorkspace(stack.app, 'agent-presence-expiry');

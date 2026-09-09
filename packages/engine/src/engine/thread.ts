@@ -48,7 +48,7 @@ export async function postReply(
   const metadata = sanitizeUserMessageMetadata(data.data);
   const sessionRef = requireSessionRefFromMetadata(metadata);
   const createdAt = new Date();
-  const mentionPattern = /(?:^|\s)@(\w+)/g;
+  const mentionPattern = /(?:^|\s)@([\w-]+)/g;
   const mentionedHandles = new Set<string>();
   for (let match = mentionPattern.exec(data.text); match !== null; match = mentionPattern.exec(data.text)) {
     mentionedHandles.add(match[1]);
