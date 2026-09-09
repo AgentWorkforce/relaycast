@@ -185,7 +185,7 @@ describe('bounded database work with retained history', () => {
     await expect(pruneExpired(f.db, { now: new Date(NaN), defaults })).rejects.toThrow('Invalid retention clock');
   });
 
-  it('advances retained-only candidate pages durably and never scans active deliveries for retention', async () => {
+  it('advances retained-only candidate pages durably and scans active deliveries only through the expiry index', async () => {
     const f = fixture();
     f.sqlite.exec(`UPDATE deliveries SET created_at = 1;
       UPDATE workspaces SET retention = '{"delivery_ttl_days":null}'`);
@@ -198,7 +198,19 @@ describe('bounded database work with retained history', () => {
     await pruneExpired(nextDb, opts);
     expect(cursor().positions.deliveries[1]).toBe('d0000000020');
     const pages = f.queries.filter(q => q.sql.includes('WITH page AS MATERIALIZED'));
-    expect(pages).toHaveLength(4); // globally disabled message retention does no candidate scan
+    // Globally disabled message retention still does no candidate scan. The
+    // fifth page is the expired-active-delivery entry, which reclaims rows the
+    // settled entry can never see: a `queued` delivery is not covered by any
+    // `delivery_ttl_days` policy, so before this entry existed those rows were
+    // unreclaimable at any TTL and simply accumulated.
+    expect(pages).toHaveLength(5);
+    const activePages = pages.filter(q => q.sql.includes('idx_deliveries_active_expiry'));
+    expect(activePages).toHaveLength(1);
+    // The active set is only ever reached through the partial expiry index —
+    // never an unindexed scan of live deliveries.
+    for (const query of activePages) {
+      expect(query.sql).toContain("status IN ('queued', 'delivered') AND expires_at IS NOT NULL");
+    }
     for (const query of pages) {
       expect(query.params.at(-1)).toBe(10);
       expect(f.sqlite.prepare(query.sql).all(...query.params).length).toBeLessThanOrEqual(10);

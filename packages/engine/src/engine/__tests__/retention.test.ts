@@ -87,8 +87,14 @@ async function insertDelivery(
   messageId: string,
   status: string,
   daysAgo: number,
+  expiresAtDays?: number | null,
 ): Promise<string> {
   const id = `del_${messageId}_${base.agent}`;
+  // `deliveries.expiresAt` is a timestamp column, so drizzle maps a Date to the
+  // stored unix seconds. Passing the seconds directly throws at bind time.
+  const expiresAt = expiresAtDays == null
+    ? null
+    : new Date(Date.now() - expiresAtDays * DAY_MS);
   await db.insert(deliveries).values({
     id,
     workspaceId: base.ws,
@@ -97,6 +103,7 @@ async function insertDelivery(
     status,
     seq: ++deliverySeqCounter,
     createdAt: new Date(Date.now() - daysAgo * DAY_MS),
+    expiresAt,
   });
   return id;
 }
@@ -148,7 +155,14 @@ describe('pruneExpired', () => {
       },
     });
 
-    expect(result).toEqual({ messages: 0, deliveries: 0, messageLogs: 0, readReceipts: 0, workspaceEvents: 0 });
+    expect(result).toEqual({
+      messages: 0,
+      deliveries: 0,
+      expiredDeliveries: 0,
+      messageLogs: 0,
+      readReceipts: 0,
+      workspaceEvents: 0,
+    });
     expect(await db.select().from(messages)).toHaveLength(1);
     expect(await db.select().from(deliveries)).toHaveLength(1);
     expect(await db.select().from(messageLogs)).toHaveLength(1);
@@ -165,6 +179,7 @@ describe('pruneExpired', () => {
 
     expect(result.messages).toBe(0);
     expect(result.deliveries).toBe(1);
+    expect(result.expiredDeliveries).toBe(0);
     expect(result.messageLogs).toBe(1);
     expect(await db.select().from(messages)).toHaveLength(1);
     expect(await db.select().from(deliveries)).toHaveLength(0);
@@ -297,8 +312,175 @@ describe('pruneExpired', () => {
     const result = await pruneExpired(db);
 
     expect(result.deliveries).toBe(2);
+    expect(result.expiredDeliveries).toBe(0);
     const remaining = (await db.select({ status: deliveries.status }).from(deliveries)).map((r) => r.status);
     expect(remaining.sort()).toEqual(['acked', 'queued']);
+  });
+
+  it('deletes a queued delivery expired longer than the grace window', async () => {
+    const { db } = track(openDb());
+    const base = await seedWorkspace(db);
+    // The delivery fixtures below derive `expires_at` from the real clock,
+    // so the prune must read the same reference or nothing is ever past
+    // its grace window.
+    const now = new Date();
+
+    await insertDelivery(db, base, await insertMessage(db, base, idAt(1)), 'queued', 1, 20);
+    // Ensure settled-delivery TTL is disabled so only the new entry can delete.
+    const result = await pruneExpired(db, {
+      now,
+      expiredDeliveryGraceDays: 7,
+      defaults: {
+        deliveryTtlDays: null,
+        messageLogTtlDays: null,
+        workspaceEventTtlDays: null,
+        messageTtlDays: null,
+      },
+    });
+
+    expect(result.expiredDeliveries).toBe(1);
+    expect(await db.select().from(deliveries)).toHaveLength(0);
+  });
+
+  it('does not delete a queued delivery expired inside the grace window', async () => {
+    const { db } = track(openDb());
+    const base = await seedWorkspace(db);
+    // The delivery fixtures below derive `expires_at` from the real clock,
+    // so the prune must read the same reference or nothing is ever past
+    // its grace window.
+    const now = new Date();
+
+    await insertDelivery(db, base, await insertMessage(db, base, idAt(1)), 'queued', 1, 3);
+    const result = await pruneExpired(db, {
+      now,
+      expiredDeliveryGraceDays: 7,
+      defaults: {
+        deliveryTtlDays: null,
+        messageLogTtlDays: null,
+        workspaceEventTtlDays: null,
+        messageTtlDays: null,
+      },
+    });
+
+    expect(result.expiredDeliveries).toBe(0);
+    expect(await db.select().from(deliveries)).toHaveLength(1);
+  });
+
+  it('does not delete a queued delivery with expires_at NULL', async () => {
+    const { db } = track(openDb());
+    const base = await seedWorkspace(db);
+    // The delivery fixtures below derive `expires_at` from the real clock,
+    // so the prune must read the same reference or nothing is ever past
+    // its grace window.
+    const now = new Date();
+
+    await insertDelivery(db, base, await insertMessage(db, base, idAt(1)), 'queued', 1, null);
+    const result = await pruneExpired(db, {
+      now,
+      expiredDeliveryGraceDays: 7,
+      defaults: {
+        deliveryTtlDays: null,
+        messageLogTtlDays: null,
+        workspaceEventTtlDays: null,
+        messageTtlDays: null,
+      },
+    });
+
+    expect(result.expiredDeliveries).toBe(0);
+    expect(await db.select().from(deliveries)).toHaveLength(1);
+  });
+
+  it('deletes a delivered delivery long past expiry', async () => {
+    const { db } = track(openDb());
+    const base = await seedWorkspace(db);
+    // The delivery fixtures below derive `expires_at` from the real clock,
+    // so the prune must read the same reference or nothing is ever past
+    // its grace window.
+    const now = new Date();
+
+    await insertDelivery(db, base, await insertMessage(db, base, idAt(1)), 'delivered', 1, 20);
+    const result = await pruneExpired(db, {
+      now,
+      expiredDeliveryGraceDays: 7,
+      defaults: {
+        deliveryTtlDays: null,
+        messageLogTtlDays: null,
+        workspaceEventTtlDays: null,
+        messageTtlDays: null,
+      },
+    });
+
+    expect(result.expiredDeliveries).toBe(1);
+    expect(await db.select().from(deliveries)).toHaveLength(0);
+  });
+
+  it('leaves an acked delivery untouched by the new entry', async () => {
+    const { db } = track(openDb());
+    const base = await seedWorkspace(db);
+    // The delivery fixtures below derive `expires_at` from the real clock,
+    // so the prune must read the same reference or nothing is ever past
+    // its grace window.
+    const now = new Date();
+
+    const msg = await insertMessage(db, base, idAt(1));
+    await insertDelivery(db, base, msg, 'acked', 1, 20);
+    const result = await pruneExpired(db, {
+      now,
+      expiredDeliveryGraceDays: 7,
+      defaults: {
+        deliveryTtlDays: null,
+        messageLogTtlDays: null,
+        workspaceEventTtlDays: null,
+        messageTtlDays: null,
+      },
+    });
+
+    expect(result.expiredDeliveries).toBe(0);
+    expect((await db.select().from(deliveries)).map((r) => r.status)).toEqual(['acked']);
+  });
+
+  it('advances cursor paging across pages for expired active deliveries', async () => {
+    const { db } = track(openDb());
+    const base = await seedWorkspace(db);
+    // The delivery fixtures below derive `expires_at` from the real clock,
+    // so the prune must read the same reference or nothing is ever past
+    // its grace window.
+    const now = new Date();
+
+    for (let i = 0; i < 3; i++) {
+      const msg = await insertMessage(db, base, idAt(1, i));
+      await insertDelivery(db, base, msg, 'queued', 1, 20);
+    }
+
+    const first = await pruneExpired(db, {
+      now,
+      expiredDeliveryGraceDays: 7,
+      batchLimit: 1,
+      maxBatches: 1,
+      defaults: {
+        deliveryTtlDays: null,
+        messageLogTtlDays: null,
+        workspaceEventTtlDays: null,
+        messageTtlDays: null,
+      },
+    });
+    expect(first.expiredDeliveries).toBe(1);
+    expect(await db.select().from(deliveries)).toHaveLength(2);
+
+    const second = await pruneExpired(db, {
+      now,
+      expiredDeliveryGraceDays: 7,
+      batchLimit: 1,
+      maxBatches: 5,
+      defaults: {
+        deliveryTtlDays: null,
+        messageLogTtlDays: null,
+        workspaceEventTtlDays: null,
+        messageTtlDays: null,
+      },
+    });
+    expect(second.expiredDeliveries).toBe(2);
+    expect(await db.select().from(deliveries)).toHaveLength(0);
   });
 
   it('does not reuse a delivery sequence after settled delivery retention', async () => {

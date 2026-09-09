@@ -6,17 +6,12 @@ import type { PruneOptions, PruneResult, RetentionDefaults } from './retention.j
 import { snowflakeIdLowerBound } from './snowflake.js';
 
 const DAY_MS = 86_400_000;
-const position = z.array(z.union([z.string(), z.number()]));
-const stateSchema = z.object({
-  next: z.number().int().min(0).max(4),
-  positions: z.record(z.string(), position),
-  highs: z.record(z.string(), position).default({}),
-});
-type State = z.infer<typeof stateSchema>;
+
 type Candidate = {
   id: string;
   workspace_id: string;
   created_at: number;
+  expires_at: number | null;
   seq: number;
   message_id: string;
   agent_id: string;
@@ -40,6 +35,9 @@ const tables: Table[] = [
   { result: 'deliveries', name: 'deliveries', index: 'idx_deliveries_settled_retention',
     keys: ['created_at', 'id'], setting: 'delivery_ttl_days', fallback: 'deliveryTtlDays',
     predicate: "status IN ('acked', 'failed', 'dead_lettered')" },
+  { result: 'expiredDeliveries', name: 'deliveries', index: 'idx_deliveries_active_expiry',
+    keys: ['expires_at', 'id'],
+    predicate: "status IN ('queued', 'delivered') AND expires_at IS NOT NULL" },
   { result: 'messageLogs', name: 'message_logs', index: 'idx_message_logs_retention',
     keys: ['length(id)', 'id'], setting: 'message_log_ttl_days', fallback: 'messageLogTtlDays' },
   { result: 'workspaceEvents', name: 'workspace_events', index: 'idx_workspace_events_retention',
@@ -51,14 +49,44 @@ const tables: Table[] = [
     eligible: 'NOT EXISTS (SELECT 1 FROM messages m WHERE m.id = page.message_id)' },
 ];
 
+const position = z.array(z.union([z.string(), z.number()]));
+// Declared after `tables` so the rotation bound tracks the table count. A
+// hard-coded bound silently rejects every persisted cursor once an entry is
+// added, which resets the traversal on every run instead of resuming it.
+const stateSchema = z.object({
+  next: z.number().int().min(0),
+  positions: z.record(z.string(), position),
+  highs: z.record(z.string(), position).default({}),
+}).refine(state => state.next < tables.length, { path: ['next'] });
+type State = z.infer<typeof stateSchema>;
+
 /** Project a candidate onto its table's ordered keyset cursor. */
 function key(row: Candidate, table: Table): (string | number)[] {
-  return table.keys.map(k => k === 'length(id)' ? row.id.length : row[k as keyof Candidate] as string | number);
+  return table.keys.map(k => {
+    if (k === 'length(id)') return row.id.length;
+    return row[k as keyof Candidate] as string | number;
+  });
 }
 
 /** Apply exact workspace policy after the bounded candidate read. */
-function expired(row: Candidate, table: Table, defaults: Required<RetentionDefaults>, nowMs: number): boolean {
+function expired(
+  row: Candidate,
+  table: Table,
+  defaults: Required<RetentionDefaults>,
+  nowMs: number,
+  expiredDeliveryGraceDays: number,
+): boolean {
   if (!row.eligible) return false;
+  // MUST precede the `!table.setting` fallthrough below. This entry carries no
+  // workspace TTL setting, so reaching that line would return `true` for every
+  // row on the page and delete live, unexpired deliveries.
+  if (table.result === 'expiredDeliveries') {
+    if (row.expires_at == null) return false;
+    const graceMs = Math.max(0, Math.floor(expiredDeliveryGraceDays * DAY_MS));
+    // `expires_at` is a unix timestamp in seconds; this page comes from a raw
+    // SELECT, so it arrives as an integer rather than a mapped Date.
+    return row.expires_at * 1000 < nowMs - graceMs;
+  }
   if (!table.setting || !table.fallback) return true;
   const settings = row.retention ? JSON.parse(row.retention) as WorkspaceRetentionSettings : {};
   const override = settings[table.setting];
@@ -94,6 +122,7 @@ export async function pruneBounded(db: EngineDb, opts: PruneOptions): Promise<Pr
   const started = Date.now();
   const budget = boundedInteger(opts.maxDurationMs, 10_000, 30_000);
   const nowMs = (opts.now ?? new Date()).getTime();
+  const expiredDeliveryGraceDays = opts.expiredDeliveryGraceDays ?? 7;
   const defaults: Required<RetentionDefaults> = {
     messageTtlDays: null, deliveryTtlDays: 90, messageLogTtlDays: 90, workspaceEventTtlDays: 30,
     ...Object.fromEntries(Object.entries(opts.defaults ?? {}).filter(([, value]) => value !== undefined)),
@@ -115,21 +144,27 @@ export async function pruneBounded(db: EngineDb, opts: PruneOptions): Promise<Pr
   const saved = await db.all<{ cursor: string }>(sql`SELECT cursor FROM maintenance_cursors WHERE id = 'retention-v1'`);
   const parsed = saved[0] ? stateSchema.safeParse(decodeCursor(saved[0].cursor)) : undefined;
   const state: State = parsed?.success ? parsed.data : { next: 0, positions: {}, highs: {} };
-  const result: PruneResult = { messages: 0, deliveries: 0, messageLogs: 0, readReceipts: 0, workspaceEvents: 0 };
+  const result: PruneResult = { messages: 0, deliveries: 0, expiredDeliveries: 0, messageLogs: 0, readReceipts: 0, workspaceEvents: 0 };
   const finished = new Set<number>();
   for (let step = 0; step < rounds * tables.length && Date.now() - started < budget; step++) {
     const index = state.next;
     state.next = (index + 1) % tables.length;
     if (finished.has(index)) continue;
     const table = tables[index]!;
-    const cursor = state.positions[table.name];
+    // Keyed by `result`, not `name`: two entries can traverse the SAME table
+    // through different indexes and key tuples (`deliveries` is walked by
+    // (created_at, id) for settled rows and by (expires_at, id) for expired
+    // active ones). Sharing a cursor between them would feed one entry's
+    // keyset position to the other and silently filter out every candidate.
+    const stateKey = table.result;
+    const cursor = state.positions[stateKey];
     const positiveTtls = table.fallback
       ? [defaults[table.fallback], minimums?.[table.result]].filter((ttl): ttl is number =>
         typeof ttl === 'number' && Number.isFinite(ttl) && ttl > 0)
       : [];
     if (table.fallback && !positiveTtls.length) {
-      delete state.positions[table.name];
-      delete state.highs[table.name];
+      delete state.positions[stateKey];
+      delete state.highs[stateKey];
       finished.add(index);
       await db.run(sql`INSERT INTO maintenance_cursors (id, cursor) VALUES ('retention-v1', ${JSON.stringify(state)})
         ON CONFLICT(id) DO UPDATE SET cursor = excluded.cursor`);
@@ -137,15 +172,16 @@ export async function pruneBounded(db: EngineDb, opts: PruneOptions): Promise<Pr
     }
     const columns = sql.raw(table.result === 'readReceipts' ? 'message_id, agent_id'
       : table.result === 'workspaceEvents' ? 'workspace_id, seq, created_at'
+      : table.result === 'expiredDeliveries' ? 'id, workspace_id, created_at, expires_at'
         : 'id, workspace_id, created_at');
     // A traversal has a finite end even while new rows keep arriving. Without
     // this fence the cursor might never wrap to retained rows that later age out.
-    if (!state.highs[table.name]) {
+    if (!state.highs[stateKey]) {
       const [last] = await db.all<Candidate>(sql`SELECT ${columns}
         FROM ${sql.raw(table.name)} INDEXED BY ${sql.raw(table.index)}
         ${table.predicate ? sql`WHERE ${sql.raw(table.predicate)}` : sql``}
         ORDER BY ${sql.raw(table.keys.map(k => k + ' DESC').join(', '))} LIMIT 1`);
-      if (last) state.highs[table.name] = key(last, table);
+      if (last) state.highs[stateKey] = key(last, table);
     }
     const predicates: SQL[] = [];
     if (table.predicate) predicates.push(sql.raw(table.predicate));
@@ -161,7 +197,7 @@ export async function pruneBounded(db: EngineDb, opts: PruneOptions): Promise<Pr
     if (cursor?.length === table.keys.length) {
       predicates.push(sql`(${sql.raw(table.keys.join(', '))}) > (${sql.join(cursor.map(v => sql`${v}`), sql`, `)})`);
     }
-    const high = state.highs[table.name];
+    const high = state.highs[stateKey];
     if (high?.length === table.keys.length) {
       predicates.push(sql`(${sql.raw(table.keys.join(', '))}) <= (${sql.join(high.map(v => sql`${v}`), sql`, `)})`);
     }
@@ -180,7 +216,7 @@ export async function pruneBounded(db: EngineDb, opts: PruneOptions): Promise<Pr
       ${table.setting ? sql`LEFT JOIN workspaces w ON w.id = page.workspace_id` : sql``}
       ORDER BY ${sql.raw(table.keys.map(k => k === 'length(id)' ? 'length(page.id)' : 'page.' + k).join(', '))}
     `);
-    const removable = page.filter(row => expired(row, table, defaults, nowMs));
+    const removable = page.filter(row => expired(row, table, defaults, nowMs, expiredDeliveryGraceDays));
     // Two-key identities need two bindings each; leave room under D1's 100.
     for (let offset = 0; offset < removable.length; offset += 40) {
       const chunk = removable.slice(offset, offset + 40);
@@ -197,11 +233,11 @@ export async function pruneBounded(db: EngineDb, opts: PruneOptions): Promise<Pr
       result[table.result] += deleted.length;
     }
     if (page.length < limit || JSON.stringify(key(page[page.length - 1]!, table)) === JSON.stringify(high)) {
-      delete state.positions[table.name];
-      delete state.highs[table.name];
+      delete state.positions[stateKey];
+      delete state.highs[stateKey];
       finished.add(index);
     } else {
-      state.positions[table.name] = key(page[page.length - 1]!, table);
+      state.positions[stateKey] = key(page[page.length - 1]!, table);
     }
     await db.run(sql`INSERT INTO maintenance_cursors (id, cursor) VALUES ('retention-v1', ${JSON.stringify(state)})
       ON CONFLICT(id) DO UPDATE SET cursor = excluded.cursor`);
