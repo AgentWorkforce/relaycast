@@ -1588,6 +1588,71 @@ describe('durable delivery api', () => {
     expect(row3.nextAttemptAt).toBeNull();
   });
 
+  it('sweepDueNodeDeliveries respects wsBacklogLimit ordering and later drains, emits no delivery.failed for capped rows, and emits exactly one expiry delivery.failed', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-ws-sweep-backlog-limit');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+    const { sock: aliceSock } = await attachDirectNodeSocket(stack, ws.workspaceId, alice);
+
+    // Queue 3 deliveries seq 1..3 by sending 3 messages.
+    for (const text of ['one', 'two', 'three']) {
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text }),
+      });
+      expect(post.status).toBe(201);
+    }
+    await waitForAssertion(() => expect(node.sock.ofType('deliver')).toHaveLength(3));
+
+    const db = stack.runtime.deps.db;
+    const seq1 = and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId), eq(deliveries.seq, 1));
+    const seq2 = and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId), eq(deliveries.seq, 2));
+    const seq3 = and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId), eq(deliveries.seq, 3));
+
+    // Reset deliveries so the sweep must redrive the backlog.
+    await db
+      .update(deliveries)
+      .set({ status: 'queued', nextAttemptAt: null, dispatchAttempts: 0, deliveredAt: null, lastDispatchError: null })
+      .where(and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId)));
+
+    const beforeDeliver = node.sock.ofType('deliver').length;
+    const swept = await sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date(), wsBacklogLimit: 2 });
+    expect(swept).toBe(3);
+
+    // Only two frames emitted due to wsBacklogLimit; seq 3 untouched.
+    const redriven = node.sock.ofType('deliver').slice(beforeDeliver);
+    expect(redriven.map((frame) => frame.seq)).toEqual([1, 2]);
+
+    const [row1] = await db.select().from(deliveries).where(seq1);
+    const [row2] = await db.select().from(deliveries).where(seq2);
+    const [row3] = await db.select().from(deliveries).where(seq3);
+    expect(row1.status).toBe('delivered');
+    expect(row2.status).toBe('delivered');
+    expect(row3.status).toBe('queued');
+    expect(contextUpdatesOfType(aliceSock, 'delivery.failed')).toHaveLength(0);
+
+    // Drain the remaining backlog on the next sweep.
+    const secondSwept = await sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date(Date.now() + 1_000) });
+    expect(secondSwept).toBe(1);
+    const [row3After] = await db.select().from(deliveries).where(seq3);
+    expect(row3After.status).toBe('delivered');
+
+    // Expiry check: reset seq3 again, expire it, then sweepExpiredDeliveries
+    // should dead-letter it and emit exactly one delivery.failed.
+    await db.update(deliveries).set({
+      status: 'queued', nextAttemptAt: null, dispatchAttempts: 0, deliveredAt: null, lastDispatchError: null, expiresAt: new Date(Date.now() - 60_000),
+    }).where(seq3);
+    await stack.settle();
+    const expiredNow = new Date(Date.now() + 60_000);
+    const expired = await sweepExpiredDeliveries(stack.runtime.deps, { now: expiredNow, maxBatches: 5 });
+    expect(expired).toBeGreaterThanOrEqual(1);
+    const [row3Dead] = await db.select().from(deliveries).where(seq3);
+    expect(row3Dead.status).toBe('dead_lettered');
+    expect(contextUpdatesOfType(aliceSock, 'delivery.failed')).toHaveLength(1);
+  });
+
   it('honors recorded route metadata when live binding changes before fanout', async () => {
     const ws = await createWorkspace(stack.app, 'mailbox-reroute');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');

@@ -509,8 +509,14 @@ async function redriveWsBacklogForAgent(
   ctx: RoutingContext,
   agentId: string,
   now: Date,
+  wsBacklogLimit: number | undefined,
 ): Promise<void> {
-  const backlog = await deliveryEngine.fetchQueuedWsBacklogEvents(ctx.db, ctx.workspaceId, agentId, { now });
+  const backlog = await deliveryEngine.fetchQueuedWsBacklogEvents(
+    ctx.db,
+    ctx.workspaceId,
+    agentId,
+    { now, limit: wsBacklogLimit },
+  );
   if (backlog.length === 0) return;
 
   const backlogDeliveries = backlog.map((event) => event.delivery);
@@ -545,10 +551,14 @@ async function redriveWsBacklogForAgent(
  */
 export async function sweepDueNodeDeliveries(
   engine: EngineDeps,
-  opts: { workspaceId?: string; now?: Date; limit?: number } = {},
+  opts: { workspaceId?: string; now?: Date; limit?: number; wsBacklogLimit?: number } = {},
 ): Promise<number> {
   const now = opts.now ?? new Date();
-  const due = await deliveryEngine.fetchDueNodeDeliveryEvents(engine.db, { ...opts, now });
+  const due = await deliveryEngine.fetchDueNodeDeliveryEvents(engine.db, {
+    workspaceId: opts.workspaceId,
+    limit: opts.limit,
+    now,
+  });
 
   const httpPushEvents: typeof due = [];
   const wsAgents: { workspaceId: string; agentId: string }[] = [];
@@ -580,6 +590,7 @@ export async function sweepDueNodeDeliveries(
         { db: engine.db, workspaceId: agent.workspaceId, engine },
         agent.agentId,
         now,
+        opts.wsBacklogLimit,
       )
     )),
   ]);

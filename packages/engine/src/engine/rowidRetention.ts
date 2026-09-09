@@ -26,6 +26,7 @@ type Candidate = {
   id: string;
   workspace_id: string;
   created_at: number;
+  expires_at: number | null;
   seq: number;
   message_id: string;
   agent_id: string;
@@ -42,27 +43,96 @@ type Table = {
   snowflake?: boolean;
   guard: string;
 };
-const settled = "status IN ('acked', 'failed', 'dead_lettered')";
+const settled = "deliveries.status IN ('acked', 'failed', 'dead_lettered')";
+// Table-qualified: `workspaces` also has an `expires_at`, and the outer page
+// query joins it, so a bare column is ambiguous there. The page builder rewrites
+// `deliveries.` to `page.` for the SELECT and leaves it intact for the DELETE.
+const DEFAULT_EXPIRED_DELIVERY_GRACE_DAYS = 7;
+// Deliveries deletion in cursor mode is settled-only by default. Active
+// queued/delivered cleanup is opt-in and handled exclusively by the indexed,
+// set-based recovery path below.
 const tables: Table[] = [
-  { name: 'messages', result: 'messages', columns: 'id, workspace_id',
-    setting: 'message_ttl_days', fallback: 'messageTtlDays', snowflake: true,
-    guard: 'NOT EXISTS (SELECT 1 FROM messages replies WHERE replies.thread_id = messages.id)' },
-  { name: 'deliveries', result: 'deliveries', columns: 'id, workspace_id, created_at, status',
-    setting: 'delivery_ttl_days', fallback: 'deliveryTtlDays', guard: settled },
-  { name: 'message_logs', result: 'messageLogs', columns: 'id, workspace_id',
-    setting: 'message_log_ttl_days', fallback: 'messageLogTtlDays', snowflake: true, guard: '1' },
-  { name: 'workspace_events', result: 'workspaceEvents', columns: 'workspace_id, seq, created_at',
-    setting: 'workspace_event_ttl_days', fallback: 'workspaceEventTtlDays',
-    guard: 'EXISTS (SELECT 1 FROM workspace_events hw WHERE hw.workspace_id = workspace_events.workspace_id AND hw.seq > workspace_events.seq LIMIT 1)' },
-  { name: 'read_receipts', result: 'readReceipts', columns: 'message_id, agent_id',
-    guard: 'NOT EXISTS (SELECT 1 FROM messages m WHERE m.id = read_receipts.message_id)' },
+    { name: 'messages', result: 'messages', columns: 'id, workspace_id',
+      setting: 'message_ttl_days', fallback: 'messageTtlDays', snowflake: true,
+      guard: 'NOT EXISTS (SELECT 1 FROM messages replies WHERE replies.thread_id = messages.id)' },
+    { name: 'deliveries', result: 'deliveries', columns: 'id, workspace_id, created_at, status, expires_at',
+      setting: 'delivery_ttl_days', fallback: 'deliveryTtlDays', guard: settled },
+    { name: 'message_logs', result: 'messageLogs', columns: 'id, workspace_id',
+      setting: 'message_log_ttl_days', fallback: 'messageLogTtlDays', snowflake: true, guard: '1' },
+    { name: 'workspace_events', result: 'workspaceEvents', columns: 'workspace_id, seq, created_at',
+      setting: 'workspace_event_ttl_days', fallback: 'workspaceEventTtlDays',
+      guard: 'EXISTS (SELECT 1 FROM workspace_events hw WHERE hw.workspace_id = workspace_events.workspace_id AND hw.seq > workspace_events.seq LIMIT 1)' },
+    { name: 'read_receipts', result: 'readReceipts', columns: 'message_id, agent_id',
+      guard: 'NOT EXISTS (SELECT 1 FROM messages m WHERE m.id = read_receipts.message_id)' },
 ];
+
+const MAX_ACTIVE_EXPIRY_RECOVERY_BATCHES = 4;
+const ACTIVE_EXPIRY_RECOVERY_DELETE_LIMIT = 1000;
+const ROWID_PAGE_LIMIT = 200;
+const ROWID_MAX_BATCHES_PER_TABLE = 5;
+const ROWID_DELETE_CHUNK_SIZE = 10;
+
+/** Hard D1 statement ceiling for one cursor-mode retention invocation.
+ *
+ * Per table: one high-water SELECT, then at most five page SELECTs and twenty
+ * ten-row DELETEs per page. The opt-in active recovery adds at most four
+ * indexed set-based DELETEs. cursorStore persistence is host-owned, not D1.
+ */
+export const ROWID_RETENTION_D1_QUERY_CEILING =
+  tables.length * (
+    1
+    + ROWID_MAX_BATCHES_PER_TABLE
+    + ROWID_MAX_BATCHES_PER_TABLE * Math.ceil(ROWID_PAGE_LIMIT / ROWID_DELETE_CHUNK_SIZE)
+  )
+  + MAX_ACTIVE_EXPIRY_RECOVERY_BATCHES;
+
+async function recoverExpiredActiveDeliveriesSetBased(
+  db: EngineDb,
+  nowMs: number,
+  graceDays: number,
+  opts: { maxBatches: number },
+): Promise<number> {
+  const graceMs = Math.max(0, Math.floor(graceDays * 86_400_000));
+  const cutoffMs = nowMs - graceMs;
+  const cutoffSeconds = Math.floor(cutoffMs / 1000);
+
+  // Use the existing index that already narrows to only active (queued/delivered).
+  // We still re-check queued/delivered + expires_at in the outer DELETE predicate
+  // to avoid expiry-extension races between selecting candidate ids and deleting.
+  const batches = Math.max(1, Math.min(Math.floor(opts.maxBatches), MAX_ACTIVE_EXPIRY_RECOVERY_BATCHES));
+  let deleted = 0;
+  for (let batch = 0; batch < batches; batch++) {
+    const changed = await db.all<{ _id: string }>(sql`
+      DELETE FROM deliveries
+      WHERE (
+        status IN ('queued', 'delivered')
+        AND expires_at IS NOT NULL
+        AND expires_at < ${cutoffSeconds}
+      )
+      AND id IN (
+        SELECT id
+        FROM deliveries INDEXED BY idx_deliveries_active_expiry
+        WHERE status IN ('queued', 'delivered')
+          AND expires_at IS NOT NULL
+          AND expires_at < ${cutoffSeconds}
+        ORDER BY expires_at, id
+        LIMIT ${ACTIVE_EXPIRY_RECOVERY_DELETE_LIMIT}
+      )
+      RETURNING id AS _id
+    `);
+    deleted += changed.length;
+    if (changed.length < ACTIVE_EXPIRY_RECOVERY_DELETE_LIMIT) break;
+  }
+  return deleted;
+}
 
 function bounded(value: number | undefined, fallback: number, max: number): number {
   return value !== undefined && Number.isFinite(value) ? Math.max(1, Math.min(max, Math.floor(value))) : fallback;
 }
 
-function expired(row: Candidate, table: Table, defaults: Required<RetentionDefaults>, now: number): boolean {
+function expired(
+  row: Candidate, table: Table, defaults: Required<RetentionDefaults>, now: number,
+): boolean {
   if (!table.setting || !table.fallback) return true;
   const settings = row.retention ? JSON.parse(row.retention) as WorkspaceRetentionSettings : {};
   const override = settings?.[table.setting];
@@ -90,13 +160,17 @@ function expired(row: Candidate, table: Table, defaults: Required<RetentionDefau
 export async function pruneRowidPages(db: EngineDb, opts: PruneOptions & { cursorStore: RetentionCursorStore }): Promise<PruneResult> {
   const now = (opts.now ?? new Date()).getTime();
   if (!Number.isFinite(now)) throw new Error('Invalid retention clock');
-  const limit = bounded(opts.batchLimit, 200, 200);
-  const pages = bounded(opts.maxBatches, 5, 5) * tables.length;
+  // Preserve existing cursor-mode ceilings exactly: 200 rows/page and 5
+  // batches/table.
+  const activeExpiryRecovery = opts.activeExpiryRecovery === true;
+  const limit = bounded(opts.batchLimit, ROWID_PAGE_LIMIT, ROWID_PAGE_LIMIT);
+  const pages = bounded(opts.maxBatches, ROWID_MAX_BATCHES_PER_TABLE, ROWID_MAX_BATCHES_PER_TABLE) * tables.length;
   const deadline = Date.now() + bounded(opts.maxDurationMs, 10_000, 30_000);
   const defaults: Required<RetentionDefaults> = {
     messageTtlDays: null, deliveryTtlDays: 90, messageLogTtlDays: 90, workspaceEventTtlDays: 30,
     ...Object.fromEntries(Object.entries(opts.defaults ?? {}).filter(([, value]) => value !== undefined)),
   };
+  const grace = opts.expiredDeliveryGraceDays ?? DEFAULT_EXPIRED_DELIVERY_GRACE_DAYS;
   const saved = await opts.cursorStore.load();
   // Corrupt state is an error, not permission to restart expensive work or
   // drop an unknown future cursor format during a rollback.
@@ -105,6 +179,18 @@ export async function pruneRowidPages(db: EngineDb, opts: PruneOptions & { curso
   const save = () => opts.cursorStore.save(structuredClone(state));
   const result: PruneResult = { messages: 0, deliveries: 0, messageLogs: 0, readReceipts: 0, workspaceEvents: 0 };
   const finished = new Set<number>();
+
+  // Opt-in active expiry recovery BEFORE the rowid crawl so a slow scan
+  // cannot starve active cleanup.
+  if (activeExpiryRecovery) {
+    const maxBatches = bounded(opts.activeExpiryRecoveryMaxBatches, MAX_ACTIVE_EXPIRY_RECOVERY_BATCHES, MAX_ACTIVE_EXPIRY_RECOVERY_BATCHES);
+    result.deliveries += await recoverExpiredActiveDeliveriesSetBased(
+      db,
+      now,
+      grace,
+      { maxBatches },
+    );
+  }
   for (let step = 0; step < pages && Date.now() < deadline; step++) {
     const index = state.next;
     state.next = (index + 1) % tables.length;
@@ -135,9 +221,9 @@ export async function pruneRowidPages(db: EngineDb, opts: PruneOptions & { curso
     const removable = page.filter(row => row.eligible && expired(row, table, defaults, now));
     // At most seven bindings per row, kept below D1's 100-variable limit.
     // Small atomic chunks also avoid one subrequest per retained-history row.
-    for (let offset = 0; offset < removable.length; offset += 10) {
+    for (let offset = 0; offset < removable.length; offset += ROWID_DELETE_CHUNK_SIZE) {
       if (Date.now() >= deadline) { await save(); return result; }
-      const chunk = removable.slice(offset, offset + 10);
+      const chunk = removable.slice(offset, offset + ROWID_DELETE_CHUNK_SIZE);
       const guarded = chunk.map(row => {
         const identity = table.result === 'workspaceEvents'
           ? sql`workspace_id = ${row.workspace_id} AND seq = ${row.seq}`
@@ -154,7 +240,12 @@ export async function pruneRowidPages(db: EngineDb, opts: PruneOptions & { curso
         const policyGuard = table.setting ? sql`AND (SELECT w.retention FROM workspaces w
           WHERE w.id = ${row.workspace_id}) IS ${row.retention}` : sql``;
         const timeGuard = table.setting && !table.snowflake ? sql`AND created_at = ${row.created_at}` : sql``;
-        return sql`(rowid = ${row._rowid} AND ${identity} ${policyGuard} ${timeGuard})`;
+        // The deliveries page is guarded as settled-only (default cursor mode),
+        // but the opt-in active recovery path re-checks status/expiry again.
+        // Always pin the exact status read so concurrent status changes
+        // cannot authorize a stale deletion.
+        const statusGuard = table.result === 'deliveries' ? sql`AND status = ${row.status}` : sql``;
+        return sql`(rowid = ${row._rowid} AND ${identity} ${policyGuard} ${timeGuard} ${statusGuard})`;
       });
       const deleted = await db.all(sql`DELETE FROM ${sql.raw(table.name)} NOT INDEXED
         WHERE (${sql.join(guarded, sql` OR `)}) AND ${sql.raw(table.guard)} RETURNING 1`);
@@ -166,5 +257,6 @@ export async function pruneRowidPages(db: EngineDb, opts: PruneOptions & { curso
     await save();
     if (finished.size === tables.length) break;
   }
+
   return result;
 }

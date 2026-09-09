@@ -58,10 +58,32 @@ export interface PruneOptions {
   cursorStore?: RetentionCursorStore;
   /** Admission budget for cursor mode; does not cancel in-flight SQL. Default 10s, capped at 30s. */
   maxDurationMs?: number;
-  /** Max rows deleted per table per batch (the SQL LIMIT). Default 200. */
+  /** Max rows deleted per table per batch (the SQL LIMIT). Default and hard cap 200 in cursor mode. */
   batchLimit?: number;
-  /** Max batches per table per call, bounding total work per run. Default 5. */
+  /** Max batches per table per call, bounding total work per run. Default and hard cap 5 in cursor mode. */
   maxBatches?: number;
+  /**
+   * How long a `queued` / `delivered` delivery must have been past its
+   * `expires_at` before retention may reap it. Independent of
+   * `delivery_ttl_days`, which cannot express this class at any value.
+   * Cursor mode only. Default 7 days.
+   */
+  expiredDeliveryGraceDays?: number;
+  /**
+   * Cursor mode only: after the grace window, recover active `queued`/
+   * `delivered` rows with a set-based DELETE using
+   * `idx_deliveries_active_expiry`. The default rowid scan remains
+   * settled-only.
+   *
+   * Opt-in cleanup after the grace window skips `delivery.failed` notices.
+   */
+  activeExpiryRecovery?: boolean;
+  /**
+   * Cursor mode only: max set-based recovery batches for active `queued`/
+   * `delivered` rows (capped at 4). Only used when `activeExpiryRecovery`
+   * is enabled.
+   */
+  activeExpiryRecoveryMaxBatches?: number;
   /** Clock override for tests. */
   now?: Date;
   /** Deployment-wide TTL fallbacks; see {@link RetentionDefaults}. */
