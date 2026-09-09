@@ -511,6 +511,62 @@ describe('node adapter conformance', () => {
       return { sock, handle };
     }
 
+    it('an explicit spawn target is not shadowed by a legacy global node alias', async () => {
+      const ws = await createWorkspace(stack.app, 'explicit-spawn-target');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, { id: 'node_alpha', name: 'alpha', capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })], load: 0 });
+      const beta = await enrollAndAttachNode(ws, { id: 'node_beta', name: 'beta', capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })], load: 0 });
+      await stack.runtime.handle.db.insert(actions).values({
+        id: 'legacy-spawn', workspaceId: ws.workspaceId, name: 'spawn', description: 'Legacy global broker alias',
+        handlerNodeId: 'node_alpha', isGlobal: true, availableTo: ['caller'],
+      });
+      const spawn = await stack.app.request('/v1/actions/spawn/invoke', {
+        method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: { cli: 'claude', name: 'fresh-worker', target_node: 'beta', verify_ready: true } }),
+      });
+      expect(spawn.status).toBe(201);
+      const { data } = await spawn.json();
+      expect(data.handler_node_id).toBe('node_beta');
+      await stack.settle();
+      expect(beta.sock.ofType('action.invoke')).toHaveLength(1);
+      expect(alpha.sock.ofType('action.invoke')).toHaveLength(0);
+      const handlerSpawn = await stack.app.request('/v1/actions/spawn/invoke', {
+        method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: { cli: 'claude', name: 'handler-worker', verify_ready: true } }),
+      });
+      expect(handlerSpawn.status).toBe(201);
+      expect((await handlerSpawn.json()).data.handler_node_id).toBe('node_alpha');
+      await stack.settle();
+      expect(alpha.sock.ofType('action.invoke')).toHaveLength(1);
+      for (const target_node of ['', '   ']) {
+        const legacy = await stack.app.request('/v1/actions/spawn/invoke', {
+          method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+          body: JSON.stringify({ input: { cli: 'claude', name: 'legacy-empty-' + target_node.length, target_node } }),
+        });
+        expect(legacy.status).toBe(201);
+        const invocation = (await legacy.json()).data;
+        expect(invocation.handler_node_id).toBe('node_alpha');
+        const [stored] = await stack.runtime.handle.db.select().from(actionInvocations).where(eq(actionInvocations.id, invocation.invocation_id));
+        expect(stored.actionId).toBe('legacy-spawn');
+      }
+      const outsider = await registerAgent(stack.app, ws.workspaceKey, 'outsider');
+      const denied = await stack.app.request('/v1/actions/spawn/invoke', {
+        method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${outsider.token}` },
+        body: JSON.stringify({ input: { cli: 'claude', name: 'forbidden', target_node: 'beta' } }),
+      });
+      expect(denied.status).toBe(403);
+      await beta.handle.handleClose();
+      const unavailable = await stack.app.request('/v1/actions/spawn/invoke', {
+        method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: { cli: 'claude', name: 'offline-worker', target_node: 'beta', verify_ready: true } }),
+      });
+      expect(unavailable.status).toBe(503);
+      expect(await unavailable.json()).toMatchObject({ error: { code: 'spawn_target_unavailable' } });
+      const claims = await stack.runtime.handle.db.select().from(actionInvocations).where(eq(actionInvocations.workspaceId, ws.workspaceId));
+      expect(claims.find(row => (row.input as {name?: string})?.name === 'offline-worker')?.status).toBe('failed');
+
+    }, 20_000);
+
     it('reports placeholder load as unavailable until a finite node explicitly marks it measured', async () => {
       const ws = await createWorkspace(stack.app, 'fleet-unreported-load-ws');
       const unbounded = await enrollAndAttachNode(ws, {
@@ -813,6 +869,9 @@ describe('node adapter conformance', () => {
         id: 'control-agent-deregister',
         type: 'agent.deregister',
         agent_id: controlAgentId,
+      });
+      expect(brokerSock.ofType('reply').at(-1)).toMatchObject({
+        id: 'control-agent-deregister', ok: true, data: { deregistered: true },
       });
       const activeBindingsAfterDeregister = await db
         .select({ id: agentNodeBindings.id })

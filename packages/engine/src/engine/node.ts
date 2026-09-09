@@ -1,3 +1,5 @@
+import { z } from 'zod';
+import { invalidateChannelCache } from './cache.js';
 import { and, asc, eq, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from 'drizzle-orm';
 import type {
   FleetAgentRecoverMessage,
@@ -1396,7 +1398,7 @@ export async function registerAgentViaNode(
   options: { deliveryCursorSupported?: boolean } = {},
 ): Promise<AgentRegisterReplyData> {
   assertRegistrableAgentName(message.name);
-  return runAtomic(db, async (tx) => {
+  const registered = await runAtomic(db, async (tx) => {
     await rejectMigrationCanceledSpawnRegistration(tx, workspaceId, {
       invocationId: message.invocation_id,
       nodeId,
@@ -1483,7 +1485,7 @@ export async function registerAgentViaNode(
       }
 
       createdAgent = true;
-      await autoJoinGeneral(tx, workspaceId, result.id);
+      if (message.auto_join_general !== false) await autoJoinGeneral(tx, workspaceId, result.id);
       await upsertAgentNodeBinding(tx, workspaceId, result, nodeId, {
         sessionRef: message.session_ref ?? null,
         deactivateExisting: true,
@@ -1509,6 +1511,8 @@ export async function registerAgentViaNode(
       throw err;
     }
   });
+  if (message.auto_join_general !== false) await invalidateChannelCache(workspaceId, 'general');
+  return registered;
 }
 
 /**
@@ -1613,7 +1617,7 @@ export async function recoverAgentViaNode(
         );
       }
 
-      await autoJoinGeneral(tx, workspaceId, result.id);
+      // Recovery preserves memberships, including an intentionally isolated identity.
       await upsertAgentNodeBinding(tx, workspaceId, result, nodeId, {
         sessionRef: message.session_ref ?? null,
         deactivateExisting: true,
@@ -1711,6 +1715,12 @@ export async function deregisterAgentViaNode(
     }
   }
   return updated ?? null;
+}
+
+/** Inventory proves identity/presence, never a harness's ready state. */
+const spawnReadinessSchema = z.object({ verify_ready: z.literal(true) }).passthrough();
+function requiresSpawnReadiness(input: unknown): boolean {
+  return spawnReadinessSchema.safeParse(input).success;
 }
 
 export async function reconcileInventory(
@@ -1850,7 +1860,9 @@ export async function reconcileInventory(
       eq(actionInvocations.dispatchedProvider, providerName),
       inArray(actionInvocations.status, ['pending', 'dispatched']),
     ));
-  const providerInvocationIds = new Set(openInvocations.map((invocation) => invocation.id));
+  const providerInvocationIds = new Set(openInvocations
+    .filter((invocation) => !requiresSpawnReadiness(invocation.input))
+    .map((invocation) => invocation.id));
 
   const reconciledAgentIds: string[] = [];
   const newlyRoutedAgentIds: string[] = [];
@@ -1947,7 +1959,10 @@ export async function reconcileInventory(
 
   let rescheduledInvocations = 0;
   for (const invocation of openInvocations) {
-    if (liveInvocationIds.has(invocation.id)) continue;
+    // A live broker owns the bounded readiness wait and cleanup. A transient
+    // empty inventory during launch/teardown must not redispatch this spawn.
+    // Actual provider disconnect and invocation expiry retain their own recovery.
+    if (liveInvocationIds.has(invocation.id) || requiresSpawnReadiness(invocation.input)) continue;
     try {
       if (await rescheduleNodeInvocation(db, registry, invocation)) {
         rescheduledInvocations++;
@@ -2346,6 +2361,11 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
       }
       case 'agent.deregister':
         await deregisterAgentViaNode(args.db, args.workspaceId, args.nodeId, message, args.completionDeps);
+        // A caller deleting an owned identity must know the live binding is gone
+        // before invoking release. Older fire-and-forget callers omit the id.
+        if (message.id) {
+          sendControl(args.socket, { v: 1, id: message.id, type: 'reply', ok: true, data: { deregistered: true } });
+        }
         return;
       case 'inventory.sync': {
         const result = await reconcileInventory(

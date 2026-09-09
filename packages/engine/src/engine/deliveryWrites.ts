@@ -119,6 +119,8 @@ export function buildChannelDeliveryWrite(
     depthCap: number;
     reason?: ChannelDeliveryReason;
     mentionHandles?: readonly string[];
+    /** Abort the enclosing atomic write when ANY recipient has no capacity. */
+    rejectOnOverflow?: boolean;
   },
 ): AtomicWrite {
   const mentionHandles = input.mentionHandles ?? [];
@@ -129,7 +131,12 @@ export function buildChannelDeliveryWrite(
       asDeliveryInsertSelect(qb
         .select({
           id: deliveryId(input.messageId, channelMembers.agentId),
-          workspaceId: sql<string>`${input.workspaceId}`,
+          // A NOT NULL guard runs inside the same INSERT SELECT as capacity
+          // evaluation. Unlike a preflight count, it cannot race another send.
+          // The enclosing atomic write rolls back the message and every recipient.
+          workspaceId: input.rejectOnOverflow
+            ? sql<string>`CASE WHEN ${belowDepthCapSql(input.workspaceId, channelMembers.agentId, input.depthCap)} THEN ${input.workspaceId} ELSE NULL END`
+            : sql<string>`${input.workspaceId}`,
           messageId: sql<string>`${input.messageId}`,
           agentId: channelMembers.agentId,
           mode: sql<string>`${input.mode}`,
@@ -179,7 +186,7 @@ export function buildChannelDeliveryWrite(
             eq(channelMembers.channelId, input.channelId),
             channelMuteDeliveryFilter(mentionHandles),
             ne(channelMembers.agentId, input.senderAgentId),
-            belowDepthCapSql(input.workspaceId, channelMembers.agentId, input.depthCap),
+            input.rejectOnOverflow ? undefined : belowDepthCapSql(input.workspaceId, channelMembers.agentId, input.depthCap),
           ),
         )),
     )

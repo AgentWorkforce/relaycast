@@ -35,7 +35,7 @@ export async function postMessage(
   const messageId = generateId();
 
   // Parse @mentions from text without treating email domains as handles.
-  const mentionPattern = /(?:^|\s)@(\w+)/g;
+  const mentionPattern = /(?:^|\s)@([\w-]+)/g;
   const mentionedHandles = new Set<string>();
   for (let match = mentionPattern.exec(data.text); match !== null; match = mentionPattern.exec(data.text)) {
     mentionedHandles.add(match[1]);

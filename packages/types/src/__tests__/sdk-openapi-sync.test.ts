@@ -51,6 +51,8 @@ const NON_SDK_OPENAPI_PATHS = new Set([
   // Operator-only, one-time recovery for legacy registrations. Agent SDKs do
   // not expose it because normal registration establishes the verifier.
   '/v1/agents/{param}/legacy-identity',
+  // Workspace-owner subscription provisioning, called by the Relay integration CLI.
+  '/v1/agents/{param}/subscription-channel',
 ]);
 
 const CORE_SDK_PATHS = new Set([
