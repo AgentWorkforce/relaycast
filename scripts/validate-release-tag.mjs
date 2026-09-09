@@ -355,7 +355,7 @@ export function validateReusableReleaseTag({ cwd = process.cwd(), tag, sourceCom
   } finally {
     try { git(["worktree", "remove", "--force", worktree], cwd); } finally { rmSync(worktree, { recursive: true, force: true }); }
   }
-  return { tagCommit, tagTree, changedPaths };
+  return { tagCommit, tagTree, changedPaths, releaseDate };
 }
 
 function argument(name) {
@@ -365,8 +365,11 @@ function argument(name) {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
-  validateReusableReleaseTag({
+  const result = validateReusableReleaseTag({
     tag: argument("--tag"), sourceCommit: argument("--source-commit"), sourceTree: argument("--source-tree"), version: argument("--version"),
     distTag: argument("--dist-tag"), packageProvenanceDigest: argument("--provenance-digest"), provenanceManifest: argument("--provenance-manifest"),
   });
+  if (process.argv.includes("--print-release-date")) {
+    process.stdout.write(`${result.releaseDate}\n`);
+  }
 }

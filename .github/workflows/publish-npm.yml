@@ -600,7 +600,9 @@ jobs:
               --version "$NEW_VERSION" \
               --dist-tag "$DIST_TAG" \
               --provenance-digest "$PROVENANCE_DIGEST" \
-              --provenance-manifest release-provenance.json
+              --provenance-manifest release-provenance.json \
+              --print-release-date > "$RUNNER_TEMP/relaycast-release-date"
+            echo "RELEASE_DATE=$(cat \"$RUNNER_TEMP/relaycast-release-date\")" >> "$GITHUB_ENV"
             echo "${TAG} metadata is valid; reusing its exact release commit/tree"
             git reset --hard "${TAG}^{commit}"
             echo "REUSE_EXISTING_RELEASE_TAG=true" >> "$GITHUB_ENV"
@@ -660,7 +662,7 @@ jobs:
           SOURCE_COMMIT="$(node -e 'const p=require("./release-provenance.json"); process.stdout.write(p.sourceCommit)')"
           SOURCE_TREE="$(node -e 'const p=require("./release-provenance.json"); process.stdout.write(p.sourceTree)')"
           DIST_TAG="$(node -e 'const p=require("./release-provenance.json"); process.stdout.write(p.distTag)')"
-          RELEASE_DATE="${{ needs.build.outputs.release_date }}"
+          RELEASE_DATE="${RELEASE_DATE:-${{ needs.build.outputs.release_date }}}"
           PROVENANCE_DIGEST="$(node scripts/release-provenance.mjs digest --manifest release-provenance.json)"
           TAG="v${NEW_VERSION}"
           CREATED_LOCAL_TAG=false
@@ -770,7 +772,7 @@ jobs:
               echo "changelog conflict on ${conflicted}; re-cutting against main"
               echo "$conflicted" | xargs git checkout --theirs --
               node scripts/cut-changelog.mjs --version "$NEW_VERSION" --date "$RELEASE_DATE"
-              echo "$conflicted" | xargs git add --
+              git add CHANGELOG.md packages/*/CHANGELOG.md
               if ! GIT_EDITOR=true git commit --no-edit; then
                 git merge --abort
                 echo "::warning::failed to resolve changelog conflict merging onto main; v${NEW_VERSION} is tagged and published, but main was not updated — land the release commit manually"

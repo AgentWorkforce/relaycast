@@ -283,7 +283,7 @@ function releaseTagFixture({ alteredSource = false, mutateReleaseFile, versionBu
   return fixture;
 }
 
-function validateTag(fixture) {
+function validateTag(fixture, { printReleaseDate = false } = {}) {
   return spawnSync(
     process.execPath,
     [
@@ -302,6 +302,7 @@ function validateTag(fixture) {
       fixture.provenanceDigest,
       "--provenance-manifest",
       fixture.provenancePath,
+      ...(printReleaseDate ? ["--print-release-date"] : []),
     ],
     { cwd: fixture.root, encoding: "utf8" },
   );
@@ -535,7 +536,36 @@ describe("publish workflow safety contract", () => {
       createRelease.slice(cut),
       /existing release tag restored; leaving its lockfile tree unchanged/,
     );
+    assert.match(
+      reuseBlock,
+      /--print-release-date\s*> \"\$RUNNER_TEMP\/relaycast-release-date\"[\s\S]*RELEASE_DATE=\$\(cat \\\"\$RUNNER_TEMP\/relaycast-release-date\\\"\)/,
+      "tag reuse must export the validated annotated date for later steps",
+    );
+    assert.match(
+      createRelease,
+      /RELEASE_DATE=\"\$\{RELEASE_DATE:-\$\{\{ needs\.build\.outputs\.release_date \}\}\}\"/,
+      "new tags may fall back to the build date",
+    );
     assert.match(createRelease, /Relaycast-Release-Date: \$\{RELEASE_DATE\}/);
+  });
+
+  it("preserves an annotated tag date across a validation retry after midnight", () => {
+    const fixture = releaseTagFixture();
+    try {
+      const validation = validateTag(fixture, { printReleaseDate: true });
+      assert.equal(validation.status, 0, validation.stderr);
+      assert.equal(validation.stdout.trim(), "2026-09-09");
+    } finally {
+      removeTemporaryDirectory(fixture.root);
+    }
+  });
+
+  it("stages every changelog after conflict recovery re-cuts the release", () => {
+    const createRelease = jobBlock("create-release");
+    const recut = createRelease.indexOf("node scripts/cut-changelog.mjs --version \"$NEW_VERSION\" --date \"$RELEASE_DATE\"");
+    const staging = createRelease.indexOf("git add CHANGELOG.md packages/*/CHANGELOG.md", recut);
+    assert.ok(recut !== -1, "conflict recovery changelog recut not found");
+    assert.ok(staging > recut, "conflict recovery must stage all changelogs after recut");
   });
 
   it("escalates permissions per job instead of workflow-wide", () => {
