@@ -102,10 +102,12 @@ export async function retainAgents(
   if (options.delete && eligible.length) {
     // One SQL write for the entire page. No per-agent round trips, transaction
     // capability fallback, or gap between the final safety check and deletion.
+    // Bind the bounded ID list once: 100 individual IDs plus safety predicates
+    // would exceed hosted D1's 100-parameter limit.
     deleted = await db.all<{ id: string }>(sql`
       DELETE FROM agents AS a
       WHERE a.workspace_id = ${workspaceId}
-        AND a.id IN (${sql.join(eligible.map(row => sql`${row.id}`), sql`, `)})
+        AND a.id IN (SELECT value FROM json_each(${JSON.stringify(eligible.map(row => row.id))}))
         AND ${reason(cutoff, indexesReady)} = 'eligible'
       RETURNING id`);
   }

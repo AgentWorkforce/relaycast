@@ -46,7 +46,7 @@
     "history_referenced": 0,
     "next_cursor": {
       "workspace_id": "ws_retention_demo",
-      "cutoff": 1788345249,
+      "cutoff": 1788345505,
       "after": "demo-0099",
       "through": "demo-2627"
     }
