@@ -6,6 +6,18 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { updateComparisonReferences } from "./release-contract.mjs";
+import {
+  assertSourceProvenance,
+  packageProvenance,
+  provenanceDigest,
+  readReleaseProvenance,
+} from "./release-provenance.mjs";
+
+const DOCKER_PACKAGE_NAMES = [
+  "@relaycast/a2a",
+  "@relaycast/types",
+  "@relaycast/engine",
+];
 
 const RELEASE_ONLY_PATHS = [
   /^package\.json$/,
@@ -87,7 +99,7 @@ function expectedRootLock(source, version) {
   return lock;
 }
 
-function assertLockDiffIsReleaseOnly(source, actual, version, { docker, engineIntegrity }) {
+function assertLockDiffIsReleaseOnly(source, actual, version, { docker, packageIntegrities }) {
   const before = JSON.parse(source);
   const after = JSON.parse(actual);
   const differences = [];
@@ -123,7 +135,7 @@ function assertLockDiffIsReleaseOnly(source, actual, version, { docker, engineIn
       return afterValue === `https://registry.npmjs.org/${packageName}/-/${shortName}-${version}.tgz`;
     }
     if (parts.length === 3 && parts[2] === "integrity") {
-      return packageName === "@relaycast/engine" ? afterValue === engineIntegrity : /^sha512-[A-Za-z0-9+/]+=*$/.test(afterValue ?? "");
+      return afterValue === packageIntegrities.get(packageName);
     }
     if (parts.length === 4 && parts[2] === "dependencies" && parts[3].startsWith("@relaycast/")) return afterValue === version;
     return false;
@@ -134,7 +146,7 @@ function assertLockDiffIsReleaseOnly(source, actual, version, { docker, engineIn
   }
 }
 
-function expectedDockerLock(source, version, engineIntegrity) {
+function expectedDockerLock(source, version, packageIntegrities) {
   const lock = JSON.parse(source);
   lock.version = version;
   const root = lock.packages?.[""];
@@ -147,15 +159,38 @@ function expectedDockerLock(source, version, engineIntegrity) {
       updateLockPackageEntry(entry, version);
       const name = key.slice("node_modules/".length);
       const shortName = name.slice("@relaycast/".length);
+      const integrity = packageIntegrities.get(name);
+      if (!integrity) throw new Error(`release provenance has no Docker integrity for ${name}`);
       entry.resolved = `https://registry.npmjs.org/${name}/-/${shortName}-${version}.tgz`;
+      entry.integrity = integrity;
     }
   }
-  const engine = lock.packages?.["node_modules/@relaycast/engine"];
-  if (engine) {
-    engine.resolved = `https://registry.npmjs.org/@relaycast/engine/-/engine-${version}.tgz`;
-    engine.integrity = engineIntegrity;
-  }
   return lock;
+}
+
+function packageIntegritiesFromProvenance({
+  provenanceManifest,
+  sourceCommit,
+  sourceTree,
+  version,
+  distTag,
+  packageProvenanceDigest,
+}) {
+  const provenance = readReleaseProvenance(provenanceManifest);
+  assertSourceProvenance(provenance, sourceCommit, sourceTree);
+  if (provenance.version !== version || provenance.distTag !== distTag) {
+    throw new Error("release provenance metadata does not match the release tag");
+  }
+  if (provenanceDigest(provenance) !== packageProvenanceDigest) {
+    throw new Error("release provenance digest does not match the release tag");
+  }
+  return new Map(DOCKER_PACKAGE_NAMES.map((name) => {
+    const pkg = packageProvenance(provenance, name);
+    if (pkg.version !== version) {
+      throw new Error(`${name} provenance version does not match the release`);
+    }
+    return [name, pkg.integrity];
+  }));
 }
 
 function treeEntry(cwd, revision, file) {
@@ -246,7 +281,7 @@ function expectedChangelog(source, { cwd, file, version, sourceCommit, tagCommit
   return result;
 }
 
-function assertExactReleaseTransform({ cwd, sourceCommit, tagCommit, changedPaths, version, engineIntegrity }) {
+function assertExactReleaseTransform({ cwd, sourceCommit, tagCommit, changedPaths, version, packageIntegrities }) {
   for (const file of changedPaths) {
     const before = fileAt(cwd, sourceCommit, file);
     const after = fileAt(cwd, tagCommit, file);
@@ -255,11 +290,11 @@ function assertExactReleaseTransform({ cwd, sourceCommit, tagCommit, changedPath
     else if (file === "docker/package.json") expected = expectedDockerManifest(before, version);
     else if (file === "package.json") expected = before;
     else if (file === "package-lock.json") {
-      assertLockDiffIsReleaseOnly(before, after, version, { docker: false, engineIntegrity });
+      assertLockDiffIsReleaseOnly(before, after, version, { docker: false, packageIntegrities });
       expected = jsonText(expectedRootLock(before, version));
     } else if (file === "docker/package-lock.json") {
-      assertLockDiffIsReleaseOnly(before, after, version, { docker: true, engineIntegrity });
-      expected = jsonText(expectedDockerLock(before, version, engineIntegrity));
+      assertLockDiffIsReleaseOnly(before, after, version, { docker: true, packageIntegrities });
+      expected = jsonText(expectedDockerLock(before, version, packageIntegrities));
     } else if (file === "Dockerfile") expected = before.replace(/^ARG RELAYCAST_ENGINE_VERSION=\S+/m, `ARG RELAYCAST_ENGINE_VERSION=${version}`);
     else if (file === "RUNBOOK.md") expected = expectedRunbook(before, version);
     else if (file.endsWith("/CHANGELOG.md") || file === "CHANGELOG.md") expected = expectedChangelog(before, { cwd, file, version, sourceCommit, tagCommit });
@@ -271,7 +306,7 @@ function assertExactReleaseTransform({ cwd, sourceCommit, tagCommit, changedPath
 }
 
 /** Validate an existing release tag without trusting its annotation alone. */
-export function validateReusableReleaseTag({ cwd = process.cwd(), tag, sourceCommit, sourceTree, version, distTag, packageProvenanceDigest, engineIntegrity }) {
+export function validateReusableReleaseTag({ cwd = process.cwd(), tag, sourceCommit, sourceTree, version, distTag, packageProvenanceDigest, provenanceManifest }) {
   if (git(["cat-file", "-t", tag], cwd) !== "tag") throw new Error(`release tag ${tag} must be annotated`);
   const tagCommit = git(["rev-parse", `${tag}^{commit}`], cwd);
   const tagTree = git(["rev-parse", `${tag}^{tree}`], cwd);
@@ -286,13 +321,20 @@ export function validateReusableReleaseTag({ cwd = process.cwd(), tag, sourceCom
     `Release v${version}`, `Relaycast-NPM-Dist-Tag: ${distTag}`, `Relaycast-Source-Commit: ${sourceCommit}`,
     `Relaycast-Source-Tree: ${sourceTree}`, `Relaycast-Package-Provenance-SHA256: ${packageProvenanceDigest}`,
   ]);
-  if (!/^sha512-[A-Za-z0-9+/]+=*$/.test(engineIntegrity ?? "")) throw new Error("release tag validator requires the published engine integrity");
+  const packageIntegrities = packageIntegritiesFromProvenance({
+    provenanceManifest,
+    sourceCommit,
+    sourceTree,
+    version,
+    distTag,
+    packageProvenanceDigest,
+  });
   const changedPaths = git(["diff", "--name-only", sourceCommit, tagCommit], cwd).split("\n").map((file) => file.trim()).filter(Boolean);
   if (changedPaths.length === 0) throw new Error("release tag tree has no release changes relative to its source");
   const unexpected = changedPaths.filter((file) => !RELEASE_ONLY_PATHS.some((pattern) => pattern.test(file)));
   if (unexpected.length > 0) throw new Error(`release tag changes non-release paths: ${unexpected.join(", ")}`);
   assertReleaseFileEntries(cwd, sourceCommit, tagCommit, changedPaths);
-  assertExactReleaseTransform({ cwd, sourceCommit, tagCommit, changedPaths, version, engineIntegrity });
+  assertExactReleaseTransform({ cwd, sourceCommit, tagCommit, changedPaths, version, packageIntegrities });
 
   const worktree = mkdtempSync(path.join(tmpdir(), "relaycast-release-tag-"));
   try {
@@ -314,6 +356,6 @@ function argument(name) {
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   validateReusableReleaseTag({
     tag: argument("--tag"), sourceCommit: argument("--source-commit"), sourceTree: argument("--source-tree"), version: argument("--version"),
-    distTag: argument("--dist-tag"), packageProvenanceDigest: argument("--provenance-digest"), engineIntegrity: argument("--engine-integrity"),
+    distTag: argument("--dist-tag"), packageProvenanceDigest: argument("--provenance-digest"), provenanceManifest: argument("--provenance-manifest"),
   });
 }
