@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { channelMembers, channels } from '../../db/schema.js';
 import { generateId } from '../../engine/snowflake.js';
 import { deleteAgent } from '../../engine/agent.js';
-import { createChannel, getChannel, joinChannel } from '../../engine/channel.js';
+import { createChannel, getChannel, joinChannel, ensureAgentSubscriptionChannel } from '../../engine/channel.js';
 import type { EngineDb, TransactionCapability } from '../../ports/database.js';
 import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
 
@@ -41,6 +41,20 @@ describe('agent subscription channels', () => {
     await post(`/v1/channels/${route.name}/leave`, target.token);
     expect((await (await post(endpoint, ws.workspaceKey)).json()).data.members).toHaveLength(1);
   });
+  it('fails setup when release wins before the conditional membership insert', async () => {
+    const ws = await createWorkspace(stack.app, 'release-during-ensure');
+    await registerAgent(stack.app, ws.workspaceKey, 'racing-recipient');
+    const db = stack.runtime.handle.db;
+    const original = db.run.bind(db);
+    const hook = vi.spyOn(db, 'run').mockImplementationOnce(async (query) => {
+      await deleteAgent(db, ws.workspaceId, 'racing-recipient');
+      return original(query);
+    });
+    try {
+      await expect(ensureAgentSubscriptionChannel(db, ws.workspaceId, 'racing-recipient')).rejects.toMatchObject({ code: 'agent_not_found' });
+    } finally { hook.mockRestore(); }
+  });
+
   it('never transfers a deleted identity subscription to a recreated name', async () => {
     const ws = await createWorkspace(stack.app, 'target-lifecycle');
     await registerAgent(stack.app, ws.workspaceKey, 'recreated-worker');

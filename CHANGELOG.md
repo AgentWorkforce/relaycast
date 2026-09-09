@@ -29,6 +29,9 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
+- Thread replies resolve full hyphenated mentions; subscription setup rejects recipients released during membership creation.
+- Verified spawn checks the selected provider heartbeat, and inventory reconciliation honors only canonical `verify_ready` input. Empty explicit targets retain legacy spawn routing.
+
 - Relayfile messages expose provider payloads from Cloud sync envelopes, preserving titles, authors, and terminal PR state for subscribers.
 
 - Subscription routes reject conflicting legacy memberships; agent removal invalidates channels actually removed by the release transaction.

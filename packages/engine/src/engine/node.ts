@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { invalidateChannelCache } from './cache.js';
 import { and, asc, eq, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from 'drizzle-orm';
 import type {
@@ -1717,15 +1718,9 @@ export async function deregisterAgentViaNode(
 }
 
 /** Inventory proves identity/presence, never a harness's ready state. */
+const spawnReadinessSchema = z.object({ verify_ready: z.literal(true) }).passthrough();
 function requiresSpawnReadiness(input: unknown): boolean {
-  const record = (value: unknown): Record<string, unknown> =>
-    value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
-  const root = record(input);
-  const agent = record(root.agent);
-  const config = record(agent.harnessConfig ?? agent.harness_config ?? root.harnessConfig ?? root.harness_config);
-  const metadata = record(config.metadata);
-  return (root.verify_ready ?? root.verifyReady ?? agent.verify_ready ?? agent.verifyReady) === true
-    || (metadata.verify_ready ?? metadata.verifyReady) === true;
+  return spawnReadinessSchema.safeParse(input).success;
 }
 
 export async function reconcileInventory(

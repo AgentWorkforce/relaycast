@@ -2323,7 +2323,8 @@ paths:
         cannot join or be invited. Does not rotate the recipient token. A
         replacement registered under the same name gets a different channel.
         The agent-events- prefix and routing metadata are reserved. This limits
-        delivery membership; it does not introduce private history access.
+        delivery membership; it does not introduce private history access. Returns
+        404 if the recipient is released before membership is established.
       tags: [Agents]
       security:
         - workspaceKey: []

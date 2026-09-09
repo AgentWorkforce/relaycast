@@ -1037,7 +1037,7 @@ Apache-2.0
 
 Workspace owners can `POST /v1/agents/{name}/subscription-channel` to obtain an
 idempotent channel whose only permitted member is that exact agent identity.
-The response is a normal channel with its verified `members` list. This operation
+The response is a normal channel with its verified `members` list; setup returns 404 if the recipient is released before membership can be established. This operation
 does not rotate the agent token. The `agent-events-` channel prefix is reserved;
 routing metadata cannot be changed and other agents cannot join or be invited.
 An agent recreated under the same name gets a different channel, so old webhook
@@ -1045,7 +1045,7 @@ subscriptions never transfer to its replacement. Removing the subscription delet
 its webhook resources; a shared per-agent channel can remain for other resources.
 This is a delivery audience restriction, not a private-channel history API.
 
-Mention handles use ASCII letters, digits, underscores and hyphens. For example,
+Channel messages and thread replies resolve mention handles using ASCII letters, digits, underscores and hyphens. For example,
 `@build-reviewer_2` resolves the full handle, never `build`. Duplicate mentions
 produce one mention delivery. A backslash immediately before `@` escapes it;
 email addresses are not mentions. Mention delivery still requires membership in
@@ -1064,11 +1064,13 @@ Explicit `target_node` on built-in spawn honors fleet placement even when a
 legacy workspace-global node action named `spawn` exists; its caller allowlist
 continues to apply. A dispatch acknowledgement does not establish harness readiness.
 
-Verified spawn (`verify_ready: true`) fails with `spawn_target_unavailable` when no connected eligible provider can dispatch the request. Unverified legacy requests retain queue behavior. Relayfile ingress preserves authenticated `providerEventType` and `resourceRef` as `provider_event_type` and `resource_ref` in message metadata, alongside the provider record. Generic file events do not imply PR, CI, or review semantics. Cloud sync envelopes are unwrapped to expose their provider payload in message metadata and formatting; this does not promote payload fields into authenticated event semantics.
+Verified spawn (`verify_ready: true`) fails with `spawn_target_unavailable` when the selected provider lacks a live handler heartbeat or connected socket. Unverified legacy requests retain queue behavior. Relayfile ingress preserves authenticated `providerEventType` and `resourceRef` as `provider_event_type` and `resource_ref` in message metadata, alongside the provider record. Generic file events do not imply PR, CI, or review semantics. Cloud sync envelopes are unwrapped to expose their provider payload in message metadata and formatting; this does not promote payload fields into authenticated event semantics.
 
-Readiness requests do not reroute registered global spawn handlers. Only an explicit `target_node` selects fleet placement around a legacy node alias; handlers that receive `verify_ready` must honor its completion contract. A deleted recipient leaves its old route memberless so a replacement cannot inherit delivery. Retire or replace the inventoried producer binding and webhook when deleting a subscriber; channel history remains for audit.
+Readiness requests do not reroute registered global spawn handlers. Only a nonempty explicit `target_node` selects fleet placement around a legacy node alias; handlers that receive `verify_ready` must honor its completion contract. A deleted recipient leaves its old route memberless so a replacement cannot inherit delivery. Retire or replace the inventoried producer binding and webhook when deleting a subscriber; channel history remains for audit.
 
 Node-control `agent.deregister` requests with an `id` receive a correlated `reply`
 only after the binding has been removed and the agent moved offline. Requests
 without an `id` retain fire-and-forget behavior. Brokers performing owned identity
 cleanup must await that acknowledgement before requesting deletion.
+
+The signed Relayfile webhook request follows Relayfile's existing external event contract (`eventId`, `providerEventType`, `resourceRef`). These are verified vendor payload fields, not alternate spellings of Relaycast HTTP fields; Relaycast message metadata remains snake_case.

@@ -1603,7 +1603,7 @@ async function dispatchSpawn(args: {
   const nodeId = placement.node.id;
   const shadow = args.bypassShadow ? null : await fetchNodeAction(args.db, args.workspaceId, nodeId, capability);
   const capProvider = (await capacityProviderName(args.db, args.workspaceId, nodeId, capability)) ?? DEFAULT_PROVIDER_NAME;
-  if (input.verify_ready === true && (placement.queued || !args.registry.isProviderConnected(args.workspaceId, nodeId, shadow?.handlerProvider ?? capProvider))) {
+  if (input.verify_ready === true && (placement.queued || !await isNodeProviderLive(args.db, args.registry, args.workspaceId, nodeId, shadow?.handlerProvider ?? capProvider))) {
     await failNeverDispatchedInvocation(args.db, args.workspaceId, invocation.id, 'spawn_target_unavailable');
     if (!placement.queued) await releaseNodeCapacity(args.db, args.workspaceId, nodeId);
     throw codedError('Verified spawn target is not connected and ready to accept work; retry when it is available', 'spawn_target_unavailable', 503);
@@ -1832,7 +1832,7 @@ export async function invokeAction(
   // Legacy workspace-global broker aliases must not swallow an explicit
   // target_node. Capacity placement validates that target and its live provider.
   // Keep the alias ACL above this branch; explicit targeting is not an ACL bypass.
-  if (actionName === 'spawn' && (!action || (action.handlerNodeId && typeof data.input?.target_node === 'string'))) {
+  if (actionName === 'spawn' && (!action || (action.handlerNodeId && typeof data.input?.target_node === 'string' && data.input.target_node.trim().length > 0))) {
     return dispatchSpawn({
       db,
       registry: options.nodeConnections,

@@ -43,6 +43,10 @@ export async function ensureAgentSubscriptionChannel(db: Db, workspaceId: string
     SELECT ${channel.id}, id, 'owner' FROM agents
     WHERE id = ${agent.id} AND name = ${agentName} AND status != 'released'
     ON CONFLICT DO NOTHING`);
+  const [recipient] = await db.select({ agentId: agents.id }).from(channelMembers)
+    .innerJoin(agents, eq(agents.id, channelMembers.agentId))
+    .where(and(eq(channelMembers.channelId, channel.id), eq(agents.id, agent.id), eq(agents.name, agentName), ne(agents.status, 'released'))).limit(1);
+  if (!recipient) throw codedError('Recipient agent was released during subscription setup', 'agent_not_found', 404);
   await invalidateChannelCache(workspaceId, name);
   return getChannel(db, workspaceId, name);
 }

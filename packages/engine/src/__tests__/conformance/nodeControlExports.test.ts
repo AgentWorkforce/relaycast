@@ -36,6 +36,7 @@ describe('node-control provider-disconnect exports', () => {
     capability: string,
     activeAgents = 0,
     instanceId = `${providerName}-i1`,
+    kind: 'action' | 'capacity' = 'action',
   ) {
     const provider = { name: providerName, instance_id: instanceId };
     const sock = new FakeSocket();
@@ -47,7 +48,7 @@ describe('node-control provider-disconnect exports', () => {
       name: nodeName,
       node_id: nodeId,
       provider,
-      capabilities: [{ name: capability, kind: 'action' }],
+      capabilities: [{ name: capability, kind }],
       max_agents: 4,
       tags: ['test'],
       version: 'v1',
@@ -100,14 +101,20 @@ describe('node-control provider-disconnect exports', () => {
       .toContain(ordinary.agent_id);
   });
 
-  it.each([true, false])('inventory does not substitute for explicit readiness: verify_ready=%s', async (verified) => {
+  it.each([
+    [{ verify_ready: true }, true],
+    [{ verify_ready: false }, false],
+    [{ verifyReady: true }, false],
+    [{ agent: { verify_ready: true } }, false],
+    [{ harness_config: { metadata: { verify_ready: true } } }, false],
+  ])('inventory follows the canonical readiness input: %j', async (readinessInput, verified) => {
     const ws = await createWorkspace(stack.app, `inventory-readiness-${verified}`);
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
     await enrollNode(ws, 'node-ready', 'ready');
     const provider = await attachProvider(ws.workspaceId, 'node-ready', 'ready', 'broker', 'spawn:claude');
     const response = await stack.app.request('/v1/actions/spawn/invoke', {
       method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
-      body: JSON.stringify({ input: { name: 'worker', cli: 'claude', verify_ready: verified } }),
+      body: JSON.stringify({ input: { name: 'worker', cli: 'claude', ...readinessInput } }),
     });
     expect(response.status).toBe(201);
     const invocationId = (await response.json()).data.invocation_id;
@@ -131,6 +138,27 @@ describe('node-control provider-disconnect exports', () => {
       expect(finished.status).toBe('completed');
       expect(finished.output).toMatchObject({ spawned: true, ready: true });
     }
+  });
+
+  it.each(['not-live', 'stale'])('verified native spawn checks its own provider: %s', async (state) => {
+    const ws = await createWorkspace(stack.app, 'provider-readiness-' + state);
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    await enrollNode(ws, 'multi-provider-node', 'multi');
+    const spawn = await attachProvider(ws.workspaceId, 'multi-provider-node', 'multi', 'broker', 'spawn:claude', 0, 'broker-i1', 'capacity');
+    await attachProvider(ws.workspaceId, 'multi-provider-node', 'multi', 'other', 'ping');
+    await db().update(nodeProviders).set(state === 'stale'
+      ? { lastHeartbeatAt: new Date(Date.now() - 300_000) }
+      : { handlersLive: false })
+      .where(and(eq(nodeProviders.nodeId, 'multi-provider-node'), eq(nodeProviders.name, 'broker')));
+    const [aggregate] = await db().select().from(nodes).where(eq(nodes.id, 'multi-provider-node'));
+    expect(aggregate.handlersLive).toBe(true);
+    const response = await stack.app.request('/v1/actions/spawn/invoke', {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { name: 'worker', cli: 'claude', target_node: 'multi', verify_ready: true } }),
+    });
+    expect(response.status).toBe(503);
+    expect((await response.json()).error.code).toBe('spawn_target_unavailable');
+    expect(spawn.sock.ofType('action.invoke')).toHaveLength(0);
   });
 
   function nodeActiveAgents(workspaceId: string, nodeId: string) {

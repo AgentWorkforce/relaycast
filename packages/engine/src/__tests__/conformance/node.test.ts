@@ -538,6 +538,17 @@ describe('node adapter conformance', () => {
       expect((await handlerSpawn.json()).data.handler_node_id).toBe('node_alpha');
       await stack.settle();
       expect(alpha.sock.ofType('action.invoke')).toHaveLength(1);
+      for (const target_node of ['', '   ']) {
+        const legacy = await stack.app.request('/v1/actions/spawn/invoke', {
+          method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+          body: JSON.stringify({ input: { cli: 'claude', name: 'legacy-empty-' + target_node.length, target_node } }),
+        });
+        expect(legacy.status).toBe(201);
+        const invocation = (await legacy.json()).data;
+        expect(invocation.handler_node_id).toBe('node_alpha');
+        const [stored] = await stack.runtime.handle.db.select().from(actionInvocations).where(eq(actionInvocations.id, invocation.invocation_id));
+        expect(stored.actionId).toBe('legacy-spawn');
+      }
       const outsider = await registerAgent(stack.app, ws.workspaceKey, 'outsider');
       const denied = await stack.app.request('/v1/actions/spawn/invoke', {
         method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${outsider.token}` },

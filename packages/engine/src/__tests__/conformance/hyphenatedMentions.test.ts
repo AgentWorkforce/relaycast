@@ -6,7 +6,7 @@ describe('exact mention delivery', () => {
   beforeEach(() => { stack = makeNodeStack(); });
   afterEach(async () => { await stack.close(); });
 
-  it('wakes the full muted handle once, never its prefix or a nonmember', async () => {
+  it.each(['channel', 'thread'])('wakes the full muted handle once on %s, never its prefix or a nonmember', async (kind) => {
     const ws = await createWorkspace(stack.app, 'mention-scope');
     const sender = await registerAgent(stack.app, ws.workspaceKey, 'sender');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'gh-proof_alpha-0908');
@@ -21,12 +21,17 @@ describe('exact mention delivery', () => {
       expect((await request('/v1/channels/scoped/join', agent.token)).status).toBeLessThan(300);
       expect((await request('/v1/channels/scoped/mute', agent.token)).status).toBeLessThan(300);
     }
-    const post = await request('/v1/channels/scoped/messages', sender.token, {
+    let endpoint = '/v1/channels/scoped/messages';
+    if (kind === 'thread') {
+      const parent = await request(endpoint, sender.token, { text: 'thread root' });
+      endpoint = '/v1/messages/' + (await parent.json()).data.id + '/replies';
+    }
+    const post = await request(endpoint, sender.token, {
       text: '@gh-proof_alpha-0908 @gh-proof_alpha-0908 @gh-proof-outside \\@gh sender@gh',
     });
     expect(post.status).toBe(201);
     const body = await post.json() as { data: { id: string; mentions: string[] } };
-    expect(body.data.mentions).toEqual(['gh-proof_alpha-0908', 'gh-proof-outside']);
+    if (kind === 'channel') expect(body.data.mentions).toEqual(['gh-proof_alpha-0908', 'gh-proof-outside']);
     for (const [agent, count] of [[target, 1], [prefix, 0], [outside, 0]] as const) {
       const response = await stack.app.request('/v1/deliveries', { headers: { authorization: `Bearer ${agent.token}` } });
       expect(response.status).toBe(200);
