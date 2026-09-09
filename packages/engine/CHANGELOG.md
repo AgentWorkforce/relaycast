@@ -9,7 +9,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased - Minor]
 
-- Add `POST /v1/agents/retention` and `scripts/retain-agents.mts` for bounded, resumable reclamation of stale unowned identities; deletion is explicit and rechecks ownership, age, status, and history references atomically. Apply `0053_agent_retention_indexes.sql` before enabling it; see the [operator guide](../../docs/agent-retention.md).
+- Add `POST /v1/agents/retention` and `scripts/retain-agents.mts` for bounded, resumable reclamation of stale unowned identities; CLI `--limit` accepts 1–100 rows per page (default 100). Deletion is explicit and rechecks ownership, age, status, and history references atomically. Apply `0053_agent_retention_indexes.sql` before enabling it; see the [operator guide](../../docs/agent-retention.md).
 
 ## [8.6.1] - 2026-09-09
 

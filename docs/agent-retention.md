@@ -70,7 +70,8 @@ Each call examines at most `limit` registry rows (default/cap 100) and performs
 at most one bulk `DELETE ... RETURNING`, rather than a request per agent. The
 candidate read is materialized before ownership/history probes. Cascading child
 rows are not bounded by the registry page size; use a smaller `limit` for identities
-with large dependent histories.
+with large dependent histories. The CLI accepts `--limit <1-100>` (for example,
+`--limit 10`); it defaults to 100 and may be reduced when resuming a state file.
 
 The response contains `dry_run`, `cutoff`, `scanned`, mutually exclusive `counts`,
 eligible `candidates` (id/name/last_seen only), `deleted`, `skipped_changed`, and

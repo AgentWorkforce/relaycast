@@ -18,7 +18,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
-- Add workspace-admin bulk reclamation for stale, unowned agent identities, with default dry-run reports, resumable pages, and protection for broker associations and retained authorship.
+- Add workspace-admin bulk reclamation for stale, unowned agent identities, with default dry-run reports, resumable pages, a configurable CLI `--limit` of 1–100 rows, and protection for broker associations and retained authorship.
 
 ## [8.6.1] - 2026-09-09
 

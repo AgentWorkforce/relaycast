@@ -17,6 +17,7 @@ async function main() {
     'd1-database-id': { type: 'string' },
     'workspace-id': { type: 'string' },
     'retention-days': { type: 'string', default: '30' },
+    limit: { type: 'string' },
     'max-pages': { type: 'string', default: '50' },
     'state-file': { type: 'string' },
     delete: { type: 'boolean', default: false },
@@ -28,9 +29,10 @@ async function main() {
     --base-url <engine-url>                       (RELAYCAST_API_KEY from environment)
     OR --sqlite <existing-file> --workspace-id <id>
     OR --d1-database-id <id> --workspace-id <id>  (read-only D1 preview)
-    [--retention-days 30] [--max-pages 50] [--state-file <path>] [--delete]
+    [--retention-days 30] [--limit 100] [--max-pages 50] [--state-file <path>] [--delete]
 
   Defaults to dry-run. Prints one JSON report per page, followed by totals.
+  --limit bounds registry rows per page (integer 1-100; default 100).
   Save --state-file to resume a bounded traversal after interruption. Use a new
   state file to start a fresh traversal or switch from preview to deletion.
   SQLite mode never migrates the database; apply engine migrations separately.`);
@@ -39,6 +41,7 @@ async function main() {
 
   const options = agentRetentionSchema.parse({
     retention_days: Number(values['retention-days']), delete: values.delete,
+    limit: values.limit === undefined ? undefined : Number(values.limit),
   });
   const maxPages = z.number().int().min(1).max(10000).parse(Number(values['max-pages']));
   if ([values.sqlite, values['base-url'], values['d1-database-id']].filter(Boolean).length !== 1) {

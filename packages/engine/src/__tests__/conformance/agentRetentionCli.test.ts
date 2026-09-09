@@ -69,6 +69,45 @@ describe('agent retention CLI', () => {
     expect(run('--delete', '--state-file', state).stderr).toContain('already complete');
   });
 
+  it('bounds preview and deletion with --limit and resumes with a smaller page size', () => {
+    const before = rows();
+    expect(summary(run('--limit', '10', '--max-pages', '1')))
+      .toMatchObject({ dry_run: true, complete: false, scanned: 10, eligible: 9, deleted: 0 });
+    expect(rows()).toEqual(before);
+
+    const state = join(directory, 'limited-deletion.json');
+    expect(summary(run('--delete', '--limit', '10', '--max-pages', '1', '--state-file', state)))
+      .toMatchObject({ complete: false, scanned: 10, deleted: 9 });
+    expect(rows()).toEqual(before.filter((_, index) => index === 0 || index >= 10));
+
+    expect(summary(run('--delete', '--limit', '1', '--max-pages', '1', '--state-file', state)))
+      .toMatchObject({ complete: false, scanned: 1, deleted: 0 });
+    expect(rows()).toHaveLength(206);
+    const resumed = run('--delete', '--limit', '5', '--state-file', state);
+    expect(summary(resumed)).toMatchObject({ complete: true, scanned: 204, deleted: 184 });
+    for (const page of resumed.stdout.trim().split('\n').slice(0, -1).map(line => JSON.parse(line))) {
+      expect(page.scanned).toBeLessThanOrEqual(5);
+      expect(page.deleted).toBeLessThanOrEqual(5);
+    }
+    expect(rows()).toEqual(before.filter((_, index) => index % 10 === 0));
+    expect(summary(run('--delete', '--limit', '5'))).toMatchObject({ complete: true, deleted: 0 });
+  });
+
+  it.each(['0', '-1', '101', '1.5', 'invalid', 'NaN', 'Infinity', ''])(
+    'rejects invalid --limit %j before deleting or advancing state', (limit) => {
+      const before = rows();
+      const state = join(directory, 'invalid-limit.json');
+      summary(run('--delete', '--max-pages', '1', '--limit', '1', '--state-file', state));
+      const checkpoint = readFileSync(state, 'utf8');
+      const result = run('--delete', `--limit=${limit}`, '--state-file', state);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('limit');
+      expect(result.stdout).toBe('');
+      expect(readFileSync(state, 'utf8')).toBe(checkpoint);
+      expect(rows()).toEqual(before);
+    },
+  );
+
   it('rejects reuse of preview state for deletion and of state for another policy', () => {
     const state = join(directory, 'preview.json');
     summary(run('--max-pages', '1', '--state-file', state));
