@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -85,16 +87,30 @@ function git(cwd, args, options = {}) {
 }
 
 // Git may still be settling a temporary object/lock entry when a fixture is
-// removed, especially on hosted Linux runners. Retry the recursive removal so
-// a transient ENOTEMPTY/EBUSY does not turn an otherwise passing contract test
-// into a false failure.
+// removed, especially on hosted Linux runners. Move the fixture out of the
+// namespace used by the test before removing it, then retry only filesystem
+// contention errors. This keeps cleanup from racing a child Git process while
+// still surfacing unexpected failures.
 function removeTemporaryDirectory(directory) {
-  rmSync(directory, {
-    recursive: true,
-    force: true,
-    maxRetries: 20,
-    retryDelay: 100,
-  });
+  const cleanupDirectory = `${directory}.cleanup-${process.pid}-${randomUUID()}`;
+  try {
+    renameSync(directory, cleanupDirectory);
+  } catch (error) {
+    if (error?.code === "ENOENT") return;
+    throw error;
+  }
+
+  const retryableErrors = new Set(["EBUSY", "EMFILE", "ENFILE", "ENOTEMPTY"]);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      rmSync(cleanupDirectory, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (!retryableErrors.has(error?.code) || attempt >= 120) throw error;
+      const wait = new Int32Array(new SharedArrayBuffer(4));
+      Atomics.wait(wait, 0, 0, 250);
+    }
+  }
 }
 
 function archiveRevision(revision, target) {
