@@ -31,15 +31,10 @@ function sha256(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
-function sqlFiles(directory, { allowMissing = false } = {}) {
-  try {
-    return readdirSync(directory)
-      .filter((filename) => filename.endsWith(".sql"))
-      .sort();
-  } catch (error) {
-    if (allowMissing && error?.code === "ENOENT") return [];
-    throw error;
-  }
+function sqlFiles(directory) {
+  return readdirSync(directory)
+    .filter((filename) => filename.endsWith(".sql"))
+    .sort();
 }
 
 function isKnownRecovery({
@@ -67,7 +62,9 @@ export function comparePublishedMigrations({
   const changed = [];
   const missing = [];
   const restored = [];
-  const publishedFiles = sqlFiles(publishedDirectory, { allowMissing: true });
+  // A published engine without its migration directory is malformed, not an
+  // empty baseline. Fail closed so every published stream remains protected.
+  const publishedFiles = sqlFiles(publishedDirectory);
 
   for (const filename of publishedFiles) {
     const publishedPath = join(publishedDirectory, filename);

@@ -88,6 +88,23 @@ describe("published engine migration immutability", () => {
     );
   });
 
+  it("rejects a published engine package without a migrations directory", () => {
+    const directories = fixture({
+      published: {},
+      source: { "0001_old.sql": "SELECT 1;\n" },
+    });
+    rmSync(directories.publishedDirectory, { recursive: true });
+
+    assert.throws(
+      () =>
+        assertPublishedMigrationsImmutable({
+          ...directories,
+          publishedVersion: "1.0.0",
+        }),
+      (error) => error?.code === "ENOENT",
+    );
+  });
+
   it("allows only an exact, version-bound recovery", () => {
     const published = "bad published bytes\n";
     const source = "canonical restored bytes\n";
