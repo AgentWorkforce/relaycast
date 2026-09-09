@@ -20,7 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
-- NPM releases now preserve every published engine migration byte-for-byte, including the canonical `0045_workspace_create_idempotency.sql` artifact.
+- NPM releases now preserve every stable and prerelease engine migration byte-for-byte, including the canonical `0045_workspace_create_idempotency.sql` artifact.
 
 ## [8.6.0] - 2026-09-09
 

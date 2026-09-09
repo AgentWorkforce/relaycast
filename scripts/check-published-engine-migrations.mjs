@@ -6,6 +6,12 @@ import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const ENGINE_PACKAGE = "@relaycast/engine";
+export const PUBLISHED_STREAM_TAGS = Object.freeze([
+  "latest",
+  "next",
+  "beta",
+  "alpha",
+]);
 
 // v8.6.0 accidentally rewrote only the header comments of migration 0045.
 // Permit exactly the one-way restoration to the v8.5.5 bytes. Any other
@@ -25,10 +31,15 @@ function sha256(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
-function sqlFiles(directory) {
-  return readdirSync(directory)
-    .filter((filename) => filename.endsWith(".sql"))
-    .sort();
+function sqlFiles(directory, { allowMissing = false } = {}) {
+  try {
+    return readdirSync(directory)
+      .filter((filename) => filename.endsWith(".sql"))
+      .sort();
+  } catch (error) {
+    if (allowMissing && error?.code === "ENOENT") return [];
+    throw error;
+  }
 }
 
 function isKnownRecovery({
@@ -56,7 +67,7 @@ export function comparePublishedMigrations({
   const changed = [];
   const missing = [];
   const restored = [];
-  const publishedFiles = sqlFiles(publishedDirectory);
+  const publishedFiles = sqlFiles(publishedDirectory, { allowMissing: true });
 
   for (const filename of publishedFiles) {
     const publishedPath = join(publishedDirectory, filename);
@@ -167,26 +178,100 @@ export function downloadPublishedEngine(spec = `${ENGINE_PACKAGE}@latest`) {
   }
 }
 
-function main() {
-  const published = downloadPublishedEngine(
-    process.argv[2] || `${ENGINE_PACKAGE}@latest`,
-  );
+export function parsePublishedEngineDistTags(output) {
+  let parsed;
   try {
-    const result = assertPublishedMigrationsImmutable({
-      sourceDirectory: resolve("packages/engine/src/db/migrations"),
-      publishedDirectory: published.migrationsDirectory,
-      publishedVersion: published.version,
-    });
-    for (const filename of result.restored) {
+    parsed = JSON.parse(String(output));
+  } catch {
+    throw new Error("npm returned invalid engine dist-tag JSON");
+  }
+  if (Array.isArray(parsed) && parsed.length === 1) parsed = parsed[0];
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("npm returned ambiguous engine dist-tag metadata");
+  }
+
+  const streams = [];
+  const seenVersions = new Set();
+  for (const tag of PUBLISHED_STREAM_TAGS) {
+    if (!Object.hasOwn(parsed, tag)) continue;
+    const version = parsed[tag];
+    if (
+      typeof version !== "string" ||
+      version.length === 0 ||
+      version.trim() !== version ||
+      /[\u0000-\u0020]/u.test(version)
+    ) {
+      throw new Error(`npm returned an invalid engine ${tag} dist-tag`);
+    }
+    if (seenVersions.has(version)) continue;
+    seenVersions.add(version);
+    streams.push({ tag, version, spec: `${ENGINE_PACKAGE}@${version}` });
+  }
+  if (streams.length === 0) {
+    throw new Error("npm returned no recognized published engine streams");
+  }
+  return streams;
+}
+
+export function readPublishedEngineStreams() {
+  return parsePublishedEngineDistTags(
+    execFileSync(
+      "npm",
+      ["view", ENGINE_PACKAGE, "dist-tags", "--json", "--prefer-online"],
+      { encoding: "utf8" },
+    ),
+  );
+}
+
+export function verifyPublishedEngineStreams({
+  sourceDirectory,
+  streams,
+  loadPublishedEngine = downloadPublishedEngine,
+  recoveries = KNOWN_RECOVERIES,
+}) {
+  return streams.map((stream) => {
+    const published = loadPublishedEngine(stream.spec);
+    try {
+      const result = assertPublishedMigrationsImmutable({
+        sourceDirectory,
+        publishedDirectory: published.migrationsDirectory,
+        publishedVersion: published.version,
+        recoveries,
+      });
+      return { ...stream, publishedVersion: published.version, result };
+    } catch (error) {
+      throw new Error(
+        `published engine stream ${stream.tag} (${published.version}) failed: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
+    } finally {
+      published.cleanup();
+    }
+  });
+}
+
+function main() {
+  const requestedSpecs = process.argv.slice(2);
+  const streams =
+    requestedSpecs.length > 0
+      ? requestedSpecs.map((spec, index) => ({
+          tag: `explicit-${index + 1}`,
+          spec,
+        }))
+      : readPublishedEngineStreams();
+  const verified = verifyPublishedEngineStreams({
+    sourceDirectory: resolve("packages/engine/src/db/migrations"),
+    streams,
+  });
+  for (const stream of verified) {
+    for (const filename of stream.result.restored) {
       console.warn(
-        `approved recovery: restored ${filename} from published ${published.version} to its canonical bytes`,
+        `approved recovery: restored ${filename} from published ${stream.publishedVersion} to its canonical bytes`,
       );
     }
     console.log(
-      `ok — ${result.checked} published engine migration(s) are immutable; ${result.added.length} append-only migration(s) added`,
+      `ok — ${stream.tag} (${stream.publishedVersion}): ${stream.result.checked} published engine migration(s) are immutable; ${stream.result.added.length} append-only migration(s) added`,
     );
-  } finally {
-    published.cleanup();
   }
 }
 

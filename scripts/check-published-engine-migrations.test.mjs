@@ -14,6 +14,8 @@ import { fileURLToPath } from "node:url";
 import {
   KNOWN_RECOVERIES,
   assertPublishedMigrationsImmutable,
+  parsePublishedEngineDistTags,
+  verifyPublishedEngineStreams,
 } from "./check-published-engine-migrations.mjs";
 
 const temporaryDirectories = [];
@@ -115,6 +117,88 @@ describe("published engine migration immutability", () => {
           recoveries: [recovery],
         }),
       /published engine migrations are immutable/,
+    );
+  });
+
+  it("protects migrations published only on a prerelease stream", () => {
+    const latest = fixture({
+      published: { "0001_stable.sql": "SELECT 1;\n" },
+      source: {
+        "0001_stable.sql": "SELECT 1;\n",
+        "0002_prerelease.sql": "SELECT 2;\n",
+      },
+    });
+    const beta = fixture({
+      published: {
+        "0001_stable.sql": "SELECT 1;\n",
+        "0002_prerelease.sql": "SELECT 'published beta bytes';\n",
+      },
+      source: {
+        "0001_stable.sql": "SELECT 1;\n",
+        "0002_prerelease.sql": "SELECT 2;\n",
+      },
+    });
+    const directories = new Map([
+      ["@relaycast/engine@8.5.5", latest.publishedDirectory],
+      ["@relaycast/engine@8.6.0-beta.1", beta.publishedDirectory],
+    ]);
+
+    assert.throws(
+      () =>
+        verifyPublishedEngineStreams({
+          sourceDirectory: latest.sourceDirectory,
+          streams: [
+            {
+              tag: "latest",
+              version: "8.5.5",
+              spec: "@relaycast/engine@8.5.5",
+            },
+            {
+              tag: "beta",
+              version: "8.6.0-beta.1",
+              spec: "@relaycast/engine@8.6.0-beta.1",
+            },
+          ],
+          loadPublishedEngine: (spec) => ({
+            cleanup() {},
+            migrationsDirectory: directories.get(spec),
+            version: spec.slice(spec.lastIndexOf("@") + 1),
+          }),
+        }),
+      /published engine stream beta \(8\.6\.0-beta\.1\)[\s\S]*0002_prerelease\.sql/,
+    );
+  });
+
+  it("reads every recognized dist-tag head and deduplicates versions", () => {
+    assert.deepEqual(
+      parsePublishedEngineDistTags(
+        JSON.stringify([
+          {
+            latest: "8.6.0",
+            next: "8.7.0-beta.1",
+            beta: "8.7.0-beta.1",
+            alpha: "8.8.0-alpha.1",
+            legacy: "1.0.0",
+          },
+        ]),
+      ),
+      [
+        {
+          tag: "latest",
+          version: "8.6.0",
+          spec: "@relaycast/engine@8.6.0",
+        },
+        {
+          tag: "next",
+          version: "8.7.0-beta.1",
+          spec: "@relaycast/engine@8.7.0-beta.1",
+        },
+        {
+          tag: "alpha",
+          version: "8.8.0-alpha.1",
+          spec: "@relaycast/engine@8.8.0-alpha.1",
+        },
+      ],
     );
   });
 

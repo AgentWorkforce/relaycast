@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- Restore migration `0045_workspace_create_idempotency.sql` to its original published bytes and reject future edits to published migrations before NPM release.
+- Restore migration `0045_workspace_create_idempotency.sql` to its original published bytes and reject future edits across stable and prerelease NPM streams.
 
 ## [8.6.0] - 2026-09-09
 

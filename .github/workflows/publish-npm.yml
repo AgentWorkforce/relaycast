@@ -93,7 +93,7 @@ jobs:
       - name: Test release workflow contracts
         run: npm run test:release
 
-      - name: Published engine migrations are immutable
+      - name: Published engine migrations are immutable across release streams
         run: node scripts/check-published-engine-migrations.mjs
 
       - name: Version all packages
