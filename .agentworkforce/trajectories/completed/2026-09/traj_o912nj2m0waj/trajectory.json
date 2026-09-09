@@ -1,0 +1,91 @@
+{
+  "id": "traj_o912nj2m0waj",
+  "version": 1,
+  "task": {
+    "title": "Repair Relaycast PR 393 release provenance and dist-tag gates",
+    "source": {
+      "system": "plain",
+      "id": "relaycast#393"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-09-09T00:34:12.174Z",
+  "completedAt": "2026-09-09T00:52:21.551Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-09-09T00:51:22.221Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_fk0aijcbm0o9",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-09-09T00:51:22.221Z",
+      "endedAt": "2026-09-09T00:52:21.551Z",
+      "events": [
+        {
+          "ts": 1788915082222,
+          "type": "decision",
+          "content": "Validate newly-created annotated release tags with the exact reusable-tag validator before any remote push: Validate newly-created annotated release tags with the exact reusable-tag validator before any remote push",
+          "raw": {
+            "question": "Validate newly-created annotated release tags with the exact reusable-tag validator before any remote push",
+            "chosen": "Validate newly-created annotated release tags with the exact reusable-tag validator before any remote push",
+            "alternatives": [],
+            "reasoning": "The semantic release contract accepted syntactically valid but provenance-mismatched Docker integrities; the local tag is the first object binding the generated release tree to the signed provenance digest."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1788915082525,
+          "type": "decision",
+          "content": "Use npm publish --tag as the sole dist-tag mutation and fail closed on bounded exact read-back: Use npm publish --tag as the sole dist-tag mutation and fail closed on bounded exact read-back",
+          "raw": {
+            "question": "Use npm publish --tag as the sole dist-tag mutation and fail closed on bounded exact read-back",
+            "chosen": "Use npm publish --tag as the sole dist-tag mutation and fail closed on bounded exact read-back",
+            "alternatives": [],
+            "reasoning": "npm trusted-publishing OIDC authorizes publish but not npm dist-tag commands. Read-only verification preserves OIDC releases, lets registry propagation converge, blocks changed/missing mappings, and never moves latest for next/alpha."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1788915082828,
+          "type": "reflection",
+          "content": "All three independent-review findings are repaired; focused release, engine, SDK, entrypoint, full workspace, build, lint, actionlint, and real-image gates are green before final security review.",
+          "raw": {
+            "focalPoints": [
+              "release-provenance",
+              "dist-tags",
+              "changelog",
+              "real-image"
+            ],
+            "confidence": 0.94
+          },
+          "significance": "high",
+          "tags": [
+            "focal:release-provenance",
+            "focal:dist-tags",
+            "focal:changelog",
+            "focal:real-image",
+            "confidence:0.94"
+          ]
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Closed PR 393 release-gate findings: exact local tag validation now precedes remote push; npm dist-tag/version mappings are provenance-bound and independently verified with bounded fail-closed reads; prerelease tags never touch latest; bootstrap-secret changelog entries are correctly unreleased. All focused and broad local gates passed.",
+    "approach": "Standard approach",
+    "confidence": 0.95
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "60ae67e6543867dd6c6a43c3c92aacdd7486c09f",
+    "endRef": "60ae67e6543867dd6c6a43c3c92aacdd7486c09f"
+  }
+}

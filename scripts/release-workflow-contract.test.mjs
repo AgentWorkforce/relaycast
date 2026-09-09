@@ -15,6 +15,7 @@ import { describe, it } from "node:test";
 import { PUBLISHED_PACKAGE_DIRS } from "./release-contract.mjs";
 import {
   assertPublishedIntegrity,
+  assertReleaseMetadata,
   assertReusableReleaseTag,
   provenanceDigest,
   readReleaseProvenance,
@@ -292,6 +293,24 @@ function validateTag(fixture) {
   );
 }
 
+function attemptFreshTagPublish(fixture) {
+  const remote = path.join(fixture.root, "release-remote.git");
+  const initialized = spawnSync("git", ["init", "--bare", "-q", remote], {
+    cwd: fixture.root,
+    encoding: "utf8",
+  });
+  assert.equal(initialized.status, 0, initialized.stderr);
+  git(fixture.root, ["remote", "add", "origin", remote]);
+
+  const validation = validateTag(fixture);
+  if (validation.status !== 0) {
+    git(fixture.root, ["tag", "-d", `v${fixture.version}`]);
+    return { validation, pushed: false };
+  }
+  git(fixture.root, ["push", "origin", `v${fixture.version}`]);
+  return { validation, pushed: true };
+}
+
 describe("publish workflow safety contract", () => {
   it("offers lockstep publication only", () => {
     const packageInput = workflow.slice(
@@ -318,6 +337,10 @@ describe("publish workflow safety contract", () => {
       jobBlock("create-release"),
       /Re-validate release contract with the refreshed lockfile[\s\S]*check-release-contract\.mjs --version/,
     );
+    for (const job of ["publish-packages", "verify-publish", "create-release"]) {
+      assert.match(jobBlock(job), /release-provenance\.mjs release/);
+      assert.match(jobBlock(job), /--dist-tag "\$\{\{ needs\.build\.outputs\.effective_tag \}\}"/);
+    }
   });
 
   it("carries generated source constants into the release commit", () => {
@@ -380,6 +403,8 @@ describe("publish workflow safety contract", () => {
       assert.match(verify, new RegExp(`"${pkg.replace(/[/]/g, "\\/")}"`));
     }
     assert.match(verify, /npm view "\$\{pkg\}@\$\{NEW_VERSION\}" version/);
+    assert.match(verify, /npm-dist-tag\.mjs verify/);
+    assert.match(verify, /--tag "\$DIST_TAG"/);
     assert.match(verify, /exit 1/);
 
     const createRelease = jobBlock("create-release");
@@ -418,6 +443,12 @@ describe("publish workflow safety contract", () => {
     assert.match(publishStep, /npm view "\$\{PACKAGE_NAME\}@\$\{NEW_VERSION\}" version/);
     assert.match(publishStep, /dist\.integrity/);
     assert.match(publishStep, /already matches this build; skipping/);
+    assert.match(publishStep, /npm-dist-tag\.mjs" verify/);
+    assert.match(
+      publishStep,
+      /--tag "\$\{\{ needs\.build\.outputs\.effective_tag \}\}"/,
+    );
+    assert.doesNotMatch(publishStep, /^\s*npm dist-tag/m);
   });
 
   it("publishes and reconciles exact build tarballs, never a version-only registry match", () => {
@@ -446,6 +477,27 @@ describe("publish workflow safety contract", () => {
     );
     assert.match(createRelease, /git reset --hard "\$\{TAG\}\^\{commit\}"/);
     assert.match(createRelease, /git checkout --theirs/);
+  });
+
+  it("validates a newly-created local tag before any remote tag push", () => {
+    const createRelease = jobBlock("create-release");
+    const tagCreation = createRelease.indexOf('git tag -a "${TAG}"');
+    const exactValidation = createRelease.indexOf(
+      "if ! node scripts/validate-release-tag.mjs",
+      tagCreation,
+    );
+    const tagPush = createRelease.indexOf('git push origin "${TAG}"');
+    assert.ok(tagCreation !== -1, "local annotated tag creation not found");
+    assert.ok(exactValidation > tagCreation, "exact validation must follow local tag creation");
+    assert.ok(tagPush > exactValidation, "remote tag push must follow exact validation");
+    assert.doesNotMatch(
+      createRelease.slice(tagCreation, exactValidation),
+      /git push origin/,
+    );
+    const validationBlock = createRelease.slice(exactValidation, tagPush);
+    assert.match(validationBlock, /--provenance-manifest release-provenance\.json/);
+    assert.match(validationBlock, /git tag -d "\$TAG"/);
+    assert.match(validationBlock, /no remote tag was pushed/);
   });
 
   it("validates and restores an existing tag before a cross-day changelog cut", () => {
@@ -541,8 +593,23 @@ describe("release tag reuse execution", () => {
     }
   });
 
+  it("publishes a fresh tag only after exact local validation succeeds", () => {
+    const fixture = releaseTagFixture({ versionBump: true });
+    try {
+      const result = attemptFreshTagPublish(fixture);
+      assert.equal(result.validation.status, 0, result.validation.stderr);
+      assert.equal(result.pushed, true);
+      assert.match(
+        git(fixture.root, ["ls-remote", "--tags", "origin", "refs/tags/v8.5.5"]),
+        /refs\/tags\/v8\.5\.5$/,
+      );
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
   for (const name of DOCKER_PACKAGE_NAMES) {
-    it(`rejects a valid but provenance-mismatched ${name} Docker integrity`, () => {
+    it(`blocks an initial remote tag for a provenance-mismatched ${name} Docker integrity`, () => {
       const fixture = releaseTagFixture({ versionBump: true });
       try {
         const lockPath = path.join(fixture.root, "docker/package-lock.json");
@@ -559,12 +626,23 @@ describe("release tag reuse execution", () => {
         });
         git(fixture.root, ["tag", "-d", "v8.5.5"]);
         createFixtureTag(fixture);
-        const result = validateTag(fixture);
-        assert.notEqual(result.status, 0);
+        const result = attemptFreshTagPublish(fixture);
+        assert.notEqual(result.validation.status, 0);
         assert.match(
-          `${result.stderr}${result.stdout}`,
+          `${result.validation.stderr}${result.validation.stdout}`,
           /outside its exact release transformation|unexpected release edits/,
         );
+        assert.equal(result.pushed, false);
+        assert.equal(
+          git(fixture.root, ["ls-remote", "--tags", "origin", "refs/tags/v8.5.5"]),
+          "",
+        );
+        const localTag = spawnSync(
+          "git",
+          ["show-ref", "--verify", "--quiet", "refs/tags/v8.5.5"],
+          { cwd: fixture.root },
+        );
+        assert.notEqual(localTag.status, 0, "invalid fresh local tag must be deleted");
       } finally {
         rmSync(fixture.root, { recursive: true, force: true });
       }
@@ -741,6 +819,13 @@ describe("release provenance adversarial cases", () => {
     assert.throws(
       () => assertSourceProvenance(PROVENANCE, "d".repeat(40), PROVENANCE.sourceTree),
       /immutable workflow source/,
+    );
+    assert.doesNotThrow(
+      () => assertReleaseMetadata(PROVENANCE, PROVENANCE.version, PROVENANCE.distTag),
+    );
+    assert.throws(
+      () => assertReleaseMetadata(PROVENANCE, PROVENANCE.version, "next"),
+      /requested version and npm dist-tag/,
     );
   });
 

@@ -372,6 +372,10 @@ jobs:
             --manifest release-provenance.json \
             --commit "$GITHUB_SHA" \
             --tree "$SOURCE_TREE"
+          node scripts/release-provenance.mjs release \
+            --manifest release-provenance.json \
+            --version "${{ needs.build.outputs.new_version }}" \
+            --dist-tag "${{ needs.build.outputs.effective_tag }}"
 
       - name: Dry run check
         if: github.event.inputs.dry_run == 'true'
@@ -404,6 +408,18 @@ jobs:
           else
             npm publish "$GITHUB_WORKSPACE/$TARBALL" --access public --provenance --tag ${{ needs.build.outputs.effective_tag }} --ignore-scripts
           fi
+          # Publishing and package identity are not enough: npm dist-tags are
+          # independently mutable. Poll the tag set atomically by npm publish
+          # until the registry reports its exact version. OIDC trusted
+          # publishing does not authorize npm dist-tag rewrites, so a resumed
+          # run fails closed if that mapping was moved or removed. For
+          # next/beta/alpha, this command never addresses or moves latest.
+          node "$GITHUB_WORKSPACE/scripts/npm-dist-tag.mjs" verify \
+            --package "$PACKAGE_NAME" \
+            --version "$NEW_VERSION" \
+            --tag "${{ needs.build.outputs.effective_tag }}" \
+            --attempts 5 \
+            --delay-ms 5000
 
   # Independently reconciles the npm registry against what this release
   # attempted to publish, rather than trusting the matrix job's own status
@@ -440,10 +456,15 @@ jobs:
             --manifest release-provenance.json \
             --commit "$GITHUB_SHA" \
             --tree "$SOURCE_TREE"
+          node scripts/release-provenance.mjs release \
+            --manifest release-provenance.json \
+            --version "${{ needs.build.outputs.new_version }}" \
+            --dist-tag "${{ needs.build.outputs.effective_tag }}"
 
       - name: Reconcile published packages against the target version
         run: |
           NEW_VERSION="${{ needs.build.outputs.new_version }}"
+          DIST_TAG="${{ needs.build.outputs.effective_tag }}"
           PACKAGES=(
             "@relaycast/a2a"
             "@relaycast/types"
@@ -471,7 +492,20 @@ jobs:
               if npm view "${pkg}@${NEW_VERSION}" version >/dev/null 2>&1; then
                 actual_integrity="$(npm view "${pkg}@${NEW_VERSION}" dist.integrity 2>/dev/null || true)"
                 if node scripts/release-provenance.mjs published --manifest release-provenance.json --package "$pkg" --integrity "$actual_integrity" --version "$NEW_VERSION"; then
-                  found=true
+                  # Independent verification is read-only: the publish matrix
+                  # must already have reconciled the requested mutable tag.
+                  # Missing, stale, unavailable, or ambiguous responses fail
+                  # closed after a bounded propagation window.
+                  if node scripts/npm-dist-tag.mjs verify \
+                    --package "$pkg" \
+                    --version "$NEW_VERSION" \
+                    --tag "$DIST_TAG" \
+                    --attempts 5 \
+                    --delay-ms 5000; then
+                    found=true
+                    break
+                  fi
+                  echo "${pkg}@${NEW_VERSION} has no verified ${DIST_TAG} dist-tag mapping" >&2
                   break
                 fi
                 echo "${pkg}@${NEW_VERSION} exists with a non-matching artifact; refusing to reconcile it" >&2
@@ -538,6 +572,10 @@ jobs:
             --manifest release-provenance.json \
             --commit "$GITHUB_SHA" \
             --tree "$SOURCE_TREE"
+          node scripts/release-provenance.mjs release \
+            --manifest release-provenance.json \
+            --version "${{ needs.build.outputs.new_version }}" \
+            --dist-tag "${{ needs.build.outputs.effective_tag }}"
 
       # A retry can cross a UTC date boundary. Validate an already-created
       # annotated tag before touching changelogs, then restore its exact
@@ -622,6 +660,7 @@ jobs:
           DIST_TAG="$(node -e 'const p=require("./release-provenance.json"); process.stdout.write(p.distTag)')"
           PROVENANCE_DIGEST="$(node scripts/release-provenance.mjs digest --manifest release-provenance.json)"
           TAG="v${NEW_VERSION}"
+          CREATED_LOCAL_TAG=false
           TAG_MESSAGE_FILE="$(mktemp)"
           cat > "$TAG_MESSAGE_FILE" <<EOF
           Release v${NEW_VERSION}
@@ -669,6 +708,26 @@ jobs:
             git reset --hard "${TAG}^{commit}"
           else
             git tag -a "${TAG}" -F "$TAG_MESSAGE_FILE"
+            CREATED_LOCAL_TAG=true
+          fi
+
+          # The local tag is the first object that binds the release tree to
+          # the provenance digest. Validate the exact same release transform
+          # used on retry before any remote ref can be created. If this run
+          # created a bad local tag, remove it; never delete a fetched tag.
+          if ! node scripts/validate-release-tag.mjs \
+            --tag "$TAG" \
+            --source-commit "$SOURCE_COMMIT" \
+            --source-tree "$SOURCE_TREE" \
+            --version "$NEW_VERSION" \
+            --dist-tag "$DIST_TAG" \
+            --provenance-digest "$PROVENANCE_DIGEST" \
+            --provenance-manifest release-provenance.json; then
+            if [ "$CREATED_LOCAL_TAG" = "true" ]; then
+              git tag -d "$TAG"
+            fi
+            echo "::error::${TAG} failed exact local validation; no remote tag was pushed"
+            exit 1
           fi
           git push origin "${TAG}"
 

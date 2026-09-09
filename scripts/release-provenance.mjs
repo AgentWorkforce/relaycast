@@ -24,7 +24,14 @@ export function readReleaseProvenance(path) {
   if (!/^[0-9a-f]{40}$/.test(manifest.sourceTree ?? "")) {
     throw new Error("release provenance has an invalid source tree");
   }
-  if (typeof manifest.version !== "string" || typeof manifest.distTag !== "string") {
+  if (
+    typeof manifest.version !== "string" ||
+    manifest.version.length === 0 ||
+    /\s/.test(manifest.version) ||
+    typeof manifest.distTag !== "string" ||
+    manifest.distTag.length === 0 ||
+    /\s/.test(manifest.distTag)
+  ) {
     throw new Error("release provenance has invalid release metadata");
   }
   if (!Array.isArray(manifest.packages) || manifest.packages.length === 0) {
@@ -56,6 +63,12 @@ export function packageProvenance(manifest, packageName) {
 export function assertSourceProvenance(manifest, sourceCommit, sourceTree) {
   if (manifest.sourceCommit !== sourceCommit || manifest.sourceTree !== sourceTree) {
     throw new Error("release artifacts do not match the immutable workflow source");
+  }
+}
+
+export function assertReleaseMetadata(manifest, version, distTag) {
+  if (manifest.version !== version || manifest.distTag !== distTag) {
+    throw new Error("release artifacts do not match the requested version and npm dist-tag");
   }
 }
 
@@ -132,6 +145,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     process.stdout.write(`${pkg[field]}\n`);
   } else if (command === "source") {
     assertSourceProvenance(manifest, argument("--commit"), argument("--tree"));
+  } else if (command === "release") {
+    assertReleaseMetadata(manifest, argument("--version"), argument("--dist-tag"));
   } else if (command === "published") {
     assertPublishedIntegrity(
       manifest,
