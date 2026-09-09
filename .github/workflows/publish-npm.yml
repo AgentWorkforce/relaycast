@@ -630,7 +630,13 @@ jobs:
           if [ "${REUSE_EXISTING_RELEASE_TAG:-false}" = "true" ]; then
             echo "existing release tag restored; leaving its lockfile tree unchanged"
           else
-            npm install --package-lock-only --ignore-scripts
+            # The build artifact deliberately gives the engine lock entry the
+            # target version before that registry artifact exists. A generic
+            # install trusts that placeholder version and can retain the old
+            # resolved tarball/integrity. Updating the exact dependency forces
+            # npm to resolve the newly published immutable artifact while
+            # preserving docker/package.json's exact version pin.
+            npm update --package-lock-only --ignore-scripts @relaycast/engine
           fi
 
       - name: Re-validate release contract with the refreshed lockfile

@@ -491,6 +491,25 @@ describe("publish workflow safety contract", () => {
     assert.match(verify, /dist\.integrity/);
   });
 
+  it("refreshes the Docker engine lock entry instead of trusting its placeholder version", () => {
+    const createRelease = jobBlock("create-release");
+    const refreshStart = createRelease.indexOf("- name: Refresh self-host image lockfile");
+    const validateStart = createRelease.indexOf(
+      "- name: Re-validate release contract with the refreshed lockfile",
+      refreshStart,
+    );
+    assert.ok(refreshStart !== -1, "Docker lock refresh step not found");
+    assert.ok(validateStart > refreshStart, "release validation must follow Docker lock refresh");
+
+    const refresh = createRelease.slice(refreshStart, validateStart);
+    assert.match(refresh, /working-directory: docker/);
+    assert.match(
+      refresh,
+      /npm update --package-lock-only --ignore-scripts @relaycast\/engine/,
+    );
+    assert.doesNotMatch(refresh, /npm install --package-lock-only/);
+  });
+
   it("reuses a matching tagged tree on rerun and tags before reconciling main", () => {
     const createRelease = jobBlock("create-release");
     // Rebasing a release commit after packages have already been published
