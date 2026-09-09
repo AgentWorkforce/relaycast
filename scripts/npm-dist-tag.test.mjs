@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { ensureNpmDistTag, parseNpmDistTagOutput } from "./npm-dist-tag.mjs";
+import {
+  ensureNpmDistTag,
+  parseNpmDistTagOutput,
+  parseNpmDistTagsOutput,
+  readNpmDistTag,
+} from "./npm-dist-tag.mjs";
 
 describe("npm dist-tag reconciliation", () => {
   it("allows bounded missing/stale registry propagation to converge", async () => {
@@ -129,6 +134,47 @@ describe("npm dist-tag reconciliation", () => {
 });
 
 describe("npm dist-tag registry response parsing", () => {
+  it("queries the complete dist-tag object before selecting an exact dotted key", () => {
+    let invocation;
+    const result = readNpmDistTag("@relaycast/engine", "preview.v2", {
+      npmCommand: "npm-test",
+      spawn: (command, args, options) => {
+        invocation = { command, args, options };
+        return {
+          status: 0,
+          stdout: '{"preview.v2":"8.5.5","preview":{"v2":"8.5.4"}}',
+        };
+      },
+    });
+    assert.deepEqual(invocation.args, [
+      "view",
+      "@relaycast/engine",
+      "dist-tags",
+      "--json",
+      "--prefer-online",
+    ]);
+    assert.equal(invocation.command, "npm-test");
+    assert.equal(invocation.options.encoding, "utf8");
+    assert.deepEqual(result, { kind: "value", value: "8.5.5" });
+  });
+
+  it("reads dotted dist-tags as exact object keys", () => {
+    assert.deepEqual(
+      parseNpmDistTagsOutput(
+        '{"preview.v2":"8.5.5","preview":{"v2":"8.5.4"}}',
+        "preview.v2",
+      ),
+      {
+        kind: "value",
+        value: "8.5.5",
+      },
+    );
+    assert.deepEqual(
+      parseNpmDistTagsOutput('{"preview":{"v2":"8.5.4"}}', "preview.v2"),
+      { kind: "missing" },
+    );
+  });
+
   it("accepts exactly one JSON string version", () => {
     assert.deepEqual(parseNpmDistTagOutput('"8.5.5"\n'), {
       kind: "value",

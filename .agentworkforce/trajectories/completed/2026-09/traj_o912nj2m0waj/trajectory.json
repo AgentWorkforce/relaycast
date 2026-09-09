@@ -76,14 +76,14 @@
     }
   ],
   "retrospective": {
-    "summary": "Closed PR 393 release-gate findings: exact local tag validation now precedes remote push; npm dist-tag/version mappings are provenance-bound and independently verified with bounded fail-closed reads; prerelease tags never touch latest; bootstrap-secret changelog entries are correctly unreleased. All focused and broad local gates passed.",
-    "approach": "Standard approach",
-    "confidence": 0.95
+    "summary": "Historical self-report about PR 393 release provenance and dist-tag decisions. This trajectory captured no commands, outputs, commits, or changed-file evidence, so implementation and validation claims are non-authoritative and non-gating.",
+    "approach": "Historical decision record (non-gating)",
+    "confidence": 0.2
   },
   "commits": [],
   "filesChanged": [],
   "projectId": "AgentWorkforce/relaycast",
-  "tags": [],
+  "tags": ["historical", "self-reported", "non-authoritative", "non-gating"],
   "_trace": {
     "startRef": "60ae67e6543867dd6c6a43c3c92aacdd7486c09f",
     "endRef": "60ae67e6543867dd6c6a43c3c92aacdd7486c09f"

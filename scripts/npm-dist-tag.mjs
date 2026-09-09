@@ -51,21 +51,50 @@ export function parseNpmDistTagOutput(stdout) {
   return { kind: "value", value: parsed };
 }
 
+export function parseNpmDistTagsOutput(stdout, distTag) {
+  const output = stdout.trim();
+  if (output === "" || output === "null") return { kind: "missing" };
+  let parsed;
+  try {
+    parsed = JSON.parse(output);
+  } catch {
+    return { kind: "ambiguous" };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { kind: "ambiguous" };
+  }
+  if (!Object.hasOwn(parsed, distTag)) return { kind: "missing" };
+  const value = parsed[distTag];
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.trim() !== value
+  ) {
+    return { kind: "ambiguous" };
+  }
+  return { kind: "value", value };
+}
+
 /** Read one exact npm dist-tag without treating malformed output as absence. */
 export function readNpmDistTag(
   packageName,
   distTag,
-  { npmCommand = "npm", cwd = process.cwd(), env = process.env } = {},
+  {
+    npmCommand = "npm",
+    cwd = process.cwd(),
+    env = process.env,
+    spawn = spawnSync,
+  } = {},
 ) {
-  const result = spawnSync(
+  const result = spawn(
     npmCommand,
-    ["view", packageName, `dist-tags.${distTag}`, "--json", "--prefer-online"],
+    ["view", packageName, "dist-tags", "--json", "--prefer-online"],
     { cwd, env, encoding: "utf8" },
   );
   if (result.error || result.status !== 0) {
     return { kind: "unavailable", exitCode: result.status };
   }
-  return parseNpmDistTagOutput(result.stdout);
+  return parseNpmDistTagsOutput(result.stdout, distTag);
 }
 
 /**

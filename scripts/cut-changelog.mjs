@@ -95,14 +95,16 @@ function lastStableTag() {
   const explicit = flag("from-tag");
   if (explicit) {
     if (!/^v\d+\.\d+\.\d+$/.test(explicit)) {
-      throw new Error(`--from-tag must be a stable vX.Y.Z tag, got ${explicit}`);
+      throw new Error(
+        `--from-tag must be a stable vX.Y.Z tag, got ${explicit}`,
+      );
     }
     if (explicit === `v${version}`) {
       throw new Error("--from-tag must precede the release being cut");
     }
     return explicit;
   }
-  const tags = git("git tag -l --sort=-v:refname")
+  const tags = git("git tag -l --merged HEAD --sort=-v:refname")
     .split("\n")
     .map((tag) => tag.trim())
     .filter((tag) => /^v\d+\.\d+\.\d+$/.test(tag) && tag !== `v${version}`);

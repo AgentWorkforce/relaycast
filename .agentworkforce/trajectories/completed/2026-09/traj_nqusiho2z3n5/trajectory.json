@@ -63,14 +63,14 @@
     }
   ],
   "retrospective": {
-    "summary": "Bound reusable release-tag Docker lock validation to the immutable release provenance manifest, requiring exact a2a, types, and engine package integrities and adding real registry-backed retry/adversarial coverage.",
-    "approach": "Standard approach",
-    "confidence": 0.96
+    "summary": "Historical self-report about binding reusable release-tag Docker lock validation to release provenance. This trajectory captured no commands, outputs, commits, or changed-file evidence, so implementation and validation claims are non-authoritative and non-gating.",
+    "approach": "Historical decision record (non-gating)",
+    "confidence": 0.2
   },
   "commits": [],
   "filesChanged": [],
   "projectId": "AgentWorkforce/relaycast",
-  "tags": [],
+  "tags": ["historical", "self-reported", "non-authoritative", "non-gating"],
   "_trace": {
     "startRef": "4612e040f93d8898910075ba5adda4e8f07cb5fd",
     "endRef": "4612e040f93d8898910075ba5adda4e8f07cb5fd"

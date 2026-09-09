@@ -65,6 +65,7 @@ jobs:
       new_version: ${{ steps.bump.outputs.new_version }}
       is_prerelease: ${{ steps.bump.outputs.is_prerelease }}
       effective_tag: ${{ steps.bump.outputs.effective_tag }}
+      release_date: ${{ steps.bump.outputs.release_date }}
 
     steps:
       - name: Checkout code
@@ -138,6 +139,7 @@ jobs:
           fi
           echo "effective_tag=$EFFECTIVE_TAG" >> "$GITHUB_OUTPUT"
           echo "Effective npm dist-tag: $EFFECTIVE_TAG (requested: $REQUESTED_TAG, prerelease: $IS_PRERELEASE)"
+          echo "release_date=$(date -u +%F)" >> "$GITHUB_OUTPUT"
 
           # Sync all package versions and internal dependencies
           NEW_VERSION="$NEW_VERSION" node <<'NODE'
@@ -612,7 +614,7 @@ jobs:
           if [ "${REUSE_EXISTING_RELEASE_TAG:-false}" = "true" ]; then
             echo "existing release tag restored; leaving its changelog tree unchanged"
           else
-            node scripts/cut-changelog.mjs --version "${{ needs.build.outputs.new_version }}"
+            node scripts/cut-changelog.mjs --version "${{ needs.build.outputs.new_version }}" --date "${{ needs.build.outputs.release_date }}"
           fi
 
       # docker/package-lock.json only got a placeholder version-field bump in
@@ -658,6 +660,7 @@ jobs:
           SOURCE_COMMIT="$(node -e 'const p=require("./release-provenance.json"); process.stdout.write(p.sourceCommit)')"
           SOURCE_TREE="$(node -e 'const p=require("./release-provenance.json"); process.stdout.write(p.sourceTree)')"
           DIST_TAG="$(node -e 'const p=require("./release-provenance.json"); process.stdout.write(p.distTag)')"
+          RELEASE_DATE="${{ needs.build.outputs.release_date }}"
           PROVENANCE_DIGEST="$(node scripts/release-provenance.mjs digest --manifest release-provenance.json)"
           TAG="v${NEW_VERSION}"
           CREATED_LOCAL_TAG=false
@@ -668,6 +671,7 @@ jobs:
           Relaycast-NPM-Dist-Tag: ${DIST_TAG}
           Relaycast-Source-Commit: ${SOURCE_COMMIT}
           Relaycast-Source-Tree: ${SOURCE_TREE}
+          Relaycast-Release-Date: ${RELEASE_DATE}
           Relaycast-Package-Provenance-SHA256: ${PROVENANCE_DIGEST}
           EOF
           git fetch --tags origin
@@ -765,7 +769,7 @@ jobs:
               fi
               echo "changelog conflict on ${conflicted}; re-cutting against main"
               echo "$conflicted" | xargs git checkout --theirs --
-              node scripts/cut-changelog.mjs --version "$NEW_VERSION"
+              node scripts/cut-changelog.mjs --version "$NEW_VERSION" --date "$RELEASE_DATE"
               echo "$conflicted" | xargs git add --
               if ! GIT_EDITOR=true git commit --no-edit; then
                 git merge --abort

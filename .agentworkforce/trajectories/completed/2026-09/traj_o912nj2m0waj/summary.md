@@ -2,7 +2,7 @@
 
 > **Status:** ✅ Completed
 > **Task:** relaycast#393
-> **Confidence:** 95%
+> **Confidence:** 20%
 > **Started:** September 9, 2026 at 02:34 AM
 > **Completed:** September 9, 2026 at 02:52 AM
 
@@ -10,9 +10,9 @@
 
 ## Summary
 
-Closed PR 393 release-gate findings: exact local tag validation now precedes remote push; npm dist-tag/version mappings are provenance-bound and independently verified with bounded fail-closed reads; prerelease tags never touch latest; bootstrap-secret changelog entries are correctly unreleased. All focused and broad local gates passed.
+Historical self-report about PR 393 release provenance and dist-tag decisions. This trajectory captured no commands, outputs, commits, or changed-file evidence, so implementation and validation claims are non-authoritative and non-gating.
 
-**Approach:** Standard approach
+**Approach:** Historical decision record (non-gating)
 
 ---
 

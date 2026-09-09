@@ -177,6 +177,7 @@ function releaseTagMessage(fixture) {
     "Relaycast-NPM-Dist-Tag: latest",
     `Relaycast-Source-Commit: ${fixture.sourceCommit}`,
     `Relaycast-Source-Tree: ${fixture.sourceTree}`,
+    "Relaycast-Release-Date: 2026-09-09",
     `Relaycast-Package-Provenance-SHA256: ${fixture.provenanceDigest}`,
   ].join("\n");
 }
@@ -258,8 +259,8 @@ function releaseTagFixture({ alteredSource = false, mutateReleaseFile, versionBu
   git(root, ["add", "."]);
   git(root, ["commit", "-qm", `chore(release): v${version}`], {
     env: {
-      GIT_AUTHOR_DATE: "2026-09-09T12:00:00Z",
-      GIT_COMMITTER_DATE: "2026-09-09T12:00:00Z",
+      GIT_AUTHOR_DATE: "2026-09-10T00:05:00Z",
+      GIT_COMMITTER_DATE: "2026-09-10T00:05:00Z",
     },
   });
   const tagCommit = git(root, ["rev-parse", "HEAD"]);
@@ -509,6 +510,7 @@ describe("publish workflow safety contract", () => {
     const reuseBlock = createRelease.slice(reuse, cut);
     assert.match(reuseBlock, /validate-release-tag\.mjs/);
     assert.match(reuseBlock, /--provenance-manifest release-provenance\.json/);
+    assert.doesNotMatch(reuseBlock, /--release-date/);
     assert.doesNotMatch(reuseBlock, /--engine-integrity/);
     assert.match(reuseBlock, /git reset --hard "\$\{TAG\}\^\{commit\}"/);
     assert.match(reuseBlock, /REUSE_EXISTING_RELEASE_TAG=true/);
@@ -520,6 +522,7 @@ describe("publish workflow safety contract", () => {
       createRelease.slice(cut),
       /existing release tag restored; leaving its lockfile tree unchanged/,
     );
+    assert.match(createRelease, /Relaycast-Release-Date: \$\{RELEASE_DATE\}/);
   });
 
   it("escalates permissions per job instead of workflow-wide", () => {
@@ -560,6 +563,17 @@ describe("release tag reuse execution", () => {
       git(fixture.root, ["reset", "--hard", "v8.5.5^{commit}"]);
       assert.equal(git(fixture.root, ["rev-parse", "HEAD^{tree}"]), taggedTree);
       assert.equal(fixture.tagCommit, git(fixture.root, ["rev-parse", "HEAD"]));
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("chooses the previous stable tag from source ancestry, not a future fetched tag", () => {
+    const fixture = releaseTagFixture();
+    try {
+      git(fixture.root, ["tag", "v99.0.0", fixture.tagCommit]);
+      const result = validateTag(fixture);
+      assert.equal(result.status, 0, result.stderr);
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }

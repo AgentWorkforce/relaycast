@@ -58,6 +58,17 @@ function requiredMetadata(tagMessage, lines) {
   }
 }
 
+function releaseDateFromTag(tagMessage, cwd, tagCommit) {
+  const prefix = "Relaycast-Release-Date: ";
+  const values = tagMessage.split("\n").filter((line) => line.startsWith(prefix)).map((line) => line.slice(prefix.length));
+  if (values.length > 1) throw new Error("release tag metadata contains duplicate release dates");
+  // Preserve the prior commit-date behavior for tags created before this
+  // metadata existed. New tags bind the changelog cut date in the tag object.
+  const value = values[0] ?? new Date(git(["show", "-s", "--format=%cI", tagCommit], cwd)).toISOString().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error("release tag metadata has an invalid release date");
+  return value;
+}
+
 function jsonText(value) { return `${JSON.stringify(value, null, 2)}\n`; }
 
 function setInternalDependencies(pkg, version) {
@@ -262,26 +273,25 @@ function fallbackBody(cwd, fromTag, sourceCommit) {
   return lines.join("\n").trimEnd();
 }
 
-function previousStableTag(cwd, version) {
-  return git(["tag", "-l", "--sort=-v:refname"], cwd).split("\n").map((tag) => tag.trim()).find((tag) => /^v\d+\.\d+\.\d+$/.test(tag) && tag !== `v${version}`);
+function previousStableTag(cwd, version, sourceCommit) {
+  return git(["tag", "-l", "--merged", sourceCommit, "--sort=-v:refname"], cwd).split("\n").map((tag) => tag.trim()).find((tag) => /^v\d+\.\d+\.\d+$/.test(tag) && tag !== `v${version}`);
 }
 
-function expectedChangelog(source, { cwd, file, version, sourceCommit, tagCommit }) {
+function expectedChangelog(source, { cwd, file, version, sourceCommit, releaseDate }) {
   const match = source.match(UNRELEASED);
   if (!match) return source;
   const curated = match[2].trim();
-  const fromTag = previousStableTag(cwd, version);
+  const fromTag = previousStableTag(cwd, version, sourceCommit);
   const body = curated || (file === "CHANGELOG.md" ? fallbackBody(cwd, fromTag, sourceCommit) : "");
   if (!body) return source;
-  const date = new Date(git(["show", "-s", "--format=%cI", tagCommit], cwd)).toISOString().slice(0, 10);
   const start = match.index;
   const end = start + match[0].length;
-  let result = source.slice(0, start) + `## [Unreleased]\n\n## [${version}] - ${date}\n\n${body}\n\n` + source.slice(end);
+  let result = source.slice(0, start) + `## [Unreleased]\n\n## [${version}] - ${releaseDate}\n\n${body}\n\n` + source.slice(end);
   if (file === "CHANGELOG.md" && fromTag) result = updateComparisonReferences(result, { version, previousVersion: fromTag.replace(/^v/, "") });
   return result;
 }
 
-function assertExactReleaseTransform({ cwd, sourceCommit, tagCommit, changedPaths, version, packageIntegrities }) {
+function assertExactReleaseTransform({ cwd, sourceCommit, tagCommit, changedPaths, version, packageIntegrities, releaseDate }) {
   for (const file of changedPaths) {
     const before = fileAt(cwd, sourceCommit, file);
     const after = fileAt(cwd, tagCommit, file);
@@ -297,7 +307,7 @@ function assertExactReleaseTransform({ cwd, sourceCommit, tagCommit, changedPath
       expected = jsonText(expectedDockerLock(before, version, packageIntegrities));
     } else if (file === "Dockerfile") expected = before.replace(/^ARG RELAYCAST_ENGINE_VERSION=\S+/m, `ARG RELAYCAST_ENGINE_VERSION=${version}`);
     else if (file === "RUNBOOK.md") expected = expectedRunbook(before, version);
-    else if (file.endsWith("/CHANGELOG.md") || file === "CHANGELOG.md") expected = expectedChangelog(before, { cwd, file, version, sourceCommit, tagCommit });
+    else if (file.endsWith("/CHANGELOG.md") || file === "CHANGELOG.md") expected = expectedChangelog(before, { cwd, file, version, sourceCommit, releaseDate });
     else if (file === "packages/sdk-typescript/src/version.ts") expected = `export const SDK_VERSION = ${JSON.stringify(version)} as const;\n`;
     else if (file === "packages/cli/src/version.ts") expected = `export const CLI_VERSION = ${JSON.stringify(version)} as const;\n`;
     if (expected === undefined) throw new Error(`no exact release transform for ${file}`);
@@ -321,6 +331,7 @@ export function validateReusableReleaseTag({ cwd = process.cwd(), tag, sourceCom
     `Release v${version}`, `Relaycast-NPM-Dist-Tag: ${distTag}`, `Relaycast-Source-Commit: ${sourceCommit}`,
     `Relaycast-Source-Tree: ${sourceTree}`, `Relaycast-Package-Provenance-SHA256: ${packageProvenanceDigest}`,
   ]);
+  const releaseDate = releaseDateFromTag(tagMessage, cwd, tagCommit);
   const packageIntegrities = packageIntegritiesFromProvenance({
     provenanceManifest,
     sourceCommit,
@@ -334,7 +345,7 @@ export function validateReusableReleaseTag({ cwd = process.cwd(), tag, sourceCom
   const unexpected = changedPaths.filter((file) => !RELEASE_ONLY_PATHS.some((pattern) => pattern.test(file)));
   if (unexpected.length > 0) throw new Error(`release tag changes non-release paths: ${unexpected.join(", ")}`);
   assertReleaseFileEntries(cwd, sourceCommit, tagCommit, changedPaths);
-  assertExactReleaseTransform({ cwd, sourceCommit, tagCommit, changedPaths, version, packageIntegrities });
+  assertExactReleaseTransform({ cwd, sourceCommit, tagCommit, changedPaths, version, packageIntegrities, releaseDate });
 
   const worktree = mkdtempSync(path.join(tmpdir(), "relaycast-release-tag-"));
   try {
