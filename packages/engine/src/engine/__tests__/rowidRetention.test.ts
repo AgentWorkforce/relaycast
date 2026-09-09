@@ -120,6 +120,13 @@ describe('schema-free retention candidate pages', () => {
     expect(high).toBe(3);
   });
 
+  it('prunes orphaned workspace events under the default policy while keeping high-water', async () => {
+    const f = fixture();
+    for (let seq = 1; seq <= 2; seq++) f.sqlite.prepare("INSERT INTO workspace_events(workspace_id,seq,type,payload,created_at) VALUES ('missing-workspace',?,'test','{}',?)").run(seq, old);
+    expect((await f.run()).workspaceEvents).toBe(1);
+    expect(f.sqlite.prepare("SELECT seq FROM workspace_events WHERE workspace_id='missing-workspace'").all()).toEqual([{ seq: 2 }]);
+  });
+
   it('persists table fairness but not candidate progress after an ambiguous failure', async () => {
     const f = fixture(); const msg = f.message();
     const execute = f.db.all.bind(f.db);

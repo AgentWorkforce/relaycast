@@ -147,8 +147,12 @@ export async function pruneRowidPages(db: EngineDb, opts: PruneOptions & { curso
         // A policy edit after the read must not authorize a stale deletion.
         // Exact raw-policy comparison is conservative (even whitespace edits
         // defer the row to the next traversal), and uses the workspace PK.
-        const policyGuard = table.setting ? sql`AND EXISTS (SELECT 1 FROM workspaces w
-          WHERE w.id = ${row.workspace_id} AND w.retention IS ${row.retention})` : sql``;
+        // A missing workspace also has the default policy. workspace_events
+        // intentionally has no workspace FK, so its orphan rows must age out.
+        // The scalar PK lookup returns NULL for absence, but a newly installed
+        // non-default policy still prevents deletion from the stale snapshot.
+        const policyGuard = table.setting ? sql`AND (SELECT w.retention FROM workspaces w
+          WHERE w.id = ${row.workspace_id}) IS ${row.retention}` : sql``;
         const timeGuard = table.setting && !table.snowflake ? sql`AND created_at = ${row.created_at}` : sql``;
         return sql`(rowid = ${row._rowid} AND ${identity} ${policyGuard} ${timeGuard})`;
       });
