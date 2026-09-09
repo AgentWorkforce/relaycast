@@ -37,7 +37,7 @@ survive. The four author/creator references above are preserved, never rewritten
 
 ## Preview and execution
 
-Apply migration `0052_agent_retention_indexes.sql` before enabling the endpoint.
+Apply migration `0053_agent_retention_indexes.sql` before enabling the endpoint.
 It adds six agent-reference indexes so history checks and SQLite foreign-key
 probes avoid unrelated full-table scans. Index creation consumes storage and
 must fit the deployment's migration capacity; this tool does not apply migrations.
@@ -100,6 +100,12 @@ or delete. Before the indexes are deployed, unowned rows are reported as
 D1 path.
 
 ## Recorded dry-run
+
+The [September 9 local re-verification](evidence/agent-retention-2026-09-09.json)
+scanned all 2,628 synthetic rows: the default preview found 2,500 eligible and
+deleted zero. Explicit local deletion removed 100 rows, resumed from disk to
+remove 2,400, and preserved all 128 protected rows; a fresh deletion removed zero.
+No production retention calls were made during this verification.
 
 The [September 8 evidence](evidence/agent-retention-2026-09-08.json) includes a
 production preview and a reproducible synthetic fixture run. The production

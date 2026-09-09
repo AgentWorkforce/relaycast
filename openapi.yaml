@@ -2298,7 +2298,7 @@ paths:
         Unknown ownership fails closed. Current direct-node registrations are
         protected, even when offline. The bulk DELETE rechecks every predicate
         atomically. Existing foreign-key cascades apply to dependent operational
-        records. Apply migration 0052_agent_retention_indexes.sql first.
+        records. Apply migration 0053_agent_retention_indexes.sql first.
         Pass next_cursor unchanged as cursor to resume; a null next_cursor ends
         the traversal. Protected pages advance too. The cursor freezes the cutoff
         and maximum id; a different workspace or a cutoff newer than the requested

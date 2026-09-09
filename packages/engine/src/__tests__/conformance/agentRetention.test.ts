@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
-import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
+import { attachDirectNodeSocket, createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
 import { agents, agentNodeBindings, channels, files, messages, nodes, webhooks } from '../../db/schema.js';
 import { retainAgents } from '../../engine/agentRetention.js';
 
@@ -93,11 +93,15 @@ describe('bulk agent retention', () => {
 
   it('preserves a real registered direct agent even with stale offline database status', async () => {
     const agent = await registerAgent(stack.app, ws.workspaceKey, 'direct-agent');
+    const { sock, handle } = await attachDirectNodeSocket(stack, ws.workspaceId, agent);
+    await stack.settle();
     await db().update(agents).set({ status: 'offline', lastSeen: old, createdAt: old })
       .where(eq(agents.id, agent.agentId));
     expect(await retainAgents(db(), ws.workspaceId, { ...options, delete: true }, now))
       .toMatchObject({ candidates: [], deleted: 0, counts: { ownership_protected: 1 } });
     expect(await remaining()).toEqual([agent.agentId]);
+    expect(sock.closed).toBe(false);
+    await handle.handleClose();
   });
 
   it('protects malformed ownership and age data, and aborts on unavailable ownership evidence', async () => {
@@ -113,6 +117,27 @@ describe('bulk agent retention', () => {
     vi.spyOn(db(), 'all').mockRejectedValue(new Error('ownership database unavailable'));
     await expect(retainAgents(db(), ws.workspaceId, { ...options, delete: true }, now)).rejects.toThrow('unavailable');
     expect(await remaining()).toHaveLength(4);
+  });
+
+  it.each(['agent_node_bindings', 'nodes'] as const)('fails closed when the %s ownership table is missing', async (table) => {
+    await seed('potential-candidate');
+    await db().run(sql.raw(`ALTER TABLE ${table} RENAME TO unavailable_ownership`));
+    for (const remove of [false, true]) {
+      await expect(retainAgents(db(), ws.workspaceId, { ...options, delete: remove }, now))
+        .rejects.toThrow();
+      expect(await remaining()).toEqual(['potential-candidate']);
+    }
+  });
+
+  it.each(['last_seen', 'created_at'] as const)('protects unknown, fractional, negative and boundary %s values', async (column) => {
+    for (const [id, value] of [['text', 'unknown'], ['fraction', 1.5], ['negative', -1], ['boundary', cutoff.getTime() / 1000]] as const) {
+      await seed(id);
+      await db().run(sql`UPDATE agents SET ${sql.identifier(column)} = ${value} WHERE id = ${id}`);
+    }
+    const before = await remaining();
+    expect(await retainAgents(db(), ws.workspaceId, { ...options, delete: true }, now))
+      .toMatchObject({ deleted: 0, candidates: [], counts: { recent_or_unknown: 4 } });
+    expect(await remaining()).toEqual(before);
   });
 
   it('indexes implicit foreign-key probes for physical deletion', async () => {
@@ -156,7 +181,7 @@ describe('bulk agent retention', () => {
     expect(await db().select().from(history)).toEqual(before);
   });
 
-  it.each(['heartbeat', 'status', 'binding', 'history'] as const)(
+  it.each(['heartbeat', 'status', 'binding', 'history', 'origin', 'location', 'metadata', 'direct_node'] as const)(
     'rechecks a concurrent %s in the DELETE without interactive transaction support', async (change) => {
       await seed('racing');
       await node();
@@ -166,6 +191,10 @@ describe('bulk agent retention', () => {
         if (Array.isArray(rows) && rows.some(row => (row as { reason?: string }).reason === 'eligible')) {
           if (change === 'heartbeat') await db().update(agents).set({ lastSeen: now }).where(eq(agents.id, 'racing'));
           if (change === 'status') await db().update(agents).set({ status: 'active' }).where(eq(agents.id, 'racing'));
+          if (change === 'origin') await db().update(agents).set({ originNodeId: 'broker' }).where(eq(agents.id, 'racing'));
+          if (change === 'location') await db().update(agents).set({ locationNodeId: 'broker' }).where(eq(agents.id, 'racing'));
+          if (change === 'metadata') await db().update(agents).set({ metadata: { broker: null } }).where(eq(agents.id, 'racing'));
+          if (change === 'direct_node') await node('node_direct_racing');
           if (change === 'binding') await db().insert(agentNodeBindings).values({
             id: 'racing-binding', workspaceId: ws.workspaceId, agentId: 'racing', nodeId: 'broker',
           });
@@ -180,6 +209,20 @@ describe('bulk agent retention', () => {
       expect(await remaining()).toEqual(['racing']);
     },
   );
+
+  it('keeps the entire page when ownership becomes unavailable after preview', async () => {
+    await seed('racing');
+    const original = db().all.bind(db());
+    vi.spyOn(db(), 'all').mockImplementation(async (query) => {
+      const rows = await original(query);
+      if (rows.some(row => (row as { reason?: string }).reason === 'eligible')) {
+        await db().run(sql`ALTER TABLE agent_node_bindings RENAME TO unavailable_ownership`);
+      }
+      return rows;
+    });
+    await expect(retainAgents(db(), ws.workspaceId, { ...options, delete: true }, now)).rejects.toThrow();
+    expect(await remaining()).toEqual(['racing']);
+  });
 
   it('bounds pages, resumes past protected rows, and safely replays a page after interruption', async () => {
     for (let i = 0; i < 2570; i += 50) {

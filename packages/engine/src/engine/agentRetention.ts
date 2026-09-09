@@ -82,7 +82,7 @@ export async function retainAgents(
     WHERE type = 'index' AND name IN (${sql.join(requiredIndexes.map(name => sql`${name}`), sql`, `)})`);
   const indexesReady = indexes.length === requiredIndexes.length;
   if (options.delete && !indexesReady) {
-    throw new Error('Agent retention requires migration 0052_agent_retention_indexes.sql before deletion');
+    throw new Error('Agent retention requires migration 0053_agent_retention_indexes.sql before deletion');
   }
   const [high] = cursor ? [] : await db.all<{ id: string }>(sql`
     SELECT id FROM agents WHERE workspace_id = ${workspaceId} ORDER BY id DESC LIMIT 1`);
