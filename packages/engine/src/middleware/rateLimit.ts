@@ -11,7 +11,10 @@ const FALLBACK_RATE_PER_MIN = 300;
 const checkApiCallPlanLimit = checkPlanLimit('api_calls');
 
 // Per-route rate limit multipliers (fraction of the global per-minute limit).
-// POST endpoints get tighter limits, GET endpoints get looser.
+// POST endpoints get tighter limits, GET endpoints get looser. A dedicated
+// entry also gives the route its own bucket instead of sharing the workspace
+// `global` one — routes that can burst independently (token minting, enrollment
+// churn) must not 429 unrelated traffic when they saturate.
 const ROUTE_MULTIPLIERS: Record<string, number> = {
   'POST:/channels/*/messages': 0.5, // message send: half the global limit
   'POST:/dm': 0.5,
@@ -19,6 +22,16 @@ const ROUTE_MULTIPLIERS: Record<string, number> = {
   'POST:/messages/*/reactions': 0.4,
   'GET:/channels/*/messages': 1.0,
   'GET:/agents/presence': 0.3,
+  // Isolate node-token minting: agent enrollment can burst to hundreds/min
+  // per workspace and was observed draining the shared `global` bucket,
+  // 429ing every other endpoint. 1.0 keeps the ceiling identical to today
+  // and only stops the collateral damage; a lower multiplier would tighten
+  // enrollment beyond the current status quo, which is not what we want.
+  'POST:/agent/node-token': 1.0,
+  // Same shape for observer-token minting: a demo/enrollment burst here
+  // must not throttle inbox, message send, or reactions in the same
+  // workspace.
+  'POST:/observer-tokens': 1.0,
 };
 
 function getRouteKey(method: string, path: string): string | null {
