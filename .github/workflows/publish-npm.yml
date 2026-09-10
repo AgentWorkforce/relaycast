@@ -167,7 +167,7 @@ jobs:
                 pkg.version = version;
 
                 // Update @relaycast/* dependencies to exact version
-                for (const depType of ['dependencies', 'devDependencies', 'peerDependencies']) {
+                for (const depType of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
                   for (const dep of Object.keys(pkg[depType] || {})) {
                     if (dep.startsWith('@relaycast/')) {
                       pkg[depType][dep] = version;

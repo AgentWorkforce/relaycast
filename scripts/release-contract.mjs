@@ -16,6 +16,11 @@ const LEVEL_RANK = { Patch: 0, Minor: 1, Major: 2 };
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/;
 const UNRELEASED =
   /^## \[Unreleased(?: - (Patch|Minor|Major))?\][ \t]*\n([\s\S]*?)(?=^## \[|(?![\s\S]))/m;
+const DOCKER_DEPENDENCY_TYPES = [
+  "dependencies",
+  "optionalDependencies",
+  "peerDependencies",
+];
 
 export function parseVersion(value) {
   const match = value.match(SEMVER);
@@ -116,10 +121,56 @@ function readJson(file) {
   return JSON.parse(readFileSync(file, "utf8"));
 }
 
+function dockerPackageManifests(root) {
+  const manifests = new Map();
+  for (const dir of packageDirectories(root)) {
+    const manifest = readJson(path.join(root, "packages", dir, "package.json"));
+    if (manifest.name?.startsWith("@relaycast/")) {
+      manifests.set(manifest.name, manifest);
+    }
+  }
+  return manifests;
+}
+
+function dockerPackageNames(manifest, manifests) {
+  const names = new Set();
+  const pending = [];
+  for (const dependencyType of DOCKER_DEPENDENCY_TYPES) {
+    for (const dependencyName of Object.keys(manifest[dependencyType] ?? {})) {
+      if (!dependencyName.startsWith("@relaycast/")) continue;
+      names.add(dependencyName);
+      pending.push(dependencyName);
+    }
+  }
+  while (pending.length > 0) {
+    const name = pending.pop();
+    const manifest = manifests.get(name);
+    if (!manifest) {
+      throw new Error(`Docker dependency ${name} has no workspace package manifest`);
+    }
+    for (const dependencyType of DOCKER_DEPENDENCY_TYPES) {
+      for (const dependencyName of Object.keys(manifest[dependencyType] ?? {})) {
+        if (!dependencyName.startsWith("@relaycast/") || names.has(dependencyName)) continue;
+        names.add(dependencyName);
+        pending.push(dependencyName);
+      }
+    }
+  }
+  return names;
+}
+
+function sameDependencyMap(actual, expected) {
+  return (
+    JSON.stringify(Object.entries(actual ?? {}).sort()) ===
+    JSON.stringify(Object.entries(expected ?? {}).sort())
+  );
+}
+
 function assertInternalDependencies(owner, pkg, expectedVersion) {
   for (const dependencyType of [
     "dependencies",
     "devDependencies",
+    "optionalDependencies",
     "peerDependencies",
   ]) {
     for (const [name, version] of Object.entries(pkg[dependencyType] ?? {})) {
@@ -173,9 +224,7 @@ function assertDockerImageManifestVersion(
 ) {
   const manifestPath = path.join(root, "docker", "package.json");
   const manifest = readJson(manifestPath);
-  const engineManifest = readJson(
-    path.join(root, "packages", "engine", "package.json"),
-  );
+  const manifests = dockerPackageManifests(root);
   if (manifest.version !== expectedVersion) {
     throw new Error(
       `${manifestPath} is ${manifest.version}, expected ${expectedVersion}`,
@@ -196,6 +245,13 @@ function assertDockerImageManifestVersion(
       `${lockPath} root package version is ${lockRoot?.version}, expected ${expectedVersion}`,
     );
   }
+  for (const dependencyType of DOCKER_DEPENDENCY_TYPES) {
+    if (!sameDependencyMap(lockRoot?.[dependencyType], manifest[dependencyType])) {
+      throw new Error(
+        `${lockPath} root ${dependencyType} topology does not match docker/package.json`,
+      );
+    }
+  }
   const lockedEngine = lock.packages?.["node_modules/@relaycast/engine"];
   if (lockedEngine?.version !== expectedVersion) {
     throw new Error(
@@ -203,34 +259,46 @@ function assertDockerImageManifestVersion(
     );
   }
   if (requireResolvedArtifact) {
-    const expectedTarball = `https://registry.npmjs.org/@relaycast/engine/-/engine-${expectedVersion}.tgz`;
-    if (lockedEngine?.resolved !== expectedTarball) {
-      throw new Error(
-        `${lockPath} node_modules/@relaycast/engine resolves ${lockedEngine?.resolved}, expected ${expectedTarball}`,
-      );
-    }
-    if (!/^sha512-[A-Za-z0-9+/]+=*$/.test(lockedEngine?.integrity ?? "")) {
-      throw new Error(
-        `${lockPath} node_modules/@relaycast/engine has no valid registry integrity`,
-      );
-    }
-  }
-
-  if (requireResolvedArtifact) {
-    for (const dependencyType of [
-      "dependencies",
-      "optionalDependencies",
-      "peerDependencies",
-    ]) {
-      const expected = engineManifest[dependencyType] ?? {};
-      const actual = lockedEngine[dependencyType] ?? {};
-      if (
-        JSON.stringify(Object.entries(actual).sort()) !==
-          JSON.stringify(Object.entries(expected).sort())
-      ) {
+    const expectedNames = dockerPackageNames(manifest, manifests);
+    for (const packageName of expectedNames) {
+      const packageManifest = manifests.get(packageName);
+      const packageKey = `node_modules/${packageName}`;
+      const lockedPackage = lock.packages?.[packageKey];
+      if (!lockedPackage) {
+        throw new Error(`${lockPath} is missing Docker package ${packageKey}`);
+      }
+      if (lockedPackage.version !== expectedVersion) {
         throw new Error(
-          `${lockPath} engine ${dependencyType} topology does not match packages/engine/package.json`,
+          `${lockPath} ${packageKey} is ${lockedPackage.version}, expected ${expectedVersion}`,
         );
+      }
+      const shortName = packageName.slice("@relaycast/".length);
+      const expectedTarball =
+        `https://registry.npmjs.org/${packageName}/-/${shortName}-${expectedVersion}.tgz`;
+      if (lockedPackage.resolved !== expectedTarball) {
+        throw new Error(
+          `${lockPath} ${packageKey} resolves ${lockedPackage.resolved}, expected ${expectedTarball}`,
+        );
+      }
+      if (!/^sha512-[A-Za-z0-9+/]+=*$/.test(lockedPackage.integrity ?? "")) {
+        throw new Error(
+          `${lockPath} ${packageKey} has no valid registry integrity`,
+        );
+      }
+      for (const dependencyType of DOCKER_DEPENDENCY_TYPES) {
+        if (!sameDependencyMap(lockedPackage[dependencyType], packageManifest[dependencyType])) {
+          throw new Error(
+            `${lockPath} ${packageName} ${dependencyType} topology does not match packages/${packageName.slice("@relaycast/".length)}/package.json`,
+          );
+        }
+      }
+    }
+    for (const key of Object.keys(lock.packages ?? {})) {
+      const match = key.match(/^node_modules\/(?:@relaycast\/[^/]+)$/);
+      if (!match) continue;
+      const packageName = key.slice("node_modules/".length);
+      if (!expectedNames.has(packageName)) {
+        throw new Error(`${lockPath} contains stale Docker package ${packageName}`);
       }
     }
   }

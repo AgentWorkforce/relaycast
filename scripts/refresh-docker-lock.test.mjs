@@ -6,6 +6,11 @@ const manifest = {
   version: "8.8.0",
   packages: [
     {
+      name: "@relaycast/a2a",
+      version: "8.8.0",
+      integrity: "sha512-a2a=",
+    },
+    {
       name: "@relaycast/engine",
       version: "8.8.0",
       integrity: "sha512-engine=",
@@ -28,6 +33,12 @@ describe("Docker lock refresh", () => {
         "": {
           version: "8.7.0",
           dependencies: { "@relaycast/engine": "8.7.0" },
+        },
+        "node_modules/@relaycast/a2a": {
+          version: "8.7.0",
+          resolved: "https://registry.npmjs.org/@relaycast/a2a/-/a2a-8.7.0.tgz",
+          integrity: "sha512-old-a2a=",
+          optionalDependencies: { "@relaycast/types": "8.7.0" },
         },
         "node_modules/@relaycast/engine": {
           version: "8.7.0",
@@ -60,6 +71,9 @@ describe("Docker lock refresh", () => {
     assert.equal(lock.packages[""].version, "8.8.0");
     assert.equal(lock.packages[""].dependencies["@relaycast/engine"], "8.8.0");
     assert.equal(lock.packages["node_modules/@relaycast/engine"].version, "8.8.0");
+    assert.equal(lock.packages["node_modules/@relaycast/a2a"].version, "8.8.0");
+    assert.equal(lock.packages["node_modules/@relaycast/a2a"].integrity, "sha512-a2a=");
+    assert.equal(lock.packages["node_modules/@relaycast/a2a"].optionalDependencies["@relaycast/types"], "8.8.0");
     assert.equal(lock.packages["node_modules/@relaycast/engine"].dependencies["@relaycast/types"], "8.8.0");
     assert.equal(lock.packages["node_modules/@relaycast/engine"].integrity, "sha512-engine=");
     assert.equal(lock.packages["node_modules/@relaycast/engine/node_modules/zod"].version, "4.6.1");

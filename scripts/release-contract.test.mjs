@@ -40,7 +40,12 @@ function repositoryFixture(version = "8.6.0-beta.0") {
       name: dir === "cli" ? "relaycast" : `@relaycast/${dir}`,
       version,
       ...(dir === "engine"
-        ? { dependencies: { "@relaycast/types": version } }
+        ? {
+            dependencies: {
+              "@relaycast/a2a": version,
+              "@relaycast/types": version,
+            },
+          }
         : {}),
     };
     writeFileSync(
@@ -81,12 +86,28 @@ function repositoryFixture(version = "8.6.0-beta.0") {
     path.join(root, "docker", "package-lock.json"),
     `${JSON.stringify({
       packages: {
-        "": { version },
+        "": {
+          version,
+          dependencies: { "@relaycast/engine": version },
+        },
+        "node_modules/@relaycast/a2a": {
+          version,
+          resolved: `https://registry.npmjs.org/@relaycast/a2a/-/a2a-${version}.tgz`,
+          integrity: "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+        },
         "node_modules/@relaycast/engine": {
           version,
           resolved: `https://registry.npmjs.org/@relaycast/engine/-/engine-${version}.tgz`,
           integrity: "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
-          dependencies: { "@relaycast/types": version },
+          dependencies: {
+            "@relaycast/a2a": version,
+            "@relaycast/types": version,
+          },
+        },
+        "node_modules/@relaycast/types": {
+          version,
+          resolved: `https://registry.npmjs.org/@relaycast/types/-/types-${version}.tgz`,
+          integrity: "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
         },
       },
     })}\n`,
@@ -327,6 +348,76 @@ describe("release version parity", () => {
       assert.throws(
         () => assertRepositoryVersionParity(root, "8.6.0-beta.0"),
         /engine dependencies topology does not match/,
+        description,
+      );
+    }
+  });
+
+  it("checks dependency topology for every Docker-installed Relaycast package", () => {
+    for (const [packageDir, dependencyType, manifestDependencies, lockDependencies] of [
+      ["a2a", "dependencies", { zod: "^4.3.6" }, {}],
+      ["types", "optionalDependencies", { "@scope/optional": "^1.0.0" }, {}],
+      ["types", "peerDependencies", { "@scope/peer": "^1.0.0" }, {}],
+      ["a2a", "dependencies", {}, { zod: "^4.3.6" }],
+      ["types", "optionalDependencies", {}, { "@scope/optional": "^1.0.0" }],
+      ["types", "peerDependencies", {}, { "@scope/peer": "^1.0.0" }],
+    ]) {
+      const root = repositoryFixture();
+      const manifestPath = path.join(
+        root,
+        "packages",
+        packageDir,
+        "package.json",
+      );
+      const packageManifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      packageManifest[dependencyType] = manifestDependencies;
+      writeFileSync(manifestPath, JSON.stringify(packageManifest));
+
+      const lockPath = path.join(root, "docker", "package-lock.json");
+      const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+      lock.packages[`node_modules/@relaycast/${packageDir}`][dependencyType] =
+        lockDependencies;
+      writeFileSync(lockPath, JSON.stringify(lock));
+
+      assert.throws(
+        () => assertRepositoryVersionParity(root, "8.6.0-beta.0"),
+        new RegExp(
+          `@relaycast/${packageDir} ${dependencyType} topology does not match`,
+        ),
+        `${packageDir} ${dependencyType}`,
+      );
+    }
+  });
+
+  it("rejects missing and stale top-level Docker Relaycast packages", () => {
+    for (const [description, mutate, expectedError] of [
+      [
+        "missing package",
+        (lock) => delete lock.packages["node_modules/@relaycast/a2a"],
+        /is missing Docker package node_modules\/@relaycast\/a2a/,
+      ],
+      [
+        "stale package",
+        (lock) => {
+          lock.packages["node_modules/@relaycast/observer-dashboard"] = {
+            version: "8.6.0-beta.0",
+            resolved:
+              "https://registry.npmjs.org/@relaycast/observer-dashboard/-/observer-dashboard-8.6.0-beta.0.tgz",
+            integrity: "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+          };
+        },
+        /contains stale Docker package @relaycast\/observer-dashboard/,
+      ],
+    ]) {
+      const root = repositoryFixture();
+      const lockPath = path.join(root, "docker", "package-lock.json");
+      const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+      mutate(lock);
+      writeFileSync(lockPath, JSON.stringify(lock));
+
+      assert.throws(
+        () => assertRepositoryVersionParity(root, "8.6.0-beta.0"),
+        expectedError,
         description,
       );
     }

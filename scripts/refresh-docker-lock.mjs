@@ -40,7 +40,12 @@ export function refreshDockerLock(lock, manifest, version) {
     entry.version = version;
     entry.resolved = `https://registry.npmjs.org/${packageName}/-/${packageName.slice("@relaycast/".length)}-${version}.tgz`;
     entry.integrity = packageEntry.integrity;
-    for (const dependencyType of ["dependencies", "devDependencies", "peerDependencies"]) {
+    for (const dependencyType of [
+      "dependencies",
+      "devDependencies",
+      "optionalDependencies",
+      "peerDependencies",
+    ]) {
       for (const dependencyName of Object.keys(entry[dependencyType] ?? {})) {
         if (dependencyName.startsWith("@relaycast/")) {
           entry[dependencyType][dependencyName] = version;

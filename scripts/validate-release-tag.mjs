@@ -72,7 +72,7 @@ function releaseDateFromTag(tagMessage, cwd, tagCommit) {
 function jsonText(value) { return `${JSON.stringify(value, null, 2)}\n`; }
 
 function setInternalDependencies(pkg, version) {
-  for (const dependencyType of ["dependencies", "devDependencies", "peerDependencies"]) {
+  for (const dependencyType of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
     for (const name of Object.keys(pkg[dependencyType] ?? {})) {
       if (name.startsWith("@relaycast/")) pkg[dependencyType][name] = version;
     }
@@ -135,7 +135,7 @@ function assertLockDiffIsReleaseOnly(source, actual, version, { docker, packageI
     if (!key) return false;
     if (!docker && packageLockEntryIsWorkspace(key)) {
       if (parts.length === 3 && parts[2] === "version") return afterValue === version;
-      if (parts.length === 4 && ["dependencies", "devDependencies", "peerDependencies"].includes(parts[2]) && parts[3].startsWith("@relaycast/")) return afterValue === version;
+      if (parts.length === 4 && ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"].includes(parts[2]) && parts[3].startsWith("@relaycast/")) return afterValue === version;
       return false;
     }
     if (!key.startsWith("node_modules/@relaycast/")) return false;
@@ -148,7 +148,7 @@ function assertLockDiffIsReleaseOnly(source, actual, version, { docker, packageI
     if (parts.length === 3 && parts[2] === "integrity") {
       return afterValue === packageIntegrities.get(packageName);
     }
-    if (parts.length === 4 && parts[2] === "dependencies" && parts[3].startsWith("@relaycast/")) return afterValue === version;
+    if (parts.length === 4 && ["dependencies", "optionalDependencies", "peerDependencies"].includes(parts[2]) && parts[3].startsWith("@relaycast/")) return afterValue === version;
     return false;
   };
   const unexpected = differences.filter(({ parts, after }) => !allowed(parts, after));

@@ -142,7 +142,7 @@ function bumpFixtureVersion(root, version, dockerIntegrities) {
     const manifestPath = path.join(root, file);
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     manifest.version = version;
-    for (const type of ["dependencies", "devDependencies", "peerDependencies"]) {
+    for (const type of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
       for (const name of Object.keys(manifest[type] ?? {})) {
         if (name.startsWith("@relaycast/")) manifest[type][name] = version;
       }
@@ -154,7 +154,7 @@ function bumpFixtureVersion(root, version, dockerIntegrities) {
   for (const [key, entry] of Object.entries(rootLock.packages ?? {})) {
     if (!/^packages\/[^/]+$/.test(key)) continue;
     entry.version = version;
-    for (const type of ["dependencies", "devDependencies", "peerDependencies"]) {
+    for (const type of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
       for (const name of Object.keys(entry[type] ?? {})) {
         if (name.startsWith("@relaycast/")) entry[type][name] = version;
       }
@@ -188,7 +188,7 @@ function bumpFixtureVersion(root, version, dockerIntegrities) {
     entry.version = version;
     entry.resolved = `https://registry.npmjs.org/${name}/-/${shortName}-${version}.tgz`;
     entry.integrity = dockerIntegrities[name];
-    for (const type of ["dependencies", "devDependencies", "peerDependencies"]) {
+    for (const type of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
       for (const dependency of Object.keys(entry[type] ?? {})) {
         if (dependency.startsWith("@relaycast/")) entry[type][dependency] = version;
       }
