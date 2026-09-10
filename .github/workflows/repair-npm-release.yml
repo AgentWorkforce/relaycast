@@ -1,0 +1,261 @@
+name: Repair NPM Release
+
+# This workflow is deliberately separate from the normal publish workflow.
+# It consumes one audited, immutable build artifact and only repairs the git
+# tag/release bookkeeping after the registry already contains every package.
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type the audited repair name"
+        required: true
+        type: choice
+        options:
+          - repair-8.8.0
+        default: repair-8.8.0
+      run_id:
+        description: "Failed build run containing the immutable build-output artifact"
+        required: true
+        type: string
+        default: "34436226889"
+      source_commit:
+        description: "Immutable commit that produced the published npm bytes"
+        required: true
+        type: string
+        default: "18981479c26ea0677585b4e79301dc23d94ed5c0"
+      source_tree:
+        description: "Immutable source tree recorded by the build artifact"
+        required: true
+        type: string
+        default: "3ea102dfb9622e3cc2819feb0cdf202cc029c8e6"
+      provenance_digest:
+        description: "SHA-256 of the immutable release-provenance.json artifact"
+        required: true
+        type: string
+        default: "a18b90273f6b93eb127040bc23f6e66688781e20f1d41c0adde510b287d97917"
+      release_date:
+        description: "UTC date used by the failed build's release-date output"
+        required: true
+        type: string
+        default: "2026-09-10"
+
+concurrency:
+  group: repair-npm-release-8.8.0
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  repair:
+    name: Repair v8.8.0 tag and release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    env:
+      NPM_TAG_VERIFY_ATTEMPTS: 30
+      NPM_TAG_VERIFY_DELAY_MS: 10000
+
+    steps:
+      - name: Checkout repair workflow
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.3"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Download the audited build artifact
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.run_id }}
+          name: build-output
+          path: ${{ runner.temp }}/relaycast-repair-input
+
+      - name: Validate immutable artifact and registry state
+        env:
+          REPAIR_RUN_ID: ${{ inputs.run_id }}
+          REPAIR_SOURCE_COMMIT: ${{ inputs.source_commit }}
+          REPAIR_SOURCE_TREE: ${{ inputs.source_tree }}
+          REPAIR_PROVENANCE_DIGEST: ${{ inputs.provenance_digest }}
+          REPAIR_RELEASE_DATE: ${{ inputs.release_date }}
+        run: |
+          set -euo pipefail
+          git fetch origin main --tags
+          CURRENT_MAIN="$(git rev-parse origin/main)"
+          INPUT_ROOT="$RUNNER_TEMP/relaycast-repair-input"
+          node scripts/release-repair.mjs validate \
+            --run-id "$REPAIR_RUN_ID" \
+            --source-commit "$REPAIR_SOURCE_COMMIT" \
+            --source-tree "$REPAIR_SOURCE_TREE" \
+            --provenance-digest "$REPAIR_PROVENANCE_DIGEST" \
+            --version 8.8.0 \
+            --dist-tag latest \
+            --release-date "$REPAIR_RELEASE_DATE" \
+            --current-main "$CURRENT_MAIN" \
+            --workspace "$GITHUB_WORKSPACE" \
+            --manifest "$INPUT_ROOT/release-provenance.json" \
+            --artifact-root "$INPUT_ROOT"
+
+          # Read-only checks are the only registry operation in a repair. An
+          # existing same-version artifact with a different integrity blocks
+          # the workflow; it is never republished or silently adopted.
+          while IFS= read -r package_name; do
+            actual_integrity="$(npm view "${package_name}@8.8.0" dist.integrity --prefer-online 2>/dev/null || true)"
+            node scripts/release-provenance.mjs published \
+              --manifest "$INPUT_ROOT/release-provenance.json" \
+              --package "$package_name" \
+              --integrity "$actual_integrity" \
+              --version 8.8.0
+          done < <(node -e 'for (const pkg of require(process.argv[1]).packages) console.log(pkg.name)' "$INPUT_ROOT/release-provenance.json")
+
+          TAG_ARGS=(
+            verify-many
+            --version 8.8.0
+            --tag latest
+            --attempts "$NPM_TAG_VERIFY_ATTEMPTS"
+            --delay-ms "$NPM_TAG_VERIFY_DELAY_MS"
+          )
+          while IFS= read -r package_name; do
+            TAG_ARGS+=(--package "$package_name")
+          done < <(node -e 'for (const pkg of require(process.argv[1]).packages) console.log(pkg.name)' "$INPUT_ROOT/release-provenance.json")
+          node scripts/npm-dist-tag.mjs "${TAG_ARGS[@]}"
+
+      - name: Build and validate the historical release tree
+        env:
+          REPAIR_SOURCE_COMMIT: ${{ inputs.source_commit }}
+          REPAIR_SOURCE_TREE: ${{ inputs.source_tree }}
+          REPAIR_PROVENANCE_DIGEST: ${{ inputs.provenance_digest }}
+          REPAIR_RELEASE_DATE: ${{ inputs.release_date }}
+        run: |
+          set -euo pipefail
+          INPUT_ROOT="$RUNNER_TEMP/relaycast-repair-input"
+          RELEASE_ROOT="$RUNNER_TEMP/relaycast-release-tree"
+          git worktree add --detach "$RELEASE_ROOT" "$REPAIR_SOURCE_COMMIT"
+          cp "$INPUT_ROOT/package.json" "$RELEASE_ROOT/package.json"
+          cp "$INPUT_ROOT/package-lock.json" "$RELEASE_ROOT/package-lock.json"
+          cp "$INPUT_ROOT/Dockerfile" "$RELEASE_ROOT/Dockerfile"
+          cp "$INPUT_ROOT/RUNBOOK.md" "$RELEASE_ROOT/RUNBOOK.md"
+          cp "$INPUT_ROOT/release-provenance.json" "$RELEASE_ROOT/release-provenance.json"
+          cp -R "$INPUT_ROOT/release-artifacts" "$RELEASE_ROOT/release-artifacts"
+          cp "$INPUT_ROOT/docker/package.json" "$RELEASE_ROOT/docker/package.json"
+          cp "$INPUT_ROOT/docker/package-lock.json" "$RELEASE_ROOT/docker/package-lock.json"
+          rsync -a "$INPUT_ROOT/packages/" "$RELEASE_ROOT/packages/"
+          # The historical source predates PR #411's release-lock helpers.
+          # Keep the helpers from this workflow checkout untracked in the
+          # temporary tree so every validation uses the hardened logic while
+          # the eventual tag still contains only release-owned paths.
+          for script in release-contract.mjs release-provenance.mjs validate-release-tag.mjs check-release-contract.mjs cut-changelog.mjs npm-dist-tag.mjs; do
+            cp "$GITHUB_WORKSPACE/scripts/$script" "$RELEASE_ROOT/scripts/$script"
+          done
+          cd "$RELEASE_ROOT"
+
+          node "$GITHUB_WORKSPACE/scripts/release-repair.mjs" validate \
+            --run-id "${{ inputs.run_id }}" \
+            --source-commit "$REPAIR_SOURCE_COMMIT" \
+            --source-tree "$REPAIR_SOURCE_TREE" \
+            --provenance-digest "$REPAIR_PROVENANCE_DIGEST" \
+            --version 8.8.0 \
+            --dist-tag latest \
+            --release-date "$REPAIR_RELEASE_DATE" \
+            --current-main "$(git rev-parse origin/main)" \
+            --workspace "$RELEASE_ROOT" \
+            --manifest "$RELEASE_ROOT/release-provenance.json" \
+            --artifact-root "$RELEASE_ROOT"
+
+          TAG=v8.8.0
+          git fetch origin main --tags
+          if git show-ref --verify --quiet "refs/tags/$TAG"; then
+            node scripts/validate-release-tag.mjs \
+              --tag "$TAG" \
+              --source-commit "$REPAIR_SOURCE_COMMIT" \
+              --source-tree "$REPAIR_SOURCE_TREE" \
+              --version 8.8.0 \
+              --dist-tag latest \
+              --provenance-digest "$REPAIR_PROVENANCE_DIGEST" \
+              --provenance-manifest "$RELEASE_ROOT/release-provenance.json"
+            git -C "$RELEASE_ROOT" reset --hard "$TAG^{commit}"
+          else
+            node scripts/cut-changelog.mjs \
+              --version 8.8.0 --date "$REPAIR_RELEASE_DATE"
+            (cd docker && node "$GITHUB_WORKSPACE/scripts/refresh-docker-lock.mjs" \
+              --manifest "$RELEASE_ROOT/release-provenance.json" --version 8.8.0)
+            node scripts/check-release-contract.mjs --version 8.8.0
+
+            git -C "$RELEASE_ROOT" config user.name "GitHub Actions"
+            git -C "$RELEASE_ROOT" config user.email "actions@github.com"
+            git -C "$RELEASE_ROOT" add package.json package-lock.json packages/*/package.json
+            git -C "$RELEASE_ROOT" add packages/sdk-typescript/src/version.ts packages/cli/src/version.ts
+            git -C "$RELEASE_ROOT" add Dockerfile docker/package.json docker/package-lock.json RUNBOOK.md CHANGELOG.md packages/*/CHANGELOG.md
+            git -C "$RELEASE_ROOT" commit -m "chore(release): v8.8.0"
+
+            cat > "$RUNNER_TEMP/relaycast-release-tag-message" <<EOF
+          Release v8.8.0
+
+          Relaycast-NPM-Dist-Tag: latest
+          Relaycast-Source-Commit: $REPAIR_SOURCE_COMMIT
+          Relaycast-Source-Tree: $REPAIR_SOURCE_TREE
+          Relaycast-Release-Date: $REPAIR_RELEASE_DATE
+          Relaycast-Package-Provenance-SHA256: $REPAIR_PROVENANCE_DIGEST
+          EOF
+            git -C "$RELEASE_ROOT" tag -a "$TAG" -F "$RUNNER_TEMP/relaycast-release-tag-message"
+          fi
+
+          node scripts/validate-release-tag.mjs \
+            --tag "$TAG" \
+            --source-commit "$REPAIR_SOURCE_COMMIT" \
+            --source-tree "$REPAIR_SOURCE_TREE" \
+            --version 8.8.0 \
+            --dist-tag latest \
+            --provenance-digest "$REPAIR_PROVENANCE_DIGEST" \
+            --provenance-manifest "$RELEASE_ROOT/release-provenance.json"
+          git -C "$RELEASE_ROOT" push origin "$TAG"
+
+          # Keep the tag's sole parent equal to the historical source. Land a
+          # separate merge commit on main, using PR #411's conflict policy;
+          # this merge commit makes no claim that main produced npm bytes.
+          for attempt in 1 2 3; do
+            git -C "$RELEASE_ROOT" fetch origin main
+            git -C "$RELEASE_ROOT" reset --hard "$TAG^{commit}"
+            if git -C "$RELEASE_ROOT" merge --no-edit origin/main; then
+              :
+            else
+              conflicted="$(git -C "$RELEASE_ROOT" diff --name-only --diff-filter=U)"
+              if [ -z "$conflicted" ] || echo "$conflicted" | grep -qvE '(^|/)CHANGELOG\.md$'; then
+                git -C "$RELEASE_ROOT" merge --abort
+                echo "::error::main merge has an unexpected conflict; tag is intact and main was not changed"
+                exit 1
+              fi
+              echo "$conflicted" | xargs git -C "$RELEASE_ROOT" checkout --theirs --
+              node scripts/cut-changelog.mjs \
+                --version 8.8.0 --date "$REPAIR_RELEASE_DATE"
+              git -C "$RELEASE_ROOT" add CHANGELOG.md packages/*/CHANGELOG.md
+              GIT_EDITOR=true git -C "$RELEASE_ROOT" commit --no-edit
+            fi
+            if git -C "$RELEASE_ROOT" push origin HEAD:main; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::main moved during repair; tag is intact and main was not changed"
+              exit 1
+            fi
+          done
+
+          echo "REPAIR_TAG_COMMIT=$(git -C "$RELEASE_ROOT" rev-parse "$TAG^{commit}")" >> "$GITHUB_ENV"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v8.8.0
+          name: v8.8.0
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
