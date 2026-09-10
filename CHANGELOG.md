@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Engine scheduled maintenance again supports host-owned retention cursors and bounded websocket backlog redrive, allowing hosted deployments to retain schema-free recovery behavior.
 
 ## [8.8.0] - 2026-09-10
 

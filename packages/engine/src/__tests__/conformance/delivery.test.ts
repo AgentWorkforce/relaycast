@@ -1528,6 +1528,42 @@ describe('durable delivery api', () => {
     expect(row2.status).toBe('delivered');
   });
 
+  it('caps one ws agent backlog per scheduled sweep without reordering or failing deferred rows', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-ws-sweep-backlog-limit');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+    for (const text of ['one', 'two', 'three']) {
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text }),
+      });
+      expect(post.status).toBe(201);
+    }
+    await waitForAssertion(() => expect(node.sock.ofType('deliver')).toHaveLength(3));
+
+    const db = stack.runtime.deps.db;
+    const rowsForBob = and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId));
+    await db.update(deliveries).set({
+      status: 'queued', nextAttemptAt: null, dispatchAttempts: 0, deliveredAt: null, lastDispatchError: null,
+    }).where(rowsForBob);
+    const before = node.sock.ofType('deliver').length;
+
+    expect(await sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date(), wsBacklogLimit: 2 })).toBe(3);
+    expect(node.sock.ofType('deliver').slice(before).map(frame => frame.seq)).toEqual([1, 2]);
+    const firstPass = await db.select({ seq: deliveries.seq, status: deliveries.status })
+      .from(deliveries).where(rowsForBob).orderBy(deliveries.seq);
+    expect(firstPass).toEqual([
+      { seq: 1, status: 'delivered' }, { seq: 2, status: 'delivered' }, { seq: 3, status: 'queued' },
+    ]);
+
+    expect(await sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date(Date.now() + 1_000) })).toBe(1);
+    const [remaining] = await db.select({ status: deliveries.status }).from(deliveries)
+      .where(and(rowsForBob, eq(deliveries.seq, 3)));
+    expect(remaining).toEqual({ status: 'delivered' });
+  });
+
   it('sweep stops a ws agent backlog at the first undeliverable seq (node connected, agent not ready)', async () => {
     // The node is connected but the agent is not delivery-ready (cursor
     // negotiation pending after a reconnect). The group must stop at seq 1 —

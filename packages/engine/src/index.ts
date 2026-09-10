@@ -92,6 +92,7 @@ export {
   DEFAULT_WORKSPACE_EVENT_TTL_DAYS,
 } from './engine/retention.js';
 export type { PruneOptions, PruneResult, RetentionDefaults } from './engine/retention.js';
+export type { RetentionCursorStore, RowidRetentionState } from './engine/rowidRetention.js';
 export type { WorkspaceRetentionSettings } from './db/schema.js';
 
 // Whole-workspace expiry is opt-in at creation and uses only the stored,
