@@ -122,11 +122,16 @@ function git(cwd, args) {
 }
 
 /** Validate the source object in the checkout before any release mutation. */
-export function assertRepairSource({ workspace = process.cwd(), sourceCommit, sourceTree } = {}) {
-  if (git(workspace, ["rev-parse", "--verify", `${sourceCommit}^{commit}`]) !== sourceCommit) {
+export function assertRepairSource({
+  workspace = process.cwd(),
+  sourceCommit,
+  sourceTree,
+  gitCommand = git,
+} = {}) {
+  if (gitCommand(workspace, ["rev-parse", "--verify", `${sourceCommit}^{commit}`]) !== sourceCommit) {
     throw new Error("repair source commit is not available locally");
   }
-  const actualTree = git(workspace, ["rev-parse", `${sourceCommit}^{tree}`]);
+  const actualTree = gitCommand(workspace, ["rev-parse", `${sourceCommit}^{tree}`]);
   if (actualTree !== sourceTree) {
     throw new Error("repair source tree does not match the audited source commit");
   }

@@ -171,6 +171,11 @@ jobs:
             --artifact-root "$RELEASE_ROOT"
 
           TAG=v8.8.0
+          # A rerun may reuse an already-pushed tag and still need to create
+          # the separate main merge commit. Configure identity before either
+          # the new-tag branch or the existing-tag branch can mutate git.
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
           git fetch origin main --tags
           if git show-ref --verify --quiet "refs/tags/$TAG"; then
             node scripts/validate-release-tag.mjs \
@@ -189,8 +194,6 @@ jobs:
               --manifest "$RELEASE_ROOT/release-provenance.json" --version 8.8.0)
             node scripts/check-release-contract.mjs --version 8.8.0
 
-            git -C "$RELEASE_ROOT" config user.name "GitHub Actions"
-            git -C "$RELEASE_ROOT" config user.email "actions@github.com"
             git -C "$RELEASE_ROOT" add package.json package-lock.json packages/*/package.json
             git -C "$RELEASE_ROOT" add packages/sdk-typescript/src/version.ts packages/cli/src/version.ts
             git -C "$RELEASE_ROOT" add Dockerfile docker/package.json docker/package-lock.json RUNBOOK.md CHANGELOG.md packages/*/CHANGELOG.md

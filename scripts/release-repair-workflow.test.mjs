@@ -40,6 +40,15 @@ describe("NPM release repair workflow safety contract", () => {
     assert.match(workflow, /softprops\/action-gh-release@v2/);
   });
 
+  it("configures git identity before an existing-tag rerun can merge main", () => {
+    const identity = workflow.indexOf('git config user.name "GitHub Actions"');
+    const existingTagBranch = workflow.indexOf('if git show-ref --verify --quiet "refs/tags/$TAG"');
+    const mainMerge = workflow.indexOf('git -C "$RELEASE_ROOT" merge --no-edit origin/main');
+    assert.ok(identity >= 0 && identity < existingTagBranch);
+    assert.ok(mainMerge > existingTagBranch);
+    assert.match(workflow, /git config user.email "actions@github\.com"/);
+  });
+
   it("does not use the dispatch checkout SHA as release provenance", () => {
     assert.doesNotMatch(workflow, /GITHUB_SHA/);
     assert.match(workflow, /source_commit:/);
