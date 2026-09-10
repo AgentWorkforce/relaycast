@@ -82,7 +82,9 @@ export interface ReleaseActionProviderAuthorization {
   kind: 'release-generation-v1';
   invocationId: string;
   agentName: string;
-  expectedTokenHash: string;
+  /** One or both immutable generation proofs may be supplied. */
+  expectedTokenHash?: string;
+  expectedAgentId?: string;
 }
 
 /** Legacy registered action proof, retained only so current owners fail it closed. */

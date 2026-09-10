@@ -1370,15 +1370,17 @@ async function dispatchRelease(args: {
         )));
 
       return writes;
-    }, expectedTokenHash ? { requireAtomic: true } : undefined);
+    }, expectedTokenHash || expectedAgentId ? { requireAtomic: true } : undefined);
     const generationConflict = results[0] as Array<{ id: string }>;
     const completed = results[1] as Array<{ id: string; handlerNodeId: string | null }>;
     const completedExitNodeId = completed[0]?.handlerNodeId ?? null;
 
-    if (expectedTokenHash && (generationConflict.length > 0 || completed.length === 0)) {
+    if ((expectedTokenHash || expectedAgentId) && (generationConflict.length > 0 || completed.length === 0)) {
       throw codedError(
-        `Agent "${name}" no longer matches the expected token generation`,
-        RELEASE_GENERATION_CONFLICT_CODE,
+        expectedAgentId
+          ? `Agent "${name}" no longer matches the expected immutable identity`
+          : `Agent "${name}" no longer matches the expected token generation`,
+        expectedAgentId ? RELEASE_IDENTITY_MISMATCH_CODE : RELEASE_GENERATION_CONFLICT_CODE,
         409,
       );
     }
@@ -1407,7 +1409,7 @@ async function dispatchRelease(args: {
   };
   const failClosed = async (): Promise<never> => {
     const completedAt = new Date();
-    if (expectedTokenHash) {
+    if (expectedTokenHash || expectedAgentId) {
       const generationStillCurrent = releaseGenerationStillCurrent(
         args.workspaceId,
         agent.id,
@@ -1443,8 +1445,10 @@ async function dispatchRelease(args: {
       const generationConflict = results[0] as Array<{ id: string }>;
       if (generationConflict.length > 0) {
         throw codedError(
-          `Agent "${name}" no longer matches the expected token generation`,
-          RELEASE_GENERATION_CONFLICT_CODE,
+          expectedAgentId
+            ? `Agent "${name}" no longer matches the expected immutable identity`
+            : `Agent "${name}" no longer matches the expected token generation`,
+          expectedAgentId ? RELEASE_IDENTITY_MISMATCH_CODE : RELEASE_GENERATION_CONFLICT_CODE,
           409,
         );
       }
@@ -1517,7 +1521,7 @@ async function dispatchRelease(args: {
       throw codedError(
         'Release invocation failed after provider dispatch',
         errorCode,
-        errorCode === RELEASE_GENERATION_CONFLICT_CODE ? 409 : 503,
+        errorCode === RELEASE_GENERATION_CONFLICT_CODE || errorCode === RELEASE_IDENTITY_MISMATCH_CODE ? 409 : 503,
       );
     }
     return invocationAck(dispatched.settled, { actionName: 'release' });
@@ -1526,7 +1530,7 @@ async function dispatchRelease(args: {
   // The provider can disconnect between the liveness check and send. Complete
   // the DB lifecycle locally instead of creating an ownerless pending request.
   if (!dispatched.accepted) {
-    if (expectedTokenHash) {
+    if (expectedTokenHash || expectedAgentId) {
       const [settled] = await args.db
         .select({ error: actionInvocations.error })
         .from(actionInvocations)
@@ -1534,10 +1538,12 @@ async function dispatchRelease(args: {
           eq(actionInvocations.workspaceId, args.workspaceId),
           eq(actionInvocations.id, invocation.id),
         ));
-      if (settled?.error === RELEASE_GENERATION_CONFLICT_CODE) {
+      if (settled?.error === RELEASE_GENERATION_CONFLICT_CODE || settled?.error === RELEASE_IDENTITY_MISMATCH_CODE) {
         throw codedError(
-          `Agent "${name}" no longer matches the expected token generation`,
-          RELEASE_GENERATION_CONFLICT_CODE,
+          expectedAgentId
+            ? `Agent "${name}" no longer matches the expected immutable identity`
+            : `Agent "${name}" no longer matches the expected token generation`,
+          expectedAgentId ? RELEASE_IDENTITY_MISMATCH_CODE : RELEASE_GENERATION_CONFLICT_CODE,
           409,
         );
       }
@@ -2950,6 +2956,9 @@ async function dispatchNodeInvocation(args: {
   const guardedReleaseAgentId = args.invocationOrigin === 'builtin' && isReleaseInvocation(args.action)
     ? releaseExpectedAgentId(args.input)
     : null;
+  const releaseConflictCode = guardedReleaseAgentId
+    ? RELEASE_IDENTITY_MISMATCH_CODE
+    : RELEASE_GENERATION_CONFLICT_CODE;
   if (guardedReleaseHash || guardedReleaseAgentId) {
     const name = typeof args.input.name === 'string' ? args.input.name : '';
     const [current] = await args.db
@@ -2973,7 +2982,7 @@ async function dispatchNodeInvocation(args: {
         .update(actionInvocations)
         .set({
           status: 'failed',
-          error: RELEASE_GENERATION_CONFLICT_CODE,
+          error: releaseConflictCode,
           completedAt: new Date(),
         })
         .where(and(
@@ -3080,7 +3089,7 @@ async function dispatchNodeInvocation(args: {
             actionName: args.action,
           },
         ) ?? false)
-    : guardedReleaseHash
+    : guardedReleaseHash || guardedReleaseAgentId
       ? await (args.registry.sendAuthorizedActionToProvider?.(
           args.workspaceId,
           args.nodeId,
@@ -3090,7 +3099,8 @@ async function dispatchNodeInvocation(args: {
             kind: 'release-generation-v1',
             invocationId: args.invocationId,
             agentName: typeof args.input.name === 'string' ? args.input.name : '',
-            expectedTokenHash: guardedReleaseHash,
+            ...(guardedReleaseHash ? { expectedTokenHash: guardedReleaseHash } : {}),
+            ...(guardedReleaseAgentId ? { expectedAgentId: guardedReleaseAgentId } : {}),
           },
         ) ?? false)
     : await args.registry.sendToProvider(
@@ -3100,7 +3110,7 @@ async function dispatchNodeInvocation(args: {
         frame,
       );
 
-  if (!sent && guardedReleaseHash) {
+  if (!sent && (guardedReleaseHash || guardedReleaseAgentId)) {
     // An adapter compiled against the older owner-authorization contract may
     // expose the method but reject the new proof kind. Settle any still-open
     // row before the caller considers local fallback, so a guarded delete can
@@ -3172,7 +3182,7 @@ async function dispatchNodeInvocation(args: {
     );
     return { accepted: false, pending: false, sent: true, settled };
   }
-  if (!accepted && guardedReleaseHash) {
+  if (!accepted && (guardedReleaseHash || guardedReleaseAgentId)) {
     const [settled] = await args.db
       .select()
       .from(actionInvocations)

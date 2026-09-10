@@ -314,9 +314,7 @@ export class HttpClient {
       }
 
       if (this._retryPolicy.retryOn.includes(res.status) && attempt < maxRetries) {
-        const waitMs = res.status === 429
-          ? parseRetryAfterMs(res) ?? computeBackoffMs(this._retryPolicy, attempt)
-          : computeBackoffMs(this._retryPolicy, attempt);
+        const waitMs = parseRetryAfterMs(res) ?? computeBackoffMs(this._retryPolicy, attempt);
         attempt += 1;
         await sleep(waitMs);
         continue;

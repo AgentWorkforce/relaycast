@@ -265,7 +265,10 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
         && typeof releaseInput === 'object'
         && !Array.isArray(releaseInput)
         && releaseInput.name === authorization.agentName
-        && releaseInput.expected_token_hash === authorization.expectedTokenHash;
+        && (authorization.expectedTokenHash === undefined
+          || releaseInput.expected_token_hash === authorization.expectedTokenHash)
+        && (authorization.expectedAgentId === undefined
+          || releaseInput.expected_agent_id === authorization.expectedAgentId);
       if (
         message.invocation_id !== authorization.invocationId
         || message.action !== 'release'
@@ -279,7 +282,8 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
         .innerJoin(agents, and(
           eq(agents.workspaceId, workspaceId),
           eq(agents.name, authorization.agentName),
-          eq(agents.tokenHash, authorization.expectedTokenHash),
+          ...(authorization.expectedTokenHash ? [eq(agents.tokenHash, authorization.expectedTokenHash)] : []),
+          ...(authorization.expectedAgentId ? [eq(agents.id, authorization.expectedAgentId)] : []),
           eq(agents.providerName, providerName),
         ))
         .innerJoin(agentNodeBindings, and(
@@ -304,14 +308,18 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
               eq(actionInvocations.dispatchedProvider, providerName),
             ),
           ),
-          sql`json_extract(${actionInvocations.input}, '$.expected_token_hash') = ${authorization.expectedTokenHash}`,
+          authorization.expectedTokenHash
+            ? sql`json_extract(${actionInvocations.input}, '$.expected_token_hash') = ${authorization.expectedTokenHash}`
+            : sql`json_extract(${actionInvocations.input}, '$.expected_agent_id') = ${authorization.expectedAgentId}`,
         ));
       if (!authorized) {
         await this.db
           .update(actionInvocations)
           .set({
             status: 'failed',
-            error: 'agent_release_generation_conflict',
+            error: authorization.expectedAgentId
+              ? 'agent_identity_mismatch'
+              : 'agent_release_generation_conflict',
             completedAt: new Date(),
           })
           .where(and(

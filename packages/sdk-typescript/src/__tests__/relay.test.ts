@@ -2039,13 +2039,13 @@ describe('RelayCast', () => {
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({
         apiKey: 'rk_live_test123',
-        retryPolicy: { maxRetries: 1, backoffMs: 0, jitter: false },
+        retryPolicy: { maxRetries: 1, backoffMs: 300, jitter: false },
       });
       mockFetch
         .mockImplementationOnce(() => Promise.resolve({
           ok: false,
           status: 503,
-          headers: new Headers({ 'Retry-After': '0' }),
+          headers: new Headers({ 'Retry-After': '0.001' }),
           json: () => Promise.resolve({ ok: false, error: { code: 'database_overloaded', message: 'busy' } }),
         }))
         .mockImplementationOnce(() => mockResponse({
@@ -2053,7 +2053,13 @@ describe('RelayCast', () => {
           handler_node_id: null, dispatched_node_id: null, input: {}, status: 'completed', created_at: '2026-01-01T00:00:00.000Z',
         }, true, 201));
 
-      await relay.agents.releaseExact({ name: 'worker', expectedAgentId: 'agent_exact_1', deleteAgent: true }, { idempotencyKey: 'release-exact-key' });
+      vi.useFakeTimers();
+      const release = relay.agents.releaseExact(
+        { name: 'worker', expectedAgentId: 'agent_exact_1', deleteAgent: true },
+        { idempotencyKey: 'release-exact-key' },
+      );
+      await vi.advanceTimersByTimeAsync(1);
+      await release;
       expect(mockFetch).toHaveBeenCalledTimes(2);
       for (const [, init] of mockFetch.mock.calls) {
         expect(init.headers['Idempotency-Key']).toBe('release-exact-key');

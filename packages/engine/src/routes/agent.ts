@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
 import { AGENT_TOKEN_HASH_PATTERN, AgentTypeSchema, CliTypeSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
-import { requireWorkspaceKey, requireAuth, requireAgentToken, requireWorkspaceRead } from '../middleware/auth.js';
+import { requireWorkspaceKey, requireAuth, requireAgentToken, requireSender, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as agentEngine from '../engine/agent.js';
 import * as agentIdentityEngine from '../engine/agentIdentity.js';
@@ -1011,7 +1011,7 @@ agentRoutes.post(
 // persist this idempotency key before it starts retrying.
 agentRoutes.post(
   '/agents/release-exact',
-  requireAuth,
+  requireSender,
   rateLimit,
   async (c) => {
     try {
@@ -1025,6 +1025,9 @@ agentRoutes.post(
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) return jsonError(c, 'invalid_idempotency_key', idempotencyError, 400);
       if (!idempotencyKey) return jsonError(c, 'idempotency_key_required', 'Idempotency-Key is required for exact agent release', 400);
+      if (callerAgent?.id === parsed.data.expected_agent_id && parsed.data.delete_agent === true) {
+        return jsonError(c, 'agent_self_release_requires_workspace_key', 'Self-release with delete_agent requires a workspace or node credential', 400);
+      }
 
       const result = await actionEngine.dispatchAgentRelease(
         db,
@@ -1039,7 +1042,7 @@ agentRoutes.post(
           },
           // A workspace key has no agent FK. Keep the audit caller null while
           // the separate durable scope below owns its idempotency namespace.
-          caller_id: callerAgent?.id ?? callerNode?.id,
+          caller_id: callerAgent?.id,
           caller_name: callerAgent?.name ?? callerNode?.name ?? 'workspace',
         },
         {
