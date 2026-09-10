@@ -19,13 +19,14 @@ interface Stack {
 
 const stacks: Stack[] = [];
 
-function makeStack(opts: { kv?: KeyValueStore } = {}): Stack {
+function makeStack(opts: { kv?: KeyValueStore; depthCap?: number } = {}): Stack {
   const runtime = createNodeRuntime({
     dbPath: ':memory:',
     baseUrl: 'http://localhost:0',
     migrate: true,
     config: {
       environment: 'test',
+      ...(opts.depthCap ? { mailbox: { depthCap: opts.depthCap } } : {}),
       relayfileInboundSecret: 'relaycast-master',
     },
     presence: { sweepIntervalMs: 0 },
@@ -70,6 +71,45 @@ class FailingKeyValueStore implements KeyValueStore {
 }
 
 describe('relayfile inbound bridge', () => {
+  it('returns retryable overflow and accepts the same unique event after capacity recovers', async () => {
+    const stack = makeStack({ depthCap: 1 });
+    const ws = await createWorkspace(stack.app, 'inbound-backpressure');
+    const busy = await registerAgent(stack.app, ws.workspaceKey, 'busy');
+    const post = (path: string, token: string, body?: unknown) => stack.app.request(path, {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+    await post('/v1/channels/general/join', busy.token);
+    const targetRes = await post('/v1/integrations/relayfile/inbound-target', ws.workspaceKey,
+      { channel: 'general', provider: 'github', path_glob: '/github/repos/o/r/issues/**' });
+    expect(targetRes.status).toBe(201);
+    const { data: target } = await targetRes.json();
+    const emit = (id: string) => {
+      const path = '/github/repos/o/r/issues/12.json';
+      const body = JSON.stringify({ eventId: id, type: 'file.updated', path, provider: 'github', revision: id,
+        snapshot: { path, contentType: 'application/json', encoding: 'utf-8', content: JSON.stringify({ title: id, body: id, number: 12 }) } });
+      return stack.app.request(target.url, { method: 'POST', body,
+        headers: { ...signedHeaders(target.secret, body), 'X-Relay-Event-Id': id } });
+    };
+    expect((await emit('first')).status).toBe(201);
+    const rejected = await emit('second');
+    expect(rejected.status).toBe(503);
+    expect(rejected.headers.get('Retry-After')).toBe('30');
+    expect(await rejected.json()).toMatchObject({ error: { code: 'mailbox_full' } });
+    const inbox = await stack.app.request('/v1/deliveries', { headers: { authorization: `Bearer ${busy.token}` } });
+    const { data: queued } = await inbox.json();
+    expect(queued).toHaveLength(1);
+    await post(`/v1/deliveries/${queued[0].id}/ack`, busy.token);
+    const retried = await emit('second');
+    expect(retried.status).toBe(201);
+    const { data: accepted } = await retried.json();
+    const duplicate = await emit('second');
+    expect(duplicate.status).toBe(201);
+    expect(await duplicate.json()).toMatchObject({ data: { replayed: true, message_id: accepted.message_id } });
+    const stored = await stack.app.request('/v1/channels/general/messages', { headers: { authorization: `Bearer ${ws.workspaceKey}` } });
+    expect((await stored.json()).data).toHaveLength(2);
+  });
+
   it('provisions a signed relayfile target for a workspace channel', async () => {
     const stack = makeStack();
     const ws = await createWorkspace(stack.app, 'relayfile-target');
@@ -173,6 +213,8 @@ describe('relayfile inbound bridge', () => {
     const target = targetBody.data;
     const event = {
       eventId: 'evt_slack_1',
+      providerEventType: 'message.created',
+      resourceRef: '/slack/channels/C123',
       type: 'file.created',
       path: '/slack/channels/C123/messages/1780607825_485189/meta.json',
       revision: 'rev_1',
@@ -210,6 +252,7 @@ describe('relayfile inbound bridge', () => {
     expect(list.status).toBe(200);
     const messages = await list.json() as { data: Array<{ text: string }> };
     expect(messages.data.filter((message) => message.text.includes('hello from slack'))).toHaveLength(1);
+    expect(messages.data[0]).toMatchObject({ metadata: { provider_event_type: 'message.created', resource_ref: '/slack/channels/C123' } });
   });
 
   it('creates channel deliveries so node/broker agents receive the message', async () => {
@@ -407,4 +450,13 @@ describe('relayfile inbound bridge', () => {
     expect(message?.text).toContain(`${'x'.repeat(1200)}...`);
     expect(message?.text).not.toContain(longBody);
   });
+  it('exposes terminal provider state from a Cloud sync envelope without treating metadata as authority', () => {
+    const payload = { number: 42, state: 'closed', merged: true, title: 'Fix', user: { login: 'author' } };
+    const snapshot = { content: JSON.stringify({ provider: 'github', objectType: 'pull_request', objectId: '42', deleted: false, connectionId: 'connection', payload }) };
+    const message = formatRelayfileEventMessage({ type: 'file.updated', providerEventType: 'pull_request.closed', path: '/github/repos/a/b/pulls/42__fix/meta.json', snapshot }, 'github');
+    expect(message).toMatchObject({ author: 'author', record: payload, text: expect.stringContaining('Fix') });
+    expect(formatRelayfileEventMessage({ type: 'file.updated', path: '/github/42.json', snapshot }, 'github')?.text).toContain('Github update');
+    expect(formatRelayfileEventMessage({ type: 'file.updated', path: '/github/42.json', snapshot: { content: JSON.stringify({ title: 'Ordinary record', payload }) } }, 'github')?.record).toMatchObject({ title: 'Ordinary record', payload });
+  });
+
 });

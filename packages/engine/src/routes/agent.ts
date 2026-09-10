@@ -47,6 +47,7 @@ const skillSchema = z.object({
 const capabilitiesSchema = z.record(z.string(), z.unknown());
 
 const registerAgentSchema = z.object({
+  auto_join_general: z.boolean().optional(),
   name: z.string().min(1),
   type: AgentTypeSchema.optional(),
   persona: z.string().optional(),
@@ -262,6 +263,7 @@ agentRoutes.post(
         metadata,
         skills,
         capabilities,
+        auto_join_general: autoJoinGeneral,
         recovery_proof_hash: recoveryProofHash,
         work_unit_id: workUnitId,
       } = parsed.data;
@@ -276,6 +278,7 @@ agentRoutes.post(
         persona,
         metadata: nextMetadata,
         capabilities,
+        autoJoinGeneral,
         recoveryProofHash,
         workUnitId,
       });

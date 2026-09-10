@@ -1,3 +1,4 @@
+import { parseMessageMentions } from './mentions.js';
 import { eq, and, sql, isNull, lt, gt, inArray } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { messages, agents, reactions, readReceipts, messageAttachments } from '../db/schema.js';
@@ -34,12 +35,7 @@ export async function postMessage(
   const startedAtMs = Date.now();
   const messageId = generateId();
 
-  // Parse @mentions from text without treating email domains as handles.
-  const mentionPattern = /(?:^|\s)@(\w+)/g;
-  const mentionedHandles = new Set<string>();
-  for (let match = mentionPattern.exec(data.text); match !== null; match = mentionPattern.exec(data.text)) {
-    mentionedHandles.add(match[1]);
-  }
+  const mentionedHandles = new Set(parseMessageMentions(data.text));
 
   const metadata = sanitizeUserMessageMetadata(data.data);
   const sessionRef = requireSessionRefFromMetadata(metadata);

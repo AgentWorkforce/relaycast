@@ -2,7 +2,7 @@
   "name": "@relaycast/engine",
   "version": "8.5.2",
   "type": "module",
-  "description": "Portable, platform-agnostic engine for Relaycast — channels, threads, DMs, presence, real-time events. Runs on Node + SQLite (self-host) or behind a Cloudflare Durable Object adapter (hosted).",
+  "description": "Portable, platform-agnostic engine for Relaycast \u2014 channels, threads, DMs, presence, real-time events. Runs on Node + SQLite (self-host) or behind a Cloudflare Durable Object adapter (hosted).",
   "bin": {
     "relaycast-engine": "dist/bin/serve.js"
   },
@@ -60,7 +60,7 @@
   "dependencies": {
     "@hono/node-server": "^1.13.7",
     "@relaycast/a2a": "8.5.2",
-    "@relaycast/types": "8.5.2",
+    "@relaycast/types": "8.7.0",
     "better-sqlite3": "^11.10.0",
     "drizzle-orm": "^0.45.1",
     "hono": "^4.11.9",
