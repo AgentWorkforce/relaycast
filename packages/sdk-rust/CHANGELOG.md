@@ -24,7 +24,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ### Added
 
 - `RelayCast::create_workspace` now requires explicit provenance, preventing CLI bootstrap workspaces from being mislabeled as SDK-created.
-- `WorkspaceBootstrapOptions` and `RelayCast::create_workspace_with_options()` support crash-safe anonymous keyed workspace creation without a deployment-wide secret.
+- `WorkspaceBootstrapOptions` and `RelayCast::create_workspace_with_options()` support crash-safe anonymous keyed workspace creation without a deployment-wide secret, plus opt-in self-host proof via `with_bootstrap_secret(...)`; the SDK never sends that proof to hosted Relaycast.
 - `RelayCast::release_agent_if_token_hash` performs generation-safe cleanup without changing the existing `ReleaseAgentRequest` struct.
 
 ## [4.2.0] - 2026-06-24

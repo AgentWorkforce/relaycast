@@ -5,6 +5,7 @@ use crate::client::{ClientOptions, HttpClient};
 use crate::error::{RelayError, Result};
 use crate::types::*;
 use serde::Serialize;
+use url::Url;
 
 use crate::DEFAULT_BASE_URL;
 
@@ -13,6 +14,35 @@ const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/sdk-rust";
 
 fn strip_hash(channel: &str) -> &str {
     channel.strip_prefix('#').unwrap_or(channel)
+}
+
+fn validate_bootstrap_secret_destination(base_url: &str) -> Result<()> {
+    let parsed = Url::parse(base_url).map_err(|_| {
+        RelayError::InvalidResponse(
+            "Anonymous keyed workspace bootstrap requires a valid self-hosted baseUrl".to_string(),
+        )
+    })?;
+    let hostname = parsed
+        .host_str()
+        .unwrap_or_default()
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    let loopback_http =
+        parsed.scheme() == "http" && matches!(hostname.as_str(), "localhost" | "127.0.0.1" | "::1");
+
+    if parsed.scheme() != "https" && !loopback_http {
+        return Err(RelayError::InvalidResponse(
+            "Anonymous keyed workspace bootstrap requires an HTTPS self-hosted baseUrl (or loopback HTTP for local development)".to_string(),
+        ));
+    }
+    if hostname == "cast.agentrelay.com" {
+        return Err(RelayError::InvalidResponse(
+            "Anonymous keyed workspace bootstrap cannot send a bootstrapSecret to the hosted gateway"
+                .to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 /// Options for creating a RelayCast client.
@@ -113,12 +143,21 @@ impl RelayCast {
     ///
     /// A hosted anonymous `idempotency_key` must be a CSPRNG-generated
     /// reveal-once recovery capability. It is never combined with or used to
-    /// transmit a deployment-wide server secret.
+    /// transmit a deployment-wide server secret. An optional
+    /// `bootstrap_secret` is sent only to an explicit safe self-hosted origin
+    /// for deployments that opt into proof enforcement.
     pub async fn create_workspace_with_options(
         name: &str,
         options: WorkspaceBootstrapOptions,
     ) -> Result<CreateWorkspaceResponse> {
-        if let Some(key) = options.idempotency_key.as_deref() {
+        let WorkspaceBootstrapOptions {
+            base_url,
+            provenance,
+            idempotency_key,
+            bootstrap_secret,
+        } = options;
+
+        if let Some(key) = idempotency_key.as_deref() {
             if key.len() < 32 {
                 return Err(RelayError::InvalidResponse(
                     "Anonymous Idempotency-Key must be at least 32 characters".to_string(),
@@ -131,21 +170,45 @@ impl RelayCast {
             }
         }
 
+        let sends_bootstrap_secret = idempotency_key.is_some() && bootstrap_secret.is_some();
+        if sends_bootstrap_secret {
+            let explicit_base_url = base_url.as_deref().ok_or_else(|| {
+                RelayError::InvalidResponse(
+                    "Anonymous keyed workspace bootstrap with a bootstrapSecret requires an explicit self-hosted baseUrl"
+                        .to_string(),
+                )
+            })?;
+            validate_bootstrap_secret_destination(explicit_base_url)?;
+        }
+
         let url = format!(
             "{}/v1/workspaces",
-            options.base_url.as_deref().unwrap_or(DEFAULT_BASE_URL)
+            base_url.as_deref().unwrap_or(DEFAULT_BASE_URL)
         );
 
-        let client = reqwest::Client::new();
+        // Never follow a redirect after attaching the self-host proof; a
+        // redirect could otherwise forward it to a different origin.
+        let client = if sends_bootstrap_secret {
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()?
+        } else {
+            reqwest::Client::new()
+        };
         let mut request = client
             .post(&url)
             .header("Content-Type", "application/json")
             .header("X-SDK-Version", SDK_VERSION)
             .header("X-Relaycast-Origin-Client", DEFAULT_ORIGIN_CLIENT)
             .header("X-Relaycast-Origin-Version", SDK_VERSION)
-            .json(&serde_json::json!({ "name": name, "provenance": options.provenance }));
-        if let Some(key) = options.idempotency_key {
+            .json(&serde_json::json!({ "name": name, "provenance": provenance }));
+        if let Some(key) = idempotency_key {
             request = request.header("Idempotency-Key", key);
+        }
+        if sends_bootstrap_secret {
+            if let Some(bootstrap_secret) = bootstrap_secret {
+                request = request.header("X-Workspace-Bootstrap-Secret", bootstrap_secret);
+            }
         }
         let response = request.send().await?;
 

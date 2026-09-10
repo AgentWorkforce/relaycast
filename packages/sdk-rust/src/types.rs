@@ -49,11 +49,33 @@ pub struct CreateWorkspaceResponse {
 /// `idempotency_key` is a reveal-once recovery capability for anonymous
 /// creation. Generate it with a CSPRNG and persist it for the logical create
 /// operation; it is sent to hosted Relaycast without any deployment secret.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct WorkspaceBootstrapOptions {
     pub base_url: Option<String>,
     pub provenance: WorkspaceProvenance,
     pub idempotency_key: Option<String>,
+    /// Optional shared-secret proof for a self-host that explicitly requires
+    /// `X-Workspace-Bootstrap-Secret`.
+    ///
+    /// Leave this unset for hosted Relaycast. The SDK refuses to send it to
+    /// the hosted gateway, and only sends it with an idempotency key to an
+    /// explicit self-hosted origin.
+    pub bootstrap_secret: Option<String>,
+}
+
+impl std::fmt::Debug for WorkspaceBootstrapOptions {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WorkspaceBootstrapOptions")
+            .field("base_url", &self.base_url)
+            .field("provenance", &self.provenance)
+            .field("idempotency_key", &self.idempotency_key)
+            .field(
+                "bootstrap_secret",
+                &self.bootstrap_secret.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
 }
 
 impl WorkspaceBootstrapOptions {
@@ -62,6 +84,7 @@ impl WorkspaceBootstrapOptions {
             base_url: None,
             provenance,
             idempotency_key: None,
+            bootstrap_secret: None,
         }
     }
 
@@ -72,6 +95,16 @@ impl WorkspaceBootstrapOptions {
 
     pub fn with_idempotency_key(mut self, idempotency_key: impl Into<String>) -> Self {
         self.idempotency_key = Some(idempotency_key.into());
+        self
+    }
+
+    /// Add a proof only for an opt-in self-hosted bootstrap deployment.
+    ///
+    /// This is intentionally optional: hosted anonymous bootstrap uses the
+    /// high-entropy idempotency key alone and must not receive a deployment
+    /// secret from the caller.
+    pub fn with_bootstrap_secret(mut self, bootstrap_secret: impl Into<String>) -> Self {
+        self.bootstrap_secret = Some(bootstrap_secret.into());
         self
     }
 }

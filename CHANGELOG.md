@@ -24,7 +24,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Added
 
-- Rust SDK `WorkspaceBootstrapOptions` and `RelayCast::create_workspace_with_options()` support crash-safe anonymous keyed workspace creation without a deployment secret.
+- Rust SDK `WorkspaceBootstrapOptions` supports crash-safe anonymous keyed workspace creation without a deployment secret and opt-in self-host bootstrap proof without exposing it to hosted Relaycast.
 
 ## [8.7.0] - 2026-09-09
 
