@@ -185,6 +185,10 @@ test('shows help without requiring a deployment authority', () => {
   const result = run(['--help']);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Required public HTTPS origin/);
+  assert.match(
+    result.stdout,
+    /RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED\s+Set true to require bootstrap-secret proof for anonymous keyed creates/,
+  );
   assertRefused([], /--base-url is required/); // Control: an actual start still refuses it.
 });
 

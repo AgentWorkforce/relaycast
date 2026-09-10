@@ -647,15 +647,21 @@ async fn bootstrap_secret_is_not_forwarded_across_a_redirect() {
 }
 
 #[test]
-fn workspace_bootstrap_options_redacts_the_self_host_proof_from_debug_output() {
+fn workspace_bootstrap_options_redacts_recovery_capabilities_from_debug_output() {
+    let idempotency_key = "hosted-run-407-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e";
     let secret = "self-host-deployment-secret";
     let options = WorkspaceBootstrapOptions::new(WorkspaceProvenance::sdk())
-        .with_idempotency_key("hosted-run-407-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e")
-        .with_bootstrap_secret(secret);
+    .with_base_url("https://self-host.example.test")
+    .with_idempotency_key(idempotency_key)
+    .with_bootstrap_secret(secret);
     let debug = format!("{options:?}");
 
-    assert!(debug.contains("<redacted>"));
+    assert!(debug.contains("idempotency_key: Some(\"<redacted>\")"));
+    assert!(debug.contains("bootstrap_secret: Some(\"<redacted>\")"));
+    assert!(!debug.contains(idempotency_key));
     assert!(!debug.contains(secret));
+    assert!(debug.contains("https://self-host.example.test"));
+    assert!(debug.contains("source: Sdk"));
 }
 
 #[tokio::test]

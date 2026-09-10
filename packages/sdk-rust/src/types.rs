@@ -69,7 +69,10 @@ impl std::fmt::Debug for WorkspaceBootstrapOptions {
             .debug_struct("WorkspaceBootstrapOptions")
             .field("base_url", &self.base_url)
             .field("provenance", &self.provenance)
-            .field("idempotency_key", &self.idempotency_key)
+            .field(
+                "idempotency_key",
+                &self.idempotency_key.as_ref().map(|_| "<redacted>"),
+            )
             .field(
                 "bootstrap_secret",
                 &self.bootstrap_secret.as_ref().map(|_| "<redacted>"),

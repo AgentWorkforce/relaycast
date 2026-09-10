@@ -16,6 +16,7 @@ Options:
 
 Environment:
   RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET  Stable secret for anonymous keyed workspace retries
+  RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED  Set true to require bootstrap-secret proof for anonymous keyed creates
 `;
 
 export class BaseUrlError extends Error {
