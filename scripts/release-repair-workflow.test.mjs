@@ -6,8 +6,22 @@ const workflow = readFileSync(
   new URL("../.github/workflows/repair-npm-release.yml", import.meta.url),
   "utf8",
 );
+const repairScript = readFileSync(new URL("./release-repair.mjs", import.meta.url), "utf8");
+const CANONICAL_SOURCE_TREE = "3ea102dfb9622e3cc2819feb0cdf202cc029c8e6";
 
 describe("NPM release repair workflow safety contract", () => {
+  it("pins the full canonical source tree in both dispatch defaults and the repair fixture", () => {
+    const sourceTreeDefault = workflow.match(
+      /source_tree:\s*\n\s+description:[\s\S]*?\n\s+required: true\n\s+type: string\n\s+default: "([0-9a-f]+)"/,
+    )?.[1];
+    assert.equal(sourceTreeDefault, CANONICAL_SOURCE_TREE);
+    assert.match(CANONICAL_SOURCE_TREE, /^[0-9a-f]{40}$/);
+    assert.match(repairScript, new RegExp(`sourceTree: "${CANONICAL_SOURCE_TREE}"`));
+    assert.match(workflow, /CANONICAL_SOURCE_TREE="\$\(git rev-parse "\$\{REPAIR_SOURCE_COMMIT\}\^\{tree\}"\)"/);
+    assert.match(workflow, /echo "REPAIR_SOURCE_TREE=\$CANONICAL_SOURCE_TREE" >> "\$GITHUB_ENV"/);
+    assert.doesNotMatch(workflow, /REPAIR_SOURCE_TREE: \$\{\{ inputs\.source_tree \}\}/);
+  });
+
   it("downloads and validates one immutable audited artifact", () => {
     assert.match(workflow, /actions\/download-artifact@v4/);
     assert.match(workflow, /run-id: \$\{\{ inputs\.run_id \}\}/);

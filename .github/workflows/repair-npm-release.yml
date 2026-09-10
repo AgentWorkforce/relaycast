@@ -79,11 +79,27 @@ jobs:
           name: build-output
           path: ${{ runner.temp }}/relaycast-repair-input
 
+      - name: Resolve the audited source tree
+        env:
+          REPAIR_SOURCE_COMMIT: ${{ inputs.source_commit }}
+          REQUESTED_SOURCE_TREE: ${{ inputs.source_tree }}
+        run: |
+          set -euo pipefail
+          git fetch origin main --tags
+          # The source commit is allow-listed by release-repair.mjs. Derive
+          # its tree here so a manually truncated dispatch input cannot change
+          # the immutable provenance identity or stop the repair before the
+          # artifact checks run.
+          CANONICAL_SOURCE_TREE="$(git rev-parse "${REPAIR_SOURCE_COMMIT}^{tree}")"
+          if [ "$REQUESTED_SOURCE_TREE" != "$CANONICAL_SOURCE_TREE" ]; then
+            echo "::warning::Ignoring the supplied source_tree input; using the source commit's canonical tree $CANONICAL_SOURCE_TREE"
+          fi
+          echo "REPAIR_SOURCE_TREE=$CANONICAL_SOURCE_TREE" >> "$GITHUB_ENV"
+
       - name: Validate immutable artifact and registry state
         env:
           REPAIR_RUN_ID: ${{ inputs.run_id }}
           REPAIR_SOURCE_COMMIT: ${{ inputs.source_commit }}
-          REPAIR_SOURCE_TREE: ${{ inputs.source_tree }}
           REPAIR_PROVENANCE_DIGEST: ${{ inputs.provenance_digest }}
           REPAIR_RELEASE_DATE: ${{ inputs.release_date }}
         run: |
@@ -131,7 +147,6 @@ jobs:
       - name: Build and validate the historical release tree
         env:
           REPAIR_SOURCE_COMMIT: ${{ inputs.source_commit }}
-          REPAIR_SOURCE_TREE: ${{ inputs.source_tree }}
           REPAIR_PROVENANCE_DIGEST: ${{ inputs.provenance_digest }}
           REPAIR_RELEASE_DATE: ${{ inputs.release_date }}
         run: |
