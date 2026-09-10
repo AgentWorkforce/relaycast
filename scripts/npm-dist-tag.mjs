@@ -4,6 +4,12 @@ import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// npm may take a few minutes to expose a newly published package and its
+// dist-tag through every registry read path. Keep retries bounded while
+// allowing that documented propagation window to elapse.
+export const DEFAULT_ATTEMPTS = 30;
+export const DEFAULT_DELAY_MS = 10_000;
+
 function requiredString(value, label) {
   if (
     typeof value !== "string" ||
@@ -110,48 +116,92 @@ export async function ensureNpmDistTag({
   packageName,
   version,
   distTag,
-  attempts = 5,
-  delayMs = 5_000,
+  attempts = DEFAULT_ATTEMPTS,
+  delayMs = DEFAULT_DELAY_MS,
   readTag = readNpmDistTag,
   sleep = (milliseconds) =>
     new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds)),
 }) {
-  requiredString(packageName, "packageName");
+  const result = await ensureNpmDistTags({
+    packageNames: [packageName],
+    version,
+    distTag,
+    attempts,
+    delayMs,
+    readTag,
+    sleep,
+  });
+  return { packageName, version, distTag, attempts: result.attempts };
+}
+
+/**
+ * Verify several dist-tags in rounds under one shared bounded window. A slow
+ * package therefore cannot consume a separate retry budget before the other
+ * packages are checked. This is read-only: stale tags fail closed and are
+ * never rewritten or used as a reason to republish a package.
+ */
+export async function ensureNpmDistTags({
+  packageNames,
+  version,
+  distTag,
+  attempts = DEFAULT_ATTEMPTS,
+  delayMs = DEFAULT_DELAY_MS,
+  readTag = readNpmDistTag,
+  sleep = (milliseconds) =>
+    new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds)),
+}) {
+  if (!Array.isArray(packageNames) || packageNames.length === 0) {
+    throw new Error("packageNames must contain at least one package");
+  }
+  const names = packageNames.map((packageName) =>
+    requiredString(packageName, "packageName"),
+  );
+  if (new Set(names).size !== names.length) {
+    throw new Error("packageNames must not contain duplicates");
+  }
   requiredString(version, "version");
   requiredString(distTag, "distTag");
   positiveInteger(attempts, "attempts");
   nonNegativeInteger(delayMs, "delayMs");
 
-  let last = { kind: "missing" };
+  const last = new Map();
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const observation = readTag(packageName, distTag);
-    last = observation;
-    if (observation?.kind === "value" && observation.value === version) {
-      return { packageName, version, distTag, attempts: attempt };
+    let pending = false;
+    for (const packageName of names) {
+      const observation = readTag(packageName, distTag);
+      last.set(packageName, observation);
+      if (observation?.kind === "value" && observation.value === version) {
+        continue;
+      }
+      if (
+        !observation ||
+        !["missing", "unavailable", "value"].includes(observation.kind)
+      ) {
+        throw new Error(
+          `npm returned an ambiguous ${packageName} dist-tag ${distTag} response`,
+        );
+      }
+      pending = true;
     }
-    if (
-      !observation ||
-      !["missing", "unavailable", "value"].includes(observation.kind)
-    ) {
-      throw new Error(
-        `npm returned an ambiguous ${packageName} dist-tag ${distTag} response`,
-      );
+    if (!pending) {
+      return { packageNames: names, version, distTag, attempts: attempt };
     }
     if (attempt < attempts) await sleep(delayMs);
   }
 
-  if (last.kind === "value") {
-    throw new Error(
-      `${packageName} dist-tag ${distTag} points to ${last.value}, expected ${version}`,
-    );
-  }
-  if (last.kind === "unavailable") {
-    throw new Error(
-      `npm could not verify ${packageName} dist-tag ${distTag} after ${attempts} attempts`,
-    );
-  }
+  const failures = names.map((packageName) => {
+    const observation = last.get(packageName);
+    if (observation?.kind === "value") {
+      return `${packageName} dist-tag ${distTag} points to ${observation.value}, expected ${version}`;
+    }
+    if (observation?.kind === "unavailable") {
+      return `npm could not verify ${packageName} dist-tag ${distTag} after ${attempts} attempts`;
+    }
+    return `${packageName} dist-tag ${distTag} is absent after ${attempts} attempts`;
+  });
+  if (failures.length === 1) throw new Error(failures[0]);
   throw new Error(
-    `${packageName} dist-tag ${distTag} is absent after ${attempts} attempts`,
+    `npm dist-tag ${distTag} reconciliation failed:\n${failures.join("\n")}`,
   );
 }
 
@@ -167,28 +217,51 @@ function argument(name, { optional = false, fallback } = {}) {
   return value;
 }
 
+function argumentsFor(name) {
+  const values = [];
+  for (let index = 0; index < process.argv.length; index += 1) {
+    if (process.argv[index] !== name) continue;
+    const value = process.argv[index + 1];
+    if (!value || value.startsWith("--")) {
+      throw new Error(`${name} requires a value`);
+    }
+    values.push(value);
+  }
+  return values;
+}
+
 if (
   process.argv[1] &&
   fileURLToPath(import.meta.url) === resolve(process.argv[1])
 ) {
   const command = process.argv[2];
-  if (command !== "verify") {
-    throw new Error("command must be verify");
+  if (command !== "verify" && command !== "verify-many") {
+    throw new Error("command must be verify or verify-many");
   }
-  const result = await ensureNpmDistTag({
-    packageName: argument("--package"),
+  const packageNames =
+    command === "verify-many" ? argumentsFor("--package") : [argument("--package")];
+  const result = await ensureNpmDistTags({
+    packageNames,
     version: argument("--version"),
     distTag: argument("--tag"),
     attempts: positiveInteger(
-      argument("--attempts", { optional: true, fallback: "5" }),
+      argument("--attempts", {
+        optional: true,
+        fallback: String(DEFAULT_ATTEMPTS),
+      }),
       "--attempts",
     ),
     delayMs: nonNegativeInteger(
-      argument("--delay-ms", { optional: true, fallback: "5000" }),
+      argument("--delay-ms", {
+        optional: true,
+        fallback: String(DEFAULT_DELAY_MS),
+      }),
       "--delay-ms",
     ),
   });
   process.stdout.write(
-    `${result.packageName} dist-tag ${result.distTag} verified at ${result.version}\n`,
+    command === "verify"
+      ? `${packageNames[0]} dist-tag ${result.distTag} verified at ${result.version}\n`
+      : `${packageNames.length} dist-tags ${result.distTag} verified at ${result.version}\n`,
   );
 }

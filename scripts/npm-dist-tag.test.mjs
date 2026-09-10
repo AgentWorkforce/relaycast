@@ -1,13 +1,80 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  DEFAULT_ATTEMPTS,
+  DEFAULT_DELAY_MS,
   ensureNpmDistTag,
+  ensureNpmDistTags,
   parseNpmDistTagOutput,
   parseNpmDistTagsOutput,
   readNpmDistTag,
 } from "./npm-dist-tag.mjs";
 
 describe("npm dist-tag reconciliation", () => {
+  it("uses a bounded multi-package window so slow packages do not starve peers", async () => {
+    const reads = new Map([
+      ["@relaycast/types", 0],
+      ["@relaycast/openclaw", 0],
+    ]);
+    const observations = [];
+    let sleeps = 0;
+    const result = await ensureNpmDistTags({
+      packageNames: ["@relaycast/types", "@relaycast/openclaw"],
+      version: "8.8.0",
+      distTag: "latest",
+      attempts: 3,
+      delayMs: 0,
+      readTag: (packageName) => {
+        const read = reads.get(packageName);
+        reads.set(packageName, read + 1);
+        observations.push(`${packageName}:${read + 1}`);
+        return read >= (packageName.endsWith("types") ? 1 : 2)
+          ? { kind: "value", value: "8.8.0" }
+          : { kind: "value", value: "8.7.0" };
+      },
+      sleep: async () => {
+        sleeps += 1;
+      },
+    });
+
+    assert.equal(result.attempts, 3);
+    assert.equal(sleeps, 2);
+    assert.deepEqual(observations, [
+      "@relaycast/types:1",
+      "@relaycast/openclaw:1",
+      "@relaycast/types:2",
+      "@relaycast/openclaw:2",
+      "@relaycast/types:3",
+      "@relaycast/openclaw:3",
+    ]);
+  });
+
+  it("keeps the default propagation budget bounded and materially longer than the old 25-second window", () => {
+    assert.equal(DEFAULT_ATTEMPTS, 30);
+    assert.equal(DEFAULT_DELAY_MS, 10_000);
+    assert.equal((DEFAULT_ATTEMPTS - 1) * DEFAULT_DELAY_MS, 290_000);
+  });
+
+  it("fails closed for a multi-package stale tag without attempting a rewrite", async () => {
+    let reads = 0;
+    await assert.rejects(
+      ensureNpmDistTags({
+        packageNames: ["@relaycast/types", "@relaycast/openclaw"],
+        version: "8.8.0",
+        distTag: "latest",
+        attempts: 2,
+        delayMs: 0,
+        readTag: () => {
+          reads += 1;
+          return { kind: "value", value: "8.7.0" };
+        },
+        sleep: async () => {},
+      }),
+      /@relaycast\/types dist-tag latest points to 8\.7\.0, expected 8\.8\.0/,
+    );
+    assert.equal(reads, 4);
+  });
+
   it("allows bounded missing/stale registry propagation to converge", async () => {
     const observations = [
       { kind: "missing" },

@@ -55,6 +55,12 @@ permissions:
 
 env:
   NPM_CONFIG_FUND: false
+  # npm can take several minutes to propagate a publish to dist-tags. Keep
+  # one shared, bounded reconciliation budget for all packages.
+  NPM_TAG_VERIFY_ATTEMPTS: 30
+  NPM_TAG_VERIFY_DELAY_MS: 10000
+  NPM_PACKAGE_VERIFY_ATTEMPTS: 12
+  NPM_PACKAGE_VERIFY_DELAY_SECONDS: 10
 
 jobs:
   # Build all packages, version them, run tests
@@ -413,18 +419,12 @@ jobs:
           else
             npm publish "$GITHUB_WORKSPACE/$TARBALL" --access public --provenance --tag ${{ needs.build.outputs.effective_tag }} --ignore-scripts
           fi
-          # Publishing and package identity are not enough: npm dist-tags are
-          # independently mutable. Poll the tag set atomically by npm publish
-          # until the registry reports its exact version. OIDC trusted
-          # publishing does not authorize npm dist-tag rewrites, so a resumed
-          # run fails closed if that mapping was moved or removed. For
-          # next/beta/alpha, this command never addresses or moves latest.
-          node "$GITHUB_WORKSPACE/scripts/npm-dist-tag.mjs" verify \
-            --package "$PACKAGE_NAME" \
-            --version "$NEW_VERSION" \
-            --tag "${{ needs.build.outputs.effective_tag }}" \
-            --attempts 5 \
-            --delay-ms 5000
+          # Dist-tags propagate independently of the immutable package
+          # artifact. Do not fail this matrix job on a stale read: the
+          # authoritative verify-publish job checks every package in one
+          # shared bounded window. This keeps a successful signed publish
+          # resumable without ever rewriting a tag or republishing a
+          # mismatched artifact.
 
   # Independently reconciles the npm registry against what this release
   # attempted to publish, rather than trusting the matrix job's own status
@@ -486,37 +486,25 @@ jobs:
             echo "| Package | Published |"
             echo "|---------|-----------|"
           } >> "$GITHUB_STEP_SUMMARY"
-          # A handful of short retries absorb ordinary npm registry read
-          # propagation delay immediately after publish, so this reconciler
-          # does not raise a false "missing" alarm for a package that in fact
-          # published successfully moments earlier.
+          # A bounded package-visibility retry absorbs npm processing delay
+          # before checking immutable provenance. Dist-tags are reconciled
+          # separately below in rounds so a slow package cannot starve peers.
           missing=()
           for pkg in "${PACKAGES[@]}"; do
             found=false
-            for check_attempt in 1 2 3 4 5; do
+            for check_attempt in $(seq 1 "$NPM_PACKAGE_VERIFY_ATTEMPTS"); do
               if npm view "${pkg}@${NEW_VERSION}" version >/dev/null 2>&1; then
                 actual_integrity="$(npm view "${pkg}@${NEW_VERSION}" dist.integrity 2>/dev/null || true)"
                 if node scripts/release-provenance.mjs published --manifest release-provenance.json --package "$pkg" --integrity "$actual_integrity" --version "$NEW_VERSION"; then
-                  # Independent verification is read-only: the publish matrix
-                  # must already have reconciled the requested mutable tag.
-                  # Missing, stale, unavailable, or ambiguous responses fail
-                  # closed after a bounded propagation window.
-                  if node scripts/npm-dist-tag.mjs verify \
-                    --package "$pkg" \
-                    --version "$NEW_VERSION" \
-                    --tag "$DIST_TAG" \
-                    --attempts 5 \
-                    --delay-ms 5000; then
-                    found=true
-                    break
-                  fi
-                  echo "${pkg}@${NEW_VERSION} has no verified ${DIST_TAG} dist-tag mapping" >&2
-                  break
+                found=true
+                break
                 fi
                 echo "${pkg}@${NEW_VERSION} exists with a non-matching artifact; refusing to reconcile it" >&2
                 break
               fi
-              sleep $(( check_attempt * 5 ))
+              if [ "$check_attempt" -lt "$NPM_PACKAGE_VERIFY_ATTEMPTS" ]; then
+                sleep "$NPM_PACKAGE_VERIFY_DELAY_SECONDS"
+              fi
             done
             if [ "$found" = "true" ]; then
               echo "| ${pkg} | done |" >> "$GITHUB_STEP_SUMMARY"
@@ -535,8 +523,23 @@ jobs:
             echo "::error::${#missing[@]} package(s) missing at v${NEW_VERSION}: ${missing[*]}"
             exit 1
           fi
+
+          # npm dist-tags are mutable registry state, but trusted publishing
+          # does not authorize `npm dist-tag`. Verify the exact mapping only;
+          # never rewrite it and never use a stale tag as a reason to publish
+          # again. All packages share this bounded round-robin window.
+          TAG_VERIFY_ARGS=(
+            --version "$NEW_VERSION"
+            --tag "$DIST_TAG"
+            --attempts "$NPM_TAG_VERIFY_ATTEMPTS"
+            --delay-ms "$NPM_TAG_VERIFY_DELAY_MS"
+          )
+          for pkg in "${PACKAGES[@]}"; do
+            TAG_VERIFY_ARGS+=(--package "$pkg")
+          done
+          node scripts/npm-dist-tag.mjs verify-many "${TAG_VERIFY_ARGS[@]}"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "All ${#PACKAGES[@]} packages confirmed published at v${NEW_VERSION}." >> "$GITHUB_STEP_SUMMARY"
+          echo "All ${#PACKAGES[@]} packages confirmed published at v${NEW_VERSION} with ${DIST_TAG} dist-tags." >> "$GITHUB_STEP_SUMMARY"
 
   # Create git tag and release
   create-release:
@@ -633,13 +636,13 @@ jobs:
           if [ "${REUSE_EXISTING_RELEASE_TAG:-false}" = "true" ]; then
             echo "existing release tag restored; leaving its lockfile tree unchanged"
           else
-            # The build artifact deliberately gives the engine lock entry the
-            # target version before that registry artifact exists. A generic
-            # install trusts that placeholder version and can retain the old
-            # resolved tarball/integrity. Updating the exact dependency forces
-            # npm to resolve the newly published immutable artifact while
-            # preserving docker/package.json's exact version pin.
-            npm update --package-lock-only --ignore-scripts @relaycast/engine
+            # Do not run npm update here: it can refresh unrelated semver
+            # ranges (for example zod), producing a release tree that fails
+            # exact validation despite correct package artifacts. Project the
+            # immutable provenance entries into the lockfile instead.
+            node "$GITHUB_WORKSPACE/scripts/refresh-docker-lock.mjs" \
+              --manifest "$GITHUB_WORKSPACE/release-provenance.json" \
+              --version "${{ needs.build.outputs.new_version }}"
           fi
 
       - name: Re-validate release contract with the refreshed lockfile

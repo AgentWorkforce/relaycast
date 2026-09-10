@@ -468,7 +468,7 @@ describe("publish workflow safety contract", () => {
       assert.match(verify, new RegExp(`"${pkg.replace(/[/]/g, "\\/")}"`));
     }
     assert.match(verify, /npm view "\$\{pkg\}@\$\{NEW_VERSION\}" version/);
-    assert.match(verify, /npm-dist-tag\.mjs verify/);
+    assert.match(verify, /npm-dist-tag\.mjs verify-many/);
     assert.match(verify, /--tag "\$DIST_TAG"/);
     assert.match(verify, /exit 1/);
 
@@ -500,7 +500,7 @@ describe("publish workflow safety contract", () => {
     );
   });
 
-  it("resumes a partially published matrix instead of hard-failing on an already-published package", () => {
+  it("resumes a partially published matrix without making tag propagation a matrix failure", () => {
     const publishPackages = jobBlock("publish-packages");
     const publishStep = publishPackages.slice(
       publishPackages.indexOf("- name: Publish to NPM"),
@@ -508,12 +508,19 @@ describe("publish workflow safety contract", () => {
     assert.match(publishStep, /npm view "\$\{PACKAGE_NAME\}@\$\{NEW_VERSION\}" version/);
     assert.match(publishStep, /dist\.integrity/);
     assert.match(publishStep, /already matches this build; skipping/);
-    assert.match(publishStep, /npm-dist-tag\.mjs" verify/);
-    assert.match(
-      publishStep,
-      /--tag "\$\{\{ needs\.build\.outputs\.effective_tag \}\}"/,
-    );
+    assert.doesNotMatch(publishStep, /npm-dist-tag\.mjs/);
     assert.doesNotMatch(publishStep, /^\s*npm dist-tag/m);
+  });
+
+  it("reconciles every dist-tag in one longer bounded, read-only window", () => {
+    const verify = jobBlock("verify-publish");
+    assert.match(verify, /npm-dist-tag\.mjs verify-many/);
+    assert.match(verify, /NPM_TAG_VERIFY_ATTEMPTS/);
+    assert.match(verify, /NPM_TAG_VERIFY_DELAY_MS/);
+    assert.match(verify, /--package \"\$pkg\"/);
+    assert.doesNotMatch(verify, /^\s*npm dist-tag/m);
+    assert.match(workflow, /NPM_TAG_VERIFY_ATTEMPTS: 30/);
+    assert.match(workflow, /NPM_TAG_VERIFY_DELAY_MS: 10000/);
   });
 
   it("publishes and reconciles exact build tarballs, never a version-only registry match", () => {
@@ -537,11 +544,8 @@ describe("publish workflow safety contract", () => {
 
     const refresh = createRelease.slice(refreshStart, validateStart);
     assert.match(refresh, /working-directory: docker/);
-    assert.match(
-      refresh,
-      /npm update --package-lock-only --ignore-scripts @relaycast\/engine/,
-    );
-    assert.doesNotMatch(refresh, /npm install --package-lock-only/);
+    assert.match(refresh, /refresh-docker-lock\.mjs/);
+    assert.doesNotMatch(refresh, /npm (?:install|update) --package-lock-only/);
   });
 
   it("reuses a matching tagged tree on rerun and tags before reconciling main", () => {

@@ -28,6 +28,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
+- NPM release reconciliation now waits for all package dist-tags within one bounded propagation window and preserves unrelated Docker lockfile resolutions.
+
 - Rust and TypeScript SDK anonymous keyed workspace bootstrap refuses remote HTTP and redirects, keeping its recovery capability on the intended origin.
 
 ## [8.7.0] - 2026-09-09
