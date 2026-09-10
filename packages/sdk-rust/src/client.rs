@@ -18,24 +18,26 @@ const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/sdk-rust";
 // One entry per attempt. The delay for the final attempt is never used —
 // there is nothing left to wait for once retries are exhausted.
 const RETRY_BACKOFFS_MS: [u64; 3] = [200, 400, 800];
-// Upper bound on a server-provided `Retry-After` delay so a misconfigured or
-// hostile response can't stall a caller far past the client's own backoff.
+// Upper bound on an *automatic* server-provided retry delay so a misconfigured
+// response cannot stall a caller. The typed terminal error still exposes the
+// unmodified authoritative value for durable exact-release reconciliation.
 const MAX_RETRY_AFTER_MS: u64 = 5_000;
 const MAX_ERROR_BODY_SUMMARY_CHARS: usize = 512;
 const MAX_REQUEST_ID_CHARS: usize = 256;
 const REQUEST_ID_HEADER_CANDIDATES: [&str; 2] = ["x-request-id", "x-correlation-id"];
 
-/// Parse a bounded retry delay (in milliseconds) from a response's
-/// `Retry-After` header. Only the delay-seconds form is supported; malformed
-/// or missing headers fall back to the caller's default backoff.
+/// Parse the authoritative retry delay (in milliseconds) from a response's
+/// `Retry-After` header. Only the delay-seconds form is supported.
 fn parse_retry_after_ms(headers: &HeaderMap) -> Option<u64> {
     let value = headers.get(reqwest::header::RETRY_AFTER)?.to_str().ok()?;
     let seconds: u64 = value.trim().parse().ok()?;
-    Some(seconds.saturating_mul(1000).min(MAX_RETRY_AFTER_MS))
+    Some(seconds.saturating_mul(1000))
 }
 
 fn retry_delay_ms(headers: &HeaderMap, fallback_ms: u64) -> u64 {
-    parse_retry_after_ms(headers).unwrap_or(fallback_ms)
+    parse_retry_after_ms(headers)
+        .map(|delay| delay.min(MAX_RETRY_AFTER_MS))
+        .unwrap_or(fallback_ms)
 }
 
 fn request_is_retryable(method: &Method, options: &RequestOptions) -> bool {
@@ -303,6 +305,7 @@ impl HttpClient {
             }
 
             let request_id = extract_request_id(response.headers());
+            let retry_after_ms = parse_retry_after_ms(response.headers());
 
             // Handle 204 No Content
             if status == 204 {
@@ -328,6 +331,7 @@ impl HttpClient {
                             status,
                             request_id,
                             attempts,
+                            retry_after_ms,
                         });
                     }
                     return Err(err.into());
@@ -345,6 +349,7 @@ impl HttpClient {
                     status,
                     request_id,
                     attempts,
+                    retry_after_ms,
                 });
             }
 
@@ -443,10 +448,11 @@ mod tests {
     use reqwest::Method;
 
     #[test]
-    fn retry_after_is_bounded_without_a_wall_clock_wait() {
+    fn retry_after_preserves_authoritative_value_while_auto_wait_is_bounded() {
         let mut headers = HeaderMap::new();
         headers.insert("retry-after", HeaderValue::from_static("3600"));
-        assert_eq!(parse_retry_after_ms(&headers), Some(MAX_RETRY_AFTER_MS));
+        assert_eq!(parse_retry_after_ms(&headers), Some(3_600_000));
+        assert_eq!(retry_delay_ms(&headers, 200), MAX_RETRY_AFTER_MS);
 
         headers.insert("retry-after", HeaderValue::from_static("0"));
         assert_eq!(retry_delay_ms(&headers, 200), 0);

@@ -19,6 +19,8 @@ pub enum RelayError {
         /// Number of HTTP attempts made (including the one that produced this
         /// error) before it was returned to the caller.
         attempts: u32,
+        /// Server-authoritative retry delay, when supplied in Retry-After.
+        retry_after_ms: Option<u64>,
     },
 
     /// An HTTP request error.
@@ -55,6 +57,7 @@ impl RelayError {
             status,
             request_id: None,
             attempts: 1,
+            retry_after_ms: None,
         }
     }
 
@@ -123,6 +126,14 @@ impl RelayError {
     pub fn attempts(&self) -> Option<u32> {
         match self {
             Self::Api { attempts, .. } => Some(*attempts),
+            _ => None,
+        }
+    }
+
+    /// Get the server-authoritative retry delay, when present.
+    pub fn retry_after_ms(&self) -> Option<u64> {
+        match self {
+            Self::Api { retry_after_ms, .. } => *retry_after_ms,
             _ => None,
         }
     }

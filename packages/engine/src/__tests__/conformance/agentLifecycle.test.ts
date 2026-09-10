@@ -1,7 +1,7 @@
 import { invokeWithConcurrentReplay } from './invocationReplay.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
-import { actionInvocations, agentNodeBindings, agents, channelMembers, nodes, workspaceEvents } from '../../db/schema.js';
+import { actionInvocations, agentNodeBindings, agents, channelMembers, nodes, pendingEvents, workspaceEvents } from '../../db/schema.js';
 import { AGENT_LIVENESS_TTL_MS, sweepStaleAgents } from '../../engine/agent.js';
 import {
   attachDirectNodeSocket,
@@ -232,6 +232,261 @@ describe('agent presence and release lifecycle', () => {
       status: 'failed',
       error: 'agent_host_unavailable',
     });
+  });
+
+  it('requires a durable key and replays an exact immutable-id release only once', async () => {
+    const ws = await createWorkspace(stack.app, 'exact-release-idempotency');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'exact-target');
+    const subscription = await stack.app.request('/v1/subscriptions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ events: ['action.invoked'], url: 'http://127.0.0.1:1/hook' }),
+    });
+    expect(subscription.status).toBe(201);
+    const body = {
+      name: target.name,
+      expected_agent_id: target.agentId,
+      delete_agent: true,
+    };
+    const request = (key?: string) => stack.app.request('/v1/agents/release-exact', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+        ...(key ? { 'Idempotency-Key': key } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+
+    expect((await request()).status).toBe(400);
+    const first = await request('exact-release-key');
+    const replay = await request('exact-release-key');
+    expect([first.status, replay.status]).toEqual([201, 201]);
+    expect(replay.headers.get('Idempotency-Replayed')).toBe('true');
+    expect(await stack.runtime.deps.db.select().from(actionInvocations).where(and(
+      eq(actionInvocations.workspaceId, ws.workspaceId),
+      eq(actionInvocations.actionName, 'release'),
+    ))).toHaveLength(1);
+    expect(await stack.runtime.deps.db.select({ eventType: pendingEvents.eventType })
+      .from(pendingEvents)
+      .where(and(
+        eq(pendingEvents.workspaceId, ws.workspaceId),
+        eq(pendingEvents.eventType, 'action.invoked'),
+      ))).toHaveLength(1);
+  });
+
+  it('accepts a node credential for exact release without making self-delete unreplayable', async () => {
+    const ws = await createWorkspace(stack.app, 'exact-release-node-auth');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'node-release-target');
+    const nodeResponse = await stack.app.request('/v1/nodes', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ node_id: 'node-release-caller', name: 'release-caller', role: 'broker', max_agents: 1 }),
+    });
+    expect(nodeResponse.status).toBe(201);
+    const node = await nodeResponse.json() as { data: { token: string } };
+
+    const response = await stack.app.request('/v1/agents/release-exact', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${node.data.token}`,
+        'Idempotency-Key': 'node-exact-release',
+      },
+      body: JSON.stringify({ name: target.name, expected_agent_id: target.agentId, delete_agent: true }),
+    });
+    expect(response.status).toBe(201);
+    expect((await response.json() as { data: { status: string } }).data.status).toBe('completed');
+  });
+
+  it('rejects agent-token self-delete before claiming an unreplayable operation', async () => {
+    const ws = await createWorkspace(stack.app, 'exact-release-self-delete');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'self-delete-target');
+    const response = await stack.app.request('/v1/agents/release-exact', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${target.token}`,
+        'Idempotency-Key': 'self-delete-key',
+      },
+      body: JSON.stringify({ name: target.name, expected_agent_id: target.agentId, delete_agent: true }),
+    });
+    expect(response.status).toBe(400);
+    expect((await response.json() as { error: { code: string } }).error.code)
+      .toBe('agent_self_release_requires_workspace_key');
+    expect(await stack.runtime.deps.db.select().from(actionInvocations).where(and(
+      eq(actionInvocations.workspaceId, ws.workspaceId),
+      eq(actionInvocations.actionName, 'release'),
+    ))).toHaveLength(0);
+  });
+
+  it('fails an identity-only release at the provider boundary without synthetic completion', async () => {
+    const ws = await createWorkspace(stack.app, 'exact-release-identity-owner-race');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'identity-owner-race');
+    const { handle } = await attachDirectNodeSocket(stack, ws.workspaceId, target);
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    const originalSend = nodeConnections.sendAuthorizedActionToProvider!.bind(nodeConnections);
+    let invalidated = false;
+    vi.spyOn(nodeConnections, 'sendAuthorizedActionToProvider').mockImplementation(async (...args) => {
+      if (!invalidated && args[3].action === 'release') {
+        invalidated = true;
+        stack.runtime.handle.sqlite.prepare(
+          `UPDATE agent_node_bindings SET status = 'inactive', updated_at = unixepoch()
+           WHERE workspace_id = ? AND agent_id = ?`,
+        ).run(ws.workspaceId, target.agentId);
+      }
+      return originalSend(...args);
+    });
+
+    const response = await stack.app.request('/v1/agents/release-exact', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+        'Idempotency-Key': 'identity-owner-race',
+      },
+      body: JSON.stringify({ name: target.name, expected_agent_id: target.agentId, delete_agent: true }),
+    });
+    expect(invalidated).toBe(true);
+    expect(response.status).toBe(409);
+    expect((await response.json() as { error: { code: string } }).error.code)
+      .toBe('agent_identity_mismatch');
+    const [agent] = await stack.runtime.deps.db.select({ name: agents.name, status: agents.status })
+      .from(agents).where(eq(agents.id, target.agentId));
+    expect(agent).toEqual({ name: target.name, status: 'active' });
+    const [invocation] = await stack.runtime.deps.db.select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations).where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'release'),
+      ));
+    expect(invocation).toEqual({ status: 'failed', error: 'agent_identity_mismatch' });
+    await handle.handleClose();
+  });
+
+  it('persists and replays an identity-only local CAS conflict', async () => {
+    const ws = await createWorkspace(stack.app, 'exact-release-identity-cas-replay');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'identity-cas-replay');
+    const { handle } = await attachDirectNodeSocket(stack, ws.workspaceId, target);
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    const originalConnected = nodeConnections.isProviderConnected.bind(nodeConnections);
+    let invalidated = false;
+    vi.spyOn(nodeConnections, 'isProviderConnected').mockImplementation((...args) => {
+      if (!invalidated) {
+        invalidated = true;
+        stack.runtime.handle.sqlite.pragma('foreign_keys = OFF');
+        stack.runtime.handle.sqlite.prepare('UPDATE agents SET id = ? WHERE id = ?')
+          .run('identity-cas-replaced', target.agentId);
+        stack.runtime.handle.sqlite.prepare('UPDATE agent_node_bindings SET agent_id = ? WHERE agent_id = ?')
+          .run('identity-cas-replaced', target.agentId);
+        stack.runtime.handle.sqlite.prepare('UPDATE channel_members SET agent_id = ? WHERE agent_id = ?')
+          .run('identity-cas-replaced', target.agentId);
+        stack.runtime.handle.sqlite.pragma('foreign_keys = ON');
+      }
+      return originalConnected(...args) && false;
+    });
+
+    const invoke = () => stack.app.request('/v1/agents/release-exact', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+        'Idempotency-Key': 'identity-cas-replay',
+      },
+      body: JSON.stringify({ name: target.name, expected_agent_id: target.agentId, delete_agent: true }),
+    });
+    const first = await invoke();
+    expect(invalidated).toBe(true);
+    expect(first.status).toBe(409);
+    expect((await first.json() as { error: { code: string } }).error.code)
+      .toBe('agent_identity_mismatch');
+    const replay = await invoke();
+    expect(replay.status).toBe(409);
+    expect((await replay.json() as { error: { code: string } }).error.code)
+      .toBe('agent_identity_mismatch');
+    const [invocation] = await stack.runtime.deps.db.select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations).where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'release'),
+      ));
+    expect(invocation).toEqual({ status: 'failed', error: 'agent_identity_mismatch' });
+    await handle.handleClose();
+  });
+
+  it('fails closed on a replacement identity and rejects an idempotency-key payload swap', async () => {
+    const ws = await createWorkspace(stack.app, 'exact-release-replacement');
+    const oldAgent = await registerAgent(stack.app, ws.workspaceKey, 'old-agent');
+    const replacement = await registerAgent(stack.app, ws.workspaceKey, 'replacement-agent');
+    const request = (body: Record<string, unknown>) => stack.app.request('/v1/agents/release-exact', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+        'Idempotency-Key': 'exact-release-payload-swap',
+      },
+      body: JSON.stringify(body),
+    });
+
+    const first = await request({ name: oldAgent.name, expected_agent_id: oldAgent.agentId, delete_agent: true });
+    expect(first.status).toBe(201);
+    const swapped = await request({ name: replacement.name, expected_agent_id: replacement.agentId, delete_agent: true });
+    expect(swapped.status).toBe(409);
+    expect((await swapped.json() as { error: { code: string } }).error.code).toBe('idempotency_key_reused');
+
+    const mismatch = await stack.app.request('/v1/agents/release-exact', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+        'Idempotency-Key': 'exact-release-mismatch',
+      },
+      body: JSON.stringify({ name: replacement.name, expected_agent_id: oldAgent.agentId, delete_agent: true }),
+    });
+    expect(mismatch.status).toBe(409);
+    expect((await mismatch.json() as { error: { code: string } }).error.code).toBe('agent_identity_mismatch');
+    const [stillReplacement] = await stack.runtime.deps.db.select({ id: agents.id, status: agents.status })
+      .from(agents).where(eq(agents.id, replacement.agentId));
+    expect(stillReplacement).toEqual({ id: replacement.agentId, status: 'active' });
+  });
+
+  it('cannot alter a same-name replacement that wins after an exact release starts', async () => {
+    const ws = await createWorkspace(stack.app, 'exact-release-dispatch-race');
+    const oldAgent = await registerAgent(stack.app, ws.workspaceKey, 'race-agent');
+    await attachDirectNodeSocket(stack, ws.workspaceId, oldAgent);
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    const originalConnected = nodeConnections.isProviderConnected.bind(nodeConnections);
+    let replaced = false;
+    vi.spyOn(nodeConnections, 'isProviderConnected').mockImplementation((...args) => {
+      if (!replaced) {
+        replaced = true;
+        // This synchronous hook is after dispatchRelease's exact name/id
+        // snapshot but before its provider-send guard. It models a new agent
+        // taking the released name while the old operation is in flight.
+        stack.runtime.handle.sqlite.prepare('UPDATE agents SET name = ? WHERE id = ?')
+          .run('race-agent#old', oldAgent.agentId);
+        stack.runtime.handle.sqlite.prepare(
+          `INSERT INTO agents (id, workspace_id, name, type, token_hash, status, location_type, provider_name, metadata, created_at, last_seen)
+           VALUES (?, ?, ?, 'agent', ?, 'active', 'self_connected', 'default', '{}', unixepoch(), unixepoch())`,
+        ).run('agent_race_replacement', ws.workspaceId, 'race-agent', 'f'.repeat(64));
+      }
+      return originalConnected(...args);
+    });
+
+    const response = await stack.app.request('/v1/agents/release-exact', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+        'Idempotency-Key': 'exact-release-dispatch-race',
+      },
+      body: JSON.stringify({ name: 'race-agent', expected_agent_id: oldAgent.agentId, delete_agent: true }),
+    });
+    expect(response.status).toBe(409);
+    expect((await response.json() as { error: { code: string } }).error.code)
+      .toBe('agent_identity_mismatch');
+    expect(replaced).toBe(true);
+    const [replacement] = await stack.runtime.deps.db.select({ id: agents.id, name: agents.name, status: agents.status })
+      .from(agents).where(eq(agents.id, 'agent_race_replacement'));
+    expect(replacement).toEqual({ id: 'agent_race_replacement', name: 'race-agent', status: 'active' });
   });
 
   it('settles a guarded no-host fallback as a generation conflict after takeover', async () => {
@@ -1062,6 +1317,63 @@ describe('agent presence and release lifecycle', () => {
     expect(sent).toBe(true);
     expect(currentNode.sock.ofType('action.invoke')).toHaveLength(1);
     expect(oldNode.sock.ofType('action.invoke')).toHaveLength(0);
+  });
+
+  it('requires every supplied release proof to match the persisted invocation', async () => {
+    const ws = await createWorkspace(stack.app, 'release-generation-dual-proof');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'dual-proof-target');
+    const targetNode = await attachDirectNodeSocket(stack, ws.workspaceId, target);
+    const expectedTokenHash = await sha256Hex(target.token);
+    const invocationId = 'inv_release_dual_proof';
+    await stack.runtime.deps.db.insert(actionInvocations).values({
+      id: invocationId,
+      workspaceId: ws.workspaceId,
+      actionName: 'release',
+      invocationOrigin: 'builtin',
+      input: {
+        name: target.name,
+        expected_token_hash: expectedTokenHash,
+        expected_agent_id: 'agent_persisted_different',
+      },
+      status: 'dispatched',
+      handlerNodeId: targetNode.nodeId,
+      dispatchedNodeId: targetNode.nodeId,
+      dispatchedProvider: 'default',
+      dispatchAttempts: 1,
+    });
+
+    const sent = await stack.runtime.realtime.sendAuthorizedActionToProvider(
+      ws.workspaceId,
+      targetNode.nodeId,
+      'default',
+      {
+        v: 1,
+        type: 'action.invoke',
+        invocation_id: invocationId,
+        action: 'release',
+        input: {
+          name: target.name,
+          expected_token_hash: expectedTokenHash,
+          expected_agent_id: target.agentId,
+        },
+      },
+      {
+        kind: 'release-generation-v1',
+        invocationId,
+        agentName: target.name,
+        expectedTokenHash,
+        expectedAgentId: target.agentId,
+      },
+    );
+
+    expect(sent).toBe(false);
+    expect(targetNode.sock.ofType('action.invoke')).toHaveLength(0);
+    const [invocation] = await stack.runtime.deps.db
+      .select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(invocation).toEqual({ status: 'failed', error: 'agent_identity_mismatch' });
+    await targetNode.handle.handleClose();
   });
 
   it('does not accept a release-generation proof for a registered action', async () => {

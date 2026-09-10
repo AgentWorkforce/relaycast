@@ -255,6 +255,7 @@ pub use types::{
     ReaderInfo,
     RegisterActionRequest,
     ReleaseAgentRequest,
+    ExactReleaseAgentRequest,
     ReleaseAgentResponse,
     // Search
     SearchOptions,

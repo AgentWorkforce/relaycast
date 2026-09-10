@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
 import { AGENT_TOKEN_HASH_PATTERN, AgentTypeSchema, CliTypeSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
-import { requireWorkspaceKey, requireAuth, requireAgentToken, requireWorkspaceRead } from '../middleware/auth.js';
+import { requireWorkspaceKey, requireAuth, requireAgentToken, requireSender, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as agentEngine from '../engine/agent.js';
 import * as agentIdentityEngine from '../engine/agentIdentity.js';
@@ -20,7 +20,9 @@ import { fanoutPresence, fanoutToAgents, fanoutToWorkspace } from './fanout.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
+import { jsonIdempotentOk, parseIdempotencyKey } from '../middleware/idempotency.js';
 import { errorResponse } from '../lib/httpError.js';
+import { D1WriteRetryExhaustedError } from '../lib/d1Retry.js';
 import {
   jsonCreated,
   jsonError,
@@ -123,6 +125,10 @@ const releaseAgentSchema = z.object({
   reason: z.string().nullable().optional(),
   delete_agent: z.boolean().optional(),
   expected_token_hash: z.string().regex(AGENT_TOKEN_HASH_PATTERN).optional(),
+});
+
+const exactReleaseAgentSchema = releaseAgentSchema.extend({
+  expected_agent_id: z.string().min(1),
 });
 
 const listSessionEventsQuerySchema = z.object({
@@ -993,6 +999,81 @@ agentRoutes.post(
 
       return jsonCreated(c, result);
     } catch (err: unknown) {
+      return errorResponse(c, err);
+    }
+  },
+);
+
+// POST /v1/agents/release-exact - durable, immutable-identity release reconciliation.
+//
+// This intentionally does not alter the legacy name-only route. A broker that
+// has lost its local process handle must opt into the stricter contract and
+// persist this idempotency key before it starts retrying.
+agentRoutes.post(
+  '/agents/release-exact',
+  requireSender,
+  rateLimit,
+  async (c) => {
+    try {
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const callerAgent = c.get('agent');
+      const callerNode = c.get('node');
+      const parsed = await parseJsonBody(c, exactReleaseAgentSchema, 'name and expected_agent_id are required');
+      if (!parsed.ok) return parsed.response;
+
+      const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
+      if (idempotencyError) return jsonError(c, 'invalid_idempotency_key', idempotencyError, 400);
+      if (!idempotencyKey) return jsonError(c, 'idempotency_key_required', 'Idempotency-Key is required for exact agent release', 400);
+      if (callerAgent?.id === parsed.data.expected_agent_id && parsed.data.delete_agent === true) {
+        return jsonError(c, 'agent_self_release_requires_workspace_key', 'Self-release with delete_agent requires a workspace or node credential', 400);
+      }
+
+      const result = await actionEngine.dispatchAgentRelease(
+        db,
+        workspace.id,
+        {
+          input: {
+            name: parsed.data.name,
+            reason: parsed.data.reason ?? null,
+            delete_agent: parsed.data.delete_agent === true,
+            expected_agent_id: parsed.data.expected_agent_id,
+            ...(parsed.data.expected_token_hash ? { expected_token_hash: parsed.data.expected_token_hash } : {}),
+          },
+          // A workspace key has no agent FK. Keep the audit caller null while
+          // the separate durable scope below owns its idempotency namespace.
+          caller_id: callerAgent?.id,
+          caller_name: callerAgent?.name ?? callerNode?.name ?? 'workspace',
+        },
+        {
+          nodeConnections: c.get('engine').nodeConnections,
+          completionDeps: c.get('engine'),
+          idempotencyKey,
+          idempotencyActorId: callerAgent?.id ?? callerNode?.id ?? 'workspace-key',
+        },
+      );
+      const replayed = actionEngine.wasInvocationReplayed(result);
+      if (!replayed) {
+        await sendWebhookEvent(c, {
+          type: 'action.invoked',
+          workspaceId: workspace.id,
+          data: {
+            invocation_id: result.invocation_id,
+            action_name: result.action_name,
+            caller_name: callerAgent?.name ?? callerNode?.name ?? 'workspace',
+            handler_agent_id: result.handler_agent_id,
+            handler_node_id: result.handler_node_id,
+          },
+        });
+      }
+      return jsonIdempotentOk(c, { status: 201, data: result, replayed });
+    } catch (err: unknown) {
+      if (err instanceof D1WriteRetryExhaustedError) {
+        // The storage layer has already spent its bounded retry budget. An
+        // exact keyed operation is safe to retry only after this delay.
+        c.header('Retry-After', '1');
+        return jsonError(c, 'database_overloaded', 'Release database is temporarily overloaded', 503);
+      }
       return errorResponse(c, err);
     }
   },

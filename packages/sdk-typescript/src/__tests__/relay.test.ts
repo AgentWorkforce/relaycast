@@ -1011,6 +1011,31 @@ describe('RelayCast', () => {
       expect(mockFetch).toHaveBeenCalledTimes(2);
     });
 
+    it('bounds an excessive Retry-After delay before an automatic retry', async () => {
+      vi.useFakeTimers();
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({
+        apiKey: 'rk_live_test123',
+        retryPolicy: { maxRetries: 1, backoffMs: 0, jitter: false, retryOn: [503] },
+      });
+
+      mockFetch
+        .mockImplementationOnce(() => Promise.resolve({
+          ok: false,
+          status: 503,
+          headers: new Headers({ 'Retry-After': '86400' }),
+          json: () => Promise.resolve({ ok: false, error: { code: 'database_overloaded', message: 'busy' } }),
+        }))
+        .mockImplementationOnce(() => mockResponse({ id: 'ws_1' }, true, 200));
+
+      const promise = relay.workspace.info();
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(promise).resolves.toEqual({ id: 'ws_1' });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
     it('accepts retry policy overrides via RelayCast constructor options', async () => {
       vi.useFakeTimers();
       const { RelayCast } = await import('../relay.js');
@@ -2031,6 +2056,52 @@ describe('RelayCast', () => {
       expect(url).toBe('https://cast.agentrelay.com/v1/agent');
       expect(init.method).toBe('GET');
       expect(init.headers.Authorization).toBe('Bearer at_live_agent123');
+    });
+  });
+
+  describe('exact agent release', () => {
+    it('preserves the caller key across an overload retry and exposes Retry-After', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({
+        apiKey: 'rk_live_test123',
+        retryPolicy: { maxRetries: 1, backoffMs: 300, jitter: false },
+      });
+      mockFetch
+        .mockImplementationOnce(() => Promise.resolve({
+          ok: false,
+          status: 503,
+          headers: new Headers({ 'Retry-After': '0.001' }),
+          json: () => Promise.resolve({ ok: false, error: { code: 'database_overloaded', message: 'busy' } }),
+        }))
+        .mockImplementationOnce(() => mockResponse({
+          invocation_id: 'inv_exact_1', action_name: 'release', handler_agent_id: null,
+          handler_node_id: null, dispatched_node_id: null, input: {}, status: 'completed', created_at: '2026-01-01T00:00:00.000Z',
+        }, true, 201));
+
+      vi.useFakeTimers();
+      const release = relay.agents.releaseExact(
+        { name: 'worker', expectedAgentId: 'agent_exact_1', deleteAgent: true },
+        { idempotencyKey: 'release-exact-key' },
+      );
+      await vi.advanceTimersByTimeAsync(1);
+      await release;
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      for (const [, init] of mockFetch.mock.calls) {
+        expect(init.headers['Idempotency-Key']).toBe('release-exact-key');
+      }
+    });
+
+    it('does not replay the legacy unkeyed release after an ambiguous 503', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123', retryPolicy: { maxRetries: 2, backoffMs: 0, jitter: false } });
+      mockFetch.mockImplementation(() => Promise.resolve({
+        ok: false,
+        status: 503,
+        headers: new Headers({ 'Retry-After': '1' }),
+        json: () => Promise.resolve({ ok: false, error: { code: 'database_overloaded', message: 'busy' } }),
+      }));
+      await expect(relay.agents.release({ name: 'worker' })).rejects.toMatchObject({ retryAfterMs: 1000, status: 503 });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
   });
 });

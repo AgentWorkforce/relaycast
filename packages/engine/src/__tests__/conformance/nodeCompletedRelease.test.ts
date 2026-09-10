@@ -257,6 +257,61 @@ describe('node-completed release preserves attributed history', () => {
     expect(binding.status).toBe('active');
   });
 
+  it('persists immutable identity mismatch when node completion loses the target row', async () => {
+    const ws = await createWorkspace(stack.app, 'node-release-identity-mismatch');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'node-identity-mismatch');
+    const { handle } = await attachDirectNodeSocket(stack, ws.workspaceId, target);
+
+    const first = await stack.app.request('/v1/agents/release-exact', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+        'Idempotency-Key': 'node-identity-mismatch',
+      },
+      body: JSON.stringify({ name: target.name, expected_agent_id: target.agentId, delete_agent: true }),
+    });
+    expect(first.status).toBe(201);
+    const firstBody = await first.json() as { data: { invocation_id: string; status: string } };
+    expect(firstBody.data.status).toBe('dispatched');
+
+    stack.runtime.handle.sqlite.pragma('foreign_keys = OFF');
+    stack.runtime.handle.sqlite.prepare('UPDATE agents SET id = ? WHERE id = ?')
+      .run('node-identity-replaced', target.agentId);
+    stack.runtime.handle.sqlite.prepare('UPDATE agent_node_bindings SET agent_id = ? WHERE agent_id = ?')
+      .run('node-identity-replaced', target.agentId);
+    stack.runtime.handle.sqlite.prepare('UPDATE channel_members SET agent_id = ? WHERE agent_id = ?')
+      .run('node-identity-replaced', target.agentId);
+    stack.runtime.handle.sqlite.pragma('foreign_keys = ON');
+
+    await handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'action.result',
+      invocation_id: firstBody.data.invocation_id,
+      output: { released: true },
+    }));
+
+    const [invocation] = await stack.runtime.deps.db
+      .select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, firstBody.data.invocation_id));
+    expect(invocation).toEqual({ status: 'failed', error: 'agent_identity_mismatch' });
+
+    const replay = await stack.app.request('/v1/agents/release-exact', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+        'Idempotency-Key': 'node-identity-mismatch',
+      },
+      body: JSON.stringify({ name: target.name, expected_agent_id: target.agentId, delete_agent: true }),
+    });
+    expect(replay.status).toBe(409);
+    expect((await replay.json() as { error: { code: string } }).error.code)
+      .toBe('agent_identity_mismatch');
+    await handle.handleClose();
+  });
+
   it('settles a malformed persisted release generation as a durable conflict', async () => {
     const ws = await createWorkspace(stack.app, 'node-release-corrupt-generation');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'corrupt-release-target');

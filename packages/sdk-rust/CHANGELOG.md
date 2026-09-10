@@ -11,6 +11,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ### Fixed
 
 - Anonymous keyed workspace bootstrap rejects remote HTTP and redirects, preventing its recovery capability from reaching another origin.
+- `RelayError::retry_after_ms()` exposes the authoritative server delay for exact-release overload handling.
 - Retryable HTTP failures retain the final status, API error, request metadata, and attempt count after retries are exhausted.
 - Retried 5xx responses honor a bounded `Retry-After` delay.
 
@@ -27,6 +28,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - `RelayCast::create_workspace` now requires explicit provenance, preventing CLI bootstrap workspaces from being mislabeled as SDK-created.
 - `WorkspaceBootstrapOptions` and `RelayCast::create_workspace_with_options()` support crash-safe anonymous keyed workspace creation without a deployment-wide secret, plus opt-in self-host proof via `with_bootstrap_secret(...)`; the SDK never sends that proof to hosted Relaycast.
 - `RelayCast::release_agent_if_token_hash` performs generation-safe cleanup without changing the existing `ReleaseAgentRequest` struct.
+- `RelayCast::release_agent_exact()` performs immutable-id, idempotent agent-release reconciliation.
 
 ## [4.2.0] - 2026-06-24
 

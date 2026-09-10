@@ -2708,6 +2708,69 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /agents/release-exact:
+    post:
+      summary: Atomically release an exact agent identity
+      description: >-
+        Crash-safe reconciliation endpoint. Requires the immutable agent id and
+        a caller-persisted Idempotency-Key. The key is scoped to the workspace,
+        authenticated caller principal, and release action; workspace-key
+        callers share the workspace-key principal scope, so each caller must
+        create and persist a unique key for each logical operation. A same-name
+        replacement is never released by this operation. Replaying a key
+        returns the original terminal invocation and does not enqueue a second
+        `action.invoked` webhook, while reusing it with another payload
+        conflicts.
+      tags: [Agents]
+      security:
+        - workspaceKey: []
+        - agentToken: []
+        - nodeToken: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 255 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, expected_agent_id]
+              properties:
+                name: { type: string }
+                expected_agent_id:
+                  type: string
+                  description: Immutable agent row id captured before local handle loss
+                reason: { type: string }
+                delete_agent: { type: boolean }
+                expected_token_hash:
+                  type: string
+                  pattern: '^[a-f0-9]{64}$'
+      responses:
+        '201':
+          description: Exact release dispatched, completed, or idempotently replayed
+          headers:
+            Idempotency-Replayed:
+              schema: { type: string, enum: ['true'] }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  data: { $ref: '#/components/schemas/LifecycleActionInvocation' }
+        '400':
+          description: Missing or invalid identity/key
+        '409':
+          description: agent_identity_mismatch or idempotency_key_reused; no replacement mutation occurred
+        '503':
+          description: database_overloaded or host unavailable; Retry-After is authoritative when supplied
+          headers:
+            Retry-After:
+              schema: { type: string }
+
   /channels:
     post:
       summary: Create channel
