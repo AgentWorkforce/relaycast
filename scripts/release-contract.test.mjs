@@ -40,7 +40,12 @@ function repositoryFixture(version = "8.6.0-beta.0") {
       name: dir === "cli" ? "relaycast" : `@relaycast/${dir}`,
       version,
       ...(dir === "engine"
-        ? { dependencies: { "@relaycast/types": version } }
+        ? {
+            dependencies: {
+              "@relaycast/a2a": version,
+              "@relaycast/types": version,
+            },
+          }
         : {}),
     };
     writeFileSync(
@@ -81,10 +86,27 @@ function repositoryFixture(version = "8.6.0-beta.0") {
     path.join(root, "docker", "package-lock.json"),
     `${JSON.stringify({
       packages: {
-        "": { version },
+        "": {
+          version,
+          dependencies: { "@relaycast/engine": version },
+        },
+        "node_modules/@relaycast/a2a": {
+          version,
+          resolved: `https://registry.npmjs.org/@relaycast/a2a/-/a2a-${version}.tgz`,
+          integrity: "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+        },
         "node_modules/@relaycast/engine": {
           version,
           resolved: `https://registry.npmjs.org/@relaycast/engine/-/engine-${version}.tgz`,
+          integrity: "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+          dependencies: {
+            "@relaycast/a2a": version,
+            "@relaycast/types": version,
+          },
+        },
+        "node_modules/@relaycast/types": {
+          version,
+          resolved: `https://registry.npmjs.org/@relaycast/types/-/types-${version}.tgz`,
           integrity: "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
         },
       },
@@ -285,6 +307,152 @@ describe("release version parity", () => {
     );
   });
 
+  it("rejects Docker lock dependency topology drift", () => {
+    for (const [description, manifestDependencies, lockDependencies] of [
+      [
+        "added dependency",
+        { "@relaycast/types": "8.6.0-beta.0", hono: "^4.11.9" },
+        { "@relaycast/types": "8.6.0-beta.0" },
+      ],
+      [
+        "removed dependency",
+        { "@relaycast/types": "8.6.0-beta.0" },
+        { "@relaycast/types": "8.6.0-beta.0", hono: "^4.11.9" },
+      ],
+      [
+        "changed non-@relaycast dependency",
+        { "@relaycast/types": "8.6.0-beta.0", hono: "^4.12.0" },
+        { "@relaycast/types": "8.6.0-beta.0", hono: "^4.11.9" },
+      ],
+    ]) {
+      const root = repositoryFixture();
+      const engineManifestPath = path.join(
+        root,
+        "packages",
+        "engine",
+        "package.json",
+      );
+      writeFileSync(
+        engineManifestPath,
+        JSON.stringify({
+          name: "@relaycast/engine",
+          version: "8.6.0-beta.0",
+          dependencies: manifestDependencies,
+        }),
+      );
+      const lockPath = path.join(root, "docker", "package-lock.json");
+      const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+      delete lock.packages["node_modules/@relaycast/a2a"];
+      lock.packages["node_modules/@relaycast/engine"].dependencies =
+        lockDependencies;
+      writeFileSync(lockPath, JSON.stringify(lock));
+      assert.throws(
+        () => assertRepositoryVersionParity(root, "8.6.0-beta.0"),
+        /engine dependencies topology does not match/,
+        description,
+      );
+    }
+  });
+
+  it("checks dependency topology for every Docker-installed Relaycast package", () => {
+    for (const [packageDir, dependencyType, manifestDependencies, lockDependencies] of [
+      ["a2a", "dependencies", { zod: "^4.3.6" }, {}],
+      ["types", "optionalDependencies", { "@scope/optional": "^1.0.0" }, {}],
+      ["types", "peerDependencies", { "@scope/peer": "^1.0.0" }, {}],
+      ["a2a", "dependencies", {}, { zod: "^4.3.6" }],
+      ["types", "optionalDependencies", {}, { "@scope/optional": "^1.0.0" }],
+      ["types", "peerDependencies", {}, { "@scope/peer": "^1.0.0" }],
+    ]) {
+      const root = repositoryFixture();
+      const manifestPath = path.join(
+        root,
+        "packages",
+        packageDir,
+        "package.json",
+      );
+      const packageManifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      packageManifest[dependencyType] = manifestDependencies;
+      writeFileSync(manifestPath, JSON.stringify(packageManifest));
+
+      const lockPath = path.join(root, "docker", "package-lock.json");
+      const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+      lock.packages[`node_modules/@relaycast/${packageDir}`][dependencyType] =
+        lockDependencies;
+      writeFileSync(lockPath, JSON.stringify(lock));
+
+      assert.throws(
+        () => assertRepositoryVersionParity(root, "8.6.0-beta.0"),
+        new RegExp(
+          `@relaycast/${packageDir} ${dependencyType} topology does not match`,
+        ),
+        `${packageDir} ${dependencyType}`,
+      );
+    }
+  });
+
+  it("rejects missing and stale top-level Docker Relaycast packages", () => {
+    for (const [description, mutate, expectedError] of [
+      [
+        "missing package",
+        (lock) => delete lock.packages["node_modules/@relaycast/a2a"],
+        /is missing Docker package node_modules\/@relaycast\/a2a/,
+      ],
+      [
+        "stale package",
+        (lock) => {
+          lock.packages["node_modules/@relaycast/observer-dashboard"] = {
+            version: "8.6.0-beta.0",
+            resolved:
+              "https://registry.npmjs.org/@relaycast/observer-dashboard/-/observer-dashboard-8.6.0-beta.0.tgz",
+            integrity: "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+          };
+        },
+        /contains stale Docker package @relaycast\/observer-dashboard/,
+      ],
+    ]) {
+      const root = repositoryFixture();
+      const lockPath = path.join(root, "docker", "package-lock.json");
+      const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+      mutate(lock);
+      writeFileSync(lockPath, JSON.stringify(lock));
+
+      assert.throws(
+        () => assertRepositoryVersionParity(root, "8.6.0-beta.0"),
+        expectedError,
+        description,
+      );
+    }
+  });
+
+  it("validates terminal nested Docker Relaycast entries", () => {
+    const root = repositoryFixture();
+    const lockPath = path.join(root, "docker", "package-lock.json");
+    const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+    const nestedKey =
+      "node_modules/@relaycast/engine/node_modules/@relaycast/types";
+    lock.packages[nestedKey] = {
+      version: "8.6.0-beta.0",
+      resolved:
+        "https://registry.npmjs.org/@relaycast/types/-/types-8.6.0-beta.0.tgz",
+      integrity:
+        "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+    };
+    writeFileSync(lockPath, JSON.stringify(lock));
+
+    assert.doesNotThrow(() =>
+      assertRepositoryVersionParity(root, "8.6.0-beta.0"),
+    );
+
+    lock.packages[nestedKey].version = "8.5.3";
+    writeFileSync(lockPath, JSON.stringify(lock));
+    assert.throws(
+      () => assertRepositoryVersionParity(root, "8.6.0-beta.0"),
+      new RegExp(
+        nestedKey + " is 8\\.5\\.3, expected 8\\.6\\.0-beta\\.0",
+      ),
+    );
+  });
+
   it("permits the intentional pre-publish lockfile placeholder only when requested", () => {
     const root = repositoryFixture();
     const lockPath = path.join(root, "docker", "package-lock.json");
@@ -296,6 +464,22 @@ describe("release version parity", () => {
       assertRepositoryVersionParity(root, "8.6.0-beta.0", {
         requireDockerResolvedArtifact: false,
       }),
+    );
+  });
+
+  it("rejects a stale Docker root engine pin on the placeholder path", () => {
+    const root = repositoryFixture();
+    const lockPath = path.join(root, "docker", "package-lock.json");
+    const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+    lock.packages[""].dependencies["@relaycast/engine"] = "8.5.3";
+    writeFileSync(lockPath, JSON.stringify(lock));
+
+    assert.throws(
+      () =>
+        assertRepositoryVersionParity(root, "8.6.0-beta.0", {
+          requireDockerResolvedArtifact: false,
+        }),
+      /root dependencies topology does not match docker\/package\.json/,
     );
   });
 
