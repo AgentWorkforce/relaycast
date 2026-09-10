@@ -102,18 +102,52 @@ impl RelayCast {
         base_url: Option<&str>,
         provenance: WorkspaceProvenance,
     ) -> Result<CreateWorkspaceResponse> {
-        let url = format!("{}/v1/workspaces", base_url.unwrap_or(DEFAULT_BASE_URL));
+        let mut options = WorkspaceBootstrapOptions::new(provenance);
+        if let Some(base_url) = base_url {
+            options = options.with_base_url(base_url);
+        }
+        Self::create_workspace_with_options(name, options).await
+    }
+
+    /// Create a workspace with optional crash-safe anonymous idempotency.
+    ///
+    /// A hosted anonymous `idempotency_key` must be a CSPRNG-generated
+    /// reveal-once recovery capability. It is never combined with or used to
+    /// transmit a deployment-wide server secret.
+    pub async fn create_workspace_with_options(
+        name: &str,
+        options: WorkspaceBootstrapOptions,
+    ) -> Result<CreateWorkspaceResponse> {
+        if let Some(key) = options.idempotency_key.as_deref() {
+            if key.len() < 32 {
+                return Err(RelayError::InvalidResponse(
+                    "Anonymous Idempotency-Key must be at least 32 characters".to_string(),
+                ));
+            }
+            if key.len() > 255 || !key.bytes().all(|byte| (b'!'..=b'~').contains(&byte)) {
+                return Err(RelayError::InvalidResponse(
+                    "Idempotency-Key must contain 1-255 visible ASCII characters".to_string(),
+                ));
+            }
+        }
+
+        let url = format!(
+            "{}/v1/workspaces",
+            options.base_url.as_deref().unwrap_or(DEFAULT_BASE_URL)
+        );
 
         let client = reqwest::Client::new();
-        let response = client
+        let mut request = client
             .post(&url)
             .header("Content-Type", "application/json")
             .header("X-SDK-Version", SDK_VERSION)
             .header("X-Relaycast-Origin-Client", DEFAULT_ORIGIN_CLIENT)
             .header("X-Relaycast-Origin-Version", SDK_VERSION)
-            .json(&serde_json::json!({ "name": name, "provenance": provenance }))
-            .send()
-            .await?;
+            .json(&serde_json::json!({ "name": name, "provenance": options.provenance }));
+        if let Some(key) = options.idempotency_key {
+            request = request.header("Idempotency-Key", key);
+        }
+        let response = request.send().await?;
 
         let status = response.status().as_u16();
         let json: ApiResponse<CreateWorkspaceResponse> = response.json().await?;

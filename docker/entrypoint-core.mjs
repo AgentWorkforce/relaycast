@@ -342,6 +342,9 @@ export function buildEngineConfig(env, mailbox = {}) {
     ...(env.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET
       ? { workspaceBootstrapSecret: env.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET }
       : {}),
+    ...(env.RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED === 'true'
+      ? { workspaceBootstrapProofRequired: true }
+      : {}),
     ...(Object.keys(mailbox).length > 0 ? { mailbox } : {}),
   };
 }

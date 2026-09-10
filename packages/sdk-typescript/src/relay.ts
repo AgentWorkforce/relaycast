@@ -209,20 +209,20 @@ export interface WorkspaceBootstrapOptions extends WorkspaceIdentityOptions {
    * authorization boundary, so this only needs to be unique per operation
    * (e.g. a job id).
    *
-   * Without `apiKey` (anonymous bootstrap): this key, together with
-   * `bootstrapSecret`, is what authorizes recovering the binding, so it
-   * MUST be generated with a CSPRNG. Never derive it from a job id, timestamp,
-   * or counter. The server enforces only a 32-character structural minimum
-   * and cannot verify true randomness. `crypto.randomUUID()` is a good default.
+   * Without `apiKey` (anonymous bootstrap): this is the reveal-once recovery
+   * capability, so it MUST be generated with a CSPRNG. Never derive it from a
+   * job id, timestamp, or counter. The server enforces only a 32-character
+   * structural minimum and cannot verify true randomness.
+   * `crypto.randomUUID()` is a good default.
    */
   idempotencyKey?: string;
   /**
-   * Deployment bootstrap secret, required alongside `idempotencyKey` for an
-   * anonymous (no `apiKey`) create. Proves the caller is authorized to
-   * recover an anonymous bootstrap binding — the idempotency key alone is
-   * not secret. Anonymous keyed callers must set `baseUrl` to their explicit
-   * self-hosted origin; this SDK refuses the hosted gateway to avoid sending a
-   * self-host deployment secret there. Ignored when `apiKey` is set.
+   * Optional self-host proof for deployments configured with
+   * `workspaceBootstrapProofRequired`. Hosted callers must omit this: the
+   * deployment secret stays server-only and the CSPRNG `idempotencyKey` is the
+   * recovery capability. When supplied, callers must set `baseUrl` to an
+   * explicit self-hosted origin; this SDK refuses the hosted gateway. Ignored
+   * when `apiKey` is set.
    */
   bootstrapSecret?: string;
 }

@@ -207,6 +207,25 @@ test('forwards the bootstrap secret without exposing it in container output', ()
   });
 });
 
+test('makes bootstrap-secret proof enforcement an explicit opt-in', () => {
+  assert.deepEqual(buildEngineConfig({
+    RELAYCAST_ENV: 'production',
+    RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: 'stable-container-secret-407',
+  }), {
+    environment: 'production',
+    workspaceBootstrapSecret: 'stable-container-secret-407',
+  });
+  assert.deepEqual(buildEngineConfig({
+    RELAYCAST_ENV: 'production',
+    RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: 'stable-container-secret-407',
+    RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'true',
+  }), {
+    environment: 'production',
+    workspaceBootstrapSecret: 'stable-container-secret-407',
+    workspaceBootstrapProofRequired: true,
+  });
+});
+
 test('never writes the bootstrap secret to stdout or stderr on the real entrypoint path', async () => {
   // A shallow assertion on buildEngineConfig's return value (above) proves
   // the secret reaches the engine config object, but not that it is kept

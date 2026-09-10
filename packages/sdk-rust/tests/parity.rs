@@ -7,10 +7,10 @@ use relaycast::{
     ListDeliveriesOptions, ListSessionEventsQuery, MessageInjectionMode, MessageListQuery,
     MonitorCertificationRequest, NodeDeliveryAuth, NodeDeliveryConfig, NodeListQuery,
     ObserverScope, ObserverTokenFilters, RateDirectoryAgentRequest, RegisterA2aOptions,
-    RegisterActionRequest, RelayCast, RelayCastOptions, ReleaseAgentRequest, RouteFeedbackRequest,
-    SearchDirectoryQuery, SpawnAgentRequest, SubmitCertificationRequest,
+    RegisterActionRequest, RelayCast, RelayCastOptions, RelayError, ReleaseAgentRequest,
+    RouteFeedbackRequest, SearchDirectoryQuery, SpawnAgentRequest, SubmitCertificationRequest,
     UpdateObserverTokenRequest, UpdateRoutingConfigRequest, WebhookTriggerRequest,
-    WorkspaceProvenance, WsClient, WsClientOptions, WsEvent,
+    WorkspaceBootstrapOptions, WorkspaceProvenance, WsClient, WsClientOptions, WsEvent,
 };
 use serde_json::json;
 use std::net::TcpListener;
@@ -448,6 +448,52 @@ async fn create_workspace_sends_origin_headers() {
     .expect("create_workspace failed");
 
     assert_eq!(created.workspace_id, "ws_123");
+}
+
+#[tokio::test]
+async fn create_workspace_with_options_sends_hosted_idempotency_key_without_a_secret() {
+    let server = MockServer::start().await;
+    let key = "hosted-run-407-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e";
+
+    Mock::given(method("POST"))
+        .and(path("/v1/workspaces"))
+        .and(header("idempotency-key", key))
+        .and(body_json(json!({
+            "name": "Hosted Retry",
+            "provenance": { "source": "sdk" }
+        })))
+        .respond_with(ok(json!({
+            "workspace_id": "ws_hosted",
+            "api_key": "rk_live_hosted",
+            "created_at": "2026-09-10T00:00:00.000Z"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let created = RelayCast::create_workspace_with_options(
+        "Hosted Retry",
+        WorkspaceBootstrapOptions::new(WorkspaceProvenance::sdk())
+            .with_base_url(server.uri())
+            .with_idempotency_key(key),
+    )
+    .await
+    .expect("keyed hosted workspace create failed");
+
+    assert_eq!(created.workspace_id, "ws_hosted");
+}
+
+#[tokio::test]
+async fn create_workspace_with_options_rejects_a_weak_anonymous_key_before_request() {
+    let result = RelayCast::create_workspace_with_options(
+        "Weak Retry",
+        WorkspaceBootstrapOptions::new(WorkspaceProvenance::sdk()).with_idempotency_key("job-407"),
+    )
+    .await;
+
+    assert!(
+        matches!(result, Err(RelayError::InvalidResponse(message)) if message.contains("at least 32"))
+    );
 }
 
 #[tokio::test]

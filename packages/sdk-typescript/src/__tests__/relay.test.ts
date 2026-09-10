@@ -1277,6 +1277,29 @@ describe('RelayCast', () => {
       expect(init.headers['X-Workspace-Bootstrap-Secret']).toBe('deployment-secret');
     });
 
+    it('uses a high-entropy key at the hosted gateway without sending a deployment secret', async () => {
+      const { RelayCast } = await import('../relay.js');
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 201,
+          json: () => Promise.resolve({
+            ok: true,
+            data: { workspace_id: 'ws_hosted', api_key: 'rk_live_hosted', created_at: '2024-01-01' },
+          }),
+        }),
+      );
+
+      await RelayCast.createWorkspace('hosted-child', {
+        idempotencyKey: 'hosted-run-407-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e',
+      });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/workspaces');
+      expect(init.headers['Idempotency-Key']).toBe('hosted-run-407-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e');
+      expect(init.headers['X-Workspace-Bootstrap-Secret']).toBeUndefined();
+    });
+
     it('rejects a short anonymous key before making a request', async () => {
       const { RelayCast } = await import('../relay.js');
 

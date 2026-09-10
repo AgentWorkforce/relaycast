@@ -116,6 +116,13 @@ export interface EngineConfig {
    */
   workspaceBootstrapSecret?: string;
   /**
+   * Require callers of anonymous keyed workspace creation to prove knowledge
+   * of `workspaceBootstrapSecret`. This optional self-host hardening mode is
+   * off for hosted deployments, where the high-entropy Idempotency-Key is the
+   * narrowly scoped recovery capability and the secret remains server-only.
+   */
+  workspaceBootstrapProofRequired?: boolean;
+  /**
    * Optional egress proxy for http_push node delivery. When set, nodes that
    * register with `delivery.use_proxy: true` have their webhook POST routed
    * through this forwarder instead of hitting the destination directly — the

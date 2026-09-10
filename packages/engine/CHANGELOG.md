@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Changed
+
+- Anonymous keyed workspace creation now uses the validated CSPRNG `Idempotency-Key` as its hosted-safe recovery capability; bootstrap secrets remain server-only derivation material, and self-host proof enforcement is opt-in.
 
 ## [8.7.0] - 2026-09-09
 

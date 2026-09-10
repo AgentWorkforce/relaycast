@@ -4,7 +4,7 @@
 // against a persistent Docker-managed volume, and drives it entirely over HTTP,
 // the same way an operator would. It is the only place that proves:
 //   - a workspace bootstrapped before a container restart is still recoverable
-//     after the restart, using the same persisted volume and bootstrap secret
+//     after the restart, using the same persisted volume and idempotency key
 //     (relaycast#371/#379's crash-idempotency contract, exercised for real);
 //   - a deployment with no bootstrap secret configured fails closed (503)
 //     instead of accidentally falling back to something insecure;
@@ -252,7 +252,6 @@ describe(
       const { status, body } = await createWorkspace(secondaryPort, {
         name: "no-secret-workspace",
         idempotencyKey: key,
-        secret: BOOTSTRAP_SECRET, // caller presents a secret; the deployment has none configured
       });
       assert.equal(status, 503);
       assert.equal(
@@ -277,14 +276,12 @@ describe(
       const first = await createWorkspace(primaryPort, {
         name: "digest-conflict-original",
         idempotencyKey: key,
-        secret: BOOTSTRAP_SECRET,
       });
       assert.equal(first.status, 201);
 
       const conflict = await createWorkspace(primaryPort, {
         name: "digest-conflict-different-name",
         idempotencyKey: key,
-        secret: BOOTSTRAP_SECRET,
       });
       assert.equal(conflict.status, 409);
       assert.equal(
@@ -298,7 +295,6 @@ describe(
       const before = await createWorkspace(primaryPort, {
         name: "restart-replay-workspace",
         idempotencyKey: key,
-        secret: BOOTSTRAP_SECRET,
       });
       assert.equal(before.status, 201);
       assert.match(before.body?.data?.api_key ?? "", /^rk_live_/);
@@ -310,18 +306,9 @@ describe(
       const after = await createWorkspace(primaryPort, {
         name: "restart-replay-workspace",
         idempotencyKey: key,
-        secret: BOOTSTRAP_SECRET,
       });
       assert.equal(after.status, 200);
       assert.deepEqual(after.body?.data, before.body?.data);
-
-      // Control: without the secret, even the same key can no longer recover
-      // it after the restart -- the container did not silently widen access.
-      const unproven = await createWorkspace(primaryPort, {
-        name: "restart-replay-workspace",
-        idempotencyKey: key,
-      });
-      assert.equal(unproven.status, 401);
     });
 
     test("the bootstrap secret never appears in captured container logs", () => {

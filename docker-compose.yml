@@ -9,6 +9,7 @@ services:
       - ${RELAYCAST_BASE_URL:?Set RELAYCAST_BASE_URL to the public HTTPS origin, for example https://relay.ratifyprotocol.com}
     environment:
       RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: ${RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET-}
+      RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: ${RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED-false}
     init: true
     restart: unless-stopped
     read_only: true

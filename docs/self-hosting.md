@@ -64,7 +64,8 @@ Flags take precedence over environment variables.
 | `--base-url <url>` | — | `http://localhost:<port>` | Public origin. **Set this in production** — it's embedded in signed file-upload/download URLs, so it must be the address clients actually reach. |
 | `--env <name>` | `RELAYCAST_ENV` | `production` | Environment label used in logs. |
 | — | `RELAYCAST_MESSAGE_TTL_DAYS` | unset (keep forever) | Opt in to pruning message history after this many days. Unset, `0`, or negative keeps messages forever. Per-workspace `retention` settings override this; operational tables (deliveries, message logs) prune at 90 days regardless. |
-| — | `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` | unset (fail closed) | Stable deployment secret for anonymous keyed workspace retries. Generate once with `openssl rand -hex 32` and persist it across restarts. |
+| — | `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` | unset (fail closed) | Stable server-only derivation secret for anonymous keyed workspace retries. Generate once with `openssl rand -hex 32` and persist it across restarts. |
+| — | `RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED` | `false` | Optional self-host policy requiring callers to prove the derivation secret. Leave unset for hosted-safe anonymous retries. |
 
 **Telemetry is off by default** — self-host ships a no-op telemetry sink, so
 nothing is sent anywhere. (There is no PostHog/analytics in self-host.)
@@ -88,14 +89,18 @@ it, put it in a Dockerfile, pass it as a command-line argument, or print it in
 logs. The server only passes it to the HMAC derivation path and never logs or
 stores it.
 
-**The caller must also present the secret.** `Idempotency-Key` is a
-caller-chosen, non-secret value, not proof of identity — every anonymous
-keyed create must send `X-Workspace-Bootstrap-Secret: <the same secret>` or it
-is rejected with `401 workspace_create_bootstrap_secret_invalid` before any
-lookup of the idempotency binding. Only give the secret to callers you trust
-to bootstrap a workspace on this deployment (your own setup script or
-container entrypoint, for example) — anyone who has it can create or recover
-any anonymous bootstrap workspace on this deployment:
+The caller does **not** receive this deployment-wide secret. Its high-entropy
+`Idempotency-Key` is the narrowly scoped recovery capability: use one CSPRNG
+key for each logical create/retry sequence and keep it unchanged when retrying.
+The server uses the secret only to derive the returned child key. This is the
+hosted-safe default and keeps the server secret out of SDKs, CLIs, and logs.
+
+If every anonymous keyed caller is trusted with the deployment secret, a
+self-host can opt into the former proof requirement with
+`RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED=true`. In that mode callers must
+send `X-Workspace-Bootstrap-Secret: <the same secret>`; missing or mismatched
+proof returns `401 workspace_create_bootstrap_secret_invalid` before binding
+lookup. Do not enable this mode for arbitrary hosted clients.
 
 Generate the replay key once per logical create/retry sequence with a CSPRNG;
 keep it unchanged when retrying (a v4 UUID or 16 random bytes encoded as hex
@@ -107,7 +112,6 @@ BOOTSTRAP_IDEMPOTENCY_KEY="$(openssl rand -hex 16)"
 curl -s -XPOST http://localhost:8787/v1/workspaces \
   -H 'content-type: application/json' \
   -H "Idempotency-Key: ${BOOTSTRAP_IDEMPOTENCY_KEY}" \
-  -H "X-Workspace-Bootstrap-Secret: $RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET" \
   -d '{"name":"my-team"}'
 ```
 

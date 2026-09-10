@@ -44,6 +44,38 @@ pub struct CreateWorkspaceResponse {
     pub created_at: String,
 }
 
+/// Options for an unauthenticated workspace bootstrap request.
+///
+/// `idempotency_key` is a reveal-once recovery capability for anonymous
+/// creation. Generate it with a CSPRNG and persist it for the logical create
+/// operation; it is sent to hosted Relaycast without any deployment secret.
+#[derive(Debug, Clone)]
+pub struct WorkspaceBootstrapOptions {
+    pub base_url: Option<String>,
+    pub provenance: WorkspaceProvenance,
+    pub idempotency_key: Option<String>,
+}
+
+impl WorkspaceBootstrapOptions {
+    pub fn new(provenance: WorkspaceProvenance) -> Self {
+        Self {
+            base_url: None,
+            provenance,
+            idempotency_key: None,
+        }
+    }
+
+    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = Some(base_url.into());
+        self
+    }
+
+    pub fn with_idempotency_key(mut self, idempotency_key: impl Into<String>) -> Self {
+        self.idempotency_key = Some(idempotency_key.into());
+        self
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceCreationSource {
