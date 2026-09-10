@@ -269,7 +269,7 @@ export const MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH = 32;
 const HOSTED_GATEWAY_HOSTNAME = 'cast.agentrelay.com';
 const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
 
-function validateAnonymousKeyedBootstrapDestination(value: string): URL {
+export function validateAnonymousKeyedBootstrapDestination(value: string): URL {
   let baseUrl: URL;
   try {
     baseUrl = new URL(value);

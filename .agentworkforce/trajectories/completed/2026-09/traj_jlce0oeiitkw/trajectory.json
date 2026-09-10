@@ -1,0 +1,53 @@
+{
+  "id": "traj_jlce0oeiitkw",
+  "version": 1,
+  "task": {
+    "title": "Harden RelaycastSetup anonymous keyed workspace transport"
+  },
+  "status": "completed",
+  "startedAt": "2026-09-10T03:18:56.500Z",
+  "completedAt": "2026-09-10T03:21:45.400Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-09-10T03:21:20.096Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_r6gxpp4vfzcg",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-09-10T03:21:20.096Z",
+      "endedAt": "2026-09-10T03:21:45.400Z",
+      "events": [
+        {
+          "ts": 1789010480097,
+          "type": "decision",
+          "content": "Apply anonymous keyed transport controls to RelaycastSetup: Apply anonymous keyed transport controls to RelaycastSetup",
+          "raw": {
+            "question": "Apply anonymous keyed transport controls to RelaycastSetup",
+            "chosen": "Apply anonymous keyed transport controls to RelaycastSetup",
+            "alternatives": [],
+            "reasoning": "Resolve optional API credentials before classifying requests; share RelayCast destination validation; use manual redirects and treat any 3xx/opaque redirect as non-retryable so the reveal-once idempotency recovery capability never reaches a remote HTTP endpoint or redirect target."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Hardened RelaycastSetup anonymous keyed workspace creation with the shared HTTPS-or-loopback destination rule, manual redirects, and non-retryable redirect rejection. Added deterministic remote HTTP, cross- and same-origin redirect, loopback, authenticated, and unkeyed-control tests; audited remaining workspace-create idempotency senders.",
+    "approach": "Standard approach",
+    "confidence": 0.96
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "46cc924a53bb572fcbe8837f708b417a20857e54",
+    "endRef": "46cc924a53bb572fcbe8837f708b417a20857e54"
+  }
+}

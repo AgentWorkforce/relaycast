@@ -74,6 +74,7 @@ describe('RelaycastSetup', () => {
     expect(init.headers['X-Relaycast-Origin-Client']).toBe('@relaycast/sdk');
     expect(init.headers['X-Relaycast-Origin-Version']).toBeDefined();
     expect(init.headers.Authorization).toBeUndefined();
+    expect(init.redirect).toBeUndefined();
     expect(JSON.parse(init.body)).toEqual({ name: 'Acme Ops', provenance: { source: 'sdk' } });
   });
 
@@ -114,6 +115,72 @@ describe('RelaycastSetup', () => {
     const [, init] = mockFetch.mock.calls[0]!;
     expect(init.headers.Authorization).toBe('Bearer rk_live_parent');
     expect(init.headers['Idempotency-Key']).toBe('cloud-job-371');
+    expect(init.redirect).toBeUndefined();
+  });
+
+  it.each([
+    ['cross-origin', 'https://attacker.invalid/v1/workspaces'],
+    ['same-origin', 'https://cast.agentrelay.com/v1/workspaces'],
+  ])('createWorkspace() rejects a %s anonymous keyed redirect', async (_kind, location) => {
+    const { RelaycastSetup } = await import('../setup.js');
+    mockFetch.mockImplementation(() =>
+      Promise.resolve({
+        ok: false,
+        status: 307,
+        type: 'opaqueredirect',
+        headers: new Headers({ Location: location }),
+        text: () => Promise.resolve(''),
+      } as Response),
+    );
+
+    await expect(new RelaycastSetup().createWorkspace({
+      name: 'redirected',
+      idempotencyKey: 'setup-run-408-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e',
+    })).rejects.toMatchObject({
+      code: 'transport_error',
+      statusCode: 307,
+    });
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [, init] = mockFetch.mock.calls[0]!;
+    expect(init.redirect).toBe('manual');
+  });
+
+  it('createWorkspace() rejects anonymous keyed remote plaintext HTTP before dispatch', async () => {
+    const { RelaycastSetup } = await import('../setup.js');
+
+    await expect(new RelaycastSetup({
+      baseUrl: 'http://self-host.example',
+    }).createWorkspace({
+      name: 'insecure',
+      idempotencyKey: 'setup-run-408-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e',
+    })).rejects.toMatchObject({
+      code: 'transport_error',
+      statusCode: 400,
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('createWorkspace() permits anonymous keyed loopback HTTP with manual redirects', async () => {
+    const { RelaycastSetup } = await import('../setup.js');
+    mockFetch.mockImplementation(() =>
+      jsonResponse({
+        ok: true,
+        data: { workspace_id: 'ws_local', api_key: 'rk_live_local', created_at: '2026-09-10' },
+      }, 201),
+    );
+
+    await new RelaycastSetup({
+      baseUrl: 'http://127.0.0.1:8787',
+    }).createWorkspace({
+      name: 'local',
+      idempotencyKey: 'setup-run-408-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e',
+    });
+
+    const [url, init] = mockFetch.mock.calls[0]!;
+    expect(url).toBe('http://127.0.0.1:8787/v1/workspaces');
+    expect(init.headers['Idempotency-Key']).toBe('setup-run-408-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e');
+    expect(init.redirect).toBe('manual');
   });
 
   it('does not silently downgrade an explicitly empty idempotency key', async () => {
