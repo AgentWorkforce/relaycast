@@ -3,14 +3,27 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use thiserror::Error;
+use tokio::time::Instant;
 
 use crate::error::RelayError;
 use crate::{AgentClient, CreateAgentRequest, RelayCast};
 
 const DEFAULT_REGISTRATION_COOLDOWN_SECS: u64 = 60;
+// A valid Retry-After is the server's scheduling instruction, but retaining a
+// cooldown indefinitely would let a broken or hostile intermediary pin an
+// agent locally. Keep the same bounded-wait principle as the HTTP client.
+const MAX_REGISTRATION_COOLDOWN_SECS: u64 = 300;
+const DEFAULT_REGISTRATION_RETRY_BACKOFF: Duration = Duration::from_secs(2);
+
+fn registration_cooldown_duration(retry_after_ms: Option<u64>) -> Duration {
+    retry_after_ms
+        .map(Duration::from_millis)
+        .map(|delay| delay.min(Duration::from_secs(MAX_REGISTRATION_COOLDOWN_SECS)))
+        .unwrap_or(Duration::from_secs(DEFAULT_REGISTRATION_COOLDOWN_SECS))
+}
 
 fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     match mutex.lock() {
@@ -187,6 +200,20 @@ impl AgentRegistrationClient {
         lock_unpoisoned(&self.registration_cooldowns).remove(trimmed);
     }
 
+    fn registration_retry_delay(
+        &self,
+        agent_name: &str,
+        error: &AgentRegistrationError,
+    ) -> Duration {
+        // Rate-limit retries must consume the cache entry made by the failed
+        // registration. Falling back to the error's rounded display value is
+        // only for concurrent invalidation; it must not permit a premature
+        // request while a known cooldown is still active.
+        self.registration_block_remaining(agent_name)
+            .or_else(|| registration_retry_after_secs(error).map(Duration::from_secs))
+            .unwrap_or(DEFAULT_REGISTRATION_RETRY_BACKOFF)
+    }
+
     /// Register a **new** agent and return its token.
     ///
     /// Registration is create-only as of engine 8.2.0 (#349): a name already
@@ -272,10 +299,11 @@ impl AgentRegistrationClient {
                 code,
                 request_id,
                 attempts,
-                ..
+                retry_after_ms,
             }) => {
-                let retry_after_secs = DEFAULT_REGISTRATION_COOLDOWN_SECS;
-                let blocked_until = Instant::now() + Duration::from_secs(retry_after_secs);
+                let cooldown = registration_cooldown_duration(retry_after_ms);
+                let retry_after_secs = cooldown.as_secs();
+                let blocked_until = Instant::now() + cooldown;
                 lock_unpoisoned(&self.registration_cooldowns)
                     .insert(trimmed_name.to_string(), blocked_until);
                 Err(AgentRegistrationError::RateLimited {
@@ -365,7 +393,7 @@ pub async fn retry_agent_registration(
         match client.register_agent_token(agent_name, cli_hint).await {
             Ok(token) => return Ok(token),
             Err(error) if registration_is_retryable(&error) && attempt < MAX_ATTEMPTS - 1 => {
-                tokio::time::sleep(Duration::from_secs(2)).await;
+                tokio::time::sleep(client.registration_retry_delay(agent_name, &error)).await;
             }
             Err(error) if registration_is_retryable(&error) => {
                 return Err(AgentRegistrationRetryOutcome::RetryableExhausted(error));
@@ -380,11 +408,14 @@ pub async fn retry_agent_registration(
 mod tests {
     use super::{
         format_registration_error, normalize_cli, registration_cli_from_hint,
-        registration_is_retryable, registration_retry_after_secs, AgentRegistrationClient,
-        AgentRegistrationError,
+        registration_cooldown_duration, registration_is_retryable, registration_retry_after_secs,
+        retry_agent_registration, AgentRegistrationClient, AgentRegistrationError,
+        DEFAULT_REGISTRATION_COOLDOWN_SECS, MAX_REGISTRATION_COOLDOWN_SECS,
     };
     use crate::{RelayCast, RelayCastOptions};
     use serde_json::json;
+    use std::time::Duration;
+    use tokio::time::{advance, Instant};
     use wiremock::matchers::{body_string_contains, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -615,20 +646,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn register_agent_token_sets_cooldown_on_rate_limit() {
+    async fn register_agent_token_uses_server_retry_after_for_rate_limit_cooldown() {
         let server = MockServer::start().await;
         let relay =
             RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
                 .expect("relay init");
         let client = AgentRegistrationClient::new(relay, "claude");
 
-        let rate_limited = ResponseTemplate::new(429).set_body_json(json!({
-            "ok": false,
-            "error": {
-                "code": "rate_limited",
-                "message": "too many requests"
-            }
-        }));
+        let rate_limited = ResponseTemplate::new(429)
+            .insert_header("retry-after", "2")
+            .set_body_json(json!({
+                "ok": false,
+                "error": {
+                    "code": "workspace_busy",
+                    "message": "workspace is busy"
+                }
+            }));
 
         Mock::given(method("POST"))
             .and(path("/v1/agents"))
@@ -644,11 +677,143 @@ mod tests {
         match error {
             AgentRegistrationError::RateLimited {
                 retry_after_secs, ..
-            } => assert_eq!(retry_after_secs, 60),
+            } => assert_eq!(retry_after_secs, 2),
             other => panic!("unexpected error variant: {other:?}"),
         }
 
         assert!(client.registration_block_remaining("worker-c").is_some());
+    }
+
+    #[tokio::test]
+    async fn register_agent_token_uses_safe_fallback_for_malformed_retry_after() {
+        let server = MockServer::start().await;
+        let relay =
+            RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+                .expect("relay init");
+        let client = AgentRegistrationClient::new(relay, "claude");
+
+        Mock::given(method("POST"))
+            .and(path("/v1/agents"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("retry-after", "not-a-delay")
+                    .set_body_json(json!({
+                        "ok": false,
+                        "error": {
+                            "code": "workspace_busy",
+                            "message": "workspace is busy"
+                        }
+                    })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let error = client
+            .register_agent_token("worker-malformed", None)
+            .await
+            .expect_err("expected rate-limited error");
+        match error {
+            AgentRegistrationError::RateLimited {
+                retry_after_secs, ..
+            } => assert_eq!(retry_after_secs, DEFAULT_REGISTRATION_COOLDOWN_SECS),
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+        assert!(client
+            .registration_block_remaining("worker-malformed")
+            .is_some());
+    }
+
+    #[test]
+    fn registration_cooldown_preserves_valid_delay_and_bounds_it() {
+        assert_eq!(
+            registration_cooldown_duration(Some(2_000)),
+            Duration::from_secs(2)
+        );
+        assert_eq!(
+            registration_cooldown_duration(None),
+            Duration::from_secs(DEFAULT_REGISTRATION_COOLDOWN_SECS)
+        );
+        assert_eq!(
+            registration_cooldown_duration(Some((MAX_REGISTRATION_COOLDOWN_SECS + 1) * 1_000)),
+            Duration::from_secs(MAX_REGISTRATION_COOLDOWN_SECS)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn registration_retry_timer_uses_cached_cooldown_without_premature_retry() {
+        let relay = RelayCast::new(RelayCastOptions::new("rk_live_test")).expect("relay init");
+        let client = AgentRegistrationClient::new(relay, "claude");
+        let agent_name = "worker-timer";
+        super::lock_unpoisoned(&client.registration_cooldowns).insert(
+            agent_name.to_string(),
+            Instant::now() + Duration::from_secs(2),
+        );
+        let error = AgentRegistrationError::RateLimited {
+            agent_name: agent_name.to_string(),
+            retry_after_secs: 1,
+            detail: "429".to_string(),
+        };
+
+        // The active cache wins over a stale error display value, so a retry
+        // cannot escape a known cooldown early.
+        let delay = client.registration_retry_delay(agent_name, &error);
+        assert_eq!(delay, Duration::from_secs(2));
+        let sleep = tokio::time::sleep(delay);
+        tokio::pin!(sleep);
+        assert!(!sleep.as_mut().is_elapsed());
+
+        advance(Duration::from_secs(1)).await;
+        assert!(!sleep.as_mut().is_elapsed());
+        advance(Duration::from_secs(1)).await;
+        sleep.as_mut().await;
+    }
+
+    #[tokio::test]
+    async fn retry_registration_retries_immediately_when_server_authorizes_zero_delay() {
+        let server = MockServer::start().await;
+        let relay =
+            RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+                .expect("relay init");
+        let client = AgentRegistrationClient::new(relay, "claude");
+
+        Mock::given(method("POST"))
+            .and(path("/v1/agents"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("retry-after", "0")
+                    .set_body_json(json!({
+                        "ok": false,
+                        "error": {
+                            "code": "workspace_busy",
+                            "message": "workspace is busy"
+                        }
+                    })),
+            )
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/agents"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "ok": true,
+                "data": {
+                    "id": "a_worker_retry",
+                    "name": "worker-retry",
+                    "token": "at_live_retry",
+                    "status": "online",
+                    "created_at": "2026-09-10T00:00:00.000Z"
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let token = retry_agent_registration(&client, "worker-retry", None)
+            .await
+            .expect("server-authorized immediate retry should reach the server");
+        assert_eq!(token, "at_live_retry");
     }
 
     #[test]
