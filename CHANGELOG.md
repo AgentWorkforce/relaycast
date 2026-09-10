@@ -25,6 +25,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Added
 
 - Rust SDK `WorkspaceBootstrapOptions` supports crash-safe anonymous keyed workspace creation without a deployment secret and opt-in self-host bootstrap proof without exposing it to hosted Relaycast.
+- `POST /v1/agents/release-exact` atomically pins broker cleanup to an immutable agent identity and durable idempotency key, so a same-name replacement cannot be released by a retry.
 
 ### Fixed
 

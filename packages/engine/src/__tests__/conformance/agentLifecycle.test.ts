@@ -234,6 +234,110 @@ describe('agent presence and release lifecycle', () => {
     });
   });
 
+  it('requires a durable key and replays an exact immutable-id release only once', async () => {
+    const ws = await createWorkspace(stack.app, 'exact-release-idempotency');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'exact-target');
+    const body = {
+      name: target.name,
+      expected_agent_id: target.agentId,
+      delete_agent: true,
+    };
+    const request = (key?: string) => stack.app.request('/v1/agents/release-exact', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+        ...(key ? { 'Idempotency-Key': key } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+
+    expect((await request()).status).toBe(400);
+    const first = await request('exact-release-key');
+    const replay = await request('exact-release-key');
+    expect([first.status, replay.status]).toEqual([201, 201]);
+    expect(replay.headers.get('Idempotency-Replayed')).toBe('true');
+    expect(await stack.runtime.deps.db.select().from(actionInvocations).where(and(
+      eq(actionInvocations.workspaceId, ws.workspaceId),
+      eq(actionInvocations.actionName, 'release'),
+    ))).toHaveLength(1);
+  });
+
+  it('fails closed on a replacement identity and rejects an idempotency-key payload swap', async () => {
+    const ws = await createWorkspace(stack.app, 'exact-release-replacement');
+    const oldAgent = await registerAgent(stack.app, ws.workspaceKey, 'old-agent');
+    const replacement = await registerAgent(stack.app, ws.workspaceKey, 'replacement-agent');
+    const request = (body: Record<string, unknown>) => stack.app.request('/v1/agents/release-exact', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+        'Idempotency-Key': 'exact-release-payload-swap',
+      },
+      body: JSON.stringify(body),
+    });
+
+    const first = await request({ name: oldAgent.name, expected_agent_id: oldAgent.agentId, delete_agent: true });
+    expect(first.status).toBe(201);
+    const swapped = await request({ name: replacement.name, expected_agent_id: replacement.agentId, delete_agent: true });
+    expect(swapped.status).toBe(409);
+    expect((await swapped.json() as { error: { code: string } }).error.code).toBe('idempotency_key_reused');
+
+    const mismatch = await stack.app.request('/v1/agents/release-exact', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+        'Idempotency-Key': 'exact-release-mismatch',
+      },
+      body: JSON.stringify({ name: replacement.name, expected_agent_id: oldAgent.agentId, delete_agent: true }),
+    });
+    expect(mismatch.status).toBe(409);
+    expect((await mismatch.json() as { error: { code: string } }).error.code).toBe('agent_identity_mismatch');
+    const [stillReplacement] = await stack.runtime.deps.db.select({ id: agents.id, status: agents.status })
+      .from(agents).where(eq(agents.id, replacement.agentId));
+    expect(stillReplacement).toEqual({ id: replacement.agentId, status: 'active' });
+  });
+
+  it('cannot alter a same-name replacement that wins after an exact release starts', async () => {
+    const ws = await createWorkspace(stack.app, 'exact-release-dispatch-race');
+    const oldAgent = await registerAgent(stack.app, ws.workspaceKey, 'race-agent');
+    await attachDirectNodeSocket(stack, ws.workspaceId, oldAgent);
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    const originalConnected = nodeConnections.isProviderConnected.bind(nodeConnections);
+    let replaced = false;
+    vi.spyOn(nodeConnections, 'isProviderConnected').mockImplementation((...args) => {
+      if (!replaced) {
+        replaced = true;
+        // This synchronous hook is after dispatchRelease's exact name/id
+        // snapshot but before its provider-send guard. It models a new agent
+        // taking the released name while the old operation is in flight.
+        stack.runtime.handle.sqlite.prepare('UPDATE agents SET name = ? WHERE id = ?')
+          .run('race-agent#old', oldAgent.agentId);
+        stack.runtime.handle.sqlite.prepare(
+          `INSERT INTO agents (id, workspace_id, name, type, token_hash, status, location_type, provider_name, metadata, created_at, last_seen)
+           VALUES (?, ?, ?, 'agent', ?, 'active', 'self_connected', 'default', '{}', unixepoch(), unixepoch())`,
+        ).run('agent_race_replacement', ws.workspaceId, 'race-agent', 'f'.repeat(64));
+      }
+      return originalConnected(...args);
+    });
+
+    const response = await stack.app.request('/v1/agents/release-exact', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+        'Idempotency-Key': 'exact-release-dispatch-race',
+      },
+      body: JSON.stringify({ name: 'race-agent', expected_agent_id: oldAgent.agentId, delete_agent: true }),
+    });
+    expect(response.status).toBe(201);
+    expect(replaced).toBe(true);
+    const [replacement] = await stack.runtime.deps.db.select({ id: agents.id, name: agents.name, status: agents.status })
+      .from(agents).where(eq(agents.id, 'agent_race_replacement'));
+    expect(replacement).toEqual({ id: 'agent_race_replacement', name: 'race-agent', status: 'active' });
+  });
+
   it('settles a guarded no-host fallback as a generation conflict after takeover', async () => {
     const ws = await createWorkspace(stack.app, 'hostless-release-generation-race');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'hostless-release-caller');

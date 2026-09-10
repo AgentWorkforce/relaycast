@@ -42,6 +42,7 @@ import type {
   SpawnAgentRequest,
   SpawnAgentResponse,
   ReleaseAgentRequest,
+  ExactReleaseAgentRequest,
   ReleaseAgentResponse,
   RegisterA2aOptions,
   RegisterA2aResponse,
@@ -892,6 +893,20 @@ export class RelayCast {
       this.client.post('/v1/agents/spawn', data),
     release: (data: ReleaseAgentRequest): Promise<ReleaseAgentResponse> =>
       this.client.post('/v1/agents/release', data),
+    /**
+     * Atomically release only the exact immutable agent identity. The key is
+     * deliberately mandatory: callers persist and reuse it across restarts.
+     */
+    releaseExact: (
+      data: ExactReleaseAgentRequest,
+      options: { idempotencyKey: string },
+    ): Promise<ReleaseAgentResponse> => {
+      const idempotencyKey = options.idempotencyKey.trim();
+      if (!idempotencyKey) throw new Error('idempotencyKey is required for exact agent release');
+      return this.client.post('/v1/agents/release-exact', data, {
+        headers: { 'Idempotency-Key': idempotencyKey },
+      });
+    },
     events: {
       emit: (name: string, data: EmitSessionEventRequest): Promise<SessionEvent> =>
         this.client.post(`/v1/agents/${encodeURIComponent(name)}/events`, data),

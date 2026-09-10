@@ -116,5 +116,14 @@ export const ReleaseAgentRequestSchema = z.object({
 });
 export type ReleaseAgentRequest = z.infer<typeof ReleaseAgentRequestSchema>;
 
+/**
+ * Server-authorized release reconciliation. Unlike the legacy name-addressed
+ * request this pins the mutation to the immutable agent row id.
+ */
+export const ExactReleaseAgentRequestSchema = ReleaseAgentRequestSchema.extend({
+  expected_agent_id: z.string().min(1),
+});
+export type ExactReleaseAgentRequest = z.infer<typeof ExactReleaseAgentRequestSchema>;
+
 export const ReleaseAgentResponseSchema = LifecycleActionInvocationResponseSchema;
 export type ReleaseAgentResponse = z.infer<typeof ReleaseAgentResponseSchema>;

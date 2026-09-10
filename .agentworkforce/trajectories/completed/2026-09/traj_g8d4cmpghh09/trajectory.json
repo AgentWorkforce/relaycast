@@ -1,0 +1,69 @@
+{
+  "id": "traj_g8d4cmpghh09",
+  "version": 1,
+  "task": {
+    "title": "Implement Relaycast #409 atomic exact-agent release contract",
+    "source": {
+      "system": "plain",
+      "id": "relaycast#409"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-09-10T04:09:51.390Z",
+  "completedAt": "2026-09-10T04:12:31.431Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-09-10T04:09:51.504Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_6apsmr7s0m61",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-09-10T04:09:51.504Z",
+      "endedAt": "2026-09-10T04:12:31.431Z",
+      "events": [
+        {
+          "ts": 1789013391505,
+          "type": "decision",
+          "content": "Use a separate exact release route: Use a separate exact release route",
+          "raw": {
+            "question": "Use a separate exact release route",
+            "chosen": "Use a separate exact release route",
+            "alternatives": [],
+            "reasoning": "Keeps legacy name-addressed release backwards compatible while requiring immutable identity and a durable caller key for reconciliation."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1789013391595,
+          "type": "reflection",
+          "content": "Engine, TypeScript SDK, and Rust SDK now share the exact-release contract; full engine suite and focused SDK tests are green.",
+          "raw": {
+            "confidence": 0.85
+          },
+          "significance": "high",
+          "tags": [
+            "confidence:0.85"
+          ]
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Added exact immutable-agent release route, keyed idempotency replay, overload retry timing, and TypeScript/Rust SDK parity with race tests.",
+    "approach": "Standard approach",
+    "confidence": 0.88
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "ac24de3be523166d7655910c0751f38d5feb3a56",
+    "endRef": "ac24de3be523166d7655910c0751f38d5feb3a56"
+  }
+}

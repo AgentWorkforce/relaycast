@@ -133,7 +133,9 @@ function computeBackoffMs(policy: RetryPolicy, retryAttempt: number): number {
 }
 
 function parseRetryAfterMs(res: Response): number | null {
-  const header = res.headers.get('Retry-After');
+  // Lightweight SDK test doubles and Fetch-compatible shims can omit
+  // `headers`; treat that exactly as an absent Retry-After value.
+  const header = res.headers?.get('Retry-After');
   if (!header) return null;
 
   const asSeconds = Number(header);
@@ -280,7 +282,12 @@ export class HttpClient {
     const hasBody = body !== undefined && method.toUpperCase() !== 'GET';
     if (hasBody) headers['Content-Type'] = 'application/json';
     const wireBody = hasBody ? decamelizeKeys(body) : undefined;
-    const maxRetries = options?.retry === false ? 0 : this._retryPolicy.maxRetries;
+    // A POST/PATCH without a caller-provided idempotency key is not safe to
+    // replay after a lost response. Exact lifecycle operations opt in by
+    // carrying their durable key in the request headers.
+    const idempotencyKey = Object.entries(headers).find(([name]) => name.toLowerCase() === 'idempotency-key')?.[1];
+    const isUnsafeMutation = ['POST', 'PATCH'].includes(method.toUpperCase()) && !idempotencyKey;
+    const maxRetries = options?.retry === false || isUnsafeMutation ? 0 : this._retryPolicy.maxRetries;
 
     let attempt = 0;
 
@@ -343,7 +350,7 @@ export class HttpClient {
         const errParsed = ApiErrorSchema.safeParse(json);
         const code = errParsed.success ? errParsed.data.error.code : 'unknown_error';
         const message = errParsed.success ? errParsed.data.error.message : 'Unknown error';
-        throw relayErrorFromApi(code, message, res.status);
+        throw relayErrorFromApi(code, message, res.status, parseRetryAfterMs(res) ?? undefined);
       }
 
       const data = envelope.data.data;

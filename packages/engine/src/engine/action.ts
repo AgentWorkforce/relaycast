@@ -122,6 +122,7 @@ function isAcceptedDeletedRegisteredActionInvocation(
 }
 
 const RELEASE_GENERATION_CONFLICT_CODE = 'agent_release_generation_conflict';
+const RELEASE_IDENTITY_MISMATCH_CODE = 'agent_identity_mismatch';
 
 function releaseExpectedTokenHash(input: Record<string, unknown>): string | null {
   const value = input.expected_token_hash;
@@ -136,15 +137,30 @@ function releaseExpectedTokenHash(input: Record<string, unknown>): string | null
   return value;
 }
 
+function releaseExpectedAgentId(input: Record<string, unknown>): string | null {
+  const value = input.expected_agent_id;
+  if (value === undefined) return null;
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw codedError(
+      'release action input.expected_agent_id must be a non-empty immutable agent id',
+      'invalid_release_request',
+      400,
+    );
+  }
+  return value;
+}
+
 function releaseGenerationStillCurrent(
   workspaceId: string,
   agentId: string,
   expectedTokenHash: string | null,
+  expectedAgentId: string | null = null,
 ) {
   return sql`EXISTS (
     SELECT 1 FROM ${agents}
     WHERE ${agents.workspaceId} = ${workspaceId}
       AND ${agents.id} = ${agentId}
+      ${expectedAgentId ? sql`AND ${agents.id} = ${expectedAgentId}` : sql``}
       ${expectedTokenHash ? sql`AND ${agents.tokenHash} = ${expectedTokenHash}` : sql``}
   )`;
 }
@@ -669,11 +685,13 @@ async function waitForInvocationReplayOutcome(
     if (
       isBuiltinReleaseInvocation(current)
       && current.status === 'failed'
-      && current.error === RELEASE_GENERATION_CONFLICT_CODE
+      && (current.error === RELEASE_GENERATION_CONFLICT_CODE || current.error === RELEASE_IDENTITY_MISMATCH_CODE)
     ) {
       throw codedError(
-        'Action invocation failed because the release generation changed',
-        RELEASE_GENERATION_CONFLICT_CODE,
+        current.error === RELEASE_IDENTITY_MISMATCH_CODE
+          ? 'Action invocation failed because the immutable agent identity changed'
+          : 'Action invocation failed because the release generation changed',
+        current.error,
         409,
       );
     }
@@ -1064,6 +1082,8 @@ async function dispatchRelease(args: {
   completionDeps?: InvocationCompletionDeps;
   workspaceId: string;
   invocationId?: string;
+  idempotencyKey?: string;
+  idempotencyActorId?: string;
   data: {
     input?: Record<string, unknown>;
     caller_id?: string;
@@ -1076,6 +1096,25 @@ async function dispatchRelease(args: {
     throw codedError('release action input.name is required', 'invalid_release_request', 400);
   }
   const expectedTokenHash = releaseExpectedTokenHash(input);
+  const expectedAgentId = releaseExpectedAgentId(input);
+
+  // Claim the operation before resolving the mutable name. A completed exact
+  // release tombstones/renames the row, so a lost-response replay must find
+  // this immutable invocation before it looks up the name again.
+  const exactClaim = expectedAgentId ? await createInvocation(args.db, args.workspaceId, null, {
+    input,
+    caller_id: args.data.caller_id,
+    caller_name: args.data.caller_name,
+    action_name: 'release',
+    invocation_id: args.invocationId ?? (args.idempotencyKey && (args.idempotencyActorId ?? args.data.caller_id)
+      ? await idempotentInvocationId(args.workspaceId, args.idempotencyActorId ?? args.data.caller_id!, 'release', args.idempotencyKey)
+      : undefined),
+  }) : null;
+  if (exactClaim?.replayed) {
+    const { invocation } = exactClaim;
+    const settled = await waitForInvocationReplayOutcome(args.db, args.workspaceId, invocation);
+    return markInvocationReplay(invocationAck(settled, { actionName: 'release' }));
+  }
 
   const [agent] = await args.db
     .select()
@@ -1083,9 +1122,36 @@ async function dispatchRelease(args: {
     .where(and(
       eq(agents.workspaceId, args.workspaceId),
       eq(agents.name, name),
+      ...(expectedAgentId ? [eq(agents.id, expectedAgentId)] : []),
       ...(expectedTokenHash ? [eq(agents.tokenHash, expectedTokenHash)] : []),
     ));
   if (!agent) {
+    if (expectedAgentId) {
+      await args.db
+        .update(actionInvocations)
+        .set({ status: 'failed', error: RELEASE_IDENTITY_MISMATCH_CODE, completedAt: new Date() })
+        .where(and(
+          eq(actionInvocations.workspaceId, args.workspaceId),
+          eq(actionInvocations.id, exactClaim!.invocation.id),
+          inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+        ));
+      const [sameName] = await args.db
+        .select({ id: agents.id })
+        .from(agents)
+        .where(and(eq(agents.workspaceId, args.workspaceId), eq(agents.name, name)));
+      if (sameName) {
+        throw codedError(
+          `Agent "${name}" no longer matches the expected immutable identity`,
+          RELEASE_IDENTITY_MISMATCH_CODE,
+          409,
+        );
+      }
+      throw codedError(
+        `Agent "${name}" with expected identity is absent`,
+        RELEASE_IDENTITY_MISMATCH_CODE,
+        409,
+      );
+    }
     if (expectedTokenHash) {
       const [sameName] = await args.db
         .select({ id: agents.id })
@@ -1101,12 +1167,17 @@ async function dispatchRelease(args: {
     }
     throw codedError(`Agent "${name}" not found`, 'agent_not_found', 404);
   }
-  const { invocation, replayed } = await createInvocation(args.db, args.workspaceId, null, {
+  // Legacy requests retain their prior behavior: invalid names/generation
+  // guards fail before creating an invocation. Exact requests have already
+  // claimed so their post-release replay survives the tombstone rename.
+  const { invocation, replayed } = exactClaim ?? await createInvocation(args.db, args.workspaceId, null, {
     input,
     caller_id: args.data.caller_id,
     caller_name: args.data.caller_name,
     action_name: 'release',
-    invocation_id: args.invocationId,
+    invocation_id: args.invocationId ?? (args.idempotencyKey && (args.idempotencyActorId ?? args.data.caller_id)
+      ? await idempotentInvocationId(args.workspaceId, args.idempotencyActorId ?? args.data.caller_id!, 'release', args.idempotencyKey)
+      : undefined),
   });
   if (replayed) {
     const settled = await waitForInvocationReplayOutcome(args.db, args.workspaceId, invocation);
@@ -1132,6 +1203,7 @@ async function dispatchRelease(args: {
       args.workspaceId,
       agent.id,
       expectedTokenHash,
+      expectedAgentId,
     );
     const atomicExitNodeId = sql<string | null>`COALESCE(
       (
@@ -1340,6 +1412,7 @@ async function dispatchRelease(args: {
         args.workspaceId,
         agent.id,
         expectedTokenHash,
+        expectedAgentId,
       );
       const results = await runAtomicWrites(args.db, (writeDb) => [
         writeDb
@@ -1508,6 +1581,10 @@ export async function dispatchAgentRelease(
   options: {
     nodeConnections?: NodeConnectionRegistry;
     completionDeps?: InvocationCompletionDeps;
+    /** Required by the exact route; derives a durable action-invocation claim. */
+    idempotencyKey?: string;
+    /** Stable idempotency scope; may be a workspace-key principal, not an agent FK. */
+    idempotencyActorId?: string;
   } = {},
 ) {
   return dispatchRelease({
@@ -1516,6 +1593,8 @@ export async function dispatchAgentRelease(
     completionDeps: options.completionDeps,
     workspaceId,
     data,
+    idempotencyKey: options.idempotencyKey,
+    idempotencyActorId: options.idempotencyActorId,
   });
 }
 
@@ -2135,7 +2214,8 @@ async function completeGuardedReleaseNodeInvocation(
     && AGENT_TOKEN_HASH_PATTERN.test(persistedTokenHash)
     ? persistedTokenHash
     : null;
-  if (!name || !expectedTokenHash) {
+  const expectedAgentId = releaseExpectedAgentId(input);
+  if (!name || (!expectedTokenHash && !expectedAgentId)) {
     const [failed] = await db
       .update(actionInvocations)
       .set({
@@ -2158,7 +2238,11 @@ async function completeGuardedReleaseNodeInvocation(
   const [agent] = await db
     .select()
     .from(agents)
-    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, name)));
+    .where(and(
+      eq(agents.workspaceId, workspaceId),
+      eq(agents.name, name),
+      ...(expectedAgentId ? [eq(agents.id, expectedAgentId)] : []),
+    ));
   if (!agent) {
     const [failed] = await db
       .update(actionInvocations)
@@ -2184,6 +2268,7 @@ async function completeGuardedReleaseNodeInvocation(
     workspaceId,
     agent.id,
     expectedTokenHash,
+    expectedAgentId,
   );
   const activeBindingStillCurrent = sql`EXISTS (
     SELECT 1 FROM ${agentNodeBindings}
@@ -2304,7 +2389,7 @@ async function completeGuardedReleaseNodeInvocation(
       eq(agents.workspaceId, workspaceId),
       eq(agents.id, agent.id),
       eq(agents.name, name),
-      eq(agents.tokenHash, expectedTokenHash),
+      ...(expectedTokenHash ? [eq(agents.tokenHash, expectedTokenHash)] : []),
       invocationCompleted,
     );
     if (input.delete_agent === true) {
@@ -2862,7 +2947,10 @@ async function dispatchNodeInvocation(args: {
   const guardedReleaseHash = args.invocationOrigin === 'builtin' && isReleaseInvocation(args.action)
     ? releaseExpectedTokenHash(args.input)
     : null;
-  if (guardedReleaseHash) {
+  const guardedReleaseAgentId = args.invocationOrigin === 'builtin' && isReleaseInvocation(args.action)
+    ? releaseExpectedAgentId(args.input)
+    : null;
+  if (guardedReleaseHash || guardedReleaseAgentId) {
     const name = typeof args.input.name === 'string' ? args.input.name : '';
     const [current] = await args.db
       .select({ id: agents.id })
@@ -2870,7 +2958,8 @@ async function dispatchNodeInvocation(args: {
       .where(and(
         eq(agents.workspaceId, args.workspaceId),
         eq(agents.name, name),
-        eq(agents.tokenHash, guardedReleaseHash),
+        ...(guardedReleaseHash ? [eq(agents.tokenHash, guardedReleaseHash)] : []),
+        ...(guardedReleaseAgentId ? [eq(agents.id, guardedReleaseAgentId)] : []),
         sql`EXISTS (
             SELECT 1 FROM ${agentNodeBindings}
             WHERE ${agentNodeBindings.workspaceId} = ${args.workspaceId}
@@ -3677,7 +3766,7 @@ export async function completeNodeInvocation(
   if (
     !data.error
     && isBuiltinReleaseInvocation(existing)
-    && existingInput.expected_token_hash !== undefined
+    && (existingInput.expected_token_hash !== undefined || existingInput.expected_agent_id !== undefined)
   ) {
     return completeGuardedReleaseNodeInvocation(
       db,

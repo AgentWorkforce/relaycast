@@ -272,6 +272,7 @@ impl AgentRegistrationClient {
                 code,
                 request_id,
                 attempts,
+                ..
             }) => {
                 let retry_after_secs = DEFAULT_REGISTRATION_COOLDOWN_SECS;
                 let blocked_until = Instant::now() + Duration::from_secs(retry_after_secs);
@@ -289,6 +290,7 @@ impl AgentRegistrationClient {
                 code,
                 request_id,
                 attempts,
+                ..
             }) => Err(AgentRegistrationError::Api {
                 agent_name: trimmed_name.to_string(),
                 status,
