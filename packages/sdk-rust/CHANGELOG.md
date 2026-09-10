@@ -14,6 +14,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - `RelayError::retry_after_ms()` exposes the authoritative server delay for exact-release overload handling.
 - Retryable HTTP failures retain the final status, API error, request metadata, and attempt count after retries are exhausted.
 - Retried 5xx responses honor a bounded `Retry-After` delay.
+- Agent registration now honors bounded server `Retry-After` cooldowns and waits for that same cooldown before retrying.
 
 ### Changed
 
