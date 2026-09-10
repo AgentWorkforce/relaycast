@@ -111,21 +111,17 @@ const child = await RelayCast.createWorkspace('job-child', {
 });
 ```
 
-Fresh bootstrap callers can use the same contract without an API key, but must
-also present the deployment's bootstrap secret as proof — the idempotency key
-alone is a caller-chosen value, not a secret by itself, so it cannot authorize
-recovering another caller's workspace credentials. For the same reason, the
-key must be generated with a CSPRNG (for example, a v4 UUID or 16 random bytes
-hex-encoded — never a job id, timestamp, or counter), and persist it alongside
+Fresh bootstrap callers use the same contract without an API key. Their
+`Idempotency-Key` is a narrowly scoped, reveal-once recovery capability, so it
+must be generated with a CSPRNG (for example, a v4 UUID or 16 random bytes
+hex-encoded — never a job id, timestamp, or counter) and persisted alongside
 the work so a genuine retry reuses the exact same value. The server only
 enforces a 32-character structural minimum; it cannot verify randomness:
 
 ```ts
 const idempotencyKey = crypto.randomUUID(); // persist with the work; reuse it on retry
 const workspace = await RelayCast.createWorkspace('my-project', {
-  baseUrl: 'https://relay.example.com', // your self-hosted deployment
   idempotencyKey,
-  bootstrapSecret: process.env.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET,
 });
 ```
 
@@ -135,13 +131,15 @@ the workspace terminalizes its binding; replaying the key cannot accidentally
 create a replacement. Unauthenticated by-name lookup never returns workspace
 credentials.
 
-Keyed anonymous bootstrap requires a stable deployment secret. Self-hosted
-deployments must persist `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` (or provide
-`workspaceBootstrapSecret` in the engine config); deployments without it return
-`503 workspace_create_idempotency_unavailable`. A caller that omits the secret
-or presents the wrong one gets `401 workspace_create_bootstrap_secret_invalid`
-before any lookup of the idempotency binding — the secret is the deployment's
-to configure and share only with callers it trusts to bootstrap a workspace.
+Keyed anonymous bootstrap requires a stable server-side derivation secret.
+Self-hosted deployments must persist `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` (or
+provide `workspaceBootstrapSecret` in engine config); deployments without it
+return `503 workspace_create_idempotency_unavailable`. Never distribute that
+deployment-wide secret to hosted clients. Self-hosted operators that need the
+previous shared-secret proof can opt in with
+`RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED=true`; only then must callers
+also send `X-Workspace-Bootstrap-Secret`, and missing or invalid proof returns
+`401 workspace_create_bootstrap_secret_invalid` before a binding lookup.
 Unkeyed creates remain available and continue to generate a fresh API key.
 
 If workspace storage remains unavailable after its transient retries and the

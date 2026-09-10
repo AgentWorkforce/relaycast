@@ -181,7 +181,7 @@ components:
           description: Snowflake ID of the workspace
         api_key:
           type: string
-          description: Workspace API key (returned on first creation and on an authenticated idempotent replay or an anonymous bootstrap replay with a valid bootstrap-secret proof)
+          description: Workspace API key (returned on first creation and on authenticated or anonymous idempotent replay)
         created_at:
           type: string
           format: date-time
@@ -1503,11 +1503,10 @@ paths:
         provide an `Idempotency-Key`: authenticated requests bind the owner, key, and exact request
         digest, while anonymous bootstrap requests bind the key to the deployment. Replaying the
         same request returns the same workspace and usable API key with a `200` response, while
-        changing the request returns `409`. An anonymous (no `Authorization`) request that supplies
-        `Idempotency-Key` must also supply `X-Workspace-Bootstrap-Secret` matching the deployment's
-        configured bootstrap secret; the `Idempotency-Key` alone is a caller-chosen, non-secret
-        correlator, so proving the deployment secret is what authorizes looking up or recovering the
-        binding. If transient storage attempts are
+        changing the request returns `409`. For an anonymous (no `Authorization`) request, a
+        CSPRNG-generated `Idempotency-Key` is the narrowly scoped recovery capability; the configured
+        deployment secret remains server-only HMAC material for deterministic child-key derivation.
+        Self-hosts can optionally require `X-Workspace-Bootstrap-Secret` proof. If transient storage attempts are
         exhausted and the server cannot confirm the committed workspace/channel pair, it returns
         `503 workspace_storage_unavailable`; that outcome is indeterminate.
       tags:
@@ -1551,8 +1550,7 @@ paths:
             authorization it is scoped to anonymous bootstrap creation on this
             deployment. Reusing it with the same request replays the workspace;
             a different request is a 409. For an anonymous (bootstrap) create,
-            this key is part of what authorizes recovering the binding
-            alongside `X-Workspace-Bootstrap-Secret`. Callers must generate it
+            this key is the narrowly scoped recovery capability. Callers must generate it
             with a CSPRNG (a v4 UUID is suitable). The server enforces only a
             32-character structural minimum: only a shorter value returns
             `400 workspace_create_idempotency_key_too_weak`. This
@@ -1563,12 +1561,11 @@ paths:
           schema:
             type: string
           description: >-
-            Required alongside `Idempotency-Key` for an anonymous (no
-            `Authorization`) request. Must match the deployment's configured
-            bootstrap secret; a missing or mismatched value returns `401`
-            before any lookup of the idempotency binding. Not used, and not
-            required, for authenticated or unkeyed (no `Idempotency-Key`)
-            creates.
+            Optional self-host proof for anonymous keyed creates when the
+            deployment enables bootstrap proof enforcement. Hosted callers
+            must not send this deployment-wide secret. When enforcement is
+            enabled, a missing or mismatched value returns `401` before any
+            binding lookup. Not used for authenticated or unkeyed creates.
       responses:
         '200':
           description: Existing workspace returned (idempotent)
@@ -1613,8 +1610,9 @@ paths:
         '401':
           description: >-
             Invalid owner workspace key for authenticated keyed creation, or
-            `workspace_create_bootstrap_secret_invalid` — an anonymous keyed
-            create did not supply a matching `X-Workspace-Bootstrap-Secret`.
+            `workspace_create_bootstrap_secret_invalid` when a self-host has
+            enabled bootstrap-proof enforcement and an anonymous keyed create
+            did not supply a matching `X-Workspace-Bootstrap-Secret`.
           content:
             application/json:
               schema:

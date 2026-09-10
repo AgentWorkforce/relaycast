@@ -16,7 +16,19 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Changed
+
+- Anonymous keyed workspace creation now treats a CSPRNG `Idempotency-Key` as the hosted-safe recovery capability; the deployment derivation secret remains server-only, while self-hosts can opt into shared-secret proof enforcement.
+
+### Added
+
+- Rust SDK `WorkspaceBootstrapOptions` supports crash-safe anonymous keyed workspace creation without a deployment secret and opt-in self-host bootstrap proof without exposing it to hosted Relaycast.
+
+### Fixed
+
+- Rust and TypeScript SDK anonymous keyed workspace bootstrap refuses remote HTTP and redirects, keeping its recovery capability on the intended origin.
 
 ## [8.7.0] - 2026-09-09
 

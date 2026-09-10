@@ -5,6 +5,7 @@ use crate::client::{ClientOptions, HttpClient};
 use crate::error::{RelayError, Result};
 use crate::types::*;
 use serde::Serialize;
+use url::Url;
 
 use crate::DEFAULT_BASE_URL;
 
@@ -13,6 +14,46 @@ const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/sdk-rust";
 
 fn strip_hash(channel: &str) -> &str {
     channel.strip_prefix('#').unwrap_or(channel)
+}
+
+fn validate_anonymous_keyed_bootstrap_destination(base_url: &str) -> Result<Url> {
+    let parsed = Url::parse(base_url).map_err(|_| {
+        RelayError::InvalidResponse(
+            "Anonymous keyed workspace bootstrap requires a valid baseUrl".to_string(),
+        )
+    })?;
+    let hostname = parsed
+        .host_str()
+        .unwrap_or_default()
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    let loopback_http =
+        parsed.scheme() == "http" && matches!(hostname.as_str(), "localhost" | "127.0.0.1" | "::1");
+
+    if parsed.scheme() != "https" && !loopback_http {
+        return Err(RelayError::InvalidResponse(
+            "Anonymous keyed workspace bootstrap requires an HTTPS self-hosted baseUrl (or loopback HTTP for local development)".to_string(),
+        ));
+    }
+
+    Ok(parsed)
+}
+
+fn validate_bootstrap_secret_destination(base_url: &str) -> Result<()> {
+    let parsed = validate_anonymous_keyed_bootstrap_destination(base_url)?;
+    let hostname = parsed
+        .host_str()
+        .unwrap_or_default()
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    if hostname == "cast.agentrelay.com" {
+        return Err(RelayError::InvalidResponse(
+            "Anonymous keyed workspace bootstrap cannot send a bootstrapSecret to the hosted gateway"
+                .to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 /// Options for creating a RelayCast client.
@@ -102,18 +143,92 @@ impl RelayCast {
         base_url: Option<&str>,
         provenance: WorkspaceProvenance,
     ) -> Result<CreateWorkspaceResponse> {
-        let url = format!("{}/v1/workspaces", base_url.unwrap_or(DEFAULT_BASE_URL));
+        let mut options = WorkspaceBootstrapOptions::new(provenance);
+        if let Some(base_url) = base_url {
+            options = options.with_base_url(base_url);
+        }
+        Self::create_workspace_with_options(name, options).await
+    }
 
-        let client = reqwest::Client::new();
-        let response = client
+    /// Create a workspace with optional crash-safe anonymous idempotency.
+    ///
+    /// A hosted anonymous `idempotency_key` must be a CSPRNG-generated
+    /// reveal-once recovery capability. It is never combined with or used to
+    /// transmit a deployment-wide server secret. An optional
+    /// `bootstrap_secret` is sent only to an explicit safe self-hosted origin
+    /// for deployments that opt into proof enforcement.
+    pub async fn create_workspace_with_options(
+        name: &str,
+        options: WorkspaceBootstrapOptions,
+    ) -> Result<CreateWorkspaceResponse> {
+        let WorkspaceBootstrapOptions {
+            base_url,
+            provenance,
+            idempotency_key,
+            bootstrap_secret,
+        } = options;
+
+        if let Some(key) = idempotency_key.as_deref() {
+            if key.len() < 32 {
+                return Err(RelayError::InvalidResponse(
+                    "Anonymous Idempotency-Key must be at least 32 characters".to_string(),
+                ));
+            }
+            if key.len() > 255 || !key.bytes().all(|byte| (b'!'..=b'~').contains(&byte)) {
+                return Err(RelayError::InvalidResponse(
+                    "Idempotency-Key must contain 1-255 visible ASCII characters".to_string(),
+                ));
+            }
+        }
+
+        let anonymous_keyed_request = idempotency_key.is_some();
+        if anonymous_keyed_request {
+            validate_anonymous_keyed_bootstrap_destination(
+                base_url.as_deref().unwrap_or(DEFAULT_BASE_URL),
+            )?;
+        }
+
+        let sends_bootstrap_secret = anonymous_keyed_request && bootstrap_secret.is_some();
+        if sends_bootstrap_secret {
+            let explicit_base_url = base_url.as_deref().ok_or_else(|| {
+                RelayError::InvalidResponse(
+                    "Anonymous keyed workspace bootstrap with a bootstrapSecret requires an explicit self-hosted baseUrl"
+                        .to_string(),
+                )
+            })?;
+            validate_bootstrap_secret_destination(explicit_base_url)?;
+        }
+
+        let url = format!(
+            "{}/v1/workspaces",
+            base_url.as_deref().unwrap_or(DEFAULT_BASE_URL)
+        );
+
+        // An anonymous Idempotency-Key is a reveal-once recovery capability,
+        // so never follow a redirect that could forward it to another origin.
+        let client = if anonymous_keyed_request {
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()?
+        } else {
+            reqwest::Client::new()
+        };
+        let mut request = client
             .post(&url)
             .header("Content-Type", "application/json")
             .header("X-SDK-Version", SDK_VERSION)
             .header("X-Relaycast-Origin-Client", DEFAULT_ORIGIN_CLIENT)
             .header("X-Relaycast-Origin-Version", SDK_VERSION)
-            .json(&serde_json::json!({ "name": name, "provenance": provenance }))
-            .send()
-            .await?;
+            .json(&serde_json::json!({ "name": name, "provenance": provenance }));
+        if let Some(key) = idempotency_key {
+            request = request.header("Idempotency-Key", key);
+        }
+        if sends_bootstrap_secret {
+            if let Some(bootstrap_secret) = bootstrap_secret {
+                request = request.header("X-Workspace-Bootstrap-Secret", bootstrap_secret);
+            }
+        }
+        let response = request.send().await?;
 
         let status = response.status().as_u16();
         let json: ApiResponse<CreateWorkspaceResponse> = response.json().await?;

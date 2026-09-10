@@ -7,7 +7,15 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Changed
+
+- `RelayCast.createWorkspace()` can replay anonymous hosted creation with a CSPRNG `idempotencyKey` without accepting or transmitting a deployment-wide secret.
+
+### Fixed
+
+- Anonymous keyed workspace bootstrap rejects remote HTTP and redirects, preventing its recovery capability from reaching another origin.
 
 ## [8.6.0] - 2026-09-09
 

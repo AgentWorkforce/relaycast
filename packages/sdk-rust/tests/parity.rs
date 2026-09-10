@@ -7,10 +7,10 @@ use relaycast::{
     ListDeliveriesOptions, ListSessionEventsQuery, MessageInjectionMode, MessageListQuery,
     MonitorCertificationRequest, NodeDeliveryAuth, NodeDeliveryConfig, NodeListQuery,
     ObserverScope, ObserverTokenFilters, RateDirectoryAgentRequest, RegisterA2aOptions,
-    RegisterActionRequest, RelayCast, RelayCastOptions, ReleaseAgentRequest, RouteFeedbackRequest,
-    SearchDirectoryQuery, SpawnAgentRequest, SubmitCertificationRequest,
+    RegisterActionRequest, RelayCast, RelayCastOptions, RelayError, ReleaseAgentRequest,
+    RouteFeedbackRequest, SearchDirectoryQuery, SpawnAgentRequest, SubmitCertificationRequest,
     UpdateObserverTokenRequest, UpdateRoutingConfigRequest, WebhookTriggerRequest,
-    WorkspaceProvenance, WsClient, WsClientOptions, WsEvent,
+    WorkspaceBootstrapOptions, WorkspaceProvenance, WsClient, WsClientOptions, WsEvent,
 };
 use serde_json::json;
 use std::net::TcpListener;
@@ -448,6 +448,281 @@ async fn create_workspace_sends_origin_headers() {
     .expect("create_workspace failed");
 
     assert_eq!(created.workspace_id, "ws_123");
+}
+
+#[tokio::test]
+async fn create_workspace_with_options_sends_hosted_idempotency_key_without_a_secret() {
+    let server = MockServer::start().await;
+    let key = "hosted-run-407-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e";
+
+    Mock::given(method("POST"))
+        .and(path("/v1/workspaces"))
+        .and(header("idempotency-key", key))
+        .and(body_json(json!({
+            "name": "Hosted Retry",
+            "provenance": { "source": "sdk" }
+        })))
+        .respond_with(ok(json!({
+            "workspace_id": "ws_hosted",
+            "api_key": "rk_live_hosted",
+            "created_at": "2026-09-10T00:00:00.000Z"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let created = RelayCast::create_workspace_with_options(
+        "Hosted Retry",
+        WorkspaceBootstrapOptions::new(WorkspaceProvenance::sdk())
+            .with_base_url(server.uri())
+            .with_idempotency_key(key),
+    )
+    .await
+    .expect("keyed hosted workspace create failed");
+
+    assert_eq!(created.workspace_id, "ws_hosted");
+    let requests = server
+        .received_requests()
+        .await
+        .expect("mock server should retain requests");
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0]
+        .headers
+        .get("x-workspace-bootstrap-secret")
+        .is_none());
+}
+
+#[tokio::test]
+async fn create_workspace_with_options_forwards_an_opt_in_self_host_bootstrap_proof() {
+    let server = MockServer::start().await;
+    let key = "self-host-run-407-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e";
+
+    Mock::given(method("POST"))
+        .and(path("/v1/workspaces"))
+        .and(header("idempotency-key", key))
+        .and(header(
+            "x-workspace-bootstrap-secret",
+            "self-host-deployment-proof",
+        ))
+        .respond_with(ok(json!({
+            "workspace_id": "ws_self_hosted",
+            "api_key": "rk_live_self_hosted",
+            "created_at": "2026-09-10T00:00:00.000Z"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let created = RelayCast::create_workspace_with_options(
+        "Self-host Retry",
+        WorkspaceBootstrapOptions::new(WorkspaceProvenance::sdk())
+            .with_base_url(server.uri())
+            .with_idempotency_key(key)
+            .with_bootstrap_secret("self-host-deployment-proof"),
+    )
+    .await
+    .expect("keyed self-host workspace create failed");
+
+    assert_eq!(created.workspace_id, "ws_self_hosted");
+}
+
+#[tokio::test]
+async fn bootstrap_secret_is_not_sent_without_an_idempotency_key() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/workspaces"))
+        .respond_with(ok(json!({
+            "workspace_id": "ws_unkeyed",
+            "api_key": "rk_live_unkeyed",
+            "created_at": "2026-09-10T00:00:00.000Z"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    RelayCast::create_workspace_with_options(
+        "Unkeyed Retry",
+        WorkspaceBootstrapOptions::new(WorkspaceProvenance::sdk())
+            .with_base_url(server.uri())
+            .with_bootstrap_secret("must-not-leave-the-process"),
+    )
+    .await
+    .expect("unkeyed workspace create failed");
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("mock server should retain requests");
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0]
+        .headers
+        .get("x-workspace-bootstrap-secret")
+        .is_none());
+}
+
+#[tokio::test]
+async fn bootstrap_secret_is_rejected_for_the_hosted_gateway_without_disclosure() {
+    let secret = "self-host-deployment-secret";
+    let result = RelayCast::create_workspace_with_options(
+        "Hosted Retry",
+        WorkspaceBootstrapOptions::new(WorkspaceProvenance::sdk())
+            .with_base_url("https://CAST.AGENTRELAY.COM./")
+            .with_idempotency_key("hosted-run-407-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e")
+            .with_bootstrap_secret(secret),
+    )
+    .await;
+
+    assert!(matches!(
+        result,
+        Err(RelayError::InvalidResponse(message))
+            if message.contains("cannot send a bootstrapSecret") && !message.contains(secret)
+    ));
+}
+
+#[tokio::test]
+async fn bootstrap_secret_requires_an_explicit_secure_self_host_origin() {
+    let secret = "self-host-deployment-secret";
+    let key = "self-host-run-407-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e";
+
+    let missing_origin = RelayCast::create_workspace_with_options(
+        "Hosted Retry",
+        WorkspaceBootstrapOptions::new(WorkspaceProvenance::sdk())
+            .with_idempotency_key(key)
+            .with_bootstrap_secret(secret),
+    )
+    .await;
+    assert!(matches!(
+        missing_origin,
+        Err(RelayError::InvalidResponse(message))
+            if message.contains("requires an explicit self-hosted baseUrl") && !message.contains(secret)
+    ));
+
+    let insecure_origin = RelayCast::create_workspace_with_options(
+        "Hosted Retry",
+        WorkspaceBootstrapOptions::new(WorkspaceProvenance::sdk())
+            .with_base_url("http://self-host.example")
+            .with_idempotency_key(key)
+            .with_bootstrap_secret(secret),
+    )
+    .await;
+    assert!(matches!(
+        insecure_origin,
+        Err(RelayError::InvalidResponse(message))
+            if message.contains("requires an HTTPS self-hosted baseUrl") && !message.contains(secret)
+    ));
+}
+
+#[tokio::test]
+async fn bootstrap_secret_is_not_forwarded_across_a_redirect() {
+    let origin = MockServer::start().await;
+    let redirected = MockServer::start().await;
+    let key = "self-host-run-407-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e";
+
+    Mock::given(method("POST"))
+        .and(path("/v1/workspaces"))
+        .respond_with(ResponseTemplate::new(307).insert_header("Location", redirected.uri()))
+        .expect(1)
+        .mount(&origin)
+        .await;
+
+    let result = RelayCast::create_workspace_with_options(
+        "Redirected Retry",
+        WorkspaceBootstrapOptions::new(WorkspaceProvenance::sdk())
+            .with_base_url(origin.uri())
+            .with_idempotency_key(key)
+            .with_bootstrap_secret("do-not-forward"),
+    )
+    .await;
+    assert!(result.is_err());
+
+    assert!(
+        redirected
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty(),
+        "the proof must not be forwarded to a redirect target"
+    );
+}
+
+#[tokio::test]
+async fn anonymous_keyed_workspace_is_not_followed_across_a_redirect() {
+    let origin = MockServer::start().await;
+    let redirected = MockServer::start().await;
+    let key = "hosted-run-408-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e";
+
+    Mock::given(method("POST"))
+        .and(path("/v1/workspaces"))
+        .respond_with(ResponseTemplate::new(307).insert_header("Location", redirected.uri()))
+        .expect(1)
+        .mount(&origin)
+        .await;
+
+    let result = RelayCast::create_workspace_with_options(
+        "Redirected Keyed Retry",
+        WorkspaceBootstrapOptions::new(WorkspaceProvenance::sdk())
+            .with_base_url(origin.uri())
+            .with_idempotency_key(key),
+    )
+    .await;
+    assert!(result.is_err());
+
+    assert!(
+        redirected
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty(),
+        "the recovery capability must not be forwarded to a redirect target"
+    );
+}
+
+#[tokio::test]
+async fn anonymous_keyed_workspace_rejects_remote_plaintext_http() {
+    let result = RelayCast::create_workspace_with_options(
+        "Remote Plaintext Retry",
+        WorkspaceBootstrapOptions::new(WorkspaceProvenance::sdk())
+            .with_base_url("http://self-host.example")
+            .with_idempotency_key("hosted-run-408-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e"),
+    )
+    .await;
+
+    assert!(matches!(
+        result,
+        Err(RelayError::InvalidResponse(message)) if message.contains("requires an HTTPS")
+    ));
+}
+
+#[test]
+fn workspace_bootstrap_options_redacts_recovery_capabilities_from_debug_output() {
+    let idempotency_key = "hosted-run-407-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e";
+    let secret = "self-host-deployment-secret";
+    let options = WorkspaceBootstrapOptions::new(WorkspaceProvenance::sdk())
+    .with_base_url("https://self-host.example.test")
+    .with_idempotency_key(idempotency_key)
+    .with_bootstrap_secret(secret);
+    let debug = format!("{options:?}");
+
+    assert!(debug.contains("idempotency_key: Some(\"<redacted>\")"));
+    assert!(debug.contains("bootstrap_secret: Some(\"<redacted>\")"));
+    assert!(!debug.contains(idempotency_key));
+    assert!(!debug.contains(secret));
+    assert!(debug.contains("https://self-host.example.test"));
+    assert!(debug.contains("source: Sdk"));
+}
+
+#[tokio::test]
+async fn create_workspace_with_options_rejects_a_weak_anonymous_key_before_request() {
+    let result = RelayCast::create_workspace_with_options(
+        "Weak Retry",
+        WorkspaceBootstrapOptions::new(WorkspaceProvenance::sdk()).with_idempotency_key("job-407"),
+    )
+    .await;
+
+    assert!(
+        matches!(result, Err(RelayError::InvalidResponse(message)) if message.contains("at least 32"))
+    );
 }
 
 #[tokio::test]

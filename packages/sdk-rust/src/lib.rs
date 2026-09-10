@@ -199,6 +199,7 @@ pub use types::{
     CreateWebhookResponse,
     // Workspace
     CreateWorkspaceResponse,
+    WorkspaceBootstrapOptions,
     WorkspaceCreationSource,
     WorkspaceProvenance,
     WorkspaceUsageClassification,

@@ -185,6 +185,10 @@ test('shows help without requiring a deployment authority', () => {
   const result = run(['--help']);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Required public HTTPS origin/);
+  assert.match(
+    result.stdout,
+    /RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED\s+Set true to require bootstrap-secret proof for anonymous keyed creates/,
+  );
   assertRefused([], /--base-url is required/); // Control: an actual start still refuses it.
 });
 
@@ -204,6 +208,25 @@ test('forwards the bootstrap secret without exposing it in container output', ()
   assert.deepEqual(config, {
     environment: 'production',
     workspaceBootstrapSecret: secret,
+  });
+});
+
+test('makes bootstrap-secret proof enforcement an explicit opt-in', () => {
+  assert.deepEqual(buildEngineConfig({
+    RELAYCAST_ENV: 'production',
+    RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: 'stable-container-secret-407',
+  }), {
+    environment: 'production',
+    workspaceBootstrapSecret: 'stable-container-secret-407',
+  });
+  assert.deepEqual(buildEngineConfig({
+    RELAYCAST_ENV: 'production',
+    RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: 'stable-container-secret-407',
+    RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'true',
+  }), {
+    environment: 'production',
+    workspaceBootstrapSecret: 'stable-container-secret-407',
+    workspaceBootstrapProofRequired: true,
   });
 });
 
