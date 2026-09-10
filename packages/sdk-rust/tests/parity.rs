@@ -7,7 +7,7 @@ use relaycast::{
     ListDeliveriesOptions, ListSessionEventsQuery, MessageInjectionMode, MessageListQuery,
     MonitorCertificationRequest, NodeDeliveryAuth, NodeDeliveryConfig, NodeListQuery,
     ObserverScope, ObserverTokenFilters, RateDirectoryAgentRequest, RegisterA2aOptions,
-    RegisterActionRequest, RelayCast, RelayCastOptions, RelayError, ReleaseAgentRequest,
+    ExactReleaseAgentRequest, RegisterActionRequest, RelayCast, RelayCastOptions, RelayError, ReleaseAgentRequest,
     RouteFeedbackRequest, SearchDirectoryQuery, SpawnAgentRequest, SubmitCertificationRequest,
     UpdateObserverTokenRequest, UpdateRoutingConfigRequest, WebhookTriggerRequest,
     WorkspaceBootstrapOptions, WorkspaceProvenance, WsClient, WsClientOptions, WsEvent,
@@ -303,6 +303,53 @@ async fn spawn_and_release_methods_use_expected_endpoints() {
         .expect("release_agent failed");
     assert_eq!(released.invocation_id, "inv_release_1");
     assert_eq!(released.action_name, "release");
+}
+
+#[tokio::test]
+async fn exact_release_uses_immutable_id_and_caller_idempotency_key() {
+    let server = MockServer::start().await;
+    let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+        .expect("failed to create relay client");
+    Mock::given(method("POST"))
+        .and(path("/v1/agents/release-exact"))
+        .and(header("Idempotency-Key", "exact-release-key"))
+        .and(body_json(json!({
+            "name": "WorkerOne",
+            "expected_agent_id": "agent_exact_1",
+            "delete_agent": true
+        })))
+        .respond_with(api_error(503, "database_overloaded", "retry exact release")
+            .insert_header("Retry-After", "0"))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/agents/release-exact"))
+        .and(header("Idempotency-Key", "exact-release-key"))
+        .and(body_json(json!({
+            "name": "WorkerOne",
+            "expected_agent_id": "agent_exact_1",
+            "delete_agent": true
+        })))
+        .respond_with(ok(json!({
+            "invocation_id": "inv_exact_1", "action_name": "release",
+            "handler_agent_id": null, "handler_node_id": null,
+            "dispatched_node_id": null, "input": {}, "status": "completed",
+            "created_at": "2026-01-01T00:00:01.000Z"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let released = relay.release_agent_exact(ExactReleaseAgentRequest {
+        name: "WorkerOne".to_string(),
+        expected_agent_id: "agent_exact_1".to_string(),
+        reason: None,
+        delete_agent: Some(true),
+        expected_token_hash: None,
+    }, "exact-release-key").await.expect("exact release succeeds");
+    assert_eq!(released.invocation_id, "inv_exact_1");
 }
 
 #[tokio::test]

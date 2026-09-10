@@ -1,7 +1,7 @@
 //! Main RelayCast client for workspace-level operations.
 
 use crate::agent::AgentClient;
-use crate::client::{ClientOptions, HttpClient};
+use crate::client::{ClientOptions, HttpClient, RequestOptions};
 use crate::error::{RelayError, Result};
 use crate::types::*;
 use serde::Serialize;
@@ -656,6 +656,22 @@ impl RelayCast {
     ) -> Result<ReleaseAgentResponse> {
         self.client
             .post("/v1/agents/release", Some(request), None)
+            .await
+    }
+
+    /// Release only the exact immutable agent identity using a durable caller
+    /// idempotency key. Reuse the same key after an overload or lost response.
+    pub async fn release_agent_exact(
+        &self,
+        request: ExactReleaseAgentRequest,
+        idempotency_key: impl Into<String>,
+    ) -> Result<ReleaseAgentResponse> {
+        self.client
+            .post(
+                "/v1/agents/release-exact",
+                Some(request),
+                Some(RequestOptions::with_idempotency_key(idempotency_key)),
+            )
             .await
     }
 

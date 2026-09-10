@@ -230,6 +230,7 @@ pub async fn bootstrap_session(
                         code: "agent_token_required".to_string(),
                         request_id: None,
                         attempts: 1,
+                        retry_after_ms: None,
                     }),
                 } {
                     Ok(result) => {
@@ -334,6 +335,7 @@ pub async fn bootstrap_session(
                         code: "agent_already_exists".to_string(),
                         request_id: None,
                         attempts: 1,
+                        retry_after_ms: None,
                     })?;
                 let rotate_result = relay
                     .rotate_agent_token(&name, existing_agent_token)

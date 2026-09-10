@@ -647,6 +647,7 @@ export type ReadReceipt = Camelize<Raw.ReadReceipt>;
 export type ReaderInfo = Camelize<Raw.ReaderInfo>;
 export type RelaycastMessageEvent = Camelize<Raw.RelaycastMessageEvent>;
 export type ReleaseAgentRequest = Camelize<Raw.ReleaseAgentRequest>;
+export type ExactReleaseAgentRequest = Camelize<Raw.ExactReleaseAgentRequest>;
 export type ReleaseAgentResponse = Camelize<Raw.ReleaseAgentResponse>;
 export type SendDmRequest = Camelize<Raw.SendDmRequest>;
 export type SetSystemPromptRequest = Camelize<Raw.SetSystemPromptRequest>;

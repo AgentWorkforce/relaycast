@@ -488,6 +488,20 @@ pub struct ReleaseAgentRequest {
     pub delete_agent: Option<bool>,
 }
 
+/// Immutable-identity release reconciliation request. The operation is only
+/// accepted by `/v1/agents/release-exact` with a caller-held Idempotency-Key.
+#[derive(Debug, Clone, Serialize)]
+pub struct ExactReleaseAgentRequest {
+    pub name: String,
+    pub expected_agent_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delete_agent: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_token_hash: Option<String>,
+}
+
 pub type ReleaseAgentResponse = InvokeActionResult;
 
 #[derive(Debug, Clone, Default)]

@@ -16,6 +16,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Fixed
 
 - Anonymous keyed workspace bootstrap rejects remote HTTP and redirects, preventing its recovery capability from reaching another origin.
+- `agents.releaseExact()` preserves its caller-held idempotency key across retries, exposes server `Retry-After`, and legacy unkeyed release is no longer replayed automatically.
 
 ## [8.6.0] - 2026-09-09
 
