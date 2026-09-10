@@ -342,6 +342,7 @@ describe("release version parity", () => {
       );
       const lockPath = path.join(root, "docker", "package-lock.json");
       const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+      delete lock.packages["node_modules/@relaycast/a2a"];
       lock.packages["node_modules/@relaycast/engine"].dependencies =
         lockDependencies;
       writeFileSync(lockPath, JSON.stringify(lock));
@@ -421,6 +422,35 @@ describe("release version parity", () => {
         description,
       );
     }
+  });
+
+  it("validates terminal nested Docker Relaycast entries", () => {
+    const root = repositoryFixture();
+    const lockPath = path.join(root, "docker", "package-lock.json");
+    const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+    const nestedKey =
+      "node_modules/@relaycast/engine/node_modules/@relaycast/types";
+    lock.packages[nestedKey] = {
+      version: "8.6.0-beta.0",
+      resolved:
+        "https://registry.npmjs.org/@relaycast/types/-/types-8.6.0-beta.0.tgz",
+      integrity:
+        "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+    };
+    writeFileSync(lockPath, JSON.stringify(lock));
+
+    assert.doesNotThrow(() =>
+      assertRepositoryVersionParity(root, "8.6.0-beta.0"),
+    );
+
+    lock.packages[nestedKey].version = "8.5.3";
+    writeFileSync(lockPath, JSON.stringify(lock));
+    assert.throws(
+      () => assertRepositoryVersionParity(root, "8.6.0-beta.0"),
+      new RegExp(
+        nestedKey + " is 8\\.5\\.3, expected 8\\.6\\.0-beta\\.0",
+      ),
+    );
   });
 
   it("permits the intentional pre-publish lockfile placeholder only when requested", () => {

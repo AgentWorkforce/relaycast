@@ -5,6 +5,8 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { packageProvenance, readReleaseProvenance } from "./release-provenance.mjs";
 
+const DOCKER_PACKAGE_KEY = /(?:^|\/)node_modules\/(@relaycast\/[^/]+)$/;
+
 /**
  * Update only the release-owned entries in the self-host lockfile. Running
  * npm update here can refresh unrelated semver ranges (for example zod) and
@@ -30,7 +32,7 @@ export function refreshDockerLock(lock, manifest, version) {
   }
 
   for (const [key, entry] of Object.entries(lock.packages)) {
-    const match = key.match(/(?:^|\/)node_modules\/(@relaycast\/[^/]+)$/);
+    const match = key.match(DOCKER_PACKAGE_KEY);
     if (!match) continue;
     const [, packageName] = match;
     const packageEntry = packageProvenance(manifest, packageName);

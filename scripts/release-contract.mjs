@@ -21,6 +21,7 @@ const DOCKER_DEPENDENCY_TYPES = [
   "optionalDependencies",
   "peerDependencies",
 ];
+const DOCKER_PACKAGE_KEY = /(?:^|\/)node_modules\/(@relaycast\/[^/]+)$/;
 
 export function parseVersion(value) {
   const match = value.match(SEMVER);
@@ -260,9 +261,9 @@ function assertDockerImageManifestVersion(
   }
   if (requireResolvedArtifact) {
     const expectedNames = dockerPackageNames(manifest, manifests);
-    for (const packageName of expectedNames) {
+    const validatedTopLevel = new Set();
+    const validatePackageEntry = (packageKey, packageName) => {
       const packageManifest = manifests.get(packageName);
-      const packageKey = `node_modules/${packageName}`;
       const lockedPackage = lock.packages?.[packageKey];
       if (!lockedPackage) {
         throw new Error(`${lockPath} is missing Docker package ${packageKey}`);
@@ -292,13 +293,24 @@ function assertDockerImageManifestVersion(
           );
         }
       }
-    }
+    };
     for (const key of Object.keys(lock.packages ?? {})) {
-      const match = key.match(/^node_modules\/(?:@relaycast\/[^/]+)$/);
+      const match = key.match(DOCKER_PACKAGE_KEY);
       if (!match) continue;
-      const packageName = key.slice("node_modules/".length);
+      const packageName = match[1];
       if (!expectedNames.has(packageName)) {
         throw new Error(`${lockPath} contains stale Docker package ${packageName}`);
+      }
+      validatePackageEntry(key, packageName);
+      if (key === `node_modules/${packageName}`) {
+        validatedTopLevel.add(packageName);
+      }
+    }
+    for (const packageName of expectedNames) {
+      if (!validatedTopLevel.has(packageName)) {
+        throw new Error(
+          `${lockPath} is missing Docker package node_modules/${packageName}`,
+        );
       }
     }
   }
