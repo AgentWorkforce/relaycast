@@ -7,7 +7,7 @@ import { runAtomic } from '../ports/database.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { isProviderAgentDeliveryReady } from '../ports/realtime.js';
 import { buildDeliverFrame, buildDeliverPayload, buildMessageCreatedEventData, buildThreadReplyEventData, buildDmReceivedEventData, buildGroupDmReceivedEventData } from './deliveryWire.js';
-import { publicMessageMetadata } from './messageMetadata.js';
+import { displayAgentName, publicMessageMetadata } from './messageMetadata.js';
 import { toIso } from '../lib/serialize.js';
 import { fetchAttachmentsBatch, type AttachmentRow } from './attachments.js';
 import type { DeliveryFanoutRecord } from './deliveryWrites.js';
@@ -552,7 +552,7 @@ function buildRoutableDeliveryEvent(
   row: PendingDeliveryRow,
   attachments: AttachmentRow[],
 ): { eventType: string; eventData: Record<string, unknown> } {
-  const senderName = row.senderAgentName ?? 'unknown';
+  const senderName = displayAgentName(row.metadata as Record<string, unknown> | null, row.senderAgentName);
   const injectionMode = row.delivery.mode === 'next-tool-call' ? 'steer' : 'wait';
   // Thread replies route as `thread.reply` in the live path even inside a DM /
   // group DM (see routes/thread.ts fanout), so a missed thread reply must

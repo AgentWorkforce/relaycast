@@ -1925,7 +1925,7 @@ describe('durable delivery api', () => {
   it('normalizes a live raw-hook delivery for node recipients', async () => {
     const ws = await createWorkspace(stack.app, 'raw-hook-wire');
     const node = await enrollAndAttachNode(ws);
-    await registerViaNode(node, 'hook-recipient');
+    const recipient = await registerViaNode(node, 'hook-recipient');
     const created = await stack.app.request('/v1/webhooks', { method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
       body: JSON.stringify({ channel: 'general' }) });
@@ -1939,6 +1939,15 @@ describe('durable delivery api', () => {
     expect(latestDeliverOfType(node.sock, 'message.created').payload).toMatchObject({
       type: 'message.created', data: { channel_name: 'general', from_name: 'GitHub', text: 'provider event' },
     });
+    await node.handle.handleClose();
+    const reconnected = await enrollAndAttachNode(ws, { id: node.id, name: node.name });
+    await reconnected.handle.handleMessage(JSON.stringify({ v: 1, type: 'inventory.sync',
+      agents: [{ agent_id: recipient.agentId, name: 'hook-recipient', session_ref: 'sess-hook-recipient' }] }));
+    await stack.settle();
+    expect(latestDeliverOfType(reconnected.sock, 'message.created').payload).toMatchObject({
+      type: 'message.created', data: { channel_name: 'general', from_name: 'GitHub', text: 'provider event' },
+    });
+
   });
 
   it('redelivers a DM with the same deliver payload after broker death/reconnect', async () => {
