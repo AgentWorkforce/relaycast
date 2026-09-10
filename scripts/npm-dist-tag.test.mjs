@@ -75,6 +75,28 @@ describe("npm dist-tag reconciliation", () => {
     assert.equal(reads, 4);
   });
 
+  it("reports only stale packages when peers already match", async () => {
+    await assert.rejects(
+      ensureNpmDistTags({
+        packageNames: ["@relaycast/types", "@relaycast/engine"],
+        version: "8.8.0",
+        distTag: "latest",
+        attempts: 1,
+        delayMs: 0,
+        readTag: (packageName) =>
+          packageName === "@relaycast/types"
+            ? { kind: "value", value: "8.8.0" }
+            : { kind: "value", value: "8.7.0" },
+        sleep: async () => {},
+      }),
+      (error) => {
+        assert.match(String(error), /@relaycast\/engine dist-tag latest points to 8\.7\.0/);
+        assert.doesNotMatch(String(error), /@relaycast\/types/);
+        return true;
+      },
+    );
+  });
+
   it("allows bounded missing/stale registry propagation to converge", async () => {
     const observations = [
       { kind: "missing" },

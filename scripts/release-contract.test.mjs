@@ -86,6 +86,7 @@ function repositoryFixture(version = "8.6.0-beta.0") {
           version,
           resolved: `https://registry.npmjs.org/@relaycast/engine/-/engine-${version}.tgz`,
           integrity: "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+          dependencies: { "@relaycast/types": version },
         },
       },
     })}\n`,
@@ -283,6 +284,52 @@ describe("release version parity", () => {
       () => assertRepositoryVersionParity(root, "8.6.0-beta.0"),
       /resolves .*engine-8\.5\.3\.tgz.*engine-8\.6\.0-beta\.0\.tgz/,
     );
+  });
+
+  it("rejects Docker lock dependency topology drift", () => {
+    for (const [description, manifestDependencies, lockDependencies] of [
+      [
+        "added dependency",
+        { "@relaycast/types": "8.6.0-beta.0", hono: "^4.11.9" },
+        { "@relaycast/types": "8.6.0-beta.0" },
+      ],
+      [
+        "removed dependency",
+        { "@relaycast/types": "8.6.0-beta.0" },
+        { "@relaycast/types": "8.6.0-beta.0", hono: "^4.11.9" },
+      ],
+      [
+        "changed non-@relaycast dependency",
+        { "@relaycast/types": "8.6.0-beta.0", hono: "^4.12.0" },
+        { "@relaycast/types": "8.6.0-beta.0", hono: "^4.11.9" },
+      ],
+    ]) {
+      const root = repositoryFixture();
+      const engineManifestPath = path.join(
+        root,
+        "packages",
+        "engine",
+        "package.json",
+      );
+      writeFileSync(
+        engineManifestPath,
+        JSON.stringify({
+          name: "@relaycast/engine",
+          version: "8.6.0-beta.0",
+          dependencies: manifestDependencies,
+        }),
+      );
+      const lockPath = path.join(root, "docker", "package-lock.json");
+      const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+      lock.packages["node_modules/@relaycast/engine"].dependencies =
+        lockDependencies;
+      writeFileSync(lockPath, JSON.stringify(lock));
+      assert.throws(
+        () => assertRepositoryVersionParity(root, "8.6.0-beta.0"),
+        /engine dependencies topology does not match/,
+        description,
+      );
+    }
   });
 
   it("permits the intentional pre-publish lockfile placeholder only when requested", () => {

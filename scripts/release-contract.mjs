@@ -173,6 +173,9 @@ function assertDockerImageManifestVersion(
 ) {
   const manifestPath = path.join(root, "docker", "package.json");
   const manifest = readJson(manifestPath);
+  const engineManifest = readJson(
+    path.join(root, "packages", "engine", "package.json"),
+  );
   if (manifest.version !== expectedVersion) {
     throw new Error(
       `${manifestPath} is ${manifest.version}, expected ${expectedVersion}`,
@@ -210,6 +213,25 @@ function assertDockerImageManifestVersion(
       throw new Error(
         `${lockPath} node_modules/@relaycast/engine has no valid registry integrity`,
       );
+    }
+  }
+
+  if (requireResolvedArtifact) {
+    for (const dependencyType of [
+      "dependencies",
+      "optionalDependencies",
+      "peerDependencies",
+    ]) {
+      const expected = engineManifest[dependencyType] ?? {};
+      const actual = lockedEngine[dependencyType] ?? {};
+      if (
+        JSON.stringify(Object.entries(actual).sort()) !==
+          JSON.stringify(Object.entries(expected).sort())
+      ) {
+        throw new Error(
+          `${lockPath} engine ${dependencyType} topology does not match packages/engine/package.json`,
+        );
+      }
     }
   }
 }

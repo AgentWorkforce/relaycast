@@ -40,6 +40,11 @@ describe("Docker lock refresh", () => {
           resolved: "https://registry.npmjs.org/@relaycast/types/-/types-8.7.0.tgz",
           integrity: "sha512-old-types=",
         },
+        "node_modules/@relaycast/engine/node_modules/zod": {
+          version: "4.6.1",
+          resolved: "https://registry.npmjs.org/zod/-/zod-4.6.1.tgz",
+          integrity: "sha512-nested=",
+        },
         "node_modules/zod": {
           version: "4.6.1",
           resolved: "https://registry.npmjs.org/zod/-/zod-4.6.1.tgz",
@@ -57,6 +62,8 @@ describe("Docker lock refresh", () => {
     assert.equal(lock.packages["node_modules/@relaycast/engine"].version, "8.8.0");
     assert.equal(lock.packages["node_modules/@relaycast/engine"].dependencies["@relaycast/types"], "8.8.0");
     assert.equal(lock.packages["node_modules/@relaycast/engine"].integrity, "sha512-engine=");
+    assert.equal(lock.packages["node_modules/@relaycast/engine/node_modules/zod"].version, "4.6.1");
+    assert.equal(lock.packages["node_modules/@relaycast/engine/node_modules/zod"].integrity, "sha512-nested=");
     assert.deepEqual(lock.packages["node_modules/zod"], unrelated);
   });
 

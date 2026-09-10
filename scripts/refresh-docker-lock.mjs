@@ -30,8 +30,9 @@ export function refreshDockerLock(lock, manifest, version) {
   }
 
   for (const [key, entry] of Object.entries(lock.packages)) {
-    if (!key.startsWith("node_modules/@relaycast/")) continue;
-    const packageName = key.slice("node_modules/".length);
+    const match = key.match(/(?:^|\/)node_modules\/(@relaycast\/[^/]+)$/);
+    if (!match) continue;
+    const [, packageName] = match;
     const packageEntry = packageProvenance(manifest, packageName);
     if (packageEntry.version !== version) {
       throw new Error(`${packageName} provenance version does not match the release`);

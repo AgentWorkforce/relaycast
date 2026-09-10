@@ -189,15 +189,17 @@ export async function ensureNpmDistTags({
     if (attempt < attempts) await sleep(delayMs);
   }
 
-  const failures = names.map((packageName) => {
+  const failures = names.flatMap((packageName) => {
     const observation = last.get(packageName);
     if (observation?.kind === "value") {
-      return `${packageName} dist-tag ${distTag} points to ${observation.value}, expected ${version}`;
+      return observation.value === version
+        ? []
+        : [`${packageName} dist-tag ${distTag} points to ${observation.value}, expected ${version}`];
     }
     if (observation?.kind === "unavailable") {
-      return `npm could not verify ${packageName} dist-tag ${distTag} after ${attempts} attempts`;
+      return [`npm could not verify ${packageName} dist-tag ${distTag} after ${attempts} attempts`];
     }
-    return `${packageName} dist-tag ${distTag} is absent after ${attempts} attempts`;
+    return [`${packageName} dist-tag ${distTag} is absent after ${attempts} attempts`];
   });
   if (failures.length === 1) throw new Error(failures[0]);
   throw new Error(
