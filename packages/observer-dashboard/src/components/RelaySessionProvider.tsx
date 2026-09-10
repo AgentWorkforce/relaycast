@@ -3,72 +3,48 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { RelayProvider } from '@relaycast/react';
-import { setAuth } from '../lib/auth';
 import { resetActivityIfWorkspaceChanged } from '../lib/activity-store';
-
-interface Session {
-  apiKey: string;
-  agentToken: string;
-  wsToken: string | null;
-  baseUrl: string;
-}
+import {
+  resolveObserverSession,
+  type ObserverSessionData,
+} from '../lib/observer-auto-login';
 
 export function RelaySessionProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [session, setSession] = useState<Session | null>(null);
+  const [session, setSession] = useState<ObserverSessionData | null>(null);
   const [checking, setChecking] = useState(true);
   const requestSeq = useRef(0);
 
   useEffect(() => {
     const seq = ++requestSeq.current;
+    // Read the `?key=` param synchronously so a query-string arrival (the
+    // "Join as observer" link shape used by Pear and the site) triggers
+    // auto-login before we probe the existing cookie session. This is the
+    // regression-prone path — keep the read explicit and covered by
+    // observer-auto-login.test.ts.
     const keyParam = searchParams.get('key');
 
     async function initSession() {
-      try {
-        if (keyParam?.startsWith('rk_live_') || keyParam?.startsWith('ot_live_')) {
-          const success = await setAuth(keyParam);
-          if (seq !== requestSeq.current) return;
-          if (!success) {
-            router.replace('/login');
-            return;
-          }
-        }
+      const outcome = await resolveObserverSession({ keyParam });
+      if (seq !== requestSeq.current) return;
 
-        const res = await fetch('/observer/api/auth/session');
-        if (seq !== requestSeq.current) return;
-
-        if (!res.ok) {
-          router.replace('/login');
-          return;
-        }
-
-        const data = await res.json();
-        if (seq !== requestSeq.current) return;
-
-        if (data?.authenticated) {
-          // Drop another workspace's cached activity before this dashboard
-          // mounts, so switching keys never hydrates stale cross-workspace events.
-          resetActivityIfWorkspaceChanged(data.apiKey);
-          setSession({
-            apiKey: data.apiKey,
-            agentToken: data.agentToken,
-            // Never fall back to the REST/admin credential for the socket; a
-            // missing stream token means the realtime stream stays offline.
-            wsToken: data.wsToken ?? null,
-            baseUrl: data.baseUrl,
-          });
-          if (keyParam) router.replace('/');
-        } else {
-          router.replace('/login');
-        }
-      } catch {
-        if (seq !== requestSeq.current) return;
+      if (outcome.kind === 'unauthenticated') {
         router.replace('/login');
-      } finally {
-        if (seq !== requestSeq.current) return;
         setChecking(false);
+        return;
       }
+
+      // Drop another workspace's cached activity before this dashboard mounts,
+      // so switching keys never hydrates stale cross-workspace events.
+      resetActivityIfWorkspaceChanged(outcome.session.apiKey);
+      setSession(outcome.session);
+      // Strip the key from the URL only after the session is established, so
+      // the URL change doesn't race with the session fetch.
+      if (outcome.consumedKeyParam) {
+        router.replace('/');
+      }
+      setChecking(false);
     }
 
     initSession();

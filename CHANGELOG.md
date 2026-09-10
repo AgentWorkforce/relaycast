@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Observer dashboard: pin the `?key=<token>` auto-login path with a dedicated `resolveObserverSession` helper and regression tests so the "Join as observer" URL shape (both `rk_live_` and `ot_live_`) cannot silently regress again.
 
 ## [8.8.0] - 2026-09-10
 
