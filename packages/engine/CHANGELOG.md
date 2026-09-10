@@ -11,6 +11,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [8.8.0] - 2026-09-10
 
+### Added
+
+- Add `POST /v1/agents/retention` and `scripts/retain-agents.mts` for bounded, resumable reclamation of stale unowned identities; CLI `--limit` accepts 1–100 rows per page (default 100). Deletion is explicit and rechecks ownership, age, status, and history references atomically. Apply `0053_agent_retention_indexes.sql` before enabling it; see the [operator guide](../../docs/agent-retention.md).
+
 ### Changed
 
 - Anonymous keyed workspace creation now uses the validated CSPRNG `Idempotency-Key` as its hosted-safe recovery capability; bootstrap secrets remain server-only derivation material, and self-host proof enforcement is opt-in.
