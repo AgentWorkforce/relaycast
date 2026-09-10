@@ -91,6 +91,33 @@ describe('scheduled-maintenance API compatibility', () => {
     expect(vi.mocked(f.cursorStore.save)).toHaveBeenCalled();
   });
 
+  it.each([
+    {},
+    { version: 1 },
+    { next: 0, positions: {}, highs: {} },
+    { version: 1, next: 0, tables: { deliveries: { cursor: 'legacy-rowid' } } },
+  ])('resets malformed host cursor state safely: %j', async (saved) => {
+    const f = fixture();
+    const old = Math.floor(new Date('2026-01-01T00:00:00Z').getTime() / 1_000);
+    f.sqlite.exec(`
+      INSERT INTO messages(id, workspace_id, channel_id, agent_id, body)
+        VALUES ('message', 'ws', 'channel', 'agent', 'body');
+      INSERT INTO deliveries(id, workspace_id, message_id, agent_id, seq, status, created_at)
+        VALUES ('delivery', 'ws', 'message', 'agent', 1, 'acked', ${old});
+    `);
+    vi.mocked(f.cursorStore.load).mockResolvedValue(saved);
+
+    await expect(pruneExpired(f.db, {
+      cursorStore: f.cursorStore,
+      batchLimit: 2,
+      maxBatches: 1,
+      now: new Date('2026-06-01T00:00:00Z'),
+    })).resolves.toMatchObject({ deliveries: 1 });
+    expect(f.sqlite.prepare("SELECT count(*) AS n FROM deliveries").get()).toEqual({ n: 0 });
+    expect(vi.mocked(f.cursorStore.save)).toHaveBeenCalled();
+    expect(f.state()).toMatchObject({ version: 1, tables: {} });
+  });
+
   it('reclaims long-expired active deliveries only when explicitly enabled', async () => {
     const f = fixture();
     const now = new Date('2026-06-01T00:00:00Z');

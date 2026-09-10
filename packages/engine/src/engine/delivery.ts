@@ -828,7 +828,12 @@ export async function fetchQueuedWsBacklogEvents(
   agentId: string,
   opts: { now?: Date; limit?: number } = {},
 ): Promise<RoutableDeliveryEvent[]> {
-  const limit = Math.min(Math.max(opts.limit ?? 200, 1), 500);
+  // SQLite LIMIT accepts only a finite integer. Match the bounded redrive
+  // option's existing semantics: floor fractions, clamp positive values, and
+  // use the safe default for NaN, infinities, or omitted limits.
+  const limit = Number.isFinite(opts.limit)
+    ? Math.min(Math.max(Math.floor(opts.limit!), 1), 500)
+    : 200;
   const now = opts.now ?? new Date();
   const nowSeconds = Math.floor(now.getTime() / 1000);
 

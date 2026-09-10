@@ -1564,6 +1564,38 @@ describe('durable delivery api', () => {
     expect(remaining).toEqual({ status: 'delivered' });
   });
 
+  it.each([1.5, Number.NaN])('normalizes invalid ws backlog limits before the SQL LIMIT (%s)', async (wsBacklogLimit) => {
+    const ws = await createWorkspace(stack.app, `mailbox-ws-sweep-limit-${String(wsBacklogLimit)}`);
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+    for (const text of ['one', 'two']) {
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text }),
+      });
+      expect(post.status).toBe(201);
+    }
+    await waitForAssertion(() => expect(node.sock.ofType('deliver')).toHaveLength(2));
+
+    const db = stack.runtime.deps.db;
+    const rowsForBob = and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId));
+    await db.update(deliveries).set({
+      status: 'queued', nextAttemptAt: null, dispatchAttempts: 0, deliveredAt: null, lastDispatchError: null,
+    }).where(rowsForBob);
+    const before = node.sock.ofType('deliver').length;
+
+    await expect(sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date(), wsBacklogLimit })).resolves.toBe(2);
+    const redriven = node.sock.ofType('deliver').slice(before);
+    expect(redriven.map((frame) => frame.seq)).toEqual(Number.isNaN(wsBacklogLimit) ? [1, 2] : [1]);
+    const remaining = await db.select({ seq: deliveries.seq, status: deliveries.status })
+      .from(deliveries).where(rowsForBob).orderBy(deliveries.seq);
+    expect(remaining).toEqual(Number.isNaN(wsBacklogLimit)
+      ? [{ seq: 1, status: 'delivered' }, { seq: 2, status: 'delivered' }]
+      : [{ seq: 1, status: 'delivered' }, { seq: 2, status: 'queued' }]);
+  });
+
   it('sweep stops a ws agent backlog at the first undeliverable seq (node connected, agent not ready)', async () => {
     // The node is connected but the agent is not delivery-ready (cursor
     // negotiation pending after a reconnect). The group must stop at seq 1 —

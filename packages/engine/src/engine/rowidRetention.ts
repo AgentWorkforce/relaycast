@@ -74,6 +74,7 @@ export const ROWID_RETENTION_D1_QUERY_CEILING = tables.length * (
   1 + ROWID_MAX_BATCHES_PER_TABLE + ROWID_MAX_BATCHES_PER_TABLE * Math.ceil(ROWID_PAGE_LIMIT / ROWID_DELETE_CHUNK_SIZE)
 ) + MAX_ACTIVE_EXPIRY_RECOVERY_BATCHES;
 
+/** Delete only long-expired active deliveries through the existing bounded index. */
 async function recoverExpiredActiveDeliveries(
   db: EngineDb,
   nowMs: number,
@@ -104,12 +105,14 @@ async function recoverExpiredActiveDeliveries(
   return deleted;
 }
 
+/** Clamp an optional maintenance budget to a positive, finite row count. */
 function bounded(value: number | undefined, fallback: number, maximum: number): number {
   return value !== undefined && Number.isFinite(value)
     ? Math.max(1, Math.min(maximum, Math.floor(value)))
     : fallback;
 }
 
+/** Evaluate one candidate against its workspace retention policy and clock. */
 function isExpired(row: Candidate, table: Table, defaults: Required<RetentionDefaults>, nowMs: number): boolean {
   if (!table.setting || !table.fallback) return true;
   const settings = row.retention ? JSON.parse(row.retention) as WorkspaceRetentionSettings : {};
@@ -144,9 +147,15 @@ export async function pruneRowidPages(
     ...Object.fromEntries(Object.entries(opts.defaults ?? {}).filter(([, value]) => value !== undefined)),
   };
   const saved = await opts.cursorStore.load();
-  const state: RowidRetentionState = saved == null
-    ? { version: 1, next: 0, tables: {} }
-    : stateSchema.parse(saved);
+  // Cursor documents are advisory checkpoints owned by the host. A stale,
+  // partial, or legacy document must not take scheduled retention offline, and
+  // must never be trusted to construct a delete predicate. Restarting from an
+  // empty state is safe because every delete below rechecks row identity and
+  // current policy before mutating anything.
+  const parsed = saved == null ? undefined : stateSchema.safeParse(saved);
+  const state: RowidRetentionState = parsed?.success
+    ? parsed.data
+    : { version: 1, next: 0, tables: {} };
   const save = () => opts.cursorStore.save(structuredClone(state));
   const result: PruneResult = { messages: 0, deliveries: 0, messageLogs: 0, readReceipts: 0, workspaceEvents: 0 };
   const finished = new Set<number>();
