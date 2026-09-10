@@ -1,0 +1,53 @@
+{
+  "id": "traj_26eywxjmijuy",
+  "version": 1,
+  "task": {
+    "title": "Document Rust registration retry cooldown helpers"
+  },
+  "status": "completed",
+  "startedAt": "2026-09-10T14:57:44.212Z",
+  "completedAt": "2026-09-10T14:58:32.365Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-09-10T14:58:30.218Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_752rm4tqu6pc",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-09-10T14:58:30.218Z",
+      "endedAt": "2026-09-10T14:58:32.365Z",
+      "events": [
+        {
+          "ts": 1789052310219,
+          "type": "decision",
+          "content": "Added rustdoc for both helpers flagged by CodeRabbit: Added rustdoc for both helpers flagged by CodeRabbit",
+          "raw": {
+            "question": "Added rustdoc for both helpers flagged by CodeRabbit",
+            "chosen": "Added rustdoc for both helpers flagged by CodeRabbit",
+            "alternatives": [],
+            "reasoning": "The docs state the observable cap/fallback and cached-deadline behavior without broadening the implementation."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Added concise rustdoc to the private registration cooldown helpers, resolving the CodeRabbit docstring coverage warning.",
+    "approach": "Standard approach",
+    "confidence": 0.98
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "8edc3cdbb7854846bcbb0563afb79912345d5102",
+    "endRef": "8edc3cdbb7854846bcbb0563afb79912345d5102"
+  }
+}

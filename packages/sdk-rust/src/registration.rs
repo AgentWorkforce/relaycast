@@ -18,6 +18,10 @@ const DEFAULT_REGISTRATION_COOLDOWN_SECS: u64 = 60;
 const MAX_REGISTRATION_COOLDOWN_SECS: u64 = 300;
 const DEFAULT_REGISTRATION_RETRY_BACKOFF: Duration = Duration::from_secs(2);
 
+/// Resolve a local registration cooldown from the server's parsed `Retry-After` delay.
+///
+/// Valid delays are capped to avoid an unbounded local block; absent or
+/// malformed headers retain the fail-closed default cooldown.
 fn registration_cooldown_duration(retry_after_ms: Option<u64>) -> Duration {
     retry_after_ms
         .map(Duration::from_millis)
@@ -200,6 +204,11 @@ impl AgentRegistrationClient {
         lock_unpoisoned(&self.registration_cooldowns).remove(trimmed);
     }
 
+    /// Select the next retry delay, preferring the active cached cooldown.
+    ///
+    /// The cached deadline prevents a retry from reaching the server before a
+    /// known rate-limit window expires. Error metadata is only a fallback when
+    /// concurrent invalidation has removed that deadline.
     fn registration_retry_delay(
         &self,
         agent_name: &str,
