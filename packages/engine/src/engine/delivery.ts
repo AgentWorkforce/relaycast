@@ -1,3 +1,4 @@
+import { parseMessageMentions } from './mentions.js';
 import { eq, and, not, asc, isNull, inArray, notInArray, lte, gt, sql, getTableColumns, type SQL } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { deliveries, messages, agents, readReceipts, channelMembers, channels, dmConversations } from '../db/schema.js';
@@ -632,7 +633,7 @@ function buildRoutableDeliveryEvent(
     };
   }
 
-  const mentions = [...row.body.matchAll(/@(\w+)/g)].map((match) => match[1]);
+  const mentions = parseMessageMentions(row.body);
   return {
     eventType,
     eventData: buildMessageCreatedEventData({

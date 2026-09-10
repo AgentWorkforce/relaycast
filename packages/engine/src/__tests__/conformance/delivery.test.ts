@@ -1901,6 +1901,46 @@ describe('durable delivery api', () => {
     ]);
   });
 
+  it('preserves hyphenated mentions through node reconnect replay', async () => {
+    const ws = await createWorkspace(stack.app, 'mention-replay');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws);
+    const bob = await registerViaNode(node, 'build-reviewer_2');
+    const response = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: '@build-reviewer_2 ping @build-reviewer_2 email@example.com \\@escaped' }),
+    });
+    expect(response.status).toBe(201);
+    await stack.settle();
+    const live = latestDeliverOfType(node.sock, 'message.created');
+    expect(live.payload).toMatchObject({ data: { mentions: ['build-reviewer_2'] } });
+    await node.handle.handleClose();
+    const reconnected = await enrollAndAttachNode(ws, { id: node.id, name: node.name });
+    await reconnected.handle.handleMessage(JSON.stringify({ v: 1, type: 'inventory.sync',
+      agents: [{ agent_id: bob.agentId, name: 'build-reviewer_2', session_ref: 'sess-build-reviewer_2' }] }));
+    await stack.settle();
+    expect(latestDeliverOfType(reconnected.sock, 'message.created').payload).toEqual(live.payload);
+  });
+
+  it('normalizes a live raw-hook delivery for node recipients', async () => {
+    const ws = await createWorkspace(stack.app, 'raw-hook-wire');
+    const node = await enrollAndAttachNode(ws);
+    await registerViaNode(node, 'hook-recipient');
+    const created = await stack.app.request('/v1/webhooks', { method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ channel: 'general' }) });
+    expect(created.status).toBe(201);
+    const { data: hook } = await created.json();
+    const response = await stack.app.request(`/v1/hooks/${hook.webhook_id}`, { method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${hook.token}` },
+      body: JSON.stringify({ text: 'provider event', author: 'GitHub' }) });
+    expect(response.status).toBe(201);
+    await stack.settle();
+    expect(latestDeliverOfType(node.sock, 'message.created').payload).toMatchObject({
+      type: 'message.created', data: { channel_name: 'general', from_name: 'GitHub', text: 'provider event' },
+    });
+  });
+
   it('redelivers a DM with the same deliver payload after broker death/reconnect', async () => {
     const ws = await createWorkspace(stack.app, 'mailbox-node-redeliver-dm');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');

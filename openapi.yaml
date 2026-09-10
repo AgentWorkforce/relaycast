@@ -2098,6 +2098,10 @@ paths:
                   type: string
                 metadata:
                   type: object
+                auto_join_general:
+                  type: boolean
+                  default: true
+                  description: Automatically join the general channel; set false to isolate event-only recipients.
                 recovery_proof_hash:
                   type: string
                   pattern: '^[a-f0-9]{64}$'
