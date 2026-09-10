@@ -1,0 +1,976 @@
+{
+  "issue": "https://github.com/AgentWorkforce/relaycast/issues/389",
+  "collected_on": "2026-09-09",
+  "account_name": "Agent Workforce",
+  "account_id": "f7232cb80f6fab86a95426302af243e4",
+  "database_name": "relaycast-cloud",
+  "database_id": "2d397899-0429-4e4c-b8ca-941328164ced",
+  "account_verification": "Wrangler account listing; repository-variable verification blocked by GitHub HTTP 401",
+  "analytics_caveats": [
+    "Adaptive normalized database-wide aggregates; counts are not a request trace.",
+    "Hourly query limited to 1000 groups sorted by total rows read.",
+    "No attribution of the 20:00 UTC CPU reset trigger from these aggregates."
+  ],
+  "statements_24h": [
+    {
+      "query": "SELECT min(rowid) AS min_rowid, max(rowid) AS max_rowid FROM deliveries;",
+      "avgRowsRead": 8649746,
+      "totalRowsRead": 1037969520,
+      "avgRowsWritten": 0,
+      "totalRowsWritten": 0,
+      "avgDurationMs": 10319.4625,
+      "totalDurationMs": 1238335.5,
+      "numberOfTimesRun": 120,
+      "queryEfficiency": 1.1561033121666232e-07,
+      "hourly_observations": [
+        {
+          "hour": "2026-09-09T14:00:00Z",
+          "count": 120,
+          "mean_rows_read": 8649746,
+          "mean_duration_ms": 10319.4625
+        }
+      ]
+    },
+    {
+      "query": "insert into \"deliveries\" (\"id\", \"workspace_id\", \"message_id\", \"agent_id\", \"mode\", \"reason\", \"priority\", \"deadline\", \"status\", \"seq\", \"location_type\", \"location_node_id\", \"route_node_id\", \"route_node_kind\", \"route_node_role\", \"delivery_adapter\", \"dispatch_attempts\", \"next_attempt_at\", \"last_dispatch_error\", \"expires_at\", \"delivered_at\", \"acked_at\", \"dead_lettered_at\", \"retryable\", \"available_at\", \"error\", \"idempotency_key\", \"created_at\", \"updated_at\") select 'del_' || ? || '_' || \"channel_members\".\"agent_id\", ?, ?, \"channel_members\".\"agent_id\", ?, ?, ?, null, ?, MAX(\"agents\".\"delivery_seq\", \"agents\".\"delivery_ack_seq\") + 1, CASE WHEN \"agent_node_bindings\".\"node_id\" IS NOT NULL THEN 'via_node' ELSE \"agents\".\"location_type\" END, COALESCE(\"agent_node_bindings\".\"node_id\", \"agents\".\"location_node_id\"), COALESCE(\"agent_node_bindings\".\"node_id\", \"agents\".\"location_node_id\"), \"nodes\".\"kind\", \"nodes\".\"role\", \"nodes\".\"delivery_adapter\", 0, null, null, (unixepoch() + ?), null, null, null, null, null, null, null, (unixepoch()), null from \"channel_members\" inner join \"agents\" on \"channel_members\".\"agent_id\" = \"agents\".\"id\" left join \"agent_node_bindings\" on (\"agent_node_bindings\".\"workspace_id\" = ? and \"agent_node_bindings\".\"agent_id\" = \"channel_members\".\"agent_id\" and \"agent_node_bindings\".\"status\" = ? and \"agents\".\"location_type\" = ? and \"agents\".\"location_node_id\" = \"agent_node_bindings\".\"node_id\") left join \"nodes\" on (\"nodes\".\"workspace_id\" = ? and \"nodes\".\"id\" = COALESCE(\"agent_node_bindings\".\"node_id\", \"agents\".\"location_node_id\")) where (\"channel_members\".\"channel_id\" = ? and \"channel_members\".\"is_muted\" = ? and \"channel_members\".\"agent_id\" <> ? and (\n    SELECT COUNT(*)\n    FROM deliveries d\n    WHERE d.workspace_id = ?\n      AND d.agent_id = \"channel_members\".\"agent_id\"\n      AND d.status IN ('queued', 'delivered')\n      AND (d.expires_at IS NULL OR d.expires_at > unixepoch())\n  ) < ?) on conflict do nothing",
+      "avgRowsRead": 558375,
+      "totalRowsRead": 341167422,
+      "avgRowsWritten": 8835,
+      "totalRowsWritten": 5398275,
+      "avgDurationMs": 5949.571295417349,
+      "totalDurationMs": 3635188.0615000003,
+      "numberOfTimesRun": 611,
+      "queryEfficiency": 0,
+      "hourly_observations": [
+        {
+          "hour": "2026-09-08T22:00:00Z",
+          "count": 61,
+          "mean_rows_read": 4139662,
+          "mean_duration_ms": 45772.406819672135
+        },
+        {
+          "hour": "2026-09-08T21:00:00Z",
+          "count": 13,
+          "mean_rows_read": 3997149,
+          "mean_duration_ms": 44653.92626153846
+        },
+        {
+          "hour": "2026-09-09T10:00:00Z",
+          "count": 76,
+          "mean_rows_read": 227532,
+          "mean_duration_ms": 1714.0728039473684
+        },
+        {
+          "hour": "2026-09-09T09:00:00Z",
+          "count": 3,
+          "mean_rows_read": 4189681,
+          "mean_duration_ms": 29168.730566666665
+        },
+        {
+          "hour": "2026-09-09T06:00:00Z",
+          "count": 1,
+          "mean_rows_read": 4176169,
+          "mean_duration_ms": 30627.3522
+        },
+        {
+          "hour": "2026-09-09T17:00:00Z",
+          "count": 214,
+          "mean_rows_read": 6046,
+          "mean_duration_ms": 40.055491588785046
+        },
+        {
+          "hour": "2026-09-09T15:00:00Z",
+          "count": 155,
+          "mean_rows_read": 7244,
+          "mean_duration_ms": 29.4621
+        },
+        {
+          "hour": "2026-09-09T18:00:00Z",
+          "count": 68,
+          "mean_rows_read": 2649,
+          "mean_duration_ms": 11.9343
+        },
+        {
+          "hour": "2026-09-09T16:00:00Z",
+          "count": 20,
+          "mean_rows_read": 2523,
+          "mean_duration_ms": 10.8547
+        }
+      ]
+    },
+    {
+      "query": "select \"deliveries\".\"id\", \"deliveries\".\"workspace_id\", \"deliveries\".\"message_id\", \"deliveries\".\"agent_id\", \"deliveries\".\"mode\", \"deliveries\".\"reason\", \"deliveries\".\"priority\", \"deliveries\".\"deadline\", \"deliveries\".\"status\", \"deliveries\".\"seq\", \"deliveries\".\"location_type\", \"deliveries\".\"location_node_id\", \"deliveries\".\"route_node_id\", \"deliveries\".\"route_node_kind\", \"deliveries\".\"route_node_role\", \"deliveries\".\"delivery_adapter\", \"deliveries\".\"dispatch_attempts\", \"deliveries\".\"next_attempt_at\", \"deliveries\".\"last_dispatch_error\", \"deliveries\".\"expires_at\", \"deliveries\".\"delivered_at\", \"deliveries\".\"acked_at\", \"deliveries\".\"dead_lettered_at\", \"deliveries\".\"retryable\", \"deliveries\".\"available_at\", \"deliveries\".\"error\", \"deliveries\".\"idempotency_key\", \"deliveries\".\"created_at\", \"deliveries\".\"updated_at\", \"agents\".\"name\", \"messages\".\"body\", \"messages\".\"blocks\", \"messages\".\"metadata\", \"messages\".\"has_attachments\", \"messages\".\"thread_id\", \"messages\".\"created_at\", \"messages\".\"channel_id\", \"channels\".\"name\", \"dm_conversations\".\"id\", \"dm_conversations\".\"dm_type\", \"messages\".\"agent_id\", (\n        SELECT a.name FROM agents a WHERE a.id = \"messages\".\"agent_id\"\n      ) from \"deliveries\" inner join \"agents\" on \"deliveries\".\"agent_id\" = \"agents\".\"id\" inner join \"messages\" on \"deliveries\".\"message_id\" = \"messages\".\"id\" inner join \"channels\" on \"messages\".\"channel_id\" = \"channels\".\"id\" left join \"dm_conversations\" on \"dm_conversations\".\"channel_id\" = \"messages\".\"channel_id\" where (\"deliveries\".\"status\" = ? and \"deliveries\".\"route_node_kind\" in (?, ?, ?, ?) and (\"deliveries\".\"expires_at\" IS NULL OR \"deliveries\".\"expires_at\" > ?) and \"deliveries\".\"next_attempt_at\" is null) order by \"deliveries\".\"created_at\" asc, \"deliveries\".\"id\" asc limit ?",
+      "avgRowsRead": 8437739,
+      "totalRowsRead": 244694458,
+      "avgRowsWritten": 0,
+      "totalRowsWritten": 0,
+      "avgDurationMs": 25074.17055517241,
+      "totalDurationMs": 727150.9461,
+      "numberOfTimesRun": 29,
+      "queryEfficiency": 1.1851516146683371e-07,
+      "hourly_observations": [
+        {
+          "hour": "2026-09-09T08:00:00Z",
+          "count": 27,
+          "mean_rows_read": 8422458,
+          "mean_duration_ms": 24913.860299999997
+        },
+        {
+          "hour": "2026-09-08T22:00:00Z",
+          "count": 1,
+          "mean_rows_read": 8877390,
+          "mean_duration_ms": 29925.9175
+        },
+        {
+          "hour": "2026-09-09T00:00:00Z",
+          "count": 1,
+          "mean_rows_read": 8410702,
+          "mean_duration_ms": 24550.8005
+        }
+      ]
+    },
+    {
+      "query": "delete from \"deliveries\" where \"deliveries\".\"id\" in (select \"id\" from \"deliveries\" where (\"deliveries\".\"status\" in (?, ?, ?) and \"deliveries\".\"created_at\" < ?) limit ?) returning \"id\"",
+      "avgRowsRead": 8409819,
+      "totalRowsRead": 201835656,
+      "avgRowsWritten": 0,
+      "totalRowsWritten": 0,
+      "avgDurationMs": 2436.2185,
+      "totalDurationMs": 58469.244,
+      "numberOfTimesRun": 24,
+      "queryEfficiency": 0,
+      "hourly_observations": [
+        {
+          "hour": "2026-09-09T06:00:00Z",
+          "count": 24,
+          "mean_rows_read": 8409819,
+          "mean_duration_ms": 2436.2185
+        }
+      ]
+    },
+    {
+      "query": "delete from \"nodes\" where (\"nodes\".\"workspace_id\" = ? and \"nodes\".\"id\" = ? and EXISTS (\n      SELECT 1 FROM \"action_invocations\"\n      WHERE \"action_invocations\".\"workspace_id\" = ?\n        AND \"action_invocations\".\"id\" = ?\n        AND \"action_invocations\".\"status\" = 'completed'\n    ) and EXISTS (\n    SELECT 1 FROM \"agents\"\n    WHERE \"agents\".\"workspace_id\" = ?\n      AND \"agents\".\"id\" = ?\n      \n  ))",
+      "avgRowsRead": 33860603,
+      "totalRowsRead": 101581809,
+      "avgRowsWritten": 3,
+      "totalRowsWritten": 9,
+      "avgDurationMs": 95664.78629999999,
+      "totalDurationMs": 286994.3589,
+      "numberOfTimesRun": 3,
+      "queryEfficiency": 0,
+      "hourly_observations": [
+        {
+          "hour": "2026-09-08T23:00:00Z",
+          "count": 3,
+          "mean_rows_read": 33860603,
+          "mean_duration_ms": 95664.78629999999
+        }
+      ]
+    },
+    {
+      "query": "select \"id\", \"workspace_id\", \"name\", \"type\", \"token_hash\", \"previous_token_hash\", \"previous_token_expires_at\", \"status\", \"handle\", \"persona\", \"metadata\", \"capabilities\", \"location_type\", \"location_node_id\", \"provider_name\", \"resumable\", \"session_ref\", \"origin_node_id\", \"delivery_ack_seq\", \"delivery_seq\", \"created_at\", \"last_seen\" from \"agents\" where (\"agents\".\"workspace_id\" = ? and \"agents\".\"status\" <> ?)",
+      "avgRowsRead": 5756,
+      "totalRowsRead": 42018776,
+      "avgRowsWritten": 0,
+      "totalRowsWritten": 0,
+      "avgDurationMs": 70.33237659953419,
+      "totalDurationMs": 513356.0168,
+      "numberOfTimesRun": 7299,
+      "queryEfficiency": 0.8363446838082002,
+      "hourly_observations": [
+        {
+          "hour": "2026-09-09T18:00:00Z",
+          "count": 968,
+          "mean_rows_read": 5827,
+          "mean_duration_ms": 76.45952334710744
+        },
+        {
+          "hour": "2026-09-09T19:00:00Z",
+          "count": 679,
+          "mean_rows_read": 5844,
+          "mean_duration_ms": 64.15170338733432
+        },
+        {
+          "hour": "2026-09-09T08:00:00Z",
+          "count": 694,
+          "mean_rows_read": 5716,
+          "mean_duration_ms": 57.922023919308344
+        },
+        {
+          "hour": "2026-09-09T16:00:00Z",
+          "count": 652,
+          "mean_rows_read": 5796,
+          "mean_duration_ms": 75.22314662576686
+        },
+        {
+          "hour": "2026-09-09T04:00:00Z",
+          "count": 559,
+          "mean_rows_read": 5712,
+          "mean_duration_ms": 55.492563506261185
+        },
+        {
+          "hour": "2026-09-09T00:00:00Z",
+          "count": 525,
+          "mean_rows_read": 5707,
+          "mean_duration_ms": 70.29253161904762
+        },
+        {
+          "hour": "2026-09-09T03:00:00Z",
+          "count": 465,
+          "mean_rows_read": 5711,
+          "mean_duration_ms": 62.3991511827957
+        },
+        {
+          "hour": "2026-09-09T01:00:00Z",
+          "count": 394,
+          "mean_rows_read": 5709,
+          "mean_duration_ms": 83.65183401015229
+        },
+        {
+          "hour": "2026-09-09T17:00:00Z",
+          "count": 347,
+          "mean_rows_read": 5805,
+          "mean_duration_ms": 75.7540832853026
+        },
+        {
+          "hour": "2026-09-09T13:00:00Z",
+          "count": 300,
+          "mean_rows_read": 5739,
+          "mean_duration_ms": 69.397747
+        },
+        {
+          "hour": "2026-09-09T02:00:00Z",
+          "count": 287,
+          "mean_rows_read": 5710,
+          "mean_duration_ms": 101.18216202090592
+        },
+        {
+          "hour": "2026-09-09T10:00:00Z",
+          "count": 285,
+          "mean_rows_read": 5728,
+          "mean_duration_ms": 66.14980947368421
+        },
+        {
+          "hour": "2026-09-09T07:00:00Z",
+          "count": 267,
+          "mean_rows_read": 5716,
+          "mean_duration_ms": 55.221263295880156
+        },
+        {
+          "hour": "2026-09-09T20:00:00Z",
+          "count": 182,
+          "mean_rows_read": 5853,
+          "mean_duration_ms": 75.75222362637362
+        },
+        {
+          "hour": "2026-09-09T05:00:00Z",
+          "count": 177,
+          "mean_rows_read": 5713,
+          "mean_duration_ms": 55.034164971751416
+        },
+        {
+          "hour": "2026-09-08T22:00:00Z",
+          "count": 133,
+          "mean_rows_read": 5699,
+          "mean_duration_ms": 116.6372962406015
+        },
+        {
+          "hour": "2026-09-09T06:00:00Z",
+          "count": 109,
+          "mean_rows_read": 5714,
+          "mean_duration_ms": 69.40722935779816
+        },
+        {
+          "hour": "2026-09-09T14:00:00Z",
+          "count": 94,
+          "mean_rows_read": 5757,
+          "mean_duration_ms": 65.8504914893617
+        },
+        {
+          "hour": "2026-09-08T21:00:00Z",
+          "count": 61,
+          "mean_rows_read": 5698,
+          "mean_duration_ms": 92.49141475409837
+        },
+        {
+          "hour": "2026-09-09T09:00:00Z",
+          "count": 56,
+          "mean_rows_read": 5718,
+          "mean_duration_ms": 66.4382
+        },
+        {
+          "hour": "2026-09-09T15:00:00Z",
+          "count": 54,
+          "mean_rows_read": 5784,
+          "mean_duration_ms": 72.2748888888889
+        },
+        {
+          "hour": "2026-09-09T11:00:00Z",
+          "count": 54,
+          "mean_rows_read": 5731,
+          "mean_duration_ms": 62.73734444444444
+        },
+        {
+          "hour": "2026-09-09T12:00:00Z",
+          "count": 15,
+          "mean_rows_read": 5734,
+          "mean_duration_ms": 79.2854
+        },
+        {
+          "hour": "2026-09-08T23:00:00Z",
+          "count": 3,
+          "mean_rows_read": 5707,
+          "mean_duration_ms": 81.595
+        }
+      ]
+    },
+    {
+      "query": "select \"id\", \"seq\" from \"deliveries\" INDEXED BY deliveries_agent_seq_unique where (\"deliveries\".\"workspace_id\" = ? and \"deliveries\".\"agent_id\" = ? and \"deliveries\".\"seq\" > ? and \"deliveries\".\"seq\" <= ?) order by \"deliveries\".\"seq\" asc limit ?",
+      "avgRowsRead": 49,
+      "totalRowsRead": 25111674,
+      "avgRowsWritten": 0,
+      "totalRowsWritten": 0,
+      "avgDurationMs": 0.733068669005738,
+      "totalDurationMs": 373574.7260000001,
+      "numberOfTimesRun": 509604,
+      "queryEfficiency": 1,
+      "hourly_observations": [
+        {
+          "hour": "2026-09-08T23:00:00Z",
+          "count": 119761,
+          "mean_rows_read": 49,
+          "mean_duration_ms": 0.7010255558988318
+        },
+        {
+          "hour": "2026-09-09T07:00:00Z",
+          "count": 107536,
+          "mean_rows_read": 48,
+          "mean_duration_ms": 0.5874461296682041
+        },
+        {
+          "hour": "2026-09-09T19:00:00Z",
+          "count": 44366,
+          "mean_rows_read": 49,
+          "mean_duration_ms": 0.7106121759906235
+        },
+        {
+          "hour": "2026-09-08T22:00:00Z",
+          "count": 43881,
+          "mean_rows_read": 49,
+          "mean_duration_ms": 0.9736719901551923
+        },
+        {
+          "hour": "2026-09-09T11:00:00Z",
+          "count": 39602,
+          "mean_rows_read": 49,
+          "mean_duration_ms": 0.883512380687844
+        },
+        {
+          "hour": "2026-09-09T12:00:00Z",
+          "count": 36226,
+          "mean_rows_read": 48,
+          "mean_duration_ms": 0.7320923342350798
+        },
+        {
+          "hour": "2026-09-09T18:00:00Z",
+          "count": 35243,
+          "mean_rows_read": 49,
+          "mean_duration_ms": 0.7132503844735125
+        },
+        {
+          "hour": "2026-09-09T10:00:00Z",
+          "count": 27084,
+          "mean_rows_read": 49,
+          "mean_duration_ms": 0.6523885947422835
+        },
+        {
+          "hour": "2026-09-09T13:00:00Z",
+          "count": 8437,
+          "mean_rows_read": 49,
+          "mean_duration_ms": 0.9173568092924024
+        },
+        {
+          "hour": "2026-09-09T15:00:00Z",
+          "count": 7973,
+          "mean_rows_read": 49,
+          "mean_duration_ms": 0.8565507588109871
+        },
+        {
+          "hour": "2026-09-09T09:00:00Z",
+          "count": 7969,
+          "mean_rows_read": 47,
+          "mean_duration_ms": 0.632618358639729
+        },
+        {
+          "hour": "2026-09-09T14:00:00Z",
+          "count": 6442,
+          "mean_rows_read": 49,
+          "mean_duration_ms": 1.1084680533995652
+        },
+        {
+          "hour": "2026-09-09T17:00:00Z",
+          "count": 6096,
+          "mean_rows_read": 49,
+          "mean_duration_ms": 0.8062055118110235
+        },
+        {
+          "hour": "2026-09-09T16:00:00Z",
+          "count": 3822,
+          "mean_rows_read": 47,
+          "mean_duration_ms": 0.8123250654107798
+        },
+        {
+          "hour": "2026-09-09T05:00:00Z",
+          "count": 2574,
+          "mean_rows_read": 47,
+          "mean_duration_ms": 0.6329968919968919
+        },
+        {
+          "hour": "2026-09-09T04:00:00Z",
+          "count": 2040,
+          "mean_rows_read": 48,
+          "mean_duration_ms": 0.7230915196078432
+        },
+        {
+          "hour": "2026-09-09T06:00:00Z",
+          "count": 1823,
+          "mean_rows_read": 48,
+          "mean_duration_ms": 0.6703487657707077
+        },
+        {
+          "hour": "2026-09-09T02:00:00Z",
+          "count": 1611,
+          "mean_rows_read": 50,
+          "mean_duration_ms": 0.8718495344506518
+        },
+        {
+          "hour": "2026-09-09T00:00:00Z",
+          "count": 1440,
+          "mean_rows_read": 50,
+          "mean_duration_ms": 0.9279964583333332
+        },
+        {
+          "hour": "2026-09-09T03:00:00Z",
+          "count": 1428,
+          "mean_rows_read": 46,
+          "mean_duration_ms": 0.6165881652661065
+        },
+        {
+          "hour": "2026-09-09T08:00:00Z",
+          "count": 1264,
+          "mean_rows_read": 50,
+          "mean_duration_ms": 0.7273488132911392
+        },
+        {
+          "hour": "2026-09-09T20:00:00Z",
+          "count": 1161,
+          "mean_rows_read": 49,
+          "mean_duration_ms": 0.9140279931093883
+        },
+        {
+          "hour": "2026-09-09T01:00:00Z",
+          "count": 979,
+          "mean_rows_read": 50,
+          "mean_duration_ms": 0.8489927477017366
+        },
+        {
+          "hour": "2026-09-08T21:00:00Z",
+          "count": 870,
+          "mean_rows_read": 50,
+          "mean_duration_ms": 2.7175971264367815
+        }
+      ]
+    }
+  ],
+  "cli_baseline": {
+    "start": "2026-09-09T20:12:47.971329+00:00",
+    "last_request_start": "2026-09-09T20:22:40.463808+00:00",
+    "samples": 27,
+    "min_seconds": 1.497,
+    "median_seconds": 2.045,
+    "max_seconds": 60.78,
+    "failures": 0,
+    "failure_rate": 0.0,
+    "over_25_seconds": 5,
+    "observations": [
+      {
+        "at": "2026-09-09T20:12:47.971329+00:00",
+        "seconds": 4.042,
+        "rc": 0,
+        "bytes": 4390885,
+        "sha256": "c01fe323a48fafe232f4bc8ab641359f45f02e513b6a96ee4e4f73e2e875c26c",
+        "stderr_bytes": 0
+      },
+      {
+        "at": "2026-09-09T20:13:02.026039+00:00",
+        "seconds": 60.78,
+        "rc": 0,
+        "bytes": 4390885,
+        "sha256": "06cdf8a734c242241087ef1b5ca09f23582412e0d39c64428c76878827e748f0",
+        "stderr_bytes": 0
+      },
+      {
+        "at": "2026-09-09T20:14:12.816501+00:00",
+        "seconds": 2.786,
+        "rc": 0,
+        "bytes": 4390885,
+        "sha256": "42590662c60d47737041c13d20382db5d8b4da77f1efb3ca8768191c2219c1d1",
+        "stderr_bytes": 0
+      },
+      {
+        "at": "2026-09-09T20:14:25.614527+00:00",
+        "seconds": 1.644,
+        "rc": 0,
+        "bytes": 4390885,
+        "sha256": "66d8c416240ec658b1a6834757f8c0b33c061124c49547b32a6cf991971df1c3",
+        "stderr_bytes": 0
+      },
+      {
+        "at": "2026-09-09T20:14:37.270717+00:00",
+        "seconds": 1.762,
+        "rc": 0,
+        "bytes": 4390885,
+        "sha256": "6d1adacaf17cc47a8c9171e96a9ea2889803a8c6576cce832e48cd36b4b27d43",
+        "stderr_bytes": 0
+      },
+      {
+        "at": "2026-09-09T20:14:49.045357+00:00",
+        "seconds": 2.16,
+        "rc": 0,
+        "bytes": 4390885,
+        "sha256": "fa4f2b33b1cfa1433d472358f46e4758b6e3b468b57b45fab16646b698a73c0d",
+        "stderr_bytes": 0
+      },
+      {
+        "at": "2026-09-09T20:15:01.216908+00:00",
+        "seconds": 1.497,
+        "rc": 0,
+        "bytes": 4390885,
+        "sha256": "83394be480b991ef2a68560f36896314ae40755bce95c60de1117a56b4056867",
+        "stderr_bytes": 0
+      },
+      {
+        "at": "2026-09-09T20:15:12.725795+00:00",
+        "seconds": 1.817,
+        "rc": 0,
+        "bytes": 4390885,
+        "sha256": "f20a7157e2bf0e853cc44ae624c4dcb365cf6dd49b61209177a00737db1c3e63",
+        "stderr_bytes": 0
+      },
+      {
+        "at": "2026-09-09T20:15:24.550840+00:00",
+        "seconds": 2.045,
+        "rc": 0,
+        "bytes": 4390885,
+        "sha256": "f20a7157e2bf0e853cc44ae624c4dcb365cf6dd49b61209177a00737db1c3e63",
+        "stderr_bytes": 0
+      },
+      {
+        "at": "2026-09-09T20:15:36.607380+00:00",
+        "seconds": 60.235,
+        "rc": 0,
+        "bytes": 4390885,
+        "sha256": "9d3acd56421eabc80c8737cafcd1b11c4b007c9a61127d64e76709b66d517458",
+        "stderr_bytes": 0
+      },
+      {
+        "at": "2026-09-09T20:16:46.852711+00:00",
+        "seconds": 1.685,
+        "rc": 0,
+        "bytes": 4391325,
+        "sha256": "f5afb1f10d047ea985db40131f1f780be20eed7586e374564e3629fb5a4807cd",
+        "stderr_bytes": 0
+      },
+      {
+        "at": "2026-09-09T20:16:58.549566+00:00",
+        "seconds": 1.973,
+        "rc": 0,
+        "bytes": 4391592,
+        "sha256": "5cad09c64ac9f2b9eb63ad333998da1a68db971cee17ef618ea4e8fc7d64e123",
+        "stderr_bytes": 0
+      },
+      {
+        "at": "2026-09-09T20:17:10.534106+00:00",
+        "seconds": 2.084,
+        "rc": 0,
+        "bytes": 4391848,
+        "sha256": "71693a8aab3c8d1396b2b67102fa94af71046927d639daad50b7a30d52e4b786",
+        "stderr_bytes": 0
+      },
+      {
+        "at": "2026-09-09T20:17:22.630574+00:00",
+        "seconds": 2.04,
+        "rc": 0,
+        "bytes": 4391848,
+        "sha256": "6a98551a71e69b051e10227e044010e10cfd8b766772512ce0aced4a40454938",
+        "stderr_bytes": 0
+      },
+      {
+        "at": "2026-09-09T20:17:34.673474+00:00",
+        "seconds": 1.575,
+        "rc": 0,
+        "bytes": 4391848,
+        "sha256": "9eb262b05e95235f18341fe6c06a764363fe922d7b8f079dbe017c314c6bc6e4",
+        "stderr_bytes": 0
+      },
+      {
+        "at": "2026-09-09T20:17:46.260562+00:00",
+        "seconds": 1.583,
+        "rc": 0,
+        "bytes": 4391848,
+        "sha256": "9eb262b05e95235f18341fe6c06a764363fe922d7b8f079dbe017c314c6bc6e4",
+        "stderr_bytes": 0
+      },
+      {
+        "at": "2026-09-09T20:17:57.855555+00:00",
+        "seconds": 49.718,
+        "rc": 0,
+        "bytes": 4391848,
+        "sha256": "79c68eb7515c7dd1151baa3ca2b883480f670fe80674292dc5486150280f996d",
+        "stderr_bytes": 0
+      },
+      {
+        "at": "2026-09-09T20:18:57.584539+00:00",
+        "seconds": 1.704,
+        "rc": 0,
+        "bytes": 4391848,
+        "sha256": "a8ca885da2a1868beb4e537bd62404eccea18ec24ea8f53074ffa549b061046d",
+        "stderr_bytes": 0
+      },
+      {
+        "at": "2026-09-09T20:19:09.300693+00:00",
+        "seconds": 1.859,
+        "rc": 0,
+        "bytes": 4391848,
+        "sha256": "a8ca885da2a1868beb4e537bd62404eccea18ec24ea8f53074ffa549b061046d",
+        "stderr_bytes": 0
+      },
+      {
+        "at": "2026-09-09T20:19:21.171874+00:00",
+        "seconds": 15.184,
+        "rc": 0,
+        "bytes": 4391848,
+        "sha256": "b712dcc5347cc9972ef26e45ee1c7f40d1ea056e7077c59b733598052ef5f0d6",
+        "stderr_bytes": 0
+      },
+      {
+        "at": "2026-09-09T20:19:46.368594+00:00",
+        "seconds": 1.824,
+        "rc": 0,
+        "bytes": 4391848,
+        "sha256": "5ab8a0410b9b63982fb8e14694ca49c608d53f4f299f3e1166dbfa2f4fcdf90f",
+        "stderr_bytes": 0
+      },
+      {
+        "at": "2026-09-09T20:19:58.205383+00:00",
+        "seconds": 7.06,
+        "rc": 0,
+        "bytes": 4391848,
+        "sha256": "5ab8a0410b9b63982fb8e14694ca49c608d53f4f299f3e1166dbfa2f4fcdf90f",
+        "stderr_bytes": 0
+      },
+      {
+        "at": "2026-09-09T20:20:15.277287+00:00",
+        "seconds": 49.632,
+        "rc": 0,
+        "bytes": 4391848,
+        "sha256": "444889df6da32c0558abdf9f8ff1fd11c271bffefa099b1ee66803787b2b68e8",
+        "stderr_bytes": 0
+      },
+      {
+        "at": "2026-09-09T20:21:14.921090+00:00",
+        "seconds": 45.166,
+        "rc": 0,
+        "bytes": 4392745,
+        "sha256": "fccdd24579c671d103c8cedcae7a109dcfb8f616b24ca46f959b6c9ab21410a7",
+        "stderr_bytes": 0
+      },
+      {
+        "at": "2026-09-09T20:22:10.098729+00:00",
+        "seconds": 5.413,
+        "rc": 0,
+        "bytes": 4392745,
+        "sha256": "f66819e308160cc04931c25c397e21bca99fb1d4cf214eb280bf80103e8da9ed",
+        "stderr_bytes": 0
+      },
+      {
+        "at": "2026-09-09T20:22:25.513776+00:00",
+        "seconds": 4.938,
+        "rc": 0,
+        "bytes": 4392745,
+        "sha256": "47301a858d95879e2f6bcdc7a19168f01b3d54467585c6c24122b25c0cfab6df",
+        "stderr_bytes": 0
+      },
+      {
+        "at": "2026-09-09T20:22:40.463808+00:00",
+        "seconds": 1.539,
+        "rc": 0,
+        "bytes": 4392745,
+        "sha256": "3f6025099b6071af67c927ae029ba8ce7dd7ef23b2463090bf0b69eb34691896",
+        "stderr_bytes": 0
+      }
+    ]
+  },
+  "http_baseline": {
+    "start": "2026-09-09T20:20:46.557Z",
+    "last_request_start": "2026-09-09T20:25:38.614Z",
+    "samples": 15,
+    "min_seconds": 0.043,
+    "median_seconds": 1.402,
+    "max_seconds": 37.014,
+    "failures": 7,
+    "failure_rate": 0.4666666666666667,
+    "over_25_seconds": 2,
+    "observations": [
+      {
+        "at": "2026-09-09T20:20:46.557Z",
+        "status": 503,
+        "bytes": 155,
+        "cf_ray": "a388e53fdaf2783d-OSL",
+        "retry_after": "7",
+        "code": "database_overloaded",
+        "seconds": 0.078
+      },
+      {
+        "at": "2026-09-09T20:21:01.637Z",
+        "status": 503,
+        "bytes": 155,
+        "cf_ray": "a388e59de8782efa-OSL",
+        "retry_after": "6",
+        "code": "database_overloaded",
+        "seconds": 0.043
+      },
+      {
+        "at": "2026-09-09T20:21:16.682Z",
+        "status": 503,
+        "bytes": 155,
+        "cf_ray": "a388e5fbfeae0b31-OSL",
+        "retry_after": "8",
+        "code": "database_overloaded",
+        "seconds": 0.191
+      },
+      {
+        "at": "2026-09-09T20:21:31.875Z",
+        "status": 503,
+        "bytes": 155,
+        "cf_ray": "a388e65ae9590daa-OSL",
+        "retry_after": "5",
+        "code": "database_overloaded",
+        "seconds": 0.16
+      },
+      {
+        "at": "2026-09-09T20:21:47.038Z",
+        "status": 503,
+        "bytes": 155,
+        "cf_ray": "a388e6b9ae5a56c4-OSL",
+        "retry_after": "7",
+        "code": "database_overloaded",
+        "seconds": 0.057
+      },
+      {
+        "at": "2026-09-09T20:22:02.097Z",
+        "status": 200,
+        "bytes": 4223917,
+        "cf_ray": "a388e717ca420b02-OSL",
+        "retry_after": null,
+        "code": null,
+        "seconds": 2.088
+      },
+      {
+        "at": "2026-09-09T20:22:19.187Z",
+        "status": 200,
+        "bytes": 4223918,
+        "cf_ray": "a388e7829c4eb1b8-OSL",
+        "retry_after": null,
+        "code": null,
+        "seconds": 1.073
+      },
+      {
+        "at": "2026-09-09T20:22:35.262Z",
+        "status": 200,
+        "bytes": 4223918,
+        "cf_ray": "a388e7e70b658deb-OSL",
+        "retry_after": null,
+        "code": null,
+        "seconds": 1.371
+      },
+      {
+        "at": "2026-09-09T20:22:51.634Z",
+        "status": 200,
+        "bytes": 4223918,
+        "cf_ray": "a388e84d6a5423eb-OSL",
+        "retry_after": null,
+        "code": null,
+        "seconds": 1.464
+      },
+      {
+        "at": "2026-09-09T20:23:08.100Z",
+        "status": 200,
+        "bytes": 4223916,
+        "cf_ray": "a388e8b45a6256a2-OSL",
+        "retry_after": null,
+        "code": null,
+        "seconds": 3.066
+      },
+      {
+        "at": "2026-09-09T20:23:26.167Z",
+        "status": 500,
+        "bytes": 80,
+        "cf_ray": "a388e9253d3576ef-OSL",
+        "retry_after": null,
+        "code": "internal_error",
+        "seconds": 37.014
+      },
+      {
+        "at": "2026-09-09T20:24:18.183Z",
+        "status": 500,
+        "bytes": 80,
+        "cf_ray": "a388ea6a5f02783d-OSL",
+        "retry_after": null,
+        "code": "internal_error",
+        "seconds": 28.654
+      },
+      {
+        "at": "2026-09-09T20:25:01.840Z",
+        "status": 200,
+        "bytes": 4223916,
+        "cf_ray": "a388eb7b4f1223eb-OSL",
+        "retry_after": null,
+        "code": null,
+        "seconds": 1.402
+      },
+      {
+        "at": "2026-09-09T20:25:18.244Z",
+        "status": 200,
+        "bytes": 4223916,
+        "cf_ray": "a388ebe1bce18deb-OSL",
+        "retry_after": null,
+        "code": null,
+        "seconds": 5.369
+      },
+      {
+        "at": "2026-09-09T20:25:38.614Z",
+        "status": 200,
+        "bytes": 4223916,
+        "cf_ray": "a388ec611f7656aa-OSL",
+        "retry_after": null,
+        "code": null,
+        "seconds": 3.045
+      }
+    ]
+  },
+  "catalog_lookup_error": {
+    "query": "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'deliveries'",
+    "code": 7429,
+    "message": "D1 DB exceeded its CPU time limit and was reset."
+  },
+  "final_current_hour_slowest_statement": {
+    "query": "select \"id\", \"workspace_id\", \"name\", \"type\", \"token_hash\", \"previous_token_hash\", \"previous_token_expires_at\", \"status\", \"handle\", \"persona\", \"metadata\", \"capabilities\", \"location_type\", \"location_node_id\", \"provider_name\", \"resumable\", \"session_ref\", \"origin_node_id\", \"delivery_ack_seq\", \"delivery_seq\", \"created_at\", \"last_seen\" from \"agents\" where (\"agents\".\"workspace_id\" = ? and \"agents\".\"status\" <> ?)",
+    "avgRowsRead": 5855,
+    "totalRowsRead": 1938149,
+    "avgRowsWritten": 0,
+    "totalRowsWritten": 0,
+    "avgDurationMs": 84.89280181268883,
+    "totalDurationMs": 28099.5174,
+    "numberOfTimesRun": 331,
+    "queryEfficiency": 0.8370623398804441
+  },
+  "audit_log_access": {
+    "method": "GET",
+    "path": "/accounts/{account_id}/logs/audit",
+    "since": "2026-09-09T20:00:00Z",
+    "http_status": 403
+  },
+  "worker_tail": {
+    "worker": "relaycast-cloud-api",
+    "caveat": "Error log counts are not a request failure rate; requests can emit multiple errors. Event timestamps can predate tail subscription. Raw requests and arbitrary log bodies omitted.",
+    "records": 5418,
+    "error_mentions": {
+      "overloaded": 49,
+      "cpu_reset": 66
+    },
+    "maintenance_jobs": [
+      {
+        "event_timestamp": 1788985244879,
+        "job": "retention_prune",
+        "duration_ms": 262,
+        "outcome": "database_overloaded"
+      },
+      {
+        "event_timestamp": 1788985544913,
+        "job": "retention_prune",
+        "duration_ms": 11579,
+        "outcome": "completed"
+      },
+      {
+        "event_timestamp": 1788985544913,
+        "job": "a2a_health",
+        "duration_ms": 247,
+        "outcome": "completed"
+      },
+      {
+        "event_timestamp": 1788985544913,
+        "job": "workspace_reaper",
+        "duration_ms": 47233,
+        "outcome": "database_overloaded"
+      }
+    ],
+    "roster_error_summary": {
+      "counts_by_http_status": {
+        "503": 79,
+        "500": 27
+      },
+      "max_duration_ms": 46409,
+      "examples": [
+        {
+          "event_timestamp": 1788985078141,
+          "status_code": 500,
+          "duration_ms": 46409,
+          "error_code": "internal_error"
+        },
+        {
+          "event_timestamp": 1788985215573,
+          "status_code": 500,
+          "duration_ms": 45125,
+          "error_code": "internal_error"
+        },
+        {
+          "event_timestamp": 1788985400884,
+          "status_code": 500,
+          "duration_ms": 42373,
+          "error_code": "internal_error"
+        },
+        {
+          "event_timestamp": 1788985401374,
+          "status_code": 500,
+          "duration_ms": 41884,
+          "error_code": "internal_error"
+        },
+        {
+          "event_timestamp": 1788985219744,
+          "status_code": 500,
+          "duration_ms": 40949,
+          "error_code": "internal_error"
+        },
+        {
+          "event_timestamp": 1788985102606,
+          "status_code": 503,
+          "duration_ms": 117,
+          "error_code": "database_overloaded"
+        },
+        {
+          "event_timestamp": 1788985104200,
+          "status_code": 503,
+          "duration_ms": 2,
+          "error_code": "database_overloaded"
+        },
+        {
+          "event_timestamp": 1788985114479,
+          "status_code": 503,
+          "duration_ms": 4,
+          "error_code": "database_overloaded"
+        }
+      ]
+    }
+  }
+}
