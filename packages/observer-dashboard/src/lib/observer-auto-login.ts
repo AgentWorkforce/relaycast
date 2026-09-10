@@ -59,6 +59,15 @@ export function isAcceptedObserverKey(value: string | null | undefined): value i
  * `RelayProvider` props. When there is no key, skip straight to the session
  * fetch (existing cookie flow). Any failure lands in `{kind: 'unauthenticated'}`
  * so the caller can redirect to `/login`.
+ *
+ * ORDERING IS LOAD-BEARING: a valid URL `?key=` MUST hit `/login` before
+ * `/session`. Reversing the order breaks the "shared observer link on a
+ * returning browser" flow — the returning browser carries cookies from a
+ * prior (possibly revoked) session, so a session-first probe would 401 and
+ * bounce to `/login` without ever using the URL key. The URL key must take
+ * precedence over any existing cookies. Guarded by
+ * `observer-auto-login.test.ts` (unit) and `RelaySessionProvider.test.tsx`
+ * (integration).
  */
 export async function resolveObserverSession(
   opts: ResolveObserverSessionOptions,

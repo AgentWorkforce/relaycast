@@ -267,4 +267,73 @@ describe('resolveObserverSession', () => {
 
     expect(outcome).toEqual({ kind: 'unauthenticated', reason: 'error' });
   });
+
+  it('shared observer link auto-logs-in even when the browser already has stale cookies for a revoked session', async () => {
+    // Repro guard for the "shared link fails on returning browsers" report:
+    // the browser has cookies from a prior (now-revoked) session, so a naive
+    // session-first flow would 401 and bounce to /login without ever using
+    // the URL key. The URL key MUST take precedence — we assert the login
+    // POST fires first (with the fresh URL key), the follow-up session GET
+    // returns the *new* identity (because login overwrote the cookies), and
+    // no unauthenticated outcome slips through.
+    //
+    // We simulate the request sequence directly: fetch #1 is the login POST
+    // (must fire before any session probe), fetch #2 is the session GET
+    // (must see the new identity established by login).
+    const callOrder: string[] = [];
+    const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url;
+      if (url === '/observer/api/auth/login') {
+        callOrder.push('login');
+        // Login accepts the URL key and (in production) overwrites the stale
+        // cookies via Set-Cookie. Signal success back to the resolver.
+        return jsonResponse({ success: true });
+      }
+      if (url === '/observer/api/auth/session') {
+        if (callOrder.length === 0) {
+          // If, hypothetically, session were probed BEFORE login, the stale
+          // cookies would come back as 401. Fail the test loudly so any future
+          // ordering regression is caught here rather than in production.
+          throw new Error(
+            'session probed before login — URL key must take precedence over stale cookies',
+          );
+        }
+        callOrder.push('session');
+        // Post-login session probe. In production the browser now carries
+        // the fresh cookies; we return the fresh identity that the login
+        // route just installed.
+        return jsonResponse({
+          authenticated: true,
+          apiKey: 'ot_live_fresh_from_url',
+          agentToken: 'ot_live_fresh_from_url',
+          wsToken: 'ot_live_fresh_from_url',
+          baseUrl: 'https://cast.agentrelay.com',
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+
+    const outcome = await resolveObserverSession({
+      keyParam: 'ot_live_fresh_from_url',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    // The URL key wins over the (stale) cookie session.
+    expect(outcome).toEqual({
+      kind: 'authenticated',
+      consumedKeyParam: true,
+      session: {
+        apiKey: 'ot_live_fresh_from_url',
+        agentToken: 'ot_live_fresh_from_url',
+        wsToken: 'ot_live_fresh_from_url',
+        baseUrl: 'https://cast.agentrelay.com',
+      },
+    });
+
+    // Ordering is load-bearing: login FIRST, then session. Reversing this
+    // is the exact regression the report describes.
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe('/observer/api/auth/login');
+    expect(fetchImpl.mock.calls[1]?.[0]).toBe('/observer/api/auth/session');
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
 });

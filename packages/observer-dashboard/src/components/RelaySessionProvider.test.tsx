@@ -126,6 +126,68 @@ describe('RelaySessionProvider auto-login from ?key=', () => {
     });
   });
 
+  it('URL key still takes precedence when the browser has stale session cookies (returning-user shared-link scenario)', async () => {
+    // Repro guard for "shared observer links fail on any browser that has
+    // ever logged in before". The browser carries stale httpOnly cookies for
+    // a revoked session; if the provider probed /session first it would 401
+    // and bounce to /login without ever POSTing the URL key. The mock below
+    // fails the test loudly if the provider ever calls /session before the
+    // URL-key login POST.
+    setSearchParams('key=ot_live_shared_link_token');
+
+    const callOrder: string[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = typeof input === 'string' ? input : (input as Request).url;
+      if (url.endsWith('/observer/api/auth/session') && callOrder.length === 0) {
+        // Simulated stale-cookies path: /session probed with no prior /login
+        // would return 401 in production. Surface this as a test failure so
+        // an ordering regression is caught here, not in the field.
+        throw new Error(
+          '/session probed before /login — URL key must take precedence over stale cookies',
+        );
+      }
+      if (url.endsWith('/observer/api/auth/login') && init?.method === 'POST') {
+        callOrder.push('login');
+        return jsonResponse({ success: true });
+      }
+      if (url.endsWith('/observer/api/auth/session')) {
+        callOrder.push('session');
+        // Post-login /session returns the fresh identity the login route
+        // just installed (login's Set-Cookie overwrote the stale cookies).
+        return jsonResponse({
+          authenticated: true,
+          apiKey: 'ot_live_shared_link_token',
+          agentToken: 'ot_live_shared_link_token',
+          wsToken: 'ot_live_shared_link_token',
+          baseUrl: 'https://cast.agentrelay.com',
+        });
+      }
+      throw new Error(`Unexpected fetch to ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await act(async () => {
+      render(
+        <RelaySessionProvider>
+          <div data-testid="dashboard-child">dashboard</div>
+        </RelaySessionProvider>,
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('relay-provider')).toBeTruthy();
+    });
+    // The RelayProvider must receive the FRESH URL-supplied identity, not any
+    // remnant of the (revoked) cookie session.
+    expect(screen.getByTestId('relay-provider').getAttribute('data-api-key')).toBe(
+      'ot_live_shared_link_token',
+    );
+    // Ordering is load-bearing.
+    expect(callOrder).toEqual(['login', 'session']);
+    // Must not bounce to /login mid-flow.
+    expect(routerReplace).not.toHaveBeenCalledWith('/login');
+  });
+
   it('bounces to /login when the URL key is rejected by /login', async () => {
     setSearchParams('key=ot_live_bad');
 
