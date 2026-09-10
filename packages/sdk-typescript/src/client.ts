@@ -111,6 +111,8 @@ const DEFAULT_RETRY_POLICY: RetryPolicy = {
   retryOn: [429, 500, 502, 503, 504],
 };
 
+const MAX_AUTOMATIC_RETRY_DELAY_MS = 60_000;
+
 function normalizeRetryPolicy(input?: RetryPolicyInput): RetryPolicy {
   return {
     maxRetries: Number.isFinite(input?.maxRetries) ? Math.max(0, Math.floor(input!.maxRetries!)) : DEFAULT_RETRY_POLICY.maxRetries,
@@ -314,7 +316,10 @@ export class HttpClient {
       }
 
       if (this._retryPolicy.retryOn.includes(res.status) && attempt < maxRetries) {
-        const waitMs = parseRetryAfterMs(res) ?? computeBackoffMs(this._retryPolicy, attempt);
+        const waitMs = Math.min(
+          parseRetryAfterMs(res) ?? computeBackoffMs(this._retryPolicy, attempt),
+          MAX_AUTOMATIC_RETRY_DELAY_MS,
+        );
         attempt += 1;
         await sleep(waitMs);
         continue;

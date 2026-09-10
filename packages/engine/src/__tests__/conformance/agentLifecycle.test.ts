@@ -1319,6 +1319,63 @@ describe('agent presence and release lifecycle', () => {
     expect(oldNode.sock.ofType('action.invoke')).toHaveLength(0);
   });
 
+  it('requires every supplied release proof to match the persisted invocation', async () => {
+    const ws = await createWorkspace(stack.app, 'release-generation-dual-proof');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'dual-proof-target');
+    const targetNode = await attachDirectNodeSocket(stack, ws.workspaceId, target);
+    const expectedTokenHash = await sha256Hex(target.token);
+    const invocationId = 'inv_release_dual_proof';
+    await stack.runtime.deps.db.insert(actionInvocations).values({
+      id: invocationId,
+      workspaceId: ws.workspaceId,
+      actionName: 'release',
+      invocationOrigin: 'builtin',
+      input: {
+        name: target.name,
+        expected_token_hash: expectedTokenHash,
+        expected_agent_id: 'agent_persisted_different',
+      },
+      status: 'dispatched',
+      handlerNodeId: targetNode.nodeId,
+      dispatchedNodeId: targetNode.nodeId,
+      dispatchedProvider: 'default',
+      dispatchAttempts: 1,
+    });
+
+    const sent = await stack.runtime.realtime.sendAuthorizedActionToProvider(
+      ws.workspaceId,
+      targetNode.nodeId,
+      'default',
+      {
+        v: 1,
+        type: 'action.invoke',
+        invocation_id: invocationId,
+        action: 'release',
+        input: {
+          name: target.name,
+          expected_token_hash: expectedTokenHash,
+          expected_agent_id: target.agentId,
+        },
+      },
+      {
+        kind: 'release-generation-v1',
+        invocationId,
+        agentName: target.name,
+        expectedTokenHash,
+        expectedAgentId: target.agentId,
+      },
+    );
+
+    expect(sent).toBe(false);
+    expect(targetNode.sock.ofType('action.invoke')).toHaveLength(0);
+    const [invocation] = await stack.runtime.deps.db
+      .select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(invocation).toEqual({ status: 'failed', error: 'agent_identity_mismatch' });
+    await targetNode.handle.handleClose();
+  });
+
   it('does not accept a release-generation proof for a registered action', async () => {
     const ws = await createWorkspace(stack.app, 'release-generation-origin-boundary');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'release-origin-target');

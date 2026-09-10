@@ -308,9 +308,12 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
               eq(actionInvocations.dispatchedProvider, providerName),
             ),
           ),
-          authorization.expectedTokenHash
-            ? sql`json_extract(${actionInvocations.input}, '$.expected_token_hash') = ${authorization.expectedTokenHash}`
-            : sql`json_extract(${actionInvocations.input}, '$.expected_agent_id') = ${authorization.expectedAgentId}`,
+          ...(authorization.expectedTokenHash !== undefined
+            ? [sql`json_extract(${actionInvocations.input}, '$.expected_token_hash') = ${authorization.expectedTokenHash}`]
+            : []),
+          ...(authorization.expectedAgentId !== undefined
+            ? [sql`json_extract(${actionInvocations.input}, '$.expected_agent_id') = ${authorization.expectedAgentId}`]
+            : []),
         ));
       if (!authorized) {
         await this.db

@@ -78,14 +78,14 @@ export interface AgentActionProviderAuthorization {
 }
 
 /** Exact token-generation proof for a release accepted by the socket owner. */
-export interface ReleaseActionProviderAuthorization {
+export type ReleaseActionProviderAuthorization = {
   kind: 'release-generation-v1';
   invocationId: string;
   agentName: string;
-  /** One or both immutable generation proofs may be supplied. */
-  expectedTokenHash?: string;
-  expectedAgentId?: string;
-}
+} & (
+  | { expectedTokenHash: string; expectedAgentId?: string }
+  | { expectedTokenHash?: string; expectedAgentId: string }
+);
 
 /** Legacy registered action proof, retained only so current owners fail it closed. */
 export interface LegacyRegisteredNodeActionProviderAuthorization {

@@ -1011,6 +1011,31 @@ describe('RelayCast', () => {
       expect(mockFetch).toHaveBeenCalledTimes(2);
     });
 
+    it('bounds an excessive Retry-After delay before an automatic retry', async () => {
+      vi.useFakeTimers();
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({
+        apiKey: 'rk_live_test123',
+        retryPolicy: { maxRetries: 1, backoffMs: 0, jitter: false, retryOn: [503] },
+      });
+
+      mockFetch
+        .mockImplementationOnce(() => Promise.resolve({
+          ok: false,
+          status: 503,
+          headers: new Headers({ 'Retry-After': '86400' }),
+          json: () => Promise.resolve({ ok: false, error: { code: 'database_overloaded', message: 'busy' } }),
+        }))
+        .mockImplementationOnce(() => mockResponse({ id: 'ws_1' }, true, 200));
+
+      const promise = relay.workspace.info();
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(promise).resolves.toEqual({ id: 'ws_1' });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
     it('accepts retry policy overrides via RelayCast constructor options', async () => {
       vi.useFakeTimers();
       const { RelayCast } = await import('../relay.js');

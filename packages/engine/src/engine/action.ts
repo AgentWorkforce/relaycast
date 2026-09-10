@@ -2226,7 +2226,7 @@ async function completeGuardedReleaseNodeInvocation(
       .update(actionInvocations)
       .set({
         status: 'failed',
-        error: RELEASE_GENERATION_CONFLICT_CODE,
+        error: expectedAgentId ? RELEASE_IDENTITY_MISMATCH_CODE : RELEASE_GENERATION_CONFLICT_CODE,
         completedAt: new Date(),
         spawnReservedAt: null,
       })
@@ -2254,7 +2254,7 @@ async function completeGuardedReleaseNodeInvocation(
       .update(actionInvocations)
       .set({
         status: 'failed',
-        error: RELEASE_GENERATION_CONFLICT_CODE,
+        error: expectedAgentId ? RELEASE_IDENTITY_MISMATCH_CODE : RELEASE_GENERATION_CONFLICT_CODE,
         completedAt: new Date(),
         spawnReservedAt: null,
       })
@@ -2315,7 +2315,7 @@ async function completeGuardedReleaseNodeInvocation(
       .update(actionInvocations)
       .set({
         status: 'failed',
-        error: RELEASE_GENERATION_CONFLICT_CODE,
+        error: expectedAgentId ? RELEASE_IDENTITY_MISMATCH_CODE : RELEASE_GENERATION_CONFLICT_CODE,
         completedAt,
         spawnReservedAt: null,
       })
@@ -3099,8 +3099,11 @@ async function dispatchNodeInvocation(args: {
             kind: 'release-generation-v1',
             invocationId: args.invocationId,
             agentName: typeof args.input.name === 'string' ? args.input.name : '',
-            ...(guardedReleaseHash ? { expectedTokenHash: guardedReleaseHash } : {}),
-            ...(guardedReleaseAgentId ? { expectedAgentId: guardedReleaseAgentId } : {}),
+            ...(guardedReleaseHash && guardedReleaseAgentId
+              ? { expectedTokenHash: guardedReleaseHash, expectedAgentId: guardedReleaseAgentId }
+              : guardedReleaseHash
+                ? { expectedTokenHash: guardedReleaseHash }
+                : { expectedAgentId: guardedReleaseAgentId! }),
           },
         ) ?? false)
     : await args.registry.sendToProvider(
