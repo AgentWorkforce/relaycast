@@ -219,7 +219,12 @@ jobs:
 
             const dockerLockPath = path.join('docker', 'package-lock.json');
             const dockerLock = JSON.parse(fs.readFileSync(dockerLockPath, 'utf8'));
-            if (dockerLock.packages?.['']) dockerLock.packages[''].version = version;
+            if (dockerLock.packages?.['']) {
+              dockerLock.packages[''].version = version;
+              if (dockerLock.packages[''].dependencies?.['@relaycast/engine']) {
+                dockerLock.packages[''].dependencies['@relaycast/engine'] = version;
+              }
+            }
             if (dockerLock.packages?.['node_modules/@relaycast/engine']) {
               dockerLock.packages['node_modules/@relaycast/engine'].version = version;
             }

@@ -426,6 +426,18 @@ describe("publish workflow safety contract", () => {
     }
   });
 
+  it("bumps the Docker lock root engine pin on the placeholder path", () => {
+    const build = jobBlock("build");
+    assert.match(
+      build,
+      /dockerLock\.packages\[''\]\.dependencies\?\.\['@relaycast\/engine'\]/,
+    );
+    assert.match(
+      build,
+      /dockerLock\.packages\[''\]\.dependencies\['@relaycast\/engine'\] = version/,
+    );
+  });
+
   it("publishes and releases only after the all-package matrix succeeds", () => {
     const matrixStart = workflow.indexOf("      matrix:\n        package:");
     const matrixEnd = workflow.indexOf("\n\n    steps:", matrixStart);

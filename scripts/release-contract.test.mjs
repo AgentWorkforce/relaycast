@@ -437,6 +437,22 @@ describe("release version parity", () => {
     );
   });
 
+  it("rejects a stale Docker root engine pin on the placeholder path", () => {
+    const root = repositoryFixture();
+    const lockPath = path.join(root, "docker", "package-lock.json");
+    const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+    lock.packages[""].dependencies["@relaycast/engine"] = "8.5.3";
+    writeFileSync(lockPath, JSON.stringify(lock));
+
+    assert.throws(
+      () =>
+        assertRepositoryVersionParity(root, "8.6.0-beta.0", {
+          requireDockerResolvedArtifact: false,
+        }),
+      /root dependencies topology does not match docker\/package\.json/,
+    );
+  });
+
   it("rejects a RUNBOOK.md engine-version mention that was not bumped", () => {
     const root = repositoryFixture();
     const runbookPath = path.join(root, "RUNBOOK.md");
