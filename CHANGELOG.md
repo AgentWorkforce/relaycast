@@ -26,6 +26,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Rust SDK `WorkspaceBootstrapOptions` supports crash-safe anonymous keyed workspace creation without a deployment secret and opt-in self-host bootstrap proof without exposing it to hosted Relaycast.
 
+### Fixed
+
+- Rust and TypeScript SDK anonymous keyed workspace bootstrap refuses remote HTTP and redirects, keeping its recovery capability on the intended origin.
+
 ## [8.7.0] - 2026-09-09
 
 ### Added

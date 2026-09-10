@@ -10,6 +10,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
+- Anonymous keyed workspace bootstrap rejects remote HTTP and redirects, preventing its recovery capability from reaching another origin.
 - Retryable HTTP failures retain the final status, API error, request metadata, and attempt count after retries are exhausted.
 - Retried 5xx responses honor a bounded `Retry-After` delay.
 

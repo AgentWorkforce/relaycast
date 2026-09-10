@@ -16,10 +16,10 @@ fn strip_hash(channel: &str) -> &str {
     channel.strip_prefix('#').unwrap_or(channel)
 }
 
-fn validate_bootstrap_secret_destination(base_url: &str) -> Result<()> {
+fn validate_anonymous_keyed_bootstrap_destination(base_url: &str) -> Result<Url> {
     let parsed = Url::parse(base_url).map_err(|_| {
         RelayError::InvalidResponse(
-            "Anonymous keyed workspace bootstrap requires a valid self-hosted baseUrl".to_string(),
+            "Anonymous keyed workspace bootstrap requires a valid baseUrl".to_string(),
         )
     })?;
     let hostname = parsed
@@ -35,6 +35,17 @@ fn validate_bootstrap_secret_destination(base_url: &str) -> Result<()> {
             "Anonymous keyed workspace bootstrap requires an HTTPS self-hosted baseUrl (or loopback HTTP for local development)".to_string(),
         ));
     }
+
+    Ok(parsed)
+}
+
+fn validate_bootstrap_secret_destination(base_url: &str) -> Result<()> {
+    let parsed = validate_anonymous_keyed_bootstrap_destination(base_url)?;
+    let hostname = parsed
+        .host_str()
+        .unwrap_or_default()
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
     if hostname == "cast.agentrelay.com" {
         return Err(RelayError::InvalidResponse(
             "Anonymous keyed workspace bootstrap cannot send a bootstrapSecret to the hosted gateway"
@@ -170,7 +181,14 @@ impl RelayCast {
             }
         }
 
-        let sends_bootstrap_secret = idempotency_key.is_some() && bootstrap_secret.is_some();
+        let anonymous_keyed_request = idempotency_key.is_some();
+        if anonymous_keyed_request {
+            validate_anonymous_keyed_bootstrap_destination(
+                base_url.as_deref().unwrap_or(DEFAULT_BASE_URL),
+            )?;
+        }
+
+        let sends_bootstrap_secret = anonymous_keyed_request && bootstrap_secret.is_some();
         if sends_bootstrap_secret {
             let explicit_base_url = base_url.as_deref().ok_or_else(|| {
                 RelayError::InvalidResponse(
@@ -186,9 +204,9 @@ impl RelayCast {
             base_url.as_deref().unwrap_or(DEFAULT_BASE_URL)
         );
 
-        // Never follow a redirect after attaching the self-host proof; a
-        // redirect could otherwise forward it to a different origin.
-        let client = if sends_bootstrap_secret {
+        // An anonymous Idempotency-Key is a reveal-once recovery capability,
+        // so never follow a redirect that could forward it to another origin.
+        let client = if anonymous_keyed_request {
             reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .build()?

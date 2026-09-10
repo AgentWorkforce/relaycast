@@ -1250,6 +1250,7 @@ describe('RelayCast', () => {
       const [, init] = mockFetch.mock.calls[0]!;
       expect(init.headers.Authorization).toBe('Bearer rk_live_parent');
       expect(init.headers['Idempotency-Key']).toBe('cloud-job-371');
+      expect(init.redirect).toBeUndefined();
     });
 
     it('forwards the bootstrap secret proof for anonymous keyed creates', async () => {
@@ -1298,6 +1299,44 @@ describe('RelayCast', () => {
       expect(url).toBe('https://cast.agentrelay.com/v1/workspaces');
       expect(init.headers['Idempotency-Key']).toBe('hosted-run-407-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e');
       expect(init.headers['X-Workspace-Bootstrap-Secret']).toBeUndefined();
+      expect(init.redirect).toBe('manual');
+    });
+
+    it('does not follow a key-only anonymous bootstrap redirect to another origin', async () => {
+      const { RelayCast } = await import('../relay.js');
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: false,
+          status: 307,
+          type: 'opaqueredirect',
+          headers: new Headers({ Location: 'https://redirected.example/v1/workspaces' }),
+          json: () => Promise.resolve({}),
+        }),
+      );
+
+      await expect(RelayCast.createWorkspace('hosted-child', {
+        idempotencyKey: 'hosted-run-408-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e',
+      })).rejects.toMatchObject({
+        code: 'transport_error',
+        statusCode: 307,
+      });
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.redirect).toBe('manual');
+    });
+
+    it('rejects a key-only anonymous bootstrap over remote plaintext HTTP', async () => {
+      const { RelayCast } = await import('../relay.js');
+
+      await expect(RelayCast.createWorkspace('hosted-child', {
+        idempotencyKey: 'hosted-run-408-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e',
+        baseUrl: 'http://self-host.example',
+      })).rejects.toMatchObject({
+        rawCode: 'workspace_create_bootstrap_base_url_required',
+        statusCode: 400,
+      });
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it('rejects a short anonymous key before making a request', async () => {

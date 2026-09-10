@@ -646,6 +646,54 @@ async fn bootstrap_secret_is_not_forwarded_across_a_redirect() {
     );
 }
 
+#[tokio::test]
+async fn anonymous_keyed_workspace_is_not_followed_across_a_redirect() {
+    let origin = MockServer::start().await;
+    let redirected = MockServer::start().await;
+    let key = "hosted-run-408-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e";
+
+    Mock::given(method("POST"))
+        .and(path("/v1/workspaces"))
+        .respond_with(ResponseTemplate::new(307).insert_header("Location", redirected.uri()))
+        .expect(1)
+        .mount(&origin)
+        .await;
+
+    let result = RelayCast::create_workspace_with_options(
+        "Redirected Keyed Retry",
+        WorkspaceBootstrapOptions::new(WorkspaceProvenance::sdk())
+            .with_base_url(origin.uri())
+            .with_idempotency_key(key),
+    )
+    .await;
+    assert!(result.is_err());
+
+    assert!(
+        redirected
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty(),
+        "the recovery capability must not be forwarded to a redirect target"
+    );
+}
+
+#[tokio::test]
+async fn anonymous_keyed_workspace_rejects_remote_plaintext_http() {
+    let result = RelayCast::create_workspace_with_options(
+        "Remote Plaintext Retry",
+        WorkspaceBootstrapOptions::new(WorkspaceProvenance::sdk())
+            .with_base_url("http://self-host.example")
+            .with_idempotency_key("hosted-run-408-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e"),
+    )
+    .await;
+
+    assert!(matches!(
+        result,
+        Err(RelayError::InvalidResponse(message)) if message.contains("requires an HTTPS")
+    ));
+}
+
 #[test]
 fn workspace_bootstrap_options_redacts_recovery_capabilities_from_debug_output() {
     let idempotency_key = "hosted-run-407-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e";

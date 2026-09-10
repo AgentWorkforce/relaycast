@@ -269,6 +269,40 @@ export const MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH = 32;
 const HOSTED_GATEWAY_HOSTNAME = 'cast.agentrelay.com';
 const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
 
+function validateAnonymousKeyedBootstrapDestination(value: string): URL {
+  let baseUrl: URL;
+  try {
+    baseUrl = new URL(value);
+  } catch {
+    throw new RelayError(
+      'transport_error',
+      'Anonymous keyed workspace bootstrap requires a valid baseUrl',
+      {
+        statusCode: 400,
+        retryable: false,
+        rawCode: 'workspace_create_bootstrap_base_url_required',
+      },
+    );
+  }
+
+  const hostname = baseUrl.hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase();
+  const isLoopbackHttp =
+    baseUrl.protocol === 'http:' && LOOPBACK_HOSTNAMES.has(hostname);
+  if (baseUrl.protocol !== 'https:' && !isLoopbackHttp) {
+    throw new RelayError(
+      'transport_error',
+      'Anonymous keyed workspace bootstrap requires an HTTPS self-hosted baseUrl (or loopback HTTP for local development)',
+      {
+        statusCode: 400,
+        retryable: false,
+        rawCode: 'workspace_create_bootstrap_base_url_required',
+      },
+    );
+  }
+
+  return baseUrl;
+}
+
 function validateWorkspaceBootstrapOptions(options: WorkspaceBootstrapOptions): void {
   // Owner-scoped keys are bounded by the authenticated API key and may remain
   // short. Anonymous keys are part of the recovery proof and must satisfy the
@@ -289,11 +323,14 @@ function validateWorkspaceBootstrapOptions(options: WorkspaceBootstrapOptions): 
     );
   }
 
-  if (
-    !options.apiKey &&
-    options.idempotencyKey !== undefined &&
-    options.bootstrapSecret !== undefined
-  ) {
+  const anonymousKeyedBootstrap = !options.apiKey && options.idempotencyKey !== undefined;
+  if (anonymousKeyedBootstrap) {
+    validateAnonymousKeyedBootstrapDestination(
+      options.baseUrl ?? 'https://cast.agentrelay.com',
+    );
+  }
+
+  if (anonymousKeyedBootstrap && options.bootstrapSecret !== undefined) {
     if (!options.baseUrl) {
       throw new RelayError(
         'transport_error',
@@ -306,34 +343,7 @@ function validateWorkspaceBootstrapOptions(options: WorkspaceBootstrapOptions): 
       );
     }
 
-    let baseUrl: URL;
-    try {
-      baseUrl = new URL(options.baseUrl);
-    } catch {
-      throw new RelayError(
-        'transport_error',
-        'Anonymous keyed workspace bootstrap requires a valid self-hosted baseUrl',
-        {
-          statusCode: 400,
-          retryable: false,
-          rawCode: 'workspace_create_bootstrap_base_url_required',
-        },
-      );
-    }
-    const isLoopbackHttp =
-      baseUrl.protocol === 'http:' &&
-      LOOPBACK_HOSTNAMES.has(baseUrl.hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase());
-    if (baseUrl.protocol !== 'https:' && !isLoopbackHttp) {
-      throw new RelayError(
-        'transport_error',
-        'Anonymous keyed workspace bootstrap requires an HTTPS self-hosted baseUrl (or loopback HTTP for local development)',
-        {
-          statusCode: 400,
-          retryable: false,
-          rawCode: 'workspace_create_bootstrap_base_url_required',
-        },
-      );
-    }
+    const baseUrl = validateAnonymousKeyedBootstrapDestination(options.baseUrl);
     const hostname = baseUrl.hostname.replace(/\.$/, '').toLowerCase();
     if (hostname === HOSTED_GATEWAY_HOSTNAME) {
       throw new RelayError(
@@ -446,13 +456,14 @@ export class RelayCast {
     const { apiKey, baseUrl } = resolved;
     const requestBaseUrl = baseUrl ?? 'https://cast.agentrelay.com';
     const identity = resolveAgentRelayIdentity(resolved);
+    const anonymousKeyedBootstrap = !apiKey && resolved.idempotencyKey !== undefined;
     const sendsBootstrapSecret =
-      !apiKey && resolved.idempotencyKey !== undefined && resolved.bootstrapSecret !== undefined;
+      anonymousKeyedBootstrap && resolved.bootstrapSecret !== undefined;
 
     const url = new URL('/v1/workspaces', requestBaseUrl);
     const res = await fetch(url.toString(), {
       method: 'POST',
-      ...(sendsBootstrapSecret ? { redirect: 'manual' as const } : {}),
+      ...(anonymousKeyedBootstrap ? { redirect: 'manual' as const } : {}),
       headers: {
         'Content-Type': 'application/json',
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
@@ -477,7 +488,7 @@ export class RelayCast {
     });
 
     if (
-      sendsBootstrapSecret &&
+      anonymousKeyedBootstrap &&
       (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400))
     ) {
       throw new RelayError(

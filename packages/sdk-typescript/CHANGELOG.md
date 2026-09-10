@@ -13,6 +13,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - `RelayCast.createWorkspace()` can replay anonymous hosted creation with a CSPRNG `idempotencyKey` without accepting or transmitting a deployment-wide secret.
 
+### Fixed
+
+- Anonymous keyed workspace bootstrap rejects remote HTTP and redirects, preventing its recovery capability from reaching another origin.
+
 ## [8.6.0] - 2026-09-09
 
 ### Changed
