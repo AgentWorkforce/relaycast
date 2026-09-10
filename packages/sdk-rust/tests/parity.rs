@@ -318,6 +318,20 @@ async fn exact_release_uses_immutable_id_and_caller_idempotency_key() {
             "expected_agent_id": "agent_exact_1",
             "delete_agent": true
         })))
+        .respond_with(api_error(503, "database_overloaded", "retry exact release")
+            .insert_header("Retry-After", "0"))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/agents/release-exact"))
+        .and(header("Idempotency-Key", "exact-release-key"))
+        .and(body_json(json!({
+            "name": "WorkerOne",
+            "expected_agent_id": "agent_exact_1",
+            "delete_agent": true
+        })))
         .respond_with(ok(json!({
             "invocation_id": "inv_exact_1", "action_name": "release",
             "handler_agent_id": null, "handler_node_id": null,

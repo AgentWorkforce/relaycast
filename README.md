@@ -870,6 +870,16 @@ replay that reaches the narrow interval before its placement/dispatch outcome is
 durable returns retryable `idempotency_unavailable`; clients must retry the same
 logical request with the same key rather than minting a replacement.
 
+For crash-safe agent cleanup, `POST /v1/agents/release-exact` requires the
+immutable `expected_agent_id` and a caller-persisted `Idempotency-Key`. The key
+is scoped to the workspace, authenticated caller principal, and `release` action;
+workspace-key callers share one workspace-key scope, so every logical operation
+must use its own unique key and independent callers must not reuse one another's
+keys. A replay returns the original terminal invocation with
+`Idempotency-Replayed: true` and does not enqueue another `action.invoked`
+webhook. A same-name replacement is never mutated, and reusing a key with a
+different payload returns `409 idempotency_key_reused`.
+
 Action registration is an idempotent assertion: re-registering an existing name
 (`POST /actions`) refreshes its description, handler, schemas, `available_to`, and
 `is_active` in place and returns 200, so a reconnecting publisher re-asserts its

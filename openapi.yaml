@@ -2713,9 +2713,14 @@ paths:
       summary: Atomically release an exact agent identity
       description: >-
         Crash-safe reconciliation endpoint. Requires the immutable agent id and
-        a caller-persisted Idempotency-Key; a same-name replacement is never
-        released by this operation. Replaying a key returns the original
-        terminal invocation, while reusing it with another payload conflicts.
+        a caller-persisted Idempotency-Key. The key is scoped to the workspace,
+        authenticated caller principal, and release action; workspace-key
+        callers share the workspace-key principal scope, so each caller must
+        create and persist a unique key for each logical operation. A same-name
+        replacement is never released by this operation. Replaying a key
+        returns the original terminal invocation and does not enqueue a second
+        `action.invoked` webhook, while reusing it with another payload
+        conflicts.
       tags: [Agents]
       security:
         - workspaceKey: []

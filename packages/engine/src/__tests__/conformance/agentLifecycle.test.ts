@@ -1,7 +1,7 @@
 import { invokeWithConcurrentReplay } from './invocationReplay.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
-import { actionInvocations, agentNodeBindings, agents, channelMembers, nodes, workspaceEvents } from '../../db/schema.js';
+import { actionInvocations, agentNodeBindings, agents, channelMembers, nodes, pendingEvents, workspaceEvents } from '../../db/schema.js';
 import { AGENT_LIVENESS_TTL_MS, sweepStaleAgents } from '../../engine/agent.js';
 import {
   attachDirectNodeSocket,
@@ -237,6 +237,12 @@ describe('agent presence and release lifecycle', () => {
   it('requires a durable key and replays an exact immutable-id release only once', async () => {
     const ws = await createWorkspace(stack.app, 'exact-release-idempotency');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'exact-target');
+    const subscription = await stack.app.request('/v1/subscriptions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ events: ['action.invoked'], url: 'http://127.0.0.1:1/hook' }),
+    });
+    expect(subscription.status).toBe(201);
     const body = {
       name: target.name,
       expected_agent_id: target.agentId,
@@ -261,6 +267,12 @@ describe('agent presence and release lifecycle', () => {
       eq(actionInvocations.workspaceId, ws.workspaceId),
       eq(actionInvocations.actionName, 'release'),
     ))).toHaveLength(1);
+    expect(await stack.runtime.deps.db.select({ eventType: pendingEvents.eventType })
+      .from(pendingEvents)
+      .where(and(
+        eq(pendingEvents.workspaceId, ws.workspaceId),
+        eq(pendingEvents.eventType, 'action.invoked'),
+      ))).toHaveLength(1);
   });
 
   it('fails closed on a replacement identity and rejects an idempotency-key payload swap', async () => {
