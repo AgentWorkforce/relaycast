@@ -363,6 +363,55 @@ describe('agent presence and release lifecycle', () => {
     await handle.handleClose();
   });
 
+  it('persists and replays an identity-only local CAS conflict', async () => {
+    const ws = await createWorkspace(stack.app, 'exact-release-identity-cas-replay');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'identity-cas-replay');
+    const { handle } = await attachDirectNodeSocket(stack, ws.workspaceId, target);
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    const originalConnected = nodeConnections.isProviderConnected.bind(nodeConnections);
+    let invalidated = false;
+    vi.spyOn(nodeConnections, 'isProviderConnected').mockImplementation((...args) => {
+      if (!invalidated) {
+        invalidated = true;
+        stack.runtime.handle.sqlite.pragma('foreign_keys = OFF');
+        stack.runtime.handle.sqlite.prepare('UPDATE agents SET id = ? WHERE id = ?')
+          .run('identity-cas-replaced', target.agentId);
+        stack.runtime.handle.sqlite.prepare('UPDATE agent_node_bindings SET agent_id = ? WHERE agent_id = ?')
+          .run('identity-cas-replaced', target.agentId);
+        stack.runtime.handle.sqlite.prepare('UPDATE channel_members SET agent_id = ? WHERE agent_id = ?')
+          .run('identity-cas-replaced', target.agentId);
+        stack.runtime.handle.sqlite.pragma('foreign_keys = ON');
+      }
+      return originalConnected(...args) && false;
+    });
+
+    const invoke = () => stack.app.request('/v1/agents/release-exact', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+        'Idempotency-Key': 'identity-cas-replay',
+      },
+      body: JSON.stringify({ name: target.name, expected_agent_id: target.agentId, delete_agent: true }),
+    });
+    const first = await invoke();
+    expect(invalidated).toBe(true);
+    expect(first.status).toBe(409);
+    expect((await first.json() as { error: { code: string } }).error.code)
+      .toBe('agent_identity_mismatch');
+    const replay = await invoke();
+    expect(replay.status).toBe(409);
+    expect((await replay.json() as { error: { code: string } }).error.code)
+      .toBe('agent_identity_mismatch');
+    const [invocation] = await stack.runtime.deps.db.select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations).where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'release'),
+      ));
+    expect(invocation).toEqual({ status: 'failed', error: 'agent_identity_mismatch' });
+    await handle.handleClose();
+  });
+
   it('fails closed on a replacement identity and rejects an idempotency-key payload swap', async () => {
     const ws = await createWorkspace(stack.app, 'exact-release-replacement');
     const oldAgent = await registerAgent(stack.app, ws.workspaceKey, 'old-agent');

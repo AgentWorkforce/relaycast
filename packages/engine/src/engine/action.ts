@@ -1246,14 +1246,14 @@ async function dispatchRelease(args: {
         .update(actionInvocations)
         .set({
           status: 'failed',
-          error: RELEASE_GENERATION_CONFLICT_CODE,
+          error: expectedAgentId ? RELEASE_IDENTITY_MISMATCH_CODE : RELEASE_GENERATION_CONFLICT_CODE,
           completedAt,
         })
         .where(and(
           eq(actionInvocations.workspaceId, args.workspaceId),
           eq(actionInvocations.id, invocation.id),
           inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
-          expectedTokenHash ? sql`NOT (${generationStillCurrent})` : sql`0`,
+          expectedTokenHash || expectedAgentId ? sql`NOT (${generationStillCurrent})` : sql`0`,
         ))
         .returning({ id: actionInvocations.id }));
 
@@ -1421,7 +1421,7 @@ async function dispatchRelease(args: {
           .update(actionInvocations)
           .set({
             status: 'failed',
-            error: RELEASE_GENERATION_CONFLICT_CODE,
+            error: expectedAgentId ? RELEASE_IDENTITY_MISMATCH_CODE : RELEASE_GENERATION_CONFLICT_CODE,
             completedAt,
           })
           .where(and(
