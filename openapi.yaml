@@ -181,7 +181,7 @@ components:
           description: Snowflake ID of the workspace
         api_key:
           type: string
-          description: Workspace API key (returned on first creation and on an authenticated idempotent replay or an anonymous bootstrap replay with a valid bootstrap-secret proof)
+          description: Workspace API key (returned on first creation and on authenticated or anonymous idempotent replay)
         created_at:
           type: string
           format: date-time
@@ -1439,6 +1439,7 @@ components:
           type: string
 
     RelayfileInboundEventSnapshot:
+      description: Provider record snapshot. Cloud sync envelopes expose their inner provider payload in message metadata and formatting; provider event semantics still require authenticated top-level event metadata.
       type: object
       properties:
         path:
@@ -1469,6 +1470,12 @@ components:
           type: string
         provider:
           type: string
+        providerEventType:
+          type: string
+          description: Authenticated provider semantic type, for example pull_request.closed. Preserved without inferring semantics from file.updated.
+        resourceRef:
+          type: string
+          description: Authenticated provider resource reference preserved in message metadata.
         correlationId:
           type: string
         timestamp:
@@ -1567,11 +1574,10 @@ paths:
         provide an `Idempotency-Key`: authenticated requests bind the owner, key, and exact request
         digest, while anonymous bootstrap requests bind the key to the deployment. Replaying the
         same request returns the same workspace and usable API key with a `200` response, while
-        changing the request returns `409`. An anonymous (no `Authorization`) request that supplies
-        `Idempotency-Key` must also supply `X-Workspace-Bootstrap-Secret` matching the deployment's
-        configured bootstrap secret; the `Idempotency-Key` alone is a caller-chosen, non-secret
-        correlator, so proving the deployment secret is what authorizes looking up or recovering the
-        binding. If transient storage attempts are
+        changing the request returns `409`. For an anonymous (no `Authorization`) request, a
+        CSPRNG-generated `Idempotency-Key` is the narrowly scoped recovery capability; the configured
+        deployment secret remains server-only HMAC material for deterministic child-key derivation.
+        Self-hosts can optionally require `X-Workspace-Bootstrap-Secret` proof. If transient storage attempts are
         exhausted and the server cannot confirm the committed workspace/channel pair, it returns
         `503 workspace_storage_unavailable`; that outcome is indeterminate.
       tags:
@@ -1615,8 +1621,7 @@ paths:
             authorization it is scoped to anonymous bootstrap creation on this
             deployment. Reusing it with the same request replays the workspace;
             a different request is a 409. For an anonymous (bootstrap) create,
-            this key is part of what authorizes recovering the binding
-            alongside `X-Workspace-Bootstrap-Secret`. Callers must generate it
+            this key is the narrowly scoped recovery capability. Callers must generate it
             with a CSPRNG (a v4 UUID is suitable). The server enforces only a
             32-character structural minimum: only a shorter value returns
             `400 workspace_create_idempotency_key_too_weak`. This
@@ -1627,12 +1632,11 @@ paths:
           schema:
             type: string
           description: >-
-            Required alongside `Idempotency-Key` for an anonymous (no
-            `Authorization`) request. Must match the deployment's configured
-            bootstrap secret; a missing or mismatched value returns `401`
-            before any lookup of the idempotency binding. Not used, and not
-            required, for authenticated or unkeyed (no `Idempotency-Key`)
-            creates.
+            Optional self-host proof for anonymous keyed creates when the
+            deployment enables bootstrap proof enforcement. Hosted callers
+            must not send this deployment-wide secret. When enforcement is
+            enabled, a missing or mismatched value returns `401` before any
+            binding lookup. Not used for authenticated or unkeyed creates.
       responses:
         '200':
           description: Existing workspace returned (idempotent)
@@ -1677,8 +1681,9 @@ paths:
         '401':
           description: >-
             Invalid owner workspace key for authenticated keyed creation, or
-            `workspace_create_bootstrap_secret_invalid` — an anonymous keyed
-            create did not supply a matching `X-Workspace-Bootstrap-Secret`.
+            `workspace_create_bootstrap_secret_invalid` when a self-host has
+            enabled bootstrap-proof enforcement and an anonymous keyed create
+            did not supply a matching `X-Workspace-Bootstrap-Secret`.
           content:
             application/json:
               schema:
@@ -2447,6 +2452,58 @@ paths:
         '204':
           description: Agent deleted
 
+  /agents/{name}/subscription-channel:
+    post:
+      summary: Ensure an exact agent subscription delivery channel
+      description: |
+        Workspace-owner operation. Idempotently returns a channel bound to the
+        agent's immutable identity ID and joins that identity. Other agents
+        cannot join or be invited. Does not rotate the recipient token. A
+        replacement registered under the same name gets a different channel.
+        The agent-events- prefix and routing metadata are reserved. This limits
+        delivery membership; it does not introduce private history access. Returns
+        404 if the recipient is released before membership is established.
+      tags: [Agents]
+      security:
+        - workspaceKey: []
+      parameters:
+        - in: path
+          name: name
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Channel with verified recipient membership
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, data]
+                properties:
+                  ok: { type: boolean, enum: [true] }
+                  data:
+                    type: object
+                    required: [id, name, members, member_count]
+                    properties:
+                      id: { type: string }
+                      name: { type: string }
+                      member_count: { type: integer, enum: [1] }
+                      members:
+                        type: array
+                        minItems: 1
+                        maxItems: 1
+                        items:
+                          type: object
+                          properties:
+                            agent_id: { type: string }
+                            agent_name: { type: string }
+        '401':
+          description: Workspace key required
+        '404':
+          description: Recipient identity not found
+        '409':
+          description: Subscription channel archived
+
   /agents/{name}/legacy-identity:
     patch:
       summary: Atomically claim a legacy agent identity
@@ -3061,7 +3118,7 @@ paths:
   /channels/{name}/mute:
     post:
       summary: Mute a channel
-      description: Mute a channel for the authenticated agent. Muted channels suppress ordinary message delivery rows and realtime pushes, but explicit @mentions still create mention deliveries. The agent remains a member and still receives system/control events (member joins, channel updates, mute confirmations). Agent identity is derived from the agent token — no request body needed.
+      description: Mute a channel for the authenticated agent. Mention handles include ASCII letters, digits, underscores and hyphens; escaped and email-address @ signs are not mentions. Muted channels suppress ordinary message delivery rows and realtime pushes, but explicit @mentions still create mention deliveries. The agent remains a member and still receives system/control events (member joins, channel updates, mute confirmations). Agent identity is derived from the agent token — no request body needed.
       tags:
         - Channels
       security:
@@ -5592,6 +5649,9 @@ paths:
         HMAC-authenticated callback used by relayfile to inject matching provider
         file events into a Relaycast channel. The HMAC input is
         `X-Relay-Timestamp + "." + raw request body`, signed with SHA-256.
+        A full recipient mailbox returns 503 mailbox_full with Retry-After: 30;
+        the producer must retry the same event ID. The message and all delivery
+        rows roll back together, so no recipient is silently skipped.
       tags:
         - Relayfile
       parameters:
@@ -5686,7 +5746,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: Relayfile inbound bridge or idempotency storage is unavailable
+          description: A recipient mailbox is full (mailbox_full), or the inbound bridge/idempotency storage is unavailable
+          headers:
+            Retry-After:
+              description: For mailbox_full, retry the same event ID after 30 seconds
+              schema:
+                type: integer
+                example: 30
           content:
             application/json:
               schema:
@@ -5799,6 +5865,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '503':
+          description: A recipient mailbox is full; no partial message or deliveries were committed
+          headers:
+            Retry-After:
+              description: Retry the event after 30 seconds
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /ws:
     get:

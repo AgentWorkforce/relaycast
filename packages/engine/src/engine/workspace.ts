@@ -30,14 +30,14 @@ type CreateWorkspaceOptions =
       /** Deployment-configured secret used to derive the anonymous bootstrap child key. */
       bootstrapSecret?: string;
       /**
-       * The bootstrap secret as presented by the caller. An anonymous,
-       * idempotency-keyed create must prove it, matching `bootstrapSecret`,
-       * before any binding lookup or credential is returned — otherwise the
-       * `Idempotency-Key` alone (a caller-chosen, non-secret value) would let
-       * any network peer who guesses or observes it retrieve a workspace's
-       * deterministic API key. See createWorkspace's bootstrap-proof check.
+       * The bootstrap secret as presented by the caller when a self-host opts
+       * into shared-secret proof enforcement. Hosted deployments keep the
+       * server derivation secret private and use the high-entropy
+       * Idempotency-Key as the narrowly scoped recovery capability.
        */
       bootstrapSecretProof?: string;
+      /** Enable the optional self-host bootstrap-secret proof requirement. */
+      bootstrapProofRequired?: boolean;
       /**
        * Crash-safe workspace-create replay key (relaycast#371/#379).
        *
@@ -47,9 +47,8 @@ type CreateWorkspaceOptions =
        * be unique per logical operation (e.g. a job id).
        *
        * Anonymous bootstrap (no owner key): the key is scoped to the
-       * deployment, not to a caller, and — together with
-       * `X-Workspace-Bootstrap-Secret` — is what recovers or replays the
-       * binding. Generate it with a CSPRNG, never a derived or guessable
+       * deployment, not to a caller, and is the reveal-once recovery
+       * capability for the binding. Generate it with a CSPRNG, never a derived or guessable
        * value such as a job id, timestamp, or counter. A v4 UUID, 16 random
        * bytes hex-encoded, or at least 24 random bytes base64url-encoded meet
        * the 32-character structural minimum. `createWorkspace` cannot verify
@@ -238,6 +237,7 @@ export async function createWorkspace(
   const providedOwnerApiKey = typeof options === 'string' ? options : options?.ownerApiKey;
   const bootstrapSecret = typeof options === 'string' ? undefined : options?.bootstrapSecret;
   const bootstrapSecretProof = typeof options === 'string' ? undefined : options?.bootstrapSecretProof;
+  const bootstrapProofRequired = typeof options === 'string' ? false : options?.bootstrapProofRequired === true;
   const expiresAt = typeof options === 'string' ? undefined : options?.expiresAt;
   const derivedOwnerApiKeyHash = providedOwnerApiKey ? await hashApiKey(providedOwnerApiKey) : undefined;
 
@@ -260,11 +260,10 @@ export async function createWorkspace(
     );
   }
 
-  // relaycast#379: an anonymous bootstrap Idempotency-Key stands in for a
-  // caller identity — together with X-Workspace-Bootstrap-Secret, it is
-  // part of what authorizes recovering a binding. Callers must generate it
-  // with a CSPRNG; this length-only structural floor is checked before any
-  // secret or database work and cannot prove the key was actually random.
+  // An anonymous bootstrap Idempotency-Key is a reveal-once recovery
+  // capability. Callers must generate it with a CSPRNG; this length-only
+  // structural floor is checked before any secret or database work and cannot
+  // prove the key was actually random.
   if (bootstrapIdempotency && idempotencyKey!.length < MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH) {
     throw codedError(
       `Anonymous Idempotency-Key must be at least ${MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH} characters. Generate it with a CSPRNG, such as a v4 UUID, 16 random bytes hex-encoded, or at least 24 random bytes base64url-encoded.`,
@@ -280,19 +279,12 @@ export async function createWorkspace(
       503,
     );
   }
-  // The Idempotency-Key is a caller-chosen, non-secret correlator, not proof
-  // of identity: without this check, any network peer who guesses or
-  // observes a low-entropy or leaked key (plus the fully public request
-  // digest) could replay another caller's anonymous bootstrap create and
-  // receive its deterministic child API key before — or instead of — the
-  // legitimate caller. Only a caller who also proves knowledge of the
-  // deployment's own bootstrap secret may look up or recover a bootstrap
-  // binding. The proof is checked with a constant-time comparison and before
-  // any binding lookup, so neither timing nor a binding's existence leaks to
-  // a caller who does not hold the secret. The container/self-host entrypoint
-  // and any other trusted caller hold the same configured secret, so replay
-  // across restarts stays fully stable for them.
-  if (bootstrapIdempotency && bootstrapSecret) {
+  // Hosted callers must never receive a deployment-wide secret. Their
+  // CSPRNG-generated Idempotency-Key is the narrow recovery capability, while
+  // bootstrapSecret remains server-only HMAC material for deterministic child
+  // key derivation. A self-host may retain the former shared-secret proof as
+  // an explicit hardening policy; check it before any binding lookup.
+  if (bootstrapIdempotency && bootstrapSecret && bootstrapProofRequired) {
     if (!bootstrapSecretProof || !(await constantTimeEqual(bootstrapSecretProof, bootstrapSecret))) {
       throw codedError(
         'A valid workspace bootstrap secret is required for anonymous idempotent workspace creation',

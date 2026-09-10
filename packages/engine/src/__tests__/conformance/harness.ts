@@ -46,6 +46,7 @@ export function makeNodeStack(options?: {
   environment?: string;
   httpPushProxy?: EngineConfig['httpPushProxy'];
   workspaceBootstrapSecret?: string;
+  workspaceBootstrapProofRequired?: boolean;
   entitlements?: EntitlementsProvider;
 }): TestStack {
   const tasks = new BackgroundTasks();
@@ -67,6 +68,7 @@ export function makeNodeStack(options?: {
         mailbox: options?.mailbox,
         httpPushProxy: options?.httpPushProxy,
         workspaceBootstrapSecret: options?.workspaceBootstrapSecret ?? 'test-bootstrap-secret',
+        workspaceBootstrapProofRequired: options?.workspaceBootstrapProofRequired,
       },
       entitlements: options?.entitlements,
       // Disable the auto-sweep timer; tests drive presence.sweep() explicitly.

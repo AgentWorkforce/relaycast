@@ -118,21 +118,17 @@ const child = await RelayCast.createWorkspace('job-child', {
 });
 ```
 
-Fresh bootstrap callers can use the same contract without an API key, but must
-also present the deployment's bootstrap secret as proof — the idempotency key
-alone is a caller-chosen value, not a secret by itself, so it cannot authorize
-recovering another caller's workspace credentials. For the same reason, the
-key must be generated with a CSPRNG (for example, a v4 UUID or 16 random bytes
-hex-encoded — never a job id, timestamp, or counter), and persist it alongside
+Fresh bootstrap callers use the same contract without an API key. Their
+`Idempotency-Key` is a narrowly scoped, reveal-once recovery capability, so it
+must be generated with a CSPRNG (for example, a v4 UUID or 16 random bytes
+hex-encoded — never a job id, timestamp, or counter) and persisted alongside
 the work so a genuine retry reuses the exact same value. The server only
 enforces a 32-character structural minimum; it cannot verify randomness:
 
 ```ts
 const idempotencyKey = crypto.randomUUID(); // persist with the work; reuse it on retry
 const workspace = await RelayCast.createWorkspace('my-project', {
-  baseUrl: 'https://relay.example.com', // your self-hosted deployment
   idempotencyKey,
-  bootstrapSecret: process.env.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET,
 });
 ```
 
@@ -142,13 +138,15 @@ the workspace terminalizes its binding; replaying the key cannot accidentally
 create a replacement. Unauthenticated by-name lookup never returns workspace
 credentials.
 
-Keyed anonymous bootstrap requires a stable deployment secret. Self-hosted
-deployments must persist `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` (or provide
-`workspaceBootstrapSecret` in the engine config); deployments without it return
-`503 workspace_create_idempotency_unavailable`. A caller that omits the secret
-or presents the wrong one gets `401 workspace_create_bootstrap_secret_invalid`
-before any lookup of the idempotency binding — the secret is the deployment's
-to configure and share only with callers it trusts to bootstrap a workspace.
+Keyed anonymous bootstrap requires a stable server-side derivation secret.
+Self-hosted deployments must persist `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` (or
+provide `workspaceBootstrapSecret` in engine config); deployments without it
+return `503 workspace_create_idempotency_unavailable`. Never distribute that
+deployment-wide secret to hosted clients. Self-hosted operators that need the
+previous shared-secret proof can opt in with
+`RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED=true`; only then must callers
+also send `X-Workspace-Bootstrap-Secret`, and missing or invalid proof returns
+`401 workspace_create_bootstrap_secret_invalid` before a binding lookup.
 Unkeyed creates remain available and continue to generate a fresh API key.
 
 If workspace storage remains unavailable after its transient retries and the
@@ -1038,3 +1036,46 @@ Relaycast includes anonymous telemetry.
 ## License
 
 Apache-2.0
+
+
+### Agent subscription delivery
+
+Workspace owners can `POST /v1/agents/{name}/subscription-channel` to obtain an
+idempotent channel whose only permitted member is that exact agent identity.
+The response is a normal channel with its verified `members` list; setup returns 404 if the recipient is released before membership can be established. This operation
+does not rotate the agent token. The `agent-events-` channel prefix is reserved;
+routing metadata cannot be changed and other agents cannot join or be invited.
+An agent recreated under the same name gets a different channel, so old webhook
+subscriptions never transfer to its replacement. Removing the subscription deletes
+its webhook resources; a shared per-agent channel can remain for other resources.
+This is a delivery audience restriction, not a private-channel history API.
+
+Channel messages and thread replies resolve mention handles using ASCII letters, digits, underscores and hyphens. For example,
+`@build-reviewer_2` resolves the full handle, never `build`. Duplicate mentions
+produce one mention delivery. A backslash immediately before `@` escapes it;
+email addresses are not mentions. Mention delivery still requires membership in
+the channel and workspace authorization.
+
+Relayfile events and raw inbound hooks preserve distinct events in FIFO order for members present when
+accepted. Joining later does not backfill old delivery rows. A full recipient
+mailbox causes the entire inbound event to return **503 `mailbox_full`** with
+`Retry-After: 30`; neither a partial message nor partial deliveries are committed.
+The Relayfile producer must retry the same event ID and retain exhausted attempts in its
+DLQ. Raw hooks must retry rejected payloads; they do not claim Relayfile event-ID deduplication. No newest-only coalescing is applied. The normal mailbox TTL still applies:
+expired deliveries become inspectable dead letters, not acted-on receipts.
+Operators must drain/retry the DLQ before declaring an event matrix complete.
+
+Explicit `target_node` on built-in spawn honors fleet placement even when a
+legacy workspace-global node action named `spawn` exists; its caller allowlist
+continues to apply. A dispatch acknowledgement does not establish harness readiness.
+
+Verified spawn (`verify_ready: true`) fails with `spawn_target_unavailable` when the selected provider lacks a live handler heartbeat or connected socket. Unverified legacy requests retain queue behavior. Relayfile ingress preserves authenticated `providerEventType` and `resourceRef` as `provider_event_type` and `resource_ref` in message metadata, alongside the provider record. Generic file events do not imply PR, CI, or review semantics. Cloud sync envelopes are unwrapped to expose their provider payload in message metadata and formatting; this does not promote payload fields into authenticated event semantics.
+
+Readiness requests do not reroute registered global spawn handlers. Only a nonempty explicit `target_node` selects fleet placement around a legacy node alias; handlers that receive `verify_ready` must honor its completion contract. A deleted recipient leaves its old route memberless so a replacement cannot inherit delivery. Retire or replace the inventoried producer binding and webhook when deleting a subscriber; channel history remains for audit.
+
+Node-control `agent.deregister` requests with an `id` receive a correlated `reply`
+only after the binding has been removed and the agent moved offline. Requests
+without an `id` retain fire-and-forget behavior. Brokers performing owned identity
+cleanup must await that acknowledgement before requesting deletion.
+
+The signed Relayfile webhook request follows Relayfile's existing external event contract (`eventId`, `providerEventType`, `resourceRef`). These are verified vendor payload fields, not alternate spellings of Relaycast HTTP fields; Relaycast message metadata remains snake_case.

@@ -8,8 +8,9 @@ import { camelizeKeys } from './casing.js';
 import { AgentClient } from './agent.js';
 import { HttpClient, type RetryPolicyInput } from './client.js';
 import { Relay } from './communicate/relay.js';
+import { RelayError } from './errors.js';
 import { SDK_ORIGIN } from './origin.js';
-import { RelayCast } from './relay.js';
+import { RelayCast, validateAnonymousKeyedBootstrapDestination } from './relay.js';
 import {
   AgentNotRegisteredError,
   MalformedApiResponseError,
@@ -341,6 +342,11 @@ export class RelaycastSetup {
   ): Promise<Response> {
     const url = new URL(path, this.config.baseUrl);
     const apiKey = await this.resolveApiKey();
+    const anonymousKeyedBootstrap =
+      !apiKey && extraHeaders?.['Idempotency-Key'] !== undefined;
+    if (anonymousKeyedBootstrap) {
+      validateAnonymousKeyedBootstrapDestination(this.config.baseUrl);
+    }
     const headers: Record<string, string> = {
       Accept: 'application/json',
       'X-SDK-Version': SDK_ORIGIN.version,
@@ -363,10 +369,22 @@ export class RelaycastSetup {
       try {
         const response = await fetch(url.toString(), {
           method,
+          ...(anonymousKeyedBootstrap ? { redirect: 'manual' as const } : {}),
           headers,
           body: method === 'POST' ? JSON.stringify(body ?? {}) : undefined,
           signal: AbortSignal.timeout(this.config.requestTimeoutMs),
         });
+
+        if (
+          anonymousKeyedBootstrap &&
+          (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400))
+        ) {
+          throw new RelayError(
+            'transport_error',
+            'Refusing to follow an anonymous bootstrap redirect',
+            { statusCode: response.status, retryable: false },
+          );
+        }
 
         if (RETRY_STATUS_CODES.has(response.status) && attempt < this.config.retryPolicy.maxRetries) {
           const waitMs = response.status === 429
@@ -379,6 +397,9 @@ export class RelaycastSetup {
 
         return response;
       } catch (error) {
+        if (error instanceof RelayError) {
+          throw error;
+        }
         if (attempt >= this.config.retryPolicy.maxRetries) {
           throw error;
         }

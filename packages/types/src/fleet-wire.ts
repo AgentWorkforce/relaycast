@@ -252,6 +252,7 @@ export const FleetAgentRegisterMessageSchema = z
   .object({
     ...FleetRequestEnvelopeFields,
     type: z.literal('agent.register'),
+    auto_join_general: z.boolean().optional(),
     name: z.string(),
     invocation_id: z.string().optional(),
     session_ref: z.string().optional(),

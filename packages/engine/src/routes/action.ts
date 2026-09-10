@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { FleetWireJsonValueSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { errorResponse } from '../lib/httpError.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireSender } from '../middleware/auth.js';
 import { jsonIdempotentOk, parseIdempotencyKey } from '../middleware/idempotency.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as actionEngine from '../engine/action.js';
@@ -299,12 +299,15 @@ actionRoutes.post('/actions/:name/invocations/:id/complete', requireAuth, rateLi
 });
 
 // GET /v1/actions/:name/invocations/:id - get invocation status
-actionRoutes.get('/actions/:name/invocations/:id', requireAuth, rateLimit, async (c) => {
+actionRoutes.get('/actions/:name/invocations/:id', requireSender, rateLimit, async (c) => {
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
     const result = await actionEngine.getInvocation(db, workspace.id, c.req.param('name'), c.req.param('id'));
-    if (!result) {
+    // Served providers need their delegated broker's terminal spawn result.
+    // This does not grant node principals general workspace invocation access.
+    const node = c.get('node');
+    if (!result || (node && (result.action_name !== 'spawn' || result.dispatched_node_id !== node.id))) {
       return jsonNotFound(c, 'invocation_not_found', 'Invocation not found');
     }
     return jsonOk(c, result);

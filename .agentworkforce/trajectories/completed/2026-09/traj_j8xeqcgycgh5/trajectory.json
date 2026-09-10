@@ -1,0 +1,57 @@
+{
+  "id": "traj_j8xeqcgycgh5",
+  "version": 1,
+  "task": {
+    "title": "Add Rust self-host bootstrap proof parity for Relaycast #407",
+    "source": {
+      "system": "plain",
+      "id": "#407"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-09-10T02:34:08.684Z",
+  "completedAt": "2026-09-10T02:40:34.406Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-09-10T02:40:01.609Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_0w8lpmtbldp0",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-09-10T02:40:01.609Z",
+      "endedAt": "2026-09-10T02:40:34.406Z",
+      "events": [
+        {
+          "ts": 1789008001610,
+          "type": "decision",
+          "content": "Rust bootstrap proof remains opt-in and destination-bound: Rust bootstrap proof remains opt-in and destination-bound",
+          "raw": {
+            "question": "Rust bootstrap proof remains opt-in and destination-bound",
+            "chosen": "Rust bootstrap proof remains opt-in and destination-bound",
+            "alternatives": [],
+            "reasoning": "Hosted callers use only a high-entropy idempotency key; the proof is forwarded solely for keyed explicit self-host HTTPS or loopback HTTP, never hosted or redirects."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Added Rust opt-in self-host bootstrap proof parity with hosted-safe omission, destination/redirect protections, redaction, docs, and wire-level tests.",
+    "approach": "Standard approach",
+    "confidence": 0.94
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "606023c96a4cd6e30b1c2c016cfecf9b9d538c6b",
+    "endRef": "606023c96a4cd6e30b1c2c016cfecf9b9d538c6b"
+  }
+}

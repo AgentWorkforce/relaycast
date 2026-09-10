@@ -9,6 +9,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [8.7.0] - 2026-09-09
+
+### Added
+
+- `CreateAgentRequest.auto_join_general` allows explicit agent isolation from the default channel.
+
 ## [8.6.0] - 2026-09-09
 
 ### Changed

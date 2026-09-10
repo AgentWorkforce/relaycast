@@ -29,6 +29,12 @@ const createTargetSchema = z.object({
   path_glob: z.string().trim().min(1),
 });
 
+const providerRecordEnvelopeSchema = z.object({
+  provider: z.string(), objectType: z.string(), objectId: z.string(),
+  deleted: z.boolean(), connectionId: z.string(),
+  payload: z.record(z.string(), z.unknown()),
+});
+
 const relayfileSnapshotSchema = z.object({
   path: z.string().optional(),
   contentType: z.string().optional(),
@@ -44,6 +50,8 @@ const relayfileEventSchema = z.object({
   revision: z.string().optional(),
   origin: z.string().optional(),
   provider: z.string().optional(),
+  providerEventType: z.string().optional(),
+  resourceRef: z.string().optional(),
   correlationId: z.string().optional(),
   timestamp: z.string().optional(),
   contentHash: z.string().optional(),
@@ -67,6 +75,8 @@ interface RelayfileEventPublic {
   revision?: string;
   origin?: string;
   provider?: string;
+  providerEventType?: string;
+  resourceRef?: string;
   correlationId?: string;
   timestamp?: string;
   contentHash?: string;
@@ -196,7 +206,7 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
       actorId: 'relayfile-inbound',
       scope: `relayfile-inbound:${channelId}`,
       key: deliveryEventId,
-      fingerprint: JSON.stringify({ path: event.path, revision: event.revision, contentHash: event.contentHash }),
+      fingerprint: JSON.stringify({ path: event.path, revision: event.revision, contentHash: event.contentHash, providerEventType: event.providerEventType, resourceRef: event.resourceRef }),
       kv: c.get('engine').kv,
       requireKv: true,
       ttlSeconds: IDEMPOTENCY_TTL_SECONDS,
@@ -213,11 +223,15 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
             revision: event.revision,
             eventId: deliveryEventId,
             provider,
+            ...(event.providerEventType ? { provider_event_type: event.providerEventType } : {}),
+            ...(event.resourceRef ? { resource_ref: event.resourceRef } : {}),
             contentHash: event.contentHash,
           },
           provider,
           path: event.path,
           event: event.type,
+          ...(event.providerEventType ? { provider_event_type: event.providerEventType } : {}),
+          ...(event.resourceRef ? { resource_ref: event.resourceRef } : {}),
           record: message.record,
         },
       }, { mailbox }),
@@ -273,6 +287,10 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
     return jsonCreated(c, { replayed: result.replayed, message_id: result.data.message_id });
   } catch (err) {
     const code = (err as Error & { code?: string }).code;
+    if (code === 'mailbox_full') {
+      c.header('Retry-After', '30');
+      return jsonError(c, 'mailbox_full', 'A recipient mailbox is full; retry this event', 503);
+    }
     if (code === 'idempotency_in_progress') {
       return jsonOk(c, { skipped: 'duplicate_in_progress' });
     }
@@ -351,12 +369,17 @@ export async function verifyRelayfileSignature(
 }
 
 export function formatRelayfileEventMessage(event: RelayfileEventPublic, provider: string): { text: string; author: string; record: unknown } | null {
-  const record = parseSnapshotRecord(event.snapshot);
+  const stored = parseSnapshotRecord(event.snapshot);
+  const envelope = providerRecordEnvelopeSchema.safeParse(stored);
+  // Cloud's sync writer stores canonical records in a provider envelope.
+  // Unwrap only that complete shape; an ordinary record's payload property
+  // is data. Authenticated event semantics still come exclusively from event.
+  const record = envelope.success && envelope.data.provider === provider ? envelope.data.payload : stored;
   const author = recordAuthor(record) ?? provider;
   const title = recordTitle(record);
   const body = recordBody(record);
   const providerLabel = provider.charAt(0).toUpperCase() + provider.slice(1);
-  const lines = [`${providerLabel} update`];
+  const lines = [event.providerEventType ? `${providerLabel} ${event.providerEventType}` : `${providerLabel} update`];
   if (title) lines.push(title);
   if (body && body !== title) lines.push(body);
   lines.push(`Relayfile path: ${event.path}`);

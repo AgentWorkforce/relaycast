@@ -18,7 +18,46 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
+### Changed
+
+- Anonymous keyed workspace creation now treats a CSPRNG `Idempotency-Key` as the hosted-safe recovery capability; the deployment derivation secret remains server-only, while self-hosts can opt into shared-secret proof enforcement.
+
+### Added
+
 - Add workspace-admin bulk reclamation for stale, unowned agent identities, with default dry-run reports, resumable pages, a configurable CLI `--limit` of 1–100 rows, and protection for broker associations and retained authorship.
+
+- Rust SDK `WorkspaceBootstrapOptions` supports crash-safe anonymous keyed workspace creation without a deployment secret and opt-in self-host bootstrap proof without exposing it to hosted Relaycast.
+
+### Fixed
+
+- Rust and TypeScript SDK anonymous keyed workspace bootstrap refuses remote HTTP and redirects, keeping its recovery capability on the intended origin.
+
+## [8.7.0] - 2026-09-09
+
+### Added
+
+- Node credentials can read their own dispatched spawn results, allowing served fleet actions to confirm broker readiness with node-scoped authority.
+
+- Agent registration accepts `auto_join_general: false` on HTTP and node control for isolated workers; recovery preserves existing memberships.
+
+- Node-control `agent.deregister` acknowledges requests with an ID after teardown, allowing brokers to confirm cleanup before deleting owned identities.
+- `POST /v1/agents/{name}/subscription-channel` provisions an exact identity-bound delivery channel without rotating recipient credentials.
+
+### Fixed
+
+- Thread replies resolve full hyphenated mentions; subscription setup rejects recipients released during membership creation.
+- Verified spawn checks the selected provider heartbeat, and inventory reconciliation honors only canonical `verify_ready` input. Empty explicit targets retain legacy spawn routing.
+
+- Relayfile messages expose provider payloads from Cloud sync envelopes, preserving titles, authors, and terminal PR state for subscribers.
+
+- Subscription routes reject conflicting legacy memberships; agent removal invalidates channels actually removed by the release transaction.
+
+- Agent deletion invalidates cached membership so subscription route checks reflect the released identity.
+- Relayfile ingress preserves authenticated provider event semantics and resource references.
+- Hyphenated mentions resolve the full handle without waking a prefix agent.
+- Raw inbound webhooks now create durable agent deliveries.
+- Relayfile ingress and raw inbound hooks reject full mailboxes atomically with retry guidance, preserving unique events without partial delivery.
+- Explicit spawn targets are honored when a legacy global node alias exists, preserving its caller allowlist.
 
 ## [8.6.1] - 2026-09-09
 
@@ -456,7 +495,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v8.6.1...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v8.7.0...HEAD
+[8.7.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.6.1...v8.7.0
 [8.6.1]: https://github.com/AgentWorkforce/relaycast/compare/v8.6.0...v8.6.1
 [8.6.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.5.5...v8.6.0
 [6.0.3]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.2...v6.0.3

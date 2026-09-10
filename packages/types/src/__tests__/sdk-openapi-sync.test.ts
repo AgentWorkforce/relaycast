@@ -54,6 +54,8 @@ const NON_SDK_OPENAPI_PATHS = new Set([
   // Workspace-admin maintenance is exposed by scripts/retain-agents.mts,
   // not by the agent SDKs.
   '/v1/agents/retention',
+  // Workspace-owner subscription provisioning, called by the Relay integration CLI.
+  '/v1/agents/{param}/subscription-channel',
 ]);
 
 const CORE_SDK_PATHS = new Set([

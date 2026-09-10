@@ -88,6 +88,9 @@ async function main(): Promise<void> {
       ...(process.env.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET
         ? { workspaceBootstrapSecret: process.env.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET }
         : {}),
+      ...(process.env.RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED === 'true'
+        ? { workspaceBootstrapProofRequired: true }
+        : {}),
       ...(Object.keys(mailbox).length > 0 ? { mailbox } : {}),
     },
     ...(eventQueue ? { eventQueue } : {}),

@@ -4,7 +4,7 @@ name: Self-Host Container Integration
 # persistent volume, driving it entirely over HTTP -- the only place that
 # exercises the actual built image rather than the entrypoint script or the
 # engine in isolation. See test/container-image-integration.test.mjs for the
-# full scenario list (bootstrap-secret restart/replay, missing-secret 503,
+# full scenario list (idempotency-key restart/replay, missing-secret 503,
 # invalid-auth 401, digest-conflict 409, and log-redaction).
 on:
   schedule:
