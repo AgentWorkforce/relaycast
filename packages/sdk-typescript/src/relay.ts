@@ -71,6 +71,8 @@ import type {
   DeleteNodeOptions,
   DeleteNodeResponse,
   NodeAgentBinding,
+  NodeHistoryPage,
+  NodeHistoryQuery,
   NodeListQuery,
   NodeRosterEntry,
   Trigger,
@@ -977,6 +979,21 @@ export class RelayCast {
       const params: Record<string, string> = {};
       if (query?.capability) params.capability = query.capability;
       if (query?.name) params.name = query.name;
+      if (query?.status) params.status = query.status;
+      return this.client.get('/v1/nodes', params);
+    },
+
+    // Explicit, bounded pagination contract for reading history (e.g. `--all`
+    // in the Relay CLI): pages through every matching row exactly once, no
+    // matter how many the workspace has retained, without silent truncation.
+    // Compatible callers keep using `list()`, which never returns this shape.
+    listHistory: (query?: NodeHistoryQuery): Promise<NodeHistoryPage> => {
+      const params: Record<string, string> = { history: 'true' };
+      if (query?.capability) params.capability = query.capability;
+      if (query?.name) params.name = query.name;
+      if (query?.status) params.status = query.status;
+      if (query?.cursor) params.cursor = query.cursor;
+      if (query?.limit !== undefined) params.limit = String(query.limit);
       return this.client.get('/v1/nodes', params);
     },
 

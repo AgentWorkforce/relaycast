@@ -1,0 +1,74 @@
+{
+  "version": "1.0.0",
+  "id": "2ecdadb7-66b0-4228-8a8b-4f1d8f3b41c6",
+  "timestamp": "2026-09-11T00:45:46.975Z",
+  "trajectory": "traj_qcx6fywepk3d",
+  "files": [
+    {
+      "path": "packages/engine/CHANGELOG.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 11,
+              "end_line": 17,
+              "revision": "20571bf9379db893f0fbcf96593bda8288a9caaf"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/__tests__/conformance/nodeListBoundedHistory.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 294,
+              "end_line": 512,
+              "revision": "20571bf9379db893f0fbcf96593bda8288a9caaf"
+            },
+            {
+              "start_line": 608,
+              "end_line": 624,
+              "revision": "20571bf9379db893f0fbcf96593bda8288a9caaf"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/engine/node.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 2060,
+              "end_line": 2066,
+              "revision": "20571bf9379db893f0fbcf96593bda8288a9caaf"
+            },
+            {
+              "start_line": 2074,
+              "end_line": 2085,
+              "revision": "20571bf9379db893f0fbcf96593bda8288a9caaf"
+            },
+            {
+              "start_line": 2098,
+              "end_line": 2118,
+              "revision": "20571bf9379db893f0fbcf96593bda8288a9caaf"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
