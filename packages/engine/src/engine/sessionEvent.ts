@@ -269,11 +269,12 @@ export async function applyStatusEventEffect(
         )`,
         // Migration 0056 cannot know whether the pre-marker route reached
         // this agent write: it inserted the event and updated the agent in
-        // separate operations. If the current row already has the requested
-        // status, the legacy retry has no state mutation left to reconcile;
-        // still claim the marker, but suppress duplicate fanout. A differing
-        // status remains pending and is applied normally, preserving recovery
-        // for the interrupted-before-update case.
+        // separate operations. Its write-time witness is therefore the only
+        // safe evidence available. Reapply a legacy event only when the agent
+        // row demonstrably predates the event; an equal or newer witness may
+        // be the original status write, a heartbeat, or another status writer.
+        // In those ambiguous cases claim the event but never clobber the row,
+        // regardless of whether its current status matches the event.
         sql`(
           NOT EXISTS (
             SELECT 1
@@ -283,7 +284,18 @@ export async function applyStatusEventEffect(
               AND legacy_event.agent_id = ${agentId}
               AND legacy_event.status_legacy_pending = 1
           )
-          OR ${agents.status} <> ${status}
+          OR (
+            ${agents.status} <> ${status}
+            AND
+            ${agents.statusUpdatedAt} IS NOT NULL
+            AND ${agents.statusUpdatedAt} < (
+              SELECT legacy_event.created_at
+              FROM session_events AS legacy_event
+              WHERE legacy_event.id = ${eventId}
+                AND legacy_event.workspace_id = ${workspaceId}
+                AND legacy_event.agent_id = ${agentId}
+            )
+          )
         )`,
       ))
       .returning({ id: agents.id }),

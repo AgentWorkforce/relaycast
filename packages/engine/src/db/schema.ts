@@ -134,6 +134,10 @@ export const agents = sqliteTable(
     deliverySeq: integer('delivery_seq').notNull().default(0),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
     lastSeen: integer('last_seen', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    // Conservative witness used to reconcile pre-0056 keyed status events.
+    // Migration 0056 backfills historical rows from last_seen and its SQLite
+    // trigger advances this value for every later status/liveness write.
+    statusUpdatedAt: integer('status_updated_at', { mode: 'timestamp' }),
   },
   (table) => [
     uniqueIndex('agents_workspace_name_unique').on(table.workspaceId, table.name),
@@ -1162,7 +1166,8 @@ export const sessionEvents = sqliteTable(
     statusAppliedAt: integer('status_applied_at', { mode: 'timestamp' }),
     // Migration 0056 marks keyed status events created before this marker
     // existed. Their old event insert and agent update were separate writes,
-    // so replay reconciles the row without fabricating completion.
+    // so replay reconciles only when the agent write-time witness proves the
+    // row predates the event; otherwise it claims without clobbering state.
     statusLegacyPending: integer('status_legacy_pending', { mode: 'boolean' }).notNull().default(false),
   },
   (table) => [

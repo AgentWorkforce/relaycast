@@ -544,6 +544,19 @@ describe('atomic write paths', () => {
       return { ws, alice, db };
     }
 
+    function markLegacyStatusEvents(db: EngineDb) {
+      // The test schema already has 0056's additive columns and trigger. Run
+      // the migration's real backfill/marker statements while omitting only
+      // DDL that would otherwise try to add the same objects twice.
+      const migration = readFileSync(
+        new URL('../db/migrations/0056_session_event_status_completion.sql', import.meta.url),
+        'utf8',
+      )
+        .replace(/^ALTER TABLE (?:agents|session_events) ADD COLUMN .*;\n/gm, '')
+        .replace(/CREATE TRIGGER agents_status_reconciliation_timestamp[\s\S]*?END;\n\n/, '');
+      stack.runtime.handle.sqlite.exec(migration);
+    }
+
     it('rolls back the status write and completion marker together when the agent update fails', async () => {
       const { ws, alice, db } = await seedAgent();
       const { event } = await recordSessionEventWithIdempotency(
@@ -616,11 +629,10 @@ describe('atomic write paths', () => {
       // UPDATE against this Node database while leaving its ALTER statements
       // out because the current test schema already has both columns.
       await db.update(agents).set({ status: 'blocked' }).where(eq(agents.id, alice.agentId));
-      const migration = readFileSync(
-        new URL('../db/migrations/0056_session_event_status_completion.sql', import.meta.url),
-        'utf8',
-      ).replace(/^ALTER TABLE session_events ADD COLUMN .*;\n/gm, '');
-      stack.runtime.handle.sqlite.exec(migration);
+      await db.update(agents).set({
+        statusUpdatedAt: new Date(new Date(first.event.created_at).getTime() + 1_000),
+      }).where(eq(agents.id, alice.agentId));
+      markLegacyStatusEvents(db);
 
       const replay = await recordSessionEventWithIdempotency(
         db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, key,
@@ -645,11 +657,10 @@ describe('atomic write paths', () => {
       const first = await recordSessionEventWithIdempotency(
         db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, 'status-legacy-pending-1',
       );
-      const migration = readFileSync(
-        new URL('../db/migrations/0056_session_event_status_completion.sql', import.meta.url),
-        'utf8',
-      ).replace(/^ALTER TABLE session_events ADD COLUMN .*;\n/gm, '');
-      stack.runtime.handle.sqlite.exec(migration);
+      await db.update(agents).set({
+        statusUpdatedAt: new Date(new Date(first.event.created_at).getTime() - 1_000),
+      }).where(eq(agents.id, alice.agentId));
+      markLegacyStatusEvents(db);
 
       const replay = await recordSessionEventWithIdempotency(
         db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, 'status-legacy-pending-1',
@@ -665,6 +676,104 @@ describe('atomic write paths', () => {
       const [eventRow] = await db.select({ statusAppliedAt: sessionEvents.statusAppliedAt })
         .from(sessionEvents).where(eq(sessionEvents.id, first.event.id));
       expect(eventRow!.statusAppliedAt).not.toBeNull();
+    });
+
+    it('does not clobber a later non-event status writer during legacy replay', async () => {
+      const { ws, alice, db } = await seedAgent();
+      const key = 'status-legacy-later-writer-1';
+      const first = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, key,
+      );
+      const eventAt = new Date(first.event.created_at);
+      await db.update(agents).set({
+        status: 'waiting',
+        statusUpdatedAt: new Date(eventAt.getTime() + 1_000),
+      }).where(eq(agents.id, alice.agentId));
+      markLegacyStatusEvents(db);
+
+      const replay = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, key,
+      );
+      await expect(
+        applyStatusEventEffect(db, ws.workspaceId, alice.agentId, replay.event.id, 'blocked'),
+      ).resolves.toEqual({ claimed: true, mutated: false });
+      const [agentRow] = await db.select({ status: agents.status }).from(agents)
+        .where(eq(agents.id, alice.agentId));
+      expect(agentRow!.status).toBe('waiting');
+    });
+
+    it('does not clobber a later heartbeat/liveness write during legacy replay', async () => {
+      const { ws, alice, db } = await seedAgent();
+      const key = 'status-legacy-heartbeat-1';
+      const first = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, key,
+      );
+      // Put the legacy event in the past, then use the real last_seen writer;
+      // 0056's trigger records that liveness write in status_updated_at.
+      await db.update(sessionEvents).set({
+        createdAt: new Date(Date.now() - 10_000),
+      }).where(eq(sessionEvents.id, first.event.id));
+      await db.update(agents).set({ lastSeen: new Date() }).where(eq(agents.id, alice.agentId));
+      markLegacyStatusEvents(db);
+
+      const replay = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, key,
+      );
+      await expect(
+        applyStatusEventEffect(db, ws.workspaceId, alice.agentId, replay.event.id, 'blocked'),
+      ).resolves.toEqual({ claimed: true, mutated: false });
+      const [agentRow] = await db.select({ status: agents.status }).from(agents)
+        .where(eq(agents.id, alice.agentId));
+      expect(agentRow!.status).toBe('active');
+    });
+
+    it.each([
+      { name: 'same status', status: 'blocked' },
+      { name: 'different status', status: 'waiting' },
+    ])('treats an equal legacy write timestamp conservatively ($name)', async ({ status }) => {
+      const { ws, alice, db } = await seedAgent();
+      const key = `status-legacy-equal-${status}`;
+      const first = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, key,
+      );
+      const eventAt = new Date(first.event.created_at);
+      await db.update(agents).set({
+        status,
+        statusUpdatedAt: eventAt,
+      }).where(eq(agents.id, alice.agentId));
+      markLegacyStatusEvents(db);
+
+      const replay = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, key,
+      );
+      await expect(
+        applyStatusEventEffect(db, ws.workspaceId, alice.agentId, replay.event.id, 'blocked'),
+      ).resolves.toEqual({ claimed: true, mutated: false });
+      const [agentRow] = await db.select({ status: agents.status }).from(agents)
+        .where(eq(agents.id, alice.agentId));
+      expect(agentRow!.status).toBe(status);
+    });
+
+    it('allows only one concurrent legacy replay to recover an older row', async () => {
+      const { ws, alice, db } = await seedAgent();
+      const key = 'status-legacy-race-1';
+      const first = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, key,
+      );
+      await db.update(agents).set({
+        statusUpdatedAt: new Date(new Date(first.event.created_at).getTime() - 1_000),
+      }).where(eq(agents.id, alice.agentId));
+      markLegacyStatusEvents(db);
+
+      const [left, right] = await Promise.all([
+        applyStatusEventEffect(db, ws.workspaceId, alice.agentId, first.event.id, 'blocked'),
+        applyStatusEventEffect(db, ws.workspaceId, alice.agentId, first.event.id, 'blocked'),
+      ]);
+      expect([left.claimed, right.claimed].sort()).toEqual([false, true]);
+      expect([left.mutated, right.mutated].sort()).toEqual([false, true]);
+      const [agentRow] = await db.select({ status: agents.status }).from(agents)
+        .where(eq(agents.id, alice.agentId));
+      expect(agentRow!.status).toBe('blocked');
     });
 
     it('applies the status write and completion marker in a single D1-style batch', async () => {

@@ -46,7 +46,16 @@ function fixture(count = 20) {
 function snapshot(handle: SqliteDbHandle) {
   const tables = handle.sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('_engine_migrations','maintenance_cursors') ORDER BY name").all() as { name: string }[];
   return tables.map(({ name }) => {
-    const rows = handle.sqlite.prepare(`SELECT * FROM "${name}"`).all().map(row => JSON.stringify(row)).sort();
+    const rows = handle.sqlite.prepare(`SELECT * FROM "${name}"`).all().map(row => {
+      // 0056 adds a conservative reconciliation witness and backfills it from
+      // the existing last_seen value. Exclude that additive bookkeeping field
+      // so this regression continues to compare all pre-existing user data.
+      if (name === 'agents') {
+        const { status_updated_at: _statusUpdatedAt, ...existing } = row as Record<string, unknown>;
+        return JSON.stringify(existing);
+      }
+      return JSON.stringify(row);
+    }).sort();
     return [name, rows.length, createHash('sha256').update(JSON.stringify(rows)).digest('hex')];
   });
 }
@@ -83,6 +92,9 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
           uniqueIndexes: table.uniqueIndexes.filter(index =>
             original.uniqueIndexes.some(previous => previous.name === index.name)),
         };
+      }
+      if (table.name === 'agents' && original) {
+        return { ...table, sql: original.sql };
       }
       return {
         ...table,

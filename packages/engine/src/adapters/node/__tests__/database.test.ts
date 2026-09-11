@@ -94,6 +94,12 @@ describe('session event status completion migration', () => {
     const sqlite = new Database(':memory:');
     handles.push(sqlite);
     sqlite.exec(`
+      CREATE TABLE agents (
+        id TEXT PRIMARY KEY,
+        created_at INTEGER NOT NULL,
+        last_seen INTEGER NOT NULL,
+        status TEXT NOT NULL
+      );
       CREATE TABLE session_events (
         id TEXT PRIMARY KEY,
         workspace_id TEXT NOT NULL,
@@ -104,6 +110,8 @@ describe('session event status completion migration', () => {
         idempotency_key_hash TEXT,
         request_digest TEXT
       );
+      INSERT INTO agents (id, created_at, last_seen, status)
+      VALUES ('agent_1', 1600000000, 1700000000, 'active');
       INSERT INTO session_events
         (id, workspace_id, agent_id, type, created_at, idempotency_key_hash)
       VALUES
@@ -135,6 +143,15 @@ describe('session event status completion migration', () => {
       { id: 'post_migration_status', status_applied_at: null, status_legacy_pending: 0 },
       { id: 'unkeyed_status', status_applied_at: null, status_legacy_pending: 0 },
     ]);
+    expect(sqlite.prepare(`SELECT status_updated_at FROM agents WHERE id = 'agent_1'`).get())
+      .toEqual({ status_updated_at: 1700000000 });
+
+    sqlite.prepare(`UPDATE agents SET last_seen = 1700000010 WHERE id = 'agent_1'`).run();
+    const touched = sqlite.prepare(`SELECT status_updated_at FROM agents WHERE id = 'agent_1'`).get() as {
+      status_updated_at: number;
+    };
+    expect(touched.status_updated_at).toBeGreaterThanOrEqual(1700000000);
+    expect(touched.status_updated_at).toBeLessThanOrEqual(Math.floor(Date.now() / 1_000) + 1);
   });
 });
 describe('action invocation provider migration', () => {
