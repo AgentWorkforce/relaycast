@@ -9,6 +9,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased - Minor]
 
+- Prevent recipient self-invitations from restoring a released subscription membership.
+
 ### Added
 
 - Node credentials can read status for spawn invocations dispatched to their own node, so served providers can await confirmed broker readiness without workspace credentials.
