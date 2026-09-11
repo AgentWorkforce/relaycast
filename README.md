@@ -803,6 +803,17 @@ presence-only for node-hosted agents (the node binding is left intact so the
 still-running session keeps its deliveries); pass `{ deregister: true }` to follow the
 full `agent.deregister` teardown path that re-homes the agent to its direct node.
 
+The authenticated `node.register` acknowledgement may include
+`registration_contract: "relay:node-registration-v1"`. This is authored by the
+server, independently of `accepted_capabilities`, and is emitted only when the
+adapter confirms the connection's provider binding. It guarantees create-only
+`agent.register`, exact request-ID echo, authenticated provider and origin-node
+assignment, `auto_join_general: false`, and `expected_token_hash` enforcement on
+`POST /v1/agents/release`. Missing or unknown contracts do not establish support.
+Clients must correlate the acknowledgement to this connection and its expected
+provider before admitting fresh identities. Registration is not idempotent: a
+lost reply still requires retained ownership or name quarantine, not a retry.
+
 Broker nodes can negotiate restart-safe delivery cursor recovery by including
 `{ "name": "relay:delivery-cursor-v1", "kind": "capacity" }` in every
 `node.register`. Relaycast then adds the authoritative `delivery_ack_seq` for the
