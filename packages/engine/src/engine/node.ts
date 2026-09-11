@@ -2204,6 +2204,13 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
             ...registered.node,
             provider: registered.provider,
             accepted_capabilities: acceptance,
+            // Backport the server contract while retaining the deployed maintenance
+            // dependencies and schema. Client capability echoes are not proof.
+            ...(args.connectionId
+              && args.registry.providerNameForConnection?.(args.connectionId) === provider.name
+              && args.registry.isProviderAttached?.(args.workspaceId, args.nodeId, provider.name)
+              ? { registration_contract: 'relay:node-registration-v1' }
+              : {}),
           },
         });
         // The node row is already persisted online, so emit the durable

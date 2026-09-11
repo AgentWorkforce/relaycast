@@ -18,6 +18,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
+- Keep channel listings within D1 parameter limits and isolate token-mint traffic from unrelated rate-limit buckets.
+
+- Prevent recipient self-invitations from restoring a released subscription membership.
+
 ### Added
 
 - Node credentials can read their own dispatched spawn results, allowing served fleet actions to confirm broker readiness with node-scoped authority.
@@ -28,6 +32,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 - `POST /v1/agents/{name}/subscription-channel` provisions an exact identity-bound delivery channel without rotating recipient credentials.
 
 ### Fixed
+
+- Node registration confirms the authenticated provider admission contract on the production maintenance engine without adding database migrations.
 
 - Thread replies resolve full hyphenated mentions; subscription setup rejects recipients released during membership creation.
 - Verified spawn checks the selected provider heartbeat, and inventory reconciliation honors only canonical `verify_ready` input. Empty explicit targets retain legacy spawn routing.
