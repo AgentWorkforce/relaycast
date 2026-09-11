@@ -847,6 +847,9 @@ agentRoutes.post(
 
       const { type, payload } = parsed.data;
 
+      const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
+      if (idempotencyError) return jsonError(c, 'invalid_idempotency_key', idempotencyError, 400);
+
       if (!sessionEventEngine.isValidEventType(type)) {
         return jsonError(c, 'invalid_event_type', `Unknown event type: ${type}`, 400);
       }
@@ -877,16 +880,39 @@ agentRoutes.post(
         }
       }
 
-      const event = await sessionEventEngine.recordSessionEvent(db, workspace.id, agentRecord.id, {
-        type,
-        payload,
-      });
+      const recorded = idempotencyKey
+        ? await sessionEventEngine.recordSessionEventWithIdempotency(
+          db,
+          workspace.id,
+          agentRecord.id,
+          { type, payload },
+          idempotencyKey,
+        )
+        : await sessionEventEngine.recordSessionEvent(db, workspace.id, agentRecord.id, { type, payload });
+      const { event, replayed, pendingStatusApplication } = recorded;
 
-      // Update agent status after the event is durably written
-      if (type.startsWith('status.')) {
+      // Apply the agent status mutation and durably mark it complete as one
+      // atomic unit (see `applyStatusEventEffect`). `pendingStatusApplication`
+      // is true both for a fresh event and for a replay whose status write
+      // never completed (crash between the durable event claim and the agent
+      // update) — either way this finishes the interrupted mutation instead
+      // of returning 201 against a stale agent row.
+      let statusApplied = false;
+      if (pendingStatusApplication && type.startsWith('status.')) {
         const resolved = sessionEventEngine.resolveStatusFromEvent(type);
         const newStatus = resolved ?? (payload.status as string);
-        await agentEngine.updateAgent(db, workspace.id, name, { status: newStatus });
+        const effect = await sessionEventEngine.applyStatusEventEffect(
+          db,
+          workspace.id,
+          agentRecord.id,
+          event.id,
+          newStatus,
+        );
+        statusApplied = effect.mutated;
+      }
+      if (statusApplied) {
+        const resolved = sessionEventEngine.resolveStatusFromEvent(type);
+        const newStatus = resolved ?? (payload.status as string);
         const eventType = type === 'status.changed' ? 'agent.status.changed' : `agent.status.${canonicalStatus(newStatus) ?? newStatus}`;
         const eventData = {
           agent_id: agentRecord.id,
@@ -903,7 +929,7 @@ agentRoutes.post(
         });
       }
 
-      if (!type.startsWith('status.')) {
+      if (!replayed && !type.startsWith('status.')) {
         const { type: _sessionEventType, ...eventWithoutType } = event;
         const eventData = { agent_name: name, ...eventWithoutType };
         runInBackground(c, fanoutToWorkspace(c, `harness.${type}`, eventData), `fanout harness.${type}`);
@@ -914,7 +940,7 @@ agentRoutes.post(
         });
       }
 
-      return jsonCreated(c, event);
+      return jsonIdempotentOk(c, { status: 201, data: event, replayed });
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

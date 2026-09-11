@@ -134,6 +134,10 @@ export const agents = sqliteTable(
     deliverySeq: integer('delivery_seq').notNull().default(0),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
     lastSeen: integer('last_seen', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    // Conservative witness used to reconcile pre-0056 keyed status events.
+    // Migration 0056 backfills historical rows from last_seen and its SQLite
+    // trigger advances this value for every later status/liveness write.
+    statusUpdatedAt: integer('status_updated_at', { mode: 'timestamp' }),
   },
   (table) => [
     uniqueIndex('agents_workspace_name_unique').on(table.workspaceId, table.name),
@@ -1148,11 +1152,27 @@ export const sessionEvents = sqliteTable(
       .references(() => agents.id, { onDelete: 'cascade' }),
     type: text('type').notNull(),
     payload: text('payload', { mode: 'json' }).notNull().default({}),
+    // Optional stable identity for callers that may retry after losing the
+    // response. NULL keeps the legacy append-only contract for unkeyed calls.
+    idempotencyKeyHash: text('idempotency_key_hash'),
+    requestDigest: text('request_digest'),
     sequence: integer('sequence').notNull().default(0),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    // Durable completion marker for a `status.*` event's agent-row mutation.
+    // NULL means "not yet applied" — set atomically with the `agents` row
+    // write (see `applyStatusEventEffect`) so a crash between the durable
+    // event insert and the status update leaves this NULL, letting a replay
+    // finish the interrupted mutation instead of silently skipping it forever.
+    statusAppliedAt: integer('status_applied_at', { mode: 'timestamp' }),
+    // Migration 0056 marks keyed status events created before this marker
+    // existed. Their old event insert and agent update were separate writes,
+    // so replay reconciles only when the agent write-time witness proves the
+    // row predates the event; otherwise it claims without clobbering state.
+    statusLegacyPending: integer('status_legacy_pending', { mode: 'boolean' }).notNull().default(false),
   },
   (table) => [
     uniqueIndex('session_events_agent_sequence_unique').on(table.agentId, table.sequence),
+    uniqueIndex('session_events_agent_idempotency_unique').on(table.workspaceId, table.agentId, table.idempotencyKeyHash),
     index('idx_session_events_agent').on(table.agentId, table.createdAt),
     index('idx_session_events_workspace').on(table.workspaceId, table.createdAt),
     index('idx_session_events_type').on(table.workspaceId, table.type, table.createdAt),

@@ -88,6 +88,72 @@ describe('delivery sequence high-water migration', () => {
       .toEqual({ seq: 8 });
   });
 });
+
+describe('session event status completion migration', () => {
+  it('marks only historical keyed status events for ambiguous replay reconciliation', () => {
+    const sqlite = new Database(':memory:');
+    handles.push(sqlite);
+    sqlite.exec(`
+      CREATE TABLE agents (
+        id TEXT PRIMARY KEY,
+        created_at INTEGER NOT NULL,
+        last_seen INTEGER NOT NULL,
+        status TEXT NOT NULL
+      );
+      CREATE TABLE session_events (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}',
+        created_at INTEGER NOT NULL,
+        idempotency_key_hash TEXT,
+        request_digest TEXT
+      );
+      INSERT INTO agents (id, created_at, last_seen, status)
+      VALUES ('agent_1', 1600000000, 1700000000, 'active');
+      INSERT INTO session_events
+        (id, workspace_id, agent_id, type, created_at, idempotency_key_hash)
+      VALUES
+        ('keyed_status', 'ws_1', 'agent_1', 'status.blocked', 1700000001, 'hash-1'),
+        ('keyed_changed', 'ws_1', 'agent_1', 'status.changed', 1700000002, 'hash-2'),
+        ('keyed_non_status', 'ws_1', 'agent_1', 'tool.called', 1700000003, 'hash-3'),
+        ('unkeyed_status', 'ws_1', 'agent_1', 'status.active', 1700000004, NULL);
+    `);
+
+    const migration = readFileSync(
+      new URL('../../../db/migrations/0056_session_event_status_completion.sql', import.meta.url),
+      'utf8',
+    );
+    sqlite.exec(migration);
+    sqlite.prepare(`
+      INSERT INTO session_events
+        (id, workspace_id, agent_id, type, created_at, idempotency_key_hash)
+      VALUES ('post_migration_status', 'ws_1', 'agent_1', 'status.idle', 1700000005, 'hash-5')
+    `).run();
+
+    expect(sqlite.prepare(`
+      SELECT id, status_applied_at, status_legacy_pending
+      FROM session_events
+      ORDER BY id
+    `).all()).toEqual([
+      { id: 'keyed_changed', status_applied_at: null, status_legacy_pending: 1 },
+      { id: 'keyed_non_status', status_applied_at: null, status_legacy_pending: 0 },
+      { id: 'keyed_status', status_applied_at: null, status_legacy_pending: 1 },
+      { id: 'post_migration_status', status_applied_at: null, status_legacy_pending: 0 },
+      { id: 'unkeyed_status', status_applied_at: null, status_legacy_pending: 0 },
+    ]);
+    expect(sqlite.prepare(`SELECT status_updated_at FROM agents WHERE id = 'agent_1'`).get())
+      .toEqual({ status_updated_at: 1700000000 });
+
+    sqlite.prepare(`UPDATE agents SET last_seen = 1700000010 WHERE id = 'agent_1'`).run();
+    const touched = sqlite.prepare(`SELECT status_updated_at FROM agents WHERE id = 'agent_1'`).get() as {
+      status_updated_at: number;
+    };
+    expect(touched.status_updated_at).toBeGreaterThanOrEqual(1700000000);
+    expect(touched.status_updated_at).toBeLessThanOrEqual(Math.floor(Date.now() / 1_000) + 1);
+  });
+});
 describe('action invocation provider migration', () => {
   it('backfills action-owned and legacy node dispatches without claiming undispatched work', () => {
     const sqlite = new Database(':memory:');

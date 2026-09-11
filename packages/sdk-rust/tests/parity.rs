@@ -1895,6 +1895,46 @@ async fn agent_session_events_use_expected_endpoints() {
     assert!(events.is_empty());
 }
 
+#[tokio::test]
+async fn keyed_agent_session_events_preserve_idempotency_key() {
+    let server = MockServer::start().await;
+    let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+        .expect("failed to create relay client");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/agents/Worker/events"))
+        .and(header("Idempotency-Key", "worker-exit-generation-1"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "ok": true,
+            "data": {
+                "id": "evt_1",
+                "agent_id": "agent_1",
+                "type": "error",
+                "payload": {"code": "worker_exit"},
+                "created_at": "2026-01-01T00:00:00.000Z"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let event = relay
+        .emit_agent_event_with_idempotency_key(
+            "Worker",
+            EmitSessionEventRequest {
+                event_type: "error".to_string(),
+                payload: Some(serde_json::Map::from_iter([(
+                    "code".to_string(),
+                    json!("worker_exit"),
+                )])),
+            },
+            "worker-exit-generation-1",
+        )
+        .await
+        .expect("keyed emit_agent_event failed");
+    assert_eq!(event.event_type, "error");
+}
+
 #[test]
 fn deserializes_action_ws_events() {
     let invoked: WsEvent = serde_json::from_value(json!({

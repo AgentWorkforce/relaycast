@@ -5531,8 +5531,10 @@ paths:
     post:
       summary: Emit agent session event
       description: >
-        Record a session event for an agent (e.g. `status.active`, `status.idle`). An agent token
-        may only post events for itself; a workspace key may post for any agent.
+        Record a session event for an agent (e.g. `status.active`, `status.idle`). For
+        `status.changed`, `payload.status` is required and accepts `active`, `idle`, `blocked`,
+        `waiting`, `offline`, or the legacy alias `online`. An agent token may only post events
+        for itself; a workspace key may post for any agent.
       tags:
         - Agents
       security:
@@ -5544,6 +5546,16 @@ paths:
           required: true
           schema:
             type: string
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: >-
+            Stable caller-generated key for retries. Within one workspace and agent, an identical
+            request replays the original event (with `Idempotency-Replayed: true`) instead of
+            appending another event. Reusing a key with a different payload returns 409.
+          schema:
+            type: string
+            maxLength: 255
       requestBody:
         required: true
         content:
@@ -5559,11 +5571,38 @@ paths:
                   type: object
       responses:
         '201':
-          description: Event recorded
+          description: Event recorded, or idempotently replayed for a repeated `Idempotency-Key`
+          headers:
+            Idempotency-Replayed:
+              description: Set to `true` when the original event is replayed.
+              schema:
+                type: string
+                enum: ['true']
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid Idempotency-Key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Idempotency-Key was reused with a different payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: >
+            `idempotency_unavailable` — the durable event identity claim could not be
+            confirmed after a storage conflict. Retry the same logical request with the
+            same Idempotency-Key; do not mint a replacement key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     get:
       summary: List agent session events
       description: List recorded session events for an agent. Observer tokens require `activity:read`; `agent_ids` and `created_after` filters apply.
