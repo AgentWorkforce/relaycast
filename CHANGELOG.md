@@ -21,6 +21,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Fixed
 
 - Keyed agent session events now survive lost responses without duplicate events, while conflicting key reuse returns a typed error.
+- A `status.*` agent session event's status mutation and its durable completion marker now commit atomically, so a crash or retry between the event claim and the status write can no longer leave the agent's status stale behind a 201 response.
 
 ## [8.8.0] - 2026-09-10
 

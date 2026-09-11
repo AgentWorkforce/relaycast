@@ -12,6 +12,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Fixed
 
 - `POST /v1/agents/:name/events` durably replays identical `Idempotency-Key` retries and rejects conflicting payload reuse.
+- `POST /v1/agents/:name/events` applies a `status.*` event's agent status mutation and its completion marker as one atomic write; a replay whose mutation was interrupted (process crash, D1 batch failure) now finishes it instead of returning `201` against a stale agent row. `openapi.yaml` now declares `Idempotency-Replayed` on the `201` response, matching other idempotent endpoints.
 
 ## [8.8.0] - 2026-09-10
 

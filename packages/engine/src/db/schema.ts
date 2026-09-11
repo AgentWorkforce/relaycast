@@ -1153,6 +1153,12 @@ export const sessionEvents = sqliteTable(
     requestDigest: text('request_digest'),
     sequence: integer('sequence').notNull().default(0),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    // Durable completion marker for a `status.*` event's agent-row mutation.
+    // NULL means "not yet applied" — set atomically with the `agents` row
+    // write (see `applyStatusEventEffect`) so a crash between the durable
+    // event insert and the status update leaves this NULL, letting a replay
+    // finish the interrupted mutation instead of silently skipping it forever.
+    statusAppliedAt: integer('status_applied_at', { mode: 'timestamp' }),
   },
   (table) => [
     uniqueIndex('session_events_agent_sequence_unique').on(table.agentId, table.sequence),

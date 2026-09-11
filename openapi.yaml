@@ -5525,7 +5525,13 @@ paths:
                   type: object
       responses:
         '201':
-          description: Event recorded
+          description: Event recorded, or idempotently replayed for a repeated `Idempotency-Key`
+          headers:
+            Idempotency-Replayed:
+              description: Set to `true` when the original event is replayed.
+              schema:
+                type: string
+                enum: ['true']
           content:
             application/json:
               schema:

@@ -888,17 +888,19 @@ agentRoutes.post(
           { type, payload },
           idempotencyKey,
         )
-        : {
-          event: await sessionEventEngine.recordSessionEvent(db, workspace.id, agentRecord.id, { type, payload }),
-          replayed: false,
-        };
-      const { event, replayed } = recorded;
+        : await sessionEventEngine.recordSessionEvent(db, workspace.id, agentRecord.id, { type, payload });
+      const { event, replayed, pendingStatusApplication } = recorded;
 
-      // Update agent status after the event is durably written
-      if (!replayed && type.startsWith('status.')) {
+      // Apply the agent status mutation and durably mark it complete as one
+      // atomic unit (see `applyStatusEventEffect`). `pendingStatusApplication`
+      // is true both for a fresh event and for a replay whose status write
+      // never completed (crash between the durable event claim and the agent
+      // update) — either way this finishes the interrupted mutation instead
+      // of returning 201 against a stale agent row.
+      if (pendingStatusApplication && type.startsWith('status.')) {
         const resolved = sessionEventEngine.resolveStatusFromEvent(type);
         const newStatus = resolved ?? (payload.status as string);
-        await agentEngine.updateAgent(db, workspace.id, name, { status: newStatus });
+        await sessionEventEngine.applyStatusEventEffect(db, workspace.id, agentRecord.id, event.id, newStatus);
         const eventType = type === 'status.changed' ? 'agent.status.changed' : `agent.status.${canonicalStatus(newStatus) ?? newStatus}`;
         const eventData = {
           agent_id: agentRecord.id,

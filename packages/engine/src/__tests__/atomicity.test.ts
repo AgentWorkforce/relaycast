@@ -17,6 +17,7 @@ import {
   messageLogs,
   messages,
   readReceipts,
+  sessionEvents,
 } from '../db/schema.js';
 import { postMessage } from '../engine/message.js';
 import { sendDm } from '../engine/dm.js';
@@ -24,6 +25,10 @@ import { createGroupDm, postGroupMessage } from '../engine/groupDm.js';
 import { postReply } from '../engine/thread.js';
 import { markRead } from '../engine/receipt.js';
 import { rotateAgentIdentity } from '../engine/agentIdentity.js';
+import {
+  applyStatusEventEffect,
+  recordSessionEventWithIdempotency,
+} from '../engine/sessionEvent.js';
 import type { AtomicWrite, EngineDb, TransactionCapability } from '../ports/database.js';
 
 /**
@@ -518,6 +523,137 @@ describe('atomic write paths', () => {
       // with no delivery rows — exactly the historical bare-handle behavior.
       expect(await db.select().from(messages)).toHaveLength(1);
       expect(await db.select().from(deliveries)).toHaveLength(0);
+    });
+  });
+
+  /**
+   * relaycast#425: the keyed status.* event mutation must be one atomic unit
+   * with its completion marker, or a crash between the durable event claim
+   * and the agent-row status write leaves a replay permanently unable to
+   * tell "never applied" apart from "applied", stranding a stale agent row
+   * behind a 201 response forever.
+   */
+  describe('session event status effect (relaycast#425)', () => {
+    async function seedAgent() {
+      const ws = await createWorkspace(stack.app, 'status-atomicity-ws');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const db = stack.runtime.handle.db as unknown as EngineDb;
+      return { ws, alice, db };
+    }
+
+    it('rolls back the status write and completion marker together when the agent update fails', async () => {
+      const { ws, alice, db } = await seedAgent();
+      const { event } = await recordSessionEventWithIdempotency(
+        db,
+        ws.workspaceId,
+        alice.agentId,
+        { type: 'status.blocked', payload: {} },
+        'status-failure-1',
+      );
+
+      const restore = injectUpdateFailure(db, agents, 'injected agent status failure');
+      await expect(
+        applyStatusEventEffect(db, ws.workspaceId, alice.agentId, event.id, 'blocked'),
+      ).rejects.toThrow('injected agent status failure');
+      restore();
+
+      const [agentRow] = await db.select({ status: agents.status }).from(agents).where(eq(agents.id, alice.agentId));
+      expect(agentRow!.status).not.toBe('blocked');
+      const [eventRow] = await db.select({ statusAppliedAt: sessionEvents.statusAppliedAt }).from(sessionEvents).where(eq(sessionEvents.id, event.id));
+      expect(eventRow!.statusAppliedAt).toBeNull();
+    });
+
+    it('replays a keyed status event whose mutation never completed and finishes it exactly once', async () => {
+      const { ws, alice, db } = await seedAgent();
+      const idempotencyKey = 'status-crash-replay-1';
+
+      // First attempt: the durable event claim commits, but the process
+      // crashes before the agent status mutation runs — modeled directly
+      // since the route always calls both in sequence.
+      const first = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, idempotencyKey,
+      );
+      expect(first.replayed).toBe(false);
+      expect(first.pendingStatusApplication).toBe(true);
+
+      // Retry after the "crash": the event is replayed, but the completion
+      // marker is still NULL, so the interrupted mutation must be redone.
+      const replay = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, idempotencyKey,
+      );
+      expect(replay.replayed).toBe(true);
+      expect(replay.pendingStatusApplication).toBe(true);
+      expect(replay.event.id).toBe(first.event.id);
+
+      await applyStatusEventEffect(db, ws.workspaceId, alice.agentId, replay.event.id, 'blocked');
+
+      const [agentRow] = await db.select({ status: agents.status }).from(agents).where(eq(agents.id, alice.agentId));
+      expect(agentRow!.status).toBe('blocked');
+
+      // A further replay now sees the completion marker set and must not
+      // report a pending mutation again.
+      const secondReplay = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, idempotencyKey,
+      );
+      expect(secondReplay.replayed).toBe(true);
+      expect(secondReplay.pendingStatusApplication).toBe(false);
+
+      expect(await db.select().from(sessionEvents)).toHaveLength(1);
+    });
+
+    it('applies the status write and completion marker in a single D1-style batch', async () => {
+      const { ws, alice, db } = await seedAgent();
+      const { event } = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.idle', payload: {} }, 'status-batch-1',
+      );
+      const batches = attachFakeBatch(db);
+
+      await applyStatusEventEffect(db, ws.workspaceId, alice.agentId, event.id, 'idle');
+
+      expect(batches).toHaveLength(1);
+      expect(batches[0]).toHaveLength(2);
+      expectStatementOn(batches[0], 'update', 'agents');
+      expectStatementOn(batches[0], 'update', 'session_events');
+
+      const [agentRow] = await db.select({ status: agents.status }).from(agents).where(eq(agents.id, alice.agentId));
+      expect(agentRow!.status).toBe('idle');
+      const [eventRow] = await db.select({ statusAppliedAt: sessionEvents.statusAppliedAt }).from(sessionEvents).where(eq(sessionEvents.id, event.id));
+      expect(eventRow!.statusAppliedAt).not.toBeNull();
+    });
+
+    it('rejects a bare handle with neither atomicity capability rather than silently applying only half the write', async () => {
+      const { ws, alice, db } = await seedAgent();
+      const { event } = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, 'status-bare-1',
+      );
+      stripCapability(db);
+
+      await expect(
+        applyStatusEventEffect(db, ws.workspaceId, alice.agentId, event.id, 'blocked'),
+      ).rejects.toThrow('Atomic write capability required');
+
+      const [agentRow] = await db.select({ status: agents.status }).from(agents).where(eq(agents.id, alice.agentId));
+      expect(agentRow!.status).not.toBe('blocked');
+    });
+
+    it('resolves genuinely concurrent keyed status posts to one applied status without interleaving', async () => {
+      const ws = await createWorkspace(stack.app, 'status-race-ws');
+      const runner = await registerAgent(stack.app, ws.workspaceKey, 'runner');
+      const headers = {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+        'Idempotency-Key': 'status-race-1',
+      };
+      const body = JSON.stringify({ type: 'status.waiting', payload: {} });
+      const postEvent = () => stack.app.request('/v1/agents/runner/events', { method: 'POST', headers, body });
+
+      const [first, second] = await Promise.all([postEvent(), postEvent()]);
+      expect([first.status, second.status]).toEqual([201, 201]);
+
+      const db = stack.runtime.handle.db as unknown as EngineDb;
+      const [agentRow] = await db.select({ status: agents.status }).from(agents).where(eq(agents.id, runner.agentId));
+      expect(agentRow!.status).toBe('waiting');
+      expect(await db.select().from(sessionEvents).where(eq(sessionEvents.agentId, runner.agentId))).toHaveLength(1);
     });
   });
 });

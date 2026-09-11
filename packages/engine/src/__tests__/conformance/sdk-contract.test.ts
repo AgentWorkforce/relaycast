@@ -1013,6 +1013,98 @@ describe('SDK v8 service contract', () => {
     expect(runnerEvents).toHaveLength(1);
   });
 
+  it('relaycast#425: a replay finishes an agent status mutation interrupted after the event was durably claimed', async () => {
+    const ws = await createWorkspace(stack.app, 'sdk-event-status-crash-ws');
+    const runner = await registerAgent(stack.app, ws.workspaceKey, 'runner');
+    const headers = {
+      'content-type': 'application/json',
+      authorization: `Bearer ${ws.workspaceKey}`,
+      'Idempotency-Key': 'status-crash-replay-http-1',
+    };
+    const body = JSON.stringify({ type: 'status.blocked', payload: {} });
+
+    // Simulate a crash between the durable event/idempotency claim commit
+    // and the agent status write: inject a failure into the status mutation
+    // only, so the caller sees an error while the event row is already
+    // durable — exactly the interrupted window relaycast#425 is about.
+    const { agents } = await import('../../db/schema.js');
+
+    // Recursively proxy the builder chain (`.update(...).set(...).where(...)`)
+    // so the failure surfaces only when the final statement is executed
+    // (awaited), not when it is merely built — matching the real crash
+    // window (the process dies mid-statement, not before it starts).
+    function failOnExecute<T extends object>(target: T, message: string): T {
+      return new Proxy(target, {
+        get(obj, prop) {
+          if (prop === 'then') {
+            return (onFulfilled?: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown) =>
+              Promise.reject(new Error(message)).then(onFulfilled, onRejected);
+          }
+          const value = Reflect.get(obj, prop) as unknown;
+          if (typeof value === 'function') {
+            return (...args: unknown[]) => {
+              const result = (value as (...a: unknown[]) => unknown).apply(obj, args);
+              return result && typeof result === 'object' ? failOnExecute(result as object, message) : result;
+            };
+          }
+          return value;
+        },
+      });
+    }
+
+    const db = stack.runtime.deps.db as unknown as { update: (t: unknown) => object };
+    const realUpdate = db.update.bind(db);
+    let failNext = true;
+    db.update = (table: unknown) => {
+      const builder = realUpdate(table);
+      if (table !== agents || !failNext) return builder;
+      failNext = false;
+      return failOnExecute(builder, 'injected crash before status write');
+    };
+
+    const first = await stack.app.request('/v1/agents/runner/events', { method: 'POST', headers, body });
+    expect(first.status).toBe(500);
+    db.update = realUpdate;
+
+    // The event claim committed despite the crash; the agent row must not
+    // have moved yet, and the completion marker must still be NULL.
+    const [afterCrash] = await stack.runtime.deps.db
+      .select({ status: agents.status })
+      .from(agents)
+      .where(eq(agents.id, runner.agentId));
+    expect(afterCrash!.status).not.toBe('blocked');
+    const [eventAfterCrash] = await stack.runtime.deps.db
+      .select({ statusAppliedAt: sessionEvents.statusAppliedAt })
+      .from(sessionEvents)
+      .where(and(eq(sessionEvents.workspaceId, ws.workspaceId), eq(sessionEvents.agentId, runner.agentId)));
+    expect(eventAfterCrash!.statusAppliedAt).toBeNull();
+
+    // The retry with the same key replays the durable event, but must
+    // still finish the interrupted status mutation rather than returning
+    // 201 against a stale agent row.
+    const replay = await stack.app.request('/v1/agents/runner/events', { method: 'POST', headers, body });
+    expect(replay.status).toBe(201);
+    expect(replay.headers.get('Idempotency-Replayed')).toBe('true');
+
+    const [afterReplay] = await stack.runtime.deps.db
+      .select({ status: agents.status })
+      .from(agents)
+      .where(eq(agents.id, runner.agentId));
+    expect(afterReplay!.status).toBe('blocked');
+    const [eventAfterReplay] = await stack.runtime.deps.db
+      .select({ statusAppliedAt: sessionEvents.statusAppliedAt })
+      .from(sessionEvents)
+      .where(and(eq(sessionEvents.workspaceId, ws.workspaceId), eq(sessionEvents.agentId, runner.agentId)));
+    expect(eventAfterReplay!.statusAppliedAt).not.toBeNull();
+
+    // No orphan second event row was ever allocated for the shared key.
+    expect(await stack.runtime.deps.db
+      .select()
+      .from(sessionEvents)
+      .where(and(eq(sessionEvents.workspaceId, ws.workspaceId), eq(sessionEvents.agentId, runner.agentId))),
+    ).toHaveLength(1);
+  });
+
   it('emits canonical message.reacted events for reactions', async () => {
     const ws = await createWorkspace(stack.app, 'sdk-reaction-ws');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');

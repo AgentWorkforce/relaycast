@@ -1,9 +1,11 @@
-import { eq, and, desc, sql } from 'drizzle-orm';
+import { eq, and, ne, desc, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { sessionEvents } from '../db/schema.js';
+import { agents, sessionEvents } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
+import { runAtomicWrites } from '../ports/database.js';
+import { RELEASED_AGENT_STATUS } from './agent.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -63,6 +65,11 @@ export function isValidEventType(type: string): type is SessionEventType {
   return VALID_EVENT_TYPES.has(type);
 }
 
+/** `status.*` events are the only ones with a side-effecting agent-row mutation to track. */
+export function isStatusEventType(type: string): boolean {
+  return type.startsWith('status.');
+}
+
 export async function recordSessionEvent(
   db: Db,
   workspaceId: string,
@@ -71,7 +78,7 @@ export async function recordSessionEvent(
     type: SessionEventType;
     payload: Record<string, unknown>;
   },
-) {
+): Promise<{ event: ReturnType<typeof toPublicEvent>; replayed: boolean; pendingStatusApplication: boolean }> {
   const id = `evt_${generateId()}`;
 
   // Sequence is assigned atomically via a scalar subquery — read and write in
@@ -88,7 +95,14 @@ export async function recordSessionEvent(
     })
     .returning();
 
-  return toPublicEvent(event, agentId);
+  return {
+    event: toPublicEvent(event, agentId),
+    replayed: false,
+    // Unkeyed events have no durable claim to replay against — the caller
+    // always applies the status mutation immediately after this call, so
+    // there is nothing to recover across a retry.
+    pendingStatusApplication: isStatusEventType(data.type),
+  };
 }
 
 /**
@@ -107,7 +121,7 @@ export async function recordSessionEventWithIdempotency(
     payload: Record<string, unknown>;
   },
   idempotencyKey: string,
-): Promise<{ event: ReturnType<typeof toPublicEvent>; replayed: boolean }> {
+): Promise<{ event: ReturnType<typeof toPublicEvent>; replayed: boolean; pendingStatusApplication: boolean }> {
   const [idempotencyKeyHash, requestDigest] = await Promise.all([
     sha256Hex(`session-event-key-v1\0${idempotencyKey}`),
     sha256Hex(`session-event-payload-v1\0${canonicalJson({ type: data.type, payload: data.payload })}`),
@@ -132,7 +146,13 @@ export async function recordSessionEventWithIdempotency(
     .onConflictDoNothing()
     .returning();
 
-  if (created) return { event: toPublicEvent(created, agentId), replayed: false };
+  if (created) {
+    return {
+      event: toPublicEvent(created, agentId),
+      replayed: false,
+      pendingStatusApplication: isStatusEventType(data.type),
+    };
+  }
 
   const [existing] = await db
     .select()
@@ -156,7 +176,57 @@ export async function recordSessionEventWithIdempotency(
       409,
     );
   }
-  return { event: toPublicEvent(existing, agentId), replayed: true };
+  return {
+    event: toPublicEvent(existing, agentId),
+    replayed: true,
+    // `status_applied_at` is set atomically with the agent-row status write
+    // (see `applyStatusEventEffect`). NULL here means either the mutation
+    // never ran, or it ran but the process crashed before marking it durable
+    // — both cases are indistinguishable from "not yet applied" and safe to
+    // retry, because the write that sets this column is the same atomic unit
+    // as the status mutation itself. A replay that is still pending finishes
+    // the interrupted work instead of returning 201 with a stale agent row.
+    pendingStatusApplication: isStatusEventType(existing.type) && existing.statusAppliedAt == null,
+  };
+}
+
+/**
+ * Apply a `status.*` event's agent-row mutation and mark the event's
+ * completion durably, as one atomic unit.
+ *
+ * This is the fix for the crash window between "the event/idempotency claim
+ * committed" and "the agent's status row is updated": if either statement
+ * here failed independently, a retry could see `replayed: true` and return
+ * 201 while the agent row stayed stale forever. Batching both writes through
+ * `runAtomicWrites` means a failure here rolls back *both* the status change
+ * and the completion marker, so `pendingStatusApplication` stays true and the
+ * next replay retries the whole mutation — it can never observe "claimed but
+ * never applied" as a terminal state.
+ *
+ * A released agent's row is intentionally not updated (matching
+ * `updateAgentById`), but the event is still marked applied: there is no
+ * agent row left to reconcile, and retrying forever would just repeat the
+ * same no-op.
+ */
+export async function applyStatusEventEffect(
+  db: Db,
+  workspaceId: string,
+  agentId: string,
+  eventId: string,
+  status: string,
+): Promise<void> {
+  await runAtomicWrites(db, (tx) => [
+    tx.update(agents)
+      .set({ status })
+      .where(and(
+        eq(agents.workspaceId, workspaceId),
+        eq(agents.id, agentId),
+        ne(agents.status, RELEASED_AGENT_STATUS),
+      )),
+    tx.update(sessionEvents)
+      .set({ statusAppliedAt: sql`(unixepoch())` })
+      .where(eq(sessionEvents.id, eventId)),
+  ], { requireAtomic: true });
 }
 
 function canonicalJson(value: unknown): string {
