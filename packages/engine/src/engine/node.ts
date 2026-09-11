@@ -2060,7 +2060,7 @@ export interface ListNodesHistoryPage {
  * to match primitive capabilities exactly as before.
  */
 function capabilityMatchCondition(capability: string) {
-  return sql`EXISTS (SELECT 1 FROM json_each(${nodes.capabilities}) AS cap
+  return sql`EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(${nodes.capabilities}) THEN ${nodes.capabilities} ELSE '[]' END) AS cap
     WHERE cap.value = ${capability}
        OR (json_valid(cap.value) AND json_extract(cap.value, '$.name') = ${capability}))`;
 }
@@ -2074,12 +2074,12 @@ function capabilityMatchCondition(capability: string) {
  */
 function observerNodeVisibilityCondition(agentIds: string[]) {
   if (agentIds.length === 0) return sql`0`;
-  const values = sql.join(agentIds.map((id) => sql`${id}`), sql`, `);
   return sql`EXISTS (
     SELECT 1 FROM ${agentNodeBindings} AS b
+    JOIN json_each(${JSON.stringify(agentIds)}) AS allowed
+      ON allowed.value = b.agent_id
     WHERE b.node_id = ${nodes.id}
       AND b.status = 'active'
-      AND b.agent_id IN (${values})
   )`;
 }
 
@@ -2105,7 +2105,7 @@ async function visibleActiveAgentCounts(
       eq(agentNodeBindings.workspaceId, workspaceId),
       eq(agentNodeBindings.status, 'active'),
       inArray(agentNodeBindings.nodeId, nodeIds),
-      inArray(agentNodeBindings.agentId, agentIds),
+      sql`${agentNodeBindings.agentId} IN (SELECT value FROM json_each(${JSON.stringify(agentIds)}))`,
     ))
     .groupBy(agentNodeBindings.nodeId);
   for (const row of rows) counts.set(row.nodeId, Number(row.count));

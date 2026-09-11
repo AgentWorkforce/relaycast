@@ -294,6 +294,90 @@ describe('observer-authorized node history pagination (#422 follow-up)', () => {
     expect(maxQueriesPerPage).toBeLessThan(10);
   });
 
+  it('handles high-cardinality observer authorization without exceeding bind limits or skipping interleaved rows', async () => {
+    const ws = await createWorkspace(stack.app, 'observer-history-wide-ws');
+    const allowedAgents = await Promise.all(
+      Array.from({ length: 140 }, async (_, i) => registerAgent(stack.app, ws.workspaceKey, `observer-wide-allowed-${i}`)),
+    );
+    const hidden = await registerAgent(stack.app, ws.workspaceKey, 'observer-wide-hidden');
+
+    const db = stack.runtime.deps.db;
+    const now = new Date();
+    const authorizedNames: string[] = [];
+    const hiddenNames: string[] = [];
+    for (let i = 0; i < 24; i++) {
+      const id = `node_obs_wide_${ws.workspaceId}_${String(i).padStart(4, '0')}`;
+      const name = `wide-${i}`;
+      const allowed = i % 2 === 0;
+      await db.insert(nodes).values({
+        id,
+        workspaceId: ws.workspaceId,
+        name,
+        tokenHash: `obs-wide-token-hash-${ws.workspaceId}-${i}`,
+        status: 'offline',
+        createdAt: now,
+      });
+      await db.insert(agentNodeBindings).values({
+        id: `anb_obs_wide_${ws.workspaceId}_${i}`,
+        workspaceId: ws.workspaceId,
+        agentId: allowed ? allowedAgents[i % allowedAgents.length].agentId : hidden.agentId,
+        nodeId: id,
+        status: 'active',
+      });
+      if (allowed) authorizedNames.push(name); else hiddenNames.push(name);
+    }
+
+    const observerToken = await createObserverToken(
+      ws.workspaceKey,
+      allowedAgents.map((agent) => agent.agentId),
+    );
+
+    const sqlite = stack.runtime.handle.sqlite;
+    const originalPrepare = sqlite.prepare.bind(sqlite);
+    const seenNames: string[] = [];
+    const seenIds = new Set<string>();
+    let cursor: string | null = null;
+    let pages = 0;
+    let maxQueriesPerPage = 0;
+    do {
+      const url = new URL('http://test/v1/nodes');
+      url.searchParams.set('history', 'true');
+      url.searchParams.set('limit', '4');
+      if (cursor) url.searchParams.set('cursor', cursor);
+
+      let queryCount = 0;
+      sqlite.prepare = ((sqlText: string) => {
+        queryCount++;
+        return originalPrepare(sqlText);
+      }) as typeof sqlite.prepare;
+      let res: Response;
+      try {
+        res = await stack.app.request(url.pathname + '?' + url.searchParams.toString(), {
+          headers: { authorization: `Bearer ${observerToken}` },
+        });
+      } finally {
+        sqlite.prepare = originalPrepare;
+      }
+      maxQueriesPerPage = Math.max(maxQueriesPerPage, queryCount);
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { data: { nodes: Array<{ id: string; name: string }>; next_cursor: string | null } };
+      for (const node of body.data.nodes) {
+        if (!node.name.startsWith('wide-')) continue;
+        expect(hiddenNames).not.toContain(node.name);
+        expect(seenIds.has(node.id)).toBe(false);
+        seenIds.add(node.id);
+        seenNames.push(node.name);
+      }
+      cursor = body.data.next_cursor;
+      pages++;
+      expect(pages).toBeLessThan(50);
+    } while (cursor);
+
+    expect(new Set(seenNames)).toEqual(new Set(authorizedNames));
+    expect(maxQueriesPerPage).toBeLessThan(10);
+  });
+
   it('returns no rows and a null next_cursor when the observer is authorized for nothing on the page', async () => {
     const ws = await createWorkspace(stack.app, 'observer-history-empty-ws');
     const allowed = await registerAgent(stack.app, ws.workspaceKey, 'observer-allowed-agent-2');
@@ -394,5 +478,18 @@ describe('capability filter tolerates legacy/malformed capability shapes (#422 f
     });
     expect(noMatch.status).toBe(200);
     expect(((await noMatch.json()) as { data: Array<{ name: string }> }).data).toEqual([]);
+  });
+
+  it('treats malformed top-level capability JSON as empty instead of raising json_each errors', async () => {
+    const ws = await createWorkspace(stack.app, 'capability-top-level-malformed-ws');
+    await seedNode(ws, 'node_cap_bad_top_level', 'bad-top-level-node', 'not-json' as never);
+    await seedNode(ws, 'node_cap_good_top_level', 'good-top-level-node', ['read']);
+
+    const res = await stack.app.request('/v1/nodes?capability=read', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: Array<{ name: string }> };
+    expect(body.data.map((n) => n.name)).toEqual(['good-top-level-node']);
   });
 });
