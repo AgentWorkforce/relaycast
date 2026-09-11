@@ -109,6 +109,16 @@ export async function createChannel(
   };
 }
 
+/**
+ * Bind parameters per member-count statement.
+ *
+ * Cloudflare D1 allows 100 per statement (measured: 100 succeeds, 101 fails with
+ * "too many SQL variables", code 7500). Deliberately below that ceiling rather
+ * than at it, so a caller-side predicate gaining one more bound value does not
+ * silently reintroduce the failure.
+ */
+const MEMBER_COUNT_CHUNK = 90;
+
 export async function listChannels(
   db: Db,
   workspaceId: string,
@@ -142,14 +152,24 @@ export async function listChannels(
 
   const channelIds = rows.map((ch) => ch.id);
 
-  // Batch: member counts
-  const memberCounts = await db
-    .select({ channelId: channelMembers.channelId, count: sql<number>`count(*)` })
-    .from(channelMembers)
-    .where(inArray(channelMembers.channelId, channelIds))
-    .groupBy(channelMembers.channelId);
-
-  const memberCountMap = new Map(memberCounts.map((r) => [r.channelId, r.count]));
+  // Member counts, chunked to stay under the statement bind-parameter ceiling.
+  //
+  // This previously fanned every channel id into one `inArray`, one bind each and
+  // no upper bound. Cloudflare D1 caps a statement at 100 bind parameters, so any
+  // workspace past that failed EVERY call with "too many SQL variables"
+  // (SQLITE_ERROR 7500) — surfacing to callers as an opaque 500, because that is
+  // not a D1-overload error and so is not converted to a retryable response.
+  // Observed in production on a workspace holding 111 non-DM channels.
+  const memberCountMap = new Map<string, number>();
+  for (let offset = 0; offset < channelIds.length; offset += MEMBER_COUNT_CHUNK) {
+    const chunk = channelIds.slice(offset, offset + MEMBER_COUNT_CHUNK);
+    const counts = await db
+      .select({ channelId: channelMembers.channelId, count: sql<number>`count(*)` })
+      .from(channelMembers)
+      .where(inArray(channelMembers.channelId, chunk))
+      .groupBy(channelMembers.channelId);
+    for (const row of counts) memberCountMap.set(row.channelId, row.count);
+  }
 
   return rows.map((ch) => ({
     id: ch.id,
