@@ -9,6 +9,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased - Minor]
 
+- Keep channel listings within D1 parameter limits and isolate token-mint traffic from unrelated rate-limit buckets.
+
 - Prevent recipient self-invitations from restoring a released subscription membership.
 
 ### Added

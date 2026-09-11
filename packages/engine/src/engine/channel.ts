@@ -5,6 +5,7 @@ import { channels, channelMembers, agents } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 import { getCachedChannel, setCachedChannel, invalidateChannelCache } from './cache.js';
 import { codedError } from '../lib/httpError.js';
+import { queryInChunks } from '../lib/queryChunks.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -142,12 +143,17 @@ export async function listChannels(
 
   const channelIds = rows.map((ch) => ch.id);
 
-  // Batch: member counts
-  const memberCounts = await db
-    .select({ channelId: channelMembers.channelId, count: sql<number>`count(*)` })
-    .from(channelMembers)
-    .where(inArray(channelMembers.channelId, channelIds))
-    .groupBy(channelMembers.channelId);
+  // D1 caps a single statement at 100 bound parameters; a workspace with >100
+  // channels of channelType=0 would overflow this IN() list and throw
+  // SQLITE_ERROR 7500 ("too many SQL variables"). Chunk the id list so member
+  // counts stay a single logical operation without a per-workspace ceiling.
+  const memberCounts = await queryInChunks(channelIds, (chunk) =>
+    db
+      .select({ channelId: channelMembers.channelId, count: sql<number>`count(*)` })
+      .from(channelMembers)
+      .where(inArray(channelMembers.channelId, chunk))
+      .groupBy(channelMembers.channelId),
+  );
 
   const memberCountMap = new Map(memberCounts.map((r) => [r.channelId, r.count]));
 

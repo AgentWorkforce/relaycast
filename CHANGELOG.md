@@ -18,6 +18,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
+- Keep channel listings within D1 parameter limits and isolate token-mint traffic from unrelated rate-limit buckets.
+
 - Prevent recipient self-invitations from restoring a released subscription membership.
 
 ### Added
