@@ -1,0 +1,93 @@
+{
+  "recorded_on": "2026-09-09",
+  "source": "Synthetic local SQLite only; no production access",
+  "migration": "0053_agent_retention_indexes.sql",
+  "fixture": {
+    "source": "synthetic fixture; not production",
+    "workspace_id": "ws_retention_demo",
+    "agents": 2628,
+    "expected": {
+      "eligible": 2500,
+      "ownership_protected": 50,
+      "history_referenced": 20,
+      "recent_or_unknown": 25,
+      "not_offline": 33
+    }
+  },
+  "preview": {
+    "type": "summary",
+    "dry_run": true,
+    "complete": true,
+    "pages": 27,
+    "scanned": 2628,
+    "eligible": 2500,
+    "deleted": 0,
+    "skipped_changed": 0,
+    "not_offline": 33,
+    "recent_or_unknown": 25,
+    "ownership_protected": 50,
+    "history_unverified": 0,
+    "history_referenced": 20,
+    "next_cursor": null
+  },
+  "first_delete_page": {
+    "type": "summary",
+    "dry_run": false,
+    "complete": false,
+    "pages": 1,
+    "scanned": 100,
+    "eligible": 100,
+    "deleted": 100,
+    "skipped_changed": 0,
+    "not_offline": 0,
+    "recent_or_unknown": 0,
+    "ownership_protected": 0,
+    "history_unverified": 0,
+    "history_referenced": 0,
+    "next_cursor": {
+      "workspace_id": "ws_retention_demo",
+      "cutoff": 1788345505,
+      "after": "demo-0099",
+      "through": "demo-2627"
+    }
+  },
+  "resumed_delete": {
+    "type": "summary",
+    "dry_run": false,
+    "complete": true,
+    "pages": 26,
+    "scanned": 2528,
+    "eligible": 2400,
+    "deleted": 2400,
+    "skipped_changed": 0,
+    "not_offline": 33,
+    "recent_or_unknown": 25,
+    "ownership_protected": 50,
+    "history_unverified": 0,
+    "history_referenced": 20,
+    "next_cursor": null
+  },
+  "fresh_idempotent_delete": {
+    "type": "summary",
+    "dry_run": false,
+    "complete": true,
+    "pages": 2,
+    "scanned": 128,
+    "eligible": 0,
+    "deleted": 0,
+    "skipped_changed": 0,
+    "not_offline": 33,
+    "recent_or_unknown": 25,
+    "ownership_protected": 50,
+    "history_unverified": 0,
+    "history_referenced": 20,
+    "next_cursor": null
+  },
+  "registry_rows": {
+    "before": 2628,
+    "after_preview": 2628,
+    "after_first_delete_page": 2528,
+    "after_resumed_delete": 128,
+    "after_replay": 128
+  }
+}

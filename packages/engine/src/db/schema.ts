@@ -134,6 +134,10 @@ export const agents = sqliteTable(
     deliverySeq: integer('delivery_seq').notNull().default(0),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
     lastSeen: integer('last_seen', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    // Conservative witness used to reconcile pre-0056 keyed status events.
+    // Migration 0056 backfills historical rows from last_seen and its SQLite
+    // trigger advances this value for every later status/liveness write.
+    statusUpdatedAt: integer('status_updated_at', { mode: 'timestamp' }),
   },
   (table) => [
     uniqueIndex('agents_workspace_name_unique').on(table.workspaceId, table.name),
@@ -263,6 +267,7 @@ export const nodes = sqliteTable(
     index('idx_nodes_workspace').on(table.workspaceId),
     index('idx_nodes_token').on(table.tokenHash),
     index('idx_nodes_status').on(table.workspaceId, table.status),
+    index('idx_nodes_status_heartbeat').on(table.workspaceId, table.status, table.lastHeartbeatAt),
     index('idx_nodes_workspace_machine').on(table.workspaceId, table.machineId),
     index('idx_nodes_workspace_machine_proven').on(table.workspaceId, table.machineId, table.provenLiveAt),
   ],
@@ -500,6 +505,7 @@ export const directoryRatings = sqliteTable(
   (table) => [
     uniqueIndex('directory_ratings_agent_rater_unique').on(table.directoryAgentId, table.raterAgentId),
     index('idx_directory_ratings_workspace').on(table.workspaceId, table.createdAt),
+    index('idx_directory_ratings_rater').on(table.raterAgentId),
     index('idx_directory_ratings_directory_agent').on(table.directoryAgentId, table.createdAt),
   ],
 );
@@ -544,6 +550,7 @@ export const routingFailures = sqliteTable(
   (table) => [
     primaryKey({ columns: [table.workspaceId, table.agentId] }),
     index('idx_routing_failures_workspace').on(table.workspaceId, table.updatedAt),
+    index('idx_routing_failures_agent').on(table.agentId),
     index('idx_routing_failures_circuit').on(table.workspaceId, table.circuitOpenUntil),
   ],
 );
@@ -600,6 +607,7 @@ export const channels = sqliteTable(
   (table) => [
     uniqueIndex('channels_workspace_name_unique').on(table.workspaceId, table.name),
     index('idx_channels_workspace').on(table.workspaceId),
+    index('idx_channels_creator').on(table.createdBy),
   ],
 );
 
@@ -660,6 +668,7 @@ export const messages = sqliteTable(
     index('idx_messages_retention').on(sql`length(${table.id})`, table.id),
     index('idx_messages_thread').on(table.threadId, table.id),
     index('idx_messages_workspace').on(table.workspaceId, table.id),
+    index('idx_messages_agent').on(table.agentId),
     index('idx_messages_workspace_session').on(
       table.workspaceId,
       table.sessionRef,
@@ -752,6 +761,7 @@ export const reactions = sqliteTable(
       table.emoji,
     ),
     index('idx_reactions_message').on(table.messageId),
+    index('idx_reactions_agent').on(table.agentId),
   ],
 );
 
@@ -965,6 +975,7 @@ export const webhooks = sqliteTable(
   (table) => [
     uniqueIndex('webhooks_workspace_name_unique').on(table.workspaceId, table.name),
     index('idx_webhooks_workspace').on(table.workspaceId),
+    index('idx_webhooks_creator').on(table.createdBy),
     index('idx_webhooks_token').on(table.tokenHash),
   ],
 );
@@ -1141,11 +1152,27 @@ export const sessionEvents = sqliteTable(
       .references(() => agents.id, { onDelete: 'cascade' }),
     type: text('type').notNull(),
     payload: text('payload', { mode: 'json' }).notNull().default({}),
+    // Optional stable identity for callers that may retry after losing the
+    // response. NULL keeps the legacy append-only contract for unkeyed calls.
+    idempotencyKeyHash: text('idempotency_key_hash'),
+    requestDigest: text('request_digest'),
     sequence: integer('sequence').notNull().default(0),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    // Durable completion marker for a `status.*` event's agent-row mutation.
+    // NULL means "not yet applied" — set atomically with the `agents` row
+    // write (see `applyStatusEventEffect`) so a crash between the durable
+    // event insert and the status update leaves this NULL, letting a replay
+    // finish the interrupted mutation instead of silently skipping it forever.
+    statusAppliedAt: integer('status_applied_at', { mode: 'timestamp' }),
+    // Migration 0056 marks keyed status events created before this marker
+    // existed. Their old event insert and agent update were separate writes,
+    // so replay reconciles only when the agent write-time witness proves the
+    // row predates the event; otherwise it claims without clobbering state.
+    statusLegacyPending: integer('status_legacy_pending', { mode: 'boolean' }).notNull().default(false),
   },
   (table) => [
     uniqueIndex('session_events_agent_sequence_unique').on(table.agentId, table.sequence),
+    uniqueIndex('session_events_agent_idempotency_unique').on(table.workspaceId, table.agentId, table.idempotencyKeyHash),
     index('idx_session_events_agent').on(table.agentId, table.createdAt),
     index('idx_session_events_workspace').on(table.workspaceId, table.createdAt),
     index('idx_session_events_type').on(table.workspaceId, table.type, table.createdAt),

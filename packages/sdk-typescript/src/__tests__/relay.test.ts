@@ -846,6 +846,149 @@ describe('RelayCast', () => {
   });
 
   describe('nodes', () => {
+    it('list() with status builds the query and camelizes stale roster fields', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse([
+        {
+          id: 'node_1',
+          name: 'node-one',
+          kind: 'ws',
+          role: 'direct',
+          machine_id: null,
+          delivery_adapter: 'ws',
+          delivery: null,
+          capabilities: [],
+          tags: [],
+          version: '1.0.0',
+          status: 'offline',
+          live: false,
+          handlers_live: false,
+          load: null,
+          active_agents: 3,
+          active_agents_stale: true,
+          max_agents: 5,
+          last_heartbeat_at: '2026-09-10T00:00:00.000Z',
+          created_at: '2026-09-01T00:00:00.000Z',
+        },
+      ]));
+
+      const result = await relay.nodes.list({ status: 'offline' });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/nodes?status=offline');
+      expect(init.method).toBe('GET');
+      expect(result).toEqual([
+        expect.objectContaining({
+          id: 'node_1',
+          name: 'node-one',
+          activeAgents: 3,
+          activeAgentsStale: true,
+          lastHeartbeatAt: '2026-09-10T00:00:00.000Z',
+        }),
+      ]);
+    });
+
+    it('list() with capability and name filters builds the combined query', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse([]));
+      await relay.nodes.list({ capability: 'gpu', name: 'node/one', status: 'online' });
+
+      const [url] = mockFetch.mock.calls[0]!;
+      const requested = new URL(String(url));
+      expect(requested.pathname).toBe('/v1/nodes');
+      expect(requested.searchParams.get('capability')).toBe('gpu');
+      expect(requested.searchParams.get('name')).toBe('node/one');
+      expect(requested.searchParams.get('status')).toBe('online');
+    });
+
+    it('list() omits query params entirely when no filters are given', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse([]));
+      await relay.nodes.list();
+
+      const [url] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/nodes');
+    });
+
+    it('listHistory() sets history=true, forwards cursor/limit, and maps next_cursor to nextCursor', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse({
+        nodes: [
+          {
+            id: 'node_2',
+            name: 'node-two',
+            kind: 'http_push',
+            role: 'broker',
+            machine_id: 'machine_1',
+            delivery_adapter: 'http_push',
+            delivery: null,
+            capabilities: [],
+            tags: [],
+            version: '1.0.0',
+            status: 'offline',
+            live: false,
+            handlers_live: false,
+            load: null,
+            active_agents: 2,
+            active_agents_stale: true,
+            max_agents: 10,
+            last_heartbeat_at: '2026-09-09T00:00:00.000Z',
+            created_at: '2026-09-01T00:00:00.000Z',
+          },
+        ],
+        next_cursor: 'cursor_abc',
+      }));
+
+      const result = await relay.nodes.listHistory({
+        capability: 'gpu',
+        name: 'node',
+        status: 'offline',
+        cursor: 'cursor_prev',
+        limit: 50,
+      });
+
+      const requested = new URL(String(mockFetch.mock.calls[0]?.[0]));
+      expect(requested.pathname).toBe('/v1/nodes');
+      expect(requested.searchParams.get('history')).toBe('true');
+      expect(requested.searchParams.get('capability')).toBe('gpu');
+      expect(requested.searchParams.get('name')).toBe('node');
+      expect(requested.searchParams.get('status')).toBe('offline');
+      expect(requested.searchParams.get('cursor')).toBe('cursor_prev');
+      expect(requested.searchParams.get('limit')).toBe('50');
+
+      expect(result).toEqual({
+        nodes: [
+          expect.objectContaining({
+            id: 'node_2',
+            activeAgents: 2,
+            activeAgentsStale: true,
+          }),
+        ],
+        nextCursor: 'cursor_abc',
+      });
+    });
+
+    it('listHistory() maps a null next_cursor to a null nextCursor', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse({ nodes: [], next_cursor: null }));
+
+      const result = await relay.nodes.listHistory();
+
+      const [url] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/nodes?history=true');
+      expect(result).toEqual({ nodes: [], nextCursor: null });
+    });
+
     it('delete() URL-encodes the node name, forwards force, and returns cascade details', async () => {
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });

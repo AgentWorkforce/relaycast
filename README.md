@@ -92,6 +92,13 @@ five minutes appear `offline`. Roster status filters run in SQL against that
 derived presence; `status=online` aliases `active`. Durable stale-status cleanup
 runs separately from reads.
 
+Workspace administrators can preview bounded registry reclamation with
+`POST /v1/agents/retention` (`retention_days: 30` by default). Physical deletion
+requires explicit `delete: true`; live/recent agents, every node association,
+and identities referenced by retained authorship are protected. See the
+[retention operator guide](docs/agent-retention.md) for eligibility limits,
+resumable bulk operation, migration requirements, and the dry-run CLI.
+
 Operator recovery for an offline agent registered before identity verifiers
 were stored uses `PATCH /v1/agents/:name/legacy-identity`. The endpoint accepts
 only a SHA-256 verifier (`identity_key_hash`) and atomically succeeds when the
@@ -669,10 +676,25 @@ send its SHA-256 hash as `expected_token_hash`; Relaycast then rejects a stale
 release with `agent_release_generation_conflict` before dispatch or completion,
 so a same-name takeover is left untouched.
 
+`GET /nodes` pushes `capability`, `name`, and a liveness `status` selector
+into its SQL query instead of fetching the full roster and filtering in JS.
+Without `history`, the response stays the legacy bare array every existing
+caller already handles; `status=online` is the server-filtered live-Fleet
+path a default listing should use, since it never reads or returns
+history no matter how many dead rows a workspace has accumulated.
+`history=true` switches to a bounded, paginated contract
+(`{ nodes, next_cursor }`, paged with `cursor`/`limit`) for an explicit full
+read (e.g. `--all`): it visits and returns every matching row exactly once,
+with no silent truncation, however large the retained history is. Each
+entry's `active_agents` is authoritative live occupancy only while `live` is
+`true`; once a node goes offline, `active_agents` is a frozen historical
+value and `active_agents_stale` is `true` — callers must not present it as
+current capacity.
+
 Fleet node presence is also published to workspace-key observer streams as the
 ephemeral `node.online`, `node.heartbeat`, and `node.offline` events. Each
 carries a `node` payload matching the `GET /nodes` roster entry (capabilities,
-tags, `load`, `active_agents`/`max_agents`, `handlers_live`,
+tags, `load`, `active_agents`/`active_agents_stale`/`max_agents`, `handlers_live`,
 `last_heartbeat_at`), so a single event fully refreshes a node's row.
 `load` is normalized managed-agent capacity utilization and remains `null`
 unless a direct node, or every constituent provider of a broker node,
@@ -954,7 +976,7 @@ POST   /v1/actions                   Register an action (agent-to-agent RPC)
 POST   /v1/actions/:name/invoke      Invoke an action (workspace-scoped / global alias)
 POST   /v1/nodes/:node/actions/:name/invoke  Invoke a node-addressed action
 DELETE /v1/nodes/:node/providers/:name       Remove a node provider
-POST   /v1/agents/:name/events       Emit an agent session event
+POST   /v1/agents/:name/events       Emit an agent session event (optional Idempotency-Key replays identical retries; status.changed requires payload.status)
 POST   /v1/directory/agents          Publish an agent to the directory
 GET    /v1/directory/search          Search the agent directory
 POST   /v1/route                     Skill-based agent routing

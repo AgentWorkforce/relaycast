@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { deliverEvent } from '../../engine/eventDelivery.js';
-import { actionInvocations, webhooks } from '../../db/schema.js';
+import { actionInvocations, sessionEvents, webhooks } from '../../db/schema.js';
 import {
   makeNodeStack,
   createWorkspace,
@@ -862,6 +862,247 @@ describe('SDK v8 service contract', () => {
       agent_name: 'runner',
       payload: { type: 'inner.tool', tool: 'build' },
     });
+  });
+
+  it('replays keyed harness events after a lost response and rejects payload changes', async () => {
+    const ws = await createWorkspace(stack.app, 'sdk-event-idempotency-ws');
+    const runner = await registerAgent(stack.app, ws.workspaceKey, 'runner');
+    const headers = {
+      'content-type': 'application/json',
+      authorization: `Bearer ${ws.workspaceKey}`,
+      'Idempotency-Key': 'worker-exit-generation-1',
+    };
+    const body = JSON.stringify({ type: 'error', payload: { code: 'worker_exit', generation: 1 } });
+
+    // Treat the first response as lost: the durable event is still the source
+    // of truth for the subsequent caller retry.
+    const first = await stack.app.request('/v1/agents/runner/events', {
+      method: 'POST', headers, body,
+    });
+    expect(first.status).toBe(201);
+    const firstBody = await first.json() as { data: { id: string; sequence: number } };
+
+    const replay = await stack.app.request('/v1/agents/runner/events', {
+      method: 'POST', headers, body,
+    });
+    expect(replay.status).toBe(201);
+    expect(replay.headers.get('Idempotency-Replayed')).toBe('true');
+    const replayBody = await replay.json() as { data: { id: string; sequence: number } };
+    expect(replayBody).toEqual(firstBody);
+
+    const conflict = await stack.app.request('/v1/agents/runner/events', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ type: 'error', payload: { code: 'different' } }),
+    });
+    expect(conflict.status).toBe(409);
+    await expect(conflict.json()).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'idempotency_key_reused' },
+    });
+
+    const unkeyedHeaders = {
+      'content-type': 'application/json',
+      authorization: `Bearer ${ws.workspaceKey}`,
+    };
+    const unkeyedBody = JSON.stringify({ type: 'log', payload: { message: 'legacy' } });
+    const unkeyed = await Promise.all([
+      stack.app.request('/v1/agents/runner/events', { method: 'POST', headers: unkeyedHeaders, body: unkeyedBody }),
+      stack.app.request('/v1/agents/runner/events', { method: 'POST', headers: unkeyedHeaders, body: unkeyedBody }),
+    ]);
+    expect(unkeyed.map((response) => response.status)).toEqual([201, 201]);
+
+    const runnerEvents = await stack.runtime.deps.db
+      .select({ id: sessionEvents.id, idempotencyKeyHash: sessionEvents.idempotencyKeyHash })
+      .from(sessionEvents)
+      .where(and(
+        eq(sessionEvents.workspaceId, ws.workspaceId),
+        eq(sessionEvents.agentId, runner.agentId),
+      ));
+    expect(runnerEvents).toHaveLength(3);
+    expect(runnerEvents.filter((event) => event.idempotencyKeyHash !== null)).toHaveLength(1);
+  });
+
+  it('resolves truly concurrent same-key same-payload event posts to one persisted row', async () => {
+    const ws = await createWorkspace(stack.app, 'sdk-event-idempotency-race-ws');
+    const runner = await registerAgent(stack.app, ws.workspaceKey, 'runner');
+    const idempotencyKey = 'worker-exit-race-1';
+    const headers = {
+      'content-type': 'application/json',
+      authorization: `Bearer ${ws.workspaceKey}`,
+      'Idempotency-Key': idempotencyKey,
+    };
+    const body = JSON.stringify({ type: 'error', payload: { code: 'worker_exit', generation: 1 } });
+    const postEvent = () => stack.app.request('/v1/agents/runner/events', {
+      method: 'POST', headers, body,
+    });
+
+    // Fire both requests without awaiting either first, so both reach the
+    // durable insert concurrently and genuinely race on the unique claim
+    // rather than serializing through a caller-side await.
+    const [first, second] = await Promise.all([postEvent(), postEvent()]);
+    expect([first.status, second.status]).toEqual([201, 201]);
+
+    const replayedFlags = [first, second]
+      .map((response) => response.headers.get('Idempotency-Replayed'))
+      .sort();
+    // Exactly one request wins the durable insert (fresh); the other reads
+    // back the winner's row and replays it.
+    expect(replayedFlags).toEqual([null, 'true']);
+
+    const [firstBody, secondBody] = await Promise.all([
+      first.json() as Promise<{ data: { id: string; sequence: number }; replayed: boolean }>,
+      second.json() as Promise<{ data: { id: string; sequence: number }; replayed: boolean }>,
+    ]);
+    // Both responses must describe the identical persisted event, regardless
+    // of which request happened to win the race.
+    expect(secondBody.data).toEqual(firstBody.data);
+
+    const runnerEvents = await stack.runtime.deps.db
+      .select({ id: sessionEvents.id, idempotencyKeyHash: sessionEvents.idempotencyKeyHash })
+      .from(sessionEvents)
+      .where(and(
+        eq(sessionEvents.workspaceId, ws.workspaceId),
+        eq(sessionEvents.agentId, runner.agentId),
+      ));
+    // Only one row was ever persisted for the shared key, no matter which
+    // request's insert physically won.
+    expect(runnerEvents).toHaveLength(1);
+    expect(runnerEvents[0]!.id).toBe(firstBody.data.id);
+  });
+
+  it('resolves truly concurrent same-key different-payload event posts deterministically', async () => {
+    const ws = await createWorkspace(stack.app, 'sdk-event-idempotency-conflict-race-ws');
+    const runner = await registerAgent(stack.app, ws.workspaceKey, 'runner');
+    const idempotencyKey = 'worker-exit-conflict-race-1';
+    const headers = {
+      'content-type': 'application/json',
+      authorization: `Bearer ${ws.workspaceKey}`,
+      'Idempotency-Key': idempotencyKey,
+    };
+    const postEvent = (code: string) => stack.app.request('/v1/agents/runner/events', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ type: 'error', payload: { code } }),
+    });
+
+    // Same key, deliberately different payloads, fired concurrently. The
+    // unique claim on (workspace, agent, key) guarantees exactly one insert
+    // wins regardless of scheduling order; the loser's payload never
+    // matches the persisted digest, so it must fail closed rather than
+    // silently returning the winner's data as if it were its own.
+    const [a, b] = await Promise.all([postEvent('worker_exit_a'), postEvent('worker_exit_b')]);
+    const statuses = [a.status, b.status].sort();
+    expect(statuses).toEqual([201, 409]);
+
+    const conflictResponse = a.status === 409 ? a : b;
+    await expect(conflictResponse.json()).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'idempotency_key_reused' },
+    });
+
+    const runnerEvents = await stack.runtime.deps.db
+      .select({ id: sessionEvents.id, idempotencyKeyHash: sessionEvents.idempotencyKeyHash })
+      .from(sessionEvents)
+      .where(and(
+        eq(sessionEvents.workspaceId, ws.workspaceId),
+        eq(sessionEvents.agentId, runner.agentId),
+      ));
+    // Exactly one payload variant is durably persisted; the conflicting
+    // concurrent write never allocates a second row.
+    expect(runnerEvents).toHaveLength(1);
+  });
+
+  it('relaycast#425: a replay finishes an agent status mutation interrupted after the event was durably claimed', async () => {
+    const ws = await createWorkspace(stack.app, 'sdk-event-status-crash-ws');
+    const runner = await registerAgent(stack.app, ws.workspaceKey, 'runner');
+    const headers = {
+      'content-type': 'application/json',
+      authorization: `Bearer ${ws.workspaceKey}`,
+      'Idempotency-Key': 'status-crash-replay-http-1',
+    };
+    const body = JSON.stringify({ type: 'status.blocked', payload: {} });
+
+    // Simulate a crash between the durable event/idempotency claim commit
+    // and the agent status write: inject a failure into the status mutation
+    // only, so the caller sees an error while the event row is already
+    // durable — exactly the interrupted window relaycast#425 is about.
+    const { agents } = await import('../../db/schema.js');
+
+    // Recursively proxy the builder chain (`.update(...).set(...).where(...)`)
+    // so the failure surfaces only when the final statement is executed
+    // (awaited), not when it is merely built — matching the real crash
+    // window (the process dies mid-statement, not before it starts).
+    function failOnExecute<T extends object>(target: T, message: string): T {
+      return new Proxy(target, {
+        get(obj, prop) {
+          if (prop === 'then') {
+            return (onFulfilled?: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown) =>
+              Promise.reject(new Error(message)).then(onFulfilled, onRejected);
+          }
+          const value = Reflect.get(obj, prop) as unknown;
+          if (typeof value === 'function') {
+            return (...args: unknown[]) => {
+              const result = (value as (...a: unknown[]) => unknown).apply(obj, args);
+              return result && typeof result === 'object' ? failOnExecute(result as object, message) : result;
+            };
+          }
+          return value;
+        },
+      });
+    }
+
+    const db = stack.runtime.deps.db as unknown as { update: (t: unknown) => object };
+    const realUpdate = db.update.bind(db);
+    let failNext = true;
+    db.update = (table: unknown) => {
+      const builder = realUpdate(table);
+      if (table !== agents || !failNext) return builder;
+      failNext = false;
+      return failOnExecute(builder, 'injected crash before status write');
+    };
+
+    const first = await stack.app.request('/v1/agents/runner/events', { method: 'POST', headers, body });
+    expect(first.status).toBe(500);
+    db.update = realUpdate;
+
+    // The event claim committed despite the crash; the agent row must not
+    // have moved yet, and the completion marker must still be NULL.
+    const [afterCrash] = await stack.runtime.deps.db
+      .select({ status: agents.status })
+      .from(agents)
+      .where(eq(agents.id, runner.agentId));
+    expect(afterCrash!.status).not.toBe('blocked');
+    const [eventAfterCrash] = await stack.runtime.deps.db
+      .select({ statusAppliedAt: sessionEvents.statusAppliedAt })
+      .from(sessionEvents)
+      .where(and(eq(sessionEvents.workspaceId, ws.workspaceId), eq(sessionEvents.agentId, runner.agentId)));
+    expect(eventAfterCrash!.statusAppliedAt).toBeNull();
+
+    // The retry with the same key replays the durable event, but must
+    // still finish the interrupted status mutation rather than returning
+    // 201 against a stale agent row.
+    const replay = await stack.app.request('/v1/agents/runner/events', { method: 'POST', headers, body });
+    expect(replay.status).toBe(201);
+    expect(replay.headers.get('Idempotency-Replayed')).toBe('true');
+
+    const [afterReplay] = await stack.runtime.deps.db
+      .select({ status: agents.status })
+      .from(agents)
+      .where(eq(agents.id, runner.agentId));
+    expect(afterReplay!.status).toBe('blocked');
+    const [eventAfterReplay] = await stack.runtime.deps.db
+      .select({ statusAppliedAt: sessionEvents.statusAppliedAt })
+      .from(sessionEvents)
+      .where(and(eq(sessionEvents.workspaceId, ws.workspaceId), eq(sessionEvents.agentId, runner.agentId)));
+    expect(eventAfterReplay!.statusAppliedAt).not.toBeNull();
+
+    // No orphan second event row was ever allocated for the shared key.
+    expect(await stack.runtime.deps.db
+      .select()
+      .from(sessionEvents)
+      .where(and(eq(sessionEvents.workspaceId, ws.workspaceId), eq(sessionEvents.agentId, runner.agentId))),
+    ).toHaveLength(1);
   });
 
   it('emits canonical message.reacted events for reactions', async () => {

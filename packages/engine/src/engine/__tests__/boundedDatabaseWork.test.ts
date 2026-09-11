@@ -114,6 +114,39 @@ describe('bounded database work with retained history', () => {
     expect(plan).toContain('SEARCH deliveries USING INDEX idx_deliveries_node_initial');
   });
 
+  it.each([100, 10_000])('counts redrive candidate visits through %i expired rows', async (history) => {
+    const f = fixture(0, history + 1);
+    f.sqlite.prepare('UPDATE deliveries SET expires_at = 1 WHERE seq <= ?').run(history);
+    let visits = 0;
+    f.sqlite.function('record_redrive_visit', () => { visits++; return 1; });
+
+    // The production query observed in #389 filters expiry before LIMIT.
+    // Even though it returns one ID, it walks every expired candidate first.
+    const baseline = f.sqlite.prepare(`
+      SELECT id FROM deliveries
+      WHERE record_redrive_visit() = 1
+        AND status = ? AND route_node_kind IN (?, ?, ?, ?)
+        AND (expires_at IS NULL OR expires_at > ?)
+        AND next_attempt_at IS NULL
+      ORDER BY created_at, id LIMIT ?
+    `).all('queued', 'http_push', 'ws', 'fleet_ws', 'direct_ws', 2, 25);
+    expect(baseline).toHaveLength(1);
+    expect(visits).toBe(history + 1);
+
+    expect(await fetchDueNodeDeliveryEvents(f.db, { now: new Date(2_000), limit: 25 })).toHaveLength(0);
+    const reads = f.queries.filter(q => q.sql.includes('INDEXED BY idx_deliveries_node_initial'));
+    expect(reads).toHaveLength(2); // One high-water seek and one metadata window.
+    const counts = reads.map(query => {
+      visits = 0;
+      // Keep the actual engine predicates, bounds, ordering and index. Count
+      // candidate visits before post-page expiry filtering, not result rows.
+      const counted = query.sql.replace('WHERE', 'WHERE record_redrive_visit() = 1 AND');
+      f.sqlite.prepare(counted).all(...query.params);
+      return visits;
+    });
+    expect(counts).toEqual([1, 25]);
+  });
+
   it.each([undefined, 'ws'])('keeps maximum redrive hydration under the D1 bind limit (workspace=%s)', async (workspaceId) => {
     const f = fixture(0, 200);
     expect(await fetchDueNodeDeliveryEvents(f.db, { workspaceId, limit: 200 })).toHaveLength(200);

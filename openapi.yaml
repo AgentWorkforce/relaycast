@@ -252,6 +252,77 @@ components:
           items:
             $ref: '#/components/schemas/AgentChannelMembership'
 
+    AgentRetentionCursor:
+      type: object
+      additionalProperties: false
+      required: [workspace_id, cutoff, after, through]
+      properties:
+        workspace_id:
+          type: string
+        cutoff:
+          type: integer
+          minimum: 0
+          description: Frozen retention boundary in Unix seconds.
+        after:
+          type: string
+        through:
+          type: string
+
+    AgentRetentionReport:
+      type: object
+      required: [dry_run, cutoff, scanned, counts, candidates, deleted, skipped_changed, next_cursor]
+      properties:
+        dry_run:
+          type: boolean
+        cutoff:
+          type: string
+          format: date-time
+        scanned:
+          type: integer
+          maximum: 100
+        counts:
+          type: object
+          description: Mutually exclusive classifications of scanned rows before the guarded write.
+          required: [not_offline, recent_or_unknown, ownership_protected, history_unverified, history_referenced, eligible]
+          properties:
+            not_offline:
+              type: integer
+            recent_or_unknown:
+              type: integer
+            ownership_protected:
+              type: integer
+            history_referenced:
+              type: integer
+            history_unverified:
+              type: integer
+              description: Required indexes are absent; retained without scanning history. Deletion requires the indexes.
+            eligible:
+              type: integer
+        candidates:
+          type: array
+          maxItems: 100
+          items:
+            type: object
+            required: [id, name, last_seen]
+            properties:
+              id:
+                type: string
+              name:
+                type: string
+              last_seen:
+                type: integer
+                description: Unix seconds.
+        deleted:
+          type: integer
+          description: Actual registry rows deleted, excluding cascading child rows; zero in dry-run.
+        skipped_changed:
+          type: integer
+          description: Preview candidates protected by changed state at deletion time; zero in dry-run.
+        next_cursor:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/AgentRetentionCursor'
+
     AgentChannelMembership:
       type: object
       properties:
@@ -1032,6 +1103,10 @@ components:
           description: Normalized managed-agent capacity utilization. Null unless a direct node, or every constituent provider of a broker node, explicitly reports a genuine measurement.
         active_agents:
           type: integer
+          description: Managed-agent occupancy. Authoritative only while `live` is true; once a node goes offline this is a frozen historical value — see `active_agents_stale`.
+        active_agents_stale:
+          type: boolean
+          description: True whenever `live` is false, meaning `active_agents` is frozen history, not current occupancy.
         max_agents:
           type: integer
           minimum: 0
@@ -2219,6 +2294,75 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+
+  /agents/retention:
+    post:
+      summary: Preview or reclaim a bounded page of stale unowned agents
+      description: >-
+        Defaults to dry-run. Explicit delete=true physically removes only persisted
+        offline or released identities whose last_seen AND created_at are strictly
+        older than the retention window. All node associations (including inactive
+        bindings, origin nodes, implicit direct nodes and legacy fleet metadata)
+        and message/channel/file/webhook authorship references are protected.
+        Unknown ownership fails closed. Current direct-node registrations are
+        protected, even when offline. The bulk DELETE rechecks every predicate
+        atomically. Existing foreign-key cascades apply to dependent operational
+        records. Apply migration 0053_agent_retention_indexes.sql first.
+        Pass next_cursor unchanged as cursor to resume; a null next_cursor ends
+        the traversal. Protected pages advance too. The cursor freezes the cutoff
+        and maximum id; a different workspace or a cutoff newer than the requested
+        policy allows is rejected. Counts describe this page, not the whole workspace.
+      tags:
+        - Agents
+      security:
+        - workspaceKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                retention_days:
+                  type: integer
+                  minimum: 1
+                  maximum: 36500
+                  default: 30
+                delete:
+                  type: boolean
+                  default: false
+                limit:
+                  type: integer
+                  minimum: 1
+                  maximum: 100
+                  default: 100
+                cursor:
+                  $ref: '#/components/schemas/AgentRetentionCursor'
+      responses:
+        '200':
+          description: Bounded dry-run or deletion report
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, data]
+                properties:
+                  ok:
+                    type: boolean
+                    enum: [true]
+                  data:
+                    $ref: '#/components/schemas/AgentRetentionReport'
+        '400':
+          description: Invalid policy, cursor, or body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+        '403':
+          description: Workspace key required
 
   /agents/{name}:
     get:
@@ -4840,7 +4984,21 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
     get:
       summary: List nodes
-      description: List delivery nodes in the workspace, optionally filtered by capability or name. Observer tokens require `nodes:read`; agent filters constrain active-agent details.
+      description: >
+        List delivery nodes in the workspace, optionally filtered by capability, name,
+        or liveness. `capability`, `name`, and `status` are evaluated in SQL, not
+        fetched in full and filtered afterward. Without `history`, the response is a
+        bare array (the legacy, unpaginated shape every existing caller already
+        handles); `status=online` is the server-filtered live-Fleet path a default
+        `fleet nodes` call should use, since it never reads or returns history no
+        matter how large the workspace's roster has grown. `history=true` switches to
+        a bounded, paginated contract (`{ nodes, next_cursor }`) for an explicit full
+        read (e.g. `--all`): `cursor`/`limit` page through every matching row exactly
+        once, with no silent truncation, however many historical rows are retained.
+        Each entry's `active_agents` is authoritative live occupancy only while
+        `live` is `true`; once a node goes offline its `active_agents` is frozen
+        history and `active_agents_stale` is `true`. Observer tokens require
+        `nodes:read`; agent filters constrain active-agent details.
       tags:
         - Nodes
       security:
@@ -4858,9 +5016,35 @@ paths:
           required: false
           schema:
             type: string
+        - name: status
+          in: query
+          required: false
+          description: Pushes a liveness predicate into SQL. `online` is fresh-heartbeat live nodes; `offline` is everything else.
+          schema:
+            type: string
+            enum: [online, offline]
+        - name: history
+          in: query
+          required: false
+          description: Switches the response to the bounded `{ nodes, next_cursor }` pagination contract.
+          schema:
+            type: boolean
+        - name: cursor
+          in: query
+          required: false
+          description: Resume point from a previous page's `next_cursor`. Only meaningful with `history=true`.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: Page size, clamped server-side to a fixed maximum. Only meaningful with `history=true`.
+          schema:
+            type: integer
+            minimum: 1
       responses:
         '200':
-          description: Node roster
+          description: Node roster — a bare array by default, or `{ nodes, next_cursor }` when `history=true`.
           content:
             application/json:
               schema:
@@ -5347,8 +5531,10 @@ paths:
     post:
       summary: Emit agent session event
       description: >
-        Record a session event for an agent (e.g. `status.active`, `status.idle`). An agent token
-        may only post events for itself; a workspace key may post for any agent.
+        Record a session event for an agent (e.g. `status.active`, `status.idle`). For
+        `status.changed`, `payload.status` is required and accepts `active`, `idle`, `blocked`,
+        `waiting`, `offline`, or the legacy alias `online`. An agent token may only post events
+        for itself; a workspace key may post for any agent.
       tags:
         - Agents
       security:
@@ -5360,6 +5546,16 @@ paths:
           required: true
           schema:
             type: string
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: >-
+            Stable caller-generated key for retries. Within one workspace and agent, an identical
+            request replays the original event (with `Idempotency-Replayed: true`) instead of
+            appending another event. Reusing a key with a different payload returns 409.
+          schema:
+            type: string
+            maxLength: 255
       requestBody:
         required: true
         content:
@@ -5375,11 +5571,38 @@ paths:
                   type: object
       responses:
         '201':
-          description: Event recorded
+          description: Event recorded, or idempotently replayed for a repeated `Idempotency-Key`
+          headers:
+            Idempotency-Replayed:
+              description: Set to `true` when the original event is replayed.
+              schema:
+                type: string
+                enum: ['true']
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid Idempotency-Key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Idempotency-Key was reused with a different payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: >
+            `idempotency_unavailable` — the durable event identity claim could not be
+            confirmed after a storage conflict. Retry the same logical request with the
+            same Idempotency-Key; do not mint a replacement key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     get:
       summary: List agent session events
       description: List recorded session events for an agent. Observer tokens require `activity:read`; `agent_ids` and `created_after` filters apply.

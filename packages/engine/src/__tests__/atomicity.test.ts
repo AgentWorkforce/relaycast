@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { and, eq } from 'drizzle-orm';
 import {
   makeNodeStack,
@@ -17,6 +18,9 @@ import {
   messageLogs,
   messages,
   readReceipts,
+  pendingEvents,
+  sessionEvents,
+  workspaceEvents,
 } from '../db/schema.js';
 import { postMessage } from '../engine/message.js';
 import { sendDm } from '../engine/dm.js';
@@ -24,6 +28,10 @@ import { createGroupDm, postGroupMessage } from '../engine/groupDm.js';
 import { postReply } from '../engine/thread.js';
 import { markRead } from '../engine/receipt.js';
 import { rotateAgentIdentity } from '../engine/agentIdentity.js';
+import {
+  applyStatusEventEffect,
+  recordSessionEventWithIdempotency,
+} from '../engine/sessionEvent.js';
 import type { AtomicWrite, EngineDb, TransactionCapability } from '../ports/database.js';
 
 /**
@@ -518,6 +526,488 @@ describe('atomic write paths', () => {
       // with no delivery rows — exactly the historical bare-handle behavior.
       expect(await db.select().from(messages)).toHaveLength(1);
       expect(await db.select().from(deliveries)).toHaveLength(0);
+    });
+  });
+
+  /**
+   * relaycast#425: the keyed status.* event mutation must be one atomic unit
+   * with its completion marker, or a crash between the durable event claim
+   * and the agent-row status write leaves a replay permanently unable to
+   * tell "never applied" apart from "applied", stranding a stale agent row
+   * behind a 201 response forever.
+   */
+  describe('session event status effect (relaycast#425)', () => {
+    async function seedAgent() {
+      const ws = await createWorkspace(stack.app, 'status-atomicity-ws');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const db = stack.runtime.handle.db as unknown as EngineDb;
+      return { ws, alice, db };
+    }
+
+    function markLegacyStatusEvents(db: EngineDb) {
+      // The test schema already has 0056's additive columns and trigger. Run
+      // the migration's real backfill/marker statements while omitting only
+      // DDL that would otherwise try to add the same objects twice.
+      const migration = readFileSync(
+        new URL('../db/migrations/0056_session_event_status_completion.sql', import.meta.url),
+        'utf8',
+      )
+        .replace(/^ALTER TABLE (?:agents|session_events) ADD COLUMN .*;\n/gm, '')
+        .replace(/CREATE TRIGGER agents_status_reconciliation_timestamp[\s\S]*?END;\n\n/, '');
+      stack.runtime.handle.sqlite.exec(migration);
+    }
+
+    it('rolls back the status write and completion marker together when the agent update fails', async () => {
+      const { ws, alice, db } = await seedAgent();
+      const { event } = await recordSessionEventWithIdempotency(
+        db,
+        ws.workspaceId,
+        alice.agentId,
+        { type: 'status.blocked', payload: {} },
+        'status-failure-1',
+      );
+
+      const restore = injectUpdateFailure(db, agents, 'injected agent status failure');
+      await expect(
+        applyStatusEventEffect(db, ws.workspaceId, alice.agentId, event.id, 'blocked'),
+      ).rejects.toThrow('injected agent status failure');
+      restore();
+
+      const [agentRow] = await db.select({ status: agents.status }).from(agents).where(eq(agents.id, alice.agentId));
+      expect(agentRow!.status).not.toBe('blocked');
+      const [eventRow] = await db.select({ statusAppliedAt: sessionEvents.statusAppliedAt }).from(sessionEvents).where(eq(sessionEvents.id, event.id));
+      expect(eventRow!.statusAppliedAt).toBeNull();
+    });
+
+    it('replays a keyed status event whose mutation never completed and finishes it exactly once', async () => {
+      const { ws, alice, db } = await seedAgent();
+      const idempotencyKey = 'status-crash-replay-1';
+
+      // First attempt: the durable event claim commits, but the process
+      // crashes before the agent status mutation runs — modeled directly
+      // since the route always calls both in sequence.
+      const first = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, idempotencyKey,
+      );
+      expect(first.replayed).toBe(false);
+      expect(first.pendingStatusApplication).toBe(true);
+
+      // Retry after the "crash": the event is replayed, but the completion
+      // marker is still NULL, so the interrupted mutation must be redone.
+      const replay = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, idempotencyKey,
+      );
+      expect(replay.replayed).toBe(true);
+      expect(replay.pendingStatusApplication).toBe(true);
+      expect(replay.event.id).toBe(first.event.id);
+
+      await applyStatusEventEffect(db, ws.workspaceId, alice.agentId, replay.event.id, 'blocked');
+
+      const [agentRow] = await db.select({ status: agents.status }).from(agents).where(eq(agents.id, alice.agentId));
+      expect(agentRow!.status).toBe('blocked');
+
+      // A further replay now sees the completion marker set and must not
+      // report a pending mutation again.
+      const secondReplay = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, idempotencyKey,
+      );
+      expect(secondReplay.replayed).toBe(true);
+      expect(secondReplay.pendingStatusApplication).toBe(false);
+
+      expect(await db.select().from(sessionEvents)).toHaveLength(1);
+    });
+
+    it('reconciles an already-applied pre-marker status without refanout', async () => {
+      const { ws, alice, db } = await seedAgent();
+      const key = 'status-legacy-backfill-1';
+      const first = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, key,
+      );
+
+      // Model the historical route: the status write completed before 0056,
+      // but no completion marker existed yet. Apply the actual migration's
+      // UPDATE against this Node database while leaving its ALTER statements
+      // out because the current test schema already has both columns.
+      await db.update(agents).set({ status: 'blocked' }).where(eq(agents.id, alice.agentId));
+      await db.update(agents).set({
+        statusUpdatedAt: new Date(new Date(first.event.created_at).getTime() + 1_000),
+      }).where(eq(agents.id, alice.agentId));
+      markLegacyStatusEvents(db);
+
+      const replay = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, key,
+      );
+      expect(replay.event.id).toBe(first.event.id);
+      expect(replay.pendingStatusApplication).toBe(true);
+
+      const batches = attachFakeBatch(db);
+      await expect(
+        applyStatusEventEffect(db, ws.workspaceId, alice.agentId, replay.event.id, 'blocked'),
+      ).resolves.toEqual({ claimed: true, mutated: false });
+      expect(batches).toHaveLength(1);
+      const [agentRow] = await db.select({ status: agents.status }).from(agents).where(eq(agents.id, alice.agentId));
+      expect(agentRow!.status).toBe('blocked');
+      const [eventRow] = await db.select({ statusAppliedAt: sessionEvents.statusAppliedAt })
+        .from(sessionEvents).where(eq(sessionEvents.id, first.event.id));
+      expect(eventRow!.statusAppliedAt).not.toBeNull();
+    });
+
+    it('replays an interrupted pre-marker status when current state differs', async () => {
+      const { ws, alice, db } = await seedAgent();
+      const first = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, 'status-legacy-pending-1',
+      );
+      await db.update(agents).set({
+        statusUpdatedAt: new Date(new Date(first.event.created_at).getTime() - 1_000),
+      }).where(eq(agents.id, alice.agentId));
+      markLegacyStatusEvents(db);
+
+      const replay = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, 'status-legacy-pending-1',
+      );
+      expect(replay.pendingStatusApplication).toBe(true);
+      const batches = attachFakeBatch(db);
+      await expect(
+        applyStatusEventEffect(db, ws.workspaceId, alice.agentId, replay.event.id, 'blocked'),
+      ).resolves.toEqual({ claimed: true, mutated: true });
+      expect(batches).toHaveLength(1);
+      const [agentRow] = await db.select({ status: agents.status }).from(agents).where(eq(agents.id, alice.agentId));
+      expect(agentRow!.status).toBe('blocked');
+      const [eventRow] = await db.select({ statusAppliedAt: sessionEvents.statusAppliedAt })
+        .from(sessionEvents).where(eq(sessionEvents.id, first.event.id));
+      expect(eventRow!.statusAppliedAt).not.toBeNull();
+    });
+
+    it('does not clobber a later non-event status writer during legacy replay', async () => {
+      const { ws, alice, db } = await seedAgent();
+      const key = 'status-legacy-later-writer-1';
+      const first = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, key,
+      );
+      const eventAt = new Date(first.event.created_at);
+      await db.update(agents).set({
+        status: 'waiting',
+        statusUpdatedAt: new Date(eventAt.getTime() + 1_000),
+      }).where(eq(agents.id, alice.agentId));
+      markLegacyStatusEvents(db);
+
+      const replay = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, key,
+      );
+      await expect(
+        applyStatusEventEffect(db, ws.workspaceId, alice.agentId, replay.event.id, 'blocked'),
+      ).resolves.toEqual({ claimed: true, mutated: false });
+      const [agentRow] = await db.select({ status: agents.status }).from(agents)
+        .where(eq(agents.id, alice.agentId));
+      expect(agentRow!.status).toBe('waiting');
+    });
+
+    it('does not clobber a later heartbeat/liveness write during legacy replay', async () => {
+      const { ws, alice, db } = await seedAgent();
+      const key = 'status-legacy-heartbeat-1';
+      const first = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, key,
+      );
+      // Put the legacy event in the past, then use the real last_seen writer;
+      // 0056's trigger records that liveness write in status_updated_at.
+      await db.update(sessionEvents).set({
+        createdAt: new Date(Date.now() - 10_000),
+      }).where(eq(sessionEvents.id, first.event.id));
+      await db.update(agents).set({ lastSeen: new Date() }).where(eq(agents.id, alice.agentId));
+      markLegacyStatusEvents(db);
+
+      const replay = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, key,
+      );
+      await expect(
+        applyStatusEventEffect(db, ws.workspaceId, alice.agentId, replay.event.id, 'blocked'),
+      ).resolves.toEqual({ claimed: true, mutated: false });
+      const [agentRow] = await db.select({ status: agents.status }).from(agents)
+        .where(eq(agents.id, alice.agentId));
+      expect(agentRow!.status).toBe('active');
+    });
+
+    it.each([
+      { name: 'same status', status: 'blocked' },
+      { name: 'different status', status: 'waiting' },
+    ])('treats an equal legacy write timestamp conservatively ($name)', async ({ status }) => {
+      const { ws, alice, db } = await seedAgent();
+      const key = `status-legacy-equal-${status}`;
+      const first = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, key,
+      );
+      const eventAt = new Date(first.event.created_at);
+      await db.update(agents).set({
+        status,
+        statusUpdatedAt: eventAt,
+      }).where(eq(agents.id, alice.agentId));
+      markLegacyStatusEvents(db);
+
+      const replay = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, key,
+      );
+      await expect(
+        applyStatusEventEffect(db, ws.workspaceId, alice.agentId, replay.event.id, 'blocked'),
+      ).resolves.toEqual({ claimed: true, mutated: false });
+      const [agentRow] = await db.select({ status: agents.status }).from(agents)
+        .where(eq(agents.id, alice.agentId));
+      expect(agentRow!.status).toBe(status);
+    });
+
+    it('allows only one concurrent legacy replay to recover an older row', async () => {
+      const { ws, alice, db } = await seedAgent();
+      const key = 'status-legacy-race-1';
+      const first = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, key,
+      );
+      await db.update(agents).set({
+        statusUpdatedAt: new Date(new Date(first.event.created_at).getTime() - 1_000),
+      }).where(eq(agents.id, alice.agentId));
+      markLegacyStatusEvents(db);
+
+      const [left, right] = await Promise.all([
+        applyStatusEventEffect(db, ws.workspaceId, alice.agentId, first.event.id, 'blocked'),
+        applyStatusEventEffect(db, ws.workspaceId, alice.agentId, first.event.id, 'blocked'),
+      ]);
+      expect([left.claimed, right.claimed].sort()).toEqual([false, true]);
+      expect([left.mutated, right.mutated].sort()).toEqual([false, true]);
+      const [agentRow] = await db.select({ status: agents.status }).from(agents)
+        .where(eq(agents.id, alice.agentId));
+      expect(agentRow!.status).toBe('blocked');
+    });
+
+    it('applies the status write and completion marker in a single D1-style batch', async () => {
+      const { ws, alice, db } = await seedAgent();
+      const { event } = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.idle', payload: {} }, 'status-batch-1',
+      );
+      const batches = attachFakeBatch(db);
+
+      await applyStatusEventEffect(db, ws.workspaceId, alice.agentId, event.id, 'idle');
+
+      expect(batches).toHaveLength(1);
+      expect(batches[0]).toHaveLength(2);
+      expectStatementOn(batches[0], 'update', 'agents');
+      expectStatementOn(batches[0], 'update', 'session_events');
+
+      const [agentRow] = await db.select({ status: agents.status }).from(agents).where(eq(agents.id, alice.agentId));
+      expect(agentRow!.status).toBe('idle');
+      const [eventRow] = await db.select({ statusAppliedAt: sessionEvents.statusAppliedAt }).from(sessionEvents).where(eq(sessionEvents.id, event.id));
+      expect(eventRow!.statusAppliedAt).not.toBeNull();
+    });
+
+    it('terminalizes an older pending replay without clobbering a newer applied status', async () => {
+      const { ws, alice, db } = await seedAgent();
+      const old = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, 'status-order-old',
+      );
+      const newer = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.active', payload: {} }, 'status-order-new',
+      );
+
+      const newerEffect = await applyStatusEventEffect(
+        db, ws.workspaceId, alice.agentId, newer.event.id, 'active',
+      );
+      expect(newerEffect).toEqual({ claimed: true, mutated: true });
+
+      const oldReplay = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, 'status-order-old',
+      );
+      expect(oldReplay.pendingStatusApplication).toBe(true);
+      const oldEffect = await applyStatusEventEffect(
+        db, ws.workspaceId, alice.agentId, oldReplay.event.id, 'blocked',
+      );
+      expect(oldEffect).toEqual({ claimed: true, mutated: false });
+
+      const [agentRow] = await db.select({ status: agents.status }).from(agents).where(eq(agents.id, alice.agentId));
+      expect(agentRow!.status).toBe('active');
+      const oldRow = await db.select({ statusAppliedAt: sessionEvents.statusAppliedAt })
+        .from(sessionEvents).where(eq(sessionEvents.id, old.event.id));
+      expect(oldRow[0]!.statusAppliedAt).not.toBeNull();
+    });
+
+    it('preserves newer status ordering when old and new effects race', async () => {
+      const { ws, alice, db } = await seedAgent();
+      const old = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, 'status-order-race-old',
+      );
+      const newer = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.active', payload: {} }, 'status-order-race-new',
+      );
+
+      const [oldEffect, newerEffect] = await Promise.all([
+        applyStatusEventEffect(db, ws.workspaceId, alice.agentId, old.event.id, 'blocked'),
+        applyStatusEventEffect(db, ws.workspaceId, alice.agentId, newer.event.id, 'active'),
+      ]);
+      expect(oldEffect.claimed).toBe(true);
+      expect(newerEffect.claimed).toBe(true);
+      const [agentRow] = await db.select({ status: agents.status }).from(agents).where(eq(agents.id, alice.agentId));
+      expect(agentRow!.status).toBe('active');
+      const rows = await db.select({ statusAppliedAt: sessionEvents.statusAppliedAt })
+        .from(sessionEvents).where(eq(sessionEvents.agentId, alice.agentId));
+      expect(rows.every((row) => row.statusAppliedAt !== null)).toBe(true);
+    });
+
+    it('uses the same ordering fence in a D1-style atomic batch', async () => {
+      const { ws, alice, db } = await seedAgent();
+      const old = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, 'status-order-d1-old',
+      );
+      const newer = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.active', payload: {} }, 'status-order-d1-new',
+      );
+      const batches = attachFakeBatch(db);
+
+      await expect(
+        applyStatusEventEffect(db, ws.workspaceId, alice.agentId, newer.event.id, 'active'),
+      ).resolves.toEqual({ claimed: true, mutated: true });
+      await expect(
+        applyStatusEventEffect(db, ws.workspaceId, alice.agentId, old.event.id, 'blocked'),
+      ).resolves.toEqual({ claimed: true, mutated: false });
+      expect(batches).toHaveLength(2);
+      const [agentRow] = await db.select({ status: agents.status }).from(agents).where(eq(agents.id, alice.agentId));
+      expect(agentRow!.status).toBe('active');
+    });
+
+    it('marks a released agent event complete without emitting status side effects', async () => {
+      const { ws, alice, db } = await seedAgent();
+      await db.update(agents).set({ status: 'released' }).where(eq(agents.id, alice.agentId));
+      const { event } = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.active', payload: {} }, 'status-released-1',
+      );
+
+      const effect = await applyStatusEventEffect(db, ws.workspaceId, alice.agentId, event.id, 'active');
+      expect(effect).toEqual({ claimed: true, mutated: false });
+      const [agentRow] = await db.select({ status: agents.status }).from(agents).where(eq(agents.id, alice.agentId));
+      expect(agentRow!.status).toBe('released');
+      const [eventRow] = await db.select({ statusAppliedAt: sessionEvents.statusAppliedAt })
+        .from(sessionEvents).where(eq(sessionEvents.id, event.id));
+      expect(eventRow!.statusAppliedAt).not.toBeNull();
+      expect(await db.select().from(workspaceEvents).where(and(
+        eq(workspaceEvents.workspaceId, ws.workspaceId),
+        eq(workspaceEvents.type, 'agent.status.active'),
+      ))).toHaveLength(0);
+      expect(await db.select().from(pendingEvents).where(and(
+        eq(pendingEvents.workspaceId, ws.workspaceId),
+        eq(pendingEvents.eventType, 'agent.status.active'),
+      ))).toHaveLength(0);
+    });
+
+    it('does not fan out or enqueue a released agent status through the HTTP route', async () => {
+      const { ws, alice, db } = await seedAgent();
+      await db.update(agents).set({ status: 'released' }).where(eq(agents.id, alice.agentId));
+
+      const response = await stack.app.request('/v1/agents/alice/events', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${ws.workspaceKey}`,
+          'Idempotency-Key': 'status-released-route-1',
+        },
+        body: JSON.stringify({ type: 'status.active', payload: {} }),
+      });
+      expect(response.status).toBe(201);
+      await stack.settle();
+
+      expect(await db.select().from(workspaceEvents).where(and(
+        eq(workspaceEvents.workspaceId, ws.workspaceId),
+        eq(workspaceEvents.type, 'agent.status.active'),
+      ))).toHaveLength(0);
+      expect(await db.select().from(pendingEvents).where(and(
+        eq(pendingEvents.workspaceId, ws.workspaceId),
+        eq(pendingEvents.eventType, 'agent.status.active'),
+      ))).toHaveLength(0);
+    });
+
+    it('rejects a bare handle with neither atomicity capability rather than silently applying only half the write', async () => {
+      const { ws, alice, db } = await seedAgent();
+      const { event } = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, 'status-bare-1',
+      );
+      stripCapability(db);
+
+      await expect(
+        applyStatusEventEffect(db, ws.workspaceId, alice.agentId, event.id, 'blocked'),
+      ).rejects.toThrow('Atomic write capability required');
+
+      const [agentRow] = await db.select({ status: agents.status }).from(agents).where(eq(agents.id, alice.agentId));
+      expect(agentRow!.status).not.toBe('blocked');
+    });
+
+    it('resolves genuinely concurrent keyed status posts to one applied status without interleaving', async () => {
+      const ws = await createWorkspace(stack.app, 'status-race-ws');
+      const runner = await registerAgent(stack.app, ws.workspaceKey, 'runner');
+      const headers = {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+        'Idempotency-Key': 'status-race-1',
+      };
+      const body = JSON.stringify({ type: 'status.waiting', payload: {} });
+      const postEvent = () => stack.app.request('/v1/agents/runner/events', { method: 'POST', headers, body });
+
+      const [first, second] = await Promise.all([postEvent(), postEvent()]);
+      expect([first.status, second.status]).toEqual([201, 201]);
+
+      const db = stack.runtime.handle.db as unknown as EngineDb;
+      const [agentRow] = await db.select({ status: agents.status }).from(agents).where(eq(agents.id, runner.agentId));
+      expect(agentRow!.status).toBe('waiting');
+      expect(await db.select().from(sessionEvents).where(eq(sessionEvents.agentId, runner.agentId))).toHaveLength(1);
+    });
+
+    it('lets only the atomic completion winner emit status side effects', async () => {
+      const ws = await createWorkspace(stack.app, 'status-side-effect-race-ws');
+      const runner = await registerAgent(stack.app, ws.workspaceKey, 'runner');
+      const subscription = await stack.app.request('/v1/subscriptions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+        body: JSON.stringify({ events: ['*'], url: 'http://127.0.0.1:1/hook' }),
+      });
+      expect(subscription.status).toBe(201);
+
+      const db = stack.runtime.handle.db as unknown as EngineDb;
+      const handle = db as EngineDb & TransactionCapability;
+      const originalWithTransaction = handle.withTransaction.bind(db);
+      let releaseFirstTransaction!: () => void;
+      const firstTransactionDelayed = new Promise<void>((resolve) => { releaseFirstTransaction = resolve; });
+      let delayed = false;
+      handle.withTransaction = async (fn) => {
+        if (!delayed) {
+          delayed = true;
+          await firstTransactionDelayed;
+        }
+        return originalWithTransaction(fn);
+      };
+
+      const headers = {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+        'Idempotency-Key': 'status-side-effect-race-1',
+      };
+      const body = JSON.stringify({ type: 'status.waiting', payload: {} });
+      const postEvent = () => stack.app.request('/v1/agents/runner/events', { method: 'POST', headers, body });
+      const firstPost = postEvent();
+      // Ensure the second request reaches its pending-status path while the
+      // first writer is paused, rather than relying on scheduler luck.
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const secondPost = postEvent();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      releaseFirstTransaction();
+      const [first, second] = await Promise.all([firstPost, secondPost]);
+      expect([first.status, second.status]).toEqual([201, 201]);
+      await stack.settle();
+      handle.withTransaction = originalWithTransaction;
+
+      const matchingWorkspaceEvents = await db.select().from(workspaceEvents).where(and(
+        eq(workspaceEvents.workspaceId, ws.workspaceId),
+        eq(workspaceEvents.type, 'agent.status.waiting'),
+      ));
+      const matchingOutboxRows = await db.select().from(pendingEvents).where(and(
+        eq(pendingEvents.workspaceId, ws.workspaceId),
+        eq(pendingEvents.eventType, 'agent.status.waiting'),
+      ));
+      expect(matchingWorkspaceEvents).toHaveLength(1);
+      expect(matchingOutboxRows).toHaveLength(1);
+      expect(await db.select().from(sessionEvents).where(eq(sessionEvents.agentId, runner.agentId))).toHaveLength(1);
     });
   });
 });
