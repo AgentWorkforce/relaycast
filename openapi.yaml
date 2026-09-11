@@ -5500,6 +5500,16 @@ paths:
           required: true
           schema:
             type: string
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: >-
+            Stable caller-generated key for retries. Within one workspace and agent, an identical
+            request replays the original event (with `Idempotency-Replayed: true`) instead of
+            appending another event. Reusing a key with a different payload returns 409.
+          schema:
+            type: string
+            maxLength: 255
       requestBody:
         required: true
         content:
@@ -5520,6 +5530,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid Idempotency-Key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Idempotency-Key was reused with a different payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     get:
       summary: List agent session events
       description: List recorded session events for an agent. Observer tokens require `activity:read`; `agent_ids` and `created_after` filters apply.

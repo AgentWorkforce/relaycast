@@ -71,10 +71,27 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
   // 0050 may add these redundant named lookup indexes, but must not alter any
   // original constraint (including a lookup that already existed via 0049).
   expect(after.filter(table => table.name !== 'maintenance_cursors' || before.some(original => original.name === table.name))
-    .map(table => ({ ...table, uniqueIndexes: table.uniqueIndexes.filter(index =>
-    !['idx_deliveries_id_lookup', 'idx_read_receipts_retention'].includes(index.name)
-      || before.find(original => original.name === table.name)!.uniqueIndexes.some(original => original.name === index.name),
-  ) }))).toEqual(before);
+    .map(table => {
+      const original = before.find(candidate => candidate.name === table.name);
+      // 0055 adds optional event identity columns and their index after the
+      // compact-maintenance path. Keep this regression guard focused on the
+      // pre-existing constraints while still checking that none was dropped.
+      if (table.name === 'session_events' && original) {
+        return {
+          ...table,
+          sql: original.sql,
+          uniqueIndexes: table.uniqueIndexes.filter(index =>
+            original.uniqueIndexes.some(previous => previous.name === index.name)),
+        };
+      }
+      return {
+        ...table,
+        uniqueIndexes: table.uniqueIndexes.filter(index =>
+          !['idx_deliveries_id_lookup', 'idx_read_receipts_retention'].includes(index.name)
+            || original?.uniqueIndexes.some(previous => previous.name === index.name),
+        ),
+      };
+    })).toEqual(before);
 }
 
 describe('compact maintenance migration path', () => {

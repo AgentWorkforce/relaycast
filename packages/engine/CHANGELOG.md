@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- `POST /v1/agents/:name/events` durably replays identical `Idempotency-Key` retries and rejects conflicting payload reuse.
+
 ## [8.8.0] - 2026-09-10
 
 ### Added

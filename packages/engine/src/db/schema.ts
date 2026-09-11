@@ -1147,11 +1147,16 @@ export const sessionEvents = sqliteTable(
       .references(() => agents.id, { onDelete: 'cascade' }),
     type: text('type').notNull(),
     payload: text('payload', { mode: 'json' }).notNull().default({}),
+    // Optional stable identity for callers that may retry after losing the
+    // response. NULL keeps the legacy append-only contract for unkeyed calls.
+    idempotencyKeyHash: text('idempotency_key_hash'),
+    requestDigest: text('request_digest'),
     sequence: integer('sequence').notNull().default(0),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   },
   (table) => [
     uniqueIndex('session_events_agent_sequence_unique').on(table.agentId, table.sequence),
+    uniqueIndex('session_events_agent_idempotency_unique').on(table.workspaceId, table.agentId, table.idempotencyKeyHash),
     index('idx_session_events_agent').on(table.agentId, table.createdAt),
     index('idx_session_events_workspace').on(table.workspaceId, table.createdAt),
     index('idx_session_events_type').on(table.workspaceId, table.type, table.createdAt),

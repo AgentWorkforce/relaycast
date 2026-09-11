@@ -849,6 +849,23 @@ impl RelayCast {
             .await
     }
 
+    /// Emit a session event with a durable identity. Reuse the same key when
+    /// retrying after an ambiguous response so Relaycast replays one event.
+    pub async fn emit_agent_event_with_idempotency_key(
+        &self,
+        name: &str,
+        request: EmitSessionEventRequest,
+        idempotency_key: impl Into<String>,
+    ) -> Result<SessionEvent> {
+        self.client
+            .post(
+                &format!("/v1/agents/{}/events", urlencoding::encode(name)),
+                Some(request),
+                Some(RequestOptions::with_idempotency_key(idempotency_key)),
+            )
+            .await
+    }
+
     /// List recorded session events for an agent.
     pub async fn list_agent_events(
         &self,

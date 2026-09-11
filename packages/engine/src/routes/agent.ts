@@ -847,6 +847,9 @@ agentRoutes.post(
 
       const { type, payload } = parsed.data;
 
+      const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
+      if (idempotencyError) return jsonError(c, 'invalid_idempotency_key', idempotencyError, 400);
+
       if (!sessionEventEngine.isValidEventType(type)) {
         return jsonError(c, 'invalid_event_type', `Unknown event type: ${type}`, 400);
       }
@@ -877,13 +880,22 @@ agentRoutes.post(
         }
       }
 
-      const event = await sessionEventEngine.recordSessionEvent(db, workspace.id, agentRecord.id, {
-        type,
-        payload,
-      });
+      const recorded = idempotencyKey
+        ? await sessionEventEngine.recordSessionEventWithIdempotency(
+          db,
+          workspace.id,
+          agentRecord.id,
+          { type, payload },
+          idempotencyKey,
+        )
+        : {
+          event: await sessionEventEngine.recordSessionEvent(db, workspace.id, agentRecord.id, { type, payload }),
+          replayed: false,
+        };
+      const { event, replayed } = recorded;
 
       // Update agent status after the event is durably written
-      if (type.startsWith('status.')) {
+      if (!replayed && type.startsWith('status.')) {
         const resolved = sessionEventEngine.resolveStatusFromEvent(type);
         const newStatus = resolved ?? (payload.status as string);
         await agentEngine.updateAgent(db, workspace.id, name, { status: newStatus });
@@ -903,7 +915,7 @@ agentRoutes.post(
         });
       }
 
-      if (!type.startsWith('status.')) {
+      if (!replayed && !type.startsWith('status.')) {
         const { type: _sessionEventType, ...eventWithoutType } = event;
         const eventData = { agent_name: name, ...eventWithoutType };
         runInBackground(c, fanoutToWorkspace(c, `harness.${type}`, eventData), `fanout harness.${type}`);
@@ -914,7 +926,7 @@ agentRoutes.post(
         });
       }
 
-      return jsonCreated(c, event);
+      return jsonIdempotentOk(c, { status: 201, data: event, replayed });
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

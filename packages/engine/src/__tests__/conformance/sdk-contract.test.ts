@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { deliverEvent } from '../../engine/eventDelivery.js';
-import { actionInvocations, webhooks } from '../../db/schema.js';
+import { actionInvocations, sessionEvents, webhooks } from '../../db/schema.js';
 import {
   makeNodeStack,
   createWorkspace,
@@ -862,6 +862,65 @@ describe('SDK v8 service contract', () => {
       agent_name: 'runner',
       payload: { type: 'inner.tool', tool: 'build' },
     });
+  });
+
+  it('replays keyed harness events after a lost response and rejects payload changes', async () => {
+    const ws = await createWorkspace(stack.app, 'sdk-event-idempotency-ws');
+    const runner = await registerAgent(stack.app, ws.workspaceKey, 'runner');
+    const headers = {
+      'content-type': 'application/json',
+      authorization: `Bearer ${ws.workspaceKey}`,
+      'Idempotency-Key': 'worker-exit-generation-1',
+    };
+    const body = JSON.stringify({ type: 'error', payload: { code: 'worker_exit', generation: 1 } });
+
+    // Treat the first response as lost: the durable event is still the source
+    // of truth for the subsequent caller retry.
+    const first = await stack.app.request('/v1/agents/runner/events', {
+      method: 'POST', headers, body,
+    });
+    expect(first.status).toBe(201);
+    const firstBody = await first.json() as { data: { id: string; sequence: number } };
+
+    const replay = await stack.app.request('/v1/agents/runner/events', {
+      method: 'POST', headers, body,
+    });
+    expect(replay.status).toBe(201);
+    expect(replay.headers.get('Idempotency-Replayed')).toBe('true');
+    const replayBody = await replay.json() as { data: { id: string; sequence: number } };
+    expect(replayBody).toEqual(firstBody);
+
+    const conflict = await stack.app.request('/v1/agents/runner/events', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ type: 'error', payload: { code: 'different' } }),
+    });
+    expect(conflict.status).toBe(409);
+    await expect(conflict.json()).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'idempotency_key_reused' },
+    });
+
+    const unkeyedHeaders = {
+      'content-type': 'application/json',
+      authorization: `Bearer ${ws.workspaceKey}`,
+    };
+    const unkeyedBody = JSON.stringify({ type: 'log', payload: { message: 'legacy' } });
+    const unkeyed = await Promise.all([
+      stack.app.request('/v1/agents/runner/events', { method: 'POST', headers: unkeyedHeaders, body: unkeyedBody }),
+      stack.app.request('/v1/agents/runner/events', { method: 'POST', headers: unkeyedHeaders, body: unkeyedBody }),
+    ]);
+    expect(unkeyed.map((response) => response.status)).toEqual([201, 201]);
+
+    const runnerEvents = await stack.runtime.deps.db
+      .select({ id: sessionEvents.id, idempotencyKeyHash: sessionEvents.idempotencyKeyHash })
+      .from(sessionEvents)
+      .where(and(
+        eq(sessionEvents.workspaceId, ws.workspaceId),
+        eq(sessionEvents.agentId, runner.agentId),
+      ));
+    expect(runnerEvents).toHaveLength(3);
+    expect(runnerEvents.filter((event) => event.idempotencyKeyHash !== null)).toHaveLength(1);
   });
 
   it('emits canonical message.reacted events for reactions', async () => {

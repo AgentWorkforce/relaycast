@@ -2,6 +2,8 @@ import { eq, and, desc, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { sessionEvents } from '../db/schema.js';
 import { generateId } from './snowflake.js';
+import { sha256Hex } from '../lib/crypto.js';
+import { codedError } from '../lib/httpError.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -86,6 +88,89 @@ export async function recordSessionEvent(
     })
     .returning();
 
+  return toPublicEvent(event, agentId);
+}
+
+/**
+ * Record an event with a durable caller-provided identity.
+ *
+ * The key is hashed before persistence and scoped by workspace + agent in the
+ * unique index. The request digest is retained beside the event so reusing a
+ * key with a different event cannot accidentally replay the first event.
+ */
+export async function recordSessionEventWithIdempotency(
+  db: Db,
+  workspaceId: string,
+  agentId: string,
+  data: {
+    type: SessionEventType;
+    payload: Record<string, unknown>;
+  },
+  idempotencyKey: string,
+): Promise<{ event: ReturnType<typeof toPublicEvent>; replayed: boolean }> {
+  const [idempotencyKeyHash, requestDigest] = await Promise.all([
+    sha256Hex(`session-event-key-v1\0${idempotencyKey}`),
+    sha256Hex(`session-event-payload-v1\0${canonicalJson({ type: data.type, payload: data.payload })}`),
+  ]);
+  const id = `evt_${generateId()}`;
+
+  // The insert and the unique identity claim are one durable operation. A
+  // conflict is followed by a scoped lookup so concurrent retries return the
+  // winner's exact event rather than allocating a second sequence number.
+  const [created] = await db
+    .insert(sessionEvents)
+    .values({
+      id,
+      workspaceId,
+      agentId,
+      type: data.type,
+      payload: data.payload,
+      idempotencyKeyHash,
+      requestDigest,
+      sequence: sql<number>`(SELECT COALESCE(MAX(sequence), 0) + 1 FROM session_events WHERE agent_id = ${agentId})`,
+    })
+    .onConflictDoNothing()
+    .returning();
+
+  if (created) return { event: toPublicEvent(created, agentId), replayed: false };
+
+  const [existing] = await db
+    .select()
+    .from(sessionEvents)
+    .where(and(
+      eq(sessionEvents.workspaceId, workspaceId),
+      eq(sessionEvents.agentId, agentId),
+      eq(sessionEvents.idempotencyKeyHash, idempotencyKeyHash),
+    ));
+  if (!existing) {
+    throw codedError(
+      'The event idempotency claim could not be read after a storage conflict; retry with the same Idempotency-Key',
+      'idempotency_unavailable',
+      503,
+    );
+  }
+  if (existing.requestDigest !== requestDigest) {
+    throw codedError(
+      'Idempotency-Key was reused with a different request payload',
+      'idempotency_key_reused',
+      409,
+    );
+  }
+  return { event: toPublicEvent(existing, agentId), replayed: true };
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value as Record<string, unknown>)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function toPublicEvent(event: typeof sessionEvents.$inferSelect, agentId: string) {
   return {
     id: event.id,
     agent_id: agentId,
