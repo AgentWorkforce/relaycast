@@ -378,6 +378,135 @@ describe('observer-authorized node history pagination (#422 follow-up)', () => {
     expect(maxQueriesPerPage).toBeLessThan(10);
   });
 
+  /**
+   * Regression: `visibleActiveAgentCounts` used `inArray(agentNodeBindings.nodeId, nodeIds)`,
+   * which binds one SQL parameter per node id. The legacy/default (unfiltered,
+   * unpaginated) observer path can return hundreds of visible nodes in a
+   * single query, and D1 caps a statement at 100 bound parameters — this
+   * would either throw or silently truncate on a real workspace. The fix
+   * binds `nodeIds` as a single JSON-array parameter via `json_each` instead,
+   * so the bind count stays constant no matter how many nodes are visible.
+   */
+  it('computes active-agent counts for 500+ visible nodes on the legacy observer path without exceeding a D1-safe bind count', async () => {
+    const ws = await createWorkspace(stack.app, 'observer-legacy-wide-ws');
+    const allowed = await registerAgent(stack.app, ws.workspaceKey, 'observer-legacy-wide-allowed');
+    const hidden = await registerAgent(stack.app, ws.workspaceKey, 'observer-legacy-wide-hidden');
+
+    const NODE_COUNT = 520;
+    const { authorizedNames } = await seedInterleavedNodes(ws, NODE_COUNT, allowed.agentId, hidden.agentId);
+    const observerToken = await createObserverToken(ws.workspaceKey, [allowed.agentId]);
+
+    const sqlite = stack.runtime.handle.sqlite;
+    const originalPrepare = sqlite.prepare.bind(sqlite);
+    let maxBindParams = 0;
+    let queryCount = 0;
+    sqlite.prepare = ((sqlText: string) => {
+      queryCount++;
+      // Bound JSON-array params never expand into per-element `?` markers,
+      // so every statement's placeholder count stays well under D1's 100
+      // parameter ceiling regardless of NODE_COUNT.
+      const paramCount = (sqlText.match(/\?/g) ?? []).length;
+      maxBindParams = Math.max(maxBindParams, paramCount);
+      return originalPrepare(sqlText);
+    }) as typeof sqlite.prepare;
+
+    let res: Response;
+    try {
+      res = await stack.app.request('/v1/nodes', {
+        headers: { authorization: `Bearer ${observerToken}` },
+      });
+    } finally {
+      sqlite.prepare = originalPrepare;
+    }
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: Array<{ name: string; active_agents: number }> };
+    const visibleObsNodes = body.data.filter((n) => n.name.startsWith('obs-'));
+    expect(new Set(visibleObsNodes.map((n) => n.name))).toEqual(new Set(authorizedNames));
+    for (const node of visibleObsNodes) expect(node.active_agents).toBe(1);
+
+    expect(maxBindParams).toBeLessThan(100); // D1 parameter ceiling
+    // No N+1: a small, fixed number of queries regardless of NODE_COUNT
+    // (roster query + one bounded active-agent-counts query, plus setup).
+    expect(queryCount).toBeLessThan(10);
+  });
+
+  it('handles a high-cardinality legacy observer request (500+ authorized agent ids) within a single bounded query', async () => {
+    const ws = await createWorkspace(stack.app, 'observer-legacy-wide-agents-ws');
+    const db = stack.runtime.deps.db;
+    const now = new Date();
+
+    // Insert agent rows directly (bypassing the HTTP registration flow,
+    // which is rate-limited well below 500 requests/test) purely for
+    // fixture speed; only `agentId` needs to round-trip through the
+    // observer token's `agent_ids` filter and the SQL join.
+    const allowedAgentIds = Array.from({ length: 500 }, (_, i) => `agent_obs_legacy_wide_${ws.workspaceId}_${i}`);
+    await db.insert(agents).values(
+      allowedAgentIds.map((id, i) => ({
+        id,
+        workspaceId: ws.workspaceId,
+        name: `observer-legacy-wide-agent-${i}`,
+        tokenHash: `obs-legacy-wide-agent-token-hash-${ws.workspaceId}-${i}`,
+      })),
+    );
+    const hiddenAgentId = `agent_obs_legacy_wide_${ws.workspaceId}_hidden`;
+    await db.insert(agents).values({
+      id: hiddenAgentId,
+      workspaceId: ws.workspaceId,
+      name: 'observer-legacy-wide-agents-hidden',
+      tokenHash: `obs-legacy-wide-agents-hidden-token-hash-${ws.workspaceId}`,
+    });
+
+    const authorizedNames: string[] = [];
+    for (let i = 0; i < 40; i++) {
+      const id = `node_obs_legacy_agents_${ws.workspaceId}_${String(i).padStart(4, '0')}`;
+      const name = `wide-agents-${i}`;
+      const allowed = i % 2 === 0;
+      await db.insert(nodes).values({
+        id,
+        workspaceId: ws.workspaceId,
+        name,
+        tokenHash: `obs-legacy-wide-agents-token-hash-${ws.workspaceId}-${i}`,
+        status: 'offline',
+        createdAt: now,
+      });
+      await db.insert(agentNodeBindings).values({
+        id: `anb_obs_legacy_agents_${ws.workspaceId}_${i}`,
+        workspaceId: ws.workspaceId,
+        agentId: allowed ? allowedAgentIds[i % allowedAgentIds.length] : hiddenAgentId,
+        nodeId: id,
+        status: 'active',
+      });
+      if (allowed) authorizedNames.push(name);
+    }
+
+    const observerToken = await createObserverToken(ws.workspaceKey, allowedAgentIds);
+
+    const sqlite = stack.runtime.handle.sqlite;
+    const originalPrepare = sqlite.prepare.bind(sqlite);
+    let maxBindParams = 0;
+    sqlite.prepare = ((sqlText: string) => {
+      const paramCount = (sqlText.match(/\?/g) ?? []).length;
+      maxBindParams = Math.max(maxBindParams, paramCount);
+      return originalPrepare(sqlText);
+    }) as typeof sqlite.prepare;
+
+    let res: Response;
+    try {
+      res = await stack.app.request('/v1/nodes', {
+        headers: { authorization: `Bearer ${observerToken}` },
+      });
+    } finally {
+      sqlite.prepare = originalPrepare;
+    }
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: Array<{ name: string }> };
+    const visible = body.data.filter((n) => n.name.startsWith('wide-agents-'));
+    expect(new Set(visible.map((n) => n.name))).toEqual(new Set(authorizedNames));
+    expect(maxBindParams).toBeLessThan(100);
+  });
+
   it('returns no rows and a null next_cursor when the observer is authorized for nothing on the page', async () => {
     const ws = await createWorkspace(stack.app, 'observer-history-empty-ws');
     const allowed = await registerAgent(stack.app, ws.workspaceKey, 'observer-allowed-agent-2');

@@ -2098,13 +2098,20 @@ async function visibleActiveAgentCounts(
 ): Promise<Map<string, number>> {
   const counts = new Map<string, number>();
   if (nodeIds.length === 0 || agentIds.length === 0) return counts;
+  // Both `nodeIds` and `agentIds` are bound as single JSON-array parameters
+  // (via `json_each`) rather than expanded through `inArray`/`IN (...)`,
+  // which would otherwise emit one bind parameter per id. A history page or
+  // a high-cardinality legacy (unpaginated) observer request can carry
+  // hundreds of node ids, and D1 caps a statement at 100 bound parameters —
+  // two JSON binds keep this query's parameter count constant regardless of
+  // how many nodes or agents are being counted.
   const rows = await db
     .select({ nodeId: agentNodeBindings.nodeId, count: sql<number>`count(*)` })
     .from(agentNodeBindings)
     .where(and(
       eq(agentNodeBindings.workspaceId, workspaceId),
       eq(agentNodeBindings.status, 'active'),
-      inArray(agentNodeBindings.nodeId, nodeIds),
+      sql`${agentNodeBindings.nodeId} IN (SELECT value FROM json_each(${JSON.stringify(nodeIds)}))`,
       sql`${agentNodeBindings.agentId} IN (SELECT value FROM json_each(${JSON.stringify(agentIds)}))`,
     ))
     .groupBy(agentNodeBindings.nodeId);
