@@ -101,7 +101,6 @@ function strictExternalUrl(c: Parameters<typeof jsonError>[0]): boolean {
   return environment !== 'test';
 }
 
-type NodeRosterEntry = Awaited<ReturnType<typeof nodeEngine.listNodes>>['nodes'][number];
 type NodeAgentBinding = NonNullable<Awaited<ReturnType<typeof nodeEngine.listNodeAgents>>>[number];
 type ObserverContext = ReturnType<typeof getObserverTokenFromContext>;
 
@@ -113,22 +112,10 @@ function filterNodeAgentsForObserver(observer: ObserverContext, bindings: NodeAg
   return bindings.filter((binding) => observerAllowsAgent(observer, binding.agent_id));
 }
 
-async function filterNodesForObserver(
-  db: Parameters<typeof nodeEngine.listNodes>[0],
-  workspaceId: string,
-  observer: ObserverContext,
-  roster: NodeRosterEntry[],
-): Promise<NodeRosterEntry[]> {
-  if (!observerHasAgentFilter(observer)) return roster;
-  const visible: NodeRosterEntry[] = [];
-  for (const node of roster) {
-    const bindings = await nodeEngine.listNodeAgents(db, workspaceId, node.name);
-    const visibleBindings = bindings ? filterNodeAgentsForObserver(observer, bindings) : [];
-    if (visibleBindings.length > 0) {
-      visible.push({ ...node, active_agents: visibleBindings.length });
-    }
-  }
-  return visible;
+/** The observer's authorized agent ids, or `undefined` when unfiltered/absent. */
+function observerAgentIdsFilter(observer: ObserverContext): string[] | undefined {
+  if (!observer) return undefined;
+  return normalizeObserverFilters(observer.filters).agent_ids;
 }
 
 // POST /v1/nodes - enroll or rotate a node token (workspace-key only)
@@ -226,14 +213,13 @@ nodeRoutes.get('/nodes', requireWorkspaceRead('nodes:read'), rateLimit, async (c
       history,
       cursor: c.req.query('cursor') ?? null,
       limit,
+      // Pushed into the same SQL query as every other filter, so hidden nodes
+      // are excluded from row selection before the page/cursor is computed —
+      // see `observerNodeVisibilityCondition` — instead of one
+      // `listNodeAgents` query per roster row followed by an app-side filter.
+      observerAgentIds: observerAgentIdsFilter(getObserverTokenFromContext(c)),
     });
-    const visible = await filterNodesForObserver(
-      db,
-      workspace.id,
-      getObserverTokenFromContext(c),
-      page.nodes,
-    );
-    return jsonOk(c, history ? { nodes: visible, next_cursor: page.nextCursor } : visible);
+    return jsonOk(c, history ? { nodes: page.nodes, next_cursor: page.nextCursor } : page.nodes);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }

@@ -2026,6 +2026,22 @@ export interface ListNodesFilters {
   cursor?: string | null;
   /** Page size for `history`, clamped to [1, NODE_LIST_HISTORY_MAX_LIMIT]. */
   limit?: number;
+  /**
+   * Restricts the result to nodes with at least one active binding to one of
+   * these agent ids — the SQL-pushed form of an observer token's `agent_ids`
+   * filter. Applied as a WHERE condition alongside `name`/`capability`/`status`,
+   * *before* the cursor/limit page is computed, so:
+   *   - a hidden node's id is never selected into the page, let alone into
+   *     `nextCursor` — an observer can't learn a hidden node's id or presence
+   *     by watching the cursor advance past it;
+   *   - the page-then-filter ordering can't shrink a page's visible count
+   *     below `limit` while still reporting more rows exist, and can't stop
+   *     paging while an authorized row beyond the current page is unvisited —
+   *     the authorization predicate is part of what "the next row" means.
+   * An empty array (as opposed to undefined) is a real, deliberate filter
+   * that authorizes nothing.
+   */
+  observerAgentIds?: string[];
 }
 
 export interface ListNodesHistoryPage {
@@ -2033,10 +2049,67 @@ export interface ListNodesHistoryPage {
   nextCursor: string | null;
 }
 
-/** Pushes a capability match (string or `{ name }` shape) into a SQL EXISTS clause. */
+/**
+ * Pushes a capability match (string or `{ name }` shape) into a SQL EXISTS
+ * clause. `cap.value` is only a valid `json_extract` target when the array
+ * element is itself a JSON object; a legacy/primitive string element (the
+ * common shape) is not valid JSON on its own (e.g. `read` vs `"read"`), and
+ * `json_extract` raises `malformed JSON` if evaluated against it. Gate the
+ * object-shape branch behind `json_valid` so `AND` short-circuits before
+ * `json_extract` ever sees a bare string, leaving the string-equality branch
+ * to match primitive capabilities exactly as before.
+ */
 function capabilityMatchCondition(capability: string) {
   return sql`EXISTS (SELECT 1 FROM json_each(${nodes.capabilities}) AS cap
-    WHERE cap.value = ${capability} OR json_extract(cap.value, '$.name') = ${capability})`;
+    WHERE cap.value = ${capability}
+       OR (json_valid(cap.value) AND json_extract(cap.value, '$.name') = ${capability}))`;
+}
+
+/**
+ * Pushes an observer token's `agent_ids` filter into a SQL EXISTS clause: a
+ * node is visible only if it has at least one *active* binding to one of the
+ * authorized agent ids. `agentIds: []` (filter present but empty) matches no
+ * node, mirroring `observerAllowsAgent`'s fail-closed behavior for an empty
+ * allow-list rather than falling open.
+ */
+function observerNodeVisibilityCondition(agentIds: string[]) {
+  if (agentIds.length === 0) return sql`0`;
+  const values = sql.join(agentIds.map((id) => sql`${id}`), sql`, `);
+  return sql`EXISTS (
+    SELECT 1 FROM ${agentNodeBindings} AS b
+    WHERE b.node_id = ${nodes.id}
+      AND b.status = 'active'
+      AND b.agent_id IN (${values})
+  )`;
+}
+
+/**
+ * Active-agent counts for a page of nodes, scoped to an observer's
+ * authorized agent ids, in one query — not one `listNodeAgents` query per
+ * node. Used to override each visible node's `active_agents` with the count
+ * the observer is actually authorized to see (mirrors the prior per-node
+ * `filterNodeAgentsForObserver(...).length` behavior).
+ */
+async function visibleActiveAgentCounts(
+  db: Db,
+  workspaceId: string,
+  nodeIds: string[],
+  agentIds: string[],
+): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  if (nodeIds.length === 0 || agentIds.length === 0) return counts;
+  const rows = await db
+    .select({ nodeId: agentNodeBindings.nodeId, count: sql<number>`count(*)` })
+    .from(agentNodeBindings)
+    .where(and(
+      eq(agentNodeBindings.workspaceId, workspaceId),
+      eq(agentNodeBindings.status, 'active'),
+      inArray(agentNodeBindings.nodeId, nodeIds),
+      inArray(agentNodeBindings.agentId, agentIds),
+    ))
+    .groupBy(agentNodeBindings.nodeId);
+  for (const row of rows) counts.set(row.nodeId, Number(row.count));
+  return counts;
 }
 
 /** Liveness predicate mirroring {@link isNodeLive}, pushed into SQL. */
@@ -2067,13 +2140,25 @@ export async function listNodes(
   if (filters.name) conditions.push(eq(nodes.name, filters.name));
   if (filters.capability) conditions.push(capabilityMatchCondition(filters.capability));
   if (filters.status) conditions.push(livenessCondition(filters.status, now));
+  // Observer authorization is a WHERE condition, evaluated in the same query
+  // as every other filter and therefore before pagination/cursor computation
+  // below — a hidden node is excluded from row selection entirely, so it can
+  // never land in `nextCursor`, and cursor advancement always tracks "the
+  // next authorized row" rather than "the next row, authorized or not".
+  if (filters.observerAgentIds) conditions.push(observerNodeVisibilityCondition(filters.observerAgentIds));
 
   if (!filters.history) {
     // Legacy/default shape: a bare array, unpaginated, matching every caller
     // that predates the history/status selector. `name`/`capability`/`status`
     // are still evaluated in SQL instead of after a full-table fetch.
     const rows = await db.select().from(nodes).where(and(...conditions));
-    return { nodes: rows.map((row) => publicNode(row, now.getTime())), nextCursor: null };
+    const page = rows.map((row) => publicNode(row, now.getTime()));
+    if (!filters.observerAgentIds) return { nodes: page, nextCursor: null };
+    const counts = await visibleActiveAgentCounts(db, workspaceId, rows.map((row) => row.id), filters.observerAgentIds);
+    return {
+      nodes: page.map((node) => ({ ...node, active_agents: counts.get(node.id) ?? 0 })),
+      nextCursor: null,
+    };
   }
 
   if (filters.cursor) conditions.push(gt(nodes.id, filters.cursor));
@@ -2089,7 +2174,13 @@ export async function listNodes(
     .limit(limit + 1);
   const page = rows.slice(0, limit);
   const nextCursor = rows.length > limit ? page[page.length - 1].id : null;
-  return { nodes: page.map((row) => publicNode(row, now.getTime())), nextCursor };
+  const publicPage = page.map((row) => publicNode(row, now.getTime()));
+  if (!filters.observerAgentIds) return { nodes: publicPage, nextCursor };
+  const counts = await visibleActiveAgentCounts(db, workspaceId, page.map((row) => row.id), filters.observerAgentIds);
+  return {
+    nodes: publicPage.map((node) => ({ ...node, active_agents: counts.get(node.id) ?? 0 })),
+    nextCursor,
+  };
 }
 
 export async function getPublicNode(db: Db, workspaceId: string, name: string) {
