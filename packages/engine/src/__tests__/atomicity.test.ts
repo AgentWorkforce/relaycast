@@ -17,7 +17,9 @@ import {
   messageLogs,
   messages,
   readReceipts,
+  pendingEvents,
   sessionEvents,
+  workspaceEvents,
 } from '../db/schema.js';
 import { postMessage } from '../engine/message.js';
 import { sendDm } from '../engine/dm.js';
@@ -653,6 +655,62 @@ describe('atomic write paths', () => {
       const db = stack.runtime.handle.db as unknown as EngineDb;
       const [agentRow] = await db.select({ status: agents.status }).from(agents).where(eq(agents.id, runner.agentId));
       expect(agentRow!.status).toBe('waiting');
+      expect(await db.select().from(sessionEvents).where(eq(sessionEvents.agentId, runner.agentId))).toHaveLength(1);
+    });
+
+    it('lets only the atomic completion winner emit status side effects', async () => {
+      const ws = await createWorkspace(stack.app, 'status-side-effect-race-ws');
+      const runner = await registerAgent(stack.app, ws.workspaceKey, 'runner');
+      const subscription = await stack.app.request('/v1/subscriptions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+        body: JSON.stringify({ events: ['*'], url: 'http://127.0.0.1:1/hook' }),
+      });
+      expect(subscription.status).toBe(201);
+
+      const db = stack.runtime.handle.db as unknown as EngineDb;
+      const handle = db as EngineDb & TransactionCapability;
+      const originalWithTransaction = handle.withTransaction.bind(db);
+      let releaseFirstTransaction!: () => void;
+      const firstTransactionDelayed = new Promise<void>((resolve) => { releaseFirstTransaction = resolve; });
+      let delayed = false;
+      handle.withTransaction = async (fn) => {
+        if (!delayed) {
+          delayed = true;
+          await firstTransactionDelayed;
+        }
+        return originalWithTransaction(fn);
+      };
+
+      const headers = {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+        'Idempotency-Key': 'status-side-effect-race-1',
+      };
+      const body = JSON.stringify({ type: 'status.waiting', payload: {} });
+      const postEvent = () => stack.app.request('/v1/agents/runner/events', { method: 'POST', headers, body });
+      const firstPost = postEvent();
+      // Ensure the second request reaches its pending-status path while the
+      // first writer is paused, rather than relying on scheduler luck.
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const secondPost = postEvent();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      releaseFirstTransaction();
+      const [first, second] = await Promise.all([firstPost, secondPost]);
+      expect([first.status, second.status]).toEqual([201, 201]);
+      await stack.settle();
+      handle.withTransaction = originalWithTransaction;
+
+      const matchingWorkspaceEvents = await db.select().from(workspaceEvents).where(and(
+        eq(workspaceEvents.workspaceId, ws.workspaceId),
+        eq(workspaceEvents.type, 'agent.status.waiting'),
+      ));
+      const matchingOutboxRows = await db.select().from(pendingEvents).where(and(
+        eq(pendingEvents.workspaceId, ws.workspaceId),
+        eq(pendingEvents.eventType, 'agent.status.waiting'),
+      ));
+      expect(matchingWorkspaceEvents).toHaveLength(1);
+      expect(matchingOutboxRows).toHaveLength(1);
       expect(await db.select().from(sessionEvents).where(eq(sessionEvents.agentId, runner.agentId))).toHaveLength(1);
     });
   });

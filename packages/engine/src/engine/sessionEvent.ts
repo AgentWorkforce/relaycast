@@ -1,4 +1,4 @@
-import { eq, and, ne, desc, sql } from 'drizzle-orm';
+import { eq, and, ne, desc, isNull, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { agents, sessionEvents } from '../db/schema.js';
 import { generateId } from './snowflake.js';
@@ -191,8 +191,8 @@ export async function recordSessionEventWithIdempotency(
 }
 
 /**
- * Apply a `status.*` event's agent-row mutation and mark the event's
- * completion durably, as one atomic unit.
+ * Apply a `status.*` event's agent-row mutation and claim its completion
+ * durably, as one atomic unit.
  *
  * This is the fix for the crash window between "the event/idempotency claim
  * committed" and "the agent's status row is updated": if either statement
@@ -203,7 +203,10 @@ export async function recordSessionEventWithIdempotency(
  * next replay retries the whole mutation — it can never observe "claimed but
  * never applied" as a terminal state.
  *
- * A released agent's row is intentionally not updated (matching
+ * The conditional completion update is also the single-winner claim for
+ * side effects: a replay that loses a concurrent claim gets `false` and must
+ * not fan out or enqueue another webhook. A released agent's row is
+ * intentionally not updated (matching
  * `updateAgentById`), but the event is still marked applied: there is no
  * agent row left to reconcile, and retrying forever would just repeat the
  * same no-op.
@@ -214,8 +217,17 @@ export async function applyStatusEventEffect(
   agentId: string,
   eventId: string,
   status: string,
-): Promise<void> {
-  await runAtomicWrites(db, (tx) => [
+): Promise<boolean> {
+  const [claimResult] = await runAtomicWrites(db, (tx) => [
+    tx.update(sessionEvents)
+      .set({ statusAppliedAt: sql`(unixepoch())` })
+      .where(and(
+        eq(sessionEvents.id, eventId),
+        eq(sessionEvents.workspaceId, workspaceId),
+        eq(sessionEvents.agentId, agentId),
+        isNull(sessionEvents.statusAppliedAt),
+      ))
+      .returning({ id: sessionEvents.id }),
     tx.update(agents)
       .set({ status })
       .where(and(
@@ -223,10 +235,13 @@ export async function applyStatusEventEffect(
         eq(agents.id, agentId),
         ne(agents.status, RELEASED_AGENT_STATUS),
       )),
-    tx.update(sessionEvents)
-      .set({ statusAppliedAt: sql`(unixepoch())` })
-      .where(eq(sessionEvents.id, eventId)),
   ], { requireAtomic: true });
+
+  // The conditional completion update is the single-winner claim. Under both
+  // Node transactions and D1 batches, only the caller that changed NULL to a
+  // timestamp may emit external side effects. The agent update remains in the
+  // same atomic unit, so a failed mutation rolls the claim back for recovery.
+  return Array.isArray(claimResult) && claimResult.length > 0;
 }
 
 function canonicalJson(value: unknown): string {

@@ -7,12 +7,12 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
 
 ### Fixed
 
-- `POST /v1/agents/:name/events` durably replays identical `Idempotency-Key` retries and rejects conflicting payload reuse.
-- `POST /v1/agents/:name/events` applies a `status.*` event's agent status mutation and its completion marker as one atomic write; a replay whose mutation was interrupted (process crash, D1 batch failure) now finishes it instead of returning `201` against a stale agent row. `openapi.yaml` now declares `Idempotency-Replayed` on the `201` response, matching other idempotent endpoints.
+- `listNodes`/`GET /v1/nodes` push `name`, `capability`, and a new `status` (`online`/`offline`) liveness selector into SQL instead of fetching the whole workspace roster and filtering in JS. `history=true` adds a bounded, non-truncating cursor pagination contract (`{ nodes, next_cursor }`, paged via `cursor`/`limit`, capped at 500/page) for explicit full-history reads. Without `history`, the response stays the legacy bare array. Roster entries add `active_agents_stale` (true once a node is offline) so `active_agents` is never read back as authoritative current occupancy. Added `idx_nodes_status_heartbeat` to keep the live-selection query indexed. An observer token's authorized `active_agents` count is computed with bounded, JSON-array-bound SQL joins instead of one `inArray`/`IN (...)` bind per visible node id, keeping every roster query under D1's 100-parameter limit regardless of page size or history/legacy path.
+- `POST /v1/agents/:name/events` durably replays identical `Idempotency-Key` retries and rejects conflicting payload reuse. Status mutations and their completion markers are applied atomically, so an interrupted status retry can finish without returning success against a stale agent row.
 
 ## [8.8.0] - 2026-09-10
 

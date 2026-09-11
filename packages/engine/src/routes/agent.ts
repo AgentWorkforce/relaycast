@@ -897,10 +897,15 @@ agentRoutes.post(
       // never completed (crash between the durable event claim and the agent
       // update) — either way this finishes the interrupted mutation instead
       // of returning 201 against a stale agent row.
+      let statusApplied = false;
       if (pendingStatusApplication && type.startsWith('status.')) {
         const resolved = sessionEventEngine.resolveStatusFromEvent(type);
         const newStatus = resolved ?? (payload.status as string);
-        await sessionEventEngine.applyStatusEventEffect(db, workspace.id, agentRecord.id, event.id, newStatus);
+        statusApplied = await sessionEventEngine.applyStatusEventEffect(db, workspace.id, agentRecord.id, event.id, newStatus);
+      }
+      if (statusApplied) {
+        const resolved = sessionEventEngine.resolveStatusFromEvent(type);
+        const newStatus = resolved ?? (payload.status as string);
         const eventType = type === 'status.changed' ? 'agent.status.changed' : `agent.status.${canonicalStatus(newStatus) ?? newStatus}`;
         const eventData = {
           agent_id: agentRecord.id,

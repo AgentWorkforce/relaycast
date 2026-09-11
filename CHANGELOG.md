@@ -16,12 +16,12 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
 
 ### Fixed
 
-- Keyed agent session events now survive lost responses without duplicate events, while conflicting key reuse returns a typed error.
-- A `status.*` agent session event's status mutation and its durable completion marker now commit atomically, so a crash or retry between the event claim and the status write can no longer leave the agent's status stale behind a 201 response.
+- `GET /v1/nodes` no longer fetches a workspace's entire node history to serve a default listing: `name`, `capability`, and a new `status` liveness selector are now pushed into SQL, and `status=online` returns only fresh-heartbeat live nodes. An explicit `history=true` mode adds bounded, non-truncating cursor pagination for reading full history (e.g. `--all`). `active_agents` is now flagged with `active_agents_stale` once a node is offline, so a frozen historical count is never presented as current occupancy. (Fixes [#422](https://github.com/AgentWorkforce/relaycast/issues/422))
+- Keyed agent session events now survive lost responses without duplicate events, while conflicting key reuse returns a typed error. A `status.*` event's status mutation and durable completion marker are applied atomically so retries cannot leave a stale agent row behind a successful response.
 
 ## [8.8.0] - 2026-09-10
 

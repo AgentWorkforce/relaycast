@@ -676,10 +676,25 @@ send its SHA-256 hash as `expected_token_hash`; Relaycast then rejects a stale
 release with `agent_release_generation_conflict` before dispatch or completion,
 so a same-name takeover is left untouched.
 
+`GET /nodes` pushes `capability`, `name`, and a liveness `status` selector
+into its SQL query instead of fetching the full roster and filtering in JS.
+Without `history`, the response stays the legacy bare array every existing
+caller already handles; `status=online` is the server-filtered live-Fleet
+path a default listing should use, since it never reads or returns
+history no matter how many dead rows a workspace has accumulated.
+`history=true` switches to a bounded, paginated contract
+(`{ nodes, next_cursor }`, paged with `cursor`/`limit`) for an explicit full
+read (e.g. `--all`): it visits and returns every matching row exactly once,
+with no silent truncation, however large the retained history is. Each
+entry's `active_agents` is authoritative live occupancy only while `live` is
+`true`; once a node goes offline, `active_agents` is a frozen historical
+value and `active_agents_stale` is `true` — callers must not present it as
+current capacity.
+
 Fleet node presence is also published to workspace-key observer streams as the
 ephemeral `node.online`, `node.heartbeat`, and `node.offline` events. Each
 carries a `node` payload matching the `GET /nodes` roster entry (capabilities,
-tags, `load`, `active_agents`/`max_agents`, `handlers_live`,
+tags, `load`, `active_agents`/`active_agents_stale`/`max_agents`, `handlers_live`,
 `last_heartbeat_at`), so a single event fully refreshes a node's row.
 `load` is normalized managed-agent capacity utilization and remains `null`
 unless a direct node, or every constituent provider of a broker node,

@@ -347,6 +347,13 @@ export interface NodeRosterEntry {
   /** Managed-agent capacity utilization in [0,1], or null when unreported. */
   load: number | null;
   activeAgents: number;
+  /**
+   * `activeAgents` is only an authoritative live occupancy count while
+   * `live` is true. Once a node goes offline its last-reported value is
+   * frozen history — it cannot change and must not be read as current
+   * capacity. `true` whenever `live` is `false`.
+   */
+  activeAgentsStale: boolean;
   maxAgents: number;
   lastHeartbeatAt: string | null;
   createdAt: string;
@@ -416,6 +423,31 @@ export interface BindAgentToNodeRequest {
 export interface NodeListQuery {
   capability?: string;
   name?: string;
+  /**
+   * Pushed into the roster's SQL query. Omitted: unfiltered by liveness
+   * (legacy default). `'online'` is the server-filtered live-Fleet path —
+   * it never reads or returns history, however large the workspace's
+   * roster has grown. `'offline'` selects everything else and, without
+   * `history`, is not paginated: prefer {@link RelayClient.nodes.listHistory}
+   * for a bounded read of a large dead roster.
+   */
+  status?: 'online' | 'offline';
+}
+
+export interface NodeHistoryQuery {
+  capability?: string;
+  name?: string;
+  status?: 'online' | 'offline';
+  /** Resume point from a previous page's `nextCursor`. Omit to start from the beginning. */
+  cursor?: string | null;
+  /** Page size, clamped server-side to a fixed maximum. */
+  limit?: number;
+}
+
+export interface NodeHistoryPage {
+  nodes: NodeRosterEntry[];
+  /** Pass back as `cursor` to fetch the next page; `null` once every row has been visited. */
+  nextCursor: string | null;
 }
 
 export interface Trigger {
