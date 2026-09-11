@@ -9,6 +9,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased - Patch]
 
+- Prevent recipient self-invitations from restoring a released subscription membership.
+
 ### Fixed
 
 - Durable message replay preserves exact hyphenated mentions and webhook display names, and raw webhook deliveries use the same payload shape as live messages.

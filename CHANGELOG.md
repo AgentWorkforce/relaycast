@@ -18,6 +18,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Patch]
 
+- Prevent recipient self-invitations from restoring a released subscription membership.
+
 ### Fixed
 
 - Durable message replay preserves exact hyphenated mentions and webhook display names, and raw webhook deliveries use the same payload shape as live messages.
