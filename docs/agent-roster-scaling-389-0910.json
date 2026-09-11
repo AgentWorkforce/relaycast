@@ -1,0 +1,762 @@
+{
+  "conclusion": "Node roster work scales linearly with workspace rows. Stale-node contribution is established; the enrollment-to-staleness-to-overload feedback loop and pruning as incident recovery remain unproven.",
+  "synthetic_scaling": {
+    "measured_at": "2026-09-10T20:37:09.925Z",
+    "repetitions": 7,
+    "method": "Synthetic in-memory SQLite with repository migrations, real engine reads, nondeterministic candidate-visit views, query_only enabled; timings include hydration and JSON serialization.",
+    "results": [
+      {
+        "stale_rows": 0,
+        "workspace_rows": 13,
+        "total_table_rows": 26,
+        "scenario": "nodes_all",
+        "candidate_visits": 13,
+        "returned_rows": 13,
+        "response_bytes": 5298,
+        "local_ms": {
+          "min": 0.1595829999999978,
+          "median": 0.1697909999999183,
+          "max": 0.372916000000032
+        }
+      },
+      {
+        "stale_rows": 0,
+        "workspace_rows": 13,
+        "total_table_rows": 26,
+        "scenario": "nodes_name_filter",
+        "candidate_visits": 13,
+        "returned_rows": 1,
+        "response_bytes": 426,
+        "local_ms": {
+          "min": 0.12254100000006929,
+          "median": 0.13400000000001455,
+          "max": 0.1965420000000222
+        }
+      },
+      {
+        "stale_rows": 0,
+        "workspace_rows": 13,
+        "total_table_rows": 26,
+        "scenario": "nodes_capability_filter",
+        "candidate_visits": 13,
+        "returned_rows": 13,
+        "response_bytes": 5298,
+        "local_ms": {
+          "min": 0.13383299999998144,
+          "median": 0.13779199999999037,
+          "max": 0.14925000000005184
+        }
+      },
+      {
+        "stale_rows": 0,
+        "workspace_rows": 13,
+        "total_table_rows": 26,
+        "scenario": "node_detail",
+        "candidate_visits": 1,
+        "returned_rows": 1,
+        "response_bytes": 426,
+        "local_ms": {
+          "min": 0.07941600000003746,
+          "median": 0.08150000000000546,
+          "max": 0.09804200000007768
+        }
+      },
+      {
+        "stale_rows": 0,
+        "workspace_rows": 13,
+        "total_table_rows": 26,
+        "scenario": "agents_all",
+        "candidate_visits": 13,
+        "returned_rows": 13,
+        "response_bytes": 3127,
+        "local_ms": {
+          "min": 0.1333750000000009,
+          "median": 0.1380420000000413,
+          "max": 0.16433300000005602
+        }
+      },
+      {
+        "stale_rows": 0,
+        "workspace_rows": 13,
+        "total_table_rows": 26,
+        "scenario": "agents_active",
+        "candidate_visits": 13,
+        "returned_rows": 13,
+        "response_bytes": 3127,
+        "local_ms": {
+          "min": 0.13487500000007913,
+          "median": 0.1427920000000995,
+          "max": 0.1504579999999578
+        }
+      },
+      {
+        "stale_rows": 100,
+        "workspace_rows": 113,
+        "total_table_rows": 226,
+        "scenario": "nodes_all",
+        "candidate_visits": 113,
+        "returned_rows": 113,
+        "response_bytes": 44898,
+        "local_ms": {
+          "min": 0.48374999999998636,
+          "median": 0.4980000000000473,
+          "max": 0.5360419999999522
+        }
+      },
+      {
+        "stale_rows": 100,
+        "workspace_rows": 113,
+        "total_table_rows": 226,
+        "scenario": "nodes_name_filter",
+        "candidate_visits": 113,
+        "returned_rows": 1,
+        "response_bytes": 426,
+        "local_ms": {
+          "min": 0.374416999999994,
+          "median": 0.37983299999996234,
+          "max": 0.38687500000003183
+        }
+      },
+      {
+        "stale_rows": 100,
+        "workspace_rows": 113,
+        "total_table_rows": 226,
+        "scenario": "nodes_capability_filter",
+        "candidate_visits": 113,
+        "returned_rows": 13,
+        "response_bytes": 5298,
+        "local_ms": {
+          "min": 0.3882089999999607,
+          "median": 0.41070799999999963,
+          "max": 0.4558749999999918
+        }
+      },
+      {
+        "stale_rows": 100,
+        "workspace_rows": 113,
+        "total_table_rows": 226,
+        "scenario": "node_detail",
+        "candidate_visits": 1,
+        "returned_rows": 1,
+        "response_bytes": 426,
+        "local_ms": {
+          "min": 0.07758400000000165,
+          "median": 0.08054200000003675,
+          "max": 0.1014580000000933
+        }
+      },
+      {
+        "stale_rows": 100,
+        "workspace_rows": 113,
+        "total_table_rows": 226,
+        "scenario": "agents_all",
+        "candidate_visits": 113,
+        "returned_rows": 113,
+        "response_bytes": 27127,
+        "local_ms": {
+          "min": 0.4688339999999016,
+          "median": 0.48375000000010004,
+          "max": 0.5175420000000486
+        }
+      },
+      {
+        "stale_rows": 100,
+        "workspace_rows": 113,
+        "total_table_rows": 226,
+        "scenario": "agents_active",
+        "candidate_visits": 13,
+        "returned_rows": 13,
+        "response_bytes": 3127,
+        "local_ms": {
+          "min": 0.1236669999999549,
+          "median": 0.12891700000000128,
+          "max": 0.1492079999999305
+        }
+      },
+      {
+        "stale_rows": 1000,
+        "workspace_rows": 1013,
+        "total_table_rows": 2026,
+        "scenario": "nodes_all",
+        "candidate_visits": 1013,
+        "returned_rows": 1013,
+        "response_bytes": 401298,
+        "local_ms": {
+          "min": 3.9414170000000013,
+          "median": 4.02658299999996,
+          "max": 5.375916000000075
+        }
+      },
+      {
+        "stale_rows": 1000,
+        "workspace_rows": 1013,
+        "total_table_rows": 2026,
+        "scenario": "nodes_name_filter",
+        "candidate_visits": 1013,
+        "returned_rows": 1,
+        "response_bytes": 426,
+        "local_ms": {
+          "min": 2.7801660000000084,
+          "median": 2.836541000000011,
+          "max": 2.9779590000000553
+        }
+      },
+      {
+        "stale_rows": 1000,
+        "workspace_rows": 1013,
+        "total_table_rows": 2026,
+        "scenario": "nodes_capability_filter",
+        "candidate_visits": 1013,
+        "returned_rows": 13,
+        "response_bytes": 5298,
+        "local_ms": {
+          "min": 2.87175000000002,
+          "median": 2.9280840000000126,
+          "max": 3.8659999999999854
+        }
+      },
+      {
+        "stale_rows": 1000,
+        "workspace_rows": 1013,
+        "total_table_rows": 2026,
+        "scenario": "node_detail",
+        "candidate_visits": 1,
+        "returned_rows": 1,
+        "response_bytes": 426,
+        "local_ms": {
+          "min": 0.06895899999994981,
+          "median": 0.0702089999999771,
+          "max": 0.0739170000000513
+        }
+      },
+      {
+        "stale_rows": 1000,
+        "workspace_rows": 1013,
+        "total_table_rows": 2026,
+        "scenario": "agents_all",
+        "candidate_visits": 1013,
+        "returned_rows": 1013,
+        "response_bytes": 243127,
+        "local_ms": {
+          "min": 3.7393749999999955,
+          "median": 3.82391599999994,
+          "max": 3.8821249999999736
+        }
+      },
+      {
+        "stale_rows": 1000,
+        "workspace_rows": 1013,
+        "total_table_rows": 2026,
+        "scenario": "agents_active",
+        "candidate_visits": 13,
+        "returned_rows": 13,
+        "response_bytes": 3127,
+        "local_ms": {
+          "min": 0.11591699999996763,
+          "median": 0.11850000000004002,
+          "max": 0.12308400000006259
+        }
+      },
+      {
+        "stale_rows": 6274,
+        "workspace_rows": 6287,
+        "total_table_rows": 12574,
+        "scenario": "nodes_all",
+        "candidate_visits": 6287,
+        "returned_rows": 6287,
+        "response_bytes": 2489802,
+        "local_ms": {
+          "min": 24.842916999999943,
+          "median": 25.39224999999999,
+          "max": 27.07362499999988
+        }
+      },
+      {
+        "stale_rows": 6274,
+        "workspace_rows": 6287,
+        "total_table_rows": 12574,
+        "scenario": "nodes_name_filter",
+        "candidate_visits": 6287,
+        "returned_rows": 1,
+        "response_bytes": 426,
+        "local_ms": {
+          "min": 17.19049999999993,
+          "median": 17.251166999999896,
+          "max": 18.546875
+        }
+      },
+      {
+        "stale_rows": 6274,
+        "workspace_rows": 6287,
+        "total_table_rows": 12574,
+        "scenario": "nodes_capability_filter",
+        "candidate_visits": 6287,
+        "returned_rows": 13,
+        "response_bytes": 5298,
+        "local_ms": {
+          "min": 16.683500000000095,
+          "median": 17.177666000000045,
+          "max": 17.99050000000011
+        }
+      },
+      {
+        "stale_rows": 6274,
+        "workspace_rows": 6287,
+        "total_table_rows": 12574,
+        "scenario": "node_detail",
+        "candidate_visits": 1,
+        "returned_rows": 1,
+        "response_bytes": 426,
+        "local_ms": {
+          "min": 0.07054200000015953,
+          "median": 0.07212499999991451,
+          "max": 0.08970900000008442
+        }
+      },
+      {
+        "stale_rows": 6274,
+        "workspace_rows": 6287,
+        "total_table_rows": 12574,
+        "scenario": "agents_all",
+        "candidate_visits": 6287,
+        "returned_rows": 6287,
+        "response_bytes": 1508887,
+        "local_ms": {
+          "min": 23.253165999999965,
+          "median": 23.51670799999988,
+          "max": 24.786415999999917
+        }
+      },
+      {
+        "stale_rows": 6274,
+        "workspace_rows": 6287,
+        "total_table_rows": 12574,
+        "scenario": "agents_active",
+        "candidate_visits": 13,
+        "returned_rows": 13,
+        "response_bytes": 3127,
+        "local_ms": {
+          "min": 0.11466599999994287,
+          "median": 0.11895800000002055,
+          "max": 0.1429169999998976
+        }
+      },
+      {
+        "stale_rows": 12548,
+        "workspace_rows": 12561,
+        "total_table_rows": 25122,
+        "scenario": "nodes_all",
+        "candidate_visits": 12561,
+        "returned_rows": 12561,
+        "response_bytes": 4974306,
+        "local_ms": {
+          "min": 47.53570800000011,
+          "median": 48.865125000000035,
+          "max": 49.66462499999989
+        }
+      },
+      {
+        "stale_rows": 12548,
+        "workspace_rows": 12561,
+        "total_table_rows": 25122,
+        "scenario": "nodes_name_filter",
+        "candidate_visits": 12561,
+        "returned_rows": 1,
+        "response_bytes": 426,
+        "local_ms": {
+          "min": 32.80562500000042,
+          "median": 34.24841699999979,
+          "max": 35.34970800000019
+        }
+      },
+      {
+        "stale_rows": 12548,
+        "workspace_rows": 12561,
+        "total_table_rows": 25122,
+        "scenario": "nodes_capability_filter",
+        "candidate_visits": 12561,
+        "returned_rows": 13,
+        "response_bytes": 5298,
+        "local_ms": {
+          "min": 33.45545899999979,
+          "median": 34.60795899999994,
+          "max": 35.936125000000175
+        }
+      },
+      {
+        "stale_rows": 12548,
+        "workspace_rows": 12561,
+        "total_table_rows": 25122,
+        "scenario": "node_detail",
+        "candidate_visits": 1,
+        "returned_rows": 1,
+        "response_bytes": 426,
+        "local_ms": {
+          "min": 0.07349999999996726,
+          "median": 0.08116599999993923,
+          "max": 0.19650000000001455
+        }
+      },
+      {
+        "stale_rows": 12548,
+        "workspace_rows": 12561,
+        "total_table_rows": 25122,
+        "scenario": "agents_all",
+        "candidate_visits": 12561,
+        "returned_rows": 12561,
+        "response_bytes": 3014647,
+        "local_ms": {
+          "min": 45.98066599999993,
+          "median": 46.144582999999784,
+          "max": 49.38299999999981
+        }
+      },
+      {
+        "stale_rows": 12548,
+        "workspace_rows": 12561,
+        "total_table_rows": 25122,
+        "scenario": "agents_active",
+        "candidate_visits": 13,
+        "returned_rows": 13,
+        "response_bytes": 3127,
+        "local_ms": {
+          "min": 0.11779200000000856,
+          "median": 0.126166000000012,
+          "max": 0.13950000000022555
+        }
+      }
+    ]
+  },
+  "http_probe": {
+    "started_at": "2026-09-10T20:35:42.483Z",
+    "samples": [
+      {
+        "at": "2026-09-10T20:35:42.483Z",
+        "path": "/v1/nodes",
+        "http_status": 200,
+        "ms": 1351.9867499999998,
+        "ray_id": "a391387f2d06b4f1-OSL",
+        "ok": true,
+        "error_code": null,
+        "bytes": 3656788,
+        "rows": 6288,
+        "live_nodes": 15,
+        "offline_nodes": 6273,
+        "broker_nodes": 2854,
+        "direct_nodes": 3434
+      },
+      {
+        "at": "2026-09-10T20:36:08.839Z",
+        "path": "/v1/agents",
+        "http_status": 200,
+        "ms": 1646.3004580000015,
+        "ray_id": "a3913923b9b54e4c-OSL",
+        "ok": true,
+        "error_code": null,
+        "bytes": 4317206,
+        "rows": 5054
+      },
+      {
+        "at": "2026-09-10T20:36:35.490Z",
+        "path": "/v1/nodes",
+        "http_status": 200,
+        "ms": 1483.6027499999982,
+        "ray_id": "a39139ca3b5cb1b8-OSL",
+        "ok": true,
+        "error_code": null,
+        "bytes": 3657281,
+        "rows": 6289,
+        "live_nodes": 14,
+        "offline_nodes": 6275,
+        "broker_nodes": 2854,
+        "direct_nodes": 3435
+      },
+      {
+        "at": "2026-09-10T20:37:01.978Z",
+        "path": "/v1/agents",
+        "http_status": 200,
+        "ms": 1826.835665999999,
+        "ray_id": "a3913a6fcba0b4fa-OSL",
+        "ok": true,
+        "error_code": null,
+        "bytes": 4324674,
+        "rows": 5055
+      },
+      {
+        "at": "2026-09-10T20:37:28.809Z",
+        "path": "/v1/nodes",
+        "http_status": 200,
+        "ms": 1008.9281669999909,
+        "ray_id": "a3913b177af05ebd-OSL",
+        "ok": true,
+        "error_code": null,
+        "bytes": 3656799,
+        "rows": 6288,
+        "live_nodes": 14,
+        "offline_nodes": 6274,
+        "broker_nodes": 2854,
+        "direct_nodes": 3434
+      },
+      {
+        "at": "2026-09-10T20:37:54.819Z",
+        "path": "/v1/agents",
+        "http_status": 200,
+        "ms": 1124.4564999999711,
+        "ray_id": "a3913bba0e38b1b8-OSL",
+        "ok": true,
+        "error_code": null,
+        "bytes": 4324674,
+        "rows": 5055
+      },
+      {
+        "at": "2026-09-10T20:38:20.950Z",
+        "path": "/v1/nodes",
+        "http_status": 200,
+        "ms": 819.2997909999976,
+        "ray_id": "a3913c5d4b4ec759-OSL",
+        "ok": true,
+        "error_code": null,
+        "bytes": 3656817,
+        "rows": 6288,
+        "live_nodes": 14,
+        "offline_nodes": 6274,
+        "broker_nodes": 2854,
+        "direct_nodes": 3434
+      },
+      {
+        "at": "2026-09-10T20:38:46.771Z",
+        "path": "/v1/agents",
+        "http_status": 200,
+        "ms": 2291.7545840000093,
+        "ray_id": "a3913cfebc865699-OSL",
+        "ok": true,
+        "error_code": null,
+        "bytes": 4324674,
+        "rows": 5055
+      },
+      {
+        "at": "2026-09-10T20:39:14.068Z",
+        "path": "/v1/nodes",
+        "http_status": 200,
+        "ms": 1457.5185409999976,
+        "ray_id": "a3913da95f1cb509-OSL",
+        "ok": true,
+        "error_code": null,
+        "bytes": 3656817,
+        "rows": 6288,
+        "live_nodes": 14,
+        "offline_nodes": 6274,
+        "broker_nodes": 2854,
+        "direct_nodes": 3434
+      },
+      {
+        "at": "2026-09-10T20:39:40.529Z",
+        "path": "/v1/agents",
+        "http_status": 200,
+        "ms": 1619.4780000000028,
+        "ray_id": "a3913e4ecd15b521-OSL",
+        "ok": true,
+        "error_code": null,
+        "bytes": 4324677,
+        "rows": 5055
+      },
+      {
+        "at": "2026-09-10T20:40:07.153Z",
+        "path": "/v1/nodes",
+        "http_status": 200,
+        "ms": 1173.3634160000365,
+        "ray_id": "a3913ef52aa45a0f-OSL",
+        "ok": true,
+        "error_code": null,
+        "bytes": 3656844,
+        "rows": 6288,
+        "live_nodes": 5,
+        "offline_nodes": 6283,
+        "broker_nodes": 2854,
+        "direct_nodes": 3434
+      },
+      {
+        "at": "2026-09-10T20:40:33.329Z",
+        "path": "/v1/agents",
+        "http_status": 200,
+        "ms": 1611.670708999969,
+        "ray_id": "a3913f98bdebb4fa-OSL",
+        "ok": true,
+        "error_code": null,
+        "bytes": 4324676,
+        "rows": 5055
+      }
+    ],
+    "method": "12 sequential Node fetch requests, alternating nodes and agents, 25-second gaps, 75-second timeout, no application retries; HTTP status and JSON envelope both checked."
+  },
+  "d1_insights": {
+    "at": "2026-09-10T20:40:17.552182+00:00",
+    "http_status": 200,
+    "graphql_errors": null,
+    "window": {
+      "start": "2026-09-10T20:10:00Z",
+      "end": "2026-09-10T20:40:16Z"
+    },
+    "limit": 50,
+    "order_by": "sum_rowsRead_DESC",
+    "returned_shapes": 50,
+    "selected_node_agent_shapes": [
+      {
+        "avg": {
+          "queryDurationMs": 44.58805482156416,
+          "rowsRead": 6278
+        },
+        "count": 1317,
+        "dimensions": {
+          "query": "select \"id\", \"workspace_id\", \"name\", \"token_hash\", \"machine_id\", \"kind\", \"role\", \"delivery_adapter\", \"delivery_config\", \"capabilities\", \"max_agents\", \"active_agents\", \"reserved_agents\", \"tags\", \"version\", \"status\", \"handlers_live\", \"load\", \"load_reported\", \"last_heartbeat_at\", \"proven_live_at\", \"created_at\" from \"nodes\" where \"nodes\".\"workspace_id\" = ?"
+        },
+        "sum": {
+          "queryDurationMs": 58722.468199999996,
+          "rowsRead": 8268236,
+          "rowsReturned": 8268236,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "avg": {
+          "queryDurationMs": 19.01028620988725,
+          "rowsRead": 6023
+        },
+        "count": 1153,
+        "dimensions": {
+          "query": "select \"id\", \"name\", \"provider_name\", \"delivery_ack_seq\" from \"agents\" where (\"agents\".\"workspace_id\" = ? and \"agents\".\"location_type\" = ? and \"agents\".\"location_node_id\" = ? and \"agents\".\"provider_name\" = ?) order by \"agents\".\"name\" asc"
+        },
+        "sum": {
+          "queryDurationMs": 21918.86,
+          "rowsRead": 6945547,
+          "rowsReturned": 14028,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "avg": {
+          "queryDurationMs": 72.79426518448439,
+          "rowsRead": 5049
+        },
+        "count": 1057,
+        "dimensions": {
+          "query": "select \"id\", \"workspace_id\", \"name\", \"type\", \"token_hash\", \"previous_token_hash\", \"previous_token_expires_at\", \"status\", \"handle\", \"persona\", \"metadata\", \"capabilities\", \"location_type\", \"location_node_id\", \"provider_name\", \"resumable\", \"session_ref\", \"origin_node_id\", \"delivery_ack_seq\", \"delivery_seq\", \"created_at\", \"last_seen\" from \"agents\" where (\"agents\".\"workspace_id\" = ? and \"agents\".\"status\" <> ?)"
+        },
+        "sum": {
+          "queryDurationMs": 76943.5383,
+          "rowsRead": 5336800,
+          "rowsReturned": 5336800,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "avg": {
+          "queryDurationMs": 23.378408163265306,
+          "rowsRead": 5054
+        },
+        "count": 245,
+        "dimensions": {
+          "query": "select \"id\", \"name\" from \"agents\" where (\"agents\".\"workspace_id\" = ? and \"agents\".\"status\" <> ?)"
+        },
+        "sum": {
+          "queryDurationMs": 5727.71,
+          "rowsRead": 1238230,
+          "rowsReturned": 1238230,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "avg": {
+          "queryDurationMs": 0.34326172459513216,
+          "rowsRead": 1
+        },
+        "count": 21118,
+        "dimensions": {
+          "query": "select \"id\", \"workspace_id\", \"name\", \"type\", \"token_hash\", \"previous_token_hash\", \"previous_token_expires_at\", \"status\", \"handle\", \"persona\", \"metadata\", \"capabilities\", \"location_type\", \"location_node_id\", \"provider_name\", \"resumable\", \"session_ref\", \"origin_node_id\", \"delivery_ack_seq\", \"delivery_seq\", \"created_at\", \"last_seen\" from \"agents\" where \"agents\".\"token_hash\" = ?"
+        },
+        "sum": {
+          "queryDurationMs": 7249.001100000001,
+          "rowsRead": 21118,
+          "rowsReturned": 21118,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "avg": {
+          "queryDurationMs": 0.34781250927594615,
+          "rowsRead": 1
+        },
+        "count": 9433,
+        "dimensions": {
+          "query": "select \"id\", \"workspace_id\", \"name\", \"token_hash\", \"machine_id\", \"kind\", \"role\", \"delivery_adapter\", \"delivery_config\", \"capabilities\", \"max_agents\", \"active_agents\", \"reserved_agents\", \"tags\", \"version\", \"status\", \"handlers_live\", \"load\", \"load_reported\", \"last_heartbeat_at\", \"proven_live_at\", \"created_at\" from \"nodes\" where (\"nodes\".\"workspace_id\" = ? and \"nodes\".\"id\" = ?)"
+        },
+        "sum": {
+          "queryDurationMs": 3280.9154,
+          "rowsRead": 9433,
+          "rowsReturned": 9433,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "avg": {
+          "queryDurationMs": 0.44375160164922295,
+          "rowsRead": 0
+        },
+        "count": 6306,
+        "dimensions": {
+          "query": "select \"id\", \"workspace_id\", \"name\", \"token_hash\", \"machine_id\", \"kind\", \"role\", \"delivery_adapter\", \"delivery_config\", \"capabilities\", \"max_agents\", \"active_agents\", \"reserved_agents\", \"tags\", \"version\", \"status\", \"handlers_live\", \"load\", \"load_reported\", \"last_heartbeat_at\", \"proven_live_at\", \"created_at\" from \"nodes\" where (\"nodes\".\"workspace_id\" = ? and \"nodes\".\"name\" = ?)"
+        },
+        "sum": {
+          "queryDurationMs": 2798.2976,
+          "rowsRead": 6072,
+          "rowsReturned": 6072,
+          "rowsWritten": 0
+        }
+      }
+    ]
+  },
+  "daytona_inventory": {
+    "at": "2026-09-10T20:38:15.730Z",
+    "inventory_page_size": 100,
+    "has_next_page": true,
+    "inventory_http_status": null,
+    "inventory_transport": "Daytona CLI JSON; HTTP status not exposed",
+    "roster_http_status": 200,
+    "roster_ok": true,
+    "roster_ray": "a3913c416f8a4e4c-OSL",
+    "running_on_page": 44,
+    "categories": {
+      "step_only": 8,
+      "workflow": 20,
+      "agent-relay-fleet-node": 15,
+      "workforce-deploy": 1
+    },
+    "limitations": "Bounded first page only; matches use sandbox IDs in node tags, missing tags cannot prove node absence. Workflow/step sandboxes are not assumed to need individual fleet enrollment.",
+    "tag_join_result": "No sandbox-ID matches; the required identity tags were not established, so this is inconclusive and not counted as 15 absent nodes."
+  },
+  "sandbox_inspection": {
+    "sample": "One source=agent-relay-fleet-node sandbox created at 2026-09-10T20:24:13.057Z, observed around 20:39-20:41Z",
+    "processes": "No relay or node process in process-name listing",
+    "log_summary": "11 session output logs: 1 entrypoint, 5 mkdir, 5 verify-upload; all zero bytes. Last <=64 KiB daemon log contained no cloud-enroll, /v1/nodes, overload, internal-error or timeout markers.",
+    "limits": "Read-only shell inspection. No registration HTTP request captured. CLI output did not expose an HTTP status. Absence of captured logs does not establish registration was never attempted."
+  },
+  "audit_retry": {
+    "at": "2026-09-10T20:35:14.738889+00:00",
+    "http_status": 403,
+    "success": false,
+    "error_code": 10000,
+    "message": "Authentication error",
+    "window": {
+      "since": "2026-09-09T20:10:00Z",
+      "before": "2026-09-09T20:27:00Z"
+    },
+    "limit": 100,
+    "required_api_token_permission": "Account Settings Read",
+    "source": "https://developers.cloudflare.com/api/resources/accounts/subresources/logs/subresources/audit/methods/list/"
+  },
+  "validation": {
+    "roster_scaling": "30 scenarios x 7 repetitions; row count and candidate visits asserted",
+    "agent_roster_tests": 37,
+    "bounded_database_work_tests": 22
+  }
+}
