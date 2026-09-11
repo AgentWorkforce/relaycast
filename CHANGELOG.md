@@ -18,6 +18,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
+### Added
+
+- Authenticated node registration replies identify the server admission contract so brokers can verify create-only provider binding, channel isolation, and guarded identity cleanup before spawning.
+
 ### Fixed
 
 - `GET /v1/nodes` no longer fetches a workspace's entire node history to serve a default listing: `name`, `capability`, and a new `status` liveness selector are now pushed into SQL, and `status=online` returns only fresh-heartbeat live nodes. An explicit `history=true` mode adds bounded, non-truncating cursor pagination for reading full history (e.g. `--all`). `active_agents` is now flagged with `active_agents_stale` once a node is offline, so a frozen historical count is never presented as current occupancy. (Fixes [#422](https://github.com/AgentWorkforce/relaycast/issues/422))

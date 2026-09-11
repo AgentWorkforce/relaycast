@@ -15,6 +15,7 @@ import type {
 } from '@relaycast/types';
 import {
   FLEET_DELIVERY_CURSOR_CAPABILITY,
+  NODE_REGISTRATION_CONTRACT_V1,
   parseFleetBrokerToRelaycastMessage,
 } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
@@ -2388,6 +2389,14 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
             ...registered.node,
             provider: registered.provider,
             accepted_capabilities: acceptance,
+            // Only claim authenticated provider registration when this adapter
+            // actually bound the connection. Echoed client capabilities are not
+            // evidence of a server contract; legacy adapters omit the field.
+            ...(args.connectionId
+              && args.registry.providerNameForConnection?.(args.connectionId) === provider.name
+              && args.registry.isProviderAttached?.(args.workspaceId, args.nodeId, provider.name)
+              ? { registration_contract: NODE_REGISTRATION_CONTRACT_V1 }
+              : {}),
           },
         });
         // The node row is already persisted online, so emit the durable

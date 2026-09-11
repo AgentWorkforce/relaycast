@@ -364,10 +364,19 @@ export type AgentRegisterReplyData = z.infer<typeof AgentRegisterReplyDataSchema
  * per-capability acceptance alongside the node's public descriptor (which is
  * passed through as additional fields).
  */
+/**
+ * Server-authored admission contract, independent of client capabilities.
+ * v1 guarantees create-only agent.register with request-ID echo, authenticated
+ * provider/origin binding, auto_join_general:false, and token-hash-guarded release.
+ * It does not make registration requests idempotent or recover lost replies.
+ */
+export const NODE_REGISTRATION_CONTRACT_V1 = 'relay:node-registration-v1' as const;
+
 export const NodeRegisterReplyDataSchema = z
   .object({
     provider: FleetProviderIdentitySchema,
     accepted_capabilities: z.array(FleetCapabilityAcceptanceSchema),
+    registration_contract: z.literal(NODE_REGISTRATION_CONTRACT_V1).optional(),
   })
   .passthrough();
 export type NodeRegisterReplyData = z.infer<typeof NodeRegisterReplyDataSchema>;
