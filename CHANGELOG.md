@@ -16,7 +16,14 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+- Prevent recipient self-invitations from restoring a released subscription membership.
+
+### Fixed
+
+- Durable message replay preserves exact hyphenated mentions and webhook display names, and raw webhook deliveries use the same payload shape as live messages.
+- Subscription joins cannot recreate membership for an agent released during the request.
 
 ## [8.9.0] - 2026-09-11
 

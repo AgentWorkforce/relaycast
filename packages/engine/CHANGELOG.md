@@ -7,7 +7,14 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+- Prevent recipient self-invitations from restoring a released subscription membership.
+
+### Fixed
+
+- Durable message replay preserves exact hyphenated mentions and webhook display names, and raw webhook deliveries use the same payload shape as live messages.
+- Subscription joins cannot recreate membership for an agent released during the request.
 
 ## [8.9.0] - 2026-09-11
 
