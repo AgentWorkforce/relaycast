@@ -11,6 +11,16 @@ info:
     - Success: `{ ok: true, data: ... }`
     - Error: `{ ok: false, error: { code, message } }`
 
+    Authenticated node-control admission: the `node.register` WebSocket reply can
+    include `registration_contract: "relay:node-registration-v1"` when the adapter
+    confirms the connection's provider binding. This server-authored contract
+    guarantees create-only agent registration, exact request-ID echo,
+    authenticated provider/origin assignment, optional general-channel isolation,
+    and `expected_token_hash` enforcement on `POST /v1/agents/release`. It is
+    independent of client-advertised capabilities. Missing/unknown values do not
+    establish support; clients must validate the current connection and provider.
+    Lost registration replies are not safe to retry automatically.
+
     Telemetry attribution (optional, all requests):
 
     Clients may declare who is driving a request so server-side product

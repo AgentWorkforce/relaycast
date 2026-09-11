@@ -29,6 +29,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
+- Node registration confirms the authenticated provider admission contract on the production maintenance engine without adding database migrations.
+
 - Thread replies resolve full hyphenated mentions; subscription setup rejects recipients released during membership creation.
 - Verified spawn checks the selected provider heartbeat, and inventory reconciliation honors only canonical `verify_ready` input. Empty explicit targets retain legacy spawn routing.
 
