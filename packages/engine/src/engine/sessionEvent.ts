@@ -267,6 +267,24 @@ export async function applyStatusEventEffect(
                 AND current_event.agent_id = ${agentId}
             )
         )`,
+        // Migration 0056 cannot know whether the pre-marker route reached
+        // this agent write: it inserted the event and updated the agent in
+        // separate operations. If the current row already has the requested
+        // status, the legacy retry has no state mutation left to reconcile;
+        // still claim the marker, but suppress duplicate fanout. A differing
+        // status remains pending and is applied normally, preserving recovery
+        // for the interrupted-before-update case.
+        sql`(
+          NOT EXISTS (
+            SELECT 1
+            FROM session_events AS legacy_event
+            WHERE legacy_event.id = ${eventId}
+              AND legacy_event.workspace_id = ${workspaceId}
+              AND legacy_event.agent_id = ${agentId}
+              AND legacy_event.status_legacy_pending = 1
+          )
+          OR ${agents.status} <> ${status}
+        )`,
       ))
       .returning({ id: agents.id }),
     tx.update(sessionEvents)

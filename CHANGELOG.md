@@ -22,7 +22,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - `GET /v1/nodes` no longer fetches a workspace's entire node history to serve a default listing: `name`, `capability`, and a new `status` liveness selector are now pushed into SQL, and `status=online` returns only fresh-heartbeat live nodes. An explicit `history=true` mode adds bounded, non-truncating cursor pagination for reading full history (e.g. `--all`). `active_agents` is now flagged with `active_agents_stale` once a node is offline, so a frozen historical count is never presented as current occupancy. (Fixes [#422](https://github.com/AgentWorkforce/relaycast/issues/422))
 - Keyed agent session events now survive lost responses without duplicate events, while conflicting key reuse returns a typed error. A `status.*` event's status mutation and durable completion marker are applied atomically so retries cannot leave a stale agent row behind a successful response.
-- Migration `0056_session_event_status_completion.sql` marks pre-existing keyed status events complete, preventing their retries from replaying status side effects after upgrade.
+- Migration `0056_session_event_status_completion.sql` reconciles pre-existing keyed status events without fabricating completion, recovering interrupted status writes while suppressing duplicate side effects when the agent row already proves the requested status.
 
 ## [8.8.0] - 2026-09-10
 

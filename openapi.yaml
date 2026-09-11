@@ -5594,6 +5594,15 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: >
+            `idempotency_unavailable` — the durable event identity claim could not be
+            confirmed after a storage conflict. Retry the same logical request with the
+            same Idempotency-Key; do not mint a replacement key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     get:
       summary: List agent session events
       description: List recorded session events for an agent. Observer tokens require `activity:read`; `agent_ids` and `created_after` filters apply.

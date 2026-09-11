@@ -1160,6 +1160,10 @@ export const sessionEvents = sqliteTable(
     // event insert and the status update leaves this NULL, letting a replay
     // finish the interrupted mutation instead of silently skipping it forever.
     statusAppliedAt: integer('status_applied_at', { mode: 'timestamp' }),
+    // Migration 0056 marks keyed status events created before this marker
+    // existed. Their old event insert and agent update were separate writes,
+    // so replay reconciles the row without fabricating completion.
+    statusLegacyPending: integer('status_legacy_pending', { mode: 'boolean' }).notNull().default(false),
   },
   (table) => [
     uniqueIndex('session_events_agent_sequence_unique').on(table.agentId, table.sequence),

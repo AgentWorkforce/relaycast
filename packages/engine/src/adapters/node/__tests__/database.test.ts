@@ -90,7 +90,7 @@ describe('delivery sequence high-water migration', () => {
 });
 
 describe('session event status completion migration', () => {
-  it('backfills only historical keyed status events as completed', () => {
+  it('marks only historical keyed status events for ambiguous replay reconciliation', () => {
     const sqlite = new Database(':memory:');
     handles.push(sqlite);
     sqlite.exec(`
@@ -118,16 +118,22 @@ describe('session event status completion migration', () => {
       'utf8',
     );
     sqlite.exec(migration);
+    sqlite.prepare(`
+      INSERT INTO session_events
+        (id, workspace_id, agent_id, type, created_at, idempotency_key_hash)
+      VALUES ('post_migration_status', 'ws_1', 'agent_1', 'status.idle', 1700000005, 'hash-5')
+    `).run();
 
     expect(sqlite.prepare(`
-      SELECT id, status_applied_at
+      SELECT id, status_applied_at, status_legacy_pending
       FROM session_events
       ORDER BY id
     `).all()).toEqual([
-      { id: 'keyed_changed', status_applied_at: 1700000002 },
-      { id: 'keyed_non_status', status_applied_at: null },
-      { id: 'keyed_status', status_applied_at: 1700000001 },
-      { id: 'unkeyed_status', status_applied_at: null },
+      { id: 'keyed_changed', status_applied_at: null, status_legacy_pending: 1 },
+      { id: 'keyed_non_status', status_applied_at: null, status_legacy_pending: 0 },
+      { id: 'keyed_status', status_applied_at: null, status_legacy_pending: 1 },
+      { id: 'post_migration_status', status_applied_at: null, status_legacy_pending: 0 },
+      { id: 'unkeyed_status', status_applied_at: null, status_legacy_pending: 0 },
     ]);
   });
 });

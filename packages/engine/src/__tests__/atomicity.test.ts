@@ -604,7 +604,7 @@ describe('atomic write paths', () => {
       expect(await db.select().from(sessionEvents)).toHaveLength(1);
     });
 
-    it('does not replay a pre-marker keyed status event after migration backfill', async () => {
+    it('reconciles an already-applied pre-marker status without refanout', async () => {
       const { ws, alice, db } = await seedAgent();
       const key = 'status-legacy-backfill-1';
       const first = await recordSessionEventWithIdempotency(
@@ -613,29 +613,58 @@ describe('atomic write paths', () => {
 
       // Model the historical route: the status write completed before 0056,
       // but no completion marker existed yet. Apply the actual migration's
-      // UPDATE against this Node database while leaving its ALTER out because
-      // the current test schema already has the column.
+      // UPDATE against this Node database while leaving its ALTER statements
+      // out because the current test schema already has both columns.
       await db.update(agents).set({ status: 'blocked' }).where(eq(agents.id, alice.agentId));
       const migration = readFileSync(
         new URL('../db/migrations/0056_session_event_status_completion.sql', import.meta.url),
         'utf8',
-      ).replace(/^ALTER TABLE session_events ADD COLUMN status_applied_at INTEGER;\n/m, '');
+      ).replace(/^ALTER TABLE session_events ADD COLUMN .*;\n/gm, '');
       stack.runtime.handle.sqlite.exec(migration);
 
       const replay = await recordSessionEventWithIdempotency(
         db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, key,
       );
       expect(replay.event.id).toBe(first.event.id);
-      expect(replay.pendingStatusApplication).toBe(false);
+      expect(replay.pendingStatusApplication).toBe(true);
 
-      // A D1-shaped retry must not construct a status-effect batch at all.
       const batches = attachFakeBatch(db);
-      if (replay.pendingStatusApplication) {
-        await applyStatusEventEffect(db, ws.workspaceId, alice.agentId, replay.event.id, 'blocked');
-      }
-      expect(batches).toHaveLength(0);
+      await expect(
+        applyStatusEventEffect(db, ws.workspaceId, alice.agentId, replay.event.id, 'blocked'),
+      ).resolves.toEqual({ claimed: true, mutated: false });
+      expect(batches).toHaveLength(1);
       const [agentRow] = await db.select({ status: agents.status }).from(agents).where(eq(agents.id, alice.agentId));
       expect(agentRow!.status).toBe('blocked');
+      const [eventRow] = await db.select({ statusAppliedAt: sessionEvents.statusAppliedAt })
+        .from(sessionEvents).where(eq(sessionEvents.id, first.event.id));
+      expect(eventRow!.statusAppliedAt).not.toBeNull();
+    });
+
+    it('replays an interrupted pre-marker status when current state differs', async () => {
+      const { ws, alice, db } = await seedAgent();
+      const first = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, 'status-legacy-pending-1',
+      );
+      const migration = readFileSync(
+        new URL('../db/migrations/0056_session_event_status_completion.sql', import.meta.url),
+        'utf8',
+      ).replace(/^ALTER TABLE session_events ADD COLUMN .*;\n/gm, '');
+      stack.runtime.handle.sqlite.exec(migration);
+
+      const replay = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, 'status-legacy-pending-1',
+      );
+      expect(replay.pendingStatusApplication).toBe(true);
+      const batches = attachFakeBatch(db);
+      await expect(
+        applyStatusEventEffect(db, ws.workspaceId, alice.agentId, replay.event.id, 'blocked'),
+      ).resolves.toEqual({ claimed: true, mutated: true });
+      expect(batches).toHaveLength(1);
+      const [agentRow] = await db.select({ status: agents.status }).from(agents).where(eq(agents.id, alice.agentId));
+      expect(agentRow!.status).toBe('blocked');
+      const [eventRow] = await db.select({ statusAppliedAt: sessionEvents.statusAppliedAt })
+        .from(sessionEvents).where(eq(sessionEvents.id, first.event.id));
+      expect(eventRow!.statusAppliedAt).not.toBeNull();
     });
 
     it('applies the status write and completion marker in a single D1-style batch', async () => {
