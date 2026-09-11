@@ -70,6 +70,13 @@ export function isStatusEventType(type: string): boolean {
   return type.startsWith('status.');
 }
 
+export interface StatusEventEffectResult {
+  /** Whether this request won the durable completion-marker claim. */
+  claimed: boolean;
+  /** Whether the current agent row was actually changed by this event. */
+  mutated: boolean;
+}
+
 export async function recordSessionEvent(
   db: Db,
   workspaceId: string,
@@ -203,10 +210,12 @@ export async function recordSessionEventWithIdempotency(
  * next replay retries the whole mutation — it can never observe "claimed but
  * never applied" as a terminal state.
  *
- * The conditional completion update is also the single-winner claim for
- * side effects: a replay that loses a concurrent claim gets `false` and must
- * not fan out or enqueue another webhook. A released agent's row is
- * intentionally not updated (matching
+ * The completion update is the single-winner claim for side effects: a replay
+ * that loses a concurrent claim gets `claimed: false` and must not fan out or
+ * enqueue another webhook. The agent update also carries a durable ordering
+ * fence: an older pending event may be terminalized, but it cannot overwrite
+ * a newer status event that was recorded while the older event was pending.
+ * A released agent's row is intentionally not updated (matching
  * `updateAgentById`), but the event is still marked applied: there is no
  * agent row left to reconcile, and retrying forever would just repeat the
  * same no-op.
@@ -217,8 +226,49 @@ export async function applyStatusEventEffect(
   agentId: string,
   eventId: string,
   status: string,
-): Promise<boolean> {
-  const [claimResult] = await runAtomicWrites(db, (tx) => [
+): Promise<StatusEventEffectResult> {
+  // The agent mutation runs first in the atomic unit. This ordering is
+  // important for D1 batches: the completion marker must still be NULL when
+  // the conditional status update is evaluated. The following marker update
+  // then claims the event; Node transactions and D1 batches serialize this
+  // pair, so an identical concurrent retry cannot mutate after the winner has
+  // claimed it.
+  const [mutationResult, claimResult] = await runAtomicWrites(db, (tx) => [
+    tx.update(agents)
+      .set({ status })
+      .where(and(
+        eq(agents.workspaceId, workspaceId),
+        eq(agents.id, agentId),
+        ne(agents.status, RELEASED_AGENT_STATUS),
+        // Do not let an interrupted older event roll a newer status back.
+        // The sequence is allocated per agent and is durable across retries;
+        // an event that is newer than this one wins the status row. A newer
+        // event that is itself pending will be responsible for applying its
+        // own status when it replays.
+        sql`EXISTS (
+          SELECT 1
+          FROM session_events AS current_event
+          WHERE current_event.id = ${eventId}
+            AND current_event.workspace_id = ${workspaceId}
+            AND current_event.agent_id = ${agentId}
+            AND current_event.status_applied_at IS NULL
+        )`,
+        sql`NOT EXISTS (
+          SELECT 1
+          FROM session_events AS newer_event
+          WHERE newer_event.workspace_id = ${workspaceId}
+            AND newer_event.agent_id = ${agentId}
+            AND newer_event.type LIKE 'status.%'
+            AND newer_event.sequence > (
+              SELECT current_event.sequence
+              FROM session_events AS current_event
+              WHERE current_event.id = ${eventId}
+                AND current_event.workspace_id = ${workspaceId}
+                AND current_event.agent_id = ${agentId}
+            )
+        )`,
+      ))
+      .returning({ id: agents.id }),
     tx.update(sessionEvents)
       .set({ statusAppliedAt: sql`(unixepoch())` })
       .where(and(
@@ -228,20 +278,15 @@ export async function applyStatusEventEffect(
         isNull(sessionEvents.statusAppliedAt),
       ))
       .returning({ id: sessionEvents.id }),
-    tx.update(agents)
-      .set({ status })
-      .where(and(
-        eq(agents.workspaceId, workspaceId),
-        eq(agents.id, agentId),
-        ne(agents.status, RELEASED_AGENT_STATUS),
-      )),
   ], { requireAtomic: true });
 
-  // The conditional completion update is the single-winner claim. Under both
-  // Node transactions and D1 batches, only the caller that changed NULL to a
-  // timestamp may emit external side effects. The agent update remains in the
-  // same atomic unit, so a failed mutation rolls the claim back for recovery.
-  return Array.isArray(claimResult) && claimResult.length > 0;
+  const claimed = Array.isArray(claimResult) && claimResult.length > 0;
+  const mutated = Array.isArray(mutationResult) && mutationResult.length > 0;
+  // Only the caller that both changed the current row and claimed the marker
+  // may emit external status side effects. The claim may intentionally win
+  // with `mutated === false` when a newer event superseded this one or the
+  // agent was released between route validation and this atomic write.
+  return { claimed, mutated: claimed && mutated };
 }
 
 function canonicalJson(value: unknown): string {

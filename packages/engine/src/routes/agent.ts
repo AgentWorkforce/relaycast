@@ -901,7 +901,14 @@ agentRoutes.post(
       if (pendingStatusApplication && type.startsWith('status.')) {
         const resolved = sessionEventEngine.resolveStatusFromEvent(type);
         const newStatus = resolved ?? (payload.status as string);
-        statusApplied = await sessionEventEngine.applyStatusEventEffect(db, workspace.id, agentRecord.id, event.id, newStatus);
+        const effect = await sessionEventEngine.applyStatusEventEffect(
+          db,
+          workspace.id,
+          agentRecord.id,
+          event.id,
+          newStatus,
+        );
+        statusApplied = effect.mutated;
       }
       if (statusApplied) {
         const resolved = sessionEventEngine.resolveStatusFromEvent(type);
