@@ -5,6 +5,7 @@ import type { EffectiveMessageRetention } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import { workspaces } from '../db/schema.js';
 import { snowflakeIdLowerBound } from './snowflake.js';
+import { pruneRowidPages, type RetentionCursorStore } from './rowidRetention.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -29,12 +30,23 @@ export interface RetentionDefaults {
 }
 
 export interface PruneOptions {
+  /**
+   * Host-owned durable state for schema-free, rowid-bounded recovery. Supplying
+   * this avoids the engine maintenance-cursors table; callers must serialize it.
+   */
+  cursorStore?: RetentionCursorStore;
   /** Stop starting candidate pages after this elapsed budget (default 10s, capped at 30s). */
   maxDurationMs?: number;
   /** Max candidate rows examined per table per batch. Default/cap 200. */
   batchLimit?: number;
   /** Max candidate batches per table per call. Default/cap 5; durable cursors resume on the next call. */
   maxBatches?: number;
+  /** Active queued/delivered expiry recovery is opt-in and defaults to a 7-day grace window. */
+  expiredDeliveryGraceDays?: number;
+  /** Opt in to bounded, indexed cleanup of active deliveries past their expiry grace window. */
+  activeExpiryRecovery?: boolean;
+  /** Maximum active-expiry recovery batches (capped at four). */
+  activeExpiryRecoveryMaxBatches?: number;
   /** Clock override for tests. */
   now?: Date;
   /** Deployment-wide TTL fallbacks; see {@link RetentionDefaults}. */
@@ -138,5 +150,6 @@ export function afterSnowflake(column: SQLiteColumn, cursor: string): SQL {
 
 /** Bounded, resumable retention; preserves TTL overrides and event high-water marks. */
 export async function pruneExpired(db: Db, opts: PruneOptions = {}): Promise<PruneResult> {
+  if (opts.cursorStore) return pruneRowidPages(db, { ...opts, cursorStore: opts.cursorStore });
   return pruneBounded(db, opts);
 }

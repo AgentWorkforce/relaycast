@@ -20,6 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
+- Engine scheduled maintenance again supports host-owned retention cursors and bounded websocket backlog redrive, allowing hosted deployments to retain schema-free recovery behavior.
 - `GET /v1/nodes` no longer fetches a workspace's entire node history to serve a default listing: `name`, `capability`, and a new `status` liveness selector are now pushed into SQL, and `status=online` returns only fresh-heartbeat live nodes. An explicit `history=true` mode adds bounded, non-truncating cursor pagination for reading full history (e.g. `--all`). `active_agents` is now flagged with `active_agents_stale` once a node is offline, so a frozen historical count is never presented as current occupancy. (Fixes [#422](https://github.com/AgentWorkforce/relaycast/issues/422))
 - Keyed agent session events now survive lost responses without duplicate events, while conflicting key reuse returns a typed error. A `status.*` event's status mutation and durable completion marker are applied atomically so retries cannot leave a stale agent row behind a successful response.
 - Migration `0056_session_event_status_completion.sql` reconciles pre-existing keyed status events without fabricating completion, recovering only rows proven older than the event and conservatively preserving rows touched by later status or liveness writers.
