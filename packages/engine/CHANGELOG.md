@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased - Minor]
 
+### Added
+
+- Authenticated node registration replies identify the server admission contract so brokers can verify create-only provider binding, channel isolation, and guarded identity cleanup before spawning.
+
 ### Fixed
 
 - `pruneExpired` accepts a host-owned `cursorStore` for bounded schema-free retention without the engine cursor table; scheduled node redrive accepts `wsBacklogLimit` per agent.

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   AgentRegisterReplyDataSchema,
+  NodeRegisterReplyDataSchema,
   FleetBrokerToRelaycastMessageSchema,
   FleetRelaycastToBrokerMessageSchema,
   parseFleetBrokerToRelaycastMessage,
@@ -15,6 +16,15 @@ const FIXTURE_DIR = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '../../fixtures/fleet-wire',
 );
+
+it('validates server registration contracts while accepting legacy node replies', () => {
+  const legacy = { provider: { name: 'broker', instance_id: 'instance' }, accepted_capabilities: [] };
+  expect(NodeRegisterReplyDataSchema.safeParse(legacy).success).toBe(true);
+  expect(NodeRegisterReplyDataSchema.safeParse({ ...legacy, registration_contract: 'relay:node-registration-v1' }).success).toBe(true);
+  for (const contract of ['invented', 1, null, { version: 1 }]) {
+    expect(NodeRegisterReplyDataSchema.safeParse({ ...legacy, registration_contract: contract }).success).toBe(false);
+  }
+});
 
 const BROKER_TO_RELAYCAST_TYPES = new Set([
   'node.register',

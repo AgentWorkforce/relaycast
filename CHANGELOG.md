@@ -18,6 +18,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
+### Added
+
+- Authenticated node registration replies identify the server admission contract so brokers can verify create-only provider binding, channel isolation, and guarded identity cleanup before spawning.
+
 ### Fixed
 
 - Engine scheduled maintenance again supports host-owned retention cursors and bounded websocket backlog redrive, allowing hosted deployments to retain schema-free recovery behavior.
