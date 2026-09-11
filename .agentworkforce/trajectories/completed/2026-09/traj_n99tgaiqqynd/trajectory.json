@@ -1,0 +1,82 @@
+{
+  "id": "traj_n99tgaiqqynd",
+  "version": 1,
+  "task": {
+    "title": "Reconcile Relaycast production maintenance APIs into main",
+    "source": {
+      "system": "plain",
+      "id": "Relaycast#415"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-09-10T10:32:31.408Z",
+  "completedAt": "2026-09-10T10:36:02.485Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-09-10T10:35:27.002Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_gug9oygglej9",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-09-10T10:35:27.002Z",
+      "endedAt": "2026-09-10T10:36:02.485Z",
+      "events": [
+        {
+          "ts": 1789036527003,
+          "type": "decision",
+          "content": "Added an opt-in host cursor retention mode beside the 8.8 index-backed default: Added an opt-in host cursor retention mode beside the 8.8 index-backed default",
+          "raw": {
+            "question": "Added an opt-in host cursor retention mode beside the 8.8 index-backed default",
+            "chosen": "Added an opt-in host cursor retention mode beside the 8.8 index-backed default",
+            "alternatives": [],
+            "reasoning": "Relaycast-cloud needs production's schema-free API while self-hosted 8.8 users retain durable database cursors and scheduled expiry semantics."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1789036527291,
+          "type": "reflection",
+          "content": "Engine, SDK/types, release, and full lint suites passed; actionlint reports pre-existing workflow warnings outside this diff.",
+          "raw": {
+            "confidence": 0.84
+          },
+          "significance": "high",
+          "tags": [
+            "confidence:0.84"
+          ]
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Restored host-owned schema-free retention cursors and bounded WS redrive for Relaycast #415.",
+    "approach": "Standard approach",
+    "confidence": 0.9
+  },
+  "commits": [
+    "7bb76398"
+  ],
+  "filesChanged": [
+    ".agentworkforce/trajectories/active/traj_n99tgaiqqynd/trajectory.json",
+    "CHANGELOG.md",
+    "packages/engine/CHANGELOG.md",
+    "packages/engine/src/__tests__/conformance/delivery.test.ts",
+    "packages/engine/src/engine/__tests__/maintenanceApiCompatibility.test.ts",
+    "packages/engine/src/engine/retention.ts",
+    "packages/engine/src/engine/rowidRetention.ts",
+    "packages/engine/src/index.ts",
+    "packages/engine/src/routes/deliveryRouting.ts"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "0fbb999e1768415c41239e2f14b7d14b92aaf9b9",
+    "endRef": "7bb763980ee363aede4b700369ff6637b5e4a4e0",
+    "traceId": "7325b2df-94a5-482a-b16a-3f6538a1b2ee"
+  }
+}
