@@ -88,6 +88,49 @@ describe('delivery sequence high-water migration', () => {
       .toEqual({ seq: 8 });
   });
 });
+
+describe('session event status completion migration', () => {
+  it('backfills only historical keyed status events as completed', () => {
+    const sqlite = new Database(':memory:');
+    handles.push(sqlite);
+    sqlite.exec(`
+      CREATE TABLE session_events (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}',
+        created_at INTEGER NOT NULL,
+        idempotency_key_hash TEXT,
+        request_digest TEXT
+      );
+      INSERT INTO session_events
+        (id, workspace_id, agent_id, type, created_at, idempotency_key_hash)
+      VALUES
+        ('keyed_status', 'ws_1', 'agent_1', 'status.blocked', 1700000001, 'hash-1'),
+        ('keyed_changed', 'ws_1', 'agent_1', 'status.changed', 1700000002, 'hash-2'),
+        ('keyed_non_status', 'ws_1', 'agent_1', 'tool.called', 1700000003, 'hash-3'),
+        ('unkeyed_status', 'ws_1', 'agent_1', 'status.active', 1700000004, NULL);
+    `);
+
+    const migration = readFileSync(
+      new URL('../../../db/migrations/0056_session_event_status_completion.sql', import.meta.url),
+      'utf8',
+    );
+    sqlite.exec(migration);
+
+    expect(sqlite.prepare(`
+      SELECT id, status_applied_at
+      FROM session_events
+      ORDER BY id
+    `).all()).toEqual([
+      { id: 'keyed_changed', status_applied_at: 1700000002 },
+      { id: 'keyed_non_status', status_applied_at: null },
+      { id: 'keyed_status', status_applied_at: 1700000001 },
+      { id: 'unkeyed_status', status_applied_at: null },
+    ]);
+  });
+});
 describe('action invocation provider migration', () => {
   it('backfills action-owned and legacy node dispatches without claiming undispatched work', () => {
     const sqlite = new Database(':memory:');

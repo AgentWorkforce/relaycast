@@ -5531,8 +5531,10 @@ paths:
     post:
       summary: Emit agent session event
       description: >
-        Record a session event for an agent (e.g. `status.active`, `status.idle`). An agent token
-        may only post events for itself; a workspace key may post for any agent.
+        Record a session event for an agent (e.g. `status.active`, `status.idle`). For
+        `status.changed`, `payload.status` is required and accepts `active`, `idle`, `blocked`,
+        `waiting`, `offline`, or the legacy alias `online`. An agent token may only post events
+        for itself; a workspace key may post for any agent.
       tags:
         - Agents
       security:

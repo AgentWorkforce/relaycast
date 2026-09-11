@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { and, eq } from 'drizzle-orm';
 import {
   makeNodeStack,
@@ -601,6 +602,40 @@ describe('atomic write paths', () => {
       expect(secondReplay.pendingStatusApplication).toBe(false);
 
       expect(await db.select().from(sessionEvents)).toHaveLength(1);
+    });
+
+    it('does not replay a pre-marker keyed status event after migration backfill', async () => {
+      const { ws, alice, db } = await seedAgent();
+      const key = 'status-legacy-backfill-1';
+      const first = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, key,
+      );
+
+      // Model the historical route: the status write completed before 0056,
+      // but no completion marker existed yet. Apply the actual migration's
+      // UPDATE against this Node database while leaving its ALTER out because
+      // the current test schema already has the column.
+      await db.update(agents).set({ status: 'blocked' }).where(eq(agents.id, alice.agentId));
+      const migration = readFileSync(
+        new URL('../db/migrations/0056_session_event_status_completion.sql', import.meta.url),
+        'utf8',
+      ).replace(/^ALTER TABLE session_events ADD COLUMN status_applied_at INTEGER;\n/m, '');
+      stack.runtime.handle.sqlite.exec(migration);
+
+      const replay = await recordSessionEventWithIdempotency(
+        db, ws.workspaceId, alice.agentId, { type: 'status.blocked', payload: {} }, key,
+      );
+      expect(replay.event.id).toBe(first.event.id);
+      expect(replay.pendingStatusApplication).toBe(false);
+
+      // A D1-shaped retry must not construct a status-effect batch at all.
+      const batches = attachFakeBatch(db);
+      if (replay.pendingStatusApplication) {
+        await applyStatusEventEffect(db, ws.workspaceId, alice.agentId, replay.event.id, 'blocked');
+      }
+      expect(batches).toHaveLength(0);
+      const [agentRow] = await db.select({ status: agents.status }).from(agents).where(eq(agents.id, alice.agentId));
+      expect(agentRow!.status).toBe('blocked');
     });
 
     it('applies the status write and completion marker in a single D1-style batch', async () => {
