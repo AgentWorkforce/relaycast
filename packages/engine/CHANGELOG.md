@@ -9,6 +9,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased - Patch]
 
+- Keep channel member-count queries within D1 parameter limits for large workspaces.
+
 - Prevent recipient self-invitations from restoring a released subscription membership.
 
 ### Fixed
