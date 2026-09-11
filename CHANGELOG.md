@@ -18,6 +18,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
+- Prevent recipient self-invitations from restoring a released subscription membership.
+
 ### Added
 
 - Node credentials can read their own dispatched spawn results, allowing served fleet actions to confirm broker readiness with node-scoped authority.
