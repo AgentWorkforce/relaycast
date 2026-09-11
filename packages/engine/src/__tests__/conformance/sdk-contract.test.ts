@@ -923,6 +923,96 @@ describe('SDK v8 service contract', () => {
     expect(runnerEvents.filter((event) => event.idempotencyKeyHash !== null)).toHaveLength(1);
   });
 
+  it('resolves truly concurrent same-key same-payload event posts to one persisted row', async () => {
+    const ws = await createWorkspace(stack.app, 'sdk-event-idempotency-race-ws');
+    const runner = await registerAgent(stack.app, ws.workspaceKey, 'runner');
+    const idempotencyKey = 'worker-exit-race-1';
+    const headers = {
+      'content-type': 'application/json',
+      authorization: `Bearer ${ws.workspaceKey}`,
+      'Idempotency-Key': idempotencyKey,
+    };
+    const body = JSON.stringify({ type: 'error', payload: { code: 'worker_exit', generation: 1 } });
+    const postEvent = () => stack.app.request('/v1/agents/runner/events', {
+      method: 'POST', headers, body,
+    });
+
+    // Fire both requests without awaiting either first, so both reach the
+    // durable insert concurrently and genuinely race on the unique claim
+    // rather than serializing through a caller-side await.
+    const [first, second] = await Promise.all([postEvent(), postEvent()]);
+    expect([first.status, second.status]).toEqual([201, 201]);
+
+    const replayedFlags = [first, second]
+      .map((response) => response.headers.get('Idempotency-Replayed'))
+      .sort();
+    // Exactly one request wins the durable insert (fresh); the other reads
+    // back the winner's row and replays it.
+    expect(replayedFlags).toEqual([null, 'true']);
+
+    const [firstBody, secondBody] = await Promise.all([
+      first.json() as Promise<{ data: { id: string; sequence: number }; replayed: boolean }>,
+      second.json() as Promise<{ data: { id: string; sequence: number }; replayed: boolean }>,
+    ]);
+    // Both responses must describe the identical persisted event, regardless
+    // of which request happened to win the race.
+    expect(secondBody.data).toEqual(firstBody.data);
+
+    const runnerEvents = await stack.runtime.deps.db
+      .select({ id: sessionEvents.id, idempotencyKeyHash: sessionEvents.idempotencyKeyHash })
+      .from(sessionEvents)
+      .where(and(
+        eq(sessionEvents.workspaceId, ws.workspaceId),
+        eq(sessionEvents.agentId, runner.agentId),
+      ));
+    // Only one row was ever persisted for the shared key, no matter which
+    // request's insert physically won.
+    expect(runnerEvents).toHaveLength(1);
+    expect(runnerEvents[0]!.id).toBe(firstBody.data.id);
+  });
+
+  it('resolves truly concurrent same-key different-payload event posts deterministically', async () => {
+    const ws = await createWorkspace(stack.app, 'sdk-event-idempotency-conflict-race-ws');
+    const runner = await registerAgent(stack.app, ws.workspaceKey, 'runner');
+    const idempotencyKey = 'worker-exit-conflict-race-1';
+    const headers = {
+      'content-type': 'application/json',
+      authorization: `Bearer ${ws.workspaceKey}`,
+      'Idempotency-Key': idempotencyKey,
+    };
+    const postEvent = (code: string) => stack.app.request('/v1/agents/runner/events', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ type: 'error', payload: { code } }),
+    });
+
+    // Same key, deliberately different payloads, fired concurrently. The
+    // unique claim on (workspace, agent, key) guarantees exactly one insert
+    // wins regardless of scheduling order; the loser's payload never
+    // matches the persisted digest, so it must fail closed rather than
+    // silently returning the winner's data as if it were its own.
+    const [a, b] = await Promise.all([postEvent('worker_exit_a'), postEvent('worker_exit_b')]);
+    const statuses = [a.status, b.status].sort();
+    expect(statuses).toEqual([201, 409]);
+
+    const conflictResponse = a.status === 409 ? a : b;
+    await expect(conflictResponse.json()).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'idempotency_key_reused' },
+    });
+
+    const runnerEvents = await stack.runtime.deps.db
+      .select({ id: sessionEvents.id, idempotencyKeyHash: sessionEvents.idempotencyKeyHash })
+      .from(sessionEvents)
+      .where(and(
+        eq(sessionEvents.workspaceId, ws.workspaceId),
+        eq(sessionEvents.agentId, runner.agentId),
+      ));
+    // Exactly one payload variant is durably persisted; the conflicting
+    // concurrent write never allocates a second row.
+    expect(runnerEvents).toHaveLength(1);
+  });
+
   it('emits canonical message.reacted events for reactions', async () => {
     const ws = await createWorkspace(stack.app, 'sdk-reaction-ws');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
