@@ -101,7 +101,7 @@ function strictExternalUrl(c: Parameters<typeof jsonError>[0]): boolean {
   return environment !== 'test';
 }
 
-type NodeRosterEntry = Awaited<ReturnType<typeof nodeEngine.listNodes>>[number];
+type NodeRosterEntry = Awaited<ReturnType<typeof nodeEngine.listNodes>>['nodes'][number];
 type NodeAgentBinding = NonNullable<Awaited<ReturnType<typeof nodeEngine.listNodeAgents>>>[number];
 type ObserverContext = ReturnType<typeof getObserverTokenFromContext>;
 
@@ -191,21 +191,49 @@ async function enrollNode(c: Context<AppEnv>, data: z.infer<typeof createNodeSch
   }
 }
 
-// GET /v1/nodes?capability=&name= - node roster
+const nodeStatusSchema = z.enum(['online', 'offline']);
+
+// GET /v1/nodes?capability=&name=&status=&history=&cursor=&limit= - node roster
+//
+// Default (no `history`): a bare array, matching every caller written before
+// this selector existed. `status=online` (or `offline`) now pushes a
+// liveness predicate into SQL instead of fetching the whole table and
+// filtering in JS — this is the server-filtered live-Fleet path a default
+// `fleet nodes` call should use so it never downloads history.
+//
+// `history=true`: switches to the bounded, paginated contract
+// (`{ nodes, next_cursor }`) for an explicit full-roster read (`--all`).
+// `cursor`/`limit` page through it without silent truncation, however many
+// historical rows the workspace has retained.
 nodeRoutes.get('/nodes', requireWorkspaceRead('nodes:read'), rateLimit, async (c) => {
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
-    const result = await nodeEngine.listNodes(db, workspace.id, {
+    const statusRaw = c.req.query('status');
+    if (statusRaw !== undefined && !nodeStatusSchema.safeParse(statusRaw).success) {
+      return jsonError(c, 'invalid_request', "status must be 'online' or 'offline'", 400);
+    }
+    const history = c.req.query('history') === 'true';
+    const limitRaw = c.req.query('limit');
+    const limit = limitRaw !== undefined ? Number(limitRaw) : undefined;
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+      return jsonError(c, 'invalid_request', 'limit must be a positive integer', 400);
+    }
+    const page = await nodeEngine.listNodes(db, workspace.id, {
       capability: c.req.query('capability'),
       name: c.req.query('name'),
+      status: statusRaw as 'online' | 'offline' | undefined,
+      history,
+      cursor: c.req.query('cursor') ?? null,
+      limit,
     });
-    return jsonOk(c, await filterNodesForObserver(
+    const visible = await filterNodesForObserver(
       db,
       workspace.id,
       getObserverTokenFromContext(c),
-      result,
-    ));
+      page.nodes,
+    );
+    return jsonOk(c, history ? { nodes: visible, next_cursor: page.nextCursor } : visible);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }

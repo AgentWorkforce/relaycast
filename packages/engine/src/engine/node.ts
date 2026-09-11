@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { invalidateChannelCache } from './cache.js';
-import { and, asc, eq, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from 'drizzle-orm';
 import type {
   FleetAgentRecoverMessage,
   FleetAgentRegisterMessage,
@@ -27,7 +27,7 @@ import { isProviderAgentDeliveryReady, type NodeConnectionRegistry } from '../po
 import { generateId } from './snowflake.js';
 import { assertRegistrableAgentName } from './agent.js';
 import { rotateAgentIdentity } from './agentIdentity.js';
-import { isNodeLive, isReusableForMachineMatch, nodeHasCapacity, nodeHasCapability, NODE_LIVENESS_TTL_MS } from './placement.js';
+import { isNodeLive, isReusableForMachineMatch, nodeHasCapacity, NODE_LIVENESS_TTL_MS } from './placement.js';
 import {
   DEFAULT_PROVIDER_NAME,
   capabilityKind,
@@ -136,8 +136,8 @@ function requestId(message: { id?: string }): string {
   return message.id ?? generateId();
 }
 
-function publicNode(row: NodeRow) {
-  const live = isNodeLive(row);
+function publicNode(row: NodeRow, now?: number) {
+  const live = isNodeLive(row, now);
   return {
     id: row.id,
     name: row.name,
@@ -154,6 +154,13 @@ function publicNode(row: NodeRow) {
     handlers_live: live && row.handlersLive,
     load: row.loadReported ? row.load : null,
     active_agents: row.activeAgents,
+    // `active_agents` is only an authoritative live occupancy count while the
+    // node is proven live within NODE_LIVENESS_TTL_MS. Once a node goes
+    // offline, its last-reported value is frozen history: it can no longer
+    // change and must not be presented as current capacity. Callers that
+    // need current occupancy must check this flag rather than assuming a
+    // non-null `active_agents` means "right now".
+    active_agents_stale: !live,
     max_agents: row.maxAgents,
     last_heartbeat_at: row.lastHeartbeatAt?.toISOString() ?? null,
     created_at: row.createdAt.toISOString(),
@@ -1994,16 +2001,95 @@ export async function reconcileInventory(
   };
 }
 
+/** Default page size for the explicit, bounded node-history cursor contract. */
+export const NODE_LIST_HISTORY_DEFAULT_LIMIT = 100;
+/** Hard cap on a single history page, regardless of caller-requested `limit`. */
+export const NODE_LIST_HISTORY_MAX_LIMIT = 500;
+
+export interface ListNodesFilters {
+  capability?: string;
+  name?: string;
+  /**
+   * Selects on computed liveness (persisted `status` plus a fresh heartbeat
+   * within `NODE_LIVENESS_TTL_MS`), pushed into SQL rather than applied after
+   * a full-table fetch. Omitted: no liveness selection (legacy behavior).
+   */
+  status?: 'online' | 'offline';
+  /**
+   * Switches the response to the bounded, paginated history contract:
+   * `{ nodes, nextCursor }` instead of a bare array, ordered by `id` so a
+   * caller can page through every historical row exactly once with no gaps
+   * or silent truncation, however many rows the workspace has retained.
+   */
+  history?: boolean;
+  /** Resume point for `history`: the `id` of the last row already consumed. */
+  cursor?: string | null;
+  /** Page size for `history`, clamped to [1, NODE_LIST_HISTORY_MAX_LIMIT]. */
+  limit?: number;
+}
+
+export interface ListNodesHistoryPage {
+  nodes: ReturnType<typeof publicNode>[];
+  nextCursor: string | null;
+}
+
+/** Pushes a capability match (string or `{ name }` shape) into a SQL EXISTS clause. */
+function capabilityMatchCondition(capability: string) {
+  return sql`EXISTS (SELECT 1 FROM json_each(${nodes.capabilities}) AS cap
+    WHERE cap.value = ${capability} OR json_extract(cap.value, '$.name') = ${capability})`;
+}
+
+/** Liveness predicate mirroring {@link isNodeLive}, pushed into SQL. */
+function livenessCondition(status: 'online' | 'offline', now: Date) {
+  const staleBefore = new Date(now.getTime() - NODE_LIVENESS_TTL_MS);
+  const live = and(
+    eq(nodes.status, 'online'),
+    isNotNull(nodes.lastHeartbeatAt),
+    lte(nodes.lastHeartbeatAt, now),
+    gte(nodes.lastHeartbeatAt, staleBefore),
+  )!;
+  return status === 'online' ? live : or(
+    ne(nodes.status, 'online'),
+    isNull(nodes.lastHeartbeatAt),
+    lt(nodes.lastHeartbeatAt, staleBefore),
+    // A heartbeat clock skewed into the future never counts as live either.
+    gt(nodes.lastHeartbeatAt, now),
+  )!;
+}
+
 export async function listNodes(
   db: Db,
   workspaceId: string,
-  filters: { capability?: string; name?: string } = {},
-) {
-  const rows = await db.select().from(nodes).where(eq(nodes.workspaceId, workspaceId));
-  return rows
-    .filter((node) => !filters.name || node.name === filters.name)
-    .filter((node) => !filters.capability || nodeHasCapability(node, filters.capability))
-    .map(publicNode);
+  filters: ListNodesFilters = {},
+): Promise<ListNodesHistoryPage> {
+  const now = new Date();
+  const conditions = [eq(nodes.workspaceId, workspaceId)];
+  if (filters.name) conditions.push(eq(nodes.name, filters.name));
+  if (filters.capability) conditions.push(capabilityMatchCondition(filters.capability));
+  if (filters.status) conditions.push(livenessCondition(filters.status, now));
+
+  if (!filters.history) {
+    // Legacy/default shape: a bare array, unpaginated, matching every caller
+    // that predates the history/status selector. `name`/`capability`/`status`
+    // are still evaluated in SQL instead of after a full-table fetch.
+    const rows = await db.select().from(nodes).where(and(...conditions));
+    return { nodes: rows.map((row) => publicNode(row, now.getTime())), nextCursor: null };
+  }
+
+  if (filters.cursor) conditions.push(gt(nodes.id, filters.cursor));
+  const limit = Math.min(
+    Math.max(1, filters.limit ?? NODE_LIST_HISTORY_DEFAULT_LIMIT),
+    NODE_LIST_HISTORY_MAX_LIMIT,
+  );
+  const rows = await db
+    .select()
+    .from(nodes)
+    .where(and(...conditions))
+    .orderBy(asc(nodes.id))
+    .limit(limit + 1);
+  const page = rows.slice(0, limit);
+  const nextCursor = rows.length > limit ? page[page.length - 1].id : null;
+  return { nodes: page.map((row) => publicNode(row, now.getTime())), nextCursor };
 }
 
 export async function getPublicNode(db: Db, workspaceId: string, name: string) {

@@ -1103,6 +1103,10 @@ components:
           description: Normalized managed-agent capacity utilization. Null unless a direct node, or every constituent provider of a broker node, explicitly reports a genuine measurement.
         active_agents:
           type: integer
+          description: Managed-agent occupancy. Authoritative only while `live` is true; once a node goes offline this is a frozen historical value — see `active_agents_stale`.
+        active_agents_stale:
+          type: boolean
+          description: True whenever `live` is false, meaning `active_agents` is frozen history, not current occupancy.
         max_agents:
           type: integer
           minimum: 0
@@ -4980,7 +4984,21 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
     get:
       summary: List nodes
-      description: List delivery nodes in the workspace, optionally filtered by capability or name. Observer tokens require `nodes:read`; agent filters constrain active-agent details.
+      description: >
+        List delivery nodes in the workspace, optionally filtered by capability, name,
+        or liveness. `capability`, `name`, and `status` are evaluated in SQL, not
+        fetched in full and filtered afterward. Without `history`, the response is a
+        bare array (the legacy, unpaginated shape every existing caller already
+        handles); `status=online` is the server-filtered live-Fleet path a default
+        `fleet nodes` call should use, since it never reads or returns history no
+        matter how large the workspace's roster has grown. `history=true` switches to
+        a bounded, paginated contract (`{ nodes, next_cursor }`) for an explicit full
+        read (e.g. `--all`): `cursor`/`limit` page through every matching row exactly
+        once, with no silent truncation, however many historical rows are retained.
+        Each entry's `active_agents` is authoritative live occupancy only while
+        `live` is `true`; once a node goes offline its `active_agents` is frozen
+        history and `active_agents_stale` is `true`. Observer tokens require
+        `nodes:read`; agent filters constrain active-agent details.
       tags:
         - Nodes
       security:
@@ -4998,9 +5016,35 @@ paths:
           required: false
           schema:
             type: string
+        - name: status
+          in: query
+          required: false
+          description: Pushes a liveness predicate into SQL. `online` is fresh-heartbeat live nodes; `offline` is everything else.
+          schema:
+            type: string
+            enum: [online, offline]
+        - name: history
+          in: query
+          required: false
+          description: Switches the response to the bounded `{ nodes, next_cursor }` pagination contract.
+          schema:
+            type: boolean
+        - name: cursor
+          in: query
+          required: false
+          description: Resume point from a previous page's `next_cursor`. Only meaningful with `history=true`.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: Page size, clamped server-side to a fixed maximum. Only meaningful with `history=true`.
+          schema:
+            type: integer
+            minimum: 1
       responses:
         '200':
-          description: Node roster
+          description: Node roster — a bare array by default, or `{ nodes, next_cursor }` when `history=true`.
           content:
             application/json:
               schema:

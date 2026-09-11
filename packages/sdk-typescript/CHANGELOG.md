@@ -9,6 +9,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- `nodes.list()` accepts `status: 'online' | 'offline'` to select on the engine's server-filtered liveness query instead of fetching the full roster. `NodeRosterEntry.activeAgentsStale` is `true` whenever `live` is `false`, so a frozen historical occupancy count is never treated as current.
+- `nodes.listHistory()` reads the bounded, paginated `history=true` contract (`{ nodes, nextCursor }`) for an explicit full-roster read without silent truncation, however many rows the workspace has retained.
+
 ## [8.8.0] - 2026-09-10
 
 ### Changed
