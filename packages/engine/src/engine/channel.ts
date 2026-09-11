@@ -329,11 +329,19 @@ export async function joinChannel(
     return { channel: channelName, agent_id: agentId, already_member: true };
   }
 
-  await db.insert(channelMembers).values({
-    channelId: channel.id,
-    agentId,
-    role: 'member',
-  });
+  if (channel.name.startsWith(SUBSCRIPTION_CHANNEL_PREFIX)) {
+    // Serialize the liveness check with release's membership removal.
+    await db.run(sql`INSERT INTO channel_members (channel_id, agent_id, role)
+      SELECT ${channel.id}, id, 'member' FROM agents
+      WHERE id = ${agentId} AND workspace_id = ${workspaceId} AND status != 'released'
+      ON CONFLICT DO NOTHING`);
+    const [recipient] = await db.select({ id: agents.id }).from(channelMembers)
+      .innerJoin(agents, eq(agents.id, channelMembers.agentId))
+      .where(and(eq(channelMembers.channelId, channel.id), eq(agents.id, agentId), ne(agents.status, 'released'))).limit(1);
+    if (!recipient) throw codedError('Subscription recipient was released', 'agent_not_found', 404);
+  } else {
+    await db.insert(channelMembers).values({ channelId: channel.id, agentId, role: 'member' });
+  }
 
   await invalidateChannelCache(workspaceId, channelName);
 

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { channelMembers, channels } from '../../db/schema.js';
 import { generateId } from '../../engine/snowflake.js';
 import { deleteAgent } from '../../engine/agent.js';
-import { createChannel, getChannel, joinChannel, ensureAgentSubscriptionChannel } from '../../engine/channel.js';
+import { createChannel, getChannel, joinChannel, leaveChannel, ensureAgentSubscriptionChannel } from '../../engine/channel.js';
 import type { EngineDb, TransactionCapability } from '../../ports/database.js';
 import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
 
@@ -52,6 +52,33 @@ describe('agent subscription channels', () => {
     });
     try {
       await expect(ensureAgentSubscriptionChannel(db, ws.workspaceId, 'racing-recipient')).rejects.toMatchObject({ code: 'agent_not_found' });
+    } finally { hook.mockRestore(); }
+  });
+
+  it('rejects a released recipient joining its old subscription channel', async () => {
+    const ws = await createWorkspace(stack.app, 'released-join');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'released-join-target');
+    const db = stack.runtime.deps.db;
+    const channel = await ensureAgentSubscriptionChannel(db, ws.workspaceId, 'released-join-target');
+    await deleteAgent(db, ws.workspaceId, 'released-join-target');
+    await expect(joinChannel(db, ws.workspaceId, channel.name, target.agentId)).rejects.toMatchObject({ code: 'agent_not_found' });
+    expect((await getChannel(db, ws.workspaceId, channel.name)).members).toHaveLength(0);
+  });
+
+  it('prevents release racing a subscription join from recreating membership', async () => {
+    const ws = await createWorkspace(stack.app, 'release-racing-join');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'racing-join-target');
+    const db = stack.runtime.deps.db;
+    const channel = await ensureAgentSubscriptionChannel(db, ws.workspaceId, 'racing-join-target');
+    await leaveChannel(db, ws.workspaceId, channel.name, target.agentId);
+    const original = db.run.bind(db);
+    const hook = vi.spyOn(db, 'run').mockImplementationOnce(async query => {
+      await deleteAgent(db, ws.workspaceId, 'racing-join-target');
+      return original(query);
+    });
+    try {
+      await expect(joinChannel(db, ws.workspaceId, channel.name, target.agentId)).rejects.toMatchObject({ code: 'agent_not_found' });
+      expect((await getChannel(db, ws.workspaceId, channel.name)).members).toHaveLength(0);
     } finally { hook.mockRestore(); }
   });
 

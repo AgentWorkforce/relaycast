@@ -1,3 +1,4 @@
+import { buildMessageCreatedEventData } from '../engine/deliveryWire.js';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
@@ -143,7 +144,8 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
     const { workspace_id, channel_id, agent_id, _deliveries, _delivery_rejections, ...responseData } = result;
 
     const eventData = { ...responseData, id: responseData.message_id, channel_id, agent_id };
-    runInBackground(c, routeDeliveryOutcomes(c, _deliveries, 'message.created', eventData, { workspaceId: workspace_id }), 'route webhook deliveries');
+    const messageEventData = buildMessageCreatedEventData(eventData, { channelName: result.channel, fromName: result.author });
+    runInBackground(c, routeDeliveryOutcomes(c, _deliveries, 'message.created', messageEventData, { workspaceId: workspace_id }), 'route webhook deliveries');
     if (channel_id) {
       runInBackground(
         c,
