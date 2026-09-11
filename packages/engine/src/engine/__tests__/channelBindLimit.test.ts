@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
-import { agents, channels, workspaces } from '../../db/schema.js';
+import { agents, channelMembers, channels, workspaces } from '../../db/schema.js';
 import { listChannels } from '../channel.js';
 
 /**
@@ -41,23 +41,36 @@ function recordBindCounts(handle: SqliteDbHandle): number[] {
 
 async function seed(db: SqliteDbHandle['db'], channelCount: number) {
   await db.insert(workspaces).values({ id: 'ws', name: 'ws', apiKeyHash: 'hash' });
-  await db.insert(agents).values({ id: 'agent', workspaceId: 'ws', name: 'a', tokenHash: 'th' });
+  for (let i = 0; i < 3; i++) {
+    await db.insert(agents).values({
+      id: `agent-${i}`, workspaceId: 'ws', name: `a${i}`, tokenHash: `th${i}`,
+    });
+  }
+  const expectedCounts: Record<string, number> = {};
   for (let i = 0; i < channelCount; i++) {
+    const channelId = `chan-${String(i).padStart(4, '0')}`;
     await db.insert(channels).values({
-      id: `chan-${String(i).padStart(4, '0')}`,
+      id: channelId,
       workspaceId: 'ws',
       name: `c${i}`,
       channelType: 0,
       isArchived: false,
     });
+    // Varied counts throughout the workspace cover both chunks and zero-member
+    // channels, regardless of the database's channel ordering.
+    expectedCounts[channelId] = i % 4;
+    for (let member = 0; member < expectedCounts[channelId]; member++) {
+      await db.insert(channelMembers).values({ channelId, agentId: `agent-${member}` });
+    }
   }
+  return expectedCounts;
 }
 
 describe('listChannels bind-parameter ceiling', () => {
   it('never issues a statement above D1 bind limit for a large workspace', async () => {
     const handle = openDb();
     try {
-      await seed(handle.db, 150);
+      const expectedCounts = await seed(handle.db, 150);
       const counts = recordBindCounts(handle);
       const result = await listChannels(handle.db, 'ws', false);
 
@@ -69,7 +82,8 @@ describe('listChannels bind-parameter ceiling', () => {
       // Chunking must not lose rows or drop the member-count join: a fix that
       // simply removed the join would satisfy the bind assertion above.
       expect(result).toHaveLength(150);
-      expect(result.every((c) => typeof c.member_count === 'number')).toBe(true);
+      expect(Object.fromEntries(result.map((c) => [c.id, c.member_count])))
+        .toEqual(expectedCounts);
     } finally {
       handle.sqlite.close();
     }
@@ -78,11 +92,13 @@ describe('listChannels bind-parameter ceiling', () => {
   it('is unchanged for a workspace under the ceiling', async () => {
     const handle = openDb();
     try {
-      await seed(handle.db, 12);
+      const expectedCounts = await seed(handle.db, 12);
       const counts = recordBindCounts(handle);
       const result = await listChannels(handle.db, 'ws', false);
       expect(Math.max(0, ...counts)).toBeLessThanOrEqual(D1_MAX_BIND_PARAMETERS);
       expect(result).toHaveLength(12);
+      expect(Object.fromEntries(result.map((c) => [c.id, c.member_count])))
+        .toEqual(expectedCounts);
     } finally {
       handle.sqlite.close();
     }
