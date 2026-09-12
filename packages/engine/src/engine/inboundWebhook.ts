@@ -8,6 +8,7 @@ import { inboundWebhookMessageMetadata, sanitizeUserMessageMetadata } from './me
 import { runAtomicWrites, databaseConstraintKind, type AtomicWrite } from '../ports/database.js';
 import { buildChannelDeliveryWrite, fetchChannelDeliveryOutcomes } from './deliveryWrites.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
+import type { WorkspaceDeliveryPolicy } from './workspaceDeliveryPolicy.js';
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -165,7 +166,10 @@ export async function triggerWebhook(
   webhookId: string,
   token: string | null,
   data: { text?: string; source?: string; author?: string; payload?: Record<string, unknown> },
-  options: { mailbox?: MailboxConfig | ((workspaceId: string) => MailboxConfig) } = {},
+  options: {
+    mailbox?: MailboxConfig | ((workspaceId: string) => MailboxConfig);
+    workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy | ((workspaceId: string) => WorkspaceDeliveryPolicy | undefined);
+  } = {},
 ) {
   // Look up webhook
   const [webhook] = await db
@@ -217,6 +221,9 @@ export async function triggerWebhook(
   const mailbox = typeof options.mailbox === 'function' ? options.mailbox(webhook.workspaceId) : options.mailbox ?? {
     ttlMs: DEFAULT_MAILBOX_TTL_MS, depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
   };
+  const workspacePolicy = typeof options.workspaceDeliveryPolicy === 'function'
+    ? options.workspaceDeliveryPolicy(webhook.workspaceId)
+    : options.workspaceDeliveryPolicy;
   const results = await runAtomicWrites(db, (writeDb) => {
     const writes: AtomicWrite[] = [
       writeDb
@@ -244,6 +251,7 @@ export async function triggerWebhook(
       workspaceId: webhook.workspaceId, messageId, channelId: webhook.channelId,
       senderAgentId: postingAgentId, mode: 'immediate',
       ttlMs: mailbox.ttlMs, depthCap: mailbox.depthCap, rejectOnOverflow: true,
+      workspacePolicy,
     }));
     return writes;
   }, { requireAtomic: true }).catch(rethrowMailboxError);
@@ -288,7 +296,7 @@ export async function triggerIntegrationMessage(
     webhookName?: string;
     mode?: 'wait' | 'steer';
   },
-  options: { mailbox?: MailboxConfig } = {},
+  options: { mailbox?: MailboxConfig; workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy } = {},
 ) {
   const postingAgentId = await ensureWebhookAgent(db, workspaceId);
   const messageId = generateId();
@@ -350,6 +358,7 @@ export async function triggerIntegrationMessage(
         ttlMs: mailbox.ttlMs,
         depthCap: mailbox.depthCap,
         rejectOnOverflow: true,
+        workspacePolicy: options.workspaceDeliveryPolicy,
       }),
     );
 

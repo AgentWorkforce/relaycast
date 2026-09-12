@@ -12,6 +12,12 @@ import { toIso } from '../lib/serialize.js';
 import { readNodeRedriveCandidates } from './nodeRedriveCandidates.js';
 import { fetchAttachmentsBatch, type AttachmentRow } from './attachments.js';
 import type { DeliveryFanoutRecord } from './deliveryWrites.js';
+import {
+  workspaceActiveDepthSql,
+  workspaceGrowthLimit,
+  WorkspaceDeliveryCapacityError,
+  type WorkspaceDeliveryPolicy,
+} from './workspaceDeliveryPolicy.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -269,7 +275,7 @@ export async function deferDelivery(
   workspaceId: string,
   agentId: string,
   deliveryId: string,
-  opts: { availableAt: Date; reason?: string },
+  opts: { availableAt: Date; reason?: string; workspacePolicy?: WorkspaceDeliveryPolicy },
 ): Promise<TransitionResult | null> {
   const existing = await getOwnedDelivery(db, workspaceId, agentId, deliveryId);
   if (!existing) return null;
@@ -293,6 +299,14 @@ export async function deferDelivery(
     eq(deliveries.availableAt, opts.availableAt),
     reasonMatches,
   )!;
+  // A failed→queued deferral resurrects a row that was NOT counted in active
+  // workspace depth, so it grows the workspace by one. Guard it in the UPDATE
+  // itself (not a preflight read) so concurrent restorations cannot overbook.
+  // Delta=0 transitions (queued→queued, repeated/no-op defers) stay allowed
+  // even at/over cap, and terminal failures are never blocked from draining.
+  const workspaceCapacityOk = opts.workspacePolicy
+    ? sql`(${deliveries.status} <> 'failed' OR (${workspaceActiveDepthSql(workspaceId)}) < ${workspaceGrowthLimit(opts.workspacePolicy, 'targeted')})`
+    : undefined;
   const [updated] = await db
     .update(deliveries)
     .set({
@@ -305,8 +319,14 @@ export async function deferDelivery(
       eq(deliveries.id, deliveryId),
       notInArray(deliveries.status, ['acked', 'dead_lettered']),
       not(isNoop),
+      workspaceCapacityOk,
     ))
     .returning();
+  if (!updated && existing.status === 'failed' && opts.workspacePolicy) {
+    throw new WorkspaceDeliveryCapacityError(
+      'Workspace delivery depth cap prevents restoring a failed delivery',
+    );
+  }
   return resolveTransition(db, workspaceId, agentId, deliveryId, updated, existing.channelId);
 }
 

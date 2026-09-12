@@ -12,6 +12,7 @@ import * as inboundWebhookEngine from '../engine/inboundWebhook.js';
 import { fanoutToChannel } from './fanout.js';
 import { routeDeliveryOutcomes } from './deliveryRouting.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
+import { resolveWorkspaceDeliveryPolicy } from '../engine/workspaceDeliveryPolicy.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
@@ -199,6 +200,7 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
   }
 
   const mailbox = resolveMailboxConfig(c.get('engine').config, workspaceId);
+  const workspaceDeliveryPolicy = resolveWorkspaceDeliveryPolicy(c.get('engine').config, workspaceId);
 
   try {
     const result = await runIdempotent({
@@ -234,7 +236,7 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
           ...(event.resourceRef ? { resource_ref: event.resourceRef } : {}),
           record: message.record,
         },
-      }, { mailbox }),
+      }, { mailbox, workspaceDeliveryPolicy }),
     });
 
     if (!result.replayed) {

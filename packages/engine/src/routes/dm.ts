@@ -7,6 +7,7 @@ import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middlew
 import { sha256Hex } from '../lib/crypto.js';
 import * as dmEngine from '../engine/dm.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
+import { resolveWorkspaceDeliveryPolicyFor } from '../engine/workspaceDeliveryPolicy.js';
 import { publishWorkspaceEvent } from './fanout.js';
 import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
 import { buildDmReceivedEventData } from '../engine/deliveryWire.js';
@@ -75,6 +76,7 @@ dmRoutes.post(
       }
 
       const mailbox = resolveMailboxConfig(c.get('engine').config, workspace.id);
+      const workspaceDeliveryPolicy = await resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace);
       const toDmReceivedEventData = (data: Awaited<ReturnType<typeof dmEngine.sendDm>>) => buildDmReceivedEventData(data, {
         fromName: agent!.name,
       });
@@ -97,7 +99,7 @@ dmRoutes.post(
           attachments: normalizedAttachments,
           data,
           mode,
-        }, { mailbox }),
+        }, { mailbox, workspaceDeliveryPolicy }),
         afterOperation: async (data) => {
           await sendWebhookEvent(c, {
             type: 'dm.received',

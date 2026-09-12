@@ -50,6 +50,31 @@ export interface WorkspaceDeliveryPolicyConfig {
   cap?: number;
   reserve?: number;
   workspaces?: Record<string, { cap?: number; reserve?: number } | undefined>;
+  /**
+   * Server-only async resolver for dynamic, request-time plans (e.g. a
+   * KV-backed effective plan lookup). When present it takes precedence over the
+   * static `cap`/`workspaces` fields, so a host whose plan is async does not
+   * have to flatten every workspace into static config. Never source this from
+   * a client request.
+   */
+  resolve?: (workspace: { id: string; plan: string }) => Promise<WorkspaceDeliveryPolicy | undefined>;
+}
+
+/**
+ * Async resolution used by request handlers: prefer a host-supplied dynamic
+ * resolver, else fall back to the static configured cap. Returns `undefined`
+ * when neither is configured (self-host: no workspace guard).
+ */
+export async function resolveWorkspaceDeliveryPolicyFor(
+  config: { workspaceDelivery?: WorkspaceDeliveryPolicyConfig } | undefined,
+  workspace: { id: string; plan?: string | null },
+): Promise<WorkspaceDeliveryPolicy | undefined> {
+  const dynamic = await config?.workspaceDelivery?.resolve?.({
+    id: workspace.id,
+    plan: workspace.plan ?? 'free',
+  });
+  if (dynamic) return dynamic;
+  return resolveWorkspaceDeliveryPolicy(config, workspace.id);
 }
 
 /**

@@ -7,12 +7,14 @@ import { fanoutToAgents } from './fanout.js';
 import { runInBackground } from './background.js';
 import { errorResponse } from '../lib/httpError.js';
 import {
+  jsonError,
   jsonNotFound,
   jsonOk,
   parseJsonBody,
   parseOptionalJsonBody,
   parseQueryParams,
 } from '../lib/httpResponse.js';
+import { resolveWorkspaceDeliveryPolicy, WorkspaceDeliveryCapacityError } from '../engine/workspaceDeliveryPolicy.js';
 import { ListDeliveriesQuerySchema, FailDeliveryRequestSchema, DeferDeliveryRequestSchema } from '@relaycast/types';
 
 export const deliveryRoutes = new Hono<AppEnv>();
@@ -143,10 +145,19 @@ deliveryRoutes.post(
       const workspace = c.get('workspace');
       const agent = c.get('agent');
       const id = c.req.param('id');
-      const result = await deliveryEngine.deferDelivery(db, workspace.id, agent!.id, id, {
-        availableAt: new Date(parsed.data.available_at),
-        reason: parsed.data.reason,
-      });
+      let result: Awaited<ReturnType<typeof deliveryEngine.deferDelivery>>;
+      try {
+        result = await deliveryEngine.deferDelivery(db, workspace.id, agent!.id, id, {
+          availableAt: new Date(parsed.data.available_at),
+          reason: parsed.data.reason,
+          workspacePolicy: resolveWorkspaceDeliveryPolicy(c.get('engine').config, workspace.id),
+        });
+      } catch (error) {
+        if (error instanceof WorkspaceDeliveryCapacityError) {
+          return jsonError(c, error.code, error.message, 429);
+        }
+        throw error;
+      }
       if (!result) {
         return jsonNotFound(c, 'delivery_not_found', 'Delivery not found');
       }

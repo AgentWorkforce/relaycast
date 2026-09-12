@@ -5,6 +5,9 @@ import { agents, channelMembers, channels, deliveries, messages, workspaces } fr
 import { runAtomicWrites } from '../../ports/database.js';
 import { buildChannelDeliveryWrite } from '../deliveryWrites.js';
 import type { EngineDb } from '../../ports/database.js';
+import * as messageEngine from '../message.js';
+import * as deliveryEngine from '../delivery.js';
+import { WorkspaceDeliveryCapacityError } from '../workspaceDeliveryPolicy.js';
 
 /**
  * Incident regression: `rw_7ccfea89` accumulated 9,778 active rows from two
@@ -129,5 +132,90 @@ describe('workspace delivery growth guard (channel broadcast)', () => {
 
     await expect(send(db, ws, channel, 'msg_big', { cap: CAP })).rejects.toThrow();
     expect(await activeDepth(db, ws)).toBe(0);
+  });
+});
+
+describe('workspace delivery guard at real engine entry points', () => {
+  it('GREEN: an overflowing broadcast rolls back its message row', async () => {
+    stack = makeNodeStack();
+    const db = stack.runtime.deps.db;
+    const { ws, channel } = await seedWorkspace(db, CAP + 1);
+
+    await expect(
+      messageEngine.postMessage(
+        db, ws, channel, SENDER, { text: 'overflow' },
+        { workspaceDeliveryPolicy: { cap: CAP } },
+      ),
+    ).rejects.toThrow();
+
+    const rows = await db.select({ c: count() }).from(messages).where(eq(messages.workspaceId, ws));
+    expect(Number(rows[0]?.c ?? 0)).toBe(0);
+    expect(await activeDepth(db, ws)).toBe(0);
+  });
+
+  it('GREEN: a duplicate delivery (zero new rows) is not rejected at capacity', async () => {
+    stack = makeNodeStack();
+    const db = stack.runtime.deps.db;
+    const { ws, channel } = await seedWorkspace(db, FANOUT);
+    const policy = { cap: CAP };
+
+    const first = await messageEngine.postMessage(
+      db, ws, channel, SENDER, { text: 'first' },
+      { workspaceDeliveryPolicy: policy },
+    );
+    expect(await activeDepth(db, ws)).toBe(FANOUT);
+
+    // Re-run the exact same message id: every candidate delivery already exists,
+    // so the guard must charge zero new rows and admit without growth.
+    await runAtomicWrites(db, (writeDb) => [
+      buildChannelDeliveryWrite(writeDb, {
+        workspaceId: ws,
+        messageId: first.id,
+        channelId: channel,
+        senderAgentId: SENDER,
+        mode: 'immediate',
+        ttlMs: 3_600_000,
+        depthCap: 1000,
+        workspacePolicy: policy,
+      }),
+    ]);
+    expect(await activeDepth(db, ws)).toBe(FANOUT);
+  });
+
+  it('GREEN: failed→queued defer is rejected at cap; delta=0 defer stays allowed', async () => {
+    stack = makeNodeStack();
+    const db = stack.runtime.deps.db;
+    const { ws, channel } = await seedWorkspace(db, 1);
+    const policy = { cap: 1 };
+    const recipient = 'agent_0';
+
+    const m1 = await messageEngine.postMessage(
+      db, ws, channel, SENDER, { text: 'one' },
+      { workspaceDeliveryPolicy: policy },
+    );
+    const d1 = `del_${m1.id}_${recipient}`;
+    await deliveryEngine.failDelivery(db, ws, recipient, d1);
+    expect(await activeDepth(db, ws)).toBe(0);
+
+    // Fill back to the cap, then a failed→queued restoration would grow past it.
+    const m2 = await messageEngine.postMessage(
+      db, ws, channel, SENDER, { text: 'two' },
+      { workspaceDeliveryPolicy: policy },
+    );
+    const d2 = `del_${m2.id}_${recipient}`;
+    await expect(
+      deliveryEngine.deferDelivery(db, ws, recipient, d1, {
+        availableAt: new Date(),
+        workspacePolicy: policy,
+      }),
+    ).rejects.toBeInstanceOf(WorkspaceDeliveryCapacityError);
+    expect(await activeDepth(db, ws)).toBe(1);
+
+    // Delta=0 (queued→queued) remains operable at/over cap.
+    const queuedDefer = await deliveryEngine.deferDelivery(db, ws, recipient, d2, {
+      availableAt: new Date(Date.now() + 60_000),
+      workspacePolicy: policy,
+    });
+    expect(queuedDefer?.changed).toBe(true);
   });
 });

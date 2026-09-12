@@ -21,6 +21,7 @@ import {
   type DeliveryOutcomeRecords,
 } from './deliveryWrites.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
+import type { WorkspaceDeliveryPolicy } from './workspaceDeliveryPolicy.js';
 import { codedError } from '../lib/httpError.js';
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 import { fetchAttachmentsBatch, resolveSendAttachments, type AttachmentRow } from './attachments.js';
@@ -32,6 +33,8 @@ type Db = ReturnType<typeof getDb>;
 interface SendDmOptions {
   skipA2aIntercept?: boolean;
   mailbox?: MailboxConfig;
+  /** Server-resolved workspace growth policy; absent => no workspace guard. */
+  workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy;
 }
 
 /**
@@ -404,6 +407,7 @@ export async function sendDm(
           reason: 'dm',
           ttlMs: mailbox.ttlMs,
           depthCap: mailbox.depthCap,
+          workspacePolicy: options.workspaceDeliveryPolicy,
         }),
       );
     }
@@ -430,7 +434,7 @@ export async function sendDm(
     );
 
     return writes;
-  });
+  }, { requireAtomic: Boolean(options.workspaceDeliveryPolicy) });
   const [message] = results[0] as (typeof messages.$inferSelect)[];
   const deliveryOutcomes: DeliveryOutcomeRecords = deliveryId
     ? await fetchDirectDeliveryOutcomes(db, { messageId, recipientAgentId: toAgent.id })

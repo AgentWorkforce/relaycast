@@ -6,6 +6,7 @@ import { rateLimit } from '../middleware/rateLimit.js';
 import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as threadEngine from '../engine/thread.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
+import { resolveWorkspaceDeliveryPolicyFor } from '../engine/workspaceDeliveryPolicy.js';
 import { publishWorkspaceEvent } from './fanout.js';
 import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
 import { buildThreadReplyEventData } from '../engine/deliveryWire.js';
@@ -58,6 +59,7 @@ threadRoutes.post(
 
       const parentId = c.req.param('id');
       const mailbox = resolveMailboxConfig(c.get('engine').config, workspace.id);
+      const workspaceDeliveryPolicy = await resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace);
       const toThreadReplyEventData = (data: Awaited<ReturnType<typeof threadEngine.postReply>>) => buildThreadReplyEventData(data, {
         channelName: data.channel_name ?? '',
         fromName: agent?.name ?? 'unknown',
@@ -78,7 +80,7 @@ threadRoutes.post(
             parentId,
             agentId,
             { text, blocks, data },
-            { mailbox },
+            { mailbox, workspaceDeliveryPolicy },
           ),
         afterOperation: async (data) => {
           await sendWebhookEvent(c, {

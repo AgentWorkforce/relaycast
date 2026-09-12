@@ -6,6 +6,7 @@ import { asCodedError, errorResponse } from '../lib/httpError.js';
 import { requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
+import { resolveWorkspaceDeliveryPolicy } from '../engine/workspaceDeliveryPolicy.js';
 import * as inboundWebhookEngine from '../engine/inboundWebhook.js';
 import * as triggerEngine from '../engine/trigger.js';
 import * as channelEngine from '../engine/channel.js';
@@ -136,7 +137,10 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
         author: author ?? source,
         payload: (payload && typeof payload === 'object') ? payload as Record<string, unknown> : undefined,
       },
-      { mailbox: (workspaceId) => resolveMailboxConfig(c.get('engine').config, workspaceId) },
+      {
+        mailbox: (workspaceId) => resolveMailboxConfig(c.get('engine').config, workspaceId),
+        workspaceDeliveryPolicy: (workspaceId) => resolveWorkspaceDeliveryPolicy(c.get('engine').config, workspaceId),
+      },
     );
     if (!result) {
       return jsonNotFound(c, 'webhook_not_found', 'Webhook not found or inactive');
