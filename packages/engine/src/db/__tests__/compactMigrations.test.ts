@@ -79,7 +79,7 @@ function constraints(handle: SqliteDbHandle) {
 function expectConstraintsPreserved(before: ReturnType<typeof constraints>, after: ReturnType<typeof constraints>) {
   // 0050 may add these redundant named lookup indexes, but must not alter any
   // original constraint (including a lookup that already existed via 0049).
-  expect(after.filter(table => table.name !== 'maintenance_cursors' || before.some(original => original.name === table.name))
+  expect(after.filter(table => !['maintenance_cursors', 'a2a_egress'].includes(table.name) || before.some(original => original.name === table.name))
     .map(table => {
       const original = before.find(candidate => candidate.name === table.name);
       // 0055 adds optional event identity columns and their index after the
@@ -126,7 +126,15 @@ describe('compact maintenance migration path', () => {
     const before = snapshot(handle);
     const beforeConstraints = constraints(handle);
     expect(runMigrations(handle).applied).toEqual(files.filter(name => name >= replacement));
-    expect(snapshot(handle)).toEqual(before);
+    const after = snapshot(handle);
+    // 0057 adds an empty table; every pre-existing row and table must remain.
+    expect(after.filter(([name]) => name !== 'a2a_egress')).toEqual(before);
+    expect(after.find(([name]) => name === 'a2a_egress')).toEqual([
+      'a2a_egress', 0, createHash('sha256').update('[]').digest('hex'),
+    ]);
+    expect(handle.sqlite.pragma('foreign_key_list(a2a_egress)')).toContainEqual(
+      expect.objectContaining({ table: 'workspaces', from: 'workspace_id', on_delete: 'CASCADE' }),
+    );
     expectConstraintsPreserved(beforeConstraints, constraints(handle));
     expect(handle.sqlite.prepare('SELECT * FROM maintenance_cursors ORDER BY id').all()).toEqual(cursorRows);
     expect(handle.sqlite.pragma('foreign_key_check')).toEqual([]);
