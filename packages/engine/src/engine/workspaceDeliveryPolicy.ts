@@ -1,4 +1,6 @@
-import { sql, type SQL, type SQLWrapper } from 'drizzle-orm';
+import { and, count, eq, or, sql, type SQL, type SQLWrapper } from 'drizzle-orm';
+import { deliveries } from '../db/schema.js';
+import type { EngineDb } from '../ports/database.js';
 
 /**
  * Server-owned workspace delivery-growth policy.
@@ -103,6 +105,24 @@ function positiveIntOrUndefined(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : undefined;
+}
+
+/**
+ * Read the current active workspace delivery depth (queued+delivered,
+ * unexpired). Used for pre-egress ordering checks where an external side effect
+ * (outbound A2A HTTP) must not fire after a capacity refusal; the authoritative
+ * atomic guard remains the SQL sentinel in the delivery write itself.
+ */
+export async function currentWorkspaceDepth(db: EngineDb, workspaceId: string): Promise<number> {
+  const rows = await db
+    .select({ depth: count() })
+    .from(deliveries)
+    .where(and(
+      eq(deliveries.workspaceId, workspaceId),
+      or(eq(deliveries.status, 'queued'), eq(deliveries.status, 'delivered')),
+      sql`(${deliveries.expiresAt} IS NULL OR ${deliveries.expiresAt} > unixepoch())`,
+    ));
+  return Number(rows[0]?.depth ?? 0);
 }
 
 /** The depth ceiling a given audience may grow the workspace to. */

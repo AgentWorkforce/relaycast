@@ -21,7 +21,12 @@ import {
   type DeliveryOutcomeRecords,
 } from './deliveryWrites.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
-import type { WorkspaceDeliveryPolicy } from './workspaceDeliveryPolicy.js';
+import {
+  currentWorkspaceDepth,
+  workspaceGrowthLimit,
+  WorkspaceDeliveryCapacityError,
+  type WorkspaceDeliveryPolicy,
+} from './workspaceDeliveryPolicy.js';
 import { codedError } from '../lib/httpError.js';
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 import { fetchAttachmentsBatch, resolveSendAttachments, type AttachmentRow } from './attachments.js';
@@ -359,6 +364,19 @@ export async function sendDm(
   };
 
   if (a2aTarget) {
+    // A2A egress ordering: an outbound HTTP send is not part of the atomic
+    // message/delivery write, so a capacity refusal must happen BEFORE it.
+    // Refuse here (no external side effect) rather than sending and then failing
+    // the local write. The atomic guard still enforces the invariant.
+    if (options.workspaceDeliveryPolicy) {
+      const limit = workspaceGrowthLimit(options.workspaceDeliveryPolicy, 'targeted');
+      const depth = await currentWorkspaceDepth(db, workspaceId);
+      if (depth >= limit) {
+        throw new WorkspaceDeliveryCapacityError(
+          'Workspace delivery depth cap prevents outbound A2A send',
+        );
+      }
+    }
     const payload = a2aEngine.translateRelayToA2a({
       id: messageId,
       agent_id: fromAgentId,

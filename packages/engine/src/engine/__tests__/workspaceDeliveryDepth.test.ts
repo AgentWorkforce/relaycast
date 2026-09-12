@@ -7,7 +7,7 @@ import { buildChannelDeliveryWrite } from '../deliveryWrites.js';
 import type { EngineDb } from '../../ports/database.js';
 import * as messageEngine from '../message.js';
 import * as deliveryEngine from '../delivery.js';
-import { WorkspaceDeliveryCapacityError, resolveWorkspaceDeliveryPolicyFor } from '../workspaceDeliveryPolicy.js';
+import { WorkspaceDeliveryCapacityError, currentWorkspaceDepth, resolveWorkspaceDeliveryPolicyFor } from '../workspaceDeliveryPolicy.js';
 
 /**
  * Incident regression: `rw_7ccfea89` accumulated 9,778 active rows from two
@@ -132,6 +132,14 @@ describe('workspace delivery growth guard (channel broadcast)', () => {
 
     await expect(send(db, ws, channel, 'msg_big', { cap: CAP })).rejects.toThrow();
     expect(await activeDepth(db, ws)).toBe(0);
+  });
+
+  it('reports active workspace depth for the A2A pre-egress check', async () => {
+    stack = makeNodeStack();
+    const db = stack.runtime.deps.db;
+    const { ws, channel } = await seedWorkspace(db, 3);
+    await send(db, ws, channel, 'msg_depth', { cap: CAP });
+    expect(await currentWorkspaceDepth(db, ws)).toBe(3);
   });
 
   it('resolves the dynamic host policy through the async resolver, clamped within cap', async () => {
