@@ -2,12 +2,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { and, count, eq, inArray } from 'drizzle-orm';
 import { makeNodeStack, type TestStack } from '../../__tests__/conformance/harness.js';
 import { agents, channelMembers, channels, deliveries, messages, workspaces } from '../../db/schema.js';
-import { runAtomicWrites } from '../../ports/database.js';
+import { databaseConstraintKind, runAtomicWrites } from '../../ports/database.js';
 import { buildChannelDeliveryWrite } from '../deliveryWrites.js';
 import type { EngineDb } from '../../ports/database.js';
 import * as messageEngine from '../message.js';
 import * as deliveryEngine from '../delivery.js';
-import { WorkspaceDeliveryCapacityError } from '../workspaceDeliveryPolicy.js';
+import { WorkspaceDeliveryCapacityError, resolveWorkspaceDeliveryPolicyFor } from '../workspaceDeliveryPolicy.js';
 
 /**
  * Incident regression: `rw_7ccfea89` accumulated 9,778 active rows from two
@@ -132,6 +132,38 @@ describe('workspace delivery growth guard (channel broadcast)', () => {
 
     await expect(send(db, ws, channel, 'msg_big', { cap: CAP })).rejects.toThrow();
     expect(await activeDepth(db, ws)).toBe(0);
+  });
+
+  it('resolves the dynamic host policy through the async resolver, clamped within cap', async () => {
+    const config = {
+      workspaceDelivery: {
+        resolve: async (w: { id: string; plan: string }) =>
+          ({ cap: w.plan === 'enterprise' ? 5000 : 500, reserve: 16 }),
+      },
+    };
+    expect(await resolveWorkspaceDeliveryPolicyFor(config, { id: 'ws', plan: 'enterprise' }))
+      .toEqual({ cap: 5000, reserve: 16 });
+    expect(await resolveWorkspaceDeliveryPolicyFor(config, { id: 'ws', plan: 'free' }))
+      .toEqual({ cap: 500, reserve: 16 });
+    // No host policy => undefined (self-host has no workspace guard).
+    expect(await resolveWorkspaceDeliveryPolicyFor(undefined, { id: 'ws', plan: 'free' })).toBeUndefined();
+    // A reserve >= cap is clamped into `0 <= reserve < cap`.
+    expect(await resolveWorkspaceDeliveryPolicyFor({ workspaceDelivery: { cap: 100, reserve: 200 } }, { id: 'ws', plan: 'free' }))
+      .toEqual({ cap: 100, reserve: 99 });
+  });
+
+  it('GREEN: workspace overflow is a distinct capacity kind from mailbox overflow', async () => {
+    stack = makeNodeStack();
+    const db = stack.runtime.deps.db;
+    const { ws, channel } = await seedWorkspace(db, CAP + 1);
+
+    let caught: unknown;
+    try {
+      await send(db, ws, channel, 'msg_kind', { cap: CAP });
+    } catch (error) {
+      caught = error;
+    }
+    expect(databaseConstraintKind(caught)).toBe('workspace_delivery_capacity');
   });
 });
 

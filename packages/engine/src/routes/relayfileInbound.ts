@@ -293,6 +293,10 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
       c.header('Retry-After', '30');
       return jsonError(c, 'mailbox_full', 'A recipient mailbox is full; retry this event', 503);
     }
+    if (code === 'workspace_delivery_capacity') {
+      c.header('Retry-After', '30');
+      return jsonError(c, 'workspace_delivery_capacity', 'Workspace delivery backlog is full; retry this event', 429);
+    }
     if (code === 'idempotency_in_progress') {
       return jsonOk(c, { skipped: 'duplicate_in_progress' });
     }

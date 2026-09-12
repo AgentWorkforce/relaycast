@@ -124,26 +124,31 @@ function belowDepthCapSql(workspaceId: string, agentId: unknown, depthCap: numbe
  * across the fanout), so when it fails the *whole* broadcast is refused, never
  * silently truncated or partially admitted.
  */
+/** The `workspace_id` sentinel for the per-recipient / required-mailbox guard. */
 function guardedWorkspaceIdSql(args: {
+  workspaceId: string;
+  perRecipientOk?: SQL;
+}): SQL<string> {
+  if (!args.perRecipientOk) return sql<string>`${args.workspaceId}`;
+  return sql<string>`CASE WHEN ${args.perRecipientOk} THEN ${args.workspaceId} ELSE NULL END`;
+}
+
+/**
+ * The `status` sentinel for the workspace-scoped growth guard. A NULL status is
+ * a DIFFERENT NOT NULL violation from the `workspace_id` mailbox sentinel, so
+ * `databaseConstraintKind` can tell a workspace capacity refusal apart from a
+ * per-recipient mailbox overflow. When no policy is configured the status is the
+ * literal `'queued'` (byte-identical current behavior).
+ */
+function guardedStatusSql(args: {
   workspaceId: string;
   policy?: WorkspaceDeliveryPolicy;
   audience: DeliveryAudience;
-  perRecipientOk?: SQL;
   newCandidates: SQL<number>;
 }): SQL<string> {
-  const conditions: SQL[] = [];
-  if (args.perRecipientOk) conditions.push(args.perRecipientOk);
-  if (args.policy) {
-    const limit = workspaceGrowthLimit(args.policy, args.audience);
-    conditions.push(
-      sql`(${workspaceActiveDepthSql(args.workspaceId)} + ${args.newCandidates}) <= ${limit}`,
-    );
-  }
-  if (conditions.length === 0) return sql<string>`${args.workspaceId}`;
-  const condition = conditions.length === 1
-    ? conditions[0]!
-    : sql`(${conditions[0]!}) AND (${conditions[1]!})`;
-  return sql<string>`CASE WHEN ${condition} THEN ${args.workspaceId} ELSE NULL END`;
+  if (!args.policy) return sql<string>`${'queued'}`;
+  const limit = workspaceGrowthLimit(args.policy, args.audience);
+  return sql<string>`CASE WHEN (${workspaceActiveDepthSql(args.workspaceId)} + ${args.newCandidates}) <= ${limit} THEN ${'queued'} ELSE NULL END`;
 }
 
 export function buildChannelDeliveryWrite(
@@ -188,11 +193,14 @@ export function buildChannelDeliveryWrite(
   );
   const workspaceId = guardedWorkspaceIdSql({
     workspaceId: input.workspaceId,
-    policy: input.workspacePolicy,
-    audience: input.audience ?? 'broadcast',
     perRecipientOk: input.rejectOnOverflow
       ? belowDepthCapSql(input.workspaceId, channelMembers.agentId, input.depthCap)
       : undefined,
+  });
+  const status = guardedStatusSql({
+    workspaceId: input.workspaceId,
+    policy: input.workspacePolicy,
+    audience: input.audience ?? 'broadcast',
     newCandidates,
   });
   return db
@@ -211,7 +219,7 @@ export function buildChannelDeliveryWrite(
           reason,
           priority: sql<string>`${'normal'}`,
           deadline: sql<null>`null`,
-          status: sql<string>`${'queued'}`,
+          status,
           // Migration 0029 installs an AFTER INSERT trigger that advances the
           // same agent row to this value. Allocation and high-water advancement
           // therefore happen in one SQLite statement on every adapter.
@@ -288,7 +296,8 @@ export function buildGroupDmDeliveryWrite(
       )),
     input.messageId,
   );
-  const workspaceId = guardedWorkspaceIdSql({
+  const workspaceId = guardedWorkspaceIdSql({ workspaceId: input.workspaceId });
+  const status = guardedStatusSql({
     workspaceId: input.workspaceId,
     policy: input.workspacePolicy,
     audience: 'targeted',
@@ -307,7 +316,7 @@ export function buildGroupDmDeliveryWrite(
           reason: sql<string>`${'dm'}`,
           priority: sql<string>`${'normal'}`,
           deadline: sql<null>`null`,
-          status: sql<string>`${'queued'}`,
+          status,
           seq: nextDeliverySeqSql(),
           locationType: sql<string>`CASE WHEN ${agentNodeBindings.nodeId} IS NOT NULL THEN 'via_node' ELSE ${agents.locationType} END`,
           locationNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
@@ -379,7 +388,8 @@ export function buildDirectDeliveryWrite(
       )),
     input.messageId,
   );
-  const workspaceId = guardedWorkspaceIdSql({
+  const workspaceId = guardedWorkspaceIdSql({ workspaceId: input.workspaceId });
+  const status = guardedStatusSql({
     workspaceId: input.workspaceId,
     policy: input.workspacePolicy,
     audience: 'targeted',
@@ -398,7 +408,7 @@ export function buildDirectDeliveryWrite(
           reason: sql<string>`${input.reason}`,
           priority: sql<string>`${'normal'}`,
           deadline: sql<null>`null`,
-          status: sql<string>`${'queued'}`,
+          status,
           seq: nextDeliverySeqSql(),
           locationType: sql<string>`CASE WHEN ${agentNodeBindings.nodeId} IS NOT NULL THEN 'via_node' ELSE ${agents.locationType} END`,
           locationNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,

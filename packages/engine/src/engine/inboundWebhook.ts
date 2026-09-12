@@ -155,7 +155,15 @@ export async function deleteWebhook(db: Db, workspaceId: string, webhookId: stri
 }
 
 function rethrowMailboxError(error: unknown): never {
-  if (databaseConstraintKind(error) === 'mailbox_capacity') {
+  const kind = databaseConstraintKind(error);
+  if (kind === 'workspace_delivery_capacity') {
+    throw codedError(
+      'Workspace delivery backlog is full; retry this event after it drains',
+      'workspace_delivery_capacity',
+      503,
+    );
+  }
+  if (kind === 'mailbox_capacity') {
     throw codedError('A recipient mailbox is full; retry this event after capacity becomes available', 'mailbox_full', 503);
   }
   throw error;

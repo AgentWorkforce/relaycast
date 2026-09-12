@@ -173,12 +173,18 @@ export async function runAtomicWrites(
 /** Normalize the capacity sentinel across SQLite adapters (D1 exposes only a wrapped message).
  * Keep driver-specific error decoding at this port boundary; engine callers use a stable kind.
  */
-export function databaseConstraintKind(error: unknown): 'mailbox_capacity' | undefined {
+export type DatabaseConstraintKind = 'mailbox_capacity' | 'workspace_delivery_capacity';
+
+export function databaseConstraintKind(error: unknown): DatabaseConstraintKind | undefined {
   const seen = new Set<unknown>();
   let cause = error;
   while (cause instanceof Error && !seen.has(cause)) {
     seen.add(cause);
+    // Per-recipient/required-mailbox sentinel (workspace_id NULL), and the
+    // distinct workspace-scoped growth sentinel (status NULL). Order matters
+    // only for a row that trips both; either is a capacity refusal.
     if (/NOT NULL constraint failed: deliveries\.workspace_id/i.test(cause.message)) return 'mailbox_capacity';
+    if (/NOT NULL constraint failed: deliveries\.status/i.test(cause.message)) return 'workspace_delivery_capacity';
     cause = cause.cause;
   }
   return undefined;
