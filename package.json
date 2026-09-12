@@ -10,6 +10,7 @@
   "scripts": {
     "build": "turbo build",
     "test": "turbo test",
+    "test:engine:regression": "node packages/engine/scripts/run-regressions.mjs",
     "test:release": "node --test scripts/check-published-engine-migrations.test.mjs scripts/npm-dist-tag.test.mjs scripts/refresh-docker-lock.test.mjs scripts/release-contract.test.mjs scripts/release-repair.test.mjs scripts/release-repair-workflow.test.mjs scripts/release-workflow-contract.test.mjs",
     "test:container": "node --test test/container-entrypoint.test.mjs",
     "test:container-image": "node --test test/container-image-integration.test.mjs",
@@ -26,6 +27,7 @@
     "eslint": "^9.39.2",
     "local-pkg": "^1.1.1",
     "loupe": "^3.1.4",
+    "miniflare": "4.20260617.1",
     "strip-literal": "^3.1.0",
     "tinypool": "^1.1.1",
     "tinyspy": "^4.0.4",

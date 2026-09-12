@@ -23,6 +23,7 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           build: "true"
+      - run: npm run test:engine:regression
       - run: npm run test:release
       - run: npx turbo lint
       - run: npx turbo test

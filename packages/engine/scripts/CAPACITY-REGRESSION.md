@@ -1,8 +1,14 @@
 # Workspace capacity regression
 
-Build ENGINE, then run `node packages/engine/scripts/capacity-http-regression.mjs`
-from the repository root with Node 22, engine runtime dependencies, and
-`miniflare@4.20260617.1` available. Set `CAPACITY_RESULTS` for the JSON output path.
+Run `npm ci`, `npm run build`, then `npm run test:engine:regression` from the
+repository root with Node 22. CI runs this command after its normal build. It runs
+the capacity, pending-retention, lifecycle, and packed-public-consumer scripts
+sequentially using the declared dependencies, including pinned test-only Miniflare.
+Set `ENGINE_REGRESSION_RESULTS_DIR` to retain separate JSON results in a chosen
+directory; by default the runner prints a new results directory under the OS temp
+directory. For an individual fixture, run
+`node packages/engine/scripts/capacity-http-regression.mjs` and set
+`CAPACITY_RESULTS` for its JSON output path.
 The fixture imports this checkout's compiled engine, uses its actual migrations,
 and sends requests through `createEngine`. SQLite uses real memory/file Node
 transactions and native Drizzle D1 batches against local workerd D1. Authentication
