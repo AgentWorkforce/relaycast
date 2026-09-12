@@ -1130,4 +1130,8 @@ Keep the same `Idempotency-Key` when retrying a transport failure: the admitted
 message can resume even when capacity is full. Engine adapters must apply migration
 `0057_a2a_egress.sql`; hosted adapters must schedule `sweepPendingA2aEgress(db)`.
 Recovery retains the remote message ID and requires receiver deduplication.
+Accepted A2A retries are bounded to 24 hours. Deleted source messages or changed/deleted
+targets fail closed with typed 410 responses; terminal intents clear their payload.
+The existing recovery sweep also cleans expired intents. After cleanup, a reused
+key is a fresh request, so stop automatic retries after the 24-hour window.
 See [capacity regression and composition](packages/engine/scripts/CAPACITY-REGRESSION.md).

@@ -327,6 +327,19 @@ export async function sendDm(
   options: SendDmOptions = {},
 ) {
   const startedAtMs = Date.now();
+  // Resolve durable request identity before mutable recipient/attachment metadata.
+  // A removed/recreated target must never turn an accepted retry into a new send.
+  const requestEgressId = !options.skipA2aIntercept && options.idempotencyKey
+    ? `a2ae_${await sha256Hex(JSON.stringify([workspaceId, fromAgentId, options.idempotencyKey]))}`
+    : null;
+  const [accepted] = requestEgressId ? await db.select().from(a2aEgress).where(eq(a2aEgress.id, requestEgressId)) : [];
+  if (accepted) {
+    if (accepted.fingerprint !== await sha256Hex(JSON.stringify(data))) {
+      throw codedError('Idempotency-Key was reused with a different request payload', 'idempotency_key_reused', 409);
+    }
+    await dispatchA2aEgress(db, accepted.id);
+  }
+
   const [toAgent] = data.to === '@self'
     ? await db
       .select()
@@ -362,10 +375,6 @@ export async function sendDm(
     ? `a2ae_${await sha256Hex(JSON.stringify([workspaceId, fromAgentId, options.idempotencyKey ?? generateId()]))}`
     : null;
   const fingerprint = egressId ? await sha256Hex(JSON.stringify(data)) : '';
-  const [accepted] = egressId ? await db.select().from(a2aEgress).where(eq(a2aEgress.id, egressId)) : [];
-  if (accepted && accepted.fingerprint !== fingerprint) {
-    throw codedError('Idempotency-Key was reused with a different request payload', 'idempotency_key_reused', 409);
-  }
   const messageId = accepted?.messageId ?? generateId();
   const mailbox = options.mailbox ?? {
     ttlMs: DEFAULT_MAILBOX_TTL_MS,
@@ -468,7 +477,7 @@ export async function sendDm(
       return sendDm(db, workspaceId, fromAgentId, data, options);
     }
   }
-  if (egressId) await dispatchA2aEgress(db, egressId);
+  if (egressId && !accepted) await dispatchA2aEgress(db, egressId);
   const message = insertedMessage ?? (await db.select().from(messages).where(eq(messages.id, messageId)))[0];
   if (!message) throw codedError('Accepted A2A message is no longer retained', 'a2a_message_not_retained', 410);
   const deliveryOutcomes: DeliveryOutcomeRecords = deliveryId

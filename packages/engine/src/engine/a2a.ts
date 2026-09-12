@@ -588,6 +588,7 @@ export async function sendToExternalAgent(
   agentUrl: string,
   jsonRpcPayload: A2aJsonRpcRequest,
   auth?: { scheme?: 'bearer' | 'api_key' | 'none' | string | null; credential?: string | null },
+  beforeAttempt?: () => Promise<{ scheme: string | null; credential: string | null }>,
 ): Promise<A2aResponse> {
   const parsedRequest = JsonRpcRequestSchema.safeParse(jsonRpcPayload);
   if (!parsedRequest.success) {
@@ -604,13 +605,14 @@ export async function sendToExternalAgent(
 
   for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt += 1) {
     try {
+      const attemptAuth = beforeAttempt ? await beforeAttempt() : auth;
       const response = await globalThis.fetch(targetUrl, {
         method: 'POST',
         signal: AbortSignal.timeout(15_000),
         headers: {
           'content-type': 'application/json',
           accept: 'application/json',
-          ...buildAuthHeaders(auth),
+          ...buildAuthHeaders(attemptAuth),
         },
         body: JSON.stringify(request),
       });

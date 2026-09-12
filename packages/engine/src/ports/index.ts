@@ -164,12 +164,5 @@ export interface EngineConfig {
    * within-cap reserve); self-host leaves it unset and applies no workspace
    * guard. Never derived from a client request.
    */
-  workspaceDelivery?: {
-    cap?: number;
-    reserve?: number;
-    workspaces?: Record<string, {
-      cap?: number;
-      reserve?: number;
-    }>;
-  };
+  workspaceDelivery?: import('../engine/workspaceDeliveryPolicy.js').WorkspaceDeliveryPolicyConfig;
 }

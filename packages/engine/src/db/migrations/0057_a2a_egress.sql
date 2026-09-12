@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS a2a_egress (
   target_id TEXT NOT NULL,
   external_url TEXT NOT NULL,
   fingerprint TEXT NOT NULL,
-  payload TEXT NOT NULL,
+  payload TEXT,
   status TEXT NOT NULL DEFAULT 'pending',
   claim_token TEXT,
   lease_until INTEGER,
@@ -17,3 +17,4 @@ CREATE TABLE IF NOT EXISTS a2a_egress (
   created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 CREATE INDEX IF NOT EXISTS idx_a2a_egress_due ON a2a_egress(status, lease_until);
+CREATE INDEX IF NOT EXISTS idx_a2a_egress_retention ON a2a_egress(created_at, id);

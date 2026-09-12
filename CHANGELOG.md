@@ -18,6 +18,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
+- Bound accepted A2A retries to 24 hours, clear terminal payloads, and prevent recovery after source deletion or target replacement/endpoint changes. Expose the async workspace capacity resolver through the public engine config.
+
 - Enforce workspace delivery capacity across HTTP producers with retryable 429 responses and durable A2A admission before external transport.
 
 ## [8.9.1] - 2026-09-11

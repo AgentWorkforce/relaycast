@@ -14,6 +14,11 @@ info:
     idempotent replays and zero-growth operations remain available at capacity.
     Outbound A2A DMs durably admit the message before transport; retry transport
     failures with the same `Idempotency-Key` to resume the admitted message.
+    Accepted A2A retries have a 24-hour window from admission. Missing source
+    messages return 410 a2a_message_not_retained; deleted/recreated targets or
+    changed endpoints return 410 a2a_target_gone. Expired retained intents return
+    410 a2a_egress_expired. After intent cleanup, the key is fresh and may create a
+    new message; callers must stop automatic retries after the window.
 
     Response format:
     - Success: `{ ok: true, data: ... }`

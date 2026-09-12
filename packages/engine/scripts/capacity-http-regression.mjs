@@ -36,7 +36,7 @@ try {
  const upgradeD1=await mf.getD1Database('UPGRADE');
  const upgradeSqlite=new Database(':memory:');
  try {
-  const baseline=sqlite.prepare("SELECT name,sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 ELSE 2 END,rowid").all().filter(row=>!shadow.has(row.name)&&!['a2a_egress','idx_a2a_egress_due'].includes(row.name));
+  const baseline=sqlite.prepare("SELECT name,sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 ELSE 2 END,rowid").all().filter(row=>!shadow.has(row.name)&&row.name !== 'a2a_egress' && !row.name.startsWith('idx_a2a_egress_'));
   for(const row of baseline){upgradeSqlite.exec(row.sql);await upgradeD1.prepare(row.sql).run();}
   const seed="INSERT INTO workspaces(id,name,api_key_hash,plan) VALUES('upgrade','upgrade','upgrade','enterprise')";
   upgradeSqlite.exec(seed);await upgradeD1.prepare(seed).run();

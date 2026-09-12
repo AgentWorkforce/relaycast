@@ -9,6 +9,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased - Minor]
 
+- Bound accepted A2A retries to 24 hours, clear terminal payloads, and prevent recovery after source deletion or target replacement/endpoint changes. Expose the async workspace capacity resolver through the public engine config.
+
 - Enforce workspace delivery capacity across HTTP producers with retryable 429 responses and durable A2A admission before external transport.
 
 - Hosts must apply migration `0057_a2a_egress.sql` and schedule `sweepPendingA2aEgress(db)` to recover accepted outbound A2A sends.

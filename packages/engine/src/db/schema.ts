@@ -1327,7 +1327,7 @@ export const a2aEgress = sqliteTable('a2a_egress', {
   targetId: text('target_id').notNull(),
   externalUrl: text('external_url').notNull(),
   fingerprint: text('fingerprint').notNull(),
-  payload: text('payload', { mode: 'json' }).notNull().$type<import('@relaycast/a2a').A2aJsonRpcRequest>(),
+  payload: text('payload', { mode: 'json' }).$type<import('@relaycast/a2a').A2aJsonRpcRequest>(),
   status: text('status').notNull().default('pending'),
   claimToken: text('claim_token'),
   leaseUntil: integer('lease_until', { mode: 'timestamp' }),
@@ -1336,4 +1336,4 @@ export const a2aEgress = sqliteTable('a2a_egress', {
   errorStatus: integer('error_status'),
   errorCode: text('error_code'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
-}, (table) => [index('idx_a2a_egress_due').on(table.status, table.leaseUntil)]);
+}, (table) => [index('idx_a2a_egress_due').on(table.status, table.leaseUntil), index('idx_a2a_egress_retention').on(table.createdAt, table.id)]);

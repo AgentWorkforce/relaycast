@@ -138,4 +138,4 @@ export {
   SnowflakeGenerator,
 } from './engine/snowflake.js';
 
-export { dispatchA2aEgress, sweepPendingA2aEgress } from './engine/a2aEgress.js';
+export { dispatchA2aEgress, sweepPendingA2aEgress, cleanupA2aEgress, A2A_EGRESS_RETRY_WINDOW_MS } from './engine/a2aEgress.js';
