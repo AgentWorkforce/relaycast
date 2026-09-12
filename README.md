@@ -1150,7 +1150,9 @@ workspace lookup indexes. The existing recovery sweep cleans expired identities.
 Source pruning scrubs the public response but preserves an identity/fingerprint
 tombstone until expiry: retry returns `410 a2a_message_not_retained` without
 recreating history. Workspace deletion removes the tombstone. Inbound KV caches
-retain only a message ID and digest; replay checks the SQL source state.
+retain only a message ID and digest; replay checks the SQL source state. A delayed
+completion cache write cannot extend the SQL window or block fresh-key reuse
+after identity expiry/cleanup, including reuse with a different payload.
 Credentialed A2A targets require HTTPS; unauthenticated public HTTP remains supported.
 Outbound A2A transport refuses redirects as terminal `502 a2a_redirect_forbidden`;
 credentials and message bodies are never forwarded automatically to a new URL.

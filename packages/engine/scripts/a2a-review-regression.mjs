@@ -155,7 +155,7 @@ try {
     const captured=JSON.parse(readFileSync(new URL('./fixtures/a2a-inbound-published-8.9.1.json',import.meta.url),'utf8'));
     assert.equal(captured.provenance.archive_sha256,'9ddd817c410c02a75cca1c2af82b6a0697599e3f9b730be23076dd8213465854');
     assert.equal(captured.kvWrites.find(w=>!w.key.endsWith(':lock')).options.expirationTtl,86400);
-    for(const mode of ['retained','near-expiry','pruned','read-failure','delete-failure','bad-auth','mismatch','malformed','source-mismatch','missing-fingerprint']) {
+    for(const mode of ['retained','near-expiry','pruned','read-failure','delete-failure','bad-auth','mismatch','malformed','source-mismatch','missing-fingerprint','partial-legacy','unknown-completion']) {
       const f=structuredClone(captured),ws=f.workspaceId;
       const age=mode==='near-expiry'?86340:3600;
       const created=Math.floor(Date.now()/1000)-age;
@@ -167,6 +167,8 @@ try {
       if(mode==='malformed')cache.data.message.id='unverified-id';
       if(mode==='source-mismatch')f.tables.messages[0].created_at=created-1;
       if(mode==='missing-fingerprint')delete cache.fingerprint;
+      if(mode==='partial-legacy')cache.data={id:cache.data.id};
+      if(mode==='unknown-completion'){cache.data={id:cache.data.id,unknown:true};cache.fingerprint=hash(cache.fingerprint);}
       for(const [table,records] of Object.entries(f.tables))for(const row of records){
         await run(`INSERT INTO ${table}(${Object.keys(row).join(',')}) VALUES(${Object.keys(row).map(()=>'?').join(',')})`,...Object.values(row));
       }
@@ -196,7 +198,7 @@ try {
         expectStatus(await emit(),410);assert.deepEqual(await effects(),pruned);
         assert.deepEqual((await rows('SELECT message_id,response FROM a2a_inbound WHERE workspace_id=?',ws))[0],{message_id:null,response:null});
       }else{
-        const status={pruned:410,'read-failure':503,'bad-auth':401,mismatch:409,malformed:503,'source-mismatch':503,'missing-fingerprint':409}[mode];expectStatus(result,status);
+        const status={pruned:410,'read-failure':503,'bad-auth':401,mismatch:409,malformed:503,'source-mismatch':503,'missing-fingerprint':409,'partial-legacy':410,'unknown-completion':410}[mode];expectStatus(result,status);
         assert.deepEqual(await effects(),before);
         if(mode==='read-failure'){readFailure=false;expectStatus(await emit(),200);assert.deepEqual(await effects(),before);}
         if(mode==='pruned'){readFailure=true;expectStatus(await emit(),410);assert.deepEqual(await effects(),before);}
@@ -208,6 +210,45 @@ try {
       await Promise.allSettled(background.splice(0));
       await run('DELETE FROM workspaces WHERE id=?',ws);
       await run('DELETE FROM workspace_events WHERE workspace_id=?',ws);
+    }
+  }
+  if (!process.env.REVIEW_CASE || process.env.REVIEW_CASE==='completion-expiry') {
+    for(const endpoint of ['rpc','webhook'])for(const source of ['retained','pruned'])for(const changed of (process.env.REVIEW_EXPIRED_CHANGED==='1'?[true]:[false,true])) {
+      const ws=await seed('completion-expiry-'+endpoint+'-'+source+'-'+changed,1,{cap:100});
+      await run('INSERT INTO a2a_agents(id,workspace_id,relay_agent_id,external_url,agent_card) VALUES(?,?,?,?,?)',ws+'peer',ws,ws+'sender',targetUrl,'{}');
+      const payload={jsonrpc:'2.0',id:42,method:'message/send',params:{target_agent:'recipient-1',message:{message_id:'expiry-key',role:'agent',parts:[{kind:'text',text:'original accepted body'}]}}};
+      const path=endpoint==='rpc'?'/a2a/rpc':`/a2a/webhook/${ws}/sender`;
+      const writes=[];let kvDown=false;
+      const cache={...deps.kv,get:async k=>{if(kvDown)throw Error('completion cache outage');return kvMap.get(k)??null;},put:async(k,v,o)=>{writes.push({k,v,o});kvMap.set(k,v);}};
+      const receiving=createEngine({...deps,kv:cache});const send=p=>request(ws,path,p??payload,{engineApp:receiving});
+      const first=await send();expectStatus(first,200);await Promise.allSettled(background.splice(0));
+      const originalId=first.body.result.task.id;
+      const completion=writes.find(w=>!w.k.endsWith(':lock'));assert.ok(completion);assert.deepEqual(JSON.parse(completion.v).data,{id:originalId});
+      assert.equal(JSON.parse(completion.v).status,endpoint==='rpc'?200:201);assert.match(JSON.parse(completion.v).fingerprint,/^[a-f0-9]{64}$/);assert.equal(completion.o.expirationTtl,86400);
+      const mismatch=structuredClone(payload);mismatch.params.message.parts[0].text='new body under expired key';
+      expectStatus(await send(),200);expectStatus(await send(mismatch),409);
+      assert.equal(writes.filter(w=>!w.k.endsWith(':lock')).length,1,'replays never extend completion TTL');
+      if(source==='pruned')await run('DELETE FROM messages WHERE workspace_id=?',ws);
+      kvDown=true;expectStatus(await send(),source==='pruned'?410:200);expectStatus(await send(mismatch),409);kvDown=false;
+      const before=async()=>({messages:await scalar('SELECT count(*) FROM messages WHERE workspace_id=?',ws),counter:await scalar('SELECT messages_recv FROM a2a_agents WHERE workspace_id=?',ws),outbox:await scalar('SELECT count(*) FROM pending_events WHERE workspace_id=?',ws),events:await scalar("SELECT count(*) FROM workspace_events WHERE workspace_id=? AND type='dm.received'",ws)});
+      const pre=await before();
+      await run('UPDATE a2a_inbound SET created_at=unixepoch()-86401 WHERE workspace_id=?',ws);
+      await sweepPendingA2aEgress(db,20);
+      assert.equal(await scalar('SELECT count(*) FROM a2a_inbound WHERE workspace_id=?',ws),0,'real bounded cleanup removed expired SQL identity');
+      assert.equal(kvMap.get(completion.k),completion.v,'completion survives SQL expiry exactly as a delayed KV write can');
+      kvDown=true;expectStatus(await send(changed?mismatch:payload),503);assert.deepEqual(await before(),pre);kvDown=false;
+      const fresh=await send(changed?mismatch:payload);expectStatus(fresh,200);assert.notEqual(fresh.body.result.task.id,originalId);
+      const post=await before();assert.equal(post.messages,pre.messages+1);assert.equal(post.counter,pre.counter+1);assert.equal(post.outbox,pre.outbox+1);assert.equal(post.events,pre.events+1);
+      const again=await send(changed?mismatch:payload);expectStatus(again,200);assert.deepEqual(again.body,fresh.body);assert.deepEqual(await before(),post);
+      assert.ok(writes.filter(w=>!w.k.endsWith(':lock')).every(w=>!w.v.includes('accepted body')&&!w.v.includes('new body')&&w.o.expirationTtl===86400));
+      // A retained expired SQL row also authorizes fresh admission during a KV
+      // outage; absent SQL + unreadable KV above must remain fail-closed.
+      await run('UPDATE a2a_inbound SET created_at=unixepoch()-86401 WHERE workspace_id=?',ws);
+      kvDown=true;const expiredWithoutCleanup=await send(changed?mismatch:payload);expectStatus(expiredWithoutCleanup,200);
+      assert.notEqual(expiredWithoutCleanup.body.result.task.id,fresh.body.result.task.id);
+      assert.equal((await before()).counter,post.counter+1);kvDown=false;
+      record(endpoint+' SQL expiry cleanup with '+source+' source and stale KV allows '+(changed?'different':'same')+' payload; within-window replay/prune/conflict and KV outage fail closed');
+      await Promise.allSettled(background.splice(0));await run('DELETE FROM workspaces WHERE id=?',ws);
     }
   }
   if (!process.env.REVIEW_CASE || process.env.REVIEW_CASE==='webhook-error-id') {

@@ -31,7 +31,9 @@ info:
     while preserving a bounded identity/fingerprint tombstone; same-key retries
     return 410 a2a_message_not_retained instead of recreating messages or effects
     within that window. Source retention can remove content before 24 hours.
-    After identity expiry/cleanup the same key is fresh and may admit a new message.
+    After identity expiry/cleanup the same key is fresh and may admit a new message,
+    including a different payload. A delayed digest-backed completion cache entry
+    cannot extend SQL retention or block that reuse.
     Published 8.9.1 completed RPC KV records are promoted against retained sources
     without new admission, using source creation as a conservative original deadline.
     Unreadable KV before a SQL identity can be verified returns 503; verified SQL

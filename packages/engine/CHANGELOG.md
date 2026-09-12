@@ -9,6 +9,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased - Minor]
 
+- Let expired inbound A2A keys admit fresh messages after SQL cleanup even when an older completion cache entry remains. Legacy acceptance verification and source-pruned replay protection are preserved.
+
 - Preserve completed inbound A2A retries from published 8.9.1 without duplicate admission, keep numeric webhook error IDs and sender rejection notices, and refuse outbound redirects before credentials or bodies can be forwarded.
 
 - Refuse new inbound A2A admission atomically when its authenticated registration changes, and send a stable HTTP Idempotency-Key on outbound retries and recovery.

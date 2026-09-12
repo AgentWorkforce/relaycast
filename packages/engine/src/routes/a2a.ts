@@ -28,6 +28,15 @@ import {
 
 export const a2aRoutes = new Hono<AppEnv>();
 
+// This exact completion format is written only after atomic SQL admission.
+// Published legacy acceptances instead contain a full response and plaintext
+// fingerprint. Never interpret partial/unknown legacy records as this marker.
+const sqlInboundCompletionSchema = z.object({
+  status: z.union([z.literal(200), z.literal(201)]),
+  data: z.object({ id: z.string().min(1) }).strict(),
+  fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+
 // KV is only an advisory completion cache. Public content and the replay
 // decision belong to SQL, where source pruning can scrub them atomically.
 async function receiveIdempotently(c: Context<AppEnv>, options: Omit<Parameters<typeof runIdempotent<dmEngine.SendDmResult>>[0], 'operation'> & {
@@ -39,9 +48,27 @@ async function receiveIdempotently(c: Context<AppEnv>, options: Omit<Parameters<
   // SQL admissions survive a later KV outage. sendDm checks fingerprint/source
   // and handles expiry before returning a replay or admitting a fresh identity.
   if (retained) return { status: options.status ?? 201, data: await options.operation(), replayed: retained.createdAt.getTime() + 86_400_000 > Date.now() };
+  const completionKey = options.kv && options.key
+    ? await buildIdempotencyStorageKey(options.workspaceId, options.actorId, options.scope, options.key) : null;
+  const sqlAuthoritativeKv = options.kv && completionKey ? new Proxy(options.kv, {
+    get(target, property) {
+      if (property === 'get') return async (key: string) => {
+        const raw = await target.get(key);
+        // SQL absence was verified above. Source pruning retains a SQL
+        // tombstone; only expiry cleanup removes that identity. A delayed KV
+        // completion cannot extend its window or reject a new fingerprint.
+        // sendDm rechecks SQL atomically if another admission races this read.
+        if (key === completionKey && raw && sqlInboundCompletionSchema.safeParse(JSON.parse(raw)).success) return null;
+        return raw;
+      };
+      const value = Reflect.get(target, property);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  }) : options.kv;
   let fresh: dmEngine.SendDmResult | undefined;
   const result = await runIdempotent({
     ...options,
+    kv: sqlAuthoritativeKv,
     fingerprint: options.fingerprint ? await sha256Hex(options.fingerprint) : undefined,
     compatibleFingerprints: options.fingerprint ? [options.fingerprint] : [],
     requireFingerprint: true,
