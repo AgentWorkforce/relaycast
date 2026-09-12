@@ -1,17 +1,15 @@
 // Actual HTTP/Node/D1 lifecycle and cleanup race controls built on the parent probe fixture.
 // Actual HTTP engine + native Node transactions and local workerd D1 batch.
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync } from 'node:fs';
-import { randomUUID, createHash, createHmac } from 'node:crypto';
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { randomUUID, createHash } from 'node:crypto';
 import { createNodeRuntime } from '../dist/adapters/node/index.js';
 import { createEngine, schema } from '../dist/index.js';
 import { drizzle } from 'drizzle-orm/d1';
 import { Miniflare } from 'miniflare';
 import Database from 'better-sqlite3';
-import { buildChannelDeliveryWrite, buildDirectDeliveryWrite, buildGroupDmDeliveryWrite } from '../dist/engine/deliveryWrites.js';
-import { runAtomicWrites } from '../dist/ports/database.js';
+import { planMigrations } from '../dist/db/migrationPlan.js';
 import { resolveWorkspaceDeliveryPolicyFor, resolveWorkspaceDeliveryPolicy } from '../dist/engine/workspaceDeliveryPolicy.js';
-import { deriveRelayfileInboundSecret } from '../dist/routes/relayfileInbound.js';
 import { sweepPendingA2aEgress, cleanupA2aEgress } from '../dist/engine/a2aEgress.js';
 
 const results = [];
@@ -37,8 +35,25 @@ try {
  const upgradeD1=await mf.getD1Database('UPGRADE');
  const upgradeSqlite=new Database(':memory:');
  try {
-  const baseline=sqlite.prepare("SELECT name,sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 ELSE 2 END,rowid").all().filter(row=>!shadow.has(row.name)&&row.name !== 'a2a_egress' && !row.name.startsWith('idx_a2a_egress_'));
-  for(const row of baseline){upgradeSqlite.exec(row.sql);await upgradeD1.prepare(row.sql).run();}
+  upgradeSqlite.pragma('foreign_keys = ON');
+  const migrationDir=new URL('../src/db/migrations/',import.meta.url);
+  const priorFiles=readdirSync(migrationDir).filter(name=>name.endsWith('.sql')&&name<'0057');
+  const priorPlan=planMigrations(priorFiles,new Set(),JSON.parse(readFileSync(new URL('supersessions.json',migrationDir),'utf8')));
+  for(const name of priorPlan)upgradeSqlite.exec(readFileSync(new URL(name,migrationDir),'utf8'));
+  assert.equal(upgradeSqlite.prepare("SELECT count(*) n FROM sqlite_schema WHERE name LIKE 'a2a_egress%' OR name='a2a_inbound'").get().n,0);
+  const baselineShadow=new Set(upgradeSqlite.prepare('PRAGMA table_list').all().filter(r=>r.type==='shadow').map(r=>r.name));
+  const baseline=upgradeSqlite.prepare("SELECT name,sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 ELSE 2 END,rowid").all().filter(row=>!baselineShadow.has(row.name));
+  for(const row of baseline)await upgradeD1.prepare(row.sql).run();
+  const metadata=async query=>{
+    const tables=await query("SELECT name,sql FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name");
+    return Promise.all(tables.filter(t=>!baselineShadow.has(t.name)&&!t.name.startsWith('_cf_')).map(async table=>({
+      ...table,foreignKeys:await query(`PRAGMA foreign_key_list('${table.name}')`),
+      indexes:await Promise.all((await query(`PRAGMA index_list('${table.name}')`)).map(async index=>({...index,columns:await query(`PRAGMA index_info('${index.name}')`)}))),
+    })));
+  };
+  const nodeQuery=async sql=>upgradeSqlite.prepare(sql).all();
+  const d1Query=async sql=>(await upgradeD1.prepare(sql).all()).results;
+  const beforeNode=await metadata(nodeQuery),beforeD1=await metadata(d1Query);
   const seed="INSERT INTO workspaces(id,name,api_key_hash,plan) VALUES('upgrade','upgrade','upgrade','enterprise')";
   upgradeSqlite.exec(seed);await upgradeD1.prepare(seed).run();
   const migration=readFileSync(new URL('../src/db/migrations/0057_a2a_egress.sql',import.meta.url),'utf8');
@@ -50,7 +65,24 @@ try {
   assert.equal((await upgradeD1.prepare("SELECT count(*) n FROM workspaces WHERE id='upgrade'").first()).n,1);
   assert.equal(upgradeSqlite.prepare('PRAGMA table_info(a2a_egress)').all().length,15);
   assert.equal((await upgradeD1.prepare('PRAGMA table_info(a2a_egress)').all()).results.length,15);
-  results.push({test:'0057 migration applied twice to previous schema; existing workspace retained',adapters:['node','workerd-d1']});
+  for(const [query,before] of [[nodeQuery,beforeNode],[d1Query,beforeD1]]){
+    const after=await metadata(query);
+    assert.deepEqual(after.filter(t=>before.some(old=>old.name===t.name)),before,'0057 preserves original SQL/FK/unique-index metadata');
+    assert.ok((await query("PRAGMA foreign_key_list('a2a_egress')")).some(f=>f.table==='workspaces'&&f.from==='workspace_id'&&f.on_delete==='CASCADE'));
+  }
+  for(const name of ['0058_a2a_egress_context.sql','0059_a2a_inbound_admission.sql']){
+    const ddl=readFileSync(new URL(name,migrationDir),'utf8');
+    for(let repeat=0;repeat<2;repeat++){
+      upgradeSqlite.exec(ddl);
+      for(const statement of ddl.split(ddl.includes('--> statement-breakpoint')?'--> statement-breakpoint':';').map(s=>s.trim()).filter(Boolean))await upgradeD1.prepare(statement).run();
+    }
+  }
+  for(const query of [nodeQuery,d1Query]){
+    assert.deepEqual((await query("PRAGMA index_info('idx_a2a_egress_workspace')")).map(c=>c.name),['workspace_id']);
+    assert.deepEqual((await query("PRAGMA foreign_key_list('a2a_inbound')")).map(f=>[f.table,f.from,f.on_delete]).sort(),[['messages','message_id','SET NULL'],['workspaces','workspace_id','CASCADE']]);
+    assert.deepEqual(await query('PRAGMA foreign_key_check'),[]);
+  }
+  results.push({test:'real pre0057 migration plan through0056; additive0057/58/59 twice, original SQL/FKs/unique-index metadata unchanged and new FK/index metadata verified',adapters:['node','workerd-d1'],priorPlan});
  }finally{upgradeSqlite.close();}
  for(const adapter of ['node-memory','node-file','workerd-d1']){
   const runtime=runtimes[adapter==='node-file'?1:0];
@@ -58,12 +90,11 @@ try {
   const run=async(sql,...args)=>adapter==='workerd-d1'?d1.prepare(sql).bind(...args).run():runtime.handle.sqlite.prepare(sql).run(...args);
   const rows=async(sql,...args)=>adapter==='workerd-d1'?(await d1.prepare(sql).bind(...args).all()).results:runtime.handle.sqlite.prepare(sql).all(...args);
   const scalar=async(sql,...args)=>Object.values((await rows(sql,...args))[0])[0];
-  const depth=ws=>scalar("SELECT count(*) FROM deliveries WHERE workspace_id=? AND status IN ('queued','delivered') AND (expires_at IS NULL OR expires_at>unixepoch())",ws);
   const policies=new Map();let resolves=0;const background=[];
-  const kvMap=new Map();let failCompletion=false;
+  const kvMap=new Map();
   const deps={...runtime.deps,db,
     config:{environment:'test',relayfileInboundSecret:'fixture-only',workspaceDelivery:{resolve:async workspace=>{await Promise.resolve();resolves++;assert.equal(workspace.plan,'enterprise');return policies.get(workspace.id);}}},
-    kv:{get:async k=>kvMap.get(k)??null,put:async(k,v)=>{if(failCompletion&&!k.endsWith(':lock'))throw Error('fixture KV completion failure');kvMap.set(k,v);},delete:async k=>{kvMap.delete(k);}},
+    kv:{get:async k=>kvMap.get(k)??null,put:async(k,v)=>{kvMap.set(k,v);},delete:async k=>{kvMap.delete(k);}},
     rateLimiter:{check:async()=>({allowed:true,remaining:10000,resetAt:Date.now()+1000})},
     webhookQueue:{send:async()=>{}},
   };
@@ -98,7 +129,7 @@ try {
     const retry=()=>request(ws,'/v1/dm',body,{key:'accepted',engineApp:noKv});
     let calls=0;let healthy=false;const captures=[];
     globalThis.fetch=async(url,init)=>{assert.equal(String(url),targetUrl);calls++;captures.push({url:String(url),auth:init.headers.authorization,payload:JSON.parse(init.body)});if(!healthy)throw Error('fixture-old transport outage');return Response.json({jsonrpc:'2.0',id:JSON.parse(init.body).id,result:{}});};
-    expectStatus(await retry(),500);
+    const unavailable=await retry();expectStatus(unavailable,502);assert.equal(unavailable.body.error.code,'a2a_transport_unavailable');
     const intent=()=>rows('SELECT * FROM a2a_egress WHERE workspace_id=?',ws).then(r=>r[0]);
     assert.ok(!(await intent()).last_error.includes('fixture-old'));
     return {ws,retry,intent,captures,calls:()=>calls,healthy:()=>{healthy=true;}};

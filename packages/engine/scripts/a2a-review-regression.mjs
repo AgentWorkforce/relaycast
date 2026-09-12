@@ -76,11 +76,11 @@ try {
   const run=async(sql,...args)=>adapter==='workerd-d1'?d1.prepare(sql).bind(...args).run():runtime.handle.sqlite.prepare(sql).run(...args);
   const rows=async(sql,...args)=>adapter==='workerd-d1'?(await d1.prepare(sql).bind(...args).all()).results:runtime.handle.sqlite.prepare(sql).all(...args);
   const scalar=async(sql,...args)=>Object.values((await rows(sql,...args))[0])[0];
-  const policies=new Map();let resolves=0;const background=[];
-  const kvMap=new Map();let failCompletion=false;
+  const policies=new Map();let resolves=0;let resolverDown=false;const background=[];
+  const kvMap=new Map();
   const deps={...runtime.deps,db,
-    config:{environment:'test',relayfileInboundSecret:'fixture-only',workspaceDelivery:{resolve:async workspace=>{await Promise.resolve();resolves++;assert.equal(workspace.plan,'enterprise');return policies.get(workspace.id);}}},
-    kv:{get:async k=>kvMap.get(k)??null,put:async(k,v)=>{if(failCompletion&&!k.endsWith(':lock'))throw Error('fixture KV completion failure');kvMap.set(k,v);},delete:async k=>{kvMap.delete(k);}},
+    config:{environment:'test',relayfileInboundSecret:'fixture-only',workspaceDelivery:{resolve:async workspace=>{await Promise.resolve();resolves++;if(resolverDown)throw Error('injected policy resolver unavailable');assert.equal(workspace.plan,'enterprise');return policies.get(workspace.id);}}},
+    kv:{get:async k=>kvMap.get(k)??null,put:async(k,v)=>{kvMap.set(k,v);},delete:async k=>{kvMap.delete(k);}},
     rateLimiter:{check:async()=>({allowed:true,remaining:10000,resetAt:Date.now()+1000})},
     webhookQueue:{send:async()=>{}},
   };
@@ -134,10 +134,155 @@ try {
         return new Response('',{status:200});
       }
       assert.equal(String(url),targetUrl);calls++;captures.push({url:String(url),auth:init.headers.authorization,payload:JSON.parse(init.body)});if(!healthy)throw Error('fixture-old transport outage');return Response.json({jsonrpc:'2.0',id:JSON.parse(init.body).id,result:{}});};
-    expectStatus(await retry(),500);
+    const unavailable=await retry();expectStatus(unavailable,502);assert.equal(unavailable.body.error.code,'a2a_transport_unavailable');
     const intent=()=>rows('SELECT * FROM a2a_egress WHERE workspace_id=?',ws).then(r=>r[0]);
     assert.ok(!(await intent()).last_error.includes('fixture-old'));
     return {ws,retry,intent,captures,localReceipts,calls:()=>calls,healthy:()=>{healthy=true;}};
+  }
+  if (!process.env.REVIEW_CASE || process.env.REVIEW_CASE==='policy') {
+    for(const kind of ['dm','group','outbound']){
+      const ws=await seed('policy-replay-'+kind,1,{cap:100});
+      let path='/v1/dm',body={to:'recipient-1',text:'recorded before outage'},calls=0;
+      if(kind==='group'){
+        const group=await request(ws,'/v1/dm/group',{participants:['recipient-1']});expectStatus(group,201);
+        path=`/v1/dm/${group.body.data.id}/messages`;body={text:'recorded before outage'};
+      }
+      if(kind==='outbound'){
+        await run('INSERT INTO a2a_agents(id,workspace_id,relay_agent_id,external_url,agent_card) VALUES(?,?,?,?,?)',ws+'peer',ws,ws+'r1',targetUrl,JSON.stringify({name:'fixture',url:targetUrl,version:'1',skills:[{name:'message'}]}));
+        globalThis.fetch=async(url,init)=>{calls++;return Response.json({jsonrpc:'2.0',id:JSON.parse(init.body).id,result:{}});};
+      }
+      const engineApp=kind==='outbound'?createEngine({...deps,kv:undefined}):app;
+      const send=()=>request(ws,path,body,{key:'recorded',engineApp});
+      const first=await send();expectStatus(first,201);const before=resolves;
+      resolverDown=true;
+      try {const replay=await send();expectStatus(replay,201);assert.deepEqual(replay.body,first.body);assert.equal(resolves,before);}
+      finally {resolverDown=false;}
+      if(kind==='outbound')assert.equal(calls,1);
+      record(kind+' cached/durable replay survives failed dynamic policy resolver without lookup or new transport');
+    }
+  }
+  if (!process.env.REVIEW_CASE || process.env.REVIEW_CASE==='correlation') {
+    for(const endpoint of ['rpc','webhook']){
+      const ws=await seed('correlation-'+endpoint,1,{cap:1});
+      expectStatus(await request(ws,'/v1/dm',{to:'recipient-1',text:'fill cap'}),201);
+      await run('INSERT INTO a2a_agents(id,workspace_id,relay_agent_id,external_url,agent_card) VALUES(?,?,?,?,?)',ws+'peer',ws,ws+'sender',targetUrl,JSON.stringify({name:'fixture',url:targetUrl,version:'1',skills:[{name:'message'}]}));
+      const body={jsonrpc:'2.0',id:'capacity-correlation',method:'message/send',params:{target_agent:'recipient-1',message:{message_id:'capacity-retry',role:'agent',parts:[{kind:'text',text:'cannot grow'}]}}};
+      const reply=await request(ws,endpoint==='rpc'?'/a2a/rpc':`/a2a/webhook/${ws}/sender`,body);
+      expectStatus(reply,429);assert.equal(reply.retry,'30');assert.equal(reply.body.id,'capacity-correlation');
+      assert.equal(reply.body.error.data.code,'workspace_delivery_depth_exceeded');
+      assert.equal(await scalar('SELECT messages_recv FROM a2a_agents WHERE workspace_id=?',ws),0);
+      record(endpoint+' real capacity rejection retains JSON-RPC correlation and Retry-After, counter unchanged');
+    }
+  }
+  if (!process.env.REVIEW_CASE || process.env.REVIEW_CASE==='protocol') {
+    for(const malformed of ['json','schema']){
+      const ws=await seed('protocol-'+malformed,1,{cap:100});
+      await run('INSERT INTO a2a_agents(id,workspace_id,relay_agent_id,external_url,agent_card) VALUES(?,?,?,?,?)',ws+'peer',ws,ws+'r1',targetUrl,JSON.stringify({name:'fixture',url:targetUrl,version:'1',skills:[{name:'message'}]}));
+      let calls=0;globalThis.fetch=async()=>{calls++;return malformed==='json'?new Response('{broken'):Response.json({jsonrpc:'bad-protocol'});};
+      const noKv=createEngine({...deps,kv:undefined});
+      await request(ws,'/v1/dm',{to:'recipient-1',text:'accepted terminal response'},{key:'protocol',engineApp:noKv});
+      const [intent]=await rows('SELECT status,payload FROM a2a_egress WHERE workspace_id=?',ws);
+      assert.deepEqual(intent,{status:'failed',payload:null},'parser/protocol failure is terminal and scrubs payload');
+      await sweepPendingA2aEgress(db);assert.equal(calls,1);
+      record(malformed+' malformed upstream is terminal after one fetch and cannot redrive retained payload');
+    }
+  }
+  if (!process.env.REVIEW_CASE || process.env.REVIEW_CASE==='inboundCached') {
+    for(const endpoint of ['rpc','webhook']){
+      const ws=await seed('inbound-cached-'+endpoint,1,{cap:100});
+      await run('INSERT INTO a2a_agents(id,workspace_id,relay_agent_id,external_url,agent_card) VALUES(?,?,?,?,?)',ws+'peer',ws,ws+'sender',targetUrl,JSON.stringify({name:'fixture',url:targetUrl,version:'1',skills:[{name:'message'}]}));
+      const privateBody='source-content-must-not-outlive-message';
+      const payload={jsonrpc:'2.0',id:'cached-inbound',method:'message/send',params:{target_agent:'recipient-1',message:{message_id:'cached-inbound',role:'agent',parts:[{kind:'text',text:privateBody}]}}};
+      const path=endpoint==='rpc'?'/a2a/rpc':`/a2a/webhook/${ws}/sender`;
+      const send=()=>request(ws,path,payload);
+      const first=await send();expectStatus(first,200);
+      const replay=await send();expectStatus(replay,200);assert.deepEqual(replay.body,first.body);
+      assert.ok([...kvMap.entries()].some(([key])=>key.includes(ws)),'completion cache was populated');
+      assert.ok(!JSON.stringify([...kvMap.entries()].filter(([key])=>key.includes(ws))).includes(privateBody),'KV retains neither public body nor plaintext fingerprint');
+      await Promise.allSettled(background.splice(0));
+      await run('DELETE FROM messages WHERE workspace_id=?',ws);
+      const pruned=await send();expectStatus(pruned,410);assert.equal(pruned.body.error.data.code,'a2a_message_not_retained');
+      assert.equal(await scalar('SELECT count(*) FROM messages WHERE workspace_id=?',ws),0);
+      assert.equal(await scalar('SELECT messages_recv FROM a2a_agents WHERE workspace_id=?',ws),1);
+      assert.deepEqual(await rows('SELECT message_id,response FROM a2a_inbound WHERE workspace_id=?',ws),[{message_id:null,response:null}]);
+      record(endpoint+' completed KV cache stores identity only and cannot bypass SQL source-prune tombstone');
+    }
+  }
+  if (!process.env.REVIEW_CASE || process.env.REVIEW_CASE==='inboundAtomic') {
+    for(const table of ['a2a_inbound','pending_events','workspace_events']){
+      const ws=await seed('inbound-atomic-'+table,1,{cap:100});
+      await run('INSERT INTO a2a_agents(id,workspace_id,relay_agent_id,external_url,agent_card) VALUES(?,?,?,?,?)',ws+'peer',ws,ws+'sender',targetUrl,JSON.stringify({name:'fixture',url:targetUrl,version:'1',skills:[{name:'message'}]}));
+      const payload={jsonrpc:'2.0',id:'atomic-inbound',method:'message/send',params:{target_agent:'recipient-1',message:{message_id:'atomic-inbound',role:'agent',parts:[{kind:'text',text:'atomic local receive'}]}}};
+      const path=`/a2a/webhook/${ws}/sender`;
+      const noKv=createEngine({...deps,kv:undefined});
+      await run(`CREATE TRIGGER inbound_fault BEFORE INSERT ON ${table} BEGIN SELECT RAISE(ABORT,'injected inbound admission failure'); END`);
+      expectStatus(await request(ws,path,payload,{engineApp:noKv}),500);
+      await run('DROP TRIGGER inbound_fault');
+      for(const name of ['messages','deliveries','message_logs','a2a_inbound','pending_events'])assert.equal(await scalar(`SELECT count(*) FROM ${name} WHERE workspace_id=?`,ws),0);
+      assert.equal(await scalar("SELECT count(*) FROM workspace_events WHERE workspace_id=? AND type='dm.received'",ws),0);
+      assert.equal(await scalar('SELECT messages_recv FROM a2a_agents WHERE workspace_id=?',ws),0);
+      expectStatus(await request(ws,path,payload,{engineApp:noKv}),200);
+      assert.equal(await scalar('SELECT messages_recv FROM a2a_agents WHERE workspace_id=?',ws),1);
+      assert.equal(await scalar('SELECT count(*) FROM a2a_inbound WHERE workspace_id=?',ws),1);
+      record('real SQL '+table+' failure rolls back inbound identity/message/counter/notifications; retry admits once');
+    }
+  }
+  if (!process.env.REVIEW_CASE || process.env.REVIEW_CASE==='inbound') {
+    for (const endpoint of ['rpc','webhook']) {
+      for (const failure of ['race','completion']) {
+        const ws=await seed('inbound-'+endpoint+'-'+failure,1,{cap:100});
+        await run('INSERT INTO a2a_agents(id,workspace_id,relay_agent_id,external_url,agent_card) VALUES(?,?,?,?,?)',ws+'peer',ws,ws+'sender',targetUrl,JSON.stringify({name:'fixture',url:targetUrl,version:'1',skills:[{name:'message'}]}));
+        const payload={jsonrpc:'2.0',id:'inbound-correlation',method:'message/send',params:{target_agent:'recipient-1',message:{message_id:'durable-inbound',role:'agent',parts:[{kind:'text',text:'one accepted inbound'}]}}};
+        const path=endpoint==='rpc'?'/a2a/rpc':`/a2a/webhook/${ws}/sender`;
+        let arrivals=0,release;const gate=new Promise(r=>release=r);
+        const atomicMethod=adapter==='workerd-d1'?'batch':'withTransaction';
+        const racingDb=new Proxy(db,{get(target,key){
+          if(key===atomicMethod)return async(...args)=>{arrivals++;if(arrivals===2)release();if(arrivals<=2)await gate;return target[key](...args);};
+          const value=Reflect.get(target,key);return typeof value==='function'?value.bind(target):value;
+        }});
+        let completionFailures=0;
+        const failingKv={...deps.kv,put:async(k,v)=>{if(!k.endsWith(':lock')){completionFailures++;throw Error('injected inbound KV completion failure');}kvMap.set(k,v);}};
+        const inboundApp=createEngine({...deps,db:failure==='race'?racingDb:db,kv:failure==='race'?undefined:failingKv});
+        const send=()=>request(ws,path,payload,{engineApp:inboundApp});
+        const replies=failure==='race'?await Promise.all([send(),send()]):[await send(),await send()];
+        for(const reply of replies)expectStatus(reply,200);
+        if(failure==='race')assert.ok(arrivals>=2,'both requests reach SQL admission');
+        else assert.ok(completionFailures>=1,'KV completion write actually failed');
+        assert.deepEqual(replies[0].body,replies[1].body);
+        assert.equal(await scalar('SELECT count(*) FROM messages WHERE workspace_id=?',ws),1,'durable inbound identity admits one message');
+        assert.equal(await scalar('SELECT messages_recv FROM a2a_agents WHERE workspace_id=?',ws),1);
+        assert.equal(await scalar("SELECT count(*) FROM workspace_events WHERE workspace_id=? AND type='dm.received'",ws),1,'one durable inbound observer identity');
+        assert.equal(await scalar("SELECT count(*) FROM pending_events WHERE workspace_id=? AND event_type='dm.received'",ws),1,'one durable inbound outbox identity');
+        assert.equal(await scalar('SELECT count(*) FROM deliveries WHERE workspace_id=?',ws),1);
+        record(endpoint+' inbound '+failure+': one SQL identity/message/counter/outbox/event/delivery',{arrivals,completionFailures});
+        const changed=structuredClone(payload);changed.params.message.parts[0].text='different payload under same identity';
+        expectStatus(await request(ws,path,changed,{engineApp:inboundApp}),409);
+        assert.equal(await scalar('SELECT count(*) FROM messages WHERE workspace_id=?',ws),1);
+        const [identity]=await rows('SELECT * FROM a2a_inbound WHERE workspace_id=?',ws);
+        assert.ok(!identity.response.includes('auth_credential'));
+        // The local auth token is checked again even for an accepted identity.
+        expectStatus(await request(ws,path,payload,{engineApp:inboundApp,token:'at_live_invalid'}),401);
+        if(failure==='race'){
+          await run('DELETE FROM messages WHERE workspace_id=?',ws);
+          const pruned=await send();expectStatus(pruned,410);
+          const tombstone=(await rows('SELECT message_id,response FROM a2a_inbound WHERE workspace_id=?',ws))[0];
+          assert.deepEqual(tombstone,{message_id:null,response:null},'source pruning scrubs content but preserves retry identity');
+          assert.equal(pruned.body.error.data.code,'a2a_message_not_retained');
+          assert.equal(await scalar('SELECT count(*) FROM messages WHERE workspace_id=?',ws),0);
+          assert.equal(await scalar('SELECT messages_recv FROM a2a_agents WHERE workspace_id=?',ws),1);
+          assert.equal(await scalar("SELECT count(*) FROM workspace_events WHERE workspace_id=? AND type='dm.received'",ws),1);
+          await run('DELETE FROM workspaces WHERE id=?',ws);
+          assert.equal(await scalar('SELECT count(*) FROM a2a_inbound WHERE workspace_id=?',ws),0);
+        }else{
+          await run('UPDATE a2a_inbound SET created_at=unixepoch()-86401 WHERE workspace_id=?',ws);
+          await sweepPendingA2aEgress(db,1);
+          assert.equal(await scalar('SELECT count(*) FROM a2a_inbound WHERE workspace_id=?',ws),0);
+        }
+        assert.deepEqual(await rows('PRAGMA foreign_key_check'),[]);
+        record(endpoint+' inbound '+failure+' retained identity rejects payload reuse/current bad auth and cascades source or expires in bounded sweep');
+
+      }
+    }
   }
   if (!process.env.REVIEW_CASE || process.env.REVIEW_CASE==='notifications') {
     const f=await setup('notifications-no-caller-retry',{node:true});

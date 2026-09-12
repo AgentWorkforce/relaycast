@@ -9,6 +9,7 @@ import { requireAuth, hashToken } from '../middleware/auth.js';
 import { asCodedError, errorResponse, type CodedError } from '../lib/httpError.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { runIdempotent } from '../middleware/idempotency.js';
+import { sha256Hex } from '../lib/crypto.js';
 import { runInBackground } from './background.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
 import * as a2aEngine from '../engine/a2a.js';
@@ -26,6 +27,30 @@ import {
 } from '../lib/httpResponse.js';
 
 export const a2aRoutes = new Hono<AppEnv>();
+
+// KV is only an advisory completion cache. Public content and the replay
+// decision belong to SQL, where source pruning can scrub them atomically.
+async function receiveIdempotently(options: Parameters<typeof runIdempotent<dmEngine.SendDmResult>>[0]) {
+  let fresh: dmEngine.SendDmResult | undefined;
+  const result = await runIdempotent({
+    ...options,
+    fingerprint: options.fingerprint ? await sha256Hex(options.fingerprint) : undefined,
+    afterOperation: undefined,
+    operation: async () => {
+      fresh = await options.operation();
+      return { id: fresh.id };
+    },
+  });
+  return { ...result, data: fresh ?? await options.operation() };
+}
+
+function admittedInbound(c: Context<AppEnv>, workspaceId: string): NonNullable<Parameters<typeof dmEngine.sendDm>[4]>['afterAdmission'] {
+  return (data, event) => {
+    runInBackground(c, c.get('engine').realtime.publishToWorkspaceStream({ workspaceId, event: { ...event.payload, seq: event.seq } }), 'publish admitted inbound dm.received');
+    runInBackground(c, c.get('engine').webhookQueue.send({ type: 'dm.received', workspaceId, data: event.data, outboxId: event.outboxId }), 'queue admitted inbound dm.received');
+    if (data._delivery) runInBackground(c, routeDeliveryOutcomes(c, [data._delivery], 'dm.received', event.data, { workspaceId }), 'route admitted inbound delivery');
+  };
+}
 
 const registerA2aSchema = z.object({
   agent_card_url: z.string().url().optional(),
@@ -336,6 +361,7 @@ a2aRoutes.get('/:workspace/.well-known/agent-card.json', handleWorkspaceAgentCar
 
 // POST /a2a/rpc
 a2aRoutes.post('/a2a/rpc', requireAuth, rateLimit, async (c) => {
+  let correlationId: string | number | undefined;
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
@@ -345,6 +371,7 @@ a2aRoutes.post('/a2a/rpc', requireAuth, rateLimit, async (c) => {
     }
 
     const request = parsed.data;
+    correlationId = request.id ?? undefined;
     const targetAgentName = extractTargetAgentName(
       request.params as Record<string, unknown> | undefined,
       request.params?.message?.context_id,
@@ -427,7 +454,7 @@ a2aRoutes.post('/a2a/rpc', requireAuth, rateLimit, async (c) => {
             ? String(request.id)
             : null;
 
-      const idempotent = await runIdempotent({
+      const idempotent = await receiveIdempotently({
         workspaceId: workspace.id,
         actorId: authenticatedAgent!.id,
         scope: 'a2a:inbound',
@@ -447,12 +474,14 @@ a2aRoutes.post('/a2a/rpc', requireAuth, rateLimit, async (c) => {
         }, {
           skipA2aIntercept: true,
           receivedA2aAgentId: registeredCaller.id,
+          inboundIdentity: inboundMessageId ? { scope: 'a2a:inbound', key: `${registeredCaller.id}:${inboundMessageId}` } : undefined,
+          afterAdmission: admittedInbound(c, workspace.id),
           // Without this, sendDm falls back to its fixed one-hour / 1000-message
           // defaults and a registered peer's deliveries quietly ignore whatever
           // TTL and depth cap the operator configured — the one delivery path on
           // the deployment that is exempt from its own backpressure settings.
           mailbox: resolveMailboxConfig(c.get('engine').config, workspace.id),
-          workspaceDeliveryPolicy: await resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace),
+          resolveWorkspaceDeliveryPolicy: () => resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace),
         }),
       });
       const sent = idempotent.data;
@@ -463,7 +492,7 @@ a2aRoutes.post('/a2a/rpc', requireAuth, rateLimit, async (c) => {
       // request observably different from a single one, which is the thing
       // idempotency exists to prevent. The response below is identical either
       // way, so the caller cannot tell — which is the point.
-      if (!idempotent.replayed) {
+      if (!idempotent.replayed && !sent._notifications_durable) {
         // Fanout and delivery routing run in the background, as `/v1/dm` does.
         // Awaiting them made the counterparty's "message accepted" wait on our
         // recipient's delivery — including a slow HTTP-push receiver — so a
@@ -547,12 +576,13 @@ a2aRoutes.post('/a2a/rpc', requireAuth, rateLimit, async (c) => {
   } catch (err: unknown) {
     if (err instanceof WorkspaceDeliveryCapacityError) {
       c.header('Retry-After', '30');
-      return jsonResponse(c, a2aEngine.jsonRpcError(undefined, -32000, err.message, { code: err.code, retryable: true }), 429);
+      return jsonResponse(c, a2aEngine.jsonRpcError(correlationId, -32000, err.message, { code: err.code, retryable: true }), 429);
     }
     const error = asCodedError(err) as CodedError & { data?: unknown };
     return jsonResponse(
       c,
-      a2aEngine.jsonRpcError(undefined, -32000, error.message || 'Internal error', error.data),
+      a2aEngine.jsonRpcError(correlationId, -32000, error.message || 'Internal error',
+        error.data ?? (error.code ? { code: error.code } : undefined)),
       error.status || 500,
     );
   }
@@ -560,6 +590,7 @@ a2aRoutes.post('/a2a/rpc', requireAuth, rateLimit, async (c) => {
 
 // POST /a2a/webhook/:workspace_id/:agent_name
 a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
+  let correlationId: string | number | undefined;
   try {
     const db = c.get('db');
     const workspaceId = c.req.param('workspace_id');
@@ -584,6 +615,7 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
     }
 
     const payload = parsed.data;
+    correlationId = extractCorrelationId(payload) ?? undefined;
     const relayMessage = a2aEngine.translateA2aToRelay(payload);
     const requestPayload = a2aEngine.JsonRpcRequestSchema.safeParse(payload);
 
@@ -619,7 +651,7 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
       ? requestPayload.data.params?.message?.message_id ?? String(requestPayload.data.id ?? '')
       : extractCorrelationId(payload);
     const a2aRecord = await a2aEngine.getA2aAgentByRelayName(db, relayAgent.workspaceId, relayName);
-    const idempotent = await runIdempotent({
+    const idempotent = await receiveIdempotently({
       workspaceId: relayAgent.workspaceId,
       actorId: relayAgent.relayAgentId,
       scope: 'a2a:webhook',
@@ -631,8 +663,10 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
       }, {
         skipA2aIntercept: true,
         receivedA2aAgentId: a2aRecord?.id,
+        inboundIdentity: inboundKey ? { scope: 'a2a:webhook', key: inboundKey } : undefined,
+        afterAdmission: admittedInbound(c, relayAgent.workspaceId),
         mailbox: resolveMailboxConfig(c.get('engine').config, relayAgent.workspaceId),
-        workspaceDeliveryPolicy: await resolveWorkspaceDeliveryPolicyById(db, c.get('engine').config, relayAgent.workspaceId),
+        resolveWorkspaceDeliveryPolicy: () => resolveWorkspaceDeliveryPolicyById(db, c.get('engine').config, relayAgent.workspaceId),
       }),
     });
     const sent = idempotent.data;
@@ -663,12 +697,13 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
   } catch (err: unknown) {
     if (err instanceof WorkspaceDeliveryCapacityError) {
       c.header('Retry-After', '30');
-      return jsonResponse(c, a2aEngine.jsonRpcError(undefined, -32000, err.message, { code: err.code, retryable: true }), 429);
+      return jsonResponse(c, a2aEngine.jsonRpcError(correlationId, -32000, err.message, { code: err.code, retryable: true }), 429);
     }
     const error = asCodedError(err) as CodedError & { data?: unknown };
     return jsonResponse(
       c,
-      a2aEngine.jsonRpcError(undefined, -32000, error.message || 'Internal error', error.data),
+      a2aEngine.jsonRpcError(correlationId, -32000, error.message || 'Internal error',
+        error.data ?? (error.code ? { code: error.code } : undefined)),
       error.status || 500,
     );
   }

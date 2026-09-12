@@ -1,3 +1,5 @@
+import type { WorkspaceDeliveryPolicy, WorkspaceDeliveryPolicyConfig } from '../ports/workspaceDelivery.js';
+export type { WorkspaceDeliveryPolicy, WorkspaceDeliveryPolicyConfig } from '../ports/workspaceDelivery.js';
 import { z } from 'zod';
 import { and, count, eq, or, sql, type SQL, type SQLWrapper } from 'drizzle-orm';
 import { deliveries, workspaces } from '../db/schema.js';
@@ -19,17 +21,6 @@ import type { EngineDb } from '../ports/database.js';
  * silently becoming unlimited by accident-of-plumbing: callers that must be
  * guarded are wired explicitly by the host.
  */
-export interface WorkspaceDeliveryPolicy {
-  /** Maximum active workspace delivery rows (queued+delivered, unexpired). */
-  cap: number;
-  /**
-   * Optional reserve carved OUT of `cap` for server-classified targeted sends.
-   * Broadcast admission requires `depth + new <= cap - reserve`; targeted
-   * admission requires `depth + new <= cap`. Must satisfy `0 <= reserve < cap`.
-   */
-  reserve?: number;
-}
-
 /** Server-classified audience. Broadcasts may not consume the targeted reserve. */
 export type DeliveryAudience = 'broadcast' | 'targeted';
 
@@ -42,26 +33,6 @@ export class WorkspaceDeliveryCapacityError extends Error {
     super(message);
     this.name = 'WorkspaceDeliveryCapacityError';
   }
-}
-
-/**
- * Server-owned engine config shape for the workspace growth policy. Mirror of
- * the mailbox config: a global cap with optional per-workspace overrides. The
- * host supplies the *effective configured* cap here; the engine never infers a
- * cap from request data.
- */
-export interface WorkspaceDeliveryPolicyConfig {
-  cap?: number;
-  reserve?: number;
-  workspaces?: Record<string, { cap?: number; reserve?: number } | undefined>;
-  /**
-   * Server-only async resolver for dynamic, request-time plans (e.g. a
-   * KV-backed effective plan lookup). When present it takes precedence over the
-   * static `cap`/`workspaces` fields, so a host whose plan is async does not
-   * have to flatten every workspace into static config. Never source this from
-   * a client request.
-   */
-  resolve?: (workspace: { id: string; plan: string }) => Promise<WorkspaceDeliveryPolicy | undefined>;
 }
 
 const dynamicWorkspaceDeliveryPolicySchema = z.object({

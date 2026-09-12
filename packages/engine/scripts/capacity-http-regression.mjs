@@ -7,13 +7,19 @@ import { createEngine, schema } from '../dist/index.js';
 import { drizzle } from 'drizzle-orm/d1';
 import { Miniflare } from 'miniflare';
 import Database from 'better-sqlite3';
-import { buildChannelDeliveryWrite, buildDirectDeliveryWrite, buildGroupDmDeliveryWrite } from '../dist/engine/deliveryWrites.js';
+import { buildChannelDeliveryWrite, buildDirectDeliveryWrite } from '../dist/engine/deliveryWrites.js';
 import { runAtomicWrites } from '../dist/ports/database.js';
 import { resolveWorkspaceDeliveryPolicyFor, resolveWorkspaceDeliveryPolicy } from '../dist/engine/workspaceDeliveryPolicy.js';
 import { deriveRelayfileInboundSecret } from '../dist/routes/relayfileInbound.js';
 import { sweepPendingA2aEgress } from '../dist/engine/a2aEgress.js';
 
 const results = [];
+const originalConsoleError=console.error;
+const backgroundErrors=[];
+console.error=(...args)=>{
+  if(args.some(arg=>arg && typeof arg==='object' && arg.source==='background.task'))backgroundErrors.push(args);
+  originalConsoleError(...args);
+};
 const hash = x => createHash('sha256').update(x).digest('hex');
 const runtimes = [':memory:', `/tmp/finn-capacity-${randomUUID()}.sqlite`].map(dbPath => createNodeRuntime({
   dbPath, baseUrl:'http://localhost:0',fileDir:`/tmp/finn-capacity-files-${randomUUID()}`,
@@ -59,10 +65,10 @@ try {
   const scalar=async(sql,...args)=>Object.values((await rows(sql,...args))[0])[0];
   const depth=ws=>scalar("SELECT count(*) FROM deliveries WHERE workspace_id=? AND status IN ('queued','delivered') AND (expires_at IS NULL OR expires_at>unixepoch())",ws);
   const policies=new Map();let resolves=0;const background=[];
-  const kvMap=new Map();let failCompletion=false;
+  const kvMap=new Map();let failCompletion=false;let completionFailures=0;
   const deps={...runtime.deps,db,
     config:{environment:'test',relayfileInboundSecret:'fixture-only',workspaceDelivery:{resolve:async workspace=>{await Promise.resolve();resolves++;assert.equal(workspace.plan,'enterprise');return policies.get(workspace.id);}}},
-    kv:{get:async k=>kvMap.get(k)??null,put:async(k,v)=>{if(failCompletion&&!k.endsWith(':lock'))throw Error('fixture KV completion failure');kvMap.set(k,v);},delete:async k=>{kvMap.delete(k);}},
+    kv:{get:async k=>kvMap.get(k)??null,put:async(k,v)=>{if(failCompletion&&!k.endsWith(':lock')){completionFailures++;throw Error('fixture KV completion failure');}kvMap.set(k,v);},delete:async k=>{kvMap.delete(k);}},
     rateLimiter:{check:async()=>({allowed:true,remaining:10000,resetAt:Date.now()+1000})},
     webhookQueue:{send:async()=>{}},
   };
@@ -174,7 +180,7 @@ try {
     const sendE=(text,key)=>request(ws,'/v1/dm',{to:'recipient-1',text},{key});
     const simultaneous=await Promise.all([sendE('one','one'),sendE('two','two')]);assert.deepEqual(simultaneous.map(x=>x.status).sort(),[201,429]);assert.equal(calls,1);assert.equal(await depth(ws),1);
     const winner=simultaneous[0].status===201?'one':'two';expectStatus(await sendE(winner,winner),201);assert.equal(calls,1);
-    kvMap.clear();failCompletion=true;expectStatus(await sendE(winner,winner),201);failCompletion=false;assert.equal(calls,1);
+    kvMap.clear();failCompletion=true;expectStatus(await sendE(winner,winner),201);assert.ok(completionFailures>0,'injected KV completion write actually failed');failCompletion=false;assert.equal(calls,1);
     globalThis.fetch=originalFetch;record('concurrent A2A overflow: one admitted, one transport; durable replay survives lost KV',{calls});
   }
   {
@@ -297,7 +303,8 @@ try {
     const bareApp=createEngine({...deps,db:bare});expectStatus(await request(ws,'/v1/channels/general/messages',{text:'cannot commit'},{engineApp:bareApp}),500);
     assert.equal(await scalar('SELECT count(*) FROM messages WHERE workspace_id=?',ws),0);assert.equal(await depth(ws),0);record('unsupported atomic adapter fails before message write');
   }
-  await Promise.allSettled(background);assert.ok(resolves>0);
+  // waitUntil receives caught best-effort tasks; SQL/delivery assertions above, not settlement, prove effects.
+  await Promise.allSettled(background);assert.equal(backgroundErrors.length,0,'background route failures must remain visible');assert.ok(resolves>0);
  }
  for(const cap of [0,-1,NaN,Infinity,0.5])await assert.rejects(()=>resolveWorkspaceDeliveryPolicyFor({workspaceDelivery:{resolve:async()=>({cap,reserve:0})}},{id:'ws'}));
  for(const reserve of [-1,NaN,0.5])await assert.rejects(()=>resolveWorkspaceDeliveryPolicyFor({workspaceDelivery:{resolve:async()=>({cap:10,reserve})}},{id:'ws'}));
@@ -305,4 +312,4 @@ try {
  assert.deepEqual(resolveWorkspaceDeliveryPolicy({workspaceDelivery:{cap:10,reserve:4,workspaces:{ws:{reserve:0}}}},'ws'),{cap:10,reserve:0});
  results.push({test:'dynamic validation and static explicit reserve zero'});
  writeFileSync(process.env.CAPACITY_RESULTS??'/tmp/finn-capacity-http-results.json',JSON.stringify({results},null,2)+'\n');console.log(`PASS ${results.length} scenario records`);
-}finally{globalThis.fetch=originalFetch;await mf.dispose();for(const r of runtimes)r.close();}
+}finally{console.error=originalConsoleError;globalThis.fetch=originalFetch;await mf.dispose();for(const r of runtimes)r.close();}

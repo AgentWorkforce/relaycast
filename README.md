@@ -1130,6 +1130,17 @@ Keep the same `Idempotency-Key` when retrying a transport failure: the admitted
 message can resume even when capacity is full. Engine adapters must apply migration
 `0057_a2a_egress.sql`; hosted adapters must schedule `sweepPendingA2aEgress(db)`.
 Recovery retains the remote message ID and requires receiver deduplication.
+Inbound A2A message IDs are admitted once per workspace, authenticated actor and
+route scope for 24 hours, including concurrent requests and failed KV completion.
+Migration `0059_a2a_inbound_admission.sql` adds the indexed inbound identity and
+workspace lookup indexes. The existing recovery sweep cleans expired identities.
+Source pruning scrubs the public response but preserves an identity/fingerprint
+tombstone until expiry: retry returns `410 a2a_message_not_retained` without
+recreating history. Workspace deletion removes the tombstone. Inbound KV caches
+retain only a message ID and digest; replay checks the SQL source state.
+Credentialed A2A targets require HTTPS; unauthenticated public HTTP remains supported.
+Transport retries use three 15-second attempts and at most two 30-second waits;
+429 honors bounded `Retry-After`. Invalid JSON/protocol responses are terminal.
 Accepted A2A retries are bounded to 24 hours. Deleted source messages or changed/deleted
 targets fail closed with typed 410 responses; terminal intents clear their payload.
 The existing recovery sweep also cleans expired intents. After cleanup, a reused

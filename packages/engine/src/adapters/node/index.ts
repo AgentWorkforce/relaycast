@@ -178,13 +178,17 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
 
   const runDeliveryMaintenance = createDeliveryMaintenanceRunner(deps);
 
+  let a2aRecoveryRunning = false;
   const sweepTimer = setInterval(() => {
     void sweepStaleAgents(db).catch(() => {});
     void sweepOfflineNodes(db, realtime, deps).catch(() => {});
     void sweepTimedOutInvocations(db, realtime, { completionDeps: deps }).catch(() => {});
     void reapExpiredWorkspaces(db, fileStorage).catch(() => {});
     void runDeliveryMaintenance();
-    void sweepPendingA2aEgress(db).catch(() => {});
+    if (!a2aRecoveryRunning) {
+      a2aRecoveryRunning = true;
+      void sweepPendingA2aEgress(db).catch(() => {}).finally(() => { a2aRecoveryRunning = false; });
+    }
   }, 15_000);
   (sweepTimer as { unref?: () => void }).unref?.();
 

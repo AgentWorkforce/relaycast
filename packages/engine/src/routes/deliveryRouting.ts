@@ -11,6 +11,7 @@ import { agents, agentNodeBindings, deliveries as deliveryRows, nodes } from '..
 import { buildHttpPushHeaders, resolveHttpPushProxy } from '../engine/httpPushDispatch.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
 import { settlePool } from '../lib/settlePool.js';
+import { queryInChunks } from '../lib/queryChunks.js';
 import { isProviderAgentDeliveryReady, type EngineDb, type EngineDeps } from '../ports/index.js';
 import { fanoutToAgents } from './fanout.js';
 import { publishEvent, publishEventsToAgents } from '../engine/eventDispatch.js';
@@ -79,7 +80,7 @@ async function resolveLiveLocations(
   const uniqueAgentIds = [...new Set(deliveries.map((delivery) => delivery.agentId))];
   if (uniqueAgentIds.length === 0) return new Map();
 
-  const bindings = await ctx.db
+  const bindings = await queryInChunks(uniqueAgentIds, chunk => ctx.db
     .select({
       agentId: agentNodeBindings.agentId,
       nodeId: agentNodeBindings.nodeId,
@@ -99,9 +100,9 @@ async function resolveLiveLocations(
     .where(and(
       eq(agentNodeBindings.workspaceId, ctx.workspaceId),
       eq(agentNodeBindings.status, 'active'),
-      inArray(agentNodeBindings.agentId, uniqueAgentIds),
+      inArray(agentNodeBindings.agentId, chunk),
     ))
-    .orderBy(sql`${agentNodeBindings.priority} DESC`, agentNodeBindings.createdAt);
+    .orderBy(sql`${agentNodeBindings.priority} DESC`, agentNodeBindings.createdAt));
 
   const byAgent = new Map<string, DeliveryTarget>();
   for (const binding of bindings) {
@@ -117,7 +118,7 @@ async function resolveLiveLocations(
     });
   }
 
-  const fallbackRows = await ctx.db
+  const fallbackRows = await queryInChunks(uniqueAgentIds, chunk => ctx.db
     .select({
       id: agents.id,
       locationType: agents.locationType,
@@ -130,7 +131,7 @@ async function resolveLiveLocations(
     })
     .from(agents)
     .leftJoin(nodes, eq(agents.locationNodeId, nodes.id))
-    .where(and(eq(agents.workspaceId, ctx.workspaceId), inArray(agents.id, uniqueAgentIds)));
+    .where(and(eq(agents.workspaceId, ctx.workspaceId), inArray(agents.id, chunk))));
 
   for (const row of fallbackRows) {
     if (byAgent.has(row.id)) continue;

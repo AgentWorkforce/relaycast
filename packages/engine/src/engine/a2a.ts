@@ -584,6 +584,13 @@ export function translateA2aToRelay(jsonRpc: A2aJsonRpcRequest | A2aJsonRpcRespo
   };
 }
 
+// Two waits of at most 30s plus three 15s attempts fit the 120s egress lease.
+function boundedRetryAfter(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const delay = /^\d+(?:\.\d+)?$/.test(value) ? Number(value) * 1000 : Date.parse(value) - Date.now();
+  return Number.isFinite(delay) ? Math.min(30_000, Math.max(0, delay)) : undefined;
+}
+
 export async function sendToExternalAgent(
   agentUrl: string,
   jsonRpcPayload: A2aJsonRpcRequest,
@@ -606,6 +613,12 @@ export async function sendToExternalAgent(
   for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt += 1) {
     try {
       const attemptAuth = beforeAttempt ? await beforeAttempt() : auth;
+      // Current credentials are resolved coherently before this check; never
+      // construct auth headers or send credentialed cleartext HTTP.
+      if (new URL(targetUrl).protocol !== 'https:' && attemptAuth?.credential
+        && (attemptAuth.scheme === 'bearer' || attemptAuth.scheme === 'api_key')) {
+        throw codedError('Credentialed A2A targets require HTTPS', 'a2a_agent_url_forbidden', 400);
+      }
       const response = await globalThis.fetch(targetUrl, {
         method: 'POST',
         signal: AbortSignal.timeout(15_000),
@@ -615,6 +628,10 @@ export async function sendToExternalAgent(
           ...buildAuthHeaders(attemptAuth),
         },
         body: JSON.stringify(request),
+      }).catch(() => {
+        // Fetch rejects on timeout, abort and network failure. Keep local
+        // validation/parser errors out of this transport-only classification.
+        throw Object.assign(codedError('A2A transport unavailable', 'a2a_transport_unavailable', 502), { retryable: true });
       });
 
       if (!response.ok) {
@@ -623,12 +640,22 @@ export async function sendToExternalAgent(
           code: response.status >= 500 ? 'a2a_upstream_unavailable' : 'a2a_upstream_rejected',
           status: response.status >= 500 ? 502 : response.status,
           retryable: response.status >= 500 || response.status === 429,
+          retryAfterMs: response.status === 429 ? boundedRetryAfter(response.headers.get('Retry-After')) : undefined,
         });
         throw err;
       }
 
-      const payload = await response.json();
-      const parsedResponse = JsonRpcResponseSchema.parse(payload);
+      let payload: unknown;
+      try { payload = await response.json(); }
+      catch (error) {
+        if (error instanceof Error && ['TimeoutError', 'AbortError', 'TypeError'].includes(error.name)) {
+          throw Object.assign(codedError('A2A transport unavailable', 'a2a_transport_unavailable', 502), { retryable: true });
+        }
+        throw Object.assign(codedError('Invalid A2A upstream response', 'a2a_invalid_response', 502), { retryable: false });
+      }
+      const parsed = JsonRpcResponseSchema.safeParse(payload);
+      if (!parsed.success) throw Object.assign(codedError('Invalid A2A upstream response', 'a2a_invalid_response', 502), { retryable: false });
+      const parsedResponse = parsed.data;
 
       if (parsedResponse.error) {
         const err = new Error(parsedResponse.error.message);
@@ -652,7 +679,7 @@ export async function sendToExternalAgent(
       // ZodErrors, JSON-RPC errors, and 4xx responses are not retryable.
       const retryable = error instanceof Error && (error as Error & { retryable?: boolean }).retryable === true;
       if (!retryable || attempt === RETRY_DELAYS_MS.length) break;
-      await sleep(RETRY_DELAYS_MS[attempt]);
+      await sleep((error as Error & { retryAfterMs?: number }).retryAfterMs ?? RETRY_DELAYS_MS[attempt]);
     }
   }
 

@@ -20,6 +20,16 @@ info:
     410 a2a_egress_expired. After intent cleanup, the key is fresh and may create a
     new message; callers must stop automatic retries after the window.
 
+    Inbound A2A identities are deduplicated durably for 24 hours per workspace,
+    authenticated actor and route scope. Source pruning scrubs public content
+    while preserving a bounded identity/fingerprint tombstone; same-key retries
+    return 410 a2a_message_not_retained instead of recreating messages or effects.
+    Workspace deletion removes the identity; expiry cleanup permits fresh keys
+    after the retry window. JSON-RPC errors preserve request/correlation IDs.
+    Credentialed A2A targets require HTTPS. Unauthenticated public HTTP is allowed.
+    Transport retries are bounded within the 120-second claim; malformed upstream
+    JSON/protocol responses are terminal.
+
     Response format:
     - Success: `{ ok: true, data: ... }`
     - Error: `{ ok: false, error: { code, message } }`

@@ -1,4 +1,4 @@
-import { eq, and, sql, lt, gt, isNull, inArray, desc } from 'drizzle-orm';
+import { eq, and, sql, lt, lte, gt, isNull, inArray, desc } from 'drizzle-orm';
 import type { DmMessage } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import {
@@ -11,6 +11,7 @@ import {
   messageAttachments,
   a2aEgress,
   a2aEgressContext,
+  a2aInbound,
   a2aAgents,
   pendingEvents,
   messageLogs,
@@ -47,6 +48,10 @@ interface SendDmOptions {
   idempotencyKey?: string;
   /** Count an authenticated inbound peer in the same transaction as its DM. */
   receivedA2aAgentId?: string;
+  /** Authenticated actor/scope/key identity, never a caller-selected recipient identity. */
+  inboundIdentity?: { scope: string; key: string };
+  /** Resolve only after durable accepted lookup (cached HTTP replay never calls sendDm). */
+  resolveWorkspaceDeliveryPolicy?: () => Promise<WorkspaceDeliveryPolicy | undefined>;
   /** Fast paths only; durable events and delivery already committed before this hook. */
   afterAdmission?: (data: SendDmResult, event: { seq: number; payload: Record<string, unknown>; data: Record<string, unknown>; outboxId: string }) => void;
   mailbox?: MailboxConfig;
@@ -408,6 +413,22 @@ export async function sendDm(
     return { ...context.response, _delivery: null, _delivery_rejections: [], _notifications_durable: true };
   }
 
+  const inboundId = options.inboundIdentity
+    ? `a2ai_${await sha256Hex(JSON.stringify([workspaceId, fromAgentId, options.inboundIdentity.scope, options.inboundIdentity.key]))}`
+    : null;
+  const inboundFingerprint = inboundId ? await sha256Hex(JSON.stringify(data)) : '';
+  if (inboundId) {
+    const [retained] = await db.select().from(a2aInbound).where(eq(a2aInbound.id, inboundId));
+    if (retained && retained.createdAt.getTime() + 86_400_000 > Date.now()) {
+      if (retained.fingerprint !== inboundFingerprint) throw codedError('Idempotency-Key was reused with a different request payload', 'idempotency_key_reused', 409);
+      if (!retained.messageId || !retained.response) throw codedError('Accepted A2A message is no longer retained', 'a2a_message_not_retained', 410);
+      return { ...retained.response, _delivery: null, _delivery_rejections: [], _notifications_durable: true };
+    }
+    if (retained) await db.delete(a2aInbound).where(and(eq(a2aInbound.id, inboundId), lte(a2aInbound.createdAt, new Date(Date.now() - 86_400_000))));
+  }
+  const workspacePolicy = options.resolveWorkspaceDeliveryPolicy
+    ? await options.resolveWorkspaceDeliveryPolicy() : options.workspaceDeliveryPolicy;
+
   const [toAgent] = data.to === '@self'
     ? await db
       .select()
@@ -517,7 +538,7 @@ export async function sendDm(
           reason: 'dm',
           ttlMs: mailbox.ttlMs,
           depthCap: mailbox.depthCap,
-          workspacePolicy: options.workspaceDeliveryPolicy,
+          workspacePolicy,
         }),
       );
     }
@@ -543,20 +564,28 @@ export async function sendDm(
       }),
     );
 
-    if (egressId) {
+    if (inboundId) writes.push(writeDb.insert(a2aInbound).values({ id: inboundId, workspaceId, messageId, fingerprint: inboundFingerprint, response: publicResult }));
+    if (egressId) writes.push(writeDb.insert(a2aEgressContext).values({ id: egressId, messageId, response: publicResult }));
+    if (egressId || options.receivedA2aAgentId || inboundId) {
       writes.push(
-        writeDb.insert(a2aEgressContext).values({ id: egressId, messageId, response: publicResult }),
         writeDb.insert(pendingEvents).values({ id: messageId, workspaceId, eventType: 'dm.received', payload: eventData }),
         buildWorkspaceEventWrite(writeDb, workspaceId, { type: 'dm.received', payload: workspacePayload }),
       );
     }
     return writes;
-  }, { requireAtomic: Boolean(options.workspaceDeliveryPolicy || a2aTarget || options.receivedA2aAgentId) });
+  }, { requireAtomic: Boolean(workspacePolicy || a2aTarget || options.receivedA2aAgentId || inboundId) });
   let admittedEventSeq: number | undefined;
   try {
     const results = await persist();
-    if (egressId) admittedEventSeq = (results[results.length - 1] as { seq: number }[])[0].seq;
+    if (egressId || options.receivedA2aAgentId || inboundId) admittedEventSeq = (results[results.length - 1] as { seq: number }[])[0].seq;
   } catch (error) {
+    if (inboundId) {
+      const [winner] = await db.select().from(a2aInbound).where(eq(a2aInbound.id, inboundId));
+      if (winner) {
+        if (winner.fingerprint !== inboundFingerprint) throw codedError('Idempotency-Key was reused with a different request payload', 'idempotency_key_reused', 409);
+        return sendDm(db, workspaceId, fromAgentId, data, options);
+      }
+    }
     // Inspect the actual committed winner after the losing atomic batch rolls back.
     const [winner] = egressId ? await db.select().from(a2aEgress).where(eq(a2aEgress.id, egressId)) : [];
     if (!winner) throw error;
@@ -574,14 +603,14 @@ export async function sendDm(
     ...publicResult,
     _delivery: dmDelivery,
     _delivery_rejections: deliveryOutcomes.rejections,
-    ...(egressId ? { _notifications_durable: true } : {}),
+    ...((egressId || options.receivedA2aAgentId || inboundId) ? { _notifications_durable: true } : {}),
   };
-  if (egressId) {
+  if (egressId || options.receivedA2aAgentId || inboundId) {
     // Local fast paths run independently of transport. A crash here still leaves
     // the webhook outbox, workspace cursor log and queued delivery recoverable.
     options.afterAdmission?.(result, { seq: admittedEventSeq!, payload: workspacePayload, data: eventData, outboxId: messageId });
-    await dispatchA2aEgress(db, egressId);
   }
+  if (egressId) await dispatchA2aEgress(db, egressId);
   return result;
 }
 

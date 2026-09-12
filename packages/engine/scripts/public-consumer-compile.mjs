@@ -1,5 +1,6 @@
 // Verify the actual packed public declarations, with strict contextual typing.
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
@@ -11,9 +12,12 @@ try {
   const destination = join(temp, 'node_modules/@relaycast/engine');
   mkdirSync(destination, { recursive: true });
   execFileSync('tar', ['-xzf', join(temp, packed.filename), '-C', destination, '--strip-components=1']);
+  assert.equal(existsSync(join(destination, 'dist/ports/workspaceDelivery.consumer.js')), false);
+  assert.ok(!readFileSync(join(destination, 'dist/ports/index.d.ts'), 'utf8').includes('../engine/workspaceDeliveryPolicy'));
   writeFileSync(join(temp, 'consumer.mts'), `
 import type { EngineConfig } from '@relaycast/engine';
-import type { EngineConfig as PortConfig } from '@relaycast/engine/ports';
+import type { EngineConfig as PortConfig, WorkspaceDeliveryPolicyConfig } from '@relaycast/engine/ports';
+const policy: WorkspaceDeliveryPolicyConfig = { cap: 10 }; void policy;
 const config = {
   workspaceDelivery: {
     resolve: async (workspace) => {

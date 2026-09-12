@@ -1,5 +1,5 @@
 import { and, eq, or, sql, lte, inArray, asc } from 'drizzle-orm';
-import { a2aAgents, a2aEgress, messages, agents } from '../db/schema.js';
+import { a2aAgents, a2aEgress, a2aInbound, messages, agents } from '../db/schema.js';
 import { runAtomicWrites, type EngineDb } from '../ports/database.js';
 import { randomUuid } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
@@ -114,5 +114,9 @@ export async function sweepPendingA2aEgress(db: EngineDb, limit = 20): Promise<{
     try { await dispatchA2aEgress(db, intent.id); } catch { failed++; }
   }
   await cleanupA2aEgress(db, limit);
+  const inboundExpired = db.select({ id: a2aInbound.id }).from(a2aInbound)
+    .where(lte(a2aInbound.createdAt, new Date(Date.now() - A2A_EGRESS_RETRY_WINDOW_MS)))
+    .orderBy(asc(a2aInbound.createdAt), asc(a2aInbound.id)).limit(batchLimit(limit));
+  await db.delete(a2aInbound).where(inArray(a2aInbound.id, inboundExpired));
   return { attempted: due.length, failed };
 }

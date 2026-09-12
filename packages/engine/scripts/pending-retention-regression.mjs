@@ -2,16 +2,13 @@
 // Actual HTTP engine + native Node transactions and local workerd D1 batch.
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { randomUUID, createHash, createHmac } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { createNodeRuntime } from '../dist/adapters/node/index.js';
 import { createEngine, schema } from '../dist/index.js';
 import { drizzle } from 'drizzle-orm/d1';
 import { Miniflare } from 'miniflare';
 import Database from 'better-sqlite3';
-import { buildChannelDeliveryWrite, buildDirectDeliveryWrite, buildGroupDmDeliveryWrite } from '../dist/engine/deliveryWrites.js';
-import { runAtomicWrites } from '../dist/ports/database.js';
 import { resolveWorkspaceDeliveryPolicyFor, resolveWorkspaceDeliveryPolicy } from '../dist/engine/workspaceDeliveryPolicy.js';
-import { deriveRelayfileInboundSecret } from '../dist/routes/relayfileInbound.js';
 import { sweepPendingA2aEgress } from '../dist/engine/a2aEgress.js';
 
 const results = [];
@@ -107,7 +104,7 @@ try {
     const ws=await seed('pending-message-pruned',1,{cap:1});
     await run('INSERT INTO a2a_agents(id,workspace_id,relay_agent_id,external_url,agent_card) VALUES(?,?,?,?,?)',ws+'a2a',ws,ws+'r1','https://example.com/a2a',JSON.stringify({name:'fixture',url:'https://example.com/a2a',version:'1',skills:[{name:'message'}]}));
     let calls=0;let healthy=false;globalThis.fetch=async(url,init)=>{if(String(url)!=='https://example.com/a2a')return originalFetch(url,init);calls++;if(!healthy)throw Error('fixture transport outage');return Response.json({jsonrpc:'2.0',id:JSON.parse(init.body).id,result:{}});};
-    expectStatus(await request(ws,'/v1/dm',{to:'recipient-1',text:'must not outlive record'},{key:'pending-retained'}),500);
+    const unavailable=await request(ws,'/v1/dm',{to:'recipient-1',text:'must not outlive record'},{key:'pending-retained'});expectStatus(unavailable,502);assert.equal(unavailable.body.error.code,'a2a_transport_unavailable');
     await run('DELETE FROM messages WHERE workspace_id=?',ws);
     await run('UPDATE a2a_egress SET lease_until=0 WHERE workspace_id=?',ws);
     healthy=true;const before=calls;await sweepPendingA2aEgress(db);

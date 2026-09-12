@@ -117,7 +117,6 @@ groupDmRoutes.post(
 
       const conversationId = c.req.param('conversation_id');
       const mailbox = resolveMailboxConfig(c.get('engine').config, workspace.id);
-      const workspaceDeliveryPolicy = await resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace);
       const canonicalMetadata = canonicalUserMessageMetadata({
         ...(data ?? {}),
         injection_mode: mode,
@@ -160,7 +159,7 @@ groupDmRoutes.post(
         fingerprint,
         compatibleFingerprints: legacyFingerprint === fingerprint ? [] : [legacyFingerprint],
         kv: c.get('engine').kv,
-        operation: () =>
+        operation: async () =>
           groupDmEngine.postGroupMessage(
             db,
             workspace.id,
@@ -172,7 +171,7 @@ groupDmRoutes.post(
               data,
               mode,
             },
-            { mailbox, workspaceDeliveryPolicy },
+            { mailbox, workspaceDeliveryPolicy: await resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace) },
           ),
         afterOperation: async (data) => {
           await sendWebhookEvent(c, {

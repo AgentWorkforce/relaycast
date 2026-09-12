@@ -18,6 +18,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
+- Deduplicate inbound A2A messages and effects durably across retries and source pruning, keep cached sends available during policy outages, and harden bounded transport recovery.
+
 - Preserve accepted A2A local notifications across transport failures, count inbound messages atomically, and return stable completed retries with typed conflicts for concurrent key reuse.
 
 - Bound accepted A2A retries to 24 hours, clear terminal payloads, and prevent recovery after source deletion or target replacement/endpoint changes. Expose the async workspace capacity resolver through the public engine config.
@@ -530,7 +532,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v8.9.1...HEAD
+[Unreleased - Minor]: https://github.com/AgentWorkforce/relaycast/compare/v8.9.1...HEAD
 [8.9.1]: https://github.com/AgentWorkforce/relaycast/compare/v8.9.0...v8.9.1
 [8.9.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.8.0...v8.9.0
 [8.8.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.7.0...v8.8.0

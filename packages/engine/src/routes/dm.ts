@@ -76,7 +76,6 @@ dmRoutes.post(
       }
 
       const mailbox = resolveMailboxConfig(c.get('engine').config, workspace.id);
-      const workspaceDeliveryPolicy = await resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace);
       const toDmReceivedEventData = (data: Awaited<ReturnType<typeof dmEngine.sendDm>>) => buildDmReceivedEventData(data, {
         fromName: agent!.name,
       });
@@ -106,7 +105,7 @@ dmRoutes.post(
           attachments: normalizedAttachments,
           data,
           mode,
-        }, { mailbox, workspaceDeliveryPolicy, idempotencyKey,
+        }, { mailbox, resolveWorkspaceDeliveryPolicy: () => resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace), idempotencyKey,
           afterAdmission: (data, event) => {
             runInBackground(c, c.get('engine').realtime.publishToWorkspaceStream({
               workspaceId: workspace.id, event: { ...event.payload, seq: event.seq },

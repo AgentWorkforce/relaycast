@@ -22,7 +22,7 @@ The normal ENGINE typecheck also includes the async resolver consumer fixture.
 
 ## Release composition
 
-Apply ENGINE migrations `0057_a2a_egress.sql` and `0058_a2a_egress_context.sql` before serving this engine version.
+Apply ENGINE migrations `0057_a2a_egress.sql`, `0058_a2a_egress_context.sql`, and `0059_a2a_inbound_admission.sql` before serving this engine version.
 It adds a durable accepted-egress table, no quota counter or extra capacity.
 The same atomic write commits the intent, message, attachments, session, delivery,
 applicable message log, public response context, webhook outbox row, and workspace
@@ -111,3 +111,28 @@ SQL counter failure/retry on both local inbound producers, immutable completed
 responses after recipient/attachment/roster/endpoint churn, and an actual concurrent
 SQL admission collision. It also applies 0058 twice to the prior schema and proves
 context cleanup under message deletion, 24-hour egress cleanup and workspace deletion.
+
+## Inbound identity and second-feedback controls
+
+The SQL inbound identity hashes workspace, authenticated actor, route scope and
+caller message key. Its transaction includes the message, receive counter,
+delivery, message log, public response, webhook outbox and workspace event.
+Concurrent losers return the committed response, or typed conflict for a changed
+payload. KV completion stores only identity/digest; SQL decides replay even when
+that cache is warm. Source deletion clears the response atomically and nulls the
+source FK while retaining a content-free tombstone for the 24-hour window. Retry
+then returns typed 410. Workspace deletion cascades identities; the existing
+bounded recovery sweep expires them using an indexed query. 0057/0058 are unchanged.
+
+The review script checks concurrent Node memory/file and D1 batches, actual KV
+completion failures, injected SQL failures, source-prune replay with/without KV,
+retention and auth/payload controls. It also covers resolver-outage replay,
+JSON-RPC capacity IDs, and terminal malformed responses. Unit controls exercise
+actual Node timer overlap and transport retry/HTTPS boundaries. Capacity fixtures
+observe background errors explicitly; ordinary promise settlement alone does not
+prove caught fast-path work succeeded. Existing lost-fast-path recovery controls
+assert SQL identities plus webhook/node/cursor recovery separately.
+
+The migration test constructs a real pre-0057 database by applying the migration
+plan through 0056, including the explicit 0048/0049 supersessions, then compares
+original table SQL, foreign keys and unique-index metadata after additive DDL.

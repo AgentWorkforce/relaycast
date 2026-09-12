@@ -164,5 +164,7 @@ export interface EngineConfig {
    * within-cap reserve); self-host leaves it unset and applies no workspace
    * guard. Never derived from a client request.
    */
-  workspaceDelivery?: import('../engine/workspaceDeliveryPolicy.js').WorkspaceDeliveryPolicyConfig;
+  workspaceDelivery?: import('./workspaceDelivery.js').WorkspaceDeliveryPolicyConfig;
 }
+
+export type { WorkspaceDeliveryPolicy, WorkspaceDeliveryPolicyConfig } from './workspaceDelivery.js';

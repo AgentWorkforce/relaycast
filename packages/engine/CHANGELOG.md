@@ -9,6 +9,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased - Minor]
 
+- Deduplicate inbound A2A admission and local effects through concurrent requests and KV failures. Apply `0059_a2a_inbound_admission.sql`; source pruning scrubs public content but keeps an indexed retry tombstone for 24 hours, with bounded expiry and workspace cleanup.
+- Keep completed DM/group-DM retries available during policy outages, preserve JSON-RPC error IDs, serialize Node A2A recovery, and bound transport retries while refusing credentialed HTTP and terminal protocol failures.
+
 - Preserve accepted A2A local notifications across transport failures, count inbound messages atomically, and return stable completed retries with typed conflicts for concurrent key reuse.
 
 - Bound accepted A2A retries to 24 hours, clear terminal payloads, and prevent recovery after source deletion or target replacement/endpoint changes. Expose the async workspace capacity resolver through the public engine config.
