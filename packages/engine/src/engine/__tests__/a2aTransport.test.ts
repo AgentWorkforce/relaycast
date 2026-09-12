@@ -33,3 +33,31 @@ it('refuses credentialed HTTP before fetch and preserves unauthenticated HTTP', 
   await sendToExternalAgent('http://example.com', payload);
   expect(fetch).toHaveBeenCalledTimes(1);
 });
+
+it('keeps the egress header and body identity on retries after current-tuple validation', async () => {
+  vi.useFakeTimers();
+  const fetch = vi.fn().mockRejectedValueOnce(new Error('remote accepted but response was lost'))
+    .mockResolvedValue(Response.json({ jsonrpc: '2.0', id: 'retry', result: {} }));
+  const validate = vi.fn().mockResolvedValue({ scheme: 'bearer', credential: 'current-token' });
+  vi.stubGlobal('fetch', fetch);
+  const result = sendToExternalAgent('https://example.com', payload, undefined, validate, 'a2ae_stable');
+  const checked = expect(result).resolves.toMatchObject({ response: { id: 'retry' } });
+  await vi.runAllTimersAsync(); await checked;
+  expect(validate).toHaveBeenCalledTimes(2);
+  expect(fetch).toHaveBeenCalledTimes(2);
+  for (const [, init] of fetch.mock.calls) {
+    expect(init.headers).toMatchObject({ 'Idempotency-Key': 'a2ae_stable', authorization: 'Bearer current-token' });
+    expect(JSON.parse(init.body)).toEqual(payload);
+  }
+});
+
+it('does not fetch with the egress header when current tuple or credentialed URL validation fails', async () => {
+  const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
+  const gone = Object.assign(new Error('registration removed'), { status: 410, code: 'a2a_target_gone' });
+  await expect(sendToExternalAgent('https://example.com', payload, undefined,
+    async () => { throw gone; }, 'a2ae_stable')).rejects.toBe(gone);
+  await expect(sendToExternalAgent('http://example.com', payload, undefined,
+    async () => ({ scheme: 'bearer', credential: 'rotated-token' }), 'a2ae_stable'))
+    .rejects.toMatchObject({ code: 'a2a_agent_url_forbidden' });
+  expect(fetch).not.toHaveBeenCalled();
+});

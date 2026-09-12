@@ -17,7 +17,7 @@ import {
   messageLogs,
 } from '../db/schema.js';
 import { sha256Hex } from '../lib/crypto.js';
-import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
+import { runAtomicWrites, databaseConstraintKind, type AtomicWrite } from '../ports/database.js';
 import { generateId } from './snowflake.js';
 import * as a2aEngine from './a2a.js';
 import { buildMessageLogWrite } from './console.js';
@@ -48,6 +48,8 @@ interface SendDmOptions {
   idempotencyKey?: string;
   /** Count an authenticated inbound peer in the same transaction as its DM. */
   receivedA2aAgentId?: string;
+  /** Token hash authenticated by the route; checked with registration at SQL admission. */
+  receivedA2aTokenHash?: string;
   /** Authenticated actor/scope/key identity, never a caller-selected recipient identity. */
   inboundIdentity?: { scope: string; key: string };
   /** Resolve only after durable accepted lookup (cached HTTP replay never calls sendDm). */
@@ -283,6 +285,7 @@ function buildDmMessageWrites(
   attachments: AttachmentRow[],
   messageId: string,
   createdAt = new Date(),
+  inboundRegistration?: { id: string; tokenHash?: string },
 ): AtomicWrite[] {
   const hasAttachments = attachments.length > 0;
   const metadata = {
@@ -299,7 +302,15 @@ function buildDmMessageWrites(
         id: messageId,
         workspaceId,
         channelId,
-        agentId: fromAgentId,
+        // NULL violates messages.agent_id inside the atomic write. A vanished,
+        // reassigned registration or rotated caller token cannot silently make
+        // the later counter UPDATE affect zero rows while the DM commits.
+        agentId: inboundRegistration ? sql<string>`(
+          SELECT a.id FROM agents a JOIN a2a_agents peer ON peer.relay_agent_id = a.id
+          WHERE peer.id = ${inboundRegistration.id} AND peer.workspace_id = ${workspaceId}
+            AND a.id = ${fromAgentId} AND a.workspace_id = ${workspaceId}
+            ${inboundRegistration.tokenHash === undefined ? sql`` : sql`AND a.token_hash = ${inboundRegistration.tokenHash}`}
+        )` : fromAgentId,
         body: data.text,
         hasAttachments,
         metadata,
@@ -513,7 +524,8 @@ export async function sendDm(
   // The outbox, observer cursor log, response context and delivery share admission.
   // None can escape a capacity rollback, or depend on external transport success.
   const persist = () => runAtomicWrites(db, (writeDb) => {
-    const writes = buildDmMessageWrites(writeDb, workspaceId, fromAgentId, conv.channelId, data, attachments, messageId, createdAt);
+    const writes = buildDmMessageWrites(writeDb, workspaceId, fromAgentId, conv.channelId, data, attachments, messageId, createdAt,
+      options.receivedA2aAgentId ? { id: options.receivedA2aAgentId, tokenHash: options.receivedA2aTokenHash } : undefined);
 
     if (egressId && a2aTarget && egressPayload) {
       // First statement owns the request identity; a competing attempt rolls
@@ -525,7 +537,7 @@ export async function sendDm(
     }
     if (options.receivedA2aAgentId) {
       writes.push(writeDb.update(a2aAgents).set({ messagesRecv: sql`${a2aAgents.messagesRecv} + 1`, updatedAt: createdAt })
-        .where(and(eq(a2aAgents.id, options.receivedA2aAgentId), eq(a2aAgents.workspaceId, workspaceId))));
+        .where(and(eq(a2aAgents.id, options.receivedA2aAgentId), eq(a2aAgents.workspaceId, workspaceId), eq(a2aAgents.relayAgentId, fromAgentId))));
     }
     if (deliveryId) {
       writes.push(
@@ -579,6 +591,9 @@ export async function sendDm(
     const results = await persist();
     if (egressId || options.receivedA2aAgentId || inboundId) admittedEventSeq = (results[results.length - 1] as { seq: number }[])[0].seq;
   } catch (error) {
+    if (options.receivedA2aAgentId && databaseConstraintKind(error) === 'a2a_registration_changed') {
+      throw codedError('Authenticated A2A registration changed before admission', 'a2a_registration_changed', 401);
+    }
     if (inboundId) {
       const [winner] = await db.select().from(a2aInbound).where(eq(a2aInbound.id, inboundId));
       if (winner) {

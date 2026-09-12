@@ -169,6 +169,7 @@ function extractCorrelationId(payload: a2aEngine.A2aJsonRpcRequest | a2aEngine.A
 async function findWebhookAgentByName(db: AppEnv['Variables']['db'], relayName: string, workspaceId: string) {
   const [row] = await db
     .select({
+      registrationId: a2aAgents.id,
       workspaceId: a2aAgents.workspaceId,
       relayAgentId: a2aAgents.relayAgentId,
       relayName: agents.name,
@@ -474,6 +475,7 @@ a2aRoutes.post('/a2a/rpc', requireAuth, rateLimit, async (c) => {
         }, {
           skipA2aIntercept: true,
           receivedA2aAgentId: registeredCaller.id,
+          receivedA2aTokenHash: authenticatedAgent!.tokenHash,
           inboundIdentity: inboundMessageId ? { scope: 'a2a:inbound', key: `${registeredCaller.id}:${inboundMessageId}` } : undefined,
           afterAdmission: admittedInbound(c, workspace.id),
           // Without this, sendDm falls back to its fixed one-hour / 1000-message
@@ -650,7 +652,6 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
     const inboundKey = requestPayload.success
       ? requestPayload.data.params?.message?.message_id ?? String(requestPayload.data.id ?? '')
       : extractCorrelationId(payload);
-    const a2aRecord = await a2aEngine.getA2aAgentByRelayName(db, relayAgent.workspaceId, relayName);
     const idempotent = await receiveIdempotently({
       workspaceId: relayAgent.workspaceId,
       actorId: relayAgent.relayAgentId,
@@ -662,7 +663,8 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
         to: targetAgentName!, text: relayMessage.text, mode: 'wait', data: relayMessage.metadata,
       }, {
         skipA2aIntercept: true,
-        receivedA2aAgentId: a2aRecord?.id,
+        receivedA2aAgentId: relayAgent.registrationId,
+        receivedA2aTokenHash: tokenHash,
         inboundIdentity: inboundKey ? { scope: 'a2a:webhook', key: inboundKey } : undefined,
         afterAdmission: admittedInbound(c, relayAgent.workspaceId),
         mailbox: resolveMailboxConfig(c.get('engine').config, relayAgent.workspaceId),

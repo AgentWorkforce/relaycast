@@ -65,16 +65,7 @@ export async function appendWorkspaceEvent(
   input: WorkspaceEventInput,
 ): Promise<number | null> {
   try {
-    const [row] = await db
-      .insert(workspaceEvents)
-      .values({
-        workspaceId,
-        seq: nextSeqSql(workspaceId),
-        type: input.type,
-        channelId: input.channelId ?? null,
-        payload: JSON.stringify(input.payload),
-      })
-      .returning({ seq: workspaceEvents.seq });
+    const [row] = await buildWorkspaceEventWrite(db, workspaceId, input);
     return row?.seq ?? null;
   } catch (err) {
     console.warn('[workspace.events] append failed', {

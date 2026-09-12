@@ -14,6 +14,9 @@ info:
     idempotent replays and zero-growth operations remain available at capacity.
     Outbound A2A DMs durably admit the message before transport; retry transport
     failures with the same `Idempotency-Key` to resume the admitted message.
+    Each outbound attempt and recovery sends the stable egress identity as its
+    HTTP Idempotency-Key and preserves the body message_id. Delivery is at least
+    once; preventing repeated receiver effects requires receiver deduplication.
     Accepted A2A retries have a 24-hour window from admission. Missing source
     messages return 410 a2a_message_not_retained; deleted/recreated targets or
     changed endpoints return 410 a2a_target_gone. Expired retained intents return
@@ -21,7 +24,10 @@ info:
     new message; callers must stop automatic retries after the window.
 
     Inbound A2A identities are deduplicated durably for 24 hours per workspace,
-    authenticated actor and route scope. Source pruning scrubs public content
+    authenticated actor and route scope. New admission atomically checks the
+    authenticated registration and token with the message and counter; a
+    concurrent change returns 401 a2a_registration_changed without message effects.
+    Source pruning scrubs public content
     while preserving a bounded identity/fingerprint tombstone; same-key retries
     return 410 a2a_message_not_retained instead of recreating messages or effects.
     Workspace deletion removes the identity; expiry cleanup permits fresh keys

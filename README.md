@@ -1129,9 +1129,14 @@ Outbound A2A DMs commit accepted egress with their guarded message before transp
 Keep the same `Idempotency-Key` when retrying a transport failure: the admitted
 message can resume even when capacity is full. Engine adapters must apply migration
 `0057_a2a_egress.sql`; hosted adapters must schedule `sweepPendingA2aEgress(db)`.
-Recovery retains the remote message ID and requires receiver deduplication.
+Recovery retains the remote message ID and sends the same egress identity in the
+HTTP `Idempotency-Key` header on every attempt. Delivery is at least once; receivers
+must deduplicate to prevent repeated effects.
 Inbound A2A message IDs are admitted once per workspace, authenticated actor and
 route scope for 24 hours, including concurrent requests and failed KV completion.
+New admission checks the authenticated registration and token in the same SQL
+transaction as the message and counter; a concurrent change returns
+`401 a2a_registration_changed` without committing message effects.
 Migration `0059_a2a_inbound_admission.sql` adds the indexed inbound identity and
 workspace lookup indexes. The existing recovery sweep cleans expired identities.
 Source pruning scrubs the public response but preserves an identity/fingerprint

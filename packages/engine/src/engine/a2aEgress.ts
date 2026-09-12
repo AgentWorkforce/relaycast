@@ -22,7 +22,8 @@ async function validateSource(db: EngineDb, intent: typeof a2aEgress.$inferSelec
 }
 
 /** Durable admission and a lease exclude concurrent senders. A crash after remote
- * acceptance can replay the same message_id; receivers must deduplicate it.
+ * acceptance can replay the same message_id and HTTP Idempotency-Key; receivers
+ * must deduplicate them. Arbitrary receivers still have at-least-once delivery.
  */
 export async function dispatchA2aEgress(db: EngineDb, id: string): Promise<void> {
   const [existing] = await db.select().from(a2aEgress).where(eq(a2aEgress.id, id));
@@ -63,7 +64,7 @@ export async function dispatchA2aEgress(db: EngineDb, id: string): Promise<void>
       if (!current.source) throw notRetained();
       if (!current.target || !current.recipient || current.target.externalUrl !== intent.externalUrl) throw targetGone();
       return { scheme: current.target.authScheme, credential: current.target.authCredential };
-    });
+    }, intent.id);
   } catch (error) {
     const failure = error as Error & { retryable?: boolean; status?: number; code?: string };
     const retryable = failure.retryable === true || (failure.retryable !== false && !(failure.status && failure.status >= 400 && failure.status < 500));

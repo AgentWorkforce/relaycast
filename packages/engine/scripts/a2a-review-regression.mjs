@@ -17,7 +17,19 @@ import { sweepDueNodeDeliveries } from '../dist/routes/deliveryRouting.js';
 
 const results = [];
 const hash = x => createHash('sha256').update(x).digest('hex');
-const runtimes = [':memory:', `/tmp/finn-capacity-${randomUUID()}.sqlite`].map(dbPath => createNodeRuntime({
+// These fixtures drive recovery explicitly. Keep earlier Node runtimes from
+// asynchronously sending their pending rows into a later case's fetch stub.
+// Production's automatic recovery/non-overlap has its own a2a-recovery unit test.
+function createManualRecoveryRuntime(options) {
+  const originalSetInterval = globalThis.setInterval;
+  const timers = [];
+  globalThis.setInterval = (...args) => {
+    const timer = originalSetInterval(...args); timers.push(timer); return timer;
+  };
+  try { return createNodeRuntime(options); }
+  finally { globalThis.setInterval = originalSetInterval; for (const timer of timers) clearInterval(timer); }
+}
+const runtimes = [':memory:', `/tmp/finn-capacity-${randomUUID()}.sqlite`].map(dbPath => createManualRecoveryRuntime({
   dbPath, baseUrl:'http://localhost:0',fileDir:`/tmp/finn-capacity-files-${randomUUID()}`,
   config:{environment:'test'},presence:{sweepIntervalMs:0},eventQueue:{pollIntervalMs:0},
 }));
@@ -133,11 +145,81 @@ try {
         }
         return new Response('',{status:200});
       }
-      assert.equal(String(url),targetUrl);calls++;captures.push({url:String(url),auth:init.headers.authorization,payload:JSON.parse(init.body)});if(!healthy)throw Error('fixture-old transport outage');return Response.json({jsonrpc:'2.0',id:JSON.parse(init.body).id,result:{}});};
+      assert.equal(String(url),targetUrl);calls++;captures.push({url:String(url),auth:init.headers.authorization,idempotencyKey:init.headers['Idempotency-Key'],payload:JSON.parse(init.body)});if(!healthy)throw Error('fixture-old transport outage');return Response.json({jsonrpc:'2.0',id:JSON.parse(init.body).id,result:{}});};
     const unavailable=await retry();expectStatus(unavailable,502);assert.equal(unavailable.body.error.code,'a2a_transport_unavailable');
     const intent=()=>rows('SELECT * FROM a2a_egress WHERE workspace_id=?',ws).then(r=>r[0]);
     assert.ok(!(await intent()).last_error.includes('fixture-old'));
     return {ws,retry,intent,captures,localReceipts,calls:()=>calls,healthy:()=>{healthy=true;}};
+  }
+  if (!process.env.REVIEW_CASE || process.env.REVIEW_CASE==='registration') {
+    for (const endpoint of ['rpc','webhook']) for (const mutation of ['remove','reassign','replace','token']) {
+      const ws=await seed('registration-'+endpoint+'-'+mutation,1,{cap:100});
+      await run('INSERT INTO a2a_agents(id,workspace_id,relay_agent_id,external_url,agent_card) VALUES(?,?,?,?,?)',ws+'peer',ws,ws+'sender',targetUrl,'{}');
+      const payload={jsonrpc:'2.0',id:'registration-race',method:'message/send',params:{target_agent:'recipient-1',message:{message_id:'history',role:'agent',parts:[{kind:'text',text:'preserved history'}]}}};
+      const path=endpoint==='rpc'?'/a2a/rpc':`/a2a/webhook/${ws}/sender`;
+      const noKv=createEngine({...deps,kv:undefined});
+      const history=await request(ws,path,payload,{engineApp:noKv});expectStatus(history,200);
+      const [original]=await rows('SELECT * FROM a2a_agents WHERE workspace_id=?',ws);
+      const snapshot=async()=>{
+        const result={};
+        for(const table of ['messages','deliveries','message_logs','a2a_inbound','pending_events'])result[table]=await scalar(`SELECT count(*) FROM ${table} WHERE workspace_id=?`,ws);
+        result.events=await scalar("SELECT count(*) FROM workspace_events WHERE workspace_id=? AND type='dm.received'",ws);
+        return result;
+      };
+      const before=await snapshot();let boundaries=0;
+      const atomicMethod=adapter==='workerd-d1'?'batch':'withTransaction';
+      const changedDb=new Proxy(db,{get(target,key){
+        if(key===atomicMethod)return async(...args)=>{
+          boundaries++;
+          if(boundaries===1){
+            if(mutation==='remove')await run('DELETE FROM a2a_agents WHERE id=?',original.id);
+            if(mutation==='reassign')await run('UPDATE a2a_agents SET relay_agent_id=? WHERE id=?',ws+'r1',original.id);
+            if(mutation==='replace')await run('UPDATE a2a_agents SET id=? WHERE id=?',ws+'replacement',original.id);
+            if(mutation==='token')await run('UPDATE agents SET token_hash=? WHERE id=?',hash('rotated-token'),ws+'sender');
+          }
+          return target[key](...args);
+        };
+        const value=Reflect.get(target,key);return typeof value==='function'?value.bind(target):value;
+      }});
+      const racing=createEngine({...deps,db:changedDb,kv:undefined});
+      const fresh=structuredClone(payload);fresh.params.message.message_id='new-admission';
+      const refused=await request(ws,path,fresh,{engineApp:racing});
+      assert.equal(boundaries,1,'mutation executes after route reads immediately before real atomic admission');
+      expectStatus(refused,401);
+      assert.equal(refused.body.error.data.code,'a2a_registration_changed');
+      assert.deepEqual(await snapshot(),before,'refused admission rolls back all durable effects and preserves history');
+      if(mutation!=='remove')assert.equal(await scalar('SELECT messages_recv FROM a2a_agents WHERE workspace_id=?',ws),1);
+      await run('DELETE FROM a2a_agents WHERE workspace_id=?',ws);
+      await run(`INSERT INTO a2a_agents(${Object.keys(original).join(',')}) VALUES(${Object.keys(original).map(()=>'?').join(',')})`,...Object.values(original));
+      await run('UPDATE agents SET token_hash=? WHERE id=?',hash('at_live_'+ws+'sender'),ws+'sender');
+      const replay=await request(ws,path,payload,{engineApp:noKv});expectStatus(replay,200);assert.deepEqual(replay.body,history.body);
+      assert.deepEqual(await snapshot(),before);
+      expectStatus(await request(ws,path,fresh,{engineApp:noKv}),200);
+      expectStatus(await request(ws,path,fresh,{engineApp:noKv}),200);
+      assert.equal(await scalar('SELECT messages_recv FROM a2a_agents WHERE workspace_id=?',ws),2);
+      assert.equal(await scalar('SELECT count(*) FROM messages WHERE workspace_id=?',ws),2);
+      record(endpoint+' authenticated registration '+mutation+' at atomic boundary refuses new admission, preserves history/replay, restored retry counts once');
+      await run('DELETE FROM workspaces WHERE id=?',ws);
+    }
+  }
+  if (!process.env.REVIEW_CASE || process.env.REVIEW_CASE==='outbound-header') {
+    const f=await setup('outbound-header');
+    const intent=await f.intent();
+    // The remote records the request before every lost response. Recovery has
+    // the same durable identity even when a receiver ignores this header.
+    assert.equal(f.captures.length,3);
+    f.healthy();await run('UPDATE a2a_egress SET lease_until=0 WHERE id=?',intent.id);
+    assert.deepEqual(await sweepPendingA2aEgress(db,1),{attempted:1,failed:0});
+    assert.equal(f.captures.length,4);
+    for(const capture of f.captures){
+      assert.equal(capture.idempotencyKey,intent.id);
+      assert.deepEqual(capture.payload,f.captures[0].payload);
+      assert.equal(capture.payload.params.message.message_id,intent.message_id);
+    }
+    assert.equal((await f.intent()).status,'sent');
+    assert.equal(await scalar('SELECT messages_sent FROM a2a_agents WHERE workspace_id=?',f.ws),1);
+    record('lost-response remote acceptance retains same HTTP Idempotency-Key and body message_id over three transport attempts and recovery',{attempts:f.captures.length});
+    await run('DELETE FROM workspaces WHERE id=?',f.ws);
   }
   if (!process.env.REVIEW_CASE || process.env.REVIEW_CASE==='policy') {
     for(const kind of ['dm','group','outbound']){

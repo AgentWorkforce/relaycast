@@ -18,6 +18,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
+- Refuse new inbound A2A admission atomically when its authenticated registration changes, and send a stable HTTP Idempotency-Key on outbound retries and recovery.
+
 - Deduplicate inbound A2A messages and effects durably across retries and source pruning, keep cached sends available during policy outages, and harden bounded transport recovery.
 
 - Preserve accepted A2A local notifications across transport failures, count inbound messages atomically, and return stable completed retries with typed conflicts for concurrent key reuse.

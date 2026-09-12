@@ -9,6 +9,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased - Minor]
 
+- Refuse new inbound A2A admission atomically when its authenticated registration changes, and send a stable HTTP Idempotency-Key on outbound retries and recovery.
+
 - Deduplicate inbound A2A admission and local effects through concurrent requests and KV failures. Apply `0059_a2a_inbound_admission.sql`; source pruning scrubs public content but keeps an indexed retry tombstone for 24 hours, with bounded expiry and workspace cleanup.
 - Keep completed DM/group-DM retries available during policy outages, preserve JSON-RPC error IDs, serialize Node A2A recovery, and bound transport retries while refusing credentialed HTTP and terminal protocol failures.
 

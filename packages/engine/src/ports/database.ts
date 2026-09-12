@@ -184,10 +184,10 @@ export async function runAtomicWrites(
   }
 }
 
-/** Normalize the capacity sentinel across SQLite adapters (D1 exposes only a wrapped message).
+/** Normalize atomic admission sentinels across SQLite adapters (D1 wraps the message).
  * Keep driver-specific error decoding at this port boundary; engine callers use a stable kind.
  */
-export type DatabaseConstraintKind = 'mailbox_capacity' | 'workspace_delivery_capacity';
+export type DatabaseConstraintKind = 'mailbox_capacity' | 'workspace_delivery_capacity' | 'a2a_registration_changed';
 
 export function databaseConstraintKind(error: unknown): DatabaseConstraintKind | undefined {
   const seen = new Set<unknown>();
@@ -196,6 +196,8 @@ export function databaseConstraintKind(error: unknown): DatabaseConstraintKind |
     seen.add(cause);
     const record = cause as { message?: unknown; cause?: unknown };
     const message = typeof record.message === 'string' ? record.message : '';
+    // Inbound registration is guarded by the message's non-null sender column.
+    if (/NOT NULL constraint failed: messages\.agent_id/i.test(message)) return 'a2a_registration_changed';
     // Per-recipient/required-mailbox sentinel (workspace_id NULL), and the
     // distinct workspace-scoped growth sentinel (status NULL). Order matters
     // only for a row that trips both; either is a capacity refusal.

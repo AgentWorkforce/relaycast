@@ -14,7 +14,19 @@ import { sweepPendingA2aEgress, cleanupA2aEgress } from '../dist/engine/a2aEgres
 
 const results = [];
 const hash = x => createHash('sha256').update(x).digest('hex');
-const runtimes = [':memory:', `/tmp/finn-capacity-${randomUUID()}.sqlite`].map(dbPath => createNodeRuntime({
+// These fixtures drive recovery explicitly. Keep earlier Node runtimes from
+// asynchronously sending their pending rows into a later case's fetch stub.
+// Production's automatic recovery/non-overlap has its own a2a-recovery unit test.
+function createManualRecoveryRuntime(options) {
+  const originalSetInterval = globalThis.setInterval;
+  const timers = [];
+  globalThis.setInterval = (...args) => {
+    const timer = originalSetInterval(...args); timers.push(timer); return timer;
+  };
+  try { return createNodeRuntime(options); }
+  finally { globalThis.setInterval = originalSetInterval; for (const timer of timers) clearInterval(timer); }
+}
+const runtimes = [':memory:', `/tmp/finn-capacity-${randomUUID()}.sqlite`].map(dbPath => createManualRecoveryRuntime({
   dbPath, baseUrl:'http://localhost:0',fileDir:`/tmp/finn-capacity-files-${randomUUID()}`,
   config:{environment:'test'},presence:{sweepIntervalMs:0},eventQueue:{pollIntervalMs:0},
 }));

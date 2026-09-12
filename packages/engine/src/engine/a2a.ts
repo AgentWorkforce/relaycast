@@ -596,6 +596,7 @@ export async function sendToExternalAgent(
   jsonRpcPayload: A2aJsonRpcRequest,
   auth?: { scheme?: 'bearer' | 'api_key' | 'none' | string | null; credential?: string | null },
   beforeAttempt?: () => Promise<{ scheme: string | null; credential: string | null }>,
+  idempotencyKey?: string,
 ): Promise<A2aResponse> {
   const parsedRequest = JsonRpcRequestSchema.safeParse(jsonRpcPayload);
   if (!parsedRequest.success) {
@@ -625,6 +626,7 @@ export async function sendToExternalAgent(
         headers: {
           'content-type': 'application/json',
           accept: 'application/json',
+          ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
           ...buildAuthHeaders(attemptAuth),
         },
         body: JSON.stringify(request),
