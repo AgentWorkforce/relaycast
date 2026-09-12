@@ -23,13 +23,21 @@ info:
     410 a2a_egress_expired. After intent cleanup, the key is fresh and may create a
     new message; callers must stop automatic retries after the window.
 
-    Inbound A2A identities are deduplicated durably for 24 hours per workspace,
+    Inbound A2A identities are deduplicated durably for up to 24 hours per workspace,
     authenticated actor and route scope. New admission atomically checks the
     authenticated registration and token with the message and counter; a
     concurrent change returns 401 a2a_registration_changed without message effects.
     Source pruning scrubs public content
     while preserving a bounded identity/fingerprint tombstone; same-key retries
-    return 410 a2a_message_not_retained instead of recreating messages or effects.
+    return 410 a2a_message_not_retained instead of recreating messages or effects
+    within that window. Source retention can remove content before 24 hours.
+    After identity expiry/cleanup the same key is fresh and may admit a new message.
+    Published 8.9.1 completed RPC KV records are promoted against retained sources
+    without new admission, using source creation as a conservative original deadline.
+    Unreadable KV before a SQL identity can be verified returns 503; verified SQL
+    replays remain available during subsequent KV outages.
+    Outbound A2A redirects are terminal 502 a2a_redirect_forbidden; the transport
+    never automatically forwards credentials or bodies to a redirected URL.
     Workspace deletion removes the identity; expiry cleanup permits fresh keys
     after the retry window. JSON-RPC errors preserve request/correlation IDs.
     Credentialed A2A targets require HTTPS. Unauthenticated public HTTP is allowed.

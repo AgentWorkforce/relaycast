@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { eq, and, sql, lt, lte, gt, isNull, inArray, desc } from 'drizzle-orm';
 import type { DmMessage } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
@@ -37,7 +38,7 @@ import { transformForClient } from './wsTransform.js';
 import { codedError } from '../lib/httpError.js';
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 import { fetchAttachmentsBatch, resolveSendAttachments, type AttachmentRow } from './attachments.js';
-import { publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
+import { canonicalUserMessageMetadata, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
 import { queryInChunks } from '../lib/queryChunks.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -50,6 +51,8 @@ interface SendDmOptions {
   receivedA2aAgentId?: string;
   /** Token hash authenticated by the route; checked with registration at SQL admission. */
   receivedA2aTokenHash?: string;
+  /** Verified legacy KV response to promote without admitting another message. */
+  legacyInbound?: unknown;
   /** Authenticated actor/scope/key identity, never a caller-selected recipient identity. */
   inboundIdentity?: { scope: string; key: string };
   /** Resolve only after durable accepted lookup (cached HTTP replay never calls sendDm). */
@@ -378,6 +381,63 @@ export type SendDmResult = AcceptedDmResult & {
   _notifications_durable?: boolean;
 };
 
+const legacyPublicFields = {
+  injection_mode: z.enum(['wait', 'steer']), attachments: z.array(z.never()),
+  metadata: z.record(z.string(), z.unknown()),
+};
+const legacyInboundSchema = z.object({
+  conversation_id: z.string().min(1), created_at: z.string().datetime(),
+  id: z.string().min(1), from_agent_id: z.string().min(1), to: z.string().min(1), text: z.string(),
+  ...legacyPublicFields,
+  message: z.object({ id: z.string().min(1), agent_id: z.string().min(1), agent_name: z.string().min(1), text: z.string(), ...legacyPublicFields }),
+});
+
+async function promoteLegacyInbound(
+  db: Db, workspaceId: string, fromAgentId: string, inboundId: string, fingerprint: string,
+  data: { to: string; text: string; mode?: 'wait' | 'steer'; data?: Record<string, unknown> | null },
+  options: SendDmOptions,
+): Promise<SendDmResult> {
+  const parsed = legacyInboundSchema.safeParse(options.legacyInbound);
+  const unverified = () => codedError('Legacy A2A acceptance cannot be verified', 'a2a_legacy_replay_unavailable', 503);
+  if (!parsed.success || !options.receivedA2aAgentId || !options.receivedA2aTokenHash) throw unverified();
+  const legacy = parsed.data;
+  const createdAt = new Date(legacy.created_at);
+  const expectedMetadata = canonicalUserMessageMetadata({ ...sanitizeUserMessageMetadata(data.data), injection_mode: data.mode ?? 'wait' });
+  if (legacy.id !== legacy.message.id || legacy.from_agent_id !== fromAgentId || legacy.message.agent_id !== fromAgentId
+    || legacy.to !== data.to || legacy.text !== data.text || legacy.message.text !== data.text
+    || legacy.injection_mode !== (data.mode ?? 'wait') || legacy.message.injection_mode !== legacy.injection_mode
+    || canonicalUserMessageMetadata(legacy.metadata) !== expectedMetadata
+    || canonicalUserMessageMetadata(legacy.message.metadata) !== expectedMetadata || createdAt.getTime() > Date.now()) throw unverified();
+  // Published records carry no KV expiry timestamp. Source creation is a
+  // conservative lower bound for the original KV write, never a renewed TTL.
+  if (createdAt.getTime() + 86_400_000 <= Date.now()) throw codedError('Legacy A2A replay window expired', 'a2a_message_not_retained', 410);
+  const [source] = await db.select().from(messages).where(eq(messages.id, legacy.id));
+  if (source && (source.workspaceId !== workspaceId || source.agentId !== fromAgentId || source.createdAt.getTime() !== createdAt.getTime())) throw unverified();
+  const sourceId = sql`(SELECT m.id FROM messages m JOIN dm_conversations dc ON dc.channel_id = m.channel_id
+    WHERE m.id = ${legacy.id} AND m.workspace_id = ${workspaceId} AND m.agent_id = ${fromAgentId}
+      AND m.created_at = ${Math.floor(createdAt.getTime() / 1000)} AND dc.id = ${legacy.conversation_id})`;
+  // One atomic statement adopts the retained source or a content-free tombstone.
+  // A delete racing promotion cannot strand plaintext after source pruning.
+  try {
+    await db.insert(a2aInbound).values({
+      id: inboundId,
+      workspaceId: sql<string>`(SELECT a.workspace_id FROM a2a_agents peer JOIN agents a ON a.id = peer.relay_agent_id
+        WHERE peer.id = ${options.receivedA2aAgentId} AND peer.workspace_id = ${workspaceId}
+          AND a.id = ${fromAgentId} AND a.workspace_id = ${workspaceId} AND a.token_hash = ${options.receivedA2aTokenHash})`,
+      messageId: sourceId, fingerprint, createdAt,
+      response: sql`CASE WHEN ${sourceId} IS NOT NULL THEN ${JSON.stringify(legacy)} ELSE NULL END`,
+    }).onConflictDoNothing();
+  } catch (error) {
+    if (databaseConstraintKind(error) === 'a2a_registration_changed') throw codedError('Authenticated A2A registration changed before admission', 'a2a_registration_changed', 401);
+    throw error;
+  }
+  const [retained] = await db.select().from(a2aInbound).where(eq(a2aInbound.id, inboundId));
+  if (!retained) throw unverified();
+  if (retained.fingerprint !== fingerprint) throw codedError('Idempotency-Key was reused with a different request payload', 'idempotency_key_reused', 409);
+  if (!retained.messageId || !retained.response || retained.createdAt.getTime() + 86_400_000 <= Date.now()) throw codedError('Accepted A2A message is no longer retained', 'a2a_message_not_retained', 410);
+  return { ...retained.response, _delivery: null, _delivery_rejections: [], _notifications_durable: true };
+}
+
 export async function sendDm(
   db: Db,
   workspaceId: string,
@@ -436,6 +496,10 @@ export async function sendDm(
       return { ...retained.response, _delivery: null, _delivery_rejections: [], _notifications_durable: true };
     }
     if (retained) await db.delete(a2aInbound).where(and(eq(a2aInbound.id, inboundId), lte(a2aInbound.createdAt, new Date(Date.now() - 86_400_000))));
+  }
+  if (options.legacyInbound !== undefined) {
+    if (!inboundId) throw codedError('Legacy A2A identity is missing', 'a2a_legacy_replay_unavailable', 503);
+    return promoteLegacyInbound(db, workspaceId, fromAgentId, inboundId, inboundFingerprint, data, options);
   }
   const workspacePolicy = options.resolveWorkspaceDeliveryPolicy
     ? await options.resolveWorkspaceDeliveryPolicy() : options.workspaceDeliveryPolicy;

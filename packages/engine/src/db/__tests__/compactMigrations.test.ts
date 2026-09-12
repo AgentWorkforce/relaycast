@@ -138,6 +138,10 @@ describe('compact maintenance migration path', () => {
     expect(after.find(([name]) => name === 'a2a_inbound')).toEqual([
       'a2a_inbound', 0, createHash('sha256').update('[]').digest('hex'),
     ]);
+    expect(handle.sqlite.pragma('foreign_key_list(a2a_inbound)')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ table: 'workspaces', from: 'workspace_id', on_delete: 'CASCADE' }),
+      expect.objectContaining({ table: 'messages', from: 'message_id', on_delete: 'SET NULL' }),
+    ]));
     expect(handle.sqlite.pragma('foreign_key_list(a2a_egress_context)')).toContainEqual(
       expect.objectContaining({ table: 'a2a_egress', from: 'id', on_delete: 'CASCADE' }),
     );

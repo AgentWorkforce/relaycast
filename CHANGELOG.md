@@ -18,6 +18,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
+- Preserve completed inbound A2A retries from published 8.9.1 without duplicate admission, keep numeric webhook error IDs and sender rejection notices, and refuse outbound redirects before credentials or bodies can be forwarded.
+
 - Refuse new inbound A2A admission atomically when its authenticated registration changes, and send a stable HTTP Idempotency-Key on outbound retries and recovery.
 
 - Deduplicate inbound A2A messages and effects durably across retries and source pruning, keep cached sends available during policy outages, and harden bounded transport recovery.

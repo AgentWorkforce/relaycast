@@ -9,6 +9,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased - Minor]
 
+- Preserve completed inbound A2A retries from published 8.9.1 without duplicate admission, keep numeric webhook error IDs and sender rejection notices, and refuse outbound redirects before credentials or bodies can be forwarded.
+
 - Refuse new inbound A2A admission atomically when its authenticated registration changes, and send a stable HTTP Idempotency-Key on outbound retries and recovery.
 
 - Deduplicate inbound A2A admission and local effects through concurrent requests and KV failures. Apply `0059_a2a_inbound_admission.sql`; source pruning scrubs public content but keeps an indexed retry tombstone for 24 hours, with bounded expiry and workspace cleanup.

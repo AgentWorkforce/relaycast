@@ -197,7 +197,7 @@ export function databaseConstraintKind(error: unknown): DatabaseConstraintKind |
     const record = cause as { message?: unknown; cause?: unknown };
     const message = typeof record.message === 'string' ? record.message : '';
     // Inbound registration is guarded by the message's non-null sender column.
-    if (/NOT NULL constraint failed: messages\.agent_id/i.test(message)) return 'a2a_registration_changed';
+    if (/NOT NULL constraint failed: (messages\.agent_id|a2a_inbound\.workspace_id)/i.test(message)) return 'a2a_registration_changed';
     // Per-recipient/required-mailbox sentinel (workspace_id NULL), and the
     // distinct workspace-scoped growth sentinel (status NULL). Order matters
     // only for a row that trips both; either is a capacity refusal.

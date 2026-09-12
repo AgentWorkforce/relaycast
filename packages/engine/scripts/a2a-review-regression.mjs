@@ -151,6 +151,104 @@ try {
     assert.ok(!(await intent()).last_error.includes('fixture-old'));
     return {ws,retry,intent,captures,localReceipts,calls:()=>calls,healthy:()=>{healthy=true;}};
   }
+  if (!process.env.REVIEW_CASE || process.env.REVIEW_CASE==='legacy-kv') {
+    const captured=JSON.parse(readFileSync(new URL('./fixtures/a2a-inbound-published-8.9.1.json',import.meta.url),'utf8'));
+    assert.equal(captured.provenance.archive_sha256,'9ddd817c410c02a75cca1c2af82b6a0697599e3f9b730be23076dd8213465854');
+    assert.equal(captured.kvWrites.find(w=>!w.key.endsWith(':lock')).options.expirationTtl,86400);
+    for(const mode of ['retained','near-expiry','pruned','read-failure','delete-failure','bad-auth','mismatch','malformed','source-mismatch','missing-fingerprint']) {
+      const f=structuredClone(captured),ws=f.workspaceId;
+      const age=mode==='near-expiry'?86340:3600;
+      const created=Math.floor(Date.now()/1000)-age;
+      // Rebase the captured fixture's clock, preserving the original response,
+      // source identity, plaintext fingerprint and measured 24-hour KV TTL.
+      f.tables.messages[0].created_at=created;
+      const [cacheKey,raw]=f.kvEntries[0];const cache=JSON.parse(raw);
+      cache.data.created_at=new Date(created*1000).toISOString();
+      if(mode==='malformed')cache.data.message.id='unverified-id';
+      if(mode==='source-mismatch')f.tables.messages[0].created_at=created-1;
+      if(mode==='missing-fingerprint')delete cache.fingerprint;
+      for(const [table,records] of Object.entries(f.tables))for(const row of records){
+        await run(`INSERT INTO ${table}(${Object.keys(row).join(',')}) VALUES(${Object.keys(row).map(()=>'?').join(',')})`,...Object.values(row));
+      }
+      const cacheMap=new Map([[cacheKey,JSON.stringify(cache)]]),writes=[];
+      let readFailure=mode==='read-failure';
+      const legacyKv={get:async k=>{if(readFailure)throw Error('legacy KV unavailable');return cacheMap.get(k)??null;},put:async(k,v,o)=>{writes.push({k,v,o});cacheMap.set(k,v);},delete:async k=>{if(mode==='delete-failure')throw Error('KV cleanup unavailable');cacheMap.delete(k);}};
+      const legacyApp=createEngine({...deps,config:{environment:'test'},kv:legacyKv});
+      const emit=(payload=f.payload,token='at_live_'+f.actorId)=>request(ws,'/a2a/rpc',payload,{token,engineApp:legacyApp});
+      const effects=async()=>{
+        const state={};for(const table of ['messages','deliveries','message_logs','pending_events'])state[table]=await scalar(`SELECT count(*) FROM ${table} WHERE workspace_id=?`,ws);
+        state.dmEvents=await scalar("SELECT count(*) FROM workspace_events WHERE workspace_id=? AND type='dm.received'",ws);
+        state.counter=await scalar('SELECT messages_recv FROM a2a_agents WHERE workspace_id=?',ws);return state;
+      };
+      if(mode==='pruned')await run('DELETE FROM messages WHERE workspace_id=?',ws);
+      const before=await effects();
+      const changed=structuredClone(f.payload);changed.params.message.parts[0].text='mismatched legacy body';
+      const result=await emit(mode==='mismatch'?changed:f.payload,mode==='bad-auth'?'at_live_invalid':'at_live_'+f.actorId);
+      if(['retained','near-expiry','delete-failure'].includes(mode)){
+        expectStatus(result,200);assert.deepEqual(result.body,f.response.body);
+        const [identity]=await rows('SELECT * FROM a2a_inbound WHERE workspace_id=?',ws);
+        assert.equal(identity.message_id,f.tables.messages[0].id);assert.equal(identity.created_at,created,'upgrade never restarts original deadline');
+        assert.ok(!JSON.stringify(identity).includes('at_live_'));
+        readFailure=true;expectStatus(await emit(),200);assert.deepEqual((await emit()).body,f.response.body);
+        expectStatus(await emit(changed),409);expectStatus(await emit(f.payload,'at_live_invalid'),401);
+        assert.deepEqual(await effects(),before);
+        await run('DELETE FROM messages WHERE workspace_id=?',ws);const pruned=await effects();
+        expectStatus(await emit(),410);assert.deepEqual(await effects(),pruned);
+        assert.deepEqual((await rows('SELECT message_id,response FROM a2a_inbound WHERE workspace_id=?',ws))[0],{message_id:null,response:null});
+      }else{
+        const status={pruned:410,'read-failure':503,'bad-auth':401,mismatch:409,malformed:503,'source-mismatch':503,'missing-fingerprint':409}[mode];expectStatus(result,status);
+        assert.deepEqual(await effects(),before);
+        if(mode==='read-failure'){readFailure=false;expectStatus(await emit(),200);assert.deepEqual(await effects(),before);}
+        if(mode==='pruned'){readFailure=true;expectStatus(await emit(),410);assert.deepEqual(await effects(),before);}
+      }
+      if(['retained','near-expiry','pruned','read-failure'].includes(mode))assert.equal(cacheMap.has(cacheKey),false,'verified legacy content removed without renewed TTL');
+      else assert.equal(cacheMap.has(cacheKey),true,'unverified or failed cleanup retains only original bounded cache');
+      assert.ok(writes.every(w=>!w.v.includes('published legacy accepted body')),'new KV writes never store plaintext body');
+      record('actual published8.9.1 completed KV fixture upgrade '+mode+' preserves identity/effects/auth and original source deadline');
+      await Promise.allSettled(background.splice(0));
+      await run('DELETE FROM workspaces WHERE id=?',ws);
+      await run('DELETE FROM workspace_events WHERE workspace_id=?',ws);
+    }
+  }
+  if (!process.env.REVIEW_CASE || process.env.REVIEW_CASE==='webhook-error-id') {
+    const ws=await seed('webhook-error-id',1,{cap:1});
+    await run('INSERT INTO a2a_agents(id,workspace_id,relay_agent_id,external_url,agent_card) VALUES(?,?,?,?,?)',ws+'peer',ws,ws+'sender',targetUrl,'{}');
+    expectStatus(await request(ws,'/v1/dm',{to:'recipient-1',text:'fill capacity'}),201);
+    for(const id of [0,42,'string-id',undefined]){
+      const payload={jsonrpc:'2.0',...(id===undefined?{}:{id}),method:'message/send',params:{target_agent:'recipient-1',message:{message_id:'id-'+String(id),role:'agent',parts:[{kind:'text',text:'capacity refusal'}]}}};
+      const result=await request(ws,`/a2a/webhook/${ws}/sender`,payload);expectStatus(result,429);
+      assert.equal(result.body.id,id);assert.equal(Object.hasOwn(result.body,'id'),id!==undefined);
+    }
+    record('webhook capacity errors preserve numeric0/42,string and absent JSON-RPC IDs');await run('DELETE FROM workspaces WHERE id=?',ws);
+  }
+  if (!process.env.REVIEW_CASE || process.env.REVIEW_CASE==='inbound-rejection') {
+    for(const endpoint of ['rpc','webhook']){
+      const ws=await seed('inbound-rejection-'+endpoint,1,{cap:100});
+      await run('INSERT INTO a2a_agents(id,workspace_id,relay_agent_id,external_url,agent_card) VALUES(?,?,?,?,?)',ws+'peer',ws,ws+'sender',targetUrl,'{}');
+      const observed=[],frames=[];
+      for(const agent of ['sender','r1']){
+        await run("INSERT INTO nodes(id,workspace_id,name,token_hash,status) VALUES(?,?,?,?,'online')",ws+agent+'node',ws,agent,hash(ws+agent+'node'));
+        await run('INSERT INTO agent_node_bindings(id,workspace_id,agent_id,node_id) VALUES(?,?,?,?)',ws+agent+'binding',ws,ws+agent,ws+agent+'node');
+        await run("UPDATE agents SET location_type='via_node',location_node_id=? WHERE id=?",ws+agent+'node',ws+agent);
+      }
+      const receiving=createEngine({...deps,nodeConnections:{...deps.nodeConnections,sendToProvider:async(workspaceId,nodeId,providerName,frame)=>{frames.push({workspaceId,nodeId,providerName,frame});return true;}},config:{...deps.config,mailbox:{depthCap:1}},realtime:{...deps.realtime,publishToWorkspaceStream:async event=>{observed.push(event);}}});
+      expectStatus(await request(ws,'/v1/dm',{to:'recipient-1',text:'mailbox fill'},{engineApp:receiving}),201);await Promise.allSettled(background.splice(0));observed.length=0;
+      const payload={jsonrpc:'2.0',id:'reject',method:'message/send',params:{target_agent:'recipient-1',message:{message_id:'rejected-delivery',role:'agent',parts:[{kind:'text',text:'admitted without target delivery'}]}}};
+      const path=endpoint==='rpc'?'/a2a/rpc':`/a2a/webhook/${ws}/sender`;
+      const first=await request(ws,path,payload,{engineApp:receiving});expectStatus(first,200);await Promise.allSettled(background.splice(0));
+      const rejected=observed.filter(x=>x.event.type==='delivery.failed');assert.equal(rejected.length,1);
+      assert.equal(rejected[0].workspaceId,ws);assert.equal(rejected[0].event.target_agent_id,ws+'r1');
+      assert.equal(rejected[0].event.message_id,first.body.result.task.id);
+      assert.equal(await scalar('SELECT count(*) FROM messages WHERE workspace_id=?',ws),2);
+      assert.equal(await scalar('SELECT count(*) FROM deliveries WHERE workspace_id=?',ws),1);
+      assert.equal(await scalar('SELECT messages_recv FROM a2a_agents WHERE workspace_id=?',ws),1);
+      const senderFrames=frames.filter(x=>x.frame.event==='delivery.failed');
+      assert.equal(senderFrames.length,1);assert.equal(senderFrames[0].nodeId,ws+'sendernode');assert.deepEqual(senderFrames[0].frame.agent_ids,[ws+'sender']);
+      const replay=await request(ws,path,payload,{engineApp:receiving});expectStatus(replay,200);assert.deepEqual(replay.body,first.body);
+      await Promise.allSettled(background.splice(0));assert.equal(observed.filter(x=>x.event.type==='delivery.failed').length,1);assert.equal(frames.filter(x=>x.frame.event==='delivery.failed').length,1);
+      record(endpoint+' actual optional mailbox refusal emits sender rejection once; accepted replay adds no notice');await run('DELETE FROM workspaces WHERE id=?',ws);
+    }
+  }
   if (!process.env.REVIEW_CASE || process.env.REVIEW_CASE==='registration') {
     for (const endpoint of ['rpc','webhook']) for (const mutation of ['remove','reassign','replace','token']) {
       const ws=await seed('registration-'+endpoint+'-'+mutation,1,{cap:100});
@@ -257,12 +355,13 @@ try {
     }
   }
   if (!process.env.REVIEW_CASE || process.env.REVIEW_CASE==='protocol') {
-    for(const malformed of ['json','schema']){
+    for(const malformed of ['json','schema','redirect307','redirect308']){
       const ws=await seed('protocol-'+malformed,1,{cap:100});
       await run('INSERT INTO a2a_agents(id,workspace_id,relay_agent_id,external_url,agent_card) VALUES(?,?,?,?,?)',ws+'peer',ws,ws+'r1',targetUrl,JSON.stringify({name:'fixture',url:targetUrl,version:'1',skills:[{name:'message'}]}));
-      let calls=0;globalThis.fetch=async()=>{calls++;return malformed==='json'?new Response('{broken'):Response.json({jsonrpc:'bad-protocol'});};
+      let calls=0;globalThis.fetch=async()=>{calls++;return malformed==='json'?new Response('{broken'):malformed.startsWith('redirect')?new Response(null,{status:Number(malformed.slice(8)),headers:{Location:'http://127.0.0.1/private'}}):Response.json({jsonrpc:'bad-protocol'});};
       const noKv=createEngine({...deps,kv:undefined});
-      await request(ws,'/v1/dm',{to:'recipient-1',text:'accepted terminal response'},{key:'protocol',engineApp:noKv});
+      const refused=await request(ws,'/v1/dm',{to:'recipient-1',text:'accepted terminal response'},{key:'protocol',engineApp:noKv});
+      expectStatus(refused,502);assert.equal(refused.body.error.code,malformed.startsWith('redirect')?'a2a_redirect_forbidden':'a2a_invalid_response');
       const [intent]=await rows('SELECT status,payload FROM a2a_egress WHERE workspace_id=?',ws);
       assert.deepEqual(intent,{status:'failed',payload:null},'parser/protocol failure is terminal and scrubs payload');
       await sweepPendingA2aEgress(db);assert.equal(calls,1);

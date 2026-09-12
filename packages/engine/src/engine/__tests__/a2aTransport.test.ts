@@ -4,9 +4,9 @@ import { sendToExternalAgent } from '../a2a.js';
 const payload = { jsonrpc: '2.0' as const, id: 'retry', method: 'message/send', params: { message: { message_id: 'retry', role: 'user' as const, parts: [{ kind: 'text' as const, text: 'hello' }] } } };
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
-it.each(['TimeoutError', 'AbortError', 'TypeError'])('retries %s transport failures', async name => {
+it('retries a lost transport response', async () => {
   vi.useFakeTimers();
-  const fetch = vi.fn().mockRejectedValueOnce(Object.assign(new Error('transport failed'), { name }))
+  const fetch = vi.fn().mockRejectedValueOnce(new Error('transport failed'))
     .mockResolvedValue(Response.json({ jsonrpc: '2.0', id: 'retry', result: {} }));
   vi.stubGlobal('fetch', fetch);
   const result = sendToExternalAgent('https://example.com', payload);
@@ -22,7 +22,7 @@ it('honors bounded Retry-After while staying within the 120-second claim', async
   const checked = expect(sendToExternalAgent('https://example.com', payload)).rejects.toMatchObject({ status: 429 });
   await vi.runAllTimersAsync(); await checked;
   expect(times).toEqual([0, 30_000, 60_000]);
-  expect(60_000 + 3 * 15_000).toBeLessThan(120_000);
+  expect(Date.now() - start).toBeLessThan(120_000);
 });
 
 it('refuses credentialed HTTP before fetch and preserves unauthenticated HTTP', async () => {
@@ -60,4 +60,15 @@ it('does not fetch with the egress header when current tuple or credentialed URL
     async () => ({ scheme: 'bearer', credential: 'rotated-token' }), 'a2ae_stable'))
     .rejects.toMatchObject({ code: 'a2a_agent_url_forbidden' });
   expect(fetch).not.toHaveBeenCalled();
+});
+
+it.each(['TimeoutError', 'AbortError', 'TypeError'])('retries %s thrown while reading the response body', async name => {
+  vi.useFakeTimers();
+  const response = Response.json({});
+  const readBody = vi.spyOn(response, 'json').mockRejectedValue(Object.assign(new Error('body interrupted'), { name }));
+  const fetch = vi.fn().mockResolvedValueOnce(response).mockResolvedValue(Response.json({ jsonrpc: '2.0', id: 'retry', result: {} }));
+  vi.stubGlobal('fetch', fetch);
+  const checked = expect(sendToExternalAgent('https://example.com', payload)).resolves.toMatchObject({ response: { id: 'retry' } });
+  await vi.runAllTimersAsync(); await checked;
+  expect(readBody).toHaveBeenCalledOnce(); expect(fetch).toHaveBeenCalledTimes(2);
 });

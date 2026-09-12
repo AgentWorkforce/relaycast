@@ -94,6 +94,19 @@ try {
   const send=(ws,text,key,data)=>request(ws,'/v1/channels/general/messages',{text,...(data?{data}:{})},{key});
   const record=(test,details={})=>{results.push({adapter,test,...details});console.log('PASS',adapter,test,JSON.stringify(details));};
   {
+    const ws=await seed('background-observer-control',1,{cap:100});
+    await run('INSERT INTO a2a_agents(id,workspace_id,relay_agent_id,external_url,agent_card) VALUES(?,?,?,?,?)',ws+'peer',ws,ws+'sender','https://peer.example/a2a','{}');
+    const observerProbe=createEngine({...deps,realtime:{...deps.realtime,publishToWorkspaceStream:async()=>{throw Error('positive background observer control');}}});
+    const before=backgroundErrors.length;
+    const payload={jsonrpc:'2.0',id:'observer-control',method:'message/send',params:{target_agent:'recipient-1',message:{message_id:'observer-control',role:'agent',parts:[{kind:'text',text:'probe'}]}}};
+    expectStatus(await request(ws,'/a2a/rpc',payload,{engineApp:observerProbe}),200);
+    await Promise.allSettled(background.splice(0));
+    assert.ok(backgroundErrors.length>before,'positive control must reach the background failure observer');
+    assert.ok(JSON.stringify(backgroundErrors.slice(before)).includes('positive background observer control'));
+    backgroundErrors.splice(before);await run('DELETE FROM workspaces WHERE id=?',ws);
+    record('positive rejected waitUntil task proves background error interception');
+  }
+  {
     const ws=await seed('replay');const a=await send(ws,'once','recorded');expectStatus(a,201);
     const high=await scalar('SELECT sum(delivery_seq) FROM agents WHERE workspace_id=?',ws);
     const events=await scalar('SELECT count(*) FROM pending_events WHERE workspace_id=?',ws);

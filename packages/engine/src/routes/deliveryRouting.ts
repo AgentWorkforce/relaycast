@@ -671,6 +671,7 @@ export async function notifyDeliveryRejections(
   c: HonoContext,
   senderAgentId: string,
   rejections: DeliveryRejectionRecord[],
+  workspaceIdOverride?: string,
 ): Promise<void> {
   if (rejections.length === 0) return;
   for (const rejection of rejections) {
@@ -682,6 +683,6 @@ export async function notifyDeliveryRejections(
       reason: rejection.reason,
       error: rejection.error,
       retryable: rejection.retryable,
-    });
+    }, workspaceIdOverride);
   }
 }

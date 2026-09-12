@@ -4,11 +4,11 @@ import type { Context } from 'hono';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
-import { a2aAgents, agents, messages, workspaces } from '../db/schema.js';
+import { a2aAgents, a2aInbound, agents, messages, workspaces } from '../db/schema.js';
 import { requireAuth, hashToken } from '../middleware/auth.js';
-import { asCodedError, errorResponse, type CodedError } from '../lib/httpError.js';
+import { asCodedError, codedError, errorResponse, type CodedError } from '../lib/httpError.js';
 import { rateLimit } from '../middleware/rateLimit.js';
-import { runIdempotent } from '../middleware/idempotency.js';
+import { buildIdempotencyStorageKey, runIdempotent } from '../middleware/idempotency.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { runInBackground } from './background.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
@@ -30,24 +30,53 @@ export const a2aRoutes = new Hono<AppEnv>();
 
 // KV is only an advisory completion cache. Public content and the replay
 // decision belong to SQL, where source pruning can scrub them atomically.
-async function receiveIdempotently(options: Parameters<typeof runIdempotent<dmEngine.SendDmResult>>[0]) {
+async function receiveIdempotently(c: Context<AppEnv>, options: Omit<Parameters<typeof runIdempotent<dmEngine.SendDmResult>>[0], 'operation'> & {
+  operation: (legacyInbound?: unknown) => Promise<dmEngine.SendDmResult>;
+}) {
+  const inboundId = options.key
+    ? `a2ai_${await sha256Hex(JSON.stringify([options.workspaceId, options.actorId, options.scope, options.key]))}` : null;
+  const [retained] = inboundId ? await c.get('db').select().from(a2aInbound).where(eq(a2aInbound.id, inboundId)) : [];
+  // SQL admissions survive a later KV outage. sendDm checks fingerprint/source
+  // and handles expiry before returning a replay or admitting a fresh identity.
+  if (retained) return { status: options.status ?? 201, data: await options.operation(), replayed: retained.createdAt.getTime() + 86_400_000 > Date.now() };
   let fresh: dmEngine.SendDmResult | undefined;
   const result = await runIdempotent({
     ...options,
     fingerprint: options.fingerprint ? await sha256Hex(options.fingerprint) : undefined,
+    compatibleFingerprints: options.fingerprint ? [options.fingerprint] : [],
+    requireFingerprint: true,
+    requireKvRead: Boolean(options.kv),
     afterOperation: undefined,
     operation: async () => {
       fresh = await options.operation();
       return { id: fresh.id };
     },
   });
-  return { ...result, data: fresh ?? await options.operation() };
+  if (fresh) return { ...result, data: fresh };
+  // Published8.9.1 stored the full response with a plaintext fingerprint. It
+  // predates SQL admission: promote that response, never run a fresh send.
+  if (result.data && 'message' in result.data) {
+    try { return { ...result, data: await options.operation(result.data) }; }
+    finally {
+      const [promoted] = inboundId ? await c.get('db').select({ id: a2aInbound.id }).from(a2aInbound).where(eq(a2aInbound.id, inboundId)) : [];
+      // Only discard old content after SQL owns the identity/tombstone. A KV
+      // cleanup outage never restarts its original TTL or bypasses SQL replay.
+      if (promoted && options.kv && options.key) {
+        const key = await buildIdempotencyStorageKey(options.workspaceId, options.actorId, options.scope, options.key);
+        try { await options.kv.delete(key); } catch { /* original bounded KV TTL remains */ }
+      }
+    }
+  }
+  const [winner] = inboundId ? await c.get('db').select().from(a2aInbound).where(eq(a2aInbound.id, inboundId)) : [];
+  if (!winner) throw codedError('Accepted A2A message is no longer retained', 'a2a_message_not_retained', 410);
+  return { ...result, data: await options.operation() };
 }
 
-function admittedInbound(c: Context<AppEnv>, workspaceId: string): NonNullable<Parameters<typeof dmEngine.sendDm>[4]>['afterAdmission'] {
+function admittedInbound(c: Context<AppEnv>, workspaceId: string, senderAgentId: string): NonNullable<Parameters<typeof dmEngine.sendDm>[4]>['afterAdmission'] {
   return (data, event) => {
     runInBackground(c, c.get('engine').realtime.publishToWorkspaceStream({ workspaceId, event: { ...event.payload, seq: event.seq } }), 'publish admitted inbound dm.received');
     runInBackground(c, c.get('engine').webhookQueue.send({ type: 'dm.received', workspaceId, data: event.data, outboxId: event.outboxId }), 'queue admitted inbound dm.received');
+    if (data._delivery_rejections.length) runInBackground(c, notifyDeliveryRejections(c, senderAgentId, data._delivery_rejections, workspaceId), 'notify admitted inbound rejection');
     if (data._delivery) runInBackground(c, routeDeliveryOutcomes(c, [data._delivery], 'dm.received', event.data, { workspaceId }), 'route admitted inbound delivery');
   };
 }
@@ -455,7 +484,7 @@ a2aRoutes.post('/a2a/rpc', requireAuth, rateLimit, async (c) => {
             ? String(request.id)
             : null;
 
-      const idempotent = await receiveIdempotently({
+      const idempotent = await receiveIdempotently(c, {
         workspaceId: workspace.id,
         actorId: authenticatedAgent!.id,
         scope: 'a2a:inbound',
@@ -467,17 +496,18 @@ a2aRoutes.post('/a2a/rpc', requireAuth, rateLimit, async (c) => {
           data: relayMessage.metadata ?? null,
         }),
         kv: c.get('engine').kv,
-        operation: async () => dmEngine.sendDm(db, workspace.id, authenticatedAgent!.id, {
+        operation: async (legacyInbound) => dmEngine.sendDm(db, workspace.id, authenticatedAgent!.id, {
           to: targetAgentName,
           text: relayMessage.text,
           mode: 'wait',
           data: relayMessage.metadata,
         }, {
           skipA2aIntercept: true,
+          legacyInbound,
           receivedA2aAgentId: registeredCaller.id,
           receivedA2aTokenHash: authenticatedAgent!.tokenHash,
           inboundIdentity: inboundMessageId ? { scope: 'a2a:inbound', key: `${registeredCaller.id}:${inboundMessageId}` } : undefined,
-          afterAdmission: admittedInbound(c, workspace.id),
+          afterAdmission: admittedInbound(c, workspace.id, authenticatedAgent!.id),
           // Without this, sendDm falls back to its fixed one-hour / 1000-message
           // defaults and a registered peer's deliveries quietly ignore whatever
           // TTL and depth cap the operator configured — the one delivery path on
@@ -617,7 +647,7 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
     }
 
     const payload = parsed.data;
-    correlationId = extractCorrelationId(payload) ?? undefined;
+    correlationId = payload.id;
     const relayMessage = a2aEngine.translateA2aToRelay(payload);
     const requestPayload = a2aEngine.JsonRpcRequestSchema.safeParse(payload);
 
@@ -642,7 +672,7 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
 
     if (!targetAgentName) {
       const response = a2aEngine.jsonRpcError(
-        extractCorrelationId(payload) ?? undefined,
+        payload.id,
         -32602,
         'target_agent or agent_name is required',
       );
@@ -652,28 +682,29 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
     const inboundKey = requestPayload.success
       ? requestPayload.data.params?.message?.message_id ?? String(requestPayload.data.id ?? '')
       : extractCorrelationId(payload);
-    const idempotent = await receiveIdempotently({
+    const idempotent = await receiveIdempotently(c, {
       workspaceId: relayAgent.workspaceId,
       actorId: relayAgent.relayAgentId,
       scope: 'a2a:webhook',
       key: inboundKey || undefined,
       fingerprint: JSON.stringify({ to: targetAgentName, text: relayMessage.text, data: relayMessage.metadata ?? null }),
       kv: c.get('engine').kv,
-      operation: async () => dmEngine.sendDm(db, relayAgent.workspaceId, relayAgent.relayAgentId, {
+      operation: async (legacyInbound) => dmEngine.sendDm(db, relayAgent.workspaceId, relayAgent.relayAgentId, {
         to: targetAgentName!, text: relayMessage.text, mode: 'wait', data: relayMessage.metadata,
       }, {
         skipA2aIntercept: true,
+        legacyInbound,
         receivedA2aAgentId: relayAgent.registrationId,
         receivedA2aTokenHash: tokenHash,
         inboundIdentity: inboundKey ? { scope: 'a2a:webhook', key: inboundKey } : undefined,
-        afterAdmission: admittedInbound(c, relayAgent.workspaceId),
+        afterAdmission: admittedInbound(c, relayAgent.workspaceId, relayAgent.relayAgentId),
         mailbox: resolveMailboxConfig(c.get('engine').config, relayAgent.workspaceId),
         resolveWorkspaceDeliveryPolicy: () => resolveWorkspaceDeliveryPolicyById(db, c.get('engine').config, relayAgent.workspaceId),
       }),
     });
     const sent = idempotent.data;
 
-    const response = a2aEngine.jsonRpcSuccess(extractCorrelationId(payload) ?? undefined, {
+    const response = a2aEngine.jsonRpcSuccess(payload.id, {
       task: {
         id: sent.message.id,
         context_id: relayMessage.thread_id ?? sent.conversation_id,

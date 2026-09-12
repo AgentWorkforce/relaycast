@@ -622,6 +622,7 @@ export async function sendToExternalAgent(
       }
       const response = await globalThis.fetch(targetUrl, {
         method: 'POST',
+        redirect: 'manual',
         signal: AbortSignal.timeout(15_000),
         headers: {
           'content-type': 'application/json',
@@ -636,6 +637,9 @@ export async function sendToExternalAgent(
         throw Object.assign(codedError('A2A transport unavailable', 'a2a_transport_unavailable', 502), { retryable: true });
       });
 
+      if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+        throw Object.assign(codedError('A2A upstream redirects are not allowed', 'a2a_redirect_forbidden', 502), { retryable: false });
+      }
       if (!response.ok) {
         const err = new Error(`A2A upstream returned ${response.status}`);
         Object.assign(err, {

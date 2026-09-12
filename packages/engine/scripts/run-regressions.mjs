@@ -16,6 +16,7 @@ for (const name of [
   'pending-retention-regression',
   'a2a-lifecycle-regression',
   'a2a-review-regression',
+  'a2a-redirect-regression',
   'public-consumer-compile',
 ]) {
   console.log(`Running ${name}`);
