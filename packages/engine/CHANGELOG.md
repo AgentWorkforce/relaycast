@@ -9,9 +9,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased - Minor]
 
+- Preserve accepted A2A local notifications across transport failures, count inbound messages atomically, and return stable completed retries with typed conflicts for concurrent key reuse.
+
 - Bound accepted A2A retries to 24 hours, clear terminal payloads, and prevent recovery after source deletion or target replacement/endpoint changes. Expose the async workspace capacity resolver through the public engine config.
 
 - Enforce workspace delivery capacity across HTTP producers with retryable 429 responses and durable A2A admission before external transport.
+
+- Hosts must also apply `0058_a2a_egress_context.sql`. Public response snapshots (including body/metadata) are retained for the 24-hour egress retry horizon and cascade away with source-message deletion, egress cleanup, or workspace deletion. No transport credentials are copied.
 
 - Hosts must apply migration `0057_a2a_egress.sql` and schedule `sweepPendingA2aEgress(db)` to recover accepted outbound A2A sends.
 

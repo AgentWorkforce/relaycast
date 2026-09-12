@@ -15,6 +15,7 @@ for (const name of [
   'capacity-http-regression',
   'pending-retention-regression',
   'a2a-lifecycle-regression',
+  'a2a-review-regression',
   'public-consumer-compile',
 ]) {
   console.log(`Running ${name}`);

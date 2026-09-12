@@ -40,6 +40,14 @@ function nextSeqSql(workspaceId: string) {
   )`;
 }
 
+/** Build a strict append for callers that atomically admit the event with a mutation. */
+export function buildWorkspaceEventWrite(db: EngineDb, workspaceId: string, input: WorkspaceEventInput) {
+  return db.insert(workspaceEvents).values({
+    workspaceId, seq: nextSeqSql(workspaceId), type: input.type,
+    channelId: input.channelId ?? null, payload: JSON.stringify(input.payload),
+  }).returning({ seq: workspaceEvents.seq });
+}
+
 /**
  * Append one event to the durable workspace event log. `seq` is per-workspace
  * monotonic from 1, assigned inside the INSERT itself (same pattern as the

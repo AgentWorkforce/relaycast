@@ -24,11 +24,13 @@ function stripDeliveryInternals<T extends Record<string, unknown>>(data: T): T {
   const {
     _deliveries: _dropDeliveries,
     _delivery_rejections: _dropRejections,
+    _notifications_durable: _dropNotifications,
     _delivery: _dropDelivery,
     ...publicData
   } = data as T & {
     _deliveries?: unknown;
     _delivery_rejections?: unknown;
+    _notifications_durable?: boolean;
     _delivery?: unknown;
   };
   return publicData as T;

@@ -10,6 +10,10 @@ import {
   dmParticipants,
   messageAttachments,
   a2aEgress,
+  a2aEgressContext,
+  a2aAgents,
+  pendingEvents,
+  messageLogs,
 } from '../db/schema.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
@@ -26,6 +30,9 @@ import {
   type WorkspaceDeliveryPolicy,
 } from './workspaceDeliveryPolicy.js';
 import { dispatchA2aEgress } from './a2aEgress.js';
+import { buildDmReceivedEventData } from './deliveryWire.js';
+import { buildWorkspaceEventWrite } from './workspaceEvents.js';
+import { transformForClient } from './wsTransform.js';
 import { codedError } from '../lib/httpError.js';
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 import { fetchAttachmentsBatch, resolveSendAttachments, type AttachmentRow } from './attachments.js';
@@ -38,6 +45,10 @@ interface SendDmOptions {
   skipA2aIntercept?: boolean;
   /** Stable request identity for resuming already admitted outbound A2A. */
   idempotencyKey?: string;
+  /** Count an authenticated inbound peer in the same transaction as its DM. */
+  receivedA2aAgentId?: string;
+  /** Fast paths only; durable events and delivery already committed before this hook. */
+  afterAdmission?: (data: SendDmResult, event: { seq: number; payload: Record<string, unknown>; data: Record<string, unknown>; outboxId: string }) => void;
   mailbox?: MailboxConfig;
   /** Server-resolved workspace growth policy; absent => no workspace guard. */
   workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy;
@@ -266,6 +277,7 @@ function buildDmMessageWrites(
   },
   attachments: AttachmentRow[],
   messageId: string,
+  createdAt = new Date(),
 ): AtomicWrite[] {
   const hasAttachments = attachments.length > 0;
   const metadata = {
@@ -275,7 +287,6 @@ function buildDmMessageWrites(
     injection_mode: data.mode ?? 'wait',
   };
   const sessionRef = requireSessionRefFromMetadata(metadata);
-  const createdAt = new Date();
   const writes: AtomicWrite[] = [
     db
       .insert(messages)
@@ -313,6 +324,44 @@ function buildDmMessageWrites(
   return writes;
 }
 
+function buildDmResult(
+  message: Pick<typeof messages.$inferSelect, 'id' | 'agentId' | 'body' | 'metadata' | 'createdAt'>,
+  conv: { id: string }, fromAgent: { name: string }, data: { to: string; mode?: 'wait' | 'steer' },
+  attachments: AttachmentRow[],
+) {
+  const injectionMode = data.mode ?? 'wait';
+  return {
+    // Canonical converged shape (new)
+    conversation_id: conv.id,
+    message: {
+      id: message.id,
+      agent_id: message.agentId,
+      agent_name: fromAgent.name,
+      text: message.body,
+      injection_mode: injectionMode,
+      attachments,
+      metadata: publicMessageMetadata(message.metadata),
+    },
+    created_at: message.createdAt.toISOString(),
+
+    // Legacy compatibility fields (scheduled for removal in next major).
+    id: message.id,
+    from_agent_id: message.agentId,
+    to: data.to,
+    text: message.body,
+    injection_mode: injectionMode,
+    attachments,
+    metadata: publicMessageMetadata(message.metadata),
+  };
+}
+
+export type AcceptedDmResult = ReturnType<typeof buildDmResult>;
+export type SendDmResult = AcceptedDmResult & {
+  _delivery: DeliveryOutcomeRecords['deliveries'][number] | null;
+  _delivery_rejections: DeliveryOutcomeRecords['rejections'];
+  _notifications_durable?: boolean;
+};
+
 export async function sendDm(
   db: Db,
   workspaceId: string,
@@ -325,7 +374,7 @@ export async function sendDm(
     data?: Record<string, unknown> | null;
   },
   options: SendDmOptions = {},
-) {
+): Promise<SendDmResult> {
   const startedAtMs = Date.now();
   // Resolve durable request identity before mutable recipient/attachment metadata.
   // A removed/recreated target must never turn an accepted retry into a new send.
@@ -338,6 +387,25 @@ export async function sendDm(
       throw codedError('Idempotency-Key was reused with a different request payload', 'idempotency_key_reused', 409);
     }
     await dispatchA2aEgress(db, accepted.id);
+    let [context] = await db.select().from(a2aEgressContext).where(eq(a2aEgressContext.id, accepted.id));
+    if (!context) {
+      // Upgrade compatibility for admissions predating 0058: recover only from
+      // the original retained message/log, never recipient-name resolution or
+      // conversation creation. New admissions always carry the atomic snapshot.
+      const [source] = await db.select({ message: messages, conversationId: messageLogs.conversationId, senderName: agents.name })
+        .from(messages)
+        .leftJoin(messageLogs, eq(messageLogs.messageId, messages.id))
+        .leftJoin(agents, eq(agents.id, messages.agentId))
+        .where(and(eq(messages.id, accepted.messageId), eq(messages.workspaceId, workspaceId)));
+      if (!source) throw codedError('Accepted A2A message is no longer retained', 'a2a_message_not_retained', 410);
+      const retainedAttachments = await fetchAttachmentsBatch(db, workspaceId, [source.message.id]);
+      const response = buildDmResult(source.message, {
+        id: source.conversationId ?? source.message.channelId.replace(/^dmch_/, 'dm_'),
+      }, { name: source.senderName ?? fromAgentId }, data, retainedAttachments.get(source.message.id) ?? []);
+      await db.insert(a2aEgressContext).values({ id: accepted.id, messageId: accepted.messageId, response }).onConflictDoNothing();
+      [context] = await db.select().from(a2aEgressContext).where(eq(a2aEgressContext.id, accepted.id));
+    }
+    return { ...context.response, _delivery: null, _delivery_rejections: [], _notifications_durable: true };
   }
 
   const [toAgent] = data.to === '@self'
@@ -375,7 +443,9 @@ export async function sendDm(
     ? `a2ae_${await sha256Hex(JSON.stringify([workspaceId, fromAgentId, options.idempotencyKey ?? generateId()]))}`
     : null;
   const fingerprint = egressId ? await sha256Hex(JSON.stringify(data)) : '';
-  const messageId = accepted?.messageId ?? generateId();
+  const messageId = generateId();
+  // Match SQLite timestamp precision so live, retained response and delivery replay agree.
+  const createdAt = new Date(Math.floor(Date.now() / 1000) * 1000);
   const mailbox = options.mailbox ?? {
     ttlMs: DEFAULT_MAILBOX_TTL_MS,
     depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
@@ -388,7 +458,7 @@ export async function sendDm(
       agent_id: fromAgentId,
       agent_name: fromAgent.name,
       text: data.text,
-      created_at: new Date().toISOString(),
+      created_at: createdAt.toISOString(),
       thread_id: conv.id,
       attachments,
       metadata: sanitizeUserMessageMetadata(data.data),
@@ -411,10 +481,18 @@ export async function sendDm(
 
   const deliveryId = toAgent.id !== fromAgentId ? `del_${generateId()}` : null;
 
-  // Durable writes (message + attachments + delivery + message_log) run as one
-  // atomic unit when the adapter supports it; fanout stays in routes.
+  const publicResult = buildDmResult({
+    id: messageId, agentId: fromAgentId, body: data.text, createdAt,
+    metadata: { ...sanitizeUserMessageMetadata(data.data), injection_mode: data.mode ?? 'wait' },
+  }, conv, fromAgent, data, attachments);
+  const eventData = buildDmReceivedEventData(publicResult, { fromName: fromAgent.name });
+  const workspacePayload = transformForClient({
+    type: 'dm.received', workspace_id: workspaceId, data: eventData, timestamp: createdAt.toISOString(),
+  });
+  // The outbox, observer cursor log, response context and delivery share admission.
+  // None can escape a capacity rollback, or depend on external transport success.
   const persist = () => runAtomicWrites(db, (writeDb) => {
-    const writes = buildDmMessageWrites(writeDb, workspaceId, fromAgentId, conv.channelId, data, attachments, messageId);
+    const writes = buildDmMessageWrites(writeDb, workspaceId, fromAgentId, conv.channelId, data, attachments, messageId, createdAt);
 
     if (egressId && a2aTarget && egressPayload) {
       // First statement owns the request identity; a competing attempt rolls
@@ -423,6 +501,10 @@ export async function sendDm(
         id: egressId, workspaceId, messageId, targetId: a2aTarget.id,
         externalUrl: a2aTarget.external_url, fingerprint, payload: egressPayload,
       }));
+    }
+    if (options.receivedA2aAgentId) {
+      writes.push(writeDb.update(a2aAgents).set({ messagesRecv: sql`${a2aAgents.messagesRecv} + 1`, updatedAt: createdAt })
+        .where(and(eq(a2aAgents.id, options.receivedA2aAgentId), eq(a2aAgents.workspaceId, workspaceId))));
     }
     if (deliveryId) {
       writes.push(
@@ -461,58 +543,46 @@ export async function sendDm(
       }),
     );
 
+    if (egressId) {
+      writes.push(
+        writeDb.insert(a2aEgressContext).values({ id: egressId, messageId, response: publicResult }),
+        writeDb.insert(pendingEvents).values({ id: messageId, workspaceId, eventType: 'dm.received', payload: eventData }),
+        buildWorkspaceEventWrite(writeDb, workspaceId, { type: 'dm.received', payload: workspacePayload }),
+      );
+    }
     return writes;
-  }, { requireAtomic: Boolean(options.workspaceDeliveryPolicy || a2aTarget) });
-  let insertedMessage: typeof messages.$inferSelect | undefined;
-  if (!accepted) {
-    try {
-      const results = await persist();
-      [insertedMessage] = results[egressId ? 1 : 0] as (typeof messages.$inferSelect)[];
+  }, { requireAtomic: Boolean(options.workspaceDeliveryPolicy || a2aTarget || options.receivedA2aAgentId) });
+  let admittedEventSeq: number | undefined;
+  try {
+    const results = await persist();
+    if (egressId) admittedEventSeq = (results[results.length - 1] as { seq: number }[])[0].seq;
+  } catch (error) {
+    // Inspect the actual committed winner after the losing atomic batch rolls back.
+    const [winner] = egressId ? await db.select().from(a2aEgress).where(eq(a2aEgress.id, egressId)) : [];
+    if (!winner) throw error;
+    if (winner.fingerprint !== fingerprint) {
+      throw codedError('Idempotency-Key was reused with a different request payload', 'idempotency_key_reused', 409);
     }
-    catch (error) {
-      // The admission unique key is durable, unlike the best-effort KV lock.
-      // A race loser may reuse only an identical committed request.
-      const [winner] = egressId ? await db.select().from(a2aEgress).where(eq(a2aEgress.id, egressId)) : [];
-      if (!winner || winner.fingerprint !== fingerprint) throw error;
-      return sendDm(db, workspaceId, fromAgentId, data, options);
-    }
+    return sendDm(db, workspaceId, fromAgentId, data, options);
   }
-  if (egressId && !accepted) await dispatchA2aEgress(db, egressId);
-  const message = insertedMessage ?? (await db.select().from(messages).where(eq(messages.id, messageId)))[0];
-  if (!message) throw codedError('Accepted A2A message is no longer retained', 'a2a_message_not_retained', 410);
   const deliveryOutcomes: DeliveryOutcomeRecords = deliveryId
     ? await fetchDirectDeliveryOutcomes(db, { messageId, recipientAgentId: toAgent.id })
     : { deliveries: [], rejections: [] };
   const dmDelivery = deliveryOutcomes.deliveries[0] ?? null;
 
-  const injectionMode = data.mode ?? 'wait';
-  return {
-    // Canonical converged shape (new)
-    conversation_id: conv.id,
-    message: {
-      id: message.id,
-      agent_id: message.agentId,
-      agent_name: fromAgent.name,
-      text: message.body,
-      injection_mode: injectionMode,
-      attachments,
-      metadata: publicMessageMetadata(message.metadata),
-    },
-    created_at: message.createdAt.toISOString(),
-
-    // Legacy compatibility fields (scheduled for removal in next major).
-    id: message.id,
-    from_agent_id: message.agentId,
-    to: data.to,
-    text: message.body,
-    injection_mode: injectionMode,
-    attachments,
-    metadata: publicMessageMetadata(message.metadata),
-
-    // Internal: delivery record for the recipient — stripped by route before response
+  const result: SendDmResult = {
+    ...publicResult,
     _delivery: dmDelivery,
     _delivery_rejections: deliveryOutcomes.rejections,
+    ...(egressId ? { _notifications_durable: true } : {}),
   };
+  if (egressId) {
+    // Local fast paths run independently of transport. A crash here still leaves
+    // the webhook outbox, workspace cursor log and queued delivery recoverable.
+    options.afterAdmission?.(result, { seq: admittedEventSeq!, payload: workspacePayload, data: eventData, outboxId: messageId });
+    await dispatchA2aEgress(db, egressId);
+  }
+  return result;
 }
 
 export async function listConversations(

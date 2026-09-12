@@ -1337,3 +1337,10 @@ export const a2aEgress = sqliteTable('a2a_egress', {
   errorCode: text('error_code'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
 }, (table) => [index('idx_a2a_egress_due').on(table.status, table.leaseUntil), index('idx_a2a_egress_retention').on(table.createdAt, table.id)]);
+
+/** Public accepted response only; never transport authentication or mutable target state. */
+export const a2aEgressContext = sqliteTable('a2a_egress_context', {
+  id: text('id').primaryKey().notNull().references(() => a2aEgress.id, { onDelete: 'cascade' }),
+  messageId: text('message_id').notNull().references(() => messages.id, { onDelete: 'cascade' }),
+  response: text('response', { mode: 'json' }).notNull().$type<import('../engine/dm.js').AcceptedDmResult>(),
+}, (table) => [index('idx_a2a_egress_context_message').on(table.messageId)]);

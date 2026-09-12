@@ -2,7 +2,7 @@
 
 Run `npm ci`, `npm run build`, then `npm run test:engine:regression` from the
 repository root with Node 22. CI runs this command after its normal build. It runs
-the capacity, pending-retention, lifecycle, and packed-public-consumer scripts
+the capacity, pending-retention, lifecycle, review-regression, and packed-public-consumer scripts
 sequentially using the declared dependencies, including pinned test-only Miniflare.
 Set `ENGINE_REGRESSION_RESULTS_DIR` to retain separate JSON results in a chosen
 directory; by default the runner prints a new results directory under the OS temp
@@ -22,10 +22,11 @@ The normal ENGINE typecheck also includes the async resolver consumer fixture.
 
 ## Release composition
 
-Apply ENGINE migration `0057_a2a_egress.sql` before serving this engine version.
+Apply ENGINE migrations `0057_a2a_egress.sql` and `0058_a2a_egress_context.sql` before serving this engine version.
 It adds a durable accepted-egress table, no quota counter or extra capacity.
 The same atomic write commits the intent, message, attachments, session, delivery,
-and applicable message log. A failed admission rolls all those rows back before
+applicable message log, public response context, webhook outbox row, and workspace
+event log row. A failed admission rolls all those rows back before
 transport. Harmless conversation metadata can remain from earlier resolution.
 
 Outbound DM retries should retain `Idempotency-Key`. A previously admitted intent
@@ -56,9 +57,19 @@ one tuple. A deleted/recreated registration or changed endpoint returns terminal
 Same-endpoint auth rotation uses the current scheme/credential pair. Credentials
 and raw upstream error bodies are never copied into the intent or error logs.
 
-Success and terminal failure immediately clear the duplicated payload. The small
+Success and terminal failure immediately clear the transport payload. The egress
 identity/outcome record remains until the window ends, even if message retention
-runs earlier. A retained sent intent with a deleted message still returns 410.
+runs earlier. Separately, `a2a_egress_context` retains the original public response,
+including message body, user metadata, sender name, conversation, and attachment
+descriptors. This is content, not merely identity bookkeeping. It has no copied
+transport credentials and is bounded by the same 24-hour egress horizon: indexed
+egress cleanup cascades its deletion. Source-message deletion and workspace
+deletion also cascade context deletion. Sent retries validate source retention and
+the retry horizon before returning the snapshot, without re-resolving recipients,
+attachments, conversation membership or external credentials. For pre-0058 rows
+without a snapshot, compatibility reads the original retained message/log and
+attachment junctions without recreating relationships; historical descriptors that
+changed before the upgrade cannot be recovered retroactively. A retained sent intent with a deleted message still returns 410.
 Before cleanup, an expired intent returns 410 `a2a_egress_expired`; a previously
 terminal failure preserves its typed outcome. After cleanup the old key is fresh,
 so callers must stop automatic retries after 24 hours; a late request may create a
@@ -80,3 +91,23 @@ imports and new-index baseline filtering only); run `a2a-lifecycle-regression.mj
 for Node memory/file and workerd D1 caller retries, target deletion/recreation,
 endpoint/auth rotation, internal retry mutations, expiry, indexed bounded cleanup,
 and concurrent cleanup/transport controls. Set `CAPACITY_RESULTS` separately.
+
+## Durable local acceptance notifications
+
+Outbound A2A admission commits one `pending_events` identity and one monotonic
+`workspace_events` cursor alongside the message and delivery, before external
+transport starts. The route only publishes those already committed identities;
+completed caller retries never append them again. Lost queue sends use the existing
+webhook outbox sweep/consumer. Lost observer publication uses workspace cursor
+replay. Queued node deliveries use the existing delivery maintenance/reconnect
+contracts. These recovery paths do not depend on the A2A transport outcome.
+External delivery retains the existing retry/deduplication contract; a receiver
+may see a repeated attempt after a crash. No new HOST timer or event kind is needed.
+
+`a2a-review-regression.mjs` exercises actual routes with Node memory/file databases
+and workerd D1: injected transport and lost fast paths recovered only through
+sweeps/cursor replay, SQL notification-write rollback, atomic capacity refusal,
+SQL counter failure/retry on both local inbound producers, immutable completed
+responses after recipient/attachment/roster/endpoint churn, and an actual concurrent
+SQL admission collision. It also applies 0058 twice to the prior schema and proves
+context cleanup under message deletion, 24-hour egress cleanup and workspace deletion.

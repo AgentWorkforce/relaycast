@@ -446,6 +446,7 @@ a2aRoutes.post('/a2a/rpc', requireAuth, rateLimit, async (c) => {
           data: relayMessage.metadata,
         }, {
           skipA2aIntercept: true,
+          receivedA2aAgentId: registeredCaller.id,
           // Without this, sendDm falls back to its fixed one-hour / 1000-message
           // defaults and a registered peer's deliveries quietly ignore whatever
           // TTL and depth cap the operator configured — the one delivery path on
@@ -463,8 +464,6 @@ a2aRoutes.post('/a2a/rpc', requireAuth, rateLimit, async (c) => {
       // idempotency exists to prevent. The response below is identical either
       // way, so the caller cannot tell — which is the point.
       if (!idempotent.replayed) {
-        await a2aEngine.incrementA2aMessagesReceived(db, registeredCaller.id);
-
         // Fanout and delivery routing run in the background, as `/v1/dm` does.
         // Awaiting them made the counterparty's "message accepted" wait on our
         // recipient's delivery — including a slow HTTP-push receiver — so a
@@ -619,6 +618,7 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
     const inboundKey = requestPayload.success
       ? requestPayload.data.params?.message?.message_id ?? String(requestPayload.data.id ?? '')
       : extractCorrelationId(payload);
+    const a2aRecord = await a2aEngine.getA2aAgentByRelayName(db, relayAgent.workspaceId, relayName);
     const idempotent = await runIdempotent({
       workspaceId: relayAgent.workspaceId,
       actorId: relayAgent.relayAgentId,
@@ -630,15 +630,12 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
         to: targetAgentName!, text: relayMessage.text, mode: 'wait', data: relayMessage.metadata,
       }, {
         skipA2aIntercept: true,
+        receivedA2aAgentId: a2aRecord?.id,
         mailbox: resolveMailboxConfig(c.get('engine').config, relayAgent.workspaceId),
         workspaceDeliveryPolicy: await resolveWorkspaceDeliveryPolicyById(db, c.get('engine').config, relayAgent.workspaceId),
       }),
     });
     const sent = idempotent.data;
-    if (!idempotent.replayed) {
-      const a2aRecord = await a2aEngine.getA2aAgentByRelayName(db, relayAgent.workspaceId, relayName);
-      if (a2aRecord) await a2aEngine.incrementA2aMessagesReceived(db, a2aRecord.id);
-    }
 
     const response = a2aEngine.jsonRpcSuccess(extractCorrelationId(payload) ?? undefined, {
       task: {

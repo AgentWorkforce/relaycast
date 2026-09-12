@@ -21,6 +21,7 @@ export interface IdempotentResult<T> {
 }
 
 type DeliveryInternals = {
+  _notifications_durable?: boolean;
   _delivery?: unknown;
   _deliveries?: unknown;
   _delivery_rejections?: unknown;
@@ -103,6 +104,7 @@ export function applyIdempotencyReplayHeader<T>(c: Context, result: IdempotentRe
 
 export function stripDeliveryInternals<T extends object>(data: T) {
   const {
+    _notifications_durable: _dropNotifications,
     _delivery: _dropDelivery,
     _deliveries: _dropDeliveries,
     _delivery_rejections: _dropRejections,
