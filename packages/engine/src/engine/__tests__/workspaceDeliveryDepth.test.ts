@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { and, count, eq, inArray } from 'drizzle-orm';
 import { makeNodeStack, type TestStack } from '../../__tests__/conformance/harness.js';
 import { agents, channelMembers, channels, deliveries, messages, workspaces } from '../../db/schema.js';
-import { databaseConstraintKind, runAtomicWrites } from '../../ports/database.js';
+import { runAtomicWrites } from '../../ports/database.js';
 import { buildChannelDeliveryWrite } from '../deliveryWrites.js';
 import type { EngineDb } from '../../ports/database.js';
 import * as messageEngine from '../message.js';
@@ -171,7 +171,8 @@ describe('workspace delivery growth guard (channel broadcast)', () => {
     } catch (error) {
       caught = error;
     }
-    expect(databaseConstraintKind(caught)).toBe('workspace_delivery_capacity');
+    expect(caught).toBeInstanceOf(WorkspaceDeliveryCapacityError);
+    expect(caught).toMatchObject({ code: 'workspace_delivery_depth_exceeded', status: 429, retryable: true });
   });
 });
 

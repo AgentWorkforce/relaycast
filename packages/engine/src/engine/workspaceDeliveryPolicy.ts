@@ -1,5 +1,6 @@
+import { z } from 'zod';
 import { and, count, eq, or, sql, type SQL, type SQLWrapper } from 'drizzle-orm';
-import { deliveries } from '../db/schema.js';
+import { deliveries, workspaces } from '../db/schema.js';
 import type { EngineDb } from '../ports/database.js';
 
 /**
@@ -36,6 +37,7 @@ export type DeliveryAudience = 'broadcast' | 'targeted';
 export class WorkspaceDeliveryCapacityError extends Error {
   readonly code = 'workspace_delivery_depth_exceeded';
   readonly retryable = true;
+  readonly status = 429;
   constructor(message: string) {
     super(message);
     this.name = 'WorkspaceDeliveryCapacityError';
@@ -62,6 +64,11 @@ export interface WorkspaceDeliveryPolicyConfig {
   resolve?: (workspace: { id: string; plan: string }) => Promise<WorkspaceDeliveryPolicy | undefined>;
 }
 
+const dynamicWorkspaceDeliveryPolicySchema = z.object({
+  cap: z.number().int().positive(),
+  reserve: z.number().int().nonnegative().default(0),
+}).transform(({ cap, reserve }) => ({ cap, reserve: Math.min(reserve, cap - 1) }));
+
 /**
  * Async resolution used by request handlers: prefer a host-supplied dynamic
  * resolver, else fall back to the static configured cap. Returns `undefined`
@@ -75,7 +82,7 @@ export async function resolveWorkspaceDeliveryPolicyFor(
     id: workspace.id,
     plan: workspace.plan ?? 'free',
   });
-  if (dynamic) return dynamic;
+  if (dynamic !== undefined) return dynamicWorkspaceDeliveryPolicySchema.parse(dynamic);
   return resolveWorkspaceDeliveryPolicy(config, workspace.id);
 }
 
@@ -92,8 +99,8 @@ export function resolveWorkspaceDeliveryPolicy(
   const scoped = config?.workspaceDelivery?.workspaces?.[workspaceId];
   const cap = positiveIntOrUndefined(scoped?.cap) ?? positiveIntOrUndefined(config?.workspaceDelivery?.cap);
   if (cap === undefined) return undefined;
-  const configuredReserve = positiveIntOrUndefined(scoped?.reserve)
-    ?? positiveIntOrUndefined(config?.workspaceDelivery?.reserve)
+  const configuredReserve = nonnegativeIntOrUndefined(scoped?.reserve)
+    ?? nonnegativeIntOrUndefined(config?.workspaceDelivery?.reserve)
     ?? 0;
   // A reserve equal to or above the cap would starve broadcast admission
   // entirely; clamp to a valid `0 <= reserve < cap`.
@@ -101,17 +108,19 @@ export function resolveWorkspaceDeliveryPolicy(
   return { cap, reserve };
 }
 
+function nonnegativeIntOrUndefined(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
 function positiveIntOrUndefined(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+    ? value
     : undefined;
 }
 
 /**
  * Read the current active workspace delivery depth (queued+delivered,
- * unexpired). Used for pre-egress ordering checks where an external side effect
- * (outbound A2A HTTP) must not fire after a capacity refusal; the authoritative
- * atomic guard remains the SQL sentinel in the delivery write itself.
+ * unexpired). Diagnostic only; admission is enforced by the atomic write guard.
  */
 export async function currentWorkspaceDepth(db: EngineDb, workspaceId: string): Promise<number> {
   const rows = await db
@@ -155,7 +164,7 @@ export function workspaceActiveDepthSql(workspaceId: string): SQL<number> {
  * `candidateAgentIds` MUST be the builder's own recipient relation (same
  * eligibility predicate, sender exclusion, group left/mention rules), so the
  * count charges exactly the rows this write would add. Deduplicating against
- * `deliveries.id` keeps idempotent retries and `onConflictDoNothing` from
+ * `(message_id, agent_id)` keeps idempotent retries and `onConflictDoNothing` from
  * charging the same delivery twice.
  */
 export function newDeliveryCountSql(
@@ -166,7 +175,7 @@ export function newDeliveryCountSql(
     SELECT COUNT(*) FROM (${candidateAgentIds}) AS cand
     WHERE NOT EXISTS (
       SELECT 1 FROM deliveries x
-      WHERE x.id = 'del_' || ${messageId} || '_' || cand.agent_id
+      WHERE x.message_id = ${messageId} AND x.agent_id = cand.agent_id
     )
   )`;
 }
@@ -189,4 +198,16 @@ export function workspaceGrowthGuardSql(
   newCandidateCount: SQL<number>,
 ): SQL<string> {
   return sql<string>`CASE WHEN (${workspaceActiveDepthSql(workspaceId)} + ${newCandidateCount}) <= ${limit} THEN ${workspaceId} ELSE NULL END`;
+}
+
+/** Resolve after custom authentication has established the workspace identity. */
+export async function resolveWorkspaceDeliveryPolicyById(
+  db: EngineDb,
+  config: { workspaceDelivery?: WorkspaceDeliveryPolicyConfig } | undefined,
+  workspaceId: string,
+): Promise<WorkspaceDeliveryPolicy | undefined> {
+  const [workspace] = await db.select({ id: workspaces.id, plan: workspaces.plan })
+    .from(workspaces).where(eq(workspaces.id, workspaceId));
+  if (!workspace) throw new Error('Workspace delivery policy workspace not found');
+  return resolveWorkspaceDeliveryPolicyFor(config, workspace);
 }

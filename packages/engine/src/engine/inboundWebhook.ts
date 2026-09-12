@@ -156,13 +156,6 @@ export async function deleteWebhook(db: Db, workspaceId: string, webhookId: stri
 
 function rethrowMailboxError(error: unknown): never {
   const kind = databaseConstraintKind(error);
-  if (kind === 'workspace_delivery_capacity') {
-    throw codedError(
-      'Workspace delivery backlog is full; retry this event after it drains',
-      'workspace_delivery_capacity',
-      503,
-    );
-  }
   if (kind === 'mailbox_capacity') {
     throw codedError('A recipient mailbox is full; retry this event after capacity becomes available', 'mailbox_full', 503);
   }
@@ -176,7 +169,7 @@ export async function triggerWebhook(
   data: { text?: string; source?: string; author?: string; payload?: Record<string, unknown> },
   options: {
     mailbox?: MailboxConfig | ((workspaceId: string) => MailboxConfig);
-    workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy | ((workspaceId: string) => WorkspaceDeliveryPolicy | undefined);
+    workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy | ((workspaceId: string) => WorkspaceDeliveryPolicy | undefined | Promise<WorkspaceDeliveryPolicy | undefined>);
   } = {},
 ) {
   // Look up webhook
@@ -230,7 +223,7 @@ export async function triggerWebhook(
     ttlMs: DEFAULT_MAILBOX_TTL_MS, depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
   };
   const workspacePolicy = typeof options.workspaceDeliveryPolicy === 'function'
-    ? options.workspaceDeliveryPolicy(webhook.workspaceId)
+    ? await options.workspaceDeliveryPolicy(webhook.workspaceId)
     : options.workspaceDeliveryPolicy;
   const results = await runAtomicWrites(db, (writeDb) => {
     const writes: AtomicWrite[] = [

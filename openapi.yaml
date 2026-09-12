@@ -7,6 +7,14 @@ info:
     All routes are prefixed with `/v1/`. Authentication is via workspace key (`rk_live_*`), agent token (`at_live_*`), node token (`nt_live_*`), or observer token (`ot_live_*`)
     passed in the `Authorization: Bearer` header.
 
+    Workspace delivery capacity applies to all local message producers. A write
+    that would exceed it returns HTTP 429 with error code
+    `workspace_delivery_depth_exceeded` and `Retry-After: 30`. A required
+    recipient mailbox overflow remains `mailbox_full` (503). Completed
+    idempotent replays and zero-growth operations remain available at capacity.
+    Outbound A2A DMs durably admit the message before transport; retry transport
+    failures with the same `Idempotency-Key` to resume the admitted message.
+
     Response format:
     - Success: `{ ok: true, data: ... }`
     - Error: `{ ok: false, error: { code, message } }`

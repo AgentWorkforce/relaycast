@@ -16,7 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+- Enforce workspace delivery capacity across HTTP producers with retryable 429 responses and durable A2A admission before external transport.
 
 ## [8.9.1] - 2026-09-11
 

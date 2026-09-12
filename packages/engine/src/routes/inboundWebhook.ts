@@ -6,7 +6,7 @@ import { asCodedError, errorResponse } from '../lib/httpError.js';
 import { requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
-import { resolveWorkspaceDeliveryPolicy } from '../engine/workspaceDeliveryPolicy.js';
+import { resolveWorkspaceDeliveryPolicyById } from '../engine/workspaceDeliveryPolicy.js';
 import * as inboundWebhookEngine from '../engine/inboundWebhook.js';
 import * as triggerEngine from '../engine/trigger.js';
 import * as channelEngine from '../engine/channel.js';
@@ -139,7 +139,7 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
       },
       {
         mailbox: (workspaceId) => resolveMailboxConfig(c.get('engine').config, workspaceId),
-        workspaceDeliveryPolicy: (workspaceId) => resolveWorkspaceDeliveryPolicy(c.get('engine').config, workspaceId),
+        workspaceDeliveryPolicy: (workspaceId) => resolveWorkspaceDeliveryPolicyById(c.get('db'), c.get('engine').config, workspaceId),
       },
     );
     if (!result) {

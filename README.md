@@ -1115,3 +1115,19 @@ without an `id` retain fire-and-forget behavior. Brokers performing owned identi
 cleanup must await that acknowledgement before requesting deletion.
 
 The signed Relayfile webhook request follows Relayfile's existing external event contract (`eventId`, `providerEventType`, `resourceRef`). These are verified vendor payload fields, not alternate spellings of Relaycast HTTP fields; Relaycast message metadata remains snake_case.
+
+### Workspace delivery capacity
+
+Hosts can supply `EngineConfig.workspaceDelivery.resolve` to resolve a workspace's
+current capacity asynchronously. All local message producers use this policy.
+Workspace overflow returns HTTP 429 with code `workspace_delivery_depth_exceeded`
+and `Retry-After: 30`; a required recipient's full mailbox remains `mailbox_full`
+(503). Reserves are carved out of the configured cap. Completed idempotent replays
+and operations that create no active delivery rows remain available at capacity.
+
+Outbound A2A DMs commit accepted egress with their guarded message before transport.
+Keep the same `Idempotency-Key` when retrying a transport failure: the admitted
+message can resume even when capacity is full. Engine adapters must apply migration
+`0057_a2a_egress.sql`; hosted adapters must schedule `sweepPendingA2aEgress(db)`.
+Recovery retains the remote message ID and requires receiver deduplication.
+See [capacity regression and composition](packages/engine/scripts/CAPACITY-REGRESSION.md).

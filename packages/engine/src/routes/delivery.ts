@@ -7,14 +7,13 @@ import { fanoutToAgents } from './fanout.js';
 import { runInBackground } from './background.js';
 import { errorResponse } from '../lib/httpError.js';
 import {
-  jsonError,
   jsonNotFound,
   jsonOk,
   parseJsonBody,
   parseOptionalJsonBody,
   parseQueryParams,
 } from '../lib/httpResponse.js';
-import { resolveWorkspaceDeliveryPolicy, WorkspaceDeliveryCapacityError } from '../engine/workspaceDeliveryPolicy.js';
+import { resolveWorkspaceDeliveryPolicyFor, WorkspaceDeliveryCapacityError } from '../engine/workspaceDeliveryPolicy.js';
 import { ListDeliveriesQuerySchema, FailDeliveryRequestSchema, DeferDeliveryRequestSchema } from '@relaycast/types';
 
 export const deliveryRoutes = new Hono<AppEnv>();
@@ -150,11 +149,11 @@ deliveryRoutes.post(
         result = await deliveryEngine.deferDelivery(db, workspace.id, agent!.id, id, {
           availableAt: new Date(parsed.data.available_at),
           reason: parsed.data.reason,
-          workspacePolicy: resolveWorkspaceDeliveryPolicy(c.get('engine').config, workspace.id),
+          workspacePolicy: await resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace),
         });
       } catch (error) {
         if (error instanceof WorkspaceDeliveryCapacityError) {
-          return jsonError(c, error.code, error.message, 429);
+          return errorResponse(c, error);
         }
         throw error;
       }

@@ -137,3 +137,5 @@ export {
   snowflakeIdLowerBound,
   SnowflakeGenerator,
 } from './engine/snowflake.js';
+
+export { dispatchA2aEgress, sweepPendingA2aEgress } from './engine/a2aEgress.js';

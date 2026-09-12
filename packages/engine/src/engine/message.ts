@@ -126,7 +126,7 @@ export async function postMessage(
     );
 
     return writes;
-  });
+  }, { requireAtomic: Boolean(options.workspaceDeliveryPolicy) });
   const [message] = results[0] as (typeof messages.$inferSelect)[];
   const deliveryOutcomes: DeliveryOutcomeRecords = await fetchChannelDeliveryOutcomes(db, {
     messageId,

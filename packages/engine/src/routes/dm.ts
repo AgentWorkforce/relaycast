@@ -99,7 +99,7 @@ dmRoutes.post(
           attachments: normalizedAttachments,
           data,
           mode,
-        }, { mailbox, workspaceDeliveryPolicy }),
+        }, { mailbox, workspaceDeliveryPolicy, idempotencyKey }),
         afterOperation: async (data) => {
           await sendWebhookEvent(c, {
             type: 'dm.received',

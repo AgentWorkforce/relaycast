@@ -1,5 +1,4 @@
-import { and, eq, isNull, ne, or, sql, inArray, type SQL } from 'drizzle-orm';
-import type { SQLiteInsertSelectQueryBuilder } from 'drizzle-orm/sqlite-core';
+import { and, eq, isNull, ne, or, sql, inArray, getTableColumns, type SQL, type SQLWrapper } from 'drizzle-orm';
 import {
   agentNodeBindings,
   agents,
@@ -10,7 +9,6 @@ import {
 } from '../db/schema.js';
 import type { AtomicWrite, EngineDb } from '../ports/database.js';
 import {
-  newDeliveryCountSql,
   workspaceActiveDepthSql,
   workspaceGrowthLimit,
   type DeliveryAudience,
@@ -19,7 +17,6 @@ import {
 
 type DeliveryMode = 'immediate' | 'next-tool-call';
 type ChannelDeliveryReason = 'message' | 'mention' | 'thread-reply';
-type DeliveryInsertSelect = SQLiteInsertSelectQueryBuilder<typeof deliveries>;
 
 export interface DeliveryFanoutRecord {
   id: string;
@@ -76,8 +73,29 @@ function channelMuteDeliveryFilter(mentionHandles: readonly string[]) {
   return or(eq(channelMembers.isMuted, false), inArray(agents.name, mentionHandles));
 }
 
-function asDeliveryInsertSelect(query: unknown): DeliveryInsertSelect {
-  return query as DeliveryInsertSelect;
+/** Materialize the exact rows that will be inserted, including routing, mute,
+ * mailbox, and duplicate filters. Admission and insertion share this snapshot;
+ * neither re-evaluates recipient membership after sequence triggers run.
+ */
+function deliveryAdmissionSelect(
+  workspaceId: string,
+  policy: WorkspaceDeliveryPolicy | undefined,
+  audience: DeliveryAudience,
+): (query: SQLWrapper) => SQL {
+  return (query) => {
+    if (!policy) return query.getSQL();
+    const columns = Object.values(getTableColumns(deliveries));
+    const names = sql.join(columns.map(column => sql.identifier(column.name)), sql`, `);
+    const values = sql.join(columns.map(column => column.name === 'status'
+      ? sql`CASE WHEN capacity_admission.allowed THEN capacity_candidates.status ELSE NULL END`
+      : sql`capacity_candidates.${sql.identifier(column.name)}`), sql`, `);
+    const limit = workspaceGrowthLimit(policy, audience);
+    return sql`WITH capacity_candidates (${names}) AS MATERIALIZED (${query.getSQL()}),
+      capacity_admission AS MATERIALIZED (
+        SELECT (${workspaceActiveDepthSql(workspaceId)} + (SELECT COUNT(*) FROM capacity_candidates)) <= ${limit} AS allowed
+      )
+      SELECT ${values} FROM capacity_candidates CROSS JOIN capacity_admission WHERE 1`;
+  };
 }
 
 function ttlSeconds(ttlMs: number): number {
@@ -133,22 +151,9 @@ function guardedWorkspaceIdSql(args: {
   return sql<string>`CASE WHEN ${args.perRecipientOk} THEN ${args.workspaceId} ELSE NULL END`;
 }
 
-/**
- * The `status` sentinel for the workspace-scoped growth guard. A NULL status is
- * a DIFFERENT NOT NULL violation from the `workspace_id` mailbox sentinel, so
- * `databaseConstraintKind` can tell a workspace capacity refusal apart from a
- * per-recipient mailbox overflow. When no policy is configured the status is the
- * literal `'queued'` (byte-identical current behavior).
- */
-function guardedStatusSql(args: {
-  workspaceId: string;
-  policy?: WorkspaceDeliveryPolicy;
-  audience: DeliveryAudience;
-  newCandidates: SQL<number>;
-}): SQL<string> {
-  if (!args.policy) return sql<string>`${'queued'}`;
-  const limit = workspaceGrowthLimit(args.policy, args.audience);
-  return sql<string>`CASE WHEN (${workspaceActiveDepthSql(args.workspaceId)} + ${args.newCandidates}) <= ${limit} THEN ${'queued'} ELSE NULL END`;
+function newDeliveryIdentitySql(messageId: string, agentId: unknown) {
+  return sql`NOT EXISTS (SELECT 1 FROM deliveries existing
+    WHERE existing.message_id = ${messageId} AND existing.agent_id = ${agentId})`;
 }
 
 export function buildChannelDeliveryWrite(
@@ -173,40 +178,18 @@ export function buildChannelDeliveryWrite(
 ): AtomicWrite {
   const mentionHandles = input.mentionHandles ?? [];
   const reason = channelReasonSql(mentionHandles, input.reason ?? 'message');
-  // The identical recipient relation the insert consumes, aliased `agent_id`, so
-  // the growth guard charges exactly the rows this write would add. New
-  // deliveries are counted after `onConflictDoNothing`/retry deduplication.
-  const newCandidates = newDeliveryCountSql(
-    db
-      .select({ agent_id: channelMembers.agentId })
-      .from(channelMembers)
-      .innerJoin(agents, eq(channelMembers.agentId, agents.id))
-      .where(and(
-        eq(channelMembers.channelId, input.channelId),
-        channelMuteDeliveryFilter(mentionHandles),
-        ne(channelMembers.agentId, input.senderAgentId),
-        input.rejectOnOverflow
-          ? undefined
-          : belowDepthCapSql(input.workspaceId, channelMembers.agentId, input.depthCap),
-      )),
-    input.messageId,
-  );
   const workspaceId = guardedWorkspaceIdSql({
     workspaceId: input.workspaceId,
     perRecipientOk: input.rejectOnOverflow
       ? belowDepthCapSql(input.workspaceId, channelMembers.agentId, input.depthCap)
       : undefined,
   });
-  const status = guardedStatusSql({
-    workspaceId: input.workspaceId,
-    policy: input.workspacePolicy,
-    audience: input.audience ?? 'broadcast',
-    newCandidates,
-  });
+  const guardedSelect = deliveryAdmissionSelect(input.workspaceId, input.workspacePolicy, input.audience ?? 'broadcast');
+  const status = sql<string>`${'queued'}`;
   return db
     .insert(deliveries)
     .select((qb) =>
-      asDeliveryInsertSelect(qb
+      guardedSelect(qb
         .select({
           id: deliveryId(input.messageId, channelMembers.agentId),
           // A NOT NULL guard runs inside the same INSERT SELECT as capacity
@@ -262,6 +245,7 @@ export function buildChannelDeliveryWrite(
             eq(channelMembers.channelId, input.channelId),
             channelMuteDeliveryFilter(mentionHandles),
             ne(channelMembers.agentId, input.senderAgentId),
+            newDeliveryIdentitySql(input.messageId, channelMembers.agentId),
             input.rejectOnOverflow ? undefined : belowDepthCapSql(input.workspaceId, channelMembers.agentId, input.depthCap),
           ),
         )),
@@ -283,30 +267,13 @@ export function buildGroupDmDeliveryWrite(
     workspacePolicy?: WorkspaceDeliveryPolicy;
   },
 ): AtomicWrite {
-  const newCandidates = newDeliveryCountSql(
-    db
-      .select({ agent_id: dmParticipants.agentId })
-      .from(dmParticipants)
-      .innerJoin(agents, eq(dmParticipants.agentId, agents.id))
-      .where(and(
-        eq(dmParticipants.conversationId, input.conversationId),
-        isNull(dmParticipants.leftAt),
-        ne(dmParticipants.agentId, input.senderAgentId),
-        belowDepthCapSql(input.workspaceId, dmParticipants.agentId, input.depthCap),
-      )),
-    input.messageId,
-  );
   const workspaceId = guardedWorkspaceIdSql({ workspaceId: input.workspaceId });
-  const status = guardedStatusSql({
-    workspaceId: input.workspaceId,
-    policy: input.workspacePolicy,
-    audience: 'targeted',
-    newCandidates,
-  });
+  const guardedSelect = deliveryAdmissionSelect(input.workspaceId, input.workspacePolicy, 'targeted');
+  const status = sql<string>`${'queued'}`;
   return db
     .insert(deliveries)
     .select((qb) =>
-      asDeliveryInsertSelect(qb
+      guardedSelect(qb
         .select({
           id: deliveryId(input.messageId, dmParticipants.agentId),
           workspaceId,
@@ -356,6 +323,7 @@ export function buildGroupDmDeliveryWrite(
             eq(dmParticipants.conversationId, input.conversationId),
             isNull(dmParticipants.leftAt),
             ne(dmParticipants.agentId, input.senderAgentId),
+            newDeliveryIdentitySql(input.messageId, dmParticipants.agentId),
             belowDepthCapSql(input.workspaceId, dmParticipants.agentId, input.depthCap),
           ),
         )),
@@ -378,27 +346,13 @@ export function buildDirectDeliveryWrite(
     workspacePolicy?: WorkspaceDeliveryPolicy;
   },
 ): AtomicWrite {
-  const newCandidates = newDeliveryCountSql(
-    db
-      .select({ agent_id: agents.id })
-      .from(agents)
-      .where(and(
-        eq(agents.id, input.agentId),
-        belowDepthCapSql(input.workspaceId, agents.id, input.depthCap),
-      )),
-    input.messageId,
-  );
   const workspaceId = guardedWorkspaceIdSql({ workspaceId: input.workspaceId });
-  const status = guardedStatusSql({
-    workspaceId: input.workspaceId,
-    policy: input.workspacePolicy,
-    audience: 'targeted',
-    newCandidates,
-  });
+  const guardedSelect = deliveryAdmissionSelect(input.workspaceId, input.workspacePolicy, 'targeted');
+  const status = sql<string>`${'queued'}`;
   return db
     .insert(deliveries)
     .select((qb) =>
-      asDeliveryInsertSelect(qb
+      guardedSelect(qb
         .select({
           id: sql<string>`${input.deliveryId ?? `del_${input.messageId}_${input.agentId}`}`,
           workspaceId,
@@ -444,6 +398,8 @@ export function buildDirectDeliveryWrite(
         ))
         .where(and(
           eq(agents.id, input.agentId),
+        eq(agents.workspaceId, input.workspaceId),
+        newDeliveryIdentitySql(input.messageId, agents.id),
           belowDepthCapSql(input.workspaceId, agents.id, input.depthCap),
         ))),
     )
@@ -536,6 +492,7 @@ export async function fetchChannelDeliveryOutcomes(
         eq(channelMembers.channelId, input.channelId),
         channelMuteDeliveryFilter(mentionHandles),
         ne(channelMembers.agentId, input.senderAgentId),
+            newDeliveryIdentitySql(input.messageId, channelMembers.agentId),
       )),
   ]);
   return {
@@ -565,6 +522,7 @@ export async function fetchGroupDeliveryOutcomes(
         eq(dmParticipants.conversationId, input.conversationId),
         isNull(dmParticipants.leftAt),
         ne(dmParticipants.agentId, input.senderAgentId),
+            newDeliveryIdentitySql(input.messageId, dmParticipants.agentId),
       )),
   ]);
   return {

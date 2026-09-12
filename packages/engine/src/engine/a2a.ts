@@ -606,6 +606,7 @@ export async function sendToExternalAgent(
     try {
       const response = await globalThis.fetch(targetUrl, {
         method: 'POST',
+        signal: AbortSignal.timeout(15_000),
         headers: {
           'content-type': 'application/json',
           accept: 'application/json',
@@ -619,7 +620,7 @@ export async function sendToExternalAgent(
         Object.assign(err, {
           code: response.status >= 500 ? 'a2a_upstream_unavailable' : 'a2a_upstream_rejected',
           status: response.status >= 500 ? 502 : response.status,
-          retryable: response.status >= 500,
+          retryable: response.status >= 500 || response.status === 429,
         });
         throw err;
       }

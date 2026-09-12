@@ -9,6 +9,7 @@ import {
   dmConversationReservations,
   dmParticipants,
   messageAttachments,
+  a2aEgress,
 } from '../db/schema.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
@@ -22,11 +23,9 @@ import {
 } from './deliveryWrites.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
 import {
-  currentWorkspaceDepth,
-  workspaceGrowthLimit,
-  WorkspaceDeliveryCapacityError,
   type WorkspaceDeliveryPolicy,
 } from './workspaceDeliveryPolicy.js';
+import { dispatchA2aEgress } from './a2aEgress.js';
 import { codedError } from '../lib/httpError.js';
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 import { fetchAttachmentsBatch, resolveSendAttachments, type AttachmentRow } from './attachments.js';
@@ -37,6 +36,8 @@ type Db = ReturnType<typeof getDb>;
 
 interface SendDmOptions {
   skipA2aIntercept?: boolean;
+  /** Stable request identity for resuming already admitted outbound A2A. */
+  idempotencyKey?: string;
   mailbox?: MailboxConfig;
   /** Server-resolved workspace growth policy; absent => no workspace guard. */
   workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy;
@@ -357,26 +358,22 @@ export async function sendDm(
     ? null
     : await a2aEngine.getA2aAgentByRelayName(db, workspaceId, toAgent.name);
 
-  const messageId = generateId();
+  const egressId = a2aTarget
+    ? `a2ae_${await sha256Hex(JSON.stringify([workspaceId, fromAgentId, options.idempotencyKey ?? generateId()]))}`
+    : null;
+  const fingerprint = egressId ? await sha256Hex(JSON.stringify(data)) : '';
+  const [accepted] = egressId ? await db.select().from(a2aEgress).where(eq(a2aEgress.id, egressId)) : [];
+  if (accepted && accepted.fingerprint !== fingerprint) {
+    throw codedError('Idempotency-Key was reused with a different request payload', 'idempotency_key_reused', 409);
+  }
+  const messageId = accepted?.messageId ?? generateId();
   const mailbox = options.mailbox ?? {
     ttlMs: DEFAULT_MAILBOX_TTL_MS,
     depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
   };
 
+  let egressPayload: ReturnType<typeof a2aEngine.translateRelayToA2a> | undefined;
   if (a2aTarget) {
-    // A2A egress ordering: an outbound HTTP send is not part of the atomic
-    // message/delivery write, so a capacity refusal must happen BEFORE it.
-    // Refuse here (no external side effect) rather than sending and then failing
-    // the local write. The atomic guard still enforces the invariant.
-    if (options.workspaceDeliveryPolicy) {
-      const limit = workspaceGrowthLimit(options.workspaceDeliveryPolicy, 'targeted');
-      const depth = await currentWorkspaceDepth(db, workspaceId);
-      if (depth >= limit) {
-        throw new WorkspaceDeliveryCapacityError(
-          'Workspace delivery depth cap prevents outbound A2A send',
-        );
-      }
-    }
     const payload = a2aEngine.translateRelayToA2a({
       id: messageId,
       agent_id: fromAgentId,
@@ -400,20 +397,24 @@ export async function sendDm(
       },
     };
 
-    await a2aEngine.sendToExternalAgent(a2aTarget.external_url, payload, {
-      scheme: a2aTarget.auth_scheme,
-      credential: a2aTarget.auth_credential,
-    });
-    await a2aEngine.incrementA2aMessagesSent(db, a2aTarget.id);
+    egressPayload = payload;
   }
 
   const deliveryId = toAgent.id !== fromAgentId ? `del_${generateId()}` : null;
 
   // Durable writes (message + attachments + delivery + message_log) run as one
   // atomic unit when the adapter supports it; fanout stays in routes.
-  const results = await runAtomicWrites(db, (writeDb) => {
+  const persist = () => runAtomicWrites(db, (writeDb) => {
     const writes = buildDmMessageWrites(writeDb, workspaceId, fromAgentId, conv.channelId, data, attachments, messageId);
 
+    if (egressId && a2aTarget && egressPayload) {
+      // First statement owns the request identity; a competing attempt rolls
+      // back before it can consume capacity or invoke the external transport.
+      writes.unshift(writeDb.insert(a2aEgress).values({
+        id: egressId, workspaceId, messageId, targetId: a2aTarget.id,
+        externalUrl: a2aTarget.external_url, fingerprint, payload: egressPayload,
+      }));
+    }
     if (deliveryId) {
       writes.push(
         buildDirectDeliveryWrite(writeDb, {
@@ -452,8 +453,24 @@ export async function sendDm(
     );
 
     return writes;
-  }, { requireAtomic: Boolean(options.workspaceDeliveryPolicy) });
-  const [message] = results[0] as (typeof messages.$inferSelect)[];
+  }, { requireAtomic: Boolean(options.workspaceDeliveryPolicy || a2aTarget) });
+  let insertedMessage: typeof messages.$inferSelect | undefined;
+  if (!accepted) {
+    try {
+      const results = await persist();
+      [insertedMessage] = results[egressId ? 1 : 0] as (typeof messages.$inferSelect)[];
+    }
+    catch (error) {
+      // The admission unique key is durable, unlike the best-effort KV lock.
+      // A race loser may reuse only an identical committed request.
+      const [winner] = egressId ? await db.select().from(a2aEgress).where(eq(a2aEgress.id, egressId)) : [];
+      if (!winner || winner.fingerprint !== fingerprint) throw error;
+      return sendDm(db, workspaceId, fromAgentId, data, options);
+    }
+  }
+  if (egressId) await dispatchA2aEgress(db, egressId);
+  const message = insertedMessage ?? (await db.select().from(messages).where(eq(messages.id, messageId)))[0];
+  if (!message) throw codedError('Accepted A2A message is no longer retained', 'a2a_message_not_retained', 410);
   const deliveryOutcomes: DeliveryOutcomeRecords = deliveryId
     ? await fetchDirectDeliveryOutcomes(db, { messageId, recipientAgentId: toAgent.id })
     : { deliveries: [], rejections: [] };

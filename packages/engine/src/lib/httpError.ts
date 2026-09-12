@@ -1,3 +1,4 @@
+import { WorkspaceDeliveryCapacityError } from '../engine/workspaceDeliveryPolicy.js';
 import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { jsonError, jsonMalformedBody } from './httpResponse.js';
@@ -79,6 +80,7 @@ export function safeClientErrorMessage(
  */
 export function errorResponse(c: Context, err: unknown) {
   const error = asCodedError(err);
+  if (err instanceof WorkspaceDeliveryCapacityError) c.header('Retry-After', '30');
   if (err instanceof SyntaxError) {
     return jsonMalformedBody(c);
   }

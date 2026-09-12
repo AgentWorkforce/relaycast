@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+- Enforce workspace delivery capacity across HTTP producers with retryable 429 responses and durable A2A admission before external transport.
+
+- Hosts must apply migration `0057_a2a_egress.sql` and schedule `sweepPendingA2aEgress(db)` to recover accepted outbound A2A sends.
 
 ## [8.9.1] - 2026-09-11
 

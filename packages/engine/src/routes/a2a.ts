@@ -1,3 +1,4 @@
+import { resolveWorkspaceDeliveryPolicyFor, resolveWorkspaceDeliveryPolicyById, WorkspaceDeliveryCapacityError } from '../engine/workspaceDeliveryPolicy.js';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { and, eq } from 'drizzle-orm';
@@ -438,7 +439,7 @@ a2aRoutes.post('/a2a/rpc', requireAuth, rateLimit, async (c) => {
           data: relayMessage.metadata ?? null,
         }),
         kv: c.get('engine').kv,
-        operation: () => dmEngine.sendDm(db, workspace.id, authenticatedAgent!.id, {
+        operation: async () => dmEngine.sendDm(db, workspace.id, authenticatedAgent!.id, {
           to: targetAgentName,
           text: relayMessage.text,
           mode: 'wait',
@@ -450,6 +451,7 @@ a2aRoutes.post('/a2a/rpc', requireAuth, rateLimit, async (c) => {
           // TTL and depth cap the operator configured — the one delivery path on
           // the deployment that is exempt from its own backpressure settings.
           mailbox: resolveMailboxConfig(c.get('engine').config, workspace.id),
+          workspaceDeliveryPolicy: await resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace),
         }),
       });
       const sent = idempotent.data;
@@ -544,6 +546,10 @@ a2aRoutes.post('/a2a/rpc', requireAuth, rateLimit, async (c) => {
       }
     }
   } catch (err: unknown) {
+    if (err instanceof WorkspaceDeliveryCapacityError) {
+      c.header('Retry-After', '30');
+      return jsonResponse(c, a2aEngine.jsonRpcError(undefined, -32000, err.message, { code: err.code, retryable: true }), 429);
+    }
     const error = asCodedError(err) as CodedError & { data?: unknown };
     return jsonResponse(
       c,
@@ -610,17 +616,28 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
       return jsonResponse(c, response, jsonRpcHttpStatus(response));
     }
 
-    const sent = await dmEngine.sendDm(db, relayAgent.workspaceId, relayAgent.relayAgentId, {
-      to: targetAgentName,
-      text: relayMessage.text,
-      mode: 'wait',
-      data: relayMessage.metadata,
-    }, {
-      skipA2aIntercept: true,
+    const inboundKey = requestPayload.success
+      ? requestPayload.data.params?.message?.message_id ?? String(requestPayload.data.id ?? '')
+      : extractCorrelationId(payload);
+    const idempotent = await runIdempotent({
+      workspaceId: relayAgent.workspaceId,
+      actorId: relayAgent.relayAgentId,
+      scope: 'a2a:webhook',
+      key: inboundKey || undefined,
+      fingerprint: JSON.stringify({ to: targetAgentName, text: relayMessage.text, data: relayMessage.metadata ?? null }),
+      kv: c.get('engine').kv,
+      operation: async () => dmEngine.sendDm(db, relayAgent.workspaceId, relayAgent.relayAgentId, {
+        to: targetAgentName!, text: relayMessage.text, mode: 'wait', data: relayMessage.metadata,
+      }, {
+        skipA2aIntercept: true,
+        mailbox: resolveMailboxConfig(c.get('engine').config, relayAgent.workspaceId),
+        workspaceDeliveryPolicy: await resolveWorkspaceDeliveryPolicyById(db, c.get('engine').config, relayAgent.workspaceId),
+      }),
     });
-    const a2aRecord = await a2aEngine.getA2aAgentByRelayName(db, relayAgent.workspaceId, relayName);
-    if (a2aRecord) {
-      await a2aEngine.incrementA2aMessagesReceived(db, a2aRecord.id);
+    const sent = idempotent.data;
+    if (!idempotent.replayed) {
+      const a2aRecord = await a2aEngine.getA2aAgentByRelayName(db, relayAgent.workspaceId, relayName);
+      if (a2aRecord) await a2aEngine.incrementA2aMessagesReceived(db, a2aRecord.id);
     }
 
     const response = a2aEngine.jsonRpcSuccess(extractCorrelationId(payload) ?? undefined, {
@@ -647,6 +664,10 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
 
     return jsonResponse(c, response);
   } catch (err: unknown) {
+    if (err instanceof WorkspaceDeliveryCapacityError) {
+      c.header('Retry-After', '30');
+      return jsonResponse(c, a2aEngine.jsonRpcError(undefined, -32000, err.message, { code: err.code, retryable: true }), 429);
+    }
     const error = asCodedError(err) as CodedError & { data?: unknown };
     return jsonResponse(
       c,

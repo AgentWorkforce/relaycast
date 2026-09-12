@@ -305,7 +305,7 @@ export async function deferDelivery(
   // Delta=0 transitions (queued→queued, repeated/no-op defers) stay allowed
   // even at/over cap, and terminal failures are never blocked from draining.
   const workspaceCapacityOk = opts.workspacePolicy
-    ? sql`(${deliveries.status} <> 'failed' OR (${workspaceActiveDepthSql(workspaceId)}) < ${workspaceGrowthLimit(opts.workspacePolicy, 'targeted')})`
+    ? sql`(${deliveries.status} <> 'failed' OR ${deliveries.expiresAt} <= unixepoch() OR (${workspaceActiveDepthSql(workspaceId)}) < ${workspaceGrowthLimit(opts.workspacePolicy, 'targeted')})`
     : undefined;
   const [updated] = await db
     .update(deliveries)
@@ -322,10 +322,11 @@ export async function deferDelivery(
       workspaceCapacityOk,
     ))
     .returning();
-  if (!updated && existing.status === 'failed' && opts.workspacePolicy) {
-    throw new WorkspaceDeliveryCapacityError(
-      'Workspace delivery depth cap prevents restoring a failed delivery',
-    );
+  if (!updated && opts.workspacePolicy) {
+    const current = await getOwnedDelivery(db, workspaceId, agentId, deliveryId);
+    if (current?.status === 'failed' && (!current.expiresAt || current.expiresAt.getTime() > Date.now())) {
+      throw new WorkspaceDeliveryCapacityError('Workspace delivery depth cap prevents restoring a failed delivery');
+    }
   }
   return resolveTransition(db, workspaceId, agentId, deliveryId, updated, existing.channelId);
 }

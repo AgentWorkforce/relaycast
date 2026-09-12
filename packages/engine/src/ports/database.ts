@@ -1,3 +1,4 @@
+import { WorkspaceDeliveryCapacityError } from '../engine/workspaceDeliveryPolicy.js';
 import type { BatchItem } from 'drizzle-orm/batch';
 import type { BaseSQLiteDatabase } from 'drizzle-orm/sqlite-core';
 import type * as schema from '../db/schema.js';
@@ -138,7 +139,7 @@ export function runAtomic<T>(db: EngineDb, fn: (tx: EngineDb) => Promise<T>): Pr
  * DB-returned values (IDs are app-generated snowflakes), because under a batch
  * nothing is visible until every statement has executed.
  */
-export async function runAtomicWrites(
+async function executeAtomicWrites(
   db: EngineDb,
   input: AtomicWriteInput,
   options: RunAtomicWritesOptions = {},
@@ -168,6 +169,19 @@ export async function runAtomicWrites(
     return handle.batch(statements as [AtomicWrite, ...AtomicWrite[]]);
   }
   return runSequentially(statements);
+}
+
+/** Translate a workspace guard failure after the atomic adapter rolls back. */
+export async function runAtomicWrites(
+  db: EngineDb, input: AtomicWriteInput, options: RunAtomicWritesOptions = {},
+): Promise<unknown[]> {
+  try { return await executeAtomicWrites(db, input, options); }
+  catch (error) {
+    if (databaseConstraintKind(error) === 'workspace_delivery_capacity') {
+      throw new WorkspaceDeliveryCapacityError('Workspace delivery backlog is full; retry after it drains');
+    }
+    throw error;
+  }
 }
 
 /** Normalize the capacity sentinel across SQLite adapters (D1 exposes only a wrapped message).
