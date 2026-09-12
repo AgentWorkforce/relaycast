@@ -12,6 +12,7 @@ import {
 } from './deliveryWrites.js';
 import { displayAgentName, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
+import type { WorkspaceDeliveryPolicy } from './workspaceDeliveryPolicy.js';
 import { fetchAttachmentsBatch, resolveSendAttachments, type AttachmentRow } from './attachments.js';
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 
@@ -30,7 +31,7 @@ export async function postMessage(
     content_type?: string;
     mode?: 'wait' | 'steer';
   },
-  options: { mailbox?: MailboxConfig } = {},
+  options: { mailbox?: MailboxConfig; workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy } = {},
 ) {
   const startedAtMs = Date.now();
   const messageId = generateId();
@@ -101,6 +102,7 @@ export async function postMessage(
         ttlMs: mailbox.ttlMs,
         depthCap: mailbox.depthCap,
         mentionHandles: Array.from(mentionedHandles),
+        workspacePolicy: options.workspaceDeliveryPolicy,
       }),
     );
 
