@@ -24,10 +24,6 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Fix deletion getting stuck for agents that never connected, while preserving protection for active agents.
 
-## [8.10.1] - 2026-09-13
-
-- Fix deletion getting stuck for agents that never connected, while preserving protection for active agents.
-
 ## [8.10.0] - 2026-09-13
 
 - Reject malformed or unsupported inbound webhook requests before admission; `message/send` and `message/stream` require a valid message.
