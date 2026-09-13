@@ -147,6 +147,37 @@ describe('inbox mention scope', () => {
     expect(ids.has(idOlderValid)).toBe(true);
     expect(inbox.mentions).toHaveLength(2);
   });
+
+  it('never truncates: finds a valid mention older than >10k false candidates', async () => {
+    const ws = await createWorkspace(stack.app, 'inbox-scan');
+    const sender = await registerAgent(stack.app, ws.workspaceKey, 'sender');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'gh-target-0908');
+    const liveRes = await api(sender.token).post('/v1/channels', { name: 'live' });
+    expect(liveRes.status).toBe(201);
+    const liveChannelId = (await liveRes.json()).data.id as string;
+    await joinOk(target.token, 'live');
+
+    const sqlite = stack.runtime.handle.sqlite;
+    const insertMessage = sqlite.prepare(
+      'INSERT INTO messages (id, workspace_id, channel_id, agent_id, body) VALUES (?, ?, ?, ?, ?)',
+    );
+    const idNewestValid = '9'.repeat(23); // 23 digits -> sorts first
+    const idOldestValid = '123456789012345678'; // 18 digits -> sorts last
+    sqlite.transaction(() => {
+      insertMessage.run(idNewestValid, ws.workspaceId, liveChannelId, sender.agentId, '@gh-target-0908 newest-valid');
+      for (let i = 0; i < 10_050; i++) {
+        insertMessage.run(`9${String(i).padStart(21, '0')}`, ws.workspaceId, liveChannelId, sender.agentId, `\\@gh-target-0908 false-${i}`);
+      }
+      insertMessage.run(idOldestValid, ws.workspaceId, liveChannelId, sender.agentId, '@gh-target-0908 oldest-valid');
+    })();
+
+    const inbox = await inboxOf(target.token);
+    const ids = new Set(inbox.mentions.map((m) => m.id));
+    // Both the newest and the oldest valid mention survive >10k false candidates:
+    // there is no total scan cap.
+    expect(ids.has(idNewestValid)).toBe(true);
+    expect(ids.has(idOldestValid)).toBe(true);
+  });
 });
 
 describe('inbox DM scope', () => {
