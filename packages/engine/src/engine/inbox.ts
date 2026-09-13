@@ -3,10 +3,12 @@ import type { getDb } from '../db/index.js';
 import {
   messages,
   channels,
+  channelMembers,
   agents,
   dmParticipants,
 } from '../db/schema.js';
 import { queryInChunks } from '../lib/queryChunks.js';
+import { parseMessageMentions } from './mentions.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -19,6 +21,7 @@ export async function getInbox(db: Db, workspaceId: string, agentId: string) {
     WHERE cm.agent_id = ${agentId}
       AND ch.workspace_id = ${workspaceId}
       AND ch.channel_type = 0
+      AND ch.is_archived = false
       AND m.thread_id IS NULL
       AND m.agent_id != ${agentId}
       AND (cm.last_read_id IS NULL OR m.id > cm.last_read_id)
@@ -33,11 +36,13 @@ export async function getInbox(db: Db, workspaceId: string, agentId: string) {
     .where(eq(agents.id, agentId));
   const agentName = agent?.name ?? '';
 
-  // Escape LIKE metacharacters so a name containing % or _ can't widen the match,
-  // and skip entirely if the name is empty (which would degenerate to '%@%' and
-  // flood the inbox with every @-containing message).
-  const escapedName = agentName.replace(/[\\%_]/g, (ch) => `\\${ch}`);
-  const mentionRows = !agentName ? [] : await db
+  // Mentions must match the canonical engine semantics: an EXACT `@handle`
+  // token (escaped `\@x`, `user@x`, and prefix/superstring names are NOT
+  // mentions), delivered only in LIVE channels the agent belongs to. We fetch a
+  // bounded candidate window by substring (SQL cannot run the tokenizer), then
+  // filter with `parseMessageMentions` — the shared contract used by live
+  // delivery and durable replay.
+  const mentionCandidates = !agentName ? [] : await db
     .select({
       id: messages.id,
       channelName: channels.name,
@@ -46,17 +51,26 @@ export async function getInbox(db: Db, workspaceId: string, agentId: string) {
       createdAt: messages.createdAt,
     })
     .from(messages)
-    .leftJoin(channels, eq(messages.channelId, channels.id))
-    .leftJoin(agents, eq(messages.agentId, agents.id))
+    .innerJoin(channels, eq(messages.channelId, channels.id))
+    .innerJoin(agents, eq(messages.agentId, agents.id))
+    .innerJoin(
+      channelMembers,
+      and(eq(channelMembers.channelId, messages.channelId), eq(channelMembers.agentId, agentId)),
+    )
     .where(
       and(
         eq(messages.workspaceId, workspaceId),
-        sql`${messages.body} LIKE ${'%@' + escapedName + '%'} ESCAPE '\\'`,
+        eq(channels.isArchived, false),
+        eq(channels.channelType, 0),
+        sql`${messages.body} LIKE ${'%@%'}`,
         ne(messages.agentId, agentId), // exclude self-mentions
       ),
     )
     .orderBy(sql`${messages.id} DESC`)
-    .limit(20);
+    .limit(200);
+  const mentionRows = mentionCandidates
+    .filter((row) => parseMessageMentions(row.body).includes(agentName))
+    .slice(0, 20);
 
   const mentionsEnriched = mentionRows.map((row) => ({
     id: row.id,
