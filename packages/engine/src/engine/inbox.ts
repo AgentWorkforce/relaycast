@@ -47,6 +47,10 @@ export async function getInbox(db: Db, workspaceId: string, agentId: string) {
   // never silently dropped. Memory is bounded per batch.
   const MAX_MENTIONS = 20;
   const MENTION_BATCH = 200;
+  // Bound the total scan so inbox latency does not grow without limit with
+  // workspace history; 20 canonical matches are normally found well inside it.
+  const MENTION_SCAN_MAX = 10_000;
+  let scanned = 0;
   const mentionsEnriched: Array<{
     id: string;
     channel_name: string;
@@ -92,12 +96,23 @@ export async function getInbox(db: Db, workspaceId: string, agentId: string) {
               and(eq(channels.channelType, 0), eq(channelMembers.agentId, agentId)),
               and(ne(channels.channelType, 0), eq(dmParticipants.agentId, agentId)),
             ),
-            ...(cursor ? [sql`${messages.id} < ${cursor}`] : []),
+            // Length-then-lexical keyset: snowflake ids are decimal strings, so
+            // ordering by (length(id), id) is chronological across MIXED decimal
+            // lengths with no numeric precision loss (a bare text compare is not),
+            // and stays length,id index-friendly. The cursor predicate matches
+            // the ORDER BY exactly.
+            ...(cursor
+              ? [
+                  sql`(length(${messages.id}) < length(${cursor})
+                    OR (length(${messages.id}) = length(${cursor}) AND ${messages.id} < ${cursor}))`,
+                ]
+              : []),
           ),
         )
-        .orderBy(sql`${messages.id} DESC`)
+        .orderBy(sql`length(${messages.id}) DESC, ${messages.id} DESC`)
         .limit(MENTION_BATCH);
       if (batch.length === 0) break;
+      scanned += batch.length;
       for (const row of batch) {
         if (mentionsEnriched.length >= MAX_MENTIONS) break;
         if (parseMessageMentions(row.body).includes(agentName)) {
@@ -111,6 +126,7 @@ export async function getInbox(db: Db, workspaceId: string, agentId: string) {
         }
       }
       if (mentionsEnriched.length >= MAX_MENTIONS) break;
+      if (scanned >= MENTION_SCAN_MAX) break;
       cursor = batch[batch.length - 1].id;
       if (batch.length < MENTION_BATCH) break;
     }

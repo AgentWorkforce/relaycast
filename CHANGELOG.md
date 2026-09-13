@@ -18,6 +18,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Patch]
 
+- `GET /v1/inbox`: unread counts no longer include archived channels, and mentions are matched with the exact `@handle` token contract (escaped `\@x`, email addresses, and prefix/superstring text are not mentions); mention results are limited to live channels the agent has joined or DMs the agent participates in.
+
+## [8.10.1] - 2026-09-13
+
 - Fix deletion getting stuck for agents that never connected, while preserving protection for active agents.
 
 ## [8.10.1] - 2026-09-13

@@ -12,9 +12,16 @@ import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from '.
  * {name, topic, metadata} (no private flag), so privacy is proven by a
  * non-member never seeing the mention.
  */
+// Test-only entitlements: a high per-minute ceiling so the bounded >200-candidate
+// fixture is not rate-limited by the free plan. No production limit changes.
+const testEntitlements = {
+  getLimits: async () => ({ messages: 1_000_000, agents: 1_000_000, file_bytes: 1_000_000_000, api_calls: 1_000_000, rate_per_min: 100_000 }),
+  getUsage: async () => 0,
+};
+
 describe('inbox mention scope', () => {
   let stack: TestStack;
-  beforeEach(() => { stack = makeNodeStack(); });
+  beforeEach(() => { stack = makeNodeStack({ entitlements: testEntitlements }); });
   afterEach(async () => { await stack.close(); });
 
   const api = (token: string) => ({
@@ -81,7 +88,7 @@ describe('inbox mention scope', () => {
     expect((await api(sender.token).post('/v1/channels', { name: 'arch' })).status).toBe(201);
     await joinOk(target.token, 'arch');
     const idArchExact = await send(sender.token, 'arch', '@gh-target-0908 archived exact');
-    await send(sender.token, 'arch', 'GHSUB_EVENT_NONCE=2dfeab92445665903b1bb9b8ceac3b81 \\@gh-target-0908');
+    const idArchEscaped = await send(sender.token, 'arch', 'GHSUB_EVENT_NONCE=2dfeab92445665903b1bb9b8ceac3b81 \\@gh-target-0908');
     expect((await api(sender.token).del('/v1/channels/arch')).status).toBeLessThan(300);
 
     // FOREIGN workspace mention never crosses over.
@@ -100,31 +107,45 @@ describe('inbox mention scope', () => {
     expect(inbox.mentions).toHaveLength(2);
 
     // Negatives are each excluded.
-    for (const id of [idEscaped, idPrefix, idSuper, idEmail, idSelf, idNonmember, idArchExact, idForeign]) {
+    for (const id of [idEscaped, idPrefix, idSuper, idEmail, idSelf, idNonmember, idArchExact, idArchEscaped, idForeign]) {
       expect(mentionIds.has(id)).toBe(false);
     }
     expect(inbox.mentions.every((m) => m.channel_name !== 'nonmember' && m.channel_name !== 'arch')).toBe(true);
     expect(inbox.unread_channels.map((c) => c.channel_name)).not.toContain('arch');
   });
 
-  it('keyset-scans past >200 false candidates to find an older valid mention', async () => {
+  it('keyset-scans >200 mixed-length false candidates to find an older valid mention', async () => {
     const ws = await createWorkspace(stack.app, 'inbox-keyset');
     const sender = await registerAgent(stack.app, ws.workspaceKey, 'sender');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'gh-target-0908');
-    expect((await api(sender.token).post('/v1/channels', { name: 'live' })).status).toBe(201);
+    const liveRes = await api(sender.token).post('/v1/channels', { name: 'live' });
+    expect(liveRes.status).toBe(201);
+    const liveChannelId = (await liveRes.json()).data.id as string;
     await joinOk(target.token, 'live');
 
-    // OLDER valid mention first, then >200 candidates matching the escaped-literal
-    // narrowing but not canonical mentions.
-    const idOlderValid = await send(sender.token, 'live', '@gh-target-0908 older-valid');
-    for (let i = 0; i < 205; i++) {
-      await send(sender.token, 'live', `\\@gh-target-0908 false-${i}`);
-    }
+    // Seed directly: the >200-candidate fixture never trips the request rate
+    // limit, and ids use MIXED decimal lengths so the cursor must be
+    // length-then-lexical (a bare text compare is wrong across lengths).
+    const sqlite = stack.runtime.handle.sqlite;
+    const insertMessage = sqlite.prepare(
+      'INSERT INTO messages (id, workspace_id, channel_id, agent_id, body) VALUES (?, ?, ?, ?, ?)',
+    );
+    const longId = (n: number) => `9${String(n).padStart(21, '0')}`; // 22 digits
+    const idNewerValid = '9'.repeat(23); // 23 digits -> sorts first
+    const idOlderValid = '123456789012345678'; // 18 digits -> sorts after the 22-digit false candidates
+    sqlite.transaction(() => {
+      insertMessage.run(idNewerValid, ws.workspaceId, liveChannelId, sender.agentId, '@gh-target-0908 newer-valid');
+      for (let i = 0; i < 205; i++) {
+        insertMessage.run(longId(i), ws.workspaceId, liveChannelId, sender.agentId, `\\@gh-target-0908 false-${i}`);
+      }
+      insertMessage.run(idOlderValid, ws.workspaceId, liveChannelId, sender.agentId, '@gh-target-0908 older-valid');
+    })();
 
     const inbox = await inboxOf(target.token);
     const ids = new Set(inbox.mentions.map((m) => m.id));
+    expect(ids.has(idNewerValid)).toBe(true);
     expect(ids.has(idOlderValid)).toBe(true);
-    expect(inbox.mentions).toHaveLength(1);
+    expect(inbox.mentions).toHaveLength(2);
   });
 });
 
