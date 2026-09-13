@@ -1483,7 +1483,14 @@ async function dispatchRelease(args: {
     ?? activeBindings.find((binding) => binding.nodeId === implicitDirectNodeId)?.nodeId
     ?? activeBindings[0]?.nodeId
     ?? (agent.locationType === 'via_node' ? agent.locationNodeId : null);
-  const hostLive = !!registry
+  // An implicit direct node has no provider row and the Cloudflare edge adapter
+  // cannot see the DO, so `isHandlerConnectionLive` reports it connected. For a
+  // guarded release the node row is the only liveness signal: a never-attached
+  // ghost (status 'offline', null heartbeat) can never accept the dispatch and
+  // must complete locally; a connected real direct node is 'online' with a fresh
+  // heartbeat and keeps the existing dispatch fence. Scoped to the implicit
+  // direct node so all other node/legacy semantics are unchanged.
+  let hostLive = !!registry
     && !!nodeId
     && await isHandlerConnectionLive(
       args.db,
@@ -1492,8 +1499,15 @@ async function dispatchRelease(args: {
       nodeId,
       agent.providerName,
     );
+  if (hostLive && nodeId === implicitDirectNodeId) {
+    const [directNode] = await args.db
+      .select({ status: nodes.status, lastHeartbeatAt: nodes.lastHeartbeatAt })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, args.workspaceId), eq(nodes.id, nodeId)));
+    if (!directNode || !isNodeLive(directNode)) hostLive = false;
+  }
 
-  if (!hostLive) {
+  if (!hostLive || !registry) {
     return input.delete_agent === true ? completeLocally() : failClosed();
   }
 
