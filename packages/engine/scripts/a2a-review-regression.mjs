@@ -279,6 +279,28 @@ try {
       record('webhook '+shape+' response correlation '+outcome+'; explicit typed ID precedence');
     }
   }
+  if (!process.env.REVIEW_CASE || process.env.REVIEW_CASE==='webhook-required-message') {
+    for(const missing of ['absent','null'])for(const id of [0,42,'string-id',undefined]){
+      const ws=await seed('required-message-'+missing+'-'+String(id),1,{cap:100});
+      await run('INSERT INTO a2a_agents(id,workspace_id,relay_agent_id,external_url,agent_card) VALUES(?,?,?,?,?)',ws+'peer',ws,ws+'sender',targetUrl,'{}');
+      const effects=async()=>({
+        messages:await scalar('SELECT count(*) FROM messages WHERE workspace_id=?',ws),
+        counter:await scalar('SELECT messages_recv FROM a2a_agents WHERE workspace_id=?',ws),
+        inbound:await scalar('SELECT count(*) FROM a2a_inbound WHERE workspace_id=?',ws),
+        deliveries:await scalar('SELECT count(*) FROM deliveries WHERE workspace_id=?',ws),
+        outbox:await scalar('SELECT count(*) FROM pending_events WHERE workspace_id=?',ws),
+        events:await scalar('SELECT count(*) FROM workspace_events WHERE workspace_id=?',ws),
+      });
+      const empty={messages:0,counter:0,inbound:0,deliveries:0,outbox:0,events:0};assert.deepEqual(await effects(),empty);
+      const payload={jsonrpc:'2.0',...(id===undefined?{}:{id}),method:'message/send',params:{target_agent:'recipient-1',...(missing==='null'?{message:null}:{})}};
+      const result=await request(ws,`/a2a/webhook/${ws}/sender`,payload);
+      expectStatus(result,400);assert.equal(result.body.id,id);assert.equal(Object.hasOwn(result.body,'id'),id!==undefined);
+      assert.deepEqual(result.body.error,{code:-32602,message:'message is required'});
+      await Promise.allSettled(background.splice(0));assert.deepEqual(await effects(),empty,'invalid request must have zero admission effects');
+      record('webhook message/send '+missing+' message with '+String(id)+' ID refuses400 before all effects');
+      await run('DELETE FROM workspaces WHERE id=?',ws);
+    }
+  }
   if (!process.env.REVIEW_CASE || process.env.REVIEW_CASE==='webhook-request-id') {
     const ws=await seed('webhook-request-id',1,{cap:100});
     await run('INSERT INTO a2a_agents(id,workspace_id,relay_agent_id,external_url,agent_card) VALUES(?,?,?,?,?)',ws+'peer',ws,ws+'sender',targetUrl,'{}');
@@ -290,10 +312,8 @@ try {
         const rpc=await request(ws,'/a2a/rpc',payload);expectStatus(rpc,target?200:400);assert.equal(Object.hasOwn(rpc.body,'id'),false,'RPC absent ID contract stays unchanged');
       }
     }
-    for(const target of ['recipient-1',undefined]){
-      const result=await request(ws,`/a2a/webhook/${ws}/sender`,{jsonrpc:'2.0',method:'message/send',params:target?{target_agent:target}:{}});
-      expectStatus(result,target?200:400);assert.equal(Object.hasOwn(result.body,'id'),false,'missing all correlation stays absent');
-    }
+    // A valid request message requires message_id; the positive cases above
+    // omit only the optional JSON-RPC ID, not the required message.
     const effectsBefore=await scalar('SELECT count(*) FROM messages WHERE workspace_id=?',ws);
     for(const payload of [
       {jsonrpc:'2.0',id:null,method:'message/send',params:{target_agent:'recipient-1',message:{message_id:'null-request',role:'agent',parts:[{kind:'text',text:'must refuse'}]}}},

@@ -668,7 +668,8 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
       return jsonError(c, 'unauthorized', 'Missing or invalid bearer token', 401);
     }
 
-    const parsed = rpcWebhookSchema.safeParse(await c.req.json());
+    const rawPayload = await c.req.json();
+    const parsed = rpcWebhookSchema.safeParse(rawPayload);
     if (!parsed.success) {
       return jsonResponse(c, a2aEngine.jsonRpcError(undefined, -32600, 'Invalid Request'), 400);
     }
@@ -677,6 +678,12 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
     const requestPayload = a2aEngine.JsonRpcRequestSchema.safeParse(payload);
     // Preserve explicit ID types and the published message/task fallback.
     correlationId = payload.id ?? extractCorrelationId(payload) ?? undefined;
+    // A null message can parse as a response after the union strips method.
+    // Check the original request before translation can produce an empty DM.
+    if (rawPayload?.method === 'message/send' && !rawPayload.params?.message) {
+      const response = a2aEngine.jsonRpcError(correlationId, -32602, 'message is required');
+      return jsonResponse(c, response, jsonRpcHttpStatus(response));
+    }
     const relayMessage = a2aEngine.translateA2aToRelay(payload);
 
     let targetAgentName = requestPayload.success

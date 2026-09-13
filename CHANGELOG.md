@@ -18,6 +18,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
+- Reject inbound webhook `message/send` requests without a message before creating any message effects.
+
 - Enforce workspace delivery capacity across HTTP producers with retryable 429 responses.
 - Expose the async workspace capacity resolver through public engine configuration.
 - Admit outbound A2A messages durably before transport and recover accepted sends without losing local notifications.
