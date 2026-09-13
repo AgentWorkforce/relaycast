@@ -12,6 +12,7 @@ import {
 } from './deliveryWrites.js';
 import { displayAgentName, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
+import type { WorkspaceDeliveryPolicy } from './workspaceDeliveryPolicy.js';
 import { codedError } from '../lib/httpError.js';
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 
@@ -23,7 +24,7 @@ export async function postReply(
   parentId: string,
   agentId: string,
   data: { text: string; blocks?: unknown[] | null; data?: Record<string, unknown> | null },
-  options: { mailbox?: MailboxConfig } = {},
+  options: { mailbox?: MailboxConfig; workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy } = {},
 ) {
   // Get the parent message
   const [parent] = await db
@@ -101,6 +102,7 @@ export async function postReply(
           mode: 'immediate',
           ttlMs: mailbox.ttlMs,
           depthCap: mailbox.depthCap,
+          workspacePolicy: options.workspaceDeliveryPolicy,
         })
         : buildChannelDeliveryWrite(writeDb, {
           workspaceId,
@@ -112,11 +114,12 @@ export async function postReply(
           depthCap: mailbox.depthCap,
           reason: 'thread-reply',
           mentionHandles: Array.from(mentionedHandles),
+          workspacePolicy: options.workspaceDeliveryPolicy,
         }),
     );
 
     return writes;
-  });
+  }, { requireAtomic: Boolean(options.workspaceDeliveryPolicy) });
   const [reply] = results[0] as (typeof messages.$inferSelect)[];
   const deliveryOutcomes: DeliveryOutcomeRecords = dmConversation
     ? await fetchGroupDeliveryOutcomes(db, {

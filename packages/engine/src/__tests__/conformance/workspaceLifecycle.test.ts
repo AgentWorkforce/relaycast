@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { createEngine } from '../../engine.js';
 import { createNodeRuntime } from '../../adapters/node/index.js';
 import {
+  a2aEgress,
   agents,
   channels,
   fileCleanupQueue,
@@ -445,6 +446,15 @@ describe('workspace lifecycle', () => {
       type: 'message.created',
       payload: JSON.stringify({ text: 'delete this event payload' }),
     });
+    await stack.runtime.handle.db.insert(a2aEgress).values({
+      id: 'egress_delete_me',
+      workspaceId: workspace.workspaceId,
+      messageId: 'message_delete_me',
+      targetId: 'target_delete_me',
+      externalUrl: 'https://example.invalid/a2a',
+      fingerprint: 'delete-me-fingerprint',
+      payload: null,
+    });
 
     const response = await stack.app.request(`/v1/workspaces/${workspace.workspaceId}`, {
       method: 'DELETE',
@@ -457,6 +467,7 @@ describe('workspace lifecycle', () => {
     expect(await stack.runtime.handle.db.select().from(agents)).toHaveLength(0);
     expect(await stack.runtime.handle.db.select().from(messages)).toHaveLength(0);
     expect(await stack.runtime.handle.db.select().from(workspaceEvents)).toHaveLength(0);
+    expect(await stack.runtime.handle.db.select().from(a2aEgress)).toHaveLength(0);
   });
 
   it('removes stored bytes so an issued download URL stops working', async () => {
@@ -818,7 +829,9 @@ describe('workspace lifecycle', () => {
     const withoutDirectCascade = coverage.filter((table) => table.on_delete !== 'CASCADE');
 
     expect(stack.runtime.handle.sqlite.pragma('foreign_keys', { simple: true })).toBe(1);
-    expect(coverage).toHaveLength(32);
+    expect(coverage).toHaveLength(34);
+    expect(coverage).toContainEqual({ table_name: 'a2a_inbound', on_delete: 'CASCADE' });
+    expect(coverage).toContainEqual({ table_name: 'a2a_egress', on_delete: 'CASCADE' });
     expect(withoutDirectCascade).toEqual([
       { table_name: 'workspace_create_idempotency', on_delete: null },
       { table_name: 'workspace_events', on_delete: null },

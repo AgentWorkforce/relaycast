@@ -1,12 +1,16 @@
 import type { Context } from 'hono';
 import { describe, expect, it, vi } from 'vitest';
 
+import { WorkspaceDeliveryCapacityError } from '../../engine/workspaceDeliveryPolicy.js';
+import { databaseConstraintKind } from '../../ports/database.js';
 import { codedError, errorResponse, safeErrorDiagnostics } from '../httpError.js';
 
 function testContext(): Context {
+  const headers = new Headers();
   return {
+    header: vi.fn((name: string, value: string) => headers.set(name, value)),
     json: vi.fn((body: unknown, status?: number) =>
-      new Response(JSON.stringify(body), { status: status ?? 200 }),
+      new Response(JSON.stringify(body), { status: status ?? 200, headers }),
     ),
   } as unknown as Context;
 }
@@ -126,4 +130,19 @@ describe('errorResponse', () => {
       storage_error: 'queue_full',
     });
   });
+});
+
+it.each([new WorkspaceDeliveryCapacityError('full'), { code: 'workspace_delivery_depth_exceeded', status: 429, message: 'full' }])('preserves Retry-After for normalized capacity errors', async error => {
+  const response = errorResponse(testContext(), error);
+  expect(response.status).toBe(429);
+  expect(response.headers.get('Retry-After')).toBe('30');
+  expect(await response.json()).toMatchObject({ error: { code: 'workspace_delivery_depth_exceeded' } });
+});
+it('decodes plain object causes and safely terminates cycles', () => {
+  const sentinel = { message: 'D1_ERROR: NOT NULL constraint failed: deliveries.status' };
+  expect(databaseConstraintKind(sentinel)).toBe('workspace_delivery_capacity');
+  expect(databaseConstraintKind(new Error('wrapper', { cause: sentinel }))).toBe('workspace_delivery_capacity');
+  const loop: { cause?: unknown } = {}; loop.cause = loop;
+  expect(databaseConstraintKind(loop)).toBeUndefined();
+  expect(databaseConstraintKind({ message: 123, cause: { message: 'NOT NULL constraint failed: deliveries.workspace_id' } })).toBe('mailbox_capacity');
 });

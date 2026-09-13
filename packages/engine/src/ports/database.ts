@@ -1,3 +1,4 @@
+import { WorkspaceDeliveryCapacityError } from '../engine/workspaceDeliveryPolicy.js';
 import type { BatchItem } from 'drizzle-orm/batch';
 import type { BaseSQLiteDatabase } from 'drizzle-orm/sqlite-core';
 import type * as schema from '../db/schema.js';
@@ -138,7 +139,7 @@ export function runAtomic<T>(db: EngineDb, fn: (tx: EngineDb) => Promise<T>): Pr
  * DB-returned values (IDs are app-generated snowflakes), because under a batch
  * nothing is visible until every statement has executed.
  */
-export async function runAtomicWrites(
+async function executeAtomicWrites(
   db: EngineDb,
   input: AtomicWriteInput,
   options: RunAtomicWritesOptions = {},
@@ -170,16 +171,40 @@ export async function runAtomicWrites(
   return runSequentially(statements);
 }
 
-/** Normalize the capacity sentinel across SQLite adapters (D1 exposes only a wrapped message).
+/** Translate a workspace guard failure after the atomic adapter rolls back. */
+export async function runAtomicWrites(
+  db: EngineDb, input: AtomicWriteInput, options: RunAtomicWritesOptions = {},
+): Promise<unknown[]> {
+  try { return await executeAtomicWrites(db, input, options); }
+  catch (error) {
+    if (databaseConstraintKind(error) === 'workspace_delivery_capacity') {
+      throw new WorkspaceDeliveryCapacityError('Workspace delivery backlog is full; retry after it drains');
+    }
+    throw error;
+  }
+}
+
+/** Normalize atomic admission sentinels across SQLite adapters (D1 wraps the message).
  * Keep driver-specific error decoding at this port boundary; engine callers use a stable kind.
  */
-export function databaseConstraintKind(error: unknown): 'mailbox_capacity' | undefined {
+export type DatabaseConstraintKind = 'mailbox_capacity' | 'workspace_delivery_capacity' | 'a2a_registration_changed';
+
+export function databaseConstraintKind(error: unknown): DatabaseConstraintKind | undefined {
   const seen = new Set<unknown>();
   let cause = error;
-  while (cause instanceof Error && !seen.has(cause)) {
+  while (cause !== null && typeof cause === 'object' && !seen.has(cause)) {
     seen.add(cause);
-    if (/NOT NULL constraint failed: deliveries\.workspace_id/i.test(cause.message)) return 'mailbox_capacity';
-    cause = cause.cause;
+    const record = cause as { message?: unknown; cause?: unknown };
+    const message = typeof record.message === 'string' ? record.message : '';
+    // Registration guards use messages.agent_id for admission and
+    // a2a_inbound.workspace_id for legacy identity promotion (both non-null).
+    if (/NOT NULL constraint failed: (messages\.agent_id|a2a_inbound\.workspace_id)/i.test(message)) return 'a2a_registration_changed';
+    // Per-recipient/required-mailbox sentinel (workspace_id NULL), and the
+    // distinct workspace-scoped growth sentinel (status NULL). Order matters
+    // only for a row that trips both; either is a capacity refusal.
+    if (/NOT NULL constraint failed: deliveries\.workspace_id/i.test(message)) return 'mailbox_capacity';
+    if (/NOT NULL constraint failed: deliveries\.status/i.test(message)) return 'workspace_delivery_capacity';
+    cause = record.cause;
   }
   return undefined;
 }

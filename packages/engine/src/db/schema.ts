@@ -1318,3 +1318,40 @@ export const maintenanceCursors = sqliteTable('maintenance_cursors', {
   id: text('id').primaryKey().notNull(),
   cursor: text('cursor').notNull(),
 });
+
+/** Admission and transport state; inserted atomically with the guarded DM. */
+export const a2aEgress = sqliteTable('a2a_egress', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+  messageId: text('message_id').notNull(),
+  targetId: text('target_id').notNull(),
+  externalUrl: text('external_url').notNull(),
+  fingerprint: text('fingerprint').notNull(),
+  payload: text('payload', { mode: 'json' }).$type<import('@relaycast/a2a').A2aJsonRpcRequest>(),
+  status: text('status').notNull().default('pending'),
+  claimToken: text('claim_token'),
+  leaseUntil: integer('lease_until', { mode: 'timestamp' }),
+  attempts: integer('attempts').notNull().default(0),
+  lastError: text('last_error'),
+  errorStatus: integer('error_status'),
+  errorCode: text('error_code'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+}, (table) => [index('idx_a2a_egress_workspace').on(table.workspaceId), index('idx_a2a_egress_due').on(table.status, table.leaseUntil), index('idx_a2a_egress_retention').on(table.createdAt, table.id)]);
+
+/** Public accepted response only; never transport authentication or mutable target state. */
+export const a2aEgressContext = sqliteTable('a2a_egress_context', {
+  id: text('id').primaryKey().notNull().references(() => a2aEgress.id, { onDelete: 'cascade' }),
+  messageId: text('message_id').notNull().references(() => messages.id, { onDelete: 'cascade' }),
+  response: text('response', { mode: 'json' }).notNull().$type<import('../engine/dm.js').AcceptedDmResult>(),
+}, (table) => [index('idx_a2a_egress_context_message').on(table.messageId)]);
+
+/** Durable inbound identity. Migration 0059 scrubs response before source deletion;
+ * the nullable source FK leaves a content-free tombstone until indexed expiry. */
+export const a2aInbound = sqliteTable('a2a_inbound', {
+  id: text('id').primaryKey().notNull(),
+  workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+  messageId: text('message_id').references(() => messages.id, { onDelete: 'set null' }),
+  fingerprint: text('fingerprint').notNull(),
+  response: text('response', { mode: 'json' }).$type<import('../engine/dm.js').AcceptedDmResult>(),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+}, table => [index('idx_a2a_inbound_workspace').on(table.workspaceId), index('idx_a2a_inbound_message').on(table.messageId), index('idx_a2a_inbound_retention').on(table.createdAt, table.id)]);

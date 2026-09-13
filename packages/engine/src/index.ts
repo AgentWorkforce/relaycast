@@ -46,6 +46,18 @@ export * as schema from './db/schema.js';
 
 // Webhook delivery + scheduled-task helpers adapters wire to their queue/cron.
 export { deliverEvent } from './engine/eventDelivery.js';
+export {
+  resolveWorkspaceDeliveryPolicy,
+  resolveWorkspaceDeliveryPolicyFor,
+  workspaceGrowthLimit,
+  workspaceActiveDepthSql,
+  WorkspaceDeliveryCapacityError,
+} from './engine/workspaceDeliveryPolicy.js';
+export type {
+  WorkspaceDeliveryPolicy,
+  WorkspaceDeliveryPolicyConfig,
+  DeliveryAudience,
+} from './engine/workspaceDeliveryPolicy.js';
 export { runA2aHealthChecks } from './engine/a2a-health.js';
 
 // Node delivery redrive: queue/cron-backed deployments call this from a
@@ -125,3 +137,5 @@ export {
   snowflakeIdLowerBound,
   SnowflakeGenerator,
 } from './engine/snowflake.js';
+
+export { dispatchA2aEgress, sweepPendingA2aEgress, cleanupA2aEgress, A2A_EGRESS_RETRY_WINDOW_MS } from './engine/a2aEgress.js';

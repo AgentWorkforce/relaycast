@@ -16,7 +16,24 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+- Reject malformed or unsupported inbound webhook requests before admission; `message/send` and `message/stream` require a valid message.
+
+- Enforce workspace delivery capacity across HTTP producers with retryable 429 responses.
+- Expose the async workspace capacity resolver through public engine configuration.
+- Admit outbound A2A messages durably before transport and recover accepted sends without losing local notifications.
+- Send a stable HTTP Idempotency-Key on outbound retries and recovery.
+- Bound outbound transport retries and refuse credentialed HTTP, redirects, and invalid JSON/protocol responses.
+- Stop A2A recovery after source deletion or target registration/endpoint changes; clear terminal payloads.
+- Deduplicate inbound A2A messages, counters, and local effects through concurrent retries and KV failures.
+- Refuse new inbound A2A admission atomically when its authenticated registration or token changes.
+- Preserve completed inbound A2A retries from published 8.9.1 without duplicate admission.
+- Preserve numeric webhook IDs and the request message/response message-or-task fallback when an ID is omitted.
+- Preserve authenticated sender rejection notices without duplicating them on replay.
+- Keep completed DM/group-DM retries available during policy outages.
+- Bound accepted A2A retries to 24 hours; source pruning returns 410 within the window without recreating history.
+- Allow fresh inbound key reuse after SQL identity expiry, including a different payload, even when a stale completion cache remains.
 
 ## [8.9.1] - 2026-09-11
 
@@ -524,7 +541,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v8.9.1...HEAD
+[Unreleased - Minor]: https://github.com/AgentWorkforce/relaycast/compare/v8.9.1...HEAD
 [8.9.1]: https://github.com/AgentWorkforce/relaycast/compare/v8.9.0...v8.9.1
 [8.9.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.8.0...v8.9.0
 [8.8.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.7.0...v8.8.0

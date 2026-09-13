@@ -55,7 +55,7 @@
     "build": "tsc && node -e \"require('fs').cpSync('src/db/migrations','dist/db/migrations',{recursive:true})\"",
     "test": "vitest run",
     "lint": "eslint src/",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
@@ -73,6 +73,7 @@
     "@types/node": "^25.2.1",
     "@types/ws": "^8.5.13",
     "drizzle-kit": "^0.31.9",
+    "undici": "7.28.0",
     "vitest": "^4.0.18"
   },
   "publishConfig": {

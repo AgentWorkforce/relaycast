@@ -1,3 +1,5 @@
+import { errorResponse } from '../lib/httpError.js';
+import { WorkspaceDeliveryCapacityError } from '../engine/workspaceDeliveryPolicy.js';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
@@ -12,6 +14,7 @@ import * as inboundWebhookEngine from '../engine/inboundWebhook.js';
 import { fanoutToChannel } from './fanout.js';
 import { routeDeliveryOutcomes } from './deliveryRouting.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
+import { resolveWorkspaceDeliveryPolicyById } from '../engine/workspaceDeliveryPolicy.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
@@ -199,7 +202,6 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
   }
 
   const mailbox = resolveMailboxConfig(c.get('engine').config, workspaceId);
-
   try {
     const result = await runIdempotent({
       workspaceId,
@@ -210,7 +212,7 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
       kv: c.get('engine').kv,
       requireKv: true,
       ttlSeconds: IDEMPOTENCY_TTL_SECONDS,
-      operation: () => inboundWebhookEngine.triggerIntegrationMessage(c.get('db'), workspaceId, channelId, {
+      operation: async () => inboundWebhookEngine.triggerIntegrationMessage(c.get('db'), workspaceId, channelId, {
         text: message.text,
         source: `relayfile:${provider}`,
         author: message.author,
@@ -234,7 +236,7 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
           ...(event.resourceRef ? { resource_ref: event.resourceRef } : {}),
           record: message.record,
         },
-      }, { mailbox }),
+      }, { mailbox, workspaceDeliveryPolicy: await resolveWorkspaceDeliveryPolicyById(c.get('db'), c.get('engine').config, workspaceId) }),
     });
 
     if (!result.replayed) {
@@ -291,8 +293,10 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
       c.header('Retry-After', '30');
       return jsonError(c, 'mailbox_full', 'A recipient mailbox is full; retry this event', 503);
     }
+    if (err instanceof WorkspaceDeliveryCapacityError) return errorResponse(c, err);
     if (code === 'idempotency_in_progress') {
-      return jsonOk(c, { skipped: 'duplicate_in_progress' });
+      c.header('Retry-After', '1');
+      return jsonError(c, code, 'Event is still processing; retry to confirm acceptance', 409);
     }
     if (code === 'idempotency_key_reused') {
       logger.warn('relayfile inbound event id reused with different payload', { workspace_id: workspaceId, event_id: deliveryEventId });

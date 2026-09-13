@@ -157,4 +157,14 @@ export interface EngineConfig {
       depthCap?: number;
     }>;
   };
+  /**
+   * Server-owned workspace delivery-growth policy. Bounds the aggregate active
+   * delivery backlog so a single large fanout cannot exceed the configured cap.
+   * Hosted adapters supply the *effective configured* cap (and an optional
+   * within-cap reserve); self-host leaves it unset and applies no workspace
+   * guard. Never derived from a client request.
+   */
+  workspaceDelivery?: import('./workspaceDelivery.js').WorkspaceDeliveryPolicyConfig;
 }
+
+export type { WorkspaceDeliveryPolicy, WorkspaceDeliveryPolicyConfig } from './workspaceDelivery.js';

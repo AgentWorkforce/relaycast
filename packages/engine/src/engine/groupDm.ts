@@ -9,6 +9,7 @@ import {
   type DeliveryOutcomeRecords,
 } from './deliveryWrites.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
+import type { WorkspaceDeliveryPolicy } from './workspaceDeliveryPolicy.js';
 import { codedError } from '../lib/httpError.js';
 import { resolveSendAttachments } from './attachments.js';
 import { publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
@@ -91,7 +92,7 @@ export async function postGroupMessage(
     mode?: 'wait' | 'steer';
     data?: Record<string, unknown> | null;
   },
-  options: { mailbox?: MailboxConfig } = {},
+  options: { mailbox?: MailboxConfig; workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy } = {},
 ) {
   // Verify sender is a participant (and hasn't left)
   const [participant] = await db
@@ -194,11 +195,12 @@ export async function postGroupMessage(
         mode: data.mode === 'steer' ? 'next-tool-call' : 'immediate',
         ttlMs: mailbox.ttlMs,
         depthCap: mailbox.depthCap,
+        workspacePolicy: options.workspaceDeliveryPolicy,
       }),
     );
 
     return writes;
-  });
+  }, { requireAtomic: Boolean(options.workspaceDeliveryPolicy) });
   const [message] = results[0] as (typeof messages.$inferSelect)[];
   const deliveryOutcomes: DeliveryOutcomeRecords = await fetchGroupDeliveryOutcomes(db, {
     messageId,

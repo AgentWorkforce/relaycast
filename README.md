@@ -1115,3 +1115,60 @@ without an `id` retain fire-and-forget behavior. Brokers performing owned identi
 cleanup must await that acknowledgement before requesting deletion.
 
 The signed Relayfile webhook request follows Relayfile's existing external event contract (`eventId`, `providerEventType`, `resourceRef`). These are verified vendor payload fields, not alternate spellings of Relaycast HTTP fields; Relaycast message metadata remains snake_case.
+
+### Workspace delivery capacity
+
+Hosts can supply `EngineConfig.workspaceDelivery.resolve` to resolve a workspace's
+current capacity asynchronously. All local message producers use this policy.
+Workspace overflow returns HTTP 429 with code `workspace_delivery_depth_exceeded`
+and `Retry-After: 30`; a required recipient's full mailbox remains `mailbox_full`
+(503). Reserves are carved out of the configured cap. Completed idempotent replays
+and operations that create no active delivery rows remain available at capacity.
+
+Outbound A2A DMs commit accepted egress with their guarded message before transport.
+Keep the same `Idempotency-Key` when retrying a transport failure: the admitted
+message can resume even when capacity is full. Engine adapters must apply migration
+`0057_a2a_egress.sql`; hosted adapters must schedule `sweepPendingA2aEgress(db)`.
+Recovery retains the remote message ID and sends the same egress identity in the
+HTTP `Idempotency-Key` header on every attempt. Delivery is at least once; receivers
+must deduplicate to prevent repeated effects.
+Webhook requests support `message/send` and `message/stream` and require a valid
+`params.message`; malformed or unsupported requests
+return HTTP 400 before admission, preserving a valid explicit JSON-RPC ID.
+Payloads carrying `method` are validated only as requests; callbacks without it
+retain response-schema validation and message/task correlation.
+A2A webhooks preserve explicit string or numeric JSON-RPC IDs. Missing IDs fall
+back to the request message ID or response message/task ID, including errors.
+RPC requests and webhooks with no correlation ID continue to omit the response ID.
+
+Inbound A2A message IDs are admitted once per workspace, authenticated actor and
+route scope for up to 24 hours, including concurrent requests and failed KV completion.
+The window is an upper bound: source pruning removes response content sooner and
+returns 410 while the identity is retained. After identity expiry/cleanup, the same
+key is fresh and may admit a new message. Stop automatic retries at that boundary.
+Completed inbound RPC KV records from published 8.9.1 are promoted against the
+retained source without repeating admission. Their SQL deadline starts at the
+original source time, conservatively preserving the old KV window. Malformed or
+unverifiable legacy records fail closed; an unreadable KV before SQL promotion
+returns 503. Promoted identities remain replayable during later KV outages.
+New admission checks the authenticated registration and token in the same SQL
+transaction as the message and counter; a concurrent change returns
+`401 a2a_registration_changed` without committing message effects.
+Migration `0059_a2a_inbound_admission.sql` adds the indexed inbound identity and
+workspace lookup indexes. The existing recovery sweep cleans expired identities.
+Source pruning scrubs the public response but preserves an identity/fingerprint
+tombstone until expiry: retry returns `410 a2a_message_not_retained` without
+recreating history. Workspace deletion removes the tombstone. Inbound KV caches
+retain only a message ID and digest; replay checks the SQL source state. A delayed
+completion cache write cannot extend the SQL window or block fresh-key reuse
+after identity expiry/cleanup, including reuse with a different payload.
+Credentialed A2A targets require HTTPS; unauthenticated public HTTP remains supported.
+Outbound A2A transport refuses redirects as terminal `502 a2a_redirect_forbidden`;
+credentials and message bodies are never forwarded automatically to a new URL.
+Transport retries use three 15-second attempts and at most two 30-second waits;
+429 honors bounded `Retry-After`. Invalid JSON/protocol responses are terminal.
+Accepted A2A retries are bounded to 24 hours. Deleted source messages or changed/deleted
+targets fail closed with typed 410 responses; terminal intents clear their payload.
+The existing recovery sweep also cleans expired intents. After cleanup, a reused
+key is a fresh request, so stop automatic retries after the 24-hour window.
+See [capacity regression and composition](packages/engine/scripts/CAPACITY-REGRESSION.md).

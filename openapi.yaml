@@ -7,6 +7,54 @@ info:
     All routes are prefixed with `/v1/`. Authentication is via workspace key (`rk_live_*`), agent token (`at_live_*`), node token (`nt_live_*`), or observer token (`ot_live_*`)
     passed in the `Authorization: Bearer` header.
 
+    Workspace delivery capacity applies to all local message producers. A write
+    that would exceed it returns HTTP 429 with error code
+    `workspace_delivery_depth_exceeded` and `Retry-After: 30`. A required
+    recipient mailbox overflow remains `mailbox_full` (503). Completed
+    idempotent replays and zero-growth operations remain available at capacity.
+    Outbound A2A DMs durably admit the message before transport; retry transport
+    failures with the same `Idempotency-Key` to resume the admitted message.
+    Each outbound attempt and recovery sends the stable egress identity as its
+    HTTP Idempotency-Key and preserves the body message_id. Delivery is at least
+    once; preventing repeated receiver effects requires receiver deduplication.
+    Accepted A2A retries have a 24-hour window from admission. Missing source
+    messages return 410 a2a_message_not_retained; deleted/recreated targets or
+    changed endpoints return 410 a2a_target_gone. Expired retained intents return
+    410 a2a_egress_expired. After intent cleanup, the key is fresh and may create a
+    new message; callers must stop automatic retries after the window.
+
+    Webhook requests support `message/send` and `message/stream` and require a valid
+    `params.message`; malformed or unsupported requests
+    return HTTP 400 before admission, preserving a valid explicit JSON-RPC ID.
+    Payloads carrying `method` are validated only as requests; callbacks without it
+    retain response-schema validation and message/task correlation.
+    A2A webhooks preserve explicit string or numeric JSON-RPC IDs. Missing IDs fall
+    back to the request message ID or response message/task ID, including errors.
+    RPC requests and webhooks with no correlation ID continue to omit the response ID.
+
+    Inbound A2A identities are deduplicated durably for up to 24 hours per workspace,
+    authenticated actor and route scope. New admission atomically checks the
+    authenticated registration and token with the message and counter; a
+    concurrent change returns 401 a2a_registration_changed without message effects.
+    Source pruning scrubs public content
+    while preserving a bounded identity/fingerprint tombstone; same-key retries
+    return 410 a2a_message_not_retained instead of recreating messages or effects
+    within that window. Source retention can remove content before 24 hours.
+    After identity expiry/cleanup the same key is fresh and may admit a new message,
+    including a different payload. A delayed digest-backed completion cache entry
+    cannot extend SQL retention or block that reuse.
+    Published 8.9.1 completed RPC KV records are promoted against retained sources
+    without new admission, using source creation as a conservative original deadline.
+    Unreadable KV before a SQL identity can be verified returns 503; verified SQL
+    replays remain available during subsequent KV outages.
+    Outbound A2A redirects are terminal 502 a2a_redirect_forbidden; the transport
+    never automatically forwards credentials or bodies to a redirected URL.
+    Workspace deletion removes the identity; expiry cleanup permits fresh keys
+    after the retry window. JSON-RPC errors preserve request/correlation IDs.
+    Credentialed A2A targets require HTTPS. Unauthenticated public HTTP is allowed.
+    Transport retries are bounded within the 120-second claim; malformed upstream
+    JSON/protocol responses are terminal.
+
     Response format:
     - Success: `{ ok: true, data: ... }`
     - Error: `{ ok: false, error: { code, message } }`

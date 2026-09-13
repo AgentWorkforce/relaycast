@@ -106,8 +106,9 @@ export async function fanoutToAgents(
   agentIds: string[],
   type: string,
   data: Record<string, unknown>,
+  workspaceIdOverride?: string,
 ): Promise<void> {
-  await dispatch(c, c.get('workspace').id, type, data, { kind: 'agents', agentIds });
+  await dispatch(c, workspaceIdOverride ?? c.get('workspace').id, type, data, { kind: 'agents', agentIds });
 }
 
 /** Fan a workspace-wide event out to the workspace stream; workspace scope has no node audience. */

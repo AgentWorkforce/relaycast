@@ -10,6 +10,7 @@ import * as messageEngine from '../engine/message.js';
 import * as channelEngine from '../engine/channel.js';
 import * as triggerEngine from '../engine/trigger.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
+import { resolveWorkspaceDeliveryPolicyFor } from '../engine/workspaceDeliveryPolicy.js';
 import { publishWorkspaceEvent } from './fanout.js';
 import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
 import { buildMessageCreatedEventData } from '../engine/deliveryWire.js';
@@ -130,6 +131,7 @@ messageRoutes.post(
       }
 
       const mailbox = resolveMailboxConfig(c.get('engine').config, workspace.id);
+      const workspaceDeliveryPolicy = await resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace);
       const toMessageCreatedEventData = (data: Awaited<ReturnType<typeof messageEngine.postMessage>>) => buildMessageCreatedEventData(data, {
         channelName,
         fromName: senderAgentName,
@@ -151,7 +153,7 @@ messageRoutes.post(
             channel.id,
             senderAgentId,
             { text, blocks, attachments, data, content_type, mode },
-            { mailbox },
+            { mailbox, workspaceDeliveryPolicy },
           ),
         afterOperation: async (data) => {
           await sendWebhookEvent(c, {

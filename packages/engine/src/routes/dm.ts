@@ -7,6 +7,7 @@ import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middlew
 import { sha256Hex } from '../lib/crypto.js';
 import * as dmEngine from '../engine/dm.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
+import { resolveWorkspaceDeliveryPolicyFor } from '../engine/workspaceDeliveryPolicy.js';
 import { publishWorkspaceEvent } from './fanout.js';
 import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
 import { buildDmReceivedEventData } from '../engine/deliveryWire.js';
@@ -79,6 +80,13 @@ dmRoutes.post(
         fromName: agent!.name,
       });
 
+      const trackDmSent = (data: { conversation_id: string; id: string }) => emitServerEvent(c, workspace.id, 'relaycast_server_dm_sent', {
+        conversation_id: data.conversation_id,
+        message_id: data.id,
+        from_agent_id: agent!.id,
+        to_agent_name: to,
+      });
+
       const idempotent = await runIdempotent({
         workspaceId: workspace.id,
         actorId: agent!.id,
@@ -97,8 +105,26 @@ dmRoutes.post(
           attachments: normalizedAttachments,
           data,
           mode,
-        }, { mailbox }),
+        }, { mailbox, resolveWorkspaceDeliveryPolicy: () => resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace), idempotencyKey,
+          afterAdmission: (data, event) => {
+            runInBackground(c, c.get('engine').realtime.publishToWorkspaceStream({
+              workspaceId: workspace.id, event: { ...event.payload, seq: event.seq },
+            }), 'publish admitted dm.received');
+            runInBackground(c, c.get('engine').webhookQueue.send({
+              type: 'dm.received', workspaceId: workspace.id,
+              data: event.data, outboxId: event.outboxId,
+            }), 'queue admitted dm.received');
+            if (data._delivery) runInBackground(c,
+              routeDeliveryOutcomes(c, [data._delivery], 'dm.received', event.data),
+              'route admitted dm delivery');
+            if (data._delivery_rejections.length) runInBackground(c,
+              notifyDeliveryRejections(c, agent!.id, data._delivery_rejections),
+              'notify admitted dm delivery rejection');
+            trackDmSent(data);
+          },
+        }),
         afterOperation: async (data) => {
+          if (data._notifications_durable) return;
           await sendWebhookEvent(c, {
             type: 'dm.received',
             workspaceId: workspace.id,
@@ -107,7 +133,7 @@ dmRoutes.post(
         },
       });
 
-      if (!idempotent.replayed) {
+      if (!idempotent.replayed && !idempotent.data._notifications_durable) {
         const {
           _delivery,
           _delivery_rejections,
@@ -134,12 +160,7 @@ dmRoutes.post(
           );
         }
 
-        emitServerEvent(c, workspace.id, 'relaycast_server_dm_sent', {
-          conversation_id: publicDmData.conversation_id,
-          message_id: publicDmData.id,
-          from_agent_id: agent!.id,
-          to_agent_name: to,
-        });
+        trackDmSent(publicDmData);
       }
 
       return jsonIdempotentOk(c, idempotent);

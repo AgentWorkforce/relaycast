@@ -79,6 +79,7 @@ export function safeClientErrorMessage(
  */
 export function errorResponse(c: Context, err: unknown) {
   const error = asCodedError(err);
+  if (error.code === 'workspace_delivery_depth_exceeded') c.header('Retry-After', '30');
   if (err instanceof SyntaxError) {
     return jsonMalformedBody(c);
   }

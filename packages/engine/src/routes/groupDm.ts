@@ -7,6 +7,7 @@ import { rateLimit } from '../middleware/rateLimit.js';
 import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as groupDmEngine from '../engine/groupDm.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
+import { resolveWorkspaceDeliveryPolicyFor } from '../engine/workspaceDeliveryPolicy.js';
 import { publishWorkspaceEvent } from './fanout.js';
 import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
 import { buildGroupDmReceivedEventData } from '../engine/deliveryWire.js';
@@ -158,7 +159,7 @@ groupDmRoutes.post(
         fingerprint,
         compatibleFingerprints: legacyFingerprint === fingerprint ? [] : [legacyFingerprint],
         kv: c.get('engine').kv,
-        operation: () =>
+        operation: async () =>
           groupDmEngine.postGroupMessage(
             db,
             workspace.id,
@@ -170,7 +171,7 @@ groupDmRoutes.post(
               data,
               mode,
             },
-            { mailbox },
+            { mailbox, workspaceDeliveryPolicy: await resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace) },
           ),
         afterOperation: async (data) => {
           await sendWebhookEvent(c, {
