@@ -1,9 +1,10 @@
-import { eq, and, sql, isNull, ne, inArray } from 'drizzle-orm';
+import { eq, and, or, sql, isNull, ne, inArray } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import {
   messages,
   channels,
   channelMembers,
+  dmConversations,
   agents,
   dmParticipants,
 } from '../db/schema.js';
@@ -38,47 +39,82 @@ export async function getInbox(db: Db, workspaceId: string, agentId: string) {
 
   // Mentions must match the canonical engine semantics: an EXACT `@handle`
   // token (escaped `\@x`, `user@x`, and prefix/superstring names are NOT
-  // mentions), delivered only in LIVE channels the agent belongs to. We fetch a
-  // bounded candidate window by substring (SQL cannot run the tokenizer), then
-  // filter with `parseMessageMentions` — the shared contract used by live
-  // delivery and durable replay.
-  const mentionCandidates = !agentName ? [] : await db
-    .select({
-      id: messages.id,
-      channelName: channels.name,
-      agentName: agents.name,
-      body: messages.body,
-      createdAt: messages.createdAt,
-    })
-    .from(messages)
-    .innerJoin(channels, eq(messages.channelId, channels.id))
-    .innerJoin(agents, eq(messages.agentId, agents.id))
-    .innerJoin(
-      channelMembers,
-      and(eq(channelMembers.channelId, messages.channelId), eq(channelMembers.agentId, agentId)),
-    )
-    .where(
-      and(
-        eq(messages.workspaceId, workspaceId),
-        eq(channels.isArchived, false),
-        eq(channels.channelType, 0),
-        sql`${messages.body} LIKE ${'%@%'}`,
-        ne(messages.agentId, agentId), // exclude self-mentions
-      ),
-    )
-    .orderBy(sql`${messages.id} DESC`)
-    .limit(200);
-  const mentionRows = mentionCandidates
-    .filter((row) => parseMessageMentions(row.body).includes(agentName))
-    .slice(0, 20);
-
-  const mentionsEnriched = mentionRows.map((row) => ({
-    id: row.id,
-    channel_name: row.channelName ?? 'unknown',
-    agent_name: row.agentName ?? 'unknown',
-    text: row.body,
-    created_at: row.createdAt.toISOString(),
-  }));
+  // mentions), delivered only where the agent has live access — a member of a
+  // live channel (channel_type 0) or a participant of a live DM (channel_type
+  // != 0). SQL narrows candidates with the ESCAPED LITERAL name; a keyset scan
+  // then walks history in bounded batches until 20 canonical matches or source
+  // exhaustion, so a valid older mention behind a batch of false candidates is
+  // never silently dropped. Memory is bounded per batch.
+  const MAX_MENTIONS = 20;
+  const MENTION_BATCH = 200;
+  const mentionsEnriched: Array<{
+    id: string;
+    channel_name: string;
+    agent_name: string;
+    text: string;
+    created_at: string;
+  }> = [];
+  if (agentName) {
+    const escapedName = agentName.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+    let cursor: string | undefined;
+    for (;;) {
+      const batch = await db
+        .select({
+          id: messages.id,
+          channelName: channels.name,
+          agentName: agents.name,
+          body: messages.body,
+          createdAt: messages.createdAt,
+        })
+        .from(messages)
+        .innerJoin(channels, eq(messages.channelId, channels.id))
+        .innerJoin(agents, eq(messages.agentId, agents.id))
+        .leftJoin(
+          channelMembers,
+          and(eq(channelMembers.channelId, messages.channelId), eq(channelMembers.agentId, agentId)),
+        )
+        .leftJoin(dmConversations, eq(dmConversations.channelId, messages.channelId))
+        .leftJoin(
+          dmParticipants,
+          and(
+            eq(dmParticipants.conversationId, dmConversations.id),
+            eq(dmParticipants.agentId, agentId),
+            isNull(dmParticipants.leftAt),
+          ),
+        )
+        .where(
+          and(
+            eq(messages.workspaceId, workspaceId),
+            eq(channels.isArchived, false),
+            ne(messages.agentId, agentId), // exclude self-mentions
+            sql`${messages.body} LIKE ${'%@' + escapedName + '%'} ESCAPE '\\'`,
+            or(
+              and(eq(channels.channelType, 0), eq(channelMembers.agentId, agentId)),
+              and(ne(channels.channelType, 0), eq(dmParticipants.agentId, agentId)),
+            ),
+            ...(cursor ? [sql`${messages.id} < ${cursor}`] : []),
+          ),
+        )
+        .orderBy(sql`${messages.id} DESC`)
+        .limit(MENTION_BATCH);
+      if (batch.length === 0) break;
+      for (const row of batch) {
+        if (mentionsEnriched.length >= MAX_MENTIONS) break;
+        if (parseMessageMentions(row.body).includes(agentName)) {
+          mentionsEnriched.push({
+            id: row.id,
+            channel_name: row.channelName ?? 'unknown',
+            agent_name: row.agentName ?? 'unknown',
+            text: row.body,
+            created_at: row.createdAt.toISOString(),
+          });
+        }
+      }
+      if (mentionsEnriched.length >= MAX_MENTIONS) break;
+      cursor = batch[batch.length - 1].id;
+      if (batch.length < MENTION_BATCH) break;
+    }
+  }
 
   // 3. Unread DMs (1:1 + group)
   const unreadDmRows = await db.all<{
