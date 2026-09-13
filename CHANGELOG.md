@@ -16,7 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased]
+
+## [8.10.1] - 2026-09-13
 
 - Fix deletion getting stuck for agents that never connected, while preserving protection for active agents.
 
@@ -545,7 +547,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased - Patch]: https://github.com/AgentWorkforce/relaycast/compare/v8.10.0...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v8.10.1...HEAD
+[8.10.1]: https://github.com/AgentWorkforce/relaycast/compare/v8.10.0...v8.10.1
 [8.10.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.9.1...v8.10.0
 [8.9.1]: https://github.com/AgentWorkforce/relaycast/compare/v8.9.0...v8.9.1
 [8.9.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.8.0...v8.9.0
