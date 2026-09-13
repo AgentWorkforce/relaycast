@@ -18,7 +18,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Patch]
 
-- Release a guarded agent whose implicit direct node was never attached: an offline direct node with no heartbeat no longer hangs the release in `node_dispatch_unavailable`.
+- Fix deletion getting stuck for agents that never connected, while preserving protection for active agents.
 
 ## [8.10.1] - 2026-09-13
 
