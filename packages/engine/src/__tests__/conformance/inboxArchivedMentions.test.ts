@@ -100,7 +100,7 @@ describe('inbox mention scope', () => {
     expect(inbox.mentions).toHaveLength(2);
 
     // Negatives are each excluded.
-    for (const id of [idEscaped, idPrefix, idSuper, idEmail, idSelf, idNonmember, idArchExact, idForeign, idArchExact]) {
+    for (const id of [idEscaped, idPrefix, idSuper, idEmail, idSelf, idNonmember, idArchExact, idForeign]) {
       expect(mentionIds.has(id)).toBe(false);
     }
     expect(inbox.mentions.every((m) => m.channel_name !== 'nonmember' && m.channel_name !== 'arch')).toBe(true);
@@ -156,7 +156,7 @@ describe('inbox DM scope', () => {
 
     const otherDmRes = await authed(sender.token).post('/v1/dm', { to: 'other', text: '@gh-target-0908 leak?' });
     expect(otherDmRes.status).toBeLessThan(300);
-    const otherDm = (await otherDmRes.json()).data as { conversation_id: string };
+    const otherDm = (await otherDmRes.json()).data as { id: string; conversation_id: string };
     expect(otherDm.conversation_id).not.toBe(ownDm.conversation_id);
 
     const res = await authed(target.token).get('/v1/inbox');
@@ -172,8 +172,10 @@ describe('inbox DM scope', () => {
     expect(own).toBeDefined();
     expect(own!.from).toBe('sender');
     expect(own!.unread_count).toBeGreaterThanOrEqual(1);
-    // Inaccessible DM is never exposed.
+    // Inaccessible DM is never exposed — neither its unread row NOR its message
+    // as a mention.
     expect(inbox.unread_dms.some((d) => d.conversation_id === otherDm.conversation_id)).toBe(false);
+    expect(inbox.mentions.some((m) => m.id === otherDm.id)).toBe(false);
     expect(other.token).toBeTruthy();
   });
 });
