@@ -129,7 +129,6 @@ const updateA2aConnectionSchema = z.object({
 );
 
 const rpcRequestSchema = a2aEngine.JsonRpcRequestSchema;
-const rpcWebhookSchema = z.union([a2aEngine.JsonRpcRequestSchema, a2aEngine.JsonRpcResponseSchema]);
 
 function jsonRpcHttpStatus(response: a2aEngine.A2aJsonRpcResponse): number {
   return response.error ? 400 : 200;
@@ -669,20 +668,31 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
     }
 
     const rawPayload = await c.req.json();
-    const parsed = rpcWebhookSchema.safeParse(rawPayload);
+    // A request must never fall through to the response schema, which strips
+    // method/params and could turn an invalid request into a correlated DM.
+    const isRequest = rawPayload !== null && typeof rawPayload === 'object'
+      && Object.hasOwn(rawPayload, 'method');
+    const requestPayload = a2aEngine.JsonRpcRequestSchema.safeParse(rawPayload);
+    const parsed = isRequest
+      ? requestPayload
+      : a2aEngine.JsonRpcResponseSchema.safeParse(rawPayload);
+    correlationId = typeof rawPayload?.id === 'string' || typeof rawPayload?.id === 'number'
+      ? rawPayload.id : undefined;
     if (!parsed.success) {
-      return jsonResponse(c, a2aEngine.jsonRpcError(undefined, -32600, 'Invalid Request'), 400);
+      return jsonResponse(c, a2aEngine.jsonRpcError(correlationId, -32600, 'Invalid Request'), 400);
     }
 
     const payload = parsed.data;
-    const requestPayload = a2aEngine.JsonRpcRequestSchema.safeParse(payload);
     // Preserve explicit ID types and the published message/task fallback.
     correlationId = payload.id ?? extractCorrelationId(payload) ?? undefined;
-    // A null message can parse as a response after the union strips method.
-    // Check the original request before translation can produce an empty DM.
-    if (rawPayload?.method === 'message/send' && !rawPayload.params?.message) {
-      const response = a2aEngine.jsonRpcError(correlationId, -32602, 'message is required');
-      return jsonResponse(c, response, jsonRpcHttpStatus(response));
+    if (isRequest && requestPayload.success) {
+      if (requestPayload.data.method !== 'message/send' && requestPayload.data.method !== 'message/stream') {
+        return jsonResponse(c, a2aEngine.jsonRpcError(correlationId, -32601,
+          `Unsupported method "${requestPayload.data.method}"`), 400);
+      }
+      if (!requestPayload.data.params?.message) {
+        return jsonResponse(c, a2aEngine.jsonRpcError(correlationId, -32602, 'message is required'), 400);
+      }
     }
     const relayMessage = a2aEngine.translateA2aToRelay(payload);
 

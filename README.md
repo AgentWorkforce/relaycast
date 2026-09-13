@@ -1132,8 +1132,11 @@ message can resume even when capacity is full. Engine adapters must apply migrat
 Recovery retains the remote message ID and sends the same egress identity in the
 HTTP `Idempotency-Key` header on every attempt. Delivery is at least once; receivers
 must deduplicate to prevent repeated effects.
-Webhook `message/send` requests require `params.message`; missing or null messages
+Webhook requests support `message/send` and `message/stream` and require a valid
+`params.message`; malformed or unsupported requests
 return HTTP 400 before admission, preserving a valid explicit JSON-RPC ID.
+Payloads carrying `method` are validated only as requests; callbacks without it
+retain response-schema validation and message/task correlation.
 A2A webhooks preserve explicit string or numeric JSON-RPC IDs. Missing IDs fall
 back to the request message ID or response message/task ID, including errors.
 RPC requests and webhooks with no correlation ID continue to omit the response ID.

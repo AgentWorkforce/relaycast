@@ -280,9 +280,18 @@ try {
     }
   }
   if (!process.env.REVIEW_CASE || process.env.REVIEW_CASE==='webhook-required-message') {
-    for(const missing of ['absent','null'])for(const id of [0,42,'string-id',undefined]){
-      const ws=await seed('required-message-'+missing+'-'+String(id),1,{cap:100});
+    const methods=['message/send','message/stream','unknown/method'].filter(method=>!process.env.REVIEW_METHOD||method===process.env.REVIEW_METHOD);
+    const routes=['target','correlation'].filter(route=>!process.env.REVIEW_ROUTE||route===process.env.REVIEW_ROUTE);
+    const forms=['absent','null','number','incomplete','valid'].filter(form=>!process.env.REVIEW_MESSAGE||form===process.env.REVIEW_MESSAGE);
+    for(const method of methods)for(const route of routes)for(const form of forms)for(const id of [0,42,'string-id',undefined]){
+      const ws=await seed('required-message-'+method.replace('/','-')+'-'+route+'-'+form+'-'+String(id),1,{cap:100});
       await run('INSERT INTO a2a_agents(id,workspace_id,relay_agent_id,external_url,agent_card) VALUES(?,?,?,?,?)',ws+'peer',ws,ws+'sender',targetUrl,'{}');
+      const messageId='incoming-'+ws;
+      // Seed a retained message from the local recipient. Numeric/string IDs
+      // are real lookup targets even if a malformed request loses its method
+      // and target when the webhook union parses it as a response.
+      const originalId=String(id??(form==='valid'?messageId:'no-correlation'));
+      await run('INSERT INTO messages(id,workspace_id,channel_id,agent_id,body) VALUES(?,?,?,?,?)',originalId,ws,ws+'ch',ws+'r1','retained original');
       const effects=async()=>({
         messages:await scalar('SELECT count(*) FROM messages WHERE workspace_id=?',ws),
         counter:await scalar('SELECT messages_recv FROM a2a_agents WHERE workspace_id=?',ws),
@@ -291,13 +300,56 @@ try {
         outbox:await scalar('SELECT count(*) FROM pending_events WHERE workspace_id=?',ws),
         events:await scalar('SELECT count(*) FROM workspace_events WHERE workspace_id=?',ws),
       });
-      const empty={messages:0,counter:0,inbound:0,deliveries:0,outbox:0,events:0};assert.deepEqual(await effects(),empty);
-      const payload={jsonrpc:'2.0',...(id===undefined?{}:{id}),method:'message/send',params:{target_agent:'recipient-1',...(missing==='null'?{message:null}:{})}};
+      const before={messages:1,counter:0,inbound:0,deliveries:0,outbox:0,events:0};assert.deepEqual(await effects(),before);
+      const message=form==='valid'?{message_id:messageId,role:'agent',parts:[{kind:'text',text:'valid nonempty '+method}]}:form==='number'?42:form==='incomplete'?{message_id:messageId}:null;
+      const payload={jsonrpc:'2.0',...(id===undefined?{}:{id}),method,params:{...(route==='target'?{target_agent:'recipient-1'}:{}),...(form==='absent'?{}:{message})}};
       const result=await request(ws,`/a2a/webhook/${ws}/sender`,payload);
-      expectStatus(result,400);assert.equal(result.body.id,id);assert.equal(Object.hasOwn(result.body,'id'),id!==undefined);
-      assert.deepEqual(result.body.error,{code:-32602,message:'message is required'});
-      await Promise.allSettled(background.splice(0));assert.deepEqual(await effects(),empty,'invalid request must have zero admission effects');
-      record('webhook message/send '+missing+' message with '+String(id)+' ID refuses400 before all effects');
+      await Promise.allSettled(background.splice(0));
+      const accepts=form==='valid'&&method!=='unknown/method';
+      if(accepts){
+        expectStatus(result,200);assert.equal(result.body.id,id??messageId);
+        assert.equal(result.body.result.task.history[0].parts[0].text,message.parts[0].text);
+        const accepted={messages:2,counter:1,inbound:1,deliveries:1,outbox:1,events:1};assert.deepEqual(await effects(),accepted);
+        const replay=await request(ws,`/a2a/webhook/${ws}/sender`,payload);expectStatus(replay,200);assert.deepEqual(replay.body,result.body);
+        await Promise.allSettled(background.splice(0));assert.deepEqual(await effects(),accepted);
+      }else{
+        if(result.status!==400)console.log('MALFORMED ADMISSION',JSON.stringify({method,route,form,id,result,effects:await effects()}));
+        expectStatus(result,400);
+        const expectedId=id??(form==='valid'?messageId:undefined);
+        assert.equal(result.body.id,expectedId);assert.equal(Object.hasOwn(result.body,'id'),expectedId!==undefined);
+        const expectedError=['null','number','incomplete'].includes(form)
+          ?{code:-32600,message:'Invalid Request'}
+          :method==='unknown/method'?{code:-32601,message:'Unsupported method \"unknown/method\"'}
+          :{code:-32602,message:'message is required'};
+        assert.deepEqual(result.body.error,expectedError);
+        assert.deepEqual(await effects(),before,'invalid request must have zero NEW admission effects');
+        assert.deepEqual(await rows('SELECT id,body FROM messages WHERE workspace_id=?',ws),[{id:originalId,body:'retained original'}]);
+      }
+      record('webhook '+method+' '+route+' '+form+' message with '+String(id)+' ID '+(accepts?'accepts once and replays':'refuses400 with zero new effects'),{method,route,form,id,status:result.status});
+      await run('DELETE FROM workspaces WHERE id=?',ws);
+    }
+  }
+  if (!process.env.REVIEW_CASE || process.env.REVIEW_CASE==='webhook-response-envelope') {
+    for(const form of ['absent','null','number','incomplete','valid'])for(const route of ['target','correlation'])for(const id of [0,42,'string-id',undefined]){
+      const ws=await seed('response-envelope-'+route+'-'+form+'-'+String(id),1,{cap:100});
+      await run('INSERT INTO a2a_agents(id,workspace_id,relay_agent_id,external_url,agent_card) VALUES(?,?,?,?,?)',ws+'peer',ws,ws+'sender',targetUrl,'{}');
+      const messageId='response-'+ws,originalId=String(id??messageId);
+      await run('INSERT INTO messages(id,workspace_id,channel_id,agent_id,body) VALUES(?,?,?,?,?)',originalId,ws,ws+'ch',ws+'r1','retained original');
+      const effects=async()=>({messages:await scalar('SELECT count(*) FROM messages WHERE workspace_id=?',ws),counter:await scalar('SELECT messages_recv FROM a2a_agents WHERE workspace_id=?',ws),inbound:await scalar('SELECT count(*) FROM a2a_inbound WHERE workspace_id=?',ws),deliveries:await scalar('SELECT count(*) FROM deliveries WHERE workspace_id=?',ws),outbox:await scalar('SELECT count(*) FROM pending_events WHERE workspace_id=?',ws),events:await scalar('SELECT count(*) FROM workspace_events WHERE workspace_id=?',ws)});
+      const before=await effects();assert.deepEqual(before,{messages:1,counter:0,inbound:0,deliveries:0,outbox:0,events:0});
+      const message=form==='valid'?{message_id:messageId,role:'agent',parts:[{kind:'text',text:'valid response callback'}]}:form==='number'?42:form==='incomplete'?{message_id:messageId}:null;
+      const payload={jsonrpc:'2.0',...(id===undefined?{}:{id}),...(route==='target'?{params:{target_agent:'recipient-1'}}:{}),result:form==='absent'?{}:{message}};
+      const result=await request(ws,`/a2a/webhook/${ws}/sender`,payload);await Promise.allSettled(background.splice(0));
+      // Keep response-only schema behavior: a correlatable empty result is a
+      // valid callback; malformed result.message must not become a request.
+      const accepts=form==='valid'||(form==='absent'&&id!==undefined);
+      expectStatus(result,accepts?200:400);assert.equal(result.body.id,id??(form==='valid'?messageId:undefined));
+      if(accepts){
+        assert.deepEqual(await effects(),{messages:2,counter:1,inbound:1,deliveries:1,outbox:1,events:1});
+        const replay=await request(ws,`/a2a/webhook/${ws}/sender`,payload);expectStatus(replay,200);assert.deepEqual(replay.body,result.body);await Promise.allSettled(background.splice(0));
+        assert.deepEqual(await effects(),{messages:2,counter:1,inbound:1,deliveries:1,outbox:1,events:1});
+      }else assert.deepEqual(await effects(),before);
+      record('response without method '+route+' '+form+' '+String(id),{form,route,id,status:result.status});
       await run('DELETE FROM workspaces WHERE id=?',ws);
     }
   }

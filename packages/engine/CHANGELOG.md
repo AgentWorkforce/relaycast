@@ -9,7 +9,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased - Minor]
 
-- Reject inbound webhook `message/send` requests without a message before creating any message effects.
+- Reject malformed or unsupported inbound webhook requests before admission; `message/send` and `message/stream` require a valid message.
 
 - Enforce workspace delivery capacity across HTTP producers with retryable 429 responses.
 - Expose the async workspace capacity resolver through public engine configuration.
