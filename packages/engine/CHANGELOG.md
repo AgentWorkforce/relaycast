@@ -7,7 +7,9 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+- `dispatchRelease` treats a never-attached implicit direct node (`node_direct_<agent_id>` with `status:'offline'` and no heartbeat) as host-less, so a guarded `delete_agent` release completes locally under the existing token-generation CAS instead of hanging in `node_dispatch_unavailable`; a connected real direct node keeps the dispatch fence.
 
 ## [8.10.0] - 2026-09-13
 

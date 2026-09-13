@@ -1533,6 +1533,93 @@ describe('agent presence and release lifecycle', () => {
     await handle.handleClose();
   });
 
+  it('completes a generation-authorized delete locally when the implicit direct node is a never-attached ghost', async () => {
+    const ws = await createWorkspace(stack.app, 'release-direct-ghost-node');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'ghost-direct-agent');
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    // Mirror the deployed Cloud edge: `isProviderConnected` cannot see the DO and
+    // reports connected, and the direct node adapter cannot deliver the guarded
+    // frame. Pre-fix this returned 503 `node_dispatch_unavailable` and stranded the
+    // identity; the node row (offline, null heartbeat) is the only liveness signal.
+    const originalConnected = nodeConnections.isProviderConnected.bind(nodeConnections);
+    nodeConnections.isProviderConnected = () => true;
+    const authorizedSend = vi.spyOn(nodeConnections, 'sendAuthorizedActionToProvider').mockResolvedValue(false);
+    let response!: Response;
+    try {
+      response = await stack.app.request('/v1/agents/release', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${ws.workspaceKey}`,
+        },
+        body: JSON.stringify({
+          name: target.name,
+          delete_agent: true,
+          expected_token_hash: await sha256Hex(target.token),
+        }),
+      });
+    } finally {
+      nodeConnections.isProviderConnected = originalConnected;
+    }
+
+    expect(response.status).toBe(201);
+    expect((await response.json() as { data: { status: string } }).data.status).toBe('completed');
+    expect(authorizedSend).not.toHaveBeenCalled();
+    expect(await stack.runtime.deps.db
+      .select()
+      .from(agents)
+      .where(and(eq(agents.workspaceId, ws.workspaceId), eq(agents.name, target.name))))
+      .toHaveLength(0);
+    const [invocation] = await stack.runtime.deps.db
+      .select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'release'),
+      ));
+    expect(invocation).toEqual({ status: 'completed', error: null });
+  });
+
+  it('keeps the guarded dispatch fence for a live implicit direct node when the adapter cannot deliver', async () => {
+    const ws = await createWorkspace(stack.app, 'release-direct-live-node');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'live-direct-agent');
+    const { handle } = await attachDirectNodeSocket(stack, ws.workspaceId, target);
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    // Same Cloud edge signal, but the direct node is genuinely online with a fresh
+    // heartbeat: the liveness check must not bypass the guard, so the failing
+    // authorized adapter still yields 503 and the identity survives.
+    const originalConnected = nodeConnections.isProviderConnected.bind(nodeConnections);
+    nodeConnections.isProviderConnected = () => true;
+    vi.spyOn(nodeConnections, 'sendAuthorizedActionToProvider').mockResolvedValue(false);
+    let response!: Response;
+    try {
+      response = await stack.app.request('/v1/agents/release', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${ws.workspaceKey}`,
+        },
+        body: JSON.stringify({
+          name: target.name,
+          delete_agent: true,
+          expected_token_hash: await sha256Hex(target.token),
+        }),
+      });
+    } finally {
+      nodeConnections.isProviderConnected = originalConnected;
+    }
+
+    expect(response.status).toBe(503);
+    expect((await response.json() as { error: { code: string } }).error.code)
+      .toBe('node_dispatch_unavailable');
+    const [current] = await stack.runtime.deps.db
+      .select({ name: agents.name, status: agents.status })
+      .from(agents)
+      .where(eq(agents.id, target.agentId));
+    expect(current).toMatchObject({ name: target.name, status: 'active' });
+    await handle.handleClose();
+  });
+
   it('fails closed when the socket owner cannot enforce a guarded release', async () => {
     const ws = await createWorkspace(stack.app, 'release-generation-owner-required');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'owner-required-agent');

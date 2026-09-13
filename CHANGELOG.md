@@ -16,7 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+- Release a guarded agent whose implicit direct node was never attached: an offline direct node with no heartbeat no longer hangs the release in `node_dispatch_unavailable`.
 
 ## [8.10.0] - 2026-09-13
 
