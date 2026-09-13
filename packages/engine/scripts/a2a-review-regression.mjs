@@ -251,6 +251,61 @@ try {
       await Promise.allSettled(background.splice(0));await run('DELETE FROM workspaces WHERE id=?',ws);
     }
   }
+  if (!process.env.REVIEW_CASE || process.env.REVIEW_CASE==='webhook-response-id') {
+    for(const shape of ['message','task'])for(const outcome of ['accepted','capacity','missing-target']){
+      const ws=await seed('response-id-'+shape+'-'+outcome,1,{cap:100});
+      // A retained outgoing message supplies the original sender for a response.
+      const original=await request(ws,'/v1/dm',{to:'sender',text:'original request'},{token:'at_live_'+ws+'r1'});expectStatus(original,201);
+      const originalId=original.body.data.message.id;
+      await run('INSERT INTO a2a_agents(id,workspace_id,relay_agent_id,external_url,agent_card) VALUES(?,?,?,?,?)',ws+'peer',ws,ws+'sender',targetUrl,'{}');
+      const correlation=outcome==='missing-target'?'unknown-original':originalId;
+      const message={message_id:correlation,role:'agent',parts:[{kind:'text',text:'response body'}]};
+      const payload={jsonrpc:'2.0',result:shape==='message'?{message}:{task:{id:correlation,status:{state:'completed'},history:[message]}}};
+      if(outcome==='capacity')policies.set(ws,{cap:1});
+      const result=await request(ws,`/a2a/webhook/${ws}/sender`,payload);
+      expectStatus(result,outcome==='accepted'?200:outcome==='capacity'?429:400);
+      assert.equal(result.body.id,correlation,'missing response ID must use original message/task correlation');
+      if(outcome==='accepted'){
+        const replay=await request(ws,`/a2a/webhook/${ws}/sender`,payload);expectStatus(replay,200);assert.deepEqual(replay.body,result.body);
+        await run('DELETE FROM messages WHERE id=?',result.body.result.task.id);
+        const pruned=await request(ws,`/a2a/webhook/${ws}/sender`,payload);expectStatus(pruned,410);assert.equal(pruned.body.id,correlation);
+      }
+      // Explicit response IDs retain type and precedence even when the embedded
+      // message/task has a valid fallback; unresolvable IDs remain a 400.
+      for(const id of [0,42,'explicit-response-id']){
+        const explicit=await request(ws,`/a2a/webhook/${ws}/sender`,{...payload,id});expectStatus(explicit,400);assert.equal(explicit.body.id,id);
+      }
+      await Promise.allSettled(background.splice(0));await run('DELETE FROM workspaces WHERE id=?',ws);
+      record('webhook '+shape+' response correlation '+outcome+'; explicit typed ID precedence');
+    }
+  }
+  if (!process.env.REVIEW_CASE || process.env.REVIEW_CASE==='webhook-request-id') {
+    const ws=await seed('webhook-request-id',1,{cap:100});
+    await run('INSERT INTO a2a_agents(id,workspace_id,relay_agent_id,external_url,agent_card) VALUES(?,?,?,?,?)',ws+'peer',ws,ws+'sender',targetUrl,'{}');
+    for(const id of [0,42,'string-id',undefined])for(const target of ['recipient-1',undefined]){
+      const messageId='request-'+String(id)+'-'+String(target);
+      const payload={jsonrpc:'2.0',...(id===undefined?{}:{id}),method:'message/send',params:{...(target?{target_agent:target}:{}),message:{message_id:messageId,role:'agent',parts:[{kind:'text',text:'request body'}]}}};
+      const result=await request(ws,`/a2a/webhook/${ws}/sender`,payload);expectStatus(result,target?200:400);assert.equal(result.body.id,id??messageId);
+      if(id===undefined){
+        const rpc=await request(ws,'/a2a/rpc',payload);expectStatus(rpc,target?200:400);assert.equal(Object.hasOwn(rpc.body,'id'),false,'RPC absent ID contract stays unchanged');
+      }
+    }
+    for(const target of ['recipient-1',undefined]){
+      const result=await request(ws,`/a2a/webhook/${ws}/sender`,{jsonrpc:'2.0',method:'message/send',params:target?{target_agent:target}:{}});
+      expectStatus(result,target?200:400);assert.equal(Object.hasOwn(result.body,'id'),false,'missing all correlation stays absent');
+    }
+    const effectsBefore=await scalar('SELECT count(*) FROM messages WHERE workspace_id=?',ws);
+    for(const payload of [
+      {jsonrpc:'2.0',id:null,method:'message/send',params:{target_agent:'recipient-1',message:{message_id:'null-request',role:'agent',parts:[{kind:'text',text:'must refuse'}]}}},
+      {jsonrpc:'2.0',id:null,result:{task:{id:'null-response',status:{state:'completed'}}}},
+      {jsonrpc:'2.0',result:{}},
+    ]){
+      const result=await request(ws,`/a2a/webhook/${ws}/sender`,payload);expectStatus(result,400);assert.equal(Object.hasOwn(result.body,'id'),false);
+    }
+    assert.equal(await scalar('SELECT count(*) FROM messages WHERE workspace_id=?',ws),effectsBefore,'null IDs and uncorrelated response cannot admit');
+    await Promise.allSettled(background.splice(0));await run('DELETE FROM workspaces WHERE id=?',ws);
+    record('webhook request 200/400 missing-ID fallback and numeric0/42/string; absent all correlation and RPC contracts');
+  }
   if (!process.env.REVIEW_CASE || process.env.REVIEW_CASE==='webhook-error-id') {
     const ws=await seed('webhook-error-id',1,{cap:1});
     await run('INSERT INTO a2a_agents(id,workspace_id,relay_agent_id,external_url,agent_card) VALUES(?,?,?,?,?)',ws+'peer',ws,ws+'sender',targetUrl,'{}');
@@ -258,9 +313,9 @@ try {
     for(const id of [0,42,'string-id',undefined]){
       const payload={jsonrpc:'2.0',...(id===undefined?{}:{id}),method:'message/send',params:{target_agent:'recipient-1',message:{message_id:'id-'+String(id),role:'agent',parts:[{kind:'text',text:'capacity refusal'}]}}};
       const result=await request(ws,`/a2a/webhook/${ws}/sender`,payload);expectStatus(result,429);
-      assert.equal(result.body.id,id);assert.equal(Object.hasOwn(result.body,'id'),id!==undefined);
+      assert.equal(result.body.id,id??'id-undefined');assert.ok(Object.hasOwn(result.body,'id'));
     }
-    record('webhook capacity errors preserve numeric0/42,string and absent JSON-RPC IDs');await run('DELETE FROM workspaces WHERE id=?',ws);
+    record('webhook capacity errors preserve numeric0/42,string and missing-ID message correlation');await run('DELETE FROM workspaces WHERE id=?',ws);
   }
   if (!process.env.REVIEW_CASE || process.env.REVIEW_CASE==='inbound-rejection') {
     for(const endpoint of ['rpc','webhook']){

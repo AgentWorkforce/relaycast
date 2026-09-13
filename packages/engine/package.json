@@ -73,6 +73,7 @@
     "@types/node": "^25.2.1",
     "@types/ws": "^8.5.13",
     "drizzle-kit": "^0.31.9",
+    "undici": "7.28.0",
     "vitest": "^4.0.18"
   },
   "publishConfig": {

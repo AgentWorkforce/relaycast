@@ -20,6 +20,12 @@ console.error=(...args)=>{
   if(args.some(arg=>arg && typeof arg==='object' && arg.source==='background.task'))backgroundErrors.push(args);
   originalConsoleError(...args);
 };
+function consumeExpectedBackgroundError(errors, before, expected) {
+  const matches=errors.slice(before).filter(args=>args[0]==='[background.task] publish admitted inbound dm.received failed' && args.some(arg=>arg?.source==='background.task' && arg.error_message===expected));
+  assert.equal(matches.length,1,'exactly one expected positive-control rejection');
+  errors.splice(errors.indexOf(matches[0]),1);
+  assert.equal(errors.length,before,'unexpected background task failure retained');
+}
 const hash = x => createHash('sha256').update(x).digest('hex');
 const runtimes = [':memory:', `/tmp/finn-capacity-${randomUUID()}.sqlite`].map(dbPath => createNodeRuntime({
   dbPath, baseUrl:'http://localhost:0',fileDir:`/tmp/finn-capacity-files-${randomUUID()}`,
@@ -93,19 +99,33 @@ try {
   }
   const send=(ws,text,key,data)=>request(ws,'/v1/channels/general/messages',{text,...(data?{data}:{})},{key});
   const record=(test,details={})=>{results.push({adapter,test,...details});console.log('PASS',adapter,test,JSON.stringify(details));};
-  {
-    const ws=await seed('background-observer-control',1,{cap:100});
+  for(const negative of [false,true]){
+    const ws=await seed('background-observer-control-'+negative,1,{cap:100});
     await run('INSERT INTO a2a_agents(id,workspace_id,relay_agent_id,external_url,agent_card) VALUES(?,?,?,?,?)',ws+'peer',ws,ws+'sender','https://peer.example/a2a','{}');
-    const observerProbe=createEngine({...deps,realtime:{...deps.realtime,publishToWorkspaceStream:async()=>{throw Error('positive background observer control');}}});
+    const expected='positive background observer control '+ws;
+    const unexpected='negative webhook queue control '+ws;
+    const observerProbe=createEngine({...deps,
+      realtime:{...deps.realtime,publishToWorkspaceStream:async()=>{throw Error(expected);}},
+      ...(negative?{webhookQueue:{send:async()=>{throw Error(unexpected);}}}:{}),
+    });
     const before=backgroundErrors.length;
     const payload={jsonrpc:'2.0',id:'observer-control',method:'message/send',params:{target_agent:'recipient-1',message:{message_id:'observer-control',role:'agent',parts:[{kind:'text',text:'probe'}]}}};
     expectStatus(await request(ws,'/a2a/rpc',payload,{engineApp:observerProbe}),200);
     await Promise.allSettled(background.splice(0));
-    assert.ok(backgroundErrors.length>before,'positive control must reach the background failure observer');
-    assert.ok(JSON.stringify(backgroundErrors.slice(before)).includes('positive background observer control'));
-    backgroundErrors.splice(before);await run('DELETE FROM workspaces WHERE id=?',ws);
-    record('positive rejected waitUntil task proves background error interception');
+    if(negative){
+      assert.throws(()=>consumeExpectedBackgroundError(backgroundErrors,before,expected),/unexpected background task failure retained/);
+      const retained=backgroundErrors.slice(before);
+      assert.equal(retained.length,1,'only the deliberate negative queue failure may remain');
+      assert.equal(retained[0][0],'[background.task] queue admitted inbound dm.received failed');
+      assert.ok(retained[0].some(arg=>arg?.source==='background.task' && arg.error_message===unexpected));
+      // Remove only this verified deliberate negative, after proving the guard
+      // rejected it and left its original diagnostic available for inspection.
+      backgroundErrors.splice(backgroundErrors.indexOf(retained[0]),1);
+    }else consumeExpectedBackgroundError(backgroundErrors,before,expected);
+    await run('DELETE FROM workspaces WHERE id=?',ws);
+    record(negative?'unexpected webhook queue rejection fails observer guard and remains recorded':'positive rejected waitUntil task consumes only the expected error');
   }
+  if(process.env.CAPACITY_CASE==='background-observer')continue;
   {
     const ws=await seed('replay');const a=await send(ws,'once','recorded');expectStatus(a,201);
     const high=await scalar('SELECT sum(delivery_seq) FROM agents WHERE workspace_id=?',ws);

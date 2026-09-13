@@ -23,6 +23,10 @@ info:
     410 a2a_egress_expired. After intent cleanup, the key is fresh and may create a
     new message; callers must stop automatic retries after the window.
 
+    A2A webhooks preserve explicit string or numeric JSON-RPC IDs. Missing IDs fall
+    back to the request message ID or response message/task ID, including errors.
+    RPC requests and webhooks with no correlation ID continue to omit the response ID.
+
     Inbound A2A identities are deduplicated durably for up to 24 hours per workspace,
     authenticated actor and route scope. New admission atomically checks the
     authenticated registration and token with the message and counter; a

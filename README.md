@@ -1132,6 +1132,10 @@ message can resume even when capacity is full. Engine adapters must apply migrat
 Recovery retains the remote message ID and sends the same egress identity in the
 HTTP `Idempotency-Key` header on every attempt. Delivery is at least once; receivers
 must deduplicate to prevent repeated effects.
+A2A webhooks preserve explicit string or numeric JSON-RPC IDs. Missing IDs fall
+back to the request message ID or response message/task ID, including errors.
+RPC requests and webhooks with no correlation ID continue to omit the response ID.
+
 Inbound A2A message IDs are admitted once per workspace, authenticated actor and
 route scope for up to 24 hours, including concurrent requests and failed KV completion.
 The window is an upper bound: source pruning removes response content sooner and

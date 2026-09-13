@@ -674,9 +674,10 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
     }
 
     const payload = parsed.data;
-    correlationId = payload.id;
-    const relayMessage = a2aEngine.translateA2aToRelay(payload);
     const requestPayload = a2aEngine.JsonRpcRequestSchema.safeParse(payload);
+    // Preserve explicit ID types and the published message/task fallback.
+    correlationId = payload.id ?? extractCorrelationId(payload) ?? undefined;
+    const relayMessage = a2aEngine.translateA2aToRelay(payload);
 
     let targetAgentName = requestPayload.success
       ? extractTargetAgentName(
@@ -699,7 +700,7 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
 
     if (!targetAgentName) {
       const response = a2aEngine.jsonRpcError(
-        payload.id,
+        correlationId,
         -32602,
         'target_agent or agent_name is required',
       );
@@ -731,7 +732,7 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
     });
     const sent = idempotent.data;
 
-    const response = a2aEngine.jsonRpcSuccess(payload.id, {
+    const response = a2aEngine.jsonRpcSuccess(correlationId, {
       task: {
         id: sent.message.id,
         context_id: relayMessage.thread_id ?? sent.conversation_id,

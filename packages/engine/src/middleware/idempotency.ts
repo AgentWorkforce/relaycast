@@ -157,7 +157,7 @@ export async function runIdempotent<T>(
   let lockKey: string | null = null;
   let lockAcquired = false;
 
-  if (!kvStore && requireKv) {
+  if (!kvStore && (requireKv || requireKvRead)) {
     throw idempotencyUnavailableError();
   }
 

@@ -9,24 +9,24 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased - Minor]
 
-- Let expired inbound A2A keys admit fresh messages after SQL cleanup even when an older completion cache entry remains. Legacy acceptance verification and source-pruned replay protection are preserved.
-
-- Preserve completed inbound A2A retries from published 8.9.1 without duplicate admission, keep numeric webhook error IDs and sender rejection notices, and refuse outbound redirects before credentials or bodies can be forwarded.
-
-- Refuse new inbound A2A admission atomically when its authenticated registration changes, and send a stable HTTP Idempotency-Key on outbound retries and recovery.
-
-- Deduplicate inbound A2A admission and local effects through concurrent requests and KV failures. Apply `0059_a2a_inbound_admission.sql`; source pruning scrubs public content but keeps an indexed retry tombstone for 24 hours, with bounded expiry and workspace cleanup.
-- Keep completed DM/group-DM retries available during policy outages, preserve JSON-RPC error IDs, serialize Node A2A recovery, and bound transport retries while refusing credentialed HTTP and terminal protocol failures.
-
-- Preserve accepted A2A local notifications across transport failures, count inbound messages atomically, and return stable completed retries with typed conflicts for concurrent key reuse.
-
-- Bound accepted A2A retries to 24 hours, clear terminal payloads, and prevent recovery after source deletion or target replacement/endpoint changes. Expose the async workspace capacity resolver through the public engine config.
-
-- Enforce workspace delivery capacity across HTTP producers with retryable 429 responses and durable A2A admission before external transport.
-
-- Hosts must also apply `0058_a2a_egress_context.sql`. Public response snapshots (including body/metadata) are retained for the 24-hour egress retry horizon and cascade away with source-message deletion, egress cleanup, or workspace deletion. No transport credentials are copied.
-
-- Hosts must apply migration `0057_a2a_egress.sql` and schedule `sweepPendingA2aEgress(db)` to recover accepted outbound A2A sends.
+- Enforce workspace delivery capacity across HTTP producers with retryable 429 responses.
+- Expose the async workspace capacity resolver through public engine configuration.
+- Admit outbound A2A messages durably before transport and recover accepted sends without losing local notifications.
+- Send a stable HTTP Idempotency-Key on outbound retries and recovery.
+- Bound outbound transport retries and refuse credentialed HTTP, redirects, and invalid JSON/protocol responses.
+- Stop A2A recovery after source deletion or target registration/endpoint changes; clear terminal payloads.
+- Deduplicate inbound A2A messages, counters, and local effects through concurrent retries and KV failures.
+- Refuse new inbound A2A admission atomically when its authenticated registration or token changes.
+- Preserve completed inbound A2A retries from published 8.9.1 without duplicate admission.
+- Preserve numeric webhook IDs and the request message/response message-or-task fallback when an ID is omitted.
+- Preserve authenticated sender rejection notices without duplicating them on replay.
+- Keep completed DM/group-DM retries available during policy outages.
+- Bound accepted A2A retries to 24 hours; source pruning returns 410 within the window without recreating history.
+- Allow fresh inbound key reuse after SQL identity expiry, including a different payload, even when a stale completion cache remains.
+- Fail closed when a keyed idempotency operation requires a KV read but no store is configured.
+- Hosts must apply `0057_a2a_egress.sql` and schedule `sweepPendingA2aEgress(db)` for outbound recovery and bounded cleanup. Node recovery runs automatically and serializes sweeps.
+- Hosts must apply `0058_a2a_egress_context.sql`. Public response snapshots retain no transport credentials and are removed with source-message deletion, egress cleanup, or workspace deletion.
+- Hosts must apply `0059_a2a_inbound_admission.sql` for inbound identity and workspace lookup indexes. Source pruning scrubs response content while retaining only a bounded identity/fingerprint tombstone; expiry or workspace deletion removes it.
 
 ## [8.9.1] - 2026-09-11
 
