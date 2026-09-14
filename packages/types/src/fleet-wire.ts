@@ -65,6 +65,8 @@ export const FleetCapabilitySchema = z
     global: z.boolean().optional(),
     /** `action` capability opts into the offline queue when its provider is down. */
     queue: z.boolean().optional(),
+    /** Task handlers must accept an execution fence before starting work. */
+    execution_mode: z.enum(['short', 'task']).optional(),
     metadata: z.record(z.string(), FleetWireJsonValueSchema).optional(),
   })
   .strict();
@@ -299,28 +301,78 @@ export const FleetDeliveryAckMessageSchema = z
   .strict();
 export type FleetDeliveryAckMessage = z.infer<typeof FleetDeliveryAckMessageSchema>;
 
+export const FleetTaskContextSchema = z.object({
+  run_id: z.string().min(1).max(512).refine(value => value.trim() === value),
+  step_id: z.string().min(1).max(512).refine(value => value.trim() === value),
+  dispatch_id: z.string().min(1).max(512).refine(value => value.trim() === value),
+  timeout_ms: z.number().int().min(1).max(86_400_000),
+}).strict();
+export type FleetTaskContext = z.infer<typeof FleetTaskContextSchema>;
+
+export const FleetTaskExecutionSchema = z.object({
+  execution_id: z.string().min(1),
+  run_id: z.string(),
+  step_id: z.string(),
+  dispatch_id: z.string(),
+  deadline: z.string().datetime(),
+}).strict();
+
+export const FleetActionAcceptMessageSchema = z.object({
+  ...FleetRequestEnvelopeFields,
+  id: z.string().min(1),
+  type: z.literal('action.accept'),
+  invocation_id: z.string().min(1),
+  execution_id: z.string().min(1),
+  worker_generation: z.string().min(1).max(512),
+}).strict();
+export type FleetActionAcceptMessage = z.infer<typeof FleetActionAcceptMessageSchema>;
+
+const taskResultFields = {
+  final: z.boolean().optional(),
+  execution_id: z.string().min(1).optional(),
+  worker_generation: z.string().min(1).max(512).optional(),
+  accounting: z.record(z.string(), z.number().finite().nonnegative()).optional(),
+};
+
+function requireTaskResultFence(message: {
+  id?: string; final?: boolean; execution_id?: string; worker_generation?: string;
+  accounting?: Record<string, number>;
+}, context: z.RefinementCtx) {
+  if (message.final === undefined && message.execution_id === undefined
+    && message.worker_generation === undefined && message.accounting === undefined) return;
+  for (const field of ['id', 'final', 'execution_id', 'worker_generation'] as const) {
+    if (message[field] === undefined || message[field] === '') {
+      context.addIssue({ code: 'custom', path: [field], message: 'Task results require a correlated execution fence and explicit final flag' });
+    }
+  }
+}
+
 export const FleetActionResultOutputMessageSchema = z
   .object({
     ...FleetRequestEnvelopeFields,
+    ...taskResultFields,
     type: z.literal('action.result'),
     invocation_id: z.string(),
     output: FleetWireJsonValueSchema,
     error: z.never().optional(),
   })
   .strict()
-  .superRefine(forbidOwnProperty('error'));
+  .superRefine(forbidOwnProperty('error'))
+  .superRefine(requireTaskResultFence);
 export type FleetActionResultOutputMessage = z.infer<typeof FleetActionResultOutputMessageSchema>;
 
 export const FleetActionResultErrorMessageSchema = z
   .object({
     ...FleetRequestEnvelopeFields,
+    ...taskResultFields,
     type: z.literal('action.result'),
     invocation_id: z.string(),
     error: z.string(),
     output: z.never().optional(),
   })
   .strict()
-  .superRefine(forbidOwnProperty('output'));
+  .superRefine(forbidOwnProperty('output'))
+  .superRefine(requireTaskResultFence);
 export type FleetActionResultErrorMessage = z.infer<typeof FleetActionResultErrorMessageSchema>;
 
 export const FleetActionResultMessageSchema = z.union([
@@ -426,6 +478,7 @@ export const FleetActionInvokeMessageSchema = z
     agent_id: z.string().optional(),
     agent_name: z.string().optional(),
     input: FleetWireJsonValueSchema,
+    task_execution: FleetTaskExecutionSchema.optional(),
   })
   .strict();
 export type FleetActionInvokeMessage = z.infer<typeof FleetActionInvokeMessageSchema>;
@@ -499,6 +552,7 @@ export const FleetPingMessageSchema = z
 export type FleetPingMessage = z.infer<typeof FleetPingMessageSchema>;
 
 export const FleetBrokerToRelaycastNonActionResultMessageSchema = z.discriminatedUnion('type', [
+  FleetActionAcceptMessageSchema,
   FleetNodeRegisterMessageSchema,
   FleetNodeHeartbeatMessageSchema,
   FleetNodeDeregisterMessageSchema,

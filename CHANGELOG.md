@@ -16,7 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+- Add opt-in durable task actions with execution fencing, final-result receipts, and restart reconciliation.
 
 ## [8.10.1] - 2026-09-13
 

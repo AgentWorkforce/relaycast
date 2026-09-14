@@ -19,6 +19,7 @@ import { runAtomic, runAtomicWrites, type AtomicWrite } from '../ports/database.
 import { claimSpawnNode, chooseNodeForAction, isNodeLive, releaseNodeCapacity, reserveNodeCapacity } from './placement.js';
 import { DEFAULT_PROVIDER_NAME, capacityProviderName, getProvider, isProviderLive } from './nodeProvider.js';
 import { AGENT_TOKEN_HASH_PATTERN } from '@relaycast/types';
+import { createTaskState, expireTaskInvocation, expireTaskInvocations, taskExecution } from './taskInvocation.js';
 
 type Db = ReturnType<typeof getDb>;
 type ActionRow = typeof actions.$inferSelect;
@@ -571,7 +572,7 @@ export async function deleteAction(
 async function createInvocation(
   db: Db,
   workspaceId: string,
-  action: Pick<ActionRow, 'id' | 'name' | 'handlerAgentId' | 'handlerNodeId'> | null,
+  action: Pick<ActionRow, 'id' | 'name' | 'handlerAgentId' | 'handlerNodeId' | 'executionMode'> | null,
   data: {
     input?: Record<string, unknown>;
     caller_id?: string | null;
@@ -583,6 +584,9 @@ async function createInvocation(
     invocation_id?: string;
   },
 ) {
+  if (action?.executionMode === 'task' && !data.invocation_id) {
+    throw codedError('Task actions require the idempotent action invoke route', 'task_idempotency_required', 400);
+  }
   const invocationId = data.invocation_id ?? `inv_${generateId()}`;
   const expectedActionName = action?.name ?? data.action_name ?? 'spawn';
   const [created] = await db
@@ -598,6 +602,7 @@ async function createInvocation(
       handlerAgentId: data.handler_agent_id ?? action?.handlerAgentId ?? null,
       handlerNodeId: data.handler_node_id ?? action?.handlerNodeId ?? null,
       input: data.input ?? {},
+      taskState: action?.executionMode === 'task' ? createTaskState(data.input ?? {}) : null,
       status: data.status ?? 'pending',
     })
     .onConflictDoNothing()
@@ -1921,6 +1926,9 @@ export async function invokeAction(
   }
 
   // Check availableTo access control — deny if caller is absent OR not in the list
+  if (action?.executionMode === 'task' && (!action.handlerNodeId || options.idempotencyKey === undefined)) {
+    throw codedError('Task actions require a node handler and Idempotency-Key', 'task_idempotency_required', 400);
+  }
   if (action?.availableTo && action.availableTo.length > 0) {
     if (!data.caller_name || !action.availableTo.includes(data.caller_name)) {
       const who = data.caller_name ? `Agent "${data.caller_name}"` : 'Caller';
@@ -2215,6 +2223,7 @@ function publicInvocation(row: InvocationRow) {
     dispatched_at: row.dispatchedAt?.toISOString() ?? null,
     created_at: row.createdAt.toISOString(),
     completed_at: row.completedAt?.toISOString() ?? null,
+    ...(row.taskState ? { task_execution: taskExecution(row) } : {}),
   };
 }
 
@@ -2730,7 +2739,7 @@ async function claimRegisteredActionHandoff(
     reservationHeld?: boolean;
     skipIncrementAttempts?: boolean;
   },
-): Promise<{ actionId: string; actionName: string; dispatchAttempts: number } | null> {
+): Promise<{ actionId: string; actionName: string; dispatchAttempts: number; taskState: InvocationRow['taskState'] } | null> {
   const claimedActionId = args.targetActionId ?? args.expectedActionId;
   const stateFields = args.pending
     ? { status: 'pending' as const, dispatchedAt: null, retryAfterAt: args.retryAfterAt ?? null }
@@ -2786,11 +2795,13 @@ async function claimRegisteredActionHandoff(
       actionId: actionInvocations.actionId,
       actionName: actionInvocations.actionName,
       dispatchAttempts: actionInvocations.dispatchAttempts,
+      taskState: actionInvocations.taskState,
     });
   return claimed?.actionId ? {
     actionId: claimed.actionId,
     actionName: claimed.actionName,
     dispatchAttempts: claimed.dispatchAttempts,
+    taskState: claimed.taskState,
   } : null;
 }
 
@@ -3023,7 +3034,11 @@ async function dispatchNodeInvocation(args: {
     }
   }
 
-  const frame = {
+  const frame: {
+    v: 1; type: 'action.invoke'; invocation_id: string; action: string;
+    agent_id?: string; agent_name?: string; input: ReturnType<typeof toFleetWireJson>;
+    task_execution?: ReturnType<typeof taskExecution>;
+  } = {
     v: 1 as const,
     type: 'action.invoke' as const,
     invocation_id: args.invocationId,
@@ -3048,7 +3063,7 @@ async function dispatchNodeInvocation(args: {
   const expectedActionId = args.invocationOrigin === 'registered_action'
     ? (args.expectedActionId ?? args.actionId)
     : null;
-  let registeredNodeClaim: { actionId: string; actionName: string; dispatchAttempts: number } | null = null;
+  let registeredNodeClaim: { actionId: string; actionName: string; dispatchAttempts: number; taskState: InvocationRow['taskState'] } | null = null;
   if (args.invocationOrigin === 'registered_action' && !args.agent) {
     registeredNodeClaim = expectedActionId
       ? await claimRegisteredActionHandoff(args.db, {
@@ -3073,6 +3088,9 @@ async function dispatchNodeInvocation(args: {
       );
       return { accepted: false, pending: false, sent: false, settled };
     }
+  }
+  if (registeredNodeClaim?.taskState) {
+    frame.task_execution = taskExecution({ id: args.invocationId, ...registeredNodeClaim });
   }
   const sent = args.agent && args.actionId
     ? await (args.registry.sendAuthorizedActionToProvider?.(
@@ -4002,6 +4020,7 @@ export async function sweepTimedOutInvocations(
   registry: NodeConnectionRegistry,
   opts: SweepTimedOutInvocationsOptions | number | null = {},
 ) {
+  await expireTaskInvocations(db);
   const sweepOpts = typeof opts === 'number' || opts === null ? {} : opts;
   const timeoutMs = typeof opts === 'number' ? opts : sweepOpts.timeoutMs ?? ACTION_DISPATCH_TIMEOUT_MS;
   await failUnreachableAgentInvocations(
@@ -4064,5 +4083,5 @@ export async function getInvocation(db: Db, workspaceId: string, actionName: str
     );
 
   if (!row) return null;
-  return publicInvocation(row);
+  return publicInvocation(await expireTaskInvocation(db, row));
 }
