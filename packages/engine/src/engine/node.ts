@@ -135,7 +135,12 @@ function registrationTags(message: FleetNodeRegisterMessage): string[] {
 // with its own tag list, often `[]`. So `node.register` carries the enrolled
 // `cloud:*` tags over and ignores any `cloud:*` tag in the frame: a connected
 // node must not be able to shed the identity reclaim uses to find it, or forge
-// one that makes it look like a different sandbox. Only enrollment sets them.
+// one that makes it look like a different sandbox. Only enrollment sets them,
+// and only enrollment clears them: re-enrolling replaces the whole tag set, so
+// a `cloud:*` value a pre-reservation broker once registered is removed by
+// re-enrolling the node, not by a later register frame. A frame's `cloud:*`
+// tags are ignored with a server-side warning rather than rejected, so a
+// broker still configured with one keeps coming online.
 export const SERVER_OWNED_NODE_TAG_PREFIX = 'cloud:';
 
 function isServerOwnedTag(tag: string): boolean {
@@ -546,6 +551,18 @@ export async function registerNode(
   }
 
   const tags = registrationTags(message);
+  const ignoredServerOwnedTags = [...new Set(message.tags.filter(isServerOwnedTag))];
+  if (ignoredServerOwnedTags.length > 0) {
+    // Not rejected: a broker whose manifest predates the reserved namespace
+    // must still come online. But dropping part of a valid frame without a
+    // trace hides the misconfiguration, so record which tags were ignored.
+    console.warn('[node.register] ignored server-owned tags', {
+      workspaceId,
+      nodeId: authenticatedNodeId,
+      prefix: SERVER_OWNED_NODE_TAG_PREFIX,
+      tags: ignoredServerOwnedTags,
+    });
+  }
 
   const [existingByName] = await db
     .select()

@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { registerNode } from '../../engine/node.js';
+import { DEFAULT_PROVIDER_NAME } from '../../engine/nodeProvider.js';
+import type { EngineDb } from '../../ports/database.js';
 import { createWorkspace, FakeSocket, makeNodeStack, type TestStack } from './harness.js';
 
 // `cloud:*` tags are written by the control plane at enrollment and are the
@@ -161,5 +164,78 @@ describe('fleet node server-owned cloud:* tags', () => {
       'current',
       'repo:AgentWorkforce/relaycast',
     ]);
+  });
+
+  it('keeps a re-enroll that commits after registration read the row but before it writes', async () => {
+    const workspace = await createWorkspace(stack.app, 'node-cloud-tags-race');
+    await enroll(workspace.workspaceKey, { max_agents: 4, tags: ENROLLED_CLOUD_TAGS });
+    const reEnrolled = ['cloud:sandbox-provider:daytona', 'cloud:sandbox-id:sbx_ledger_2'];
+
+    // registerNode reads the row, then writes tags inside runAtomic. Land a
+    // re-enroll in exactly that window: after the read, before the write
+    // transaction opens. A merge computed from the earlier read would put
+    // `sbx_ledger_1` back; the in-statement merge must keep `sbx_ledger_2`.
+    const db = stack.runtime.deps.db as EngineDb & { withTransaction: <T>(fn: (tx: EngineDb) => Promise<T>) => Promise<T> };
+    let reEnrolledMidRegister = false;
+    const racingDb = new Proxy(db, {
+      get(target, prop) {
+        if (prop === 'withTransaction') {
+          return async <T>(fn: (tx: EngineDb) => Promise<T>): Promise<T> => {
+            if (!reEnrolledMidRegister) {
+              reEnrolledMidRegister = true;
+              await enroll(workspace.workspaceKey, { max_agents: 4, tags: reEnrolled });
+            }
+            return target.withTransaction(fn);
+          };
+        }
+        const value = Reflect.get(target, prop, target) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    const result = await registerNode(racingDb, workspace.workspaceId, 'node_sandbox', {
+      v: 1,
+      id: 'register-race',
+      type: 'node.register',
+      name: 'sandbox-node',
+      node_id: 'node_sandbox',
+      capabilities: [],
+      max_agents: 4,
+      tags: ['linux'],
+      version: 'test-node',
+      resume_cursor: null,
+    }, { name: DEFAULT_PROVIDER_NAME, instance_id: 'conn_race' });
+
+    expect(reEnrolledMidRegister).toBe(true);
+    expect(result.node.tags).toEqual([...reEnrolled, 'linux']);
+    expect(await readTags(workspace.workspaceKey)).toEqual([...reEnrolled, 'linux']);
+  });
+
+  it('logs the cloud:* tags a register frame tried to set, and still registers', async () => {
+    const workspace = await createWorkspace(stack.app, 'node-cloud-tags-warn');
+    await enroll(workspace.workspaceKey, { max_agents: 4, tags: ENROLLED_CLOUD_TAGS });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const tags = await register(workspace.workspaceId, 'register-warn', {
+        tags: ['linux', 'cloud:region:eu-west', 'cloud:region:eu-west', 'cloud:sandbox-id:sbx_forged'],
+      });
+      expect(tags).toEqual([...ENROLLED_CLOUD_TAGS, 'linux']);
+      const ignored = warn.mock.calls.filter(([label]) => label === '[node.register] ignored server-owned tags');
+      expect(ignored).toEqual([[
+        '[node.register] ignored server-owned tags',
+        {
+          workspaceId: workspace.workspaceId,
+          nodeId: 'node_sandbox',
+          prefix: 'cloud:',
+          tags: ['cloud:region:eu-west', 'cloud:sandbox-id:sbx_forged'],
+        },
+      ]]);
+
+      warn.mockClear();
+      await register(workspace.workspaceId, 'register-no-warn', { tags: ['linux', 'cloudy'] });
+      expect(warn.mock.calls.filter(([label]) => label === '[node.register] ignored server-owned tags')).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

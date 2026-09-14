@@ -166,6 +166,9 @@ export const FleetNodeRegisterMessageSchema = z
     capabilities: z.array(FleetCapabilitySchema),
     // Provider-level capacity; the node figure is the aggregate across providers.
     max_agents: z.number().int().nonnegative(),
+    // `cloud:*` is reserved for control-plane lifecycle tags set at enrollment.
+    // The engine ignores (and logs) any `cloud:*` entry here and keeps the
+    // node's enrolled `cloud:*` tags instead.
     tags: z.array(FleetNodeTagSchema),
     // Placement-safe repository identities. The engine persists these as
     // `repo:<owner/name>` tags so existing node roster readers can consume them.

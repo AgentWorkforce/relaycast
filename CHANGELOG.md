@@ -18,7 +18,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Patch]
 
-- Keep a node's enrollment-time `cloud:*` tags when its broker re-registers, and stop brokers from adding or removing them.
+- Keep a node's enrollment-time `cloud:*` tags when its broker re-registers, and stop brokers from adding or removing them. `cloud:` is now a reserved node-tag namespace: `cloud:*` tags in `node.register` are ignored with a server-side warning, and re-enrolling is how to change or clear them.
 
 ## [8.10.1] - 2026-09-13
 
