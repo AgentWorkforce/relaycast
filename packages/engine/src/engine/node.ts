@@ -142,6 +142,26 @@ function isServerOwnedTag(tag: string): boolean {
   return tag.startsWith(SERVER_OWNED_NODE_TAG_PREFIX);
 }
 
+// The tags a broker registration writes: the row's current `cloud:*` tags,
+// then the broker's own (already stripped of `cloud:*` by registrationTags).
+// This is computed inside the UPDATE rather than from a row read earlier,
+// because a concurrent re-enroll can replace the `cloud:*` set in between and
+// a read-then-write would put the stale set back. runAtomic is not isolated on
+// every adapter (it runs unwrapped on D1) and enrollment does not take the
+// node lock, so a single statement is the only boundary that holds everywhere.
+// `substr` keeps the match case-sensitive like isServerOwnedTag; LIKE would not.
+function brokerTagsPreservingServerOwned(callerTags: string[]) {
+  return sql<string[]>`(
+    SELECT json_group_array(value) FROM (
+      SELECT 0 AS src, key AS pos, value FROM json_each(${nodes.tags})
+        WHERE substr(value, 1, ${SERVER_OWNED_NODE_TAG_PREFIX.length}) = ${SERVER_OWNED_NODE_TAG_PREFIX}
+      UNION ALL
+      SELECT 1 AS src, key AS pos, value FROM json_each(${JSON.stringify(callerTags)})
+      ORDER BY src, pos
+    )
+  )`;
+}
+
 function supportsProviderDeliveryReadiness(registry: NodeConnectionRegistry): boolean {
   return typeof registry.setProviderDeliveryReadiness === 'function'
     && typeof registry.markProviderAgentsDeliveryReady === 'function'
@@ -568,14 +588,6 @@ export async function registerNode(
     return { node: publicNode(updated), acceptance: [], provider };
   }
 
-  // The broker's tags replace the node's caller-visible tags, but the enrolled
-  // server-owned `cloud:*` identity carries over untouched (see
-  // SERVER_OWNED_NODE_TAG_PREFIX). `tags` has already had any `cloud:*` tag
-  // from the frame stripped, so the enrolled set is the only source.
-  const brokerTags = [...new Set([
-    ...existing.tags.filter(isServerOwnedTag),
-    ...tags,
-  ])];
   const capabilities = normalizeCapabilities(message.capabilities);
   await runAtomic(db, async (tx) => {
     await upsertProvider(tx, workspaceId, authenticatedNodeId, {
@@ -589,7 +601,7 @@ export async function registerNode(
     await materializeProviderActions(tx, workspaceId, authenticatedNodeId, provider.name, capabilities);
     await tx
       .update(nodes)
-      .set({ name: message.name, kind: 'ws', role: 'broker', deliveryAdapter: 'ws.node.v1', deliveryConfig: null, tags: brokerTags })
+      .set({ name: message.name, kind: 'ws', role: 'broker', deliveryAdapter: 'ws.node.v1', deliveryConfig: null, tags: brokerTagsPreservingServerOwned(tags) })
       .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, authenticatedNodeId)));
     await recomputeNodeAggregate(tx, workspaceId, authenticatedNodeId, {
       version: message.version,
