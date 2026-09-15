@@ -119,13 +119,53 @@ function isRepoTag(tag: string): boolean {
 // repo advertisements: once a registration carries the field at all - even as an
 // empty list - every caller-supplied `repo:` tag is dropped rather than merged.
 // Registrations that omit the field entirely are pre-`repo_keys` clients and
-// stay on the legacy tag-only path. Non-repo tags always round-trip.
+// stay on the legacy tag-only path. Other tags round-trip, except server-owned
+// tags (below), which a registration can never supply.
 function registrationTags(message: FleetNodeRegisterMessage): string[] {
-  if (!message.repo_keys) return [...new Set(message.tags)];
+  const callerTags = message.tags.filter((tag) => !isServerOwnedTag(tag));
+  if (!message.repo_keys) return [...new Set(callerTags)];
   return [...new Set([
-    ...message.tags.filter((tag) => !isRepoTag(tag)),
+    ...callerTags.filter((tag) => !isRepoTag(tag)),
     ...message.repo_keys.map((repoKey) => `repo:${repoKey}`),
   ])];
+}
+
+// `cloud:*` tags are server-owned lifecycle identity (sandbox provider, node
+// type, sandbox id, route). The control plane writes them at enrollment through
+// POST /v1/nodes; the broker on the node never learns them and re-registers
+// with its own tag list, often `[]`. So `node.register` carries the enrolled
+// `cloud:*` tags over and ignores any `cloud:*` tag in the frame: a connected
+// node must not be able to shed the identity reclaim uses to find it, or forge
+// one that makes it look like a different sandbox. Only enrollment sets them,
+// and only enrollment clears them: re-enrolling replaces the whole tag set, so
+// a `cloud:*` value a pre-reservation broker once registered is removed by
+// re-enrolling the node, not by a later register frame. A frame's `cloud:*`
+// tags are ignored with a server-side warning rather than rejected, so a
+// broker still configured with one keeps coming online.
+export const SERVER_OWNED_NODE_TAG_PREFIX = 'cloud:';
+
+function isServerOwnedTag(tag: string): boolean {
+  return tag.startsWith(SERVER_OWNED_NODE_TAG_PREFIX);
+}
+
+// The tags a broker registration writes: the row's current `cloud:*` tags,
+// then the broker's own (already stripped of `cloud:*` by registrationTags).
+// This is computed inside the UPDATE rather than from a row read earlier,
+// because a concurrent re-enroll can replace the `cloud:*` set in between and
+// a read-then-write would put the stale set back. runAtomic is not isolated on
+// every adapter (it runs unwrapped on D1) and enrollment does not take the
+// node lock, so a single statement is the only boundary that holds everywhere.
+// `substr` keeps the match case-sensitive like isServerOwnedTag; LIKE would not.
+function brokerTagsPreservingServerOwned(callerTags: string[]) {
+  return sql<string[]>`(
+    SELECT json_group_array(value) FROM (
+      SELECT 0 AS src, key AS pos, value FROM json_each(${nodes.tags})
+        WHERE substr(value, 1, ${SERVER_OWNED_NODE_TAG_PREFIX.length}) = ${SERVER_OWNED_NODE_TAG_PREFIX}
+      UNION ALL
+      SELECT 1 AS src, key AS pos, value FROM json_each(${JSON.stringify(callerTags)})
+      ORDER BY src, pos
+    )
+  )`;
 }
 
 function supportsProviderDeliveryReadiness(registry: NodeConnectionRegistry): boolean {
@@ -512,6 +552,18 @@ export async function registerNode(
   }
 
   const tags = registrationTags(message);
+  const ignoredServerOwnedTags = [...new Set(message.tags.filter(isServerOwnedTag))];
+  if (ignoredServerOwnedTags.length > 0) {
+    // Not rejected: a broker whose manifest predates the reserved namespace
+    // must still come online. But dropping part of a valid frame without a
+    // trace hides the misconfiguration, so record which tags were ignored.
+    console.warn('[node.register] ignored server-owned tags', {
+      workspaceId,
+      nodeId: authenticatedNodeId,
+      prefix: SERVER_OWNED_NODE_TAG_PREFIX,
+      tags: ignoredServerOwnedTags,
+    });
+  }
 
   const [existingByName] = await db
     .select()
@@ -567,7 +619,7 @@ export async function registerNode(
     await materializeProviderActions(tx, workspaceId, authenticatedNodeId, provider.name, capabilities);
     await tx
       .update(nodes)
-      .set({ name: message.name, kind: 'ws', role: 'broker', deliveryAdapter: 'ws.node.v1', deliveryConfig: null, tags })
+      .set({ name: message.name, kind: 'ws', role: 'broker', deliveryAdapter: 'ws.node.v1', deliveryConfig: null, tags: brokerTagsPreservingServerOwned(tags) })
       .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, authenticatedNodeId)));
     await recomputeNodeAggregate(tx, workspaceId, authenticatedNodeId, {
       version: message.version,

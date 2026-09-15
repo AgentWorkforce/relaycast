@@ -10,6 +10,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased - Minor]
 
 - Persist task ownership and immutable final results with attempt/generation fencing, deadline failure, and replayable fleet receipts; migration 0060 adds task state and action execution mode.
+- Preserve server-owned `cloud:*` node tags set at enrollment when a broker node re-registers, and ignore `cloud:*` tags sent in `node.register` (logged as `[node.register] ignored server-owned tags`); only enrollment sets or clears them. The merge happens inside the register UPDATE, so a re-enroll that lands mid-registration is not reverted.
 
 ## [8.10.1] - 2026-09-13
 

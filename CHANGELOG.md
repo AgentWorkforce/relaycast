@@ -19,6 +19,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ## [Unreleased - Minor]
 
 - Add opt-in durable task actions with execution fencing, final-result receipts, and restart reconciliation.
+- Keep a node's enrollment-time `cloud:*` tags when its broker re-registers, and stop brokers from adding or removing them. `cloud:` is now a reserved node-tag namespace: `cloud:*` tags in `node.register` are ignored with a server-side warning, and re-enrolling is how to change or clear them.
 
 ## [8.10.1] - 2026-09-13
 
@@ -549,7 +550,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v8.10.1...HEAD
+[Unreleased - Minor]: https://github.com/AgentWorkforce/relaycast/compare/v8.10.1...HEAD
 [8.10.1]: https://github.com/AgentWorkforce/relaycast/compare/v8.10.0...v8.10.1
 [8.10.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.9.1...v8.10.0
 [8.9.1]: https://github.com/AgentWorkforce/relaycast/compare/v8.9.0...v8.9.1
