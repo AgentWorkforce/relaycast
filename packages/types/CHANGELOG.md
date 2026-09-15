@@ -7,7 +7,9 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+- Add task action capability mode, correlated execution metadata, action.accept, and fenced final/interim result validation.
 
 ## [8.9.0] - 2026-09-11
 

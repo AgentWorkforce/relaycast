@@ -911,6 +911,51 @@ replay that reaches the narrow interval before its placement/dispatch outcome is
 durable returns retryable `idempotency_unavailable`; clients must retry the same
 logical request with the same key rather than minting a replacement.
 
+Long-running providers can register an action capability with
+`execution_mode: "task"` (for example `{name: "task.run", kind: "action", global:
+true, execution_mode: "task"}`). Task invocations use the existing authenticated
+agent `POST /v1/actions/:name/invoke` route and **require** `Idempotency-Key` plus
+`input.task_context`: `{run_id, step_id, dispatch_id, timeout_ms}`. Correlation
+identifiers are nonempty, at most 512 characters, and have no surrounding
+whitespace; the timeout is an integer from 1 through 86400000 milliseconds. Keep
+both the key and input stable across caller retries. Node-addressed invokes and
+unkeyed triggers cannot invoke task actions.
+
+The fleet `action.invoke` adds `task_execution` containing the correlation IDs,
+an engine-issued `execution_id`, and an absolute `deadline`. Providers must
+persist the invocation, execution ID, and their immutable `worker_generation`
+before sending `{v: 1, id, type: "action.accept", invocation_id, execution_id,
+worker_generation}`. The correlated `reply` commits ownership as `running` and
+returns `newly_accepted: true` only for the winning transition. Replaying acceptance
+reconciles that generation and returns `newly_accepted: false` with the current
+state and result. A provider must reconcile its durable launch record on replay;
+it must never launch another worker just because the acceptance reply was lost.
+An ambiguous crash between acceptance and launch may end at the deadline rather
+than repeat an execution. Accepted tasks are not redispatched on the short action
+timeout, node loss, or reconnect. Before acceptance, redelivery may change the
+execution ID; stale IDs and mismatched worker generations are rejected.
+
+Task `action.result` frames require `id`, `execution_id`, `worker_generation`, and
+an explicit `final` flag, plus either JSON `output` or a nonempty `error`.
+`final: false` acknowledges observation without storing terminal output.
+`final: true` commits immutable output/failure and optional `accounting` (a map of
+nonnegative finite numeric counters) **before** the correlated positive `reply`.
+Identical final retries return the persisted receipt; conflicting finals fail
+with `task_result_conflict`. The provider should acknowledge its worker callback
+only after that receipt. Readiness, idle state, and process exit are not final
+results; a provider that loses its worker should submit an explicit final failure.
+
+The existing `GET /v1/actions/:name/invocations/:id` is authoritative after a caller
+restart or missed completion event. It includes `task_execution`, `running` or
+terminal status, output, error, and completion time. Provider reconciliation uses
+`action.accept` with the original fence; this does not broaden node-token HTTP
+access or permit node-owned HTTP completion. An elapsed deadline settles an
+unfinished task as `failed` with `task_deadline_exceeded` on read or sweep, never
+as successful readiness. Terminal event delivery is best effort; always reconcile
+with durable readback. Existing short actions and spawn readiness retain their
+current behavior. Deploy the engine contract before enabling task providers;
+providers must implement durable launch/result recovery before callers use them.
+
 For crash-safe agent cleanup, `POST /v1/agents/release-exact` requires the
 immutable `expected_agent_id` and a caller-persisted `Idempotency-Key`. The key
 is scoped to the workspace, authenticated caller principal, and `release` action;

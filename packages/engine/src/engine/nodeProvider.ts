@@ -215,6 +215,9 @@ export async function materializeProviderActions(
   capabilities: FleetCapability[],
 ): Promise<void> {
   const actionCaps = capabilities.filter((cap) => capabilityKind(cap) === 'action');
+  if (capabilities.some((cap) => cap.execution_mode === 'task' && capabilityKind(cap) !== 'action')) {
+    throw codedError('Task execution mode requires an action capability', 'invalid_task_capability', 400);
+  }
   const keepNames = actionCaps.map((cap) => cap.name);
 
   // Prune actions this provider previously materialized that it no longer offers.
@@ -286,7 +289,7 @@ export async function materializeProviderActions(
     if (existing) {
       await db
         .update(actions)
-        .set({ handlerProvider: providerName, handlerAgentId: null, isGlobal: wantGlobal, queue: wantQueue, isActive: true })
+        .set({ handlerProvider: providerName, handlerAgentId: null, isGlobal: wantGlobal, queue: wantQueue, executionMode: cap.execution_mode ?? 'short', isActive: true })
         .where(eq(actions.id, existing.id));
     } else {
       await db.insert(actions).values({
@@ -299,6 +302,7 @@ export async function materializeProviderActions(
         handlerProvider: providerName,
         isGlobal: wantGlobal,
         queue: wantQueue,
+        executionMode: cap.execution_mode ?? 'short',
         inputSchema: {},
         outputSchema: {},
         availableTo: null,

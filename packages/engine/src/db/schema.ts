@@ -11,7 +11,15 @@ import {
 } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
-import type { FleetCapability, WorkspaceProvenance } from '@relaycast/types';
+import type { FleetCapability, FleetTaskContext, WorkspaceProvenance } from '@relaycast/types';
+
+export interface TaskInvocationState extends FleetTaskContext {
+  deadline: string;
+  execution_id?: string;
+  worker_generation?: string;
+  accepted_at?: string;
+  accounting?: Record<string, number>;
+}
 
 // ============================================
 // Workspaces
@@ -1028,6 +1036,7 @@ export const actions = sqliteTable(
     // When true, an invoke whose provider is offline queues instead of failing
     // fast (the per-provider offline queue).
     queue: integer('queue', { mode: 'boolean' }).notNull().default(false),
+    executionMode: text('execution_mode').$type<'short' | 'task'>().notNull().default('short'),
     inputSchema: text('input_schema', { mode: 'json' }).$type<Record<string, unknown>>().default({}),
     outputSchema: text('output_schema', { mode: 'json' }).$type<Record<string, unknown>>().default({}),
     availableTo: text('available_to', { mode: 'json' }).$type<string[]>(),
@@ -1076,6 +1085,7 @@ export const actionInvocations = sqliteTable(
     handlerAgentId: text('handler_agent_id'),
     handlerNodeId: text('handler_node_id'),
     input: text('input', { mode: 'json' }).default({}),
+    taskState: text('task_state', { mode: 'json' }).$type<TaskInvocationState>(),
     output: text('output', { mode: 'json' }),
     status: text('status').notNull().default('pending'),
     error: text('error'),
