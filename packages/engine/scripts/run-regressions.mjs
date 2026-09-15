@@ -18,6 +18,7 @@ for (const name of [
   'a2a-review-regression',
   'a2a-redirect-regression',
   'public-consumer-compile',
+  'task-invocations-regression',
 ]) {
   console.log(`Running ${name}`);
   const result = spawnSync(process.execPath, [fileURLToPath(new URL(`${name}.mjs`, import.meta.url))], {

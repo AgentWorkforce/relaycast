@@ -435,6 +435,37 @@ components:
         audit_id:
           type: string
 
+    TaskContext:
+      type: object
+      additionalProperties: false
+      required: [run_id, step_id, dispatch_id, timeout_ms]
+      description: Immutable task correlation; identifiers have no surrounding whitespace.
+      properties:
+        run_id: { type: string, minLength: 1, maxLength: 512 }
+        step_id: { type: string, minLength: 1, maxLength: 512 }
+        dispatch_id: { type: string, minLength: 1, maxLength: 512 }
+        timeout_ms: { type: integer, minimum: 1, maximum: 86400000 }
+
+    TaskExecution:
+      type: object
+      required: [execution_id, run_id, step_id, dispatch_id, deadline]
+      description: >-
+        Durable task execution metadata returned on invocation GET and fleet receipts.
+        action.invoke carries the required fields before acceptance. A provider
+        persists its worker_generation before action.accept. Receipt status is
+        dispatched/running/completed/failed; only the last two are terminal.
+      properties:
+        execution_id: { type: string }
+        run_id: { type: string }
+        step_id: { type: string }
+        dispatch_id: { type: string }
+        deadline: { type: string, format: date-time }
+        worker_generation: { type: string }
+        accepted_at: { type: string, format: date-time }
+        accounting:
+          type: object
+          additionalProperties: { type: number, minimum: 0 }
+
     LifecycleActionInvocation:
       type: object
       required:
@@ -4813,7 +4844,24 @@ paths:
   /actions/{name}/invoke:
     post:
       summary: Invoke action
-      description: Invoke a registered action. The caller must be an agent allowed by `available_to`; the request returns an async ack containing `invocation_id`, dispatches an `action.invoke` frame to the handler's node, and delivers `action.denied` to the caller's node on denied calls.
+      description: >-
+        Invoke a registered action as an agent allowed by available_to. Returns an
+        async acknowledgment containing invocation_id and dispatches action.invoke
+        to the handler node. Task capabilities register execution_mode=task and
+        require Idempotency-Key and input.task_context (TaskContext). They use
+        dispatched -> running -> completed/failed; spawn readiness is not task
+        completion. The fleet frame adds TaskExecution; action.accept binds its
+        execution_id and a durable worker_generation before launch. A correlated
+        reply includes newly_accepted (false on replay) and current result. Accepted
+        tasks are not redispatched on node loss or the short action timeout.
+        Task action.result requires id, execution_id, worker_generation, final,
+        and either output or a nonempty error. final=false stays nonterminal;
+        final=true commits immutable output/error/accounting before reply. Identical
+        result retries reconcile, conflicting payloads return task_result_conflict,
+        and obsolete attempts/generations return stale_task_execution. Providers
+        persist launch state before acceptance and reconcile ambiguous replies
+        without launching a second worker. Node-addressed and unkeyed invokes of
+        task actions fail task_idempotency_required.
       tags:
         - Actions
       security:
@@ -4857,7 +4905,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
         '400':
-          description: Invalid `Idempotency-Key` header.
+          description: Invalid Idempotency-Key, task_idempotency_required, or invalid_task_context.
           content:
             application/json:
               schema:
@@ -4891,7 +4939,10 @@ paths:
   /actions/{name}/invocations/{id}/complete:
     post:
       summary: Complete action invocation
-      description: Handler agent reports the result (or error) of an invocation.
+      description: >-
+        Handler agent reports the result (or error) of an invocation. Node-owned
+        invocations cannot complete through this route. Task providers use fenced
+        fleet action.result and wait for its durable correlated reply.
       tags:
         - Actions
       security:
@@ -4931,7 +4982,12 @@ paths:
   /actions/{name}/invocations/{id}:
     get:
       summary: Get action invocation
-      description: Get the status and result of an action invocation
+      description: >-
+        Get durable status and result, including after reconnect or caller restart.
+        Task-mode invocations include task_execution. Accepted ownership is running,
+        not completion. An elapsed task deadline settles unfinished work as failed
+        with task_deadline_exceeded. Node tokens retain their existing own-spawn-only
+        read restriction; task providers reconcile through fenced fleet action.accept.
       tags:
         - Actions
       security:
