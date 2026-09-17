@@ -140,6 +140,11 @@ type DirectNodeToken = {
   token: string;
 };
 
+// Consecutive connect attempts a cached node token may serve before it is re-minted.
+// The counter resets whenever a connection actually opens, so a healthy client mints
+// once per session while a client that can never connect still recovers a stale token.
+const DIRECT_NODE_TOKEN_MAX_USES = 3;
+
 function normalizeSubscriptionChannel(channel: string): string {
   const trimmed = channel.trim();
   if (trimmed === '@self') return trimmed;
@@ -164,6 +169,7 @@ export class AgentClient {
   private pendingHeartbeat: Promise<void> | null = null;
   private wsOptions: Omit<WsClientOptions, 'token' | 'baseUrl' | 'path' | 'nodeRegistration' | 'autoAckDeliveries'>;
   private directNodeToken: DirectNodeToken | null = null;
+  private directNodeTokenUses = 0;
   private manualSubscriptions = new Set<string>();
   private managedSubscriptions = new Map<symbol, ManagedSubscription>();
   private activeWsChannels = new Set<string>();
@@ -230,8 +236,18 @@ export class AgentClient {
   }
 
   private async fetchDirectNodeToken(): Promise<string> {
+    // A node token is a long-lived credential, so reuse it across reconnects rather
+    // than minting one per attempt. Minting rotates the node's token through the
+    // workspace's shared write lane, so a reconnect loop that mints every attempt
+    // turns write backpressure into more write load. Reuse is bounded so a token the
+    // server no longer accepts still gets replaced instead of wedging the client.
+    if (this.directNodeToken && this.directNodeTokenUses < DIRECT_NODE_TOKEN_MAX_USES) {
+      this.directNodeTokenUses += 1;
+      return this.directNodeToken.token;
+    }
     const token = await this.client.post<DirectNodeToken>('/v1/agent/node-token', {});
     this.directNodeToken = token;
+    this.directNodeTokenUses = 1;
     return token.token;
   }
 
@@ -268,6 +284,7 @@ export class AgentClient {
       this.client.internalOrigin,
     ));
     this.ws.on('open', () => {
+      this.directNodeTokenUses = 0;
       void this.presence.markOnline().catch(() => {});
       this.startAutoHeartbeat();
       this.syncDesiredSubscriptions({ resetRemoteState: true });
