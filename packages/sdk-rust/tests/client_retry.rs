@@ -174,6 +174,85 @@ async fn unsafe_mutations_retry_only_with_an_idempotency_key() {
     assert_eq!(value, json!({ "id": "agent-keyed" }));
 }
 
+/// Workspace write admission rejects before the engine handler runs, so an
+/// unkeyed POST that is denied has provably applied nothing and must be retried.
+/// Agent/node binding is the motivating caller: it carries no idempotency key, so
+/// without this a momentary denial leaves the agent permanently unbound.
+#[tokio::test]
+async fn admission_denials_retry_unkeyed_mutations() {
+    for code in ["workspace_busy", "workspace_admission_unavailable"] {
+        let mock_server = MockServer::start().await;
+        let status = if code == "workspace_busy" { 429 } else { 503 };
+        Mock::given(method_matcher("POST"))
+            .respond_with(
+                api_error(status, code, "workspace write capacity is busy")
+                    .insert_header("Retry-After", "0"),
+            )
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+        Mock::given(method_matcher("POST"))
+            .respond_with(ok(json!({ "agent_name": "codex" })))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let binding: Value = client_for(&mock_server)
+            .post(
+                "/v1/nodes/chief/agents",
+                Some(json!({ "agent_name": "codex" })),
+                None,
+            )
+            .await
+            .unwrap_or_else(|err| panic!("{code} should be retried, got {err:?}"));
+        assert_eq!(binding, json!({ "agent_name": "codex" }));
+    }
+}
+
+/// Sustained denial still terminates with the server's own diagnostic rather than
+/// retrying forever, and keeps the authoritative `Retry-After` for the caller.
+#[tokio::test]
+async fn exhausted_admission_denials_preserve_the_terminal_diagnostic() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method_matcher("POST"))
+        .respond_with(
+            api_error(
+                429,
+                "workspace_busy",
+                "Workspace write capacity is busy; retry with backoff",
+            )
+            .insert_header("Retry-After", "0"),
+        )
+        .expect(3)
+        .mount(&mock_server)
+        .await;
+
+    let err = client_for(&mock_server)
+        .post::<Value>(
+            "/v1/nodes/chief/agents",
+            Some(json!({ "agent_name": "codex" })),
+            None,
+        )
+        .await
+        .expect_err("sustained admission denial must surface to the caller");
+    match err {
+        RelayError::Api {
+            code,
+            status,
+            attempts,
+            retry_after_ms,
+            ..
+        } => {
+            assert_eq!(status, 429);
+            assert_eq!(code, "workspace_busy");
+            assert_eq!(attempts, 3);
+            assert_eq!(retry_after_ms, Some(0));
+        }
+        other => panic!("expected a preserved RelayError::Api, got {other:?}"),
+    }
+}
+
 /// A non-JSON body on the final exhausted attempt (e.g. a bare-text 502 from
 /// a proxy in front of the API) must surface both the real HTTP status and a
 /// bounded, single-line body summary instead of an opaque JSON-parse error.

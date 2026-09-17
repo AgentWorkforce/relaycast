@@ -9,6 +9,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [8.11.1] - 2026-09-17
+
+### Fixed
+
+- `AgentClient.connect()` reuses its direct node token across reconnect attempts rather than calling `POST /v1/agent/node-token` on every attempt. The cached token is replaced after three consecutive attempts that never reach a usable connection, and the counter resets once one does, so a healthy client mints once per session while a client holding a rejected token still recovers.
+
 ## [8.9.0] - 2026-09-11
 
 ### Added

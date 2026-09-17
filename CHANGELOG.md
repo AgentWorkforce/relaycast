@@ -18,6 +18,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased]
 
+## [8.11.1] - 2026-09-17
+
+- Agent realtime clients reuse their direct node token across reconnect attempts instead of minting a new one per attempt. Minting rotates the token through the workspace's shared write capacity, so a client that could not connect would generate write load with every retry and crowd out ordinary writes — including binding a newly spawned agent to its node.
+
 ## [8.11.0] - 2026-09-17
 
 - Fix authenticated requests returning HTTP 429 `plan_limit_exceeded` permanently once a workspace passed its plan's API-call limit: the counter accumulated for the workspace's lifetime instead of resetting each billing period.
@@ -559,6 +563,8 @@ Earlier releases are available on the [GitHub releases page](https://github.com/
 [Unreleased - Minor]: https://github.com/AgentWorkforce/relaycast/compare/v8.10.1...HEAD
 [Unreleased - Patch]: https://github.com/AgentWorkforce/relaycast/compare/v8.10.1...HEAD
 [Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v8.11.0...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v8.11.1...HEAD
+[8.11.1]: https://github.com/AgentWorkforce/relaycast/compare/v8.11.0...v8.11.1
 [8.11.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.10.1...v8.11.0
 [8.10.1]: https://github.com/AgentWorkforce/relaycast/compare/v8.10.0...v8.10.1
 [8.10.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.9.1...v8.10.0
