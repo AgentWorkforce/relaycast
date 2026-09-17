@@ -11,6 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Persist task ownership and immutable final results with attempt/generation fencing, deadline failure, and replayable fleet receipts; migration 0060 adds task state and action execution mode.
 - Preserve server-owned `cloud:*` node tags set at enrollment when a broker node re-registers, and ignore `cloud:*` tags sent in `node.register` (logged as `[node.register] ignored server-owned tags`); only enrollment sets or clears them. The merge happens inside the register UPDATE, so a re-enroll that lands mid-registration is not reverted.
+- `GET /v1/inbox`: unread counts no longer include archived channels, and mentions are matched with the exact `@handle` token contract (escaped `\@x`, email addresses, and prefix/superstring text are not mentions); mention results are limited to live channels the agent has joined or DMs the agent participates in. Hosts must apply `0061_messages_workspace_length_id_index.sql` so mention keyset batches use `(workspace_id, length(id), id)`.
 
 ## [8.10.1] - 2026-09-13
 

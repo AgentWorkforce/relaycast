@@ -1536,6 +1536,13 @@ describe('agent presence and release lifecycle', () => {
   it('completes a generation-authorized delete locally when the implicit direct node is a never-attached ghost', async () => {
     const ws = await createWorkspace(stack.app, 'release-direct-ghost-node');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'ghost-direct-agent');
+    // The liveness signal the fix keys off: the implicit direct node is a
+    // never-attached ghost -> offline with a null heartbeat.
+    const [ghostNode] = await stack.runtime.deps.db
+      .select({ status: nodes.status, lastHeartbeatAt: nodes.lastHeartbeatAt })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.name, `direct-${target.agentId}`)));
+    expect(ghostNode).toEqual({ status: 'offline', lastHeartbeatAt: null });
     const nodeConnections = stack.runtime.deps.nodeConnections!;
     // Mirror the deployed Cloud edge: `isProviderConnected` cannot see the DO and
     // reports connected, and the direct node adapter cannot deliver the guarded
@@ -1584,6 +1591,16 @@ describe('agent presence and release lifecycle', () => {
     const ws = await createWorkspace(stack.app, 'release-direct-live-node');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'live-direct-agent');
     const { handle } = await attachDirectNodeSocket(stack, ws.workspaceId, target);
+    // The liveness signal the fix keys off: the direct node is genuinely online
+    // with a fresh heartbeat (unlike the ghost), so it must stay in the guarded
+    // dispatch path rather than being released locally.
+    const [liveNode] = await stack.runtime.deps.db
+      .select({ status: nodes.status, lastHeartbeatAt: nodes.lastHeartbeatAt })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.name, `direct-${target.agentId}`)));
+    expect(liveNode?.status).toBe('online');
+    expect(liveNode?.lastHeartbeatAt).toBeInstanceOf(Date);
+    expect(Date.now() - (liveNode!.lastHeartbeatAt!.getTime())).toBeLessThan(60_000);
     const nodeConnections = stack.runtime.deps.nodeConnections!;
     // Same Cloud edge signal, but the direct node is genuinely online with a fresh
     // heartbeat: the liveness check must not bypass the guard, so the failing

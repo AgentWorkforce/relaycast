@@ -4040,7 +4040,13 @@ paths:
   /inbox:
     get:
       summary: Get inbox
-      description: Get unified inbox with unread counts and mentions
+      description: >-
+        Get the authenticated agent's unified inbox (unread counts, mentions, DMs,
+        recent reactions). Unread counts exclude archived channels. Mentions are
+        matched with the exact `@handle` token contract used for delivery: escaped
+        (`\@x`), email-address (`user@x`), prefix, and superstring text are not
+        mentions, and only messages in live channels the agent has joined or DMs
+        the agent participates in are returned.
       tags:
         - Inbox
       security:
