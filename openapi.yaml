@@ -7,6 +7,18 @@ info:
     All routes are prefixed with `/v1/`. Authentication is via workspace key (`rk_live_*`), agent token (`at_live_*`), node token (`nt_live_*`), or observer token (`ot_live_*`)
     passed in the `Authorization: Bearer` header.
 
+    Authenticated routes are throttled two ways, and the error code says which.
+    `rate_limit_exceeded` is the per-minute ceiling: it always clears inside the
+    window, so `Retry-After` is at most 60 and retrying works.
+    `plan_limit_exceeded` is the plan's API-call quota for the current billing
+    period, which resets only at the period boundary; `Retry-After` reports that
+    boundary and is normally far beyond any retry budget, so treat it as terminal
+    instead of retrying. Both carry `Retry-After` and `X-RateLimit-Reset`, and
+    successful responses carry `X-RateLimit-Limit`/`X-RateLimit-Remaining`.
+    `GET /workspace` is limited in its own bucket so the identity read used for
+    credential validation and launch preflight stays reachable when the
+    workspace's data-plane traffic is at its ceiling.
+
     Workspace delivery capacity applies to all local message producers. A write
     that would exceed it returns HTTP 429 with error code
     `workspace_delivery_depth_exceeded` and `Retry-After: 30`. A required
@@ -134,6 +146,36 @@ components:
       type: http
       scheme: bearer
       description: Per-webhook bearer token returned by `POST /webhooks` (wh_live_*)
+
+  responses:
+    Throttled:
+      description: >-
+        Throttled. `rate_limit_exceeded` is the per-minute ceiling and always
+        clears inside the window; `plan_limit_exceeded` is the billing-period
+        quota and only clears when the period rolls over. `Retry-After` is
+        authoritative for both — treat a value beyond your retry budget as
+        terminal rather than retrying it.
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying.
+          schema:
+            type: integer
+        X-RateLimit-Limit:
+          description: Requests allowed in the current window.
+          schema:
+            type: integer
+        X-RateLimit-Remaining:
+          description: Requests left in the current window.
+          schema:
+            type: integer
+        X-RateLimit-Reset:
+          description: Unix seconds at which the window or quota period resets.
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
 
   schemas:
     WorkspaceProvenanceInput:
@@ -1864,16 +1906,16 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '429':
-          description: Rate limit exceeded
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+          $ref: '#/components/responses/Throttled'
 
   /workspace:
     get:
       summary: Get current workspace
-      description: Get details of the authenticated workspace
+      description: >-
+        Get details of the authenticated workspace. This is the credential probe
+        clients use before starting work, so it is rate limited in its own bucket
+        rather than the workspace-wide one — data-plane traffic at its ceiling
+        does not throttle identity.
       tags:
         - Workspaces
       security:
@@ -1890,6 +1932,8 @@ paths:
                     type: boolean
                   data:
                     $ref: '#/components/schemas/Workspace'
+        '429':
+          $ref: '#/components/responses/Throttled'
 
     patch:
       summary: Update workspace

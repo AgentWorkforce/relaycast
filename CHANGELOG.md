@@ -18,6 +18,9 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
+- Fix authenticated requests returning HTTP 429 `plan_limit_exceeded` permanently once a workspace passed its plan's API-call limit: the counter accumulated for the workspace's lifetime instead of resetting each billing period.
+- Rate limit `GET /v1/workspace` in its own bucket so credential validation and launch preflight stay reachable while the workspace's other traffic is at its ceiling.
+- Put a retry contract on every 429: `Retry-After` and `X-RateLimit-Reset` now distinguish a per-minute throttle that clears in seconds from a plan quota that only clears at the period boundary.
 - Add opt-in durable task actions with execution fencing, final-result receipts, and restart reconciliation.
 - `GET /v1/inbox`: unread counts no longer include archived channels, and mentions are matched with the exact `@handle` token contract (escaped `\@x`, email addresses, and prefix/superstring text are not mentions); mention results are limited to live channels the agent has joined or DMs the agent participates in.
 

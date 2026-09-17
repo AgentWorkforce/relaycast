@@ -1,5 +1,6 @@
 import type { EntitlementsProvider, PlanLimits, UsageMetric, Workspace } from '../ports/index.js';
 import type { KeyValueStore } from '../ports/kv.js';
+import { getUsageMetric, usagePeriodResetAt } from '../engine/usage.js';
 
 /**
  * The default plan limits, lifted from the original `middleware/planLimits.ts`.
@@ -17,8 +18,9 @@ export const PLAN_LIMITS: Record<string, PlanLimits> = {
 /**
  * Static, table-driven entitlements — the self-host default. Resolves limits
  * from {@link PLAN_LIMITS} keyed by `workspace.plan`, and reads usage counters
- * from the key/value store (the same `usage:<wid>:<metric>` keys the usage
- * tracker increments). The cloud product injects a billing-backed provider.
+ * from the key/value store (the same `usage:<wid>:<metric>:<period>` keys the
+ * usage tracker increments, so both agree on the current billing period). The
+ * cloud product injects a billing-backed provider.
  */
 export class StaticEntitlementsProvider implements EntitlementsProvider {
   constructor(
@@ -34,10 +36,13 @@ export class StaticEntitlementsProvider implements EntitlementsProvider {
   async getUsage(workspaceId: string, metric: UsageMetric): Promise<number> {
     if (!this.kv) return 0;
     try {
-      const raw = await this.kv.get(`usage:${workspaceId}:${metric}`);
-      return parseInt(raw || '0', 10) || 0;
+      return await getUsageMetric(this.kv, workspaceId, metric);
     } catch {
       return 0;
     }
+  }
+
+  async getUsageResetAt(): Promise<number> {
+    return usagePeriodResetAt();
   }
 }

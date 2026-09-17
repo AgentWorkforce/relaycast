@@ -12,5 +12,10 @@ export interface RateLimitResult {
 }
 
 export interface RateLimiter {
+  /**
+   * Count this request against `bucketKey` and report whether it is allowed.
+   * A rejected request must not consume the bucket, so a throttled client's
+   * own retries cannot push `count` past `limit` or extend its window.
+   */
   check(args: { bucketKey: string; limit: number; windowMs: number }): Promise<RateLimitResult>;
 }

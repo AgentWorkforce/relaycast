@@ -268,6 +268,24 @@ agent tokens return `agent_token_invalid` with HTTP 401. Recover only with an
 explicit current-token, origin-node, or enrolled work-unit proof; use the
 audited owner takeover when those proofs are unavailable.
 
+### Throttling
+
+Two different conditions return HTTP 429, and the error code tells you which:
+
+| Code | What it is | Retry |
+| --- | --- | --- |
+| `rate_limit_exceeded` | Per-minute request ceiling | Always clears inside the window; `Retry-After` is at most 60 |
+| `plan_limit_exceeded` | Plan API-call quota for the current billing period | Clears only at the period boundary; `Retry-After` reports it |
+
+Both carry `Retry-After` and `X-RateLimit-Reset`; successful responses carry
+`X-RateLimit-Limit` and `X-RateLimit-Remaining`. `Retry-After` is authoritative
+— a value beyond your retry budget means retrying cannot help, so fail fast
+rather than spending the budget on it.
+
+`GET /v1/workspace` is limited in its own bucket, so the identity read used for
+credential validation and launch preflight stays reachable while the workspace's
+data-plane traffic sits at its ceiling.
+
 ## Telemetry Attribution
 
 Clients may declare who is driving a request so server-side product telemetry
