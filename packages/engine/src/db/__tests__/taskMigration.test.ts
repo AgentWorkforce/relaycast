@@ -23,7 +23,10 @@ it('upgrades existing actions and results additively, preserving rows and every 
       rows: db.prepare(`SELECT * FROM ${name}`).all(),
       fks: db.pragma(`foreign_key_list(${name})`),
     }));
-    expect(runMigrations(handle).applied).toEqual(['0060_durable_task_invocations.sql']);
+    expect(runMigrations(handle).applied).toEqual([
+      '0060_durable_task_invocations.sql',
+      '0061_messages_workspace_length_id_index.sql',
+    ]);
     for (const table of before) {
       const columns = db.pragma(`table_info(${table.name})`) as { name: string }[];
       expect(columns.slice(0, table.columns.length)).toEqual(table.columns);
