@@ -16,7 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Minor]
+## [Unreleased]
+
+## [8.11.0] - 2026-09-17
 
 - Fix authenticated requests returning HTTP 429 `plan_limit_exceeded` permanently once a workspace passed its plan's API-call limit: the counter accumulated for the workspace's lifetime instead of resetting each billing period.
 - Rate limit `GET /v1/workspace` in its own bucket so credential validation and launch preflight stay reachable while the workspace's other traffic is at its ceiling.
@@ -553,7 +555,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased - Patch]: https://github.com/AgentWorkforce/relaycast/compare/v8.10.1...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v8.11.0...HEAD
+[8.11.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.10.1...v8.11.0
 [8.10.1]: https://github.com/AgentWorkforce/relaycast/compare/v8.10.0...v8.10.1
 [8.10.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.9.1...v8.10.0
 [8.9.1]: https://github.com/AgentWorkforce/relaycast/compare/v8.9.0...v8.9.1

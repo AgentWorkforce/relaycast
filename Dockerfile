@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-ARG RELAYCAST_ENGINE_VERSION=8.10.1
+ARG RELAYCAST_ENGINE_VERSION=8.11.0
 
 # Build the engine from this checkout so a source change is exercised by the
 # self-host image before the matching npm package is published.

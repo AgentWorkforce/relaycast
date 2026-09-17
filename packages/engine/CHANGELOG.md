@@ -7,7 +7,9 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Minor]
+## [Unreleased]
+
+## [8.11.0] - 2026-09-17
 
 - Scope usage counters to a UTC-month billing period (`usage:<wid>:<metric>:<period>`). The previous unscoped key accumulated for the lifetime of the workspace, so once it passed the plan's `api_calls` ceiling every authenticated route — including `GET /v1/workspace` — returned 429 `plan_limit_exceeded` with no window that ever cleared it. Entitlements providers reading these counters directly must use the period-scoped key; existing lifetime counters are abandoned, which is the reset.
 - Export `usageCounterKey`, `usagePeriod`, `usagePeriodResetAt`, and `getUsageMetric` so an out-of-tree `EntitlementsProvider` can read the counters the engine writes without rebuilding the key by hand.
