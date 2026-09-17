@@ -542,6 +542,51 @@ describe('AgentClient WebSocket integration', () => {
     expect(handler).toHaveBeenLastCalledWith(2);
   });
 
+  it('reuses the direct node token across reconnect attempts instead of minting per attempt', async () => {
+    const agent = createAgent();
+    const mints = () =>
+      mockFetch.mock.calls.filter(([url]) => String(url).endsWith('/v1/agent/node-token')).length;
+
+    agent.connect();
+    await nextSocket();
+    expect(mints()).toBe(1);
+
+    // Minting rotates the node token through the workspace's shared write lane, so an
+    // attempt that never opens must not mint again — otherwise write backpressure
+    // feeds itself and a reconnect loop saturates the lane it is already losing.
+    for (const [index, delayMs] of [[0, 1000], [1, 2000]] as const) {
+      MockWebSocket.instances[index]!.simulateClose();
+      await vi.advanceTimersByTimeAsync(delayMs);
+      await nextSocket(index + 1);
+      expect(mints()).toBe(1);
+    }
+
+    // Reuse stays bounded so a token the server no longer accepts is still replaced.
+    MockWebSocket.instances[2]!.simulateClose();
+    await vi.advanceTimersByTimeAsync(4000);
+    await nextSocket(3);
+    expect(mints()).toBe(2);
+  });
+
+  it('keeps a single minted token while a connection that opens keeps flapping', async () => {
+    const agent = createAgent();
+    const mints = () =>
+      mockFetch.mock.calls.filter(([url]) => String(url).endsWith('/v1/agent/node-token')).length;
+
+    agent.connect();
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const socket = await nextSocket(attempt);
+      socket.simulateOpen();
+      // `open` is emitted only after node registration is sent, so let that settle:
+      // reaching a usable connection is what marks the cached token good.
+      await vi.advanceTimersByTimeAsync(0);
+      socket.simulateClose();
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+
+    expect(mints()).toBe(1);
+  });
+
   it('on.permanentlyDisconnected fires with attempt count', async () => {
     const agent = createAgent({
       ws: { maxReconnectAttempts: 0, reconnectJitter: false },

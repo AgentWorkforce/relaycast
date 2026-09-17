@@ -16,7 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+- Agent realtime clients reuse their direct node token across reconnect attempts instead of minting a new one per attempt. Minting rotates the token through the workspace's shared write capacity, so a client that could not connect would generate write load with every retry and crowd out ordinary writes — including binding a newly spawned agent to its node.
 
 ## [8.11.0] - 2026-09-17
 
