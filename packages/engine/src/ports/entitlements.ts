@@ -27,4 +27,13 @@ export interface EntitlementsProvider {
 
   /** Current usage for a metric, compared against the limit before allowing an action. */
   getUsage(workspaceId: string, metric: UsageMetric): Promise<number>;
+
+  /**
+   * Unix ms at which `metric`'s usage window rolls over, used to put an honest
+   * `Retry-After` on a quota 429 so callers can tell a wait-and-retry condition
+   * from one that no retry will clear. Optional: a provider billing on its own
+   * cycle reports that cycle's end; omitting it falls back to the engine's
+   * UTC-month period.
+   */
+  getUsageResetAt?(workspaceId: string, metric: UsageMetric): Promise<number>;
 }

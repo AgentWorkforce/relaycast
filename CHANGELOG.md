@@ -16,8 +16,13 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Minor]
+## [Unreleased]
 
+## [8.11.0] - 2026-09-17
+
+- Fix authenticated requests returning HTTP 429 `plan_limit_exceeded` permanently once a workspace passed its plan's API-call limit: the counter accumulated for the workspace's lifetime instead of resetting each billing period.
+- Rate limit `GET /v1/workspace` in its own bucket so credential validation and launch preflight stay reachable while the workspace's other traffic is at its ceiling.
+- Put a retry contract on every 429: `Retry-After` and `X-RateLimit-Reset` now distinguish a per-minute throttle that clears in seconds from a plan quota that only clears at the period boundary.
 - Add opt-in durable task actions with execution fencing, final-result receipts, and restart reconciliation.
 - Keep a node's enrollment-time `cloud:*` tags when its broker re-registers, and stop brokers from adding or removing them. `cloud:` is now a reserved node-tag namespace: `cloud:*` tags in `node.register` are ignored with a server-side warning, and re-enrolling is how to change or clear them.
 - `GET /v1/inbox`: unread counts no longer include archived channels, and mentions are matched with the exact `@handle` token contract (escaped `\@x`, email addresses, and prefix/superstring text are not mentions); mention results are limited to live channels the agent has joined or DMs the agent participates in.
@@ -553,6 +558,8 @@ Earlier releases are available on the [GitHub releases page](https://github.com/
 
 [Unreleased - Minor]: https://github.com/AgentWorkforce/relaycast/compare/v8.10.1...HEAD
 [Unreleased - Patch]: https://github.com/AgentWorkforce/relaycast/compare/v8.10.1...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v8.11.0...HEAD
+[8.11.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.10.1...v8.11.0
 [8.10.1]: https://github.com/AgentWorkforce/relaycast/compare/v8.10.0...v8.10.1
 [8.10.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.9.1...v8.10.0
 [8.9.1]: https://github.com/AgentWorkforce/relaycast/compare/v8.9.0...v8.9.1

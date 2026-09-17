@@ -28,12 +28,17 @@ export class InProcessRateLimiter implements RateLimiter {
       this.buckets.set(bucketKey, bucket);
     }
 
-    bucket.count += 1;
-    const count = bucket.count;
+    // A rejected request must not consume the bucket. Counting it lets a client
+    // that retries while throttled drive the count arbitrarily past the limit,
+    // which reports a nonsense `count` and, for any sliding-window backend,
+    // lets the caller's own retries hold its window open.
+    const allowed = bucket.count < limit;
+    if (allowed) bucket.count += 1;
+
     return {
-      count,
-      remaining: Math.max(0, limit - count),
-      allowed: count <= limit,
+      count: bucket.count,
+      remaining: Math.max(0, limit - bucket.count),
+      allowed,
     };
   }
 }
