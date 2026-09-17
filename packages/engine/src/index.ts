@@ -37,6 +37,15 @@ export type {
 // OSS default providers (self-host). Cloud injects its own.
 export { SqliteApiKeyAuthProvider, hashToken } from './auth/index.js';
 export { StaticEntitlementsProvider, PLAN_LIMITS } from './providers/static-entitlements.js';
+// Usage-counter key contract. An `EntitlementsProvider` reads the counters the
+// engine writes, so it has to agree with the engine on the billing period the
+// key is scoped to — build the key with these rather than by hand.
+export {
+  getUsageMetric,
+  usageCounterKey,
+  usagePeriod,
+  usagePeriodResetAt,
+} from './engine/usage.js';
 export { NoopTelemetrySink } from './providers/noop-telemetry.js';
 
 // Database helpers + schema for adapters and migrations.

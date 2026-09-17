@@ -10,6 +10,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased - Minor]
 
 - Scope usage counters to a UTC-month billing period (`usage:<wid>:<metric>:<period>`). The previous unscoped key accumulated for the lifetime of the workspace, so once it passed the plan's `api_calls` ceiling every authenticated route — including `GET /v1/workspace` — returned 429 `plan_limit_exceeded` with no window that ever cleared it. Entitlements providers reading these counters directly must use the period-scoped key; existing lifetime counters are abandoned, which is the reset.
+- Export `usageCounterKey`, `usagePeriod`, `usagePeriodResetAt`, and `getUsageMetric` so an out-of-tree `EntitlementsProvider` can read the counters the engine writes without rebuilding the key by hand.
 - Rate limit `GET /v1/workspace` in its own bucket instead of the workspace-wide `global` one, so data-plane traffic at its ceiling cannot starve the identity read.
 - Emit `Retry-After` and `X-RateLimit-Reset` on `rate_limit_exceeded` and `plan_limit_exceeded`, and `X-RateLimit-Reset` on throttled routes' successful responses.
 - Add optional `EntitlementsProvider.getUsageResetAt()` so a billing-backed provider can report its own period boundary for `Retry-After`; omitting it falls back to the engine's UTC-month period.
