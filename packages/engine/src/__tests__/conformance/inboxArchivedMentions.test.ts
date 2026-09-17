@@ -145,6 +145,15 @@ describe('inbox mention scope', () => {
 
     const inbox = await inboxOf(target.token);
     expect(inbox.mentions.map((m) => m.id)).toEqual([idNewerValid, idOlderValid]);
+
+    const plan = sqlite.prepare(`
+      EXPLAIN QUERY PLAN
+      SELECT messages.id FROM messages
+      WHERE messages.workspace_id = ?
+      ORDER BY length(messages.id) DESC, messages.id DESC
+      LIMIT 200
+    `).all(ws.workspaceId) as Array<{ detail: string }>;
+    expect(plan.map((step) => step.detail).join('\n')).toContain('idx_messages_workspace_length_id');
   });
 
   it('never truncates: finds a valid mention older than >10k false candidates', async () => {
