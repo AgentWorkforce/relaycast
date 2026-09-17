@@ -124,15 +124,17 @@ describe('inbox mention scope', () => {
     await joinOk(target.token, 'live');
 
     // Seed directly: the >200-candidate fixture never trips the request rate
-    // limit, and ids use MIXED decimal lengths so the cursor must be
-    // length-then-lexical (a bare text compare is wrong across lengths).
+    // limit. Ids use MIXED decimal lengths that DIVERGE under bare-text vs
+    // length-then-lexical DESC: the newer valid id is longer but lexically
+    // smaller than the 22-digit `9…` false candidates, so bare-text DESC would
+    // emit the older valid mention first. Assert ordered ids, not set membership.
     const sqlite = stack.runtime.handle.sqlite;
     const insertMessage = sqlite.prepare(
       'INSERT INTO messages (id, workspace_id, channel_id, agent_id, body) VALUES (?, ?, ?, ?, ?)',
     );
-    const longId = (n: number) => `9${String(n).padStart(21, '0')}`; // 22 digits
-    const idNewerValid = '9'.repeat(23); // 23 digits -> sorts first
-    const idOlderValid = '123456789012345678'; // 18 digits -> sorts after the 22-digit false candidates
+    const longId = (n: number) => `9${String(n).padStart(21, '0')}`; // 22 digits, starts with 9
+    const idNewerValid = `1${'0'.repeat(22)}`; // 23 digits, starts with 1 — length-first, lexically after 9…
+    const idOlderValid = '123456789012345678'; // 18 digits -> after the 22-digit false candidates
     sqlite.transaction(() => {
       insertMessage.run(idNewerValid, ws.workspaceId, liveChannelId, sender.agentId, '@gh-target-0908 newer-valid');
       for (let i = 0; i < 205; i++) {
@@ -142,10 +144,7 @@ describe('inbox mention scope', () => {
     })();
 
     const inbox = await inboxOf(target.token);
-    const ids = new Set(inbox.mentions.map((m) => m.id));
-    expect(ids.has(idNewerValid)).toBe(true);
-    expect(ids.has(idOlderValid)).toBe(true);
-    expect(inbox.mentions).toHaveLength(2);
+    expect(inbox.mentions.map((m) => m.id)).toEqual([idNewerValid, idOlderValid]);
   });
 
   it('never truncates: finds a valid mention older than >10k false candidates', async () => {

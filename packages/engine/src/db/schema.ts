@@ -676,6 +676,11 @@ export const messages = sqliteTable(
     index('idx_messages_retention').on(sql`length(${table.id})`, table.id),
     index('idx_messages_thread').on(table.threadId, table.id),
     index('idx_messages_workspace').on(table.workspaceId, table.id),
+    index('idx_messages_workspace_length_id').on(
+      table.workspaceId,
+      sql`length(${table.id})`,
+      table.id,
+    ),
     index('idx_messages_agent').on(table.agentId),
     index('idx_messages_workspace_session').on(
       table.workspaceId,

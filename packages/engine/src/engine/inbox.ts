@@ -97,10 +97,9 @@ export async function getInbox(db: Db, workspaceId: string, agentId: string) {
             // lengths with no numeric precision loss (a bare text compare is not).
             // The cursor predicate matches the ORDER BY exactly. Tradeoff: the
             // scan is bounded per batch but deliberately NOT by a total cap — a
-            // total cap would silently drop valid older mentions. The existing
-            // retention expression index is (length(id), id) and is
-            // workspace-agnostic, so this ordered range may not use it; recorded
-            // for review, no migration here.
+            // total cap would silently drop valid older mentions.
+            // idx_messages_workspace_length_id covers (workspace_id, length(id), id)
+            // so each batch can stop at MENTION_BATCH without a cross-workspace scan.
             ...(cursor
               ? [
                   sql`(length(${messages.id}) < length(${cursor})
