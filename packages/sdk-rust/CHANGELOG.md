@@ -15,6 +15,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - Retryable HTTP failures retain the final status, API error, request metadata, and attempt count after retries are exhausted.
 - Retried 5xx responses honor a bounded `Retry-After` delay.
 - Agent registration now honors bounded server `Retry-After` cooldowns and waits for that same cooldown before retrying.
+- Workspace write-admission denials (`workspace_busy`, `workspace_admission_unavailable`) are retried on the server's own `Retry-After` pacing, including for unkeyed mutations. Admission rejects before the handler runs, so nothing was applied; previously a momentary denial was terminal and left calls such as agent/node binding permanently unapplied.
 
 ### Changed
 

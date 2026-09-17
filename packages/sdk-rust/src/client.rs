@@ -57,6 +57,16 @@ fn should_retry_server_error(
     request_is_retryable(method, options) && (500..=599).contains(&status) && attempt < last_attempt
 }
 
+/// Workspace write admission decides before the engine handler runs, so a denial
+/// leaves no partial write behind. That is what makes these codes safe to retry for
+/// a non-idempotent POST, where an ordinary 5xx — which may have applied writes
+/// before failing — is not.
+const ADMISSION_DENIAL_CODES: [&str; 2] = ["workspace_busy", "workspace_admission_unavailable"];
+
+fn is_admission_denial(code: &str) -> bool {
+    ADMISSION_DENIAL_CODES.contains(&code)
+}
+
 /// Extract a correlation/request id from a response, if the server sent one.
 fn extract_request_id(headers: &HeaderMap) -> Option<String> {
     REQUEST_ID_HEADER_CANDIDATES.iter().find_map(|name| {
@@ -306,6 +316,9 @@ impl HttpClient {
 
             let request_id = extract_request_id(response.headers());
             let retry_after_ms = parse_retry_after_ms(response.headers());
+            // Captured before the body is consumed so an admission denial discovered
+            // below can still honor the server's own pacing.
+            let admission_delay_ms = retry_delay_ms(response.headers(), *backoff);
 
             // Handle 204 No Content
             if status == 204 {
@@ -343,6 +356,13 @@ impl HttpClient {
                     code: "unknown_error".to_string(),
                     message: "Unknown error".to_string(),
                 });
+                // Admission backpressure is explicitly transient and the server sends
+                // the delay it wants. Without this, a momentary denial on a call like
+                // agent/node binding is terminal and the agent stays unbound.
+                if is_admission_denial(&error.code) && attempt < last_attempt {
+                    tokio::time::sleep(Duration::from_millis(admission_delay_ms)).await;
+                    continue;
+                }
                 return Err(RelayError::Api {
                     code: error.code,
                     message: error.message,
