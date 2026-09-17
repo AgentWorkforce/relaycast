@@ -8,6 +8,7 @@ import type { AppEnv } from '../env.js';
 import { requireAgentToken, requireWorkspaceKey, requireWorkspaceRead } from '../middleware/auth.js';
 import { parseIdempotencyKey } from '../middleware/idempotency.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { RATE_LIMIT_WINDOW_MS, rateLimitWindow, rateLimitWindowResetAt, setRetryContract } from '../lib/throttle.js';
 import * as workspaceEngine from '../engine/workspace.js';
 import * as activityEngine from '../engine/activity.js';
 import * as dmAllEngine from '../engine/dmAll.js';
@@ -134,15 +135,16 @@ function inMemoryPublicLookupRateCheck(clientId: string, limit: number) {
     }
   }
 
-  const window = Math.floor(now / 60_000);
-  const bucketKey = `${clientId}:${window}`;
+  const bucketKey = `${clientId}:${rateLimitWindow(now)}`;
   const bucket = publicWorkspaceLookupBuckets.get(bucketKey) ?? { count: 0, lastSeen: now };
-  bucket.count += 1;
+  // Matches the limiter port: a rejected request does not consume the bucket.
+  const allowed = bucket.count < limit;
+  if (allowed) bucket.count += 1;
   bucket.lastSeen = now;
   publicWorkspaceLookupBuckets.set(bucketKey, bucket);
 
   return {
-    allowed: bucket.count <= limit,
+    allowed,
     remaining: Math.max(0, limit - bucket.count),
   };
 }
@@ -164,31 +166,30 @@ function parseOwnerAuthorization(authHeader: string | undefined): OwnerAuthoriza
 const publicWorkspaceLookupRateLimit = createMiddleware<AppEnv>(async (c, next) => {
   const clientId = getPublicLookupClientId(c);
   const limit = PUBLIC_WORKSPACE_LOOKUP_LIMIT;
-  const window = Math.floor(Date.now() / 60_000);
-  const bucketKey = `public-workspace-lookup:${clientId}:${window}`;
+  const now = Date.now();
+  const resetAt = rateLimitWindowResetAt(now);
+  const bucketKey = `public-workspace-lookup:${clientId}:${rateLimitWindow(now)}`;
 
+  const throttled = (remaining: number) => {
+    c.header('X-RateLimit-Limit', String(limit));
+    c.header('X-RateLimit-Remaining', String(remaining));
+    c.header('X-RateLimit-Reset', String(Math.ceil(resetAt / 1000)));
+  };
+
+  let allowed: boolean;
   try {
-    const { count, allowed } = await c.get('engine').rateLimiter.check({
-      bucketKey,
-      limit,
-      windowMs: 60_000,
-    });
-    const remaining = Math.max(0, limit - count);
-
-    c.header('X-RateLimit-Limit', String(limit));
-    c.header('X-RateLimit-Remaining', String(remaining));
-
-    if (!allowed) {
-      return jsonError(c, 'rate_limit_exceeded', `Rate limit exceeded. ${limit} requests per minute allowed for public workspace lookups.`, 429);
-    }
+    const result = await c.get('engine').rateLimiter.check({ bucketKey, limit, windowMs: RATE_LIMIT_WINDOW_MS });
+    allowed = result.allowed;
+    throttled(Math.max(0, limit - result.count));
   } catch {
-    const { allowed, remaining } = inMemoryPublicLookupRateCheck(clientId, limit);
-    c.header('X-RateLimit-Limit', String(limit));
-    c.header('X-RateLimit-Remaining', String(remaining));
+    const fallback = inMemoryPublicLookupRateCheck(clientId, limit);
+    allowed = fallback.allowed;
+    throttled(fallback.remaining);
+  }
 
-    if (!allowed) {
-      return jsonError(c, 'rate_limit_exceeded', `Rate limit exceeded. ${limit} requests per minute allowed for public workspace lookups.`, 429);
-    }
+  if (!allowed) {
+    setRetryContract(c, resetAt, now);
+    return jsonError(c, 'rate_limit_exceeded', `Rate limit exceeded. ${limit} requests per minute allowed for public workspace lookups.`, 429);
   }
 
   await next();
