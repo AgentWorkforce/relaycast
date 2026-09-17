@@ -7,9 +7,10 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
 
-- `GET /v1/inbox`: unread counts no longer include archived channels, and mentions are matched with the exact `@handle` token contract (escaped `\@x`, email addresses, and prefix/superstring text are not mentions); mention results are limited to live channels the agent has joined or DMs the agent participates in.
+- Persist task ownership and immutable final results with attempt/generation fencing, deadline failure, and replayable fleet receipts; migration 0060 adds task state and action execution mode.
+- `GET /v1/inbox`: unread counts no longer include archived channels, and mentions are matched with the exact `@handle` token contract (escaped `\@x`, email addresses, and prefix/superstring text are not mentions); mention results are limited to live channels the agent has joined or DMs the agent participates in. Hosts must apply `0061_messages_workspace_length_id_index.sql` so mention keyset batches use `(workspace_id, length(id), id)`.
 
 ## [8.10.1] - 2026-09-13
 

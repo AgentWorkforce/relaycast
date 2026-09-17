@@ -93,6 +93,14 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
             original.uniqueIndexes.some(previous => previous.name === index.name)),
         };
       }
+      // 0060 adds only these two columns. Remove their exact additive DDL
+      // before comparison; changes to any original definition still fail.
+      if (table.name === 'actions') {
+        table = { ...table, sql: table.sql.replace(", execution_mode TEXT NOT NULL DEFAULT 'short'", '') };
+      }
+      if (table.name === 'action_invocations') {
+        table = { ...table, sql: table.sql.replace(', task_state TEXT', '') };
+      }
       if (table.name === 'agents' && original) {
         return { ...table, sql: original.sql };
       }

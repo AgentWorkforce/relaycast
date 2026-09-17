@@ -22,6 +22,7 @@ import type { getDb } from '../db/index.js';
 import { actionInvocations, agents, agentNodeBindings, channelMembers, channels, nodeProviders, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
+import { acceptTaskInvocation, completeTaskInvocation } from './taskInvocation.js';
 import { runAtomic } from '../ports/database.js';
 import type { EngineDb } from '../ports/database.js';
 import { isProviderAgentDeliveryReady, type NodeConnectionRegistry } from '../ports/realtime.js';
@@ -2608,7 +2609,26 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
         );
         return;
       }
+      case 'action.accept': {
+        const accepted = await acceptTaskInvocation(args.db, args.workspaceId, args.nodeId, frameProviderName, message);
+        sendControl(args.socket, { v: 1, id: message.id, type: 'reply', ok: true, data: accepted });
+        return;
+      }
       case 'action.result': {
+        const task = await completeTaskInvocation(args.db, args.workspaceId, args.nodeId, frameProviderName, message);
+        if (task) {
+          // The state CAS has committed before this reply. A lost reply is
+          // reconciled by replaying the same fenced result or acceptance.
+          sendControl(args.socket, { v: 1, id: message.id, type: 'reply', ok: true, data: task.receipt });
+          if (task.completed && args.completionDeps) {
+            const row = task.completed;
+            await emitInvocationCompletionEffects(args.completionDeps, args.workspaceId, {
+              invocation_id: row.id, action_name: row.actionName, caller_id: row.callerId,
+              status: row.status, output: row.output, error: row.error,
+            });
+          }
+          return;
+        }
         const completed = await completeNodeInvocation(
           args.db,
           args.registry,
