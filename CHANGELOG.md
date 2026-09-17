@@ -16,7 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased]
+
+## [8.11.1] - 2026-09-17
 
 - Agent realtime clients reuse their direct node token across reconnect attempts instead of minting a new one per attempt. Minting rotates the token through the workspace's shared write capacity, so a client that could not connect would generate write load with every retry and crowd out ordinary writes — including binding a newly spawned agent to its node.
 
@@ -557,7 +559,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v8.11.0...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v8.11.1...HEAD
+[8.11.1]: https://github.com/AgentWorkforce/relaycast/compare/v8.11.0...v8.11.1
 [8.11.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.10.1...v8.11.0
 [8.10.1]: https://github.com/AgentWorkforce/relaycast/compare/v8.10.0...v8.10.1
 [8.10.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.9.1...v8.10.0
