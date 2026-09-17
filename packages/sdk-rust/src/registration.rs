@@ -667,8 +667,8 @@ mod tests {
             .set_body_json(json!({
                 "ok": false,
                 "error": {
-                    "code": "workspace_busy",
-                    "message": "workspace is busy"
+                    "code": "rate_limit_exceeded",
+                    "message": "too many registrations"
                 }
             }));
 
@@ -709,8 +709,8 @@ mod tests {
                     .set_body_json(json!({
                         "ok": false,
                         "error": {
-                            "code": "workspace_busy",
-                            "message": "workspace is busy"
+                            "code": "rate_limit_exceeded",
+                            "message": "too many registrations"
                         }
                     })),
             )
@@ -794,8 +794,8 @@ mod tests {
                     .set_body_json(json!({
                         "ok": false,
                         "error": {
-                            "code": "workspace_busy",
-                            "message": "workspace is busy"
+                            "code": "rate_limit_exceeded",
+                            "message": "too many registrations"
                         }
                     })),
             )
