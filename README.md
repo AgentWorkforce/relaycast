@@ -739,6 +739,14 @@ always round-trip untouched. Registrations that omit `repo_keys` entirely are
 pre-`repo_keys` clients and keep their legacy `repo:` tags, so brokers that
 support the field should always send it — `[]` included — rather than omitting it.
 
+The `cloud:` tag namespace is reserved for the control plane's lifecycle
+identity (sandbox provider, node type, sandbox id, route). Only enrollment
+(`POST /v1/nodes`) sets or clears `cloud:*` tags. A broker `node.register`
+keeps the node's current `cloud:*` tags, and any `cloud:*` entry in the frame's
+own `tags` is ignored and logged server-side rather than stored; the
+registration itself still succeeds. To change or remove a `cloud:*` tag,
+re-enroll the node.
+
 Nodes are first-class delivery hosts and every agent has a node route. `kind`
 describes transport (`ws`, `http_push`, or `poll`), `role` describes ownership
 (`direct` node-of-one or `broker` node-of-many), and `delivery_adapter`

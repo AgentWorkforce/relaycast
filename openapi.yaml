@@ -1216,7 +1216,11 @@ components:
             that field is the only source of these entries and any `repo:` tag
             in the register message's own `tags` is dropped. A register message
             that omits `repo_keys` is a pre-`repo_keys` client, and its
-            validated `repo:` tags are preserved as-is.
+            validated `repo:` tags are preserved as-is. `cloud:*` entries are
+            reserved for control-plane lifecycle identity and are set or
+            cleared only by enrollment (`POST /v1/nodes`); a broker
+            `node.register` keeps the node's current `cloud:*` tags and
+            ignores (and logs) any `cloud:*` tag in its own `tags`.
         version:
           type: string
         status:
