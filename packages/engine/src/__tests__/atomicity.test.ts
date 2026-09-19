@@ -2,9 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { and, eq } from 'drizzle-orm';
 import {
+  attachFakeBatch as attachFakeBatchOn,
+  injectInsertFailure,
+  injectUpdateFailure,
   makeNodeStack,
   createWorkspace,
   registerAgent,
+  stripTransactionCapability,
   type TestStack,
 } from './conformance/harness.js';
 import {
@@ -32,7 +36,7 @@ import {
   applyStatusEventEffect,
   recordSessionEventWithIdempotency,
 } from '../engine/sessionEvent.js';
-import type { AtomicWrite, EngineDb, TransactionCapability } from '../ports/database.js';
+import type { EngineDb, TransactionCapability } from '../ports/database.js';
 
 /**
  * Atomicity of multi-statement write paths.
@@ -78,87 +82,10 @@ describe('atomic write paths', () => {
     return { ws, alice, bob, channelId: channel.id, db };
   }
 
-  /**
-   * Wrap a built statement so it fails when *executed* (awaited), not when
-   * built. Write paths build their statement list up front, so a build-time
-   * throw would abort before any write executes and never exercise rollback;
-   * an execution-time failure lands mid-transaction / mid-batch / mid-sequence
-   * — the crash the atomicity machinery exists for. Builder chaining and
-   * `toSQL()` still delegate to the real statement.
-   */
-  function failOnExecute<T extends object>(target: T, message: string): T {
-    return new Proxy(target, {
-      get(obj, prop) {
-        if (prop === 'then') {
-          return (onFulfilled?: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown) =>
-            Promise.reject(new Error(message)).then(onFulfilled, onRejected);
-        }
-        const value = Reflect.get(obj, prop) as unknown;
-        if (typeof value === 'function') {
-          return (...args: unknown[]) => {
-            const result = (value as (...a: unknown[]) => unknown).apply(obj, args);
-            return result && typeof result === 'object' ? failOnExecute(result as object, message) : result;
-          };
-        }
-        return value;
-      },
-    });
-  }
+  const stripCapability = stripTransactionCapability;
 
-  /** Make statements inserting into `table` fail at execution; returns a restore function. */
-  function injectInsertFailure(db: EngineDb, table: unknown, message: string): () => void {
-    const handle = db as unknown as { insert: (t: unknown) => object };
-    const real = handle.insert.bind(db);
-    handle.insert = (t: unknown) => {
-      const builder = real(t);
-      return t === table ? failOnExecute(builder, message) : builder;
-    };
-    return () => { handle.insert = real; };
-  }
-
-  /** Make statements updating `table` fail at execution; returns a restore function. */
-  function injectUpdateFailure(db: EngineDb, table: unknown, message: string): () => void {
-    const handle = db as unknown as { update: (t: unknown) => object };
-    const real = handle.update.bind(db);
-    handle.update = (t: unknown) => {
-      const builder = real(t);
-      return t === table ? failOnExecute(builder, message) : builder;
-    };
-    return () => { handle.update = real; };
-  }
-
-  function stripCapability(db: EngineDb): void {
-    delete (db as Partial<TransactionCapability>).withTransaction;
-  }
-
-  /**
-   * Turn the Node handle into a D1-shaped one: no `withTransaction`, but a
-   * `batch()` that executes every statement inside one underlying SQLite
-   * transaction (all-or-nothing, like D1) and records each batch's SQL.
-   */
   function attachFakeBatch(db: EngineDb, beforeExecute?: () => Promise<void>): string[][] {
-    stripCapability(db);
-    const sqlite = stack.runtime.handle.sqlite;
-    const batches: string[][] = [];
-    (db as unknown as Record<string, unknown>).batch = async (
-      statements: ReadonlyArray<AtomicWrite & { toSQL(): { sql: string } }>,
-    ): Promise<unknown[]> => {
-      batches.push(statements.map((s) => s.toSQL().sql));
-      await beforeExecute?.();
-      sqlite.exec('BEGIN IMMEDIATE');
-      try {
-        const results: unknown[] = [];
-        for (const statement of statements) {
-          results.push(await statement);
-        }
-        sqlite.exec('COMMIT');
-        return results;
-      } catch (err) {
-        if (sqlite.inTransaction) sqlite.exec('ROLLBACK');
-        throw err;
-      }
-    };
-    return batches;
+    return attachFakeBatchOn(stack, db, beforeExecute);
   }
 
   function expectStatementOn(batch: string[], verb: 'insert' | 'update', table: string): void {

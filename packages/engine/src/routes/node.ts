@@ -256,7 +256,7 @@ nodeRoutes.post('/nodes/:name/agents', requireWorkspaceKey, rateLimit, async (c)
     if (!parsed.ok) {
       return parsed.response;
     }
-    const result = await nodeEngine.bindAgentToNode(
+    const { binding, move } = await nodeEngine.bindAgentToNode(
       c.get('db'),
       c.get('workspace').id,
       c.req.param('name'),
@@ -266,7 +266,23 @@ nodeRoutes.post('/nodes/:name/agents', requireWorkspaceKey, rateLimit, async (c)
         priority: parsed.data.priority,
       },
     );
-    return jsonCreated(c, result);
+    const response = jsonCreated(c, binding);
+    // The response — which carries delivery_ack_seq — must be on the wire
+    // before any deliver frame reaches the provider socket: agent.register and
+    // agent.recover order their cursor-bearing reply ahead of the ready mark
+    // and replay, and a bound agent's drain honors the same ordering.
+    runInBackground(
+      c,
+      Promise.resolve().then(() =>
+        nodeEngine.completeBoundAgentDelivery(
+          c.get('db'),
+          c.get('engine').nodeConnections,
+          c.get('workspace').id,
+          move,
+        )),
+      'bind delivery readiness+replay',
+    );
+    return response;
   } catch (err: unknown) {
     return errorResponse(c, err);
   }

@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Binding an agent to a node now adopts one of that node's live providers, marks the agent delivery-ready on cursor-aware providers, and guards against stealing an agent that is active on another live node. A broker-spawned agent that was HTTP-registered first (provider `default`) and then bound through the node-agents fallback kept a provider its node did not serve, so its deliveries were routed to the node but never pushed — the spawned agent was never woken. The bind's binding row, location move and node capacity counters now commit as one atomic unit, so a failure part-way through can no longer leave a node charged for a binding it retired, or holding an active binding it never reserved capacity for. The bind response also returns the agent's `delivery_ack_seq` so cursor-aware providers learn the adopted identity's authoritative delivery cursor.
 
 ## [8.11.2] - 2026-09-19
 
