@@ -23,8 +23,8 @@ import { actionInvocations, agents, agentNodeBindings, channelMembers, channels,
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { acceptTaskInvocation, completeTaskInvocation } from './taskInvocation.js';
-import { runAtomic } from '../ports/database.js';
-import type { EngineDb } from '../ports/database.js';
+import { runAtomic, runAtomicWrites } from '../ports/database.js';
+import type { AtomicWrite, EngineDb } from '../ports/database.js';
 import { isProviderAgentDeliveryReady, type NodeConnectionRegistry } from '../ports/realtime.js';
 import { generateId } from './snowflake.js';
 import { assertRegistrableAgentName } from './agent.js';
@@ -99,6 +99,31 @@ function directNodeNameForAgent(agentId: string): string {
 
 function isImplicitDirectLocation(agent: Pick<AgentRow, 'id' | 'locationNodeId'>): boolean {
   return agent.locationNodeId === directNodeIdForAgent(agent.id);
+}
+
+/**
+ * An agent adopted onto a node keeps a provider identity that node can serve:
+ * deliveries are pushed to the `(node, provider)` socket named by
+ * `agents.provider_name`, so a provider the node does not serve is a silent
+ * dead end. Precedence, most specific first:
+ *
+ *  1. The node already serves the agent's provider — keep it. It routes today,
+ *     and it is the closest thing to evidence of which provider owns the agent;
+ *     rewriting it would hand the agent to a sibling provider on the same host.
+ *  2. The node serves exactly one provider — adopt it; there is no other answer.
+ *  3. The node serves the synthetic `default` — adopt it as the generic
+ *     fallback, since the agent's own provider is not served here.
+ *  4. Otherwise (several named providers, none of them the agent's) nothing
+ *     identifies the owner, so the existing provider stands rather than guessing.
+ *
+ * A node with no registered providers at all falls through to (4): no socket
+ * exists to adopt, and rewriting to a name nobody serves would not help.
+ */
+function adoptNodeProviderName(current: string, nodeProviderNames: string[]): string {
+  if (nodeProviderNames.includes(current)) return current;
+  if (nodeProviderNames.length === 1) return nodeProviderNames[0];
+  if (nodeProviderNames.includes(DEFAULT_PROVIDER_NAME)) return DEFAULT_PROVIDER_NAME;
+  return current;
 }
 
 function normalizeCapabilities(capabilities: CapabilityLike[]): FleetCapability[] {
@@ -930,57 +955,101 @@ async function autoJoinGeneral(db: Db, workspaceId: string, agentId: string) {
   }
 }
 
-async function upsertAgentNodeBinding(
+interface AgentNodeBindingOpts {
+  sessionRef?: string | null;
+  priority?: number;
+  deactivateExisting?: boolean;
+  /** Provider identity to adopt with the move; omitted leaves it untouched. */
+  providerName?: string;
+  /** Origin node to stamp when the agent has none; omitted leaves it untouched. */
+  originNodeId?: string;
+}
+
+/**
+ * Statements that bind `agent` to `nodeId` and move its routable location onto
+ * that node. Built, not executed: a caller that owns the whole move hands them
+ * to {@link runAtomicWrites} so the binding row, the location move and the
+ * retirement of the bindings left behind commit as one unit — on D1 too, where
+ * there is no interactive transaction to roll a half-applied move back.
+ *
+ * Statement order is the last-resort story for a caller that still runs them
+ * one at a time inside its own transaction: every prefix has to leave the agent
+ * routable, so the new binding is inserted first (inert on its own — delivery
+ * joins bindings only where `agents.location_node_id` matches), then the agent
+ * moves onto it, then the bindings it left behind are retired (inert once the
+ * agent has moved off them). Deactivating first, or moving the agent before its
+ * binding exists, would strand the agent with no active binding at its
+ * location. Callers that mutate `agents` themselves must write through
+ * `providerName`/`originNodeId` here rather than updating the row up front,
+ * for the same reason.
+ */
+function agentNodeBindingWrites(
   db: Db,
   workspaceId: string,
   agent: Pick<AgentRow, 'id' | 'locationNodeId'>,
   nodeId: string,
-  opts: { sessionRef?: string | null; priority?: number; deactivateExisting?: boolean } = {},
-) {
+  opts: AgentNodeBindingOpts = {},
+): AtomicWrite[] {
+  const now = new Date();
+  const writes: AtomicWrite[] = [
+    db
+      .insert(agentNodeBindings)
+      .values({
+        id: `anb_${generateId()}`,
+        workspaceId,
+        agentId: agent.id,
+        nodeId,
+        status: 'active',
+        sessionRef: opts.sessionRef ?? null,
+        priority: opts.priority ?? 0,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [agentNodeBindings.agentId, agentNodeBindings.nodeId],
+        set: {
+          status: 'active',
+          sessionRef: opts.sessionRef ?? null,
+          priority: opts.priority ?? 0,
+          updatedAt: now,
+        },
+      }),
+    db
+      .update(agents)
+      .set({
+        locationType: 'via_node',
+        locationNodeId: nodeId,
+        sessionRef: opts.sessionRef ?? undefined,
+        providerName: opts.providerName ?? undefined,
+        originNodeId: opts.originNodeId ?? undefined,
+        status: 'active',
+        lastSeen: now,
+      })
+      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agent.id))),
+  ];
+
   if (opts.deactivateExisting ?? true) {
-    await db
+    writes.push(db
       .update(agentNodeBindings)
-      .set({ status: 'inactive', updatedAt: new Date() })
+      .set({ status: 'inactive', updatedAt: now })
       .where(and(
         eq(agentNodeBindings.workspaceId, workspaceId),
         eq(agentNodeBindings.agentId, agent.id),
         eq(agentNodeBindings.status, 'active'),
         ne(agentNodeBindings.nodeId, nodeId),
-      ));
+      )));
   }
+  return writes;
+}
 
-  await db
-    .insert(agentNodeBindings)
-    .values({
-      id: `anb_${generateId()}`,
-      workspaceId,
-      agentId: agent.id,
-      nodeId,
-      status: 'active',
-      sessionRef: opts.sessionRef ?? null,
-      priority: opts.priority ?? 0,
-      updatedAt: new Date(),
-    })
-    .onConflictDoUpdate({
-      target: [agentNodeBindings.agentId, agentNodeBindings.nodeId],
-      set: {
-        status: 'active',
-        sessionRef: opts.sessionRef ?? null,
-        priority: opts.priority ?? 0,
-        updatedAt: new Date(),
-      },
-    });
-
-  await db
-    .update(agents)
-    .set({
-      locationType: 'via_node',
-      locationNodeId: nodeId,
-      sessionRef: opts.sessionRef ?? undefined,
-      status: 'active',
-      lastSeen: new Date(),
-    })
-    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agent.id)));
+/** Run {@link agentNodeBindingWrites} one statement at a time. */
+async function upsertAgentNodeBinding(
+  db: Db,
+  workspaceId: string,
+  agent: Pick<AgentRow, 'id' | 'locationNodeId'>,
+  nodeId: string,
+  opts: AgentNodeBindingOpts = {},
+) {
+  for (const write of agentNodeBindingWrites(db, workspaceId, agent, nodeId, opts)) await write;
 }
 
 async function activeBindingNodeIdsForAgent(db: Db, workspaceId: string, agentId: string): Promise<string[]> {
@@ -1113,10 +1182,18 @@ async function rejectMigrationCanceledSpawnRegistration(
   }
 }
 
-async function releaseNodeAgentSlots(db: Db, workspaceId: string, nodeIds: string[]): Promise<void> {
+/**
+ * The statement (at most one) that gives back one agent slot on each of
+ * `nodeIds`. Built, not executed, so a caller can commit the decrement in the
+ * same atomic unit as the binding retirement that justifies it: a decrement
+ * that lands without the retirement lets the node overshoot `maxAgents`, and a
+ * retirement that lands without the decrement charges capacity to a binding
+ * nothing will ever release.
+ */
+function releaseNodeAgentSlotWrites(db: Db, workspaceId: string, nodeIds: string[]): AtomicWrite[] {
   const uniqueNodeIds = [...new Set(nodeIds)];
-  if (uniqueNodeIds.length === 0) return;
-  await db
+  if (uniqueNodeIds.length === 0) return [];
+  return [db
     .update(nodes)
     .set({
       activeAgents: sql`CASE WHEN ${nodes.activeAgents} > 0 THEN ${nodes.activeAgents} - 1 ELSE 0 END`,
@@ -1124,7 +1201,11 @@ async function releaseNodeAgentSlots(db: Db, workspaceId: string, nodeIds: strin
     .where(and(
       eq(nodes.workspaceId, workspaceId),
       inArray(nodes.id, uniqueNodeIds),
-    ));
+    ))];
+}
+
+async function releaseNodeAgentSlots(db: Db, workspaceId: string, nodeIds: string[]): Promise<void> {
+  for (const write of releaseNodeAgentSlotWrites(db, workspaceId, nodeIds)) await write;
 }
 
 export async function ensureDirectNodeForAgent(
@@ -1332,6 +1413,15 @@ export async function bindAgentToNode(
   agentName: string,
   opts: { session_ref?: string | null; priority?: number } = {},
 ) {
+  // `runAtomic` below already owns a transaction on an adapter that has one, so
+  // the move's statements must not re-enter `withTransaction` (the shared
+  // connection serializes transactions and would deadlock on itself) — they run
+  // in order inside it instead. Without one, the move has to be a D1 batch, and
+  // a handle offering neither is refused before a single statement lands rather
+  // than committing half a move it cannot undo.
+  const hasInteractiveTransaction = typeof (db as EngineDb & {
+    withTransaction?: unknown;
+  }).withTransaction === 'function';
   return runAtomic(db, async (tx) => {
     const node = await getNodeByName(tx, workspaceId, nodeName);
     if (!node) throw codedError(`Node "${nodeName}" not found`, 'node_not_found', 404);
@@ -1342,6 +1432,40 @@ export async function bindAgentToNode(
       .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, agentName)));
     if (!agent) throw codedError(`Agent "${agentName}" not found`, 'agent_not_found', 404);
 
+    // A bind moves the agent's routable location onto this node. Delivery
+    // routing joins bindings only where `agents.location_node_id` matches the
+    // bound node, so a binding row alone leaves an HTTP-registered agent
+    // stranded on its implicit `direct-*` pseudo-node and never woken — the
+    // exact shape of the broker's create-only register falling back to this
+    // endpoint. `unbindAgentFromNode` already assumes this move happened.
+    if (
+      agent.status === 'active'
+      && agent.locationNodeId
+      && agent.locationNodeId !== node.id
+      && !isImplicitDirectLocation(agent)
+    ) {
+      const [locatedNode] = await tx
+        .select()
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, agent.locationNodeId)));
+      // A dead or missing prior location is not a conflict — it is exactly what
+      // a bind is for. Only a live one still owns the identity.
+      if (locatedNode && isNodeLive(locatedNode)) {
+        throw codedError(
+          `Agent "${agentName}" is already active on another live location`,
+          'agent_location_conflict',
+          409,
+        );
+      }
+    }
+
+    const nodeProviderNames = (await tx
+      .select({ name: nodeProviders.name })
+      .from(nodeProviders)
+      .where(and(eq(nodeProviders.workspaceId, workspaceId), eq(nodeProviders.nodeId, node.id))))
+      .map((row) => row.name);
+    const adoptedProviderName = adoptNodeProviderName(agent.providerName, nodeProviderNames);
+
     const activeNodeIds = await activeBindingNodeIdsForAgent(tx, workspaceId, agent.id);
     const targetWasActive = activeNodeIds.includes(node.id);
     let reservedTargetSlot = false;
@@ -1350,12 +1474,34 @@ export async function bindAgentToNode(
         await reserveNodeAgentSlot(tx, workspaceId, node);
         reservedTargetSlot = true;
       }
-      await upsertAgentNodeBinding(tx, workspaceId, agent, node.id, {
-        sessionRef: opts.session_ref ?? null,
-        priority: opts.priority ?? 0,
-      });
-      await releaseNodeAgentSlots(tx, workspaceId, activeNodeIds.filter((nodeId) => nodeId !== node.id));
+      // The binding row, the location move, the provider adoption, the
+      // retirement of the bindings left behind and the slots those bindings
+      // held are one mutation. Committing any subset is a corruption that no
+      // retry repairs: a binding without its reservation lets the node exceed
+      // `maxAgents`, and a retired binding whose slot was never given back
+      // charges the old node forever, because the retry that would fix either
+      // reads the half-applied state as already done.
+      const buildMoveWrites = (writeDb: Db): AtomicWrite[] => [
+        ...agentNodeBindingWrites(writeDb, workspaceId, agent, node.id, {
+          sessionRef: opts.session_ref ?? null,
+          priority: opts.priority ?? 0,
+          providerName: adoptedProviderName,
+          originNodeId: agent.originNodeId ?? node.id,
+        }),
+        ...releaseNodeAgentSlotWrites(
+          writeDb,
+          workspaceId,
+          activeNodeIds.filter((nodeId) => nodeId !== node.id),
+        ),
+      ];
+      if (hasInteractiveTransaction) {
+        for (const write of buildMoveWrites(tx)) await write;
+      } else {
+        await runAtomicWrites(tx, buildMoveWrites, { requireAtomic: true });
+      }
     } catch (err) {
+      // Every statement of the move either landed or did not, so a throw means
+      // none of it did and the slot reserved for it belongs to nobody.
       if (reservedTargetSlot) {
         await releaseNodeAgentSlots(tx, workspaceId, [node.id]);
       }

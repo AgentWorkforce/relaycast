@@ -1,16 +1,25 @@
 import { invokeWithConcurrentReplay } from './invocationReplay.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
-import { actionInvocations, agentNodeBindings, agents, channelMembers, nodes, pendingEvents, workspaceEvents } from '../../db/schema.js';
+import { actionInvocations, agentNodeBindings, agents, channelMembers, deliveries, nodeProviders, nodes, pendingEvents, workspaceEvents } from '../../db/schema.js';
 import { AGENT_LIVENESS_TTL_MS, sweepStaleAgents } from '../../engine/agent.js';
+import { bindAgentToNode } from '../../engine/node.js';
+import { NODE_LIVENESS_TTL_MS } from '../../engine/placement.js';
 import {
   attachDirectNodeSocket,
+  attachFakeBatch,
   createWorkspace,
+  deliverFramesOfType,
+  FakeSocket,
+  injectInsertFailure,
+  injectUpdateFailure,
   makeNodeStack,
   registerAgent,
+  stripTransactionCapability,
   type TestStack,
 } from './harness.js';
 import { sha256Hex } from '../../lib/crypto.js';
+import type { EngineDb, TransactionCapability } from '../../ports/database.js';
 
 describe('agent presence and release lifecycle', () => {
   let stack: TestStack;
@@ -1743,5 +1752,572 @@ describe('agent presence and release lifecycle', () => {
       )))
       .toHaveLength(0);
     await handle.handleClose();
+  });
+});
+
+/**
+ * A node bind is a location move, not just a roster row. The broker's spawn
+ * path HTTP-registers an agent first (leaving it on its implicit `direct-*`
+ * pseudo-node), then falls back to this endpoint when its create-only
+ * `agent.register` loses to the row that already exists. Delivery routing
+ * joins bindings only where `agents.location_node_id` matches the bound node,
+ * so a bind that leaves the agent row untouched strands the spawned agent on a
+ * dead pseudo-node and it is never woken.
+ */
+describe('node agent binding adopts the agent location', () => {
+  let stack: TestStack;
+
+  beforeEach(() => { stack = makeNodeStack(); });
+  afterEach(() => stack.close());
+
+  async function enrollNode(workspaceKey: string, nodeId: string, name: string) {
+    const res = await stack.app.request('/v1/nodes', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${workspaceKey}` },
+      body: JSON.stringify({ node_id: nodeId, name, role: 'broker', max_agents: 4, tags: ['test'], version: 'v0' }),
+    });
+    expect(res.status).toBe(201);
+    return (await res.json() as { data: { token: string } }).data.token;
+  }
+
+  function bindAgent(
+    workspaceKey: string,
+    nodeName: string,
+    agentName: string,
+    body: Record<string, unknown> = {},
+  ) {
+    return stack.app.request(`/v1/nodes/${nodeName}/agents`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${workspaceKey}` },
+      body: JSON.stringify({ agent_name: agentName, ...body }),
+    });
+  }
+
+  /** Every agent column the bind path writes. */
+  async function readAgent(agentId: string) {
+    const [row] = await stack.runtime.deps.db
+      .select({
+        locationType: agents.locationType,
+        locationNodeId: agents.locationNodeId,
+        status: agents.status,
+        providerName: agents.providerName,
+        originNodeId: agents.originNodeId,
+        sessionRef: agents.sessionRef,
+        lastSeen: agents.lastSeen,
+      })
+      .from(agents)
+      .where(eq(agents.id, agentId));
+    return row;
+  }
+
+  async function activeBindingNodeIds(workspaceId: string, agentId: string): Promise<string[]> {
+    const rows = await stack.runtime.deps.db
+      .select({ nodeId: agentNodeBindings.nodeId })
+      .from(agentNodeBindings)
+      .where(and(
+        eq(agentNodeBindings.workspaceId, workspaceId),
+        eq(agentNodeBindings.agentId, agentId),
+        eq(agentNodeBindings.status, 'active'),
+      ));
+    return rows.map((row) => row.nodeId).sort();
+  }
+
+  /** The capacity counters a bind reserves on its target and releases elsewhere. */
+  async function nodeSlots(nodeId: string) {
+    const [row] = await stack.runtime.deps.db
+      .select({ activeAgents: nodes.activeAgents, reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(eq(nodes.id, nodeId));
+    return row;
+  }
+
+  /** Age a node's heartbeat past the liveness TTL, leaving its bindings alone. */
+  async function expireNode(workspaceId: string, nodeId: string) {
+    await stack.runtime.deps.db
+      .update(nodes)
+      .set({ lastHeartbeatAt: new Date(Date.now() - NODE_LIVENESS_TTL_MS - 60_000) })
+      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+  }
+
+  /** HTTP registration always mints `default`; other providers come from a node. */
+  async function setAgentProvider(agentId: string, providerName: string) {
+    await stack.runtime.deps.db
+      .update(agents)
+      .set({ providerName })
+      .where(eq(agents.id, agentId));
+  }
+
+  /** Attach a node-control socket and register `providerName` on the node. */
+  async function attachProvider(workspaceId: string, nodeId: string, nodeName: string, providerName: string) {
+    const sock = new FakeSocket();
+    const handle = stack.runtime.realtime.attachNodeSocket(workspaceId, nodeId, sock);
+    await handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: `reg-${nodeId}-${providerName}`,
+      type: 'node.register',
+      node_id: nodeId,
+      name: nodeName,
+      provider: { name: providerName, instance_id: `${providerName}-i1` },
+      capabilities: [{ name: 'spawn:claude', kind: 'capacity' }],
+      max_agents: 4,
+      tags: ['test'],
+      version: 'v1',
+      resume_cursor: null,
+    }));
+    expect(sock.ofType('error')).toEqual([]);
+    return { sock, handle };
+  }
+
+  it('moves an HTTP-registered agent off its implicit direct node onto the bound node', async () => {
+    const ws = await createWorkspace(stack.app, 'bind-adopts-location');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'fallback-bound-agent');
+    await enrollNode(ws.workspaceKey, 'node_broker', 'broker-host');
+
+    // The HTTP registration parked the agent on its implicit pseudo-node.
+    const [before] = await stack.runtime.deps.db
+      .select({ locationType: agents.locationType, locationNodeId: agents.locationNodeId })
+      .from(agents)
+      .where(eq(agents.id, target.agentId));
+    expect(before).toEqual({ locationType: 'via_node', locationNodeId: `node_direct_${target.agentId}` });
+
+    expect((await bindAgent(ws.workspaceKey, 'broker-host', target.name)).status).toBe(201);
+
+    const [located] = await stack.runtime.deps.db
+      .select({
+        locationType: agents.locationType,
+        locationNodeId: agents.locationNodeId,
+        status: agents.status,
+        originNodeId: agents.originNodeId,
+      })
+      .from(agents)
+      .where(eq(agents.id, target.agentId));
+    expect(located).toEqual({
+      locationType: 'via_node',
+      locationNodeId: 'node_broker',
+      status: 'active',
+      // Location moves; origin does not. HTTP registration stamped the
+      // pseudo-node as this agent's origin and that is where identity
+      // recovery authority stays.
+      originNodeId: `node_direct_${target.agentId}`,
+    });
+    expect(await stack.runtime.deps.db
+      .select({ id: agentNodeBindings.id })
+      .from(agentNodeBindings)
+      .where(and(
+        eq(agentNodeBindings.workspaceId, ws.workspaceId),
+        eq(agentNodeBindings.agentId, target.agentId),
+        eq(agentNodeBindings.nodeId, 'node_broker'),
+        eq(agentNodeBindings.status, 'active'),
+      )))
+      .toHaveLength(1);
+  });
+
+  it('routes a channel delivery for a fallback-bound agent through its bound node', async () => {
+    const ws = await createWorkspace(stack.app, 'bind-adopts-routing');
+    const speaker = await registerAgent(stack.app, ws.workspaceKey, 'speaker');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'routed-bound-agent');
+    await enrollNode(ws.workspaceKey, 'node_broker', 'broker-host');
+    const { sock } = await attachProvider(ws.workspaceId, 'node_broker', 'broker-host', 'broker');
+
+    expect((await bindAgent(ws.workspaceKey, 'broker-host', target.name)).status).toBe(201);
+
+    const posted = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${speaker.token}` },
+      body: JSON.stringify({ text: 'wake up' }),
+    });
+    expect(posted.status).toBe(201);
+    const message = await posted.json() as { data: { id: string } };
+
+    const [route] = await stack.runtime.deps.db
+      .select({ routeNodeId: deliveries.routeNodeId })
+      .from(deliveries)
+      .where(and(
+        eq(deliveries.workspaceId, ws.workspaceId),
+        eq(deliveries.messageId, message.data.id),
+        eq(deliveries.agentId, target.agentId),
+      ));
+    expect(route).toEqual({ routeNodeId: 'node_broker' });
+
+    // Fanout publishes its completion through waitUntil.
+    await stack.settle();
+    expect(deliverFramesOfType(sock, 'message.created')).toEqual([
+      expect.objectContaining({
+        type: 'deliver',
+        msg_id: message.data.id,
+        agent: target.name,
+      }),
+    ]);
+  });
+
+  it('refuses to steal an agent that is active on another live node', async () => {
+    const ws = await createWorkspace(stack.app, 'bind-location-conflict');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'contested-agent');
+    await enrollNode(ws.workspaceKey, 'node_owner', 'owner-host');
+    await enrollNode(ws.workspaceKey, 'node_thief', 'thief-host');
+    await attachProvider(ws.workspaceId, 'node_owner', 'owner-host', 'broker');
+
+    expect((await bindAgent(ws.workspaceKey, 'owner-host', target.name)).status).toBe(201);
+
+    const stolen = await bindAgent(ws.workspaceKey, 'thief-host', target.name);
+    expect(stolen.status).toBe(409);
+    expect((await stolen.json() as { error: { code: string } }).error)
+      .toMatchObject({ code: 'agent_location_conflict' });
+
+    const [held] = await stack.runtime.deps.db
+      .select({ locationNodeId: agents.locationNodeId })
+      .from(agents)
+      .where(eq(agents.id, target.agentId));
+    expect(held).toEqual({ locationNodeId: 'node_owner' });
+    expect(await stack.runtime.deps.db
+      .select({ id: agentNodeBindings.id })
+      .from(agentNodeBindings)
+      .where(and(
+        eq(agentNodeBindings.workspaceId, ws.workspaceId),
+        eq(agentNodeBindings.agentId, target.agentId),
+        eq(agentNodeBindings.nodeId, 'node_thief'),
+        eq(agentNodeBindings.status, 'active'),
+      )))
+      .toHaveLength(0);
+  });
+
+  it('adopts the sole provider of the node it is bound to', async () => {
+    const ws = await createWorkspace(stack.app, 'bind-adopts-provider');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'adopted-agent');
+    await enrollNode(ws.workspaceKey, 'node_broker', 'broker-host');
+    await attachProvider(ws.workspaceId, 'node_broker', 'broker-host', 'broker');
+
+    const [registered] = await stack.runtime.deps.db
+      .select({ providerName: agents.providerName })
+      .from(agents)
+      .where(eq(agents.id, target.agentId));
+    expect(registered).toEqual({ providerName: 'default' });
+    expect(await stack.runtime.deps.db
+      .select({ name: nodeProviders.name })
+      .from(nodeProviders)
+      .where(and(eq(nodeProviders.workspaceId, ws.workspaceId), eq(nodeProviders.nodeId, 'node_broker'))))
+      .toEqual([{ name: 'broker' }]);
+
+    expect((await bindAgent(ws.workspaceKey, 'broker-host', target.name)).status).toBe(201);
+
+    const [adopted] = await stack.runtime.deps.db
+      .select({ providerName: agents.providerName, locationNodeId: agents.locationNodeId })
+      .from(agents)
+      .where(eq(agents.id, target.agentId));
+    expect(adopted).toEqual({ providerName: 'broker', locationNodeId: 'node_broker' });
+  });
+
+  it('stamps session, liveness and origin with the move, and keeps the first origin on a later one', async () => {
+    const ws = await createWorkspace(stack.app, 'bind-stamps-identity');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'stamped-agent');
+    await enrollNode(ws.workspaceKey, 'node_first', 'first-host');
+    await enrollNode(ws.workspaceKey, 'node_second', 'second-host');
+    const before = await readAgent(target.agentId);
+
+    expect((await bindAgent(ws.workspaceKey, 'first-host', target.name, { session_ref: 'sess-1' })).status).toBe(201);
+
+    const stamped = await readAgent(target.agentId);
+    expect(stamped).toMatchObject({
+      locationNodeId: 'node_first',
+      status: 'active',
+      sessionRef: 'sess-1',
+      originNodeId: `node_direct_${target.agentId}`,
+    });
+    expect(stamped.lastSeen.getTime()).toBeGreaterThanOrEqual(before.lastSeen.getTime());
+    expect(await stack.runtime.deps.db
+      .select({ sessionRef: agentNodeBindings.sessionRef })
+      .from(agentNodeBindings)
+      .where(and(
+        eq(agentNodeBindings.agentId, target.agentId),
+        eq(agentNodeBindings.nodeId, 'node_first'),
+      )))
+      .toEqual([{ sessionRef: 'sess-1' }]);
+
+    // A second move omits the session ref: the binding row for the new node
+    // carries none, while the agent keeps the session it is still running.
+    expect((await bindAgent(ws.workspaceKey, 'second-host', target.name)).status).toBe(201);
+
+    expect(await readAgent(target.agentId)).toMatchObject({
+      locationNodeId: 'node_second',
+      sessionRef: 'sess-1',
+      // Origin records where the agent came from, so a move never rewrites it.
+      originNodeId: `node_direct_${target.agentId}`,
+    });
+    expect(await activeBindingNodeIds(ws.workspaceId, target.agentId)).toEqual(['node_second']);
+  });
+
+  it('moves an agent off its implicit direct node even while that pseudo-node is live', async () => {
+    const ws = await createWorkspace(stack.app, 'bind-live-direct-node');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'connected-agent');
+    await enrollNode(ws.workspaceKey, 'node_broker', 'broker-host');
+    const direct = await attachDirectNodeSocket(stack, ws.workspaceId, target);
+
+    // The pseudo-node is as live as a node gets — online with a fresh
+    // heartbeat. It still never owns the agent against a real node, or the
+    // spawn fallback could never bind an agent that is already connected.
+    const [directNode] = await stack.runtime.deps.db
+      .select({ status: nodes.status, lastHeartbeatAt: nodes.lastHeartbeatAt })
+      .from(nodes)
+      .where(eq(nodes.id, direct.nodeId));
+    expect(directNode.status).toBe('online');
+    expect(Date.now() - directNode.lastHeartbeatAt!.getTime()).toBeLessThan(NODE_LIVENESS_TTL_MS);
+
+    expect((await bindAgent(ws.workspaceKey, 'broker-host', target.name)).status).toBe(201);
+
+    expect(await readAgent(target.agentId)).toMatchObject({ locationNodeId: 'node_broker' });
+    expect(await activeBindingNodeIds(ws.workspaceId, target.agentId)).toEqual(['node_broker']);
+    await direct.handle.handleClose();
+  });
+
+  it('takes over an agent whose owning node has gone stale, releasing its slot', async () => {
+    const ws = await createWorkspace(stack.app, 'bind-stale-owner');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'stranded-agent');
+    await enrollNode(ws.workspaceKey, 'node_owner', 'owner-host');
+    await enrollNode(ws.workspaceKey, 'node_rescue', 'rescue-host');
+    await attachProvider(ws.workspaceId, 'node_owner', 'owner-host', 'broker');
+
+    expect((await bindAgent(ws.workspaceKey, 'owner-host', target.name)).status).toBe(201);
+    expect(await nodeSlots('node_owner')).toEqual({ activeAgents: 1, reservedAgents: 0 });
+
+    // The host stopped heartbeating: its claim on the agent expires with it.
+    await expireNode(ws.workspaceId, 'node_owner');
+    expect((await bindAgent(ws.workspaceKey, 'rescue-host', target.name)).status).toBe(201);
+
+    expect(await readAgent(target.agentId)).toMatchObject({ locationNodeId: 'node_rescue' });
+    expect(await activeBindingNodeIds(ws.workspaceId, target.agentId)).toEqual(['node_rescue']);
+    expect(await nodeSlots('node_owner')).toEqual({ activeAgents: 0, reservedAgents: 0 });
+    expect(await nodeSlots('node_rescue')).toEqual({ activeAgents: 1, reservedAgents: 0 });
+  });
+
+  it('takes over an agent whose location node was pruned out from under it', async () => {
+    const ws = await createWorkspace(stack.app, 'bind-pruned-owner');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'orphaned-agent');
+    await enrollNode(ws.workspaceKey, 'node_rescue', 'rescue-host');
+    // Deleting a node nulls the location it owned (`on delete set null`), so a
+    // pruned host leaves an active agent nowhere. Nothing is left to hold the
+    // identity: the bind is a recovery, not a steal.
+    await stack.runtime.deps.db
+      .update(agents)
+      .set({ locationNodeId: null, status: 'active' })
+      .where(eq(agents.id, target.agentId));
+
+    expect((await bindAgent(ws.workspaceKey, 'rescue-host', target.name)).status).toBe(201);
+    expect(await readAgent(target.agentId)).toMatchObject({
+      locationType: 'via_node',
+      locationNodeId: 'node_rescue',
+    });
+    // A legacy row with no origin gets one stamped by the node adopting it.
+    await stack.runtime.deps.db
+      .update(agents)
+      .set({ originNodeId: null })
+      .where(eq(agents.id, target.agentId));
+    await enrollNode(ws.workspaceKey, 'node_later', 'later-host');
+    expect((await bindAgent(ws.workspaceKey, 'later-host', target.name)).status).toBe(201);
+    expect(await readAgent(target.agentId)).toMatchObject({ originNodeId: 'node_later' });
+  });
+
+  /**
+   * Provider adoption keeps the agent addressable: deliveries are pushed to
+   * the `(node, provider)` socket named by `agents.provider_name`, so the bind
+   * may only rewrite it when the node's own providers make the answer clear.
+   */
+  const providerAdoption = [
+    {
+      what: 'adopts the only provider a node serves',
+      providers: ['broker'],
+      current: 'default',
+      expected: 'broker',
+    },
+    {
+      what: 'falls back to the synthetic default when the node serves several and none is the agent\'s',
+      providers: ['broker', 'default'],
+      current: 'codex',
+      expected: 'default',
+    },
+    {
+      what: 'keeps a provider the node already serves instead of the default',
+      providers: ['broker', 'default'],
+      current: 'broker',
+      expected: 'broker',
+    },
+    {
+      what: 'keeps the agent provider when a multi-provider node offers no default',
+      providers: ['broker', 'codex'],
+      current: 'default',
+      expected: 'default',
+    },
+    {
+      what: 'keeps the agent provider when the node has registered no providers',
+      providers: [],
+      current: 'codex',
+      expected: 'codex',
+    },
+  ];
+
+  for (const [index, adoption] of providerAdoption.entries()) {
+    it(adoption.what, async () => {
+      const ws = await createWorkspace(stack.app, `bind-provider-${index}`);
+      const target = await registerAgent(stack.app, ws.workspaceKey, 'provider-agent');
+      await enrollNode(ws.workspaceKey, 'node_broker', 'broker-host');
+      for (const providerName of adoption.providers) {
+        await attachProvider(ws.workspaceId, 'node_broker', 'broker-host', providerName);
+      }
+      await setAgentProvider(target.agentId, adoption.current);
+
+      expect(await stack.runtime.deps.db
+        .select({ name: nodeProviders.name })
+        .from(nodeProviders)
+        .where(and(
+          eq(nodeProviders.workspaceId, ws.workspaceId),
+          eq(nodeProviders.nodeId, 'node_broker'),
+        ))
+        .then((rows) => rows.map((row) => row.name).sort()))
+        .toEqual([...adoption.providers].sort());
+
+      expect((await bindAgent(ws.workspaceKey, 'broker-host', target.name)).status).toBe(201);
+
+      expect(await readAgent(target.agentId)).toMatchObject({
+        providerName: adoption.expected,
+        locationNodeId: 'node_broker',
+      });
+    });
+  }
+
+  /**
+   * The bind writes a binding row, the agent's location/provider/origin, the
+   * slot it reserves on the node it moves onto and the slot it gives back on
+   * the node it moves off. A failure anywhere in that sequence must leave none
+   * of it behind, on every adapter shape — including D1, which has no
+   * interactive transaction and keeps whatever already ran.
+   *
+   * Half a move is worse than no move, because the retry cannot see that it is
+   * half done and reads the leftovers as work already finished:
+   *
+   *  - a binding that committed while its reservation was compensated away
+   *    looks bound-and-charged, so the retry reserves nothing and the node runs
+   *    one agent over `max_agents` forever;
+   *  - a binding retired without its slot being given back looks released, so
+   *    the retry finds nothing active on the old node and never refunds it.
+   *
+   * So the move commits as one unit, and every failure point below is checked
+   * for exactly that: nothing changed, and the retry still completes the move
+   * with both slot counters right.
+   */
+  describe('a failed bind leaves nothing behind', () => {
+    const INJECTED = 'injected bind failure';
+
+    /**
+     * Park the agent on `owner-host`, then let that host go stale so the bind
+     * to `rescue-host` is a genuine move: it reserves a slot on the rescue
+     * node, retires the owner's binding and refunds the owner's slot.
+     */
+    async function stagedMove(label: string) {
+      const ws = await createWorkspace(stack.app, `bind-failure-${label}`);
+      const target = await registerAgent(stack.app, ws.workspaceKey, 'moved-agent');
+      await enrollNode(ws.workspaceKey, 'node_owner', 'owner-host');
+      await enrollNode(ws.workspaceKey, 'node_rescue', 'rescue-host');
+      await attachProvider(ws.workspaceId, 'node_owner', 'owner-host', 'broker');
+      await attachProvider(ws.workspaceId, 'node_rescue', 'rescue-host', 'rescue');
+
+      expect((await bindAgent(ws.workspaceKey, 'owner-host', target.name)).status).toBe(201);
+      expect(await nodeSlots('node_owner')).toEqual({ activeAgents: 1, reservedAgents: 0 });
+      await expireNode(ws.workspaceId, 'node_owner');
+
+      return { ws, target, db: stack.runtime.deps.db as unknown as EngineDb };
+    }
+
+    /** Everything the move touches, in one comparable value. */
+    async function snapshot(workspaceId: string, agentId: string) {
+      return {
+        agent: await readAgent(agentId),
+        bindings: await activeBindingNodeIds(workspaceId, agentId),
+        owner: await nodeSlots('node_owner'),
+        rescue: await nodeSlots('node_rescue'),
+      };
+    }
+
+    const shapes = [
+      {
+        what: 'transactional',
+        // The Node adapter's handle rolls the whole move back.
+        apply: () => {},
+      },
+      {
+        what: 'D1 batch',
+        // D1 has no interactive transaction; its atomicity is `batch()`.
+        apply: (db: EngineDb) => { attachFakeBatch(stack, db); },
+      },
+    ];
+
+    const failurePoints = [
+      {
+        at: 'the binding insert',
+        inject: (db: EngineDb) => injectInsertFailure(db, agentNodeBindings, INJECTED),
+      },
+      {
+        at: 'the agent location move',
+        inject: (db: EngineDb) => injectUpdateFailure(db, agents, INJECTED),
+      },
+      {
+        at: 'the old binding retirement',
+        inject: (db: EngineDb) => injectUpdateFailure(db, agentNodeBindings, INJECTED),
+      },
+      {
+        at: 'the old slot refund',
+        // Both slot writes update `nodes`: the rescue reservation is built
+        // first, the owner's refund second. One shot only, so the reservation's
+        // own compensating release still runs.
+        inject: (db: EngineDb) => injectUpdateFailure(db, nodes, INJECTED, { skip: 1, times: 1 }),
+      },
+    ];
+
+    for (const shape of shapes) {
+      for (const point of failurePoints) {
+        it(`restores every row and both slot counters when ${point.at} fails (${shape.what})`, async () => {
+          const { ws, target, db } = await stagedMove(`${shape.what}-${point.at}`.replace(/\s+/g, '-'));
+          shape.apply(db);
+          const before = await snapshot(ws.workspaceId, target.agentId);
+
+          const restore = point.inject(db);
+          await expect(bindAgentToNode(db, ws.workspaceId, 'rescue-host', target.name))
+            .rejects.toThrow(INJECTED);
+          restore();
+
+          expect(await snapshot(ws.workspaceId, target.agentId)).toEqual(before);
+
+          // The retry reads untouched state, so it reserves and refunds exactly
+          // once and the move lands whole.
+          await bindAgentToNode(db, ws.workspaceId, 'rescue-host', target.name);
+          expect(await snapshot(ws.workspaceId, target.agentId)).toMatchObject({
+            agent: expect.objectContaining({ locationNodeId: 'node_rescue', providerName: 'rescue' }),
+            bindings: ['node_rescue'],
+            owner: { activeAgents: 0, reservedAgents: 0 },
+            rescue: { activeAgents: 1, reservedAgents: 0 },
+          });
+        });
+      }
+    }
+
+    it('refuses the move on a handle that can neither roll back nor batch', async () => {
+      const { ws, target, db } = await stagedMove('bare-handle');
+      const capability = (db as EngineDb & TransactionCapability).withTransaction;
+      stripTransactionCapability(db);
+      const before = await snapshot(ws.workspaceId, target.agentId);
+
+      // Nothing can undo a half-applied move here, so the bind never starts
+      // one: it is refused before the first statement and the reservation it
+      // took is handed straight back.
+      await expect(bindAgentToNode(db, ws.workspaceId, 'rescue-host', target.name))
+        .rejects.toThrow(/Atomic write capability required/);
+      expect(await snapshot(ws.workspaceId, target.agentId)).toEqual(before);
+
+      (db as EngineDb & TransactionCapability).withTransaction = capability;
+      await bindAgentToNode(db, ws.workspaceId, 'rescue-host', target.name);
+      expect(await snapshot(ws.workspaceId, target.agentId)).toMatchObject({
+        bindings: ['node_rescue'],
+        owner: { activeAgents: 0, reservedAgents: 0 },
+        rescue: { activeAgents: 1, reservedAgents: 0 },
+      });
+    });
   });
 });
