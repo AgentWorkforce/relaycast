@@ -17,6 +17,44 @@ final class RelaycastTests: XCTestCase {
         }
     }
 
+    func testActionInvocationDecodesHostedInvocationIdentifier() throws {
+        // The hosted API identifies an invocation as `invocation_id` on the
+        // status-poll and completion routes; decoding it as `id` failed every
+        // action completion with "Invalid Relaycast API response".
+        let payload = Data("""
+        {
+          "invocation_id": "inv_215317590589313024",
+          "action_name": "add_rectangle",
+          "caller_id": "215317575185170432",
+          "caller_name": "board-driver",
+          "input": {"x": 120},
+          "output": {"text": "Added rectangle rect-1"},
+          "status": "completed",
+          "error": null,
+          "duration_ms": 42,
+          "created_at": "2026-08-18T03:55:13.000Z",
+          "completed_at": "2026-08-18T03:55:14.000Z"
+        }
+        """.utf8)
+
+        let decoded = try makeRelaycastDecoder().decode(ActionInvocation.self, from: payload)
+        XCTAssertEqual(decoded.invocationId, "inv_215317590589313024")
+        XCTAssertEqual(decoded.actionName, "add_rectangle")
+        XCTAssertEqual(decoded.status, "completed")
+        XCTAssertEqual(decoded.durationMs, 42)
+        XCTAssertEqual(decoded.completedAt, "2026-08-18T03:55:14.000Z")
+        XCTAssertEqual(decoded.output?["text"], .string("Added rectangle rect-1"))
+    }
+
+    func testActionInvocationAcceptsPlainIdAlias() throws {
+        let payload = Data("""
+        {"id": "inv_1", "status": "completed"}
+        """.utf8)
+
+        let decoded = try makeRelaycastDecoder().decode(ActionInvocation.self, from: payload)
+        XCTAssertEqual(decoded.invocationId, "inv_1")
+    }
+
     func testHttpClientEncodesSnakeCaseAndOriginHeaders() async throws {
         let session = makeMockSession()
         let client = try HttpClient(
