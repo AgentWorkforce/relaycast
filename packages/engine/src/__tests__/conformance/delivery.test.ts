@@ -2209,6 +2209,71 @@ describe('durable delivery api', () => {
       // ...and a heartbeat cannot introduce one the registration never made.
       expect(await advertised(legacyNode.id)).not.toContain(FLEET_DELIVERY_CURSOR_CAPABILITY);
     });
+
+    /**
+     * A superseded connection's in-flight `inventory.sync` is not the live
+     * connection's certification. The registry answers `undefined` for a
+     * connection that no longer owns the provider — reading the persisted
+     * advertisement instead would classify the stale frame by whichever
+     * registration owns the provider NOW, replaying certified deliveries to
+     * sessions the replacement never certified.
+     */
+    it('does not replay the outage backlog on a superseded connection certification', async () => {
+      const ws = await createWorkspace(stack.app, 'mailbox-outage-stale-sync');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const nodeA = await enrollAndAttachNode(ws, { cursorHandshake: true });
+      const bob = await registerViaNode(nodeA, 'bob');
+
+      await nodeA.handle.handleClose();
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text: 'queued before the stale certification' }),
+      });
+      expect(post.status).toBe(201);
+      const messageId = ((await post.json()) as { data: { id: string } }).data.id;
+      await stack.settle();
+
+      // The broker's fresh connection owns the provider now and persisted its
+      // own cursor advertisement at register. Nothing is certified yet — but
+      // an out-of-process socket owner can still report bob ready: its
+      // ready-set is keyed per node+provider, not per connection, and survives
+      // the transport reconnect (the state this whole replay path exists for).
+      const nodeB = await enrollAndAttachNode(ws, {
+        id: nodeA.id,
+        name: nodeA.name,
+        cursorHandshake: true,
+      });
+      expect(nodeB.sock.ofType('deliver')).toHaveLength(0);
+      stack.runtime.realtime.markProviderAgentsDeliveryReady(
+        ws.workspaceId,
+        nodeB.id,
+        DEFAULT_PROVIDER_NAME,
+        undefined,
+        [bob.agentId],
+      );
+
+      // The old connection's queued sync finally runs. Its certification is
+      // not this connection's: it must not drain the backlog to bob.
+      await nodeA.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'inventory.sync',
+        agents: [{ agent_id: bob.agentId, name: bob.name, session_ref: 'sess-bob' }],
+      }));
+      await stack.settle();
+      expect(deliverFramesOfType(nodeB.sock, 'message.created')).toHaveLength(0);
+
+      // The replacement's own certification still drains the backlog.
+      await nodeB.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'inventory.sync',
+        agents: [{ agent_id: bob.agentId, name: bob.name, session_ref: 'sess-bob' }],
+      }));
+      await stack.settle();
+      expect(deliverFramesOfType(nodeB.sock, 'message.created')).toEqual([
+        expect.objectContaining({ agent: bob.name, msg_id: messageId, seq: 1 }),
+      ]);
+    });
   });
 
   it('preserves hyphenated mentions through node reconnect replay', async () => {

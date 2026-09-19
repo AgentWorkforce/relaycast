@@ -264,6 +264,14 @@ function withRegisteredProtocolCapabilities(
  * contract) falls back to the persisted advertisement — which heartbeats keep
  * off-limits (see `heartbeatNode`) precisely so the fallback answers for the
  * registration rather than for the latest roster snapshot.
+ *
+ * When the method DOES exist, its `undefined` is an answer too: the connection
+ * asking is not the provider's current owner (a superseded connection whose
+ * frame queued behind the replacement's register). Reading the persisted
+ * advertisement then would classify a stale connection's sync by whichever
+ * registration owns the provider now — replaying certified deliveries to a
+ * connection that has not certified those sessions. A registry that can
+ * answer gets the last word; the fallback is only for one that cannot.
  */
 async function connectionNegotiatedDeliveryCursor(
   db: EngineDb,
@@ -274,8 +282,10 @@ async function connectionNegotiatedDeliveryCursor(
   connectionId: string | undefined,
 ): Promise<boolean> {
   if (!supportsProviderDeliveryReadiness(registry)) return false;
-  const mode = registry.providerDeliveryReadinessMode?.(workspaceId, nodeId, providerName, connectionId);
-  if (mode !== undefined) return mode === 'agent_scoped';
+  if (registry.providerDeliveryReadinessMode) {
+    return registry.providerDeliveryReadinessMode(workspaceId, nodeId, providerName, connectionId)
+      === 'agent_scoped';
+  }
   return providerAdvertisesDeliveryCursor(db, workspaceId, nodeId, providerName);
 }
 
