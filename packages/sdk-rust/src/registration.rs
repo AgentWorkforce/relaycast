@@ -122,6 +122,31 @@ pub enum AgentRegistrationError {
     },
     #[error("registration transport error for '{agent_name}': {detail}")]
     Transport { agent_name: String, detail: String },
+    /// The server answered, and the answer could not be understood.
+    ///
+    /// Distinct from `Transport`, which means the exchange did not complete.
+    /// Here it did: a body arrived and failed to decode, or decoded into
+    /// something this client's schema does not accept. Collapsing the two lost
+    /// the difference between "the network failed" and "the server is wrong",
+    /// and reported the second as the first:
+    ///
+    ///   register transport error: HTTP error: error decoding response body
+    ///
+    /// which named no status, no URL, and no cause — and was retried as though
+    /// a retry could help.
+    #[error(
+        "registration for '{agent_name}' got a response it could not understand{}: {detail}",
+        status.map(|code| format!(" ({code})")).unwrap_or_default()
+    )]
+    InvalidResponse {
+        agent_name: String,
+        /// HTTP status, when the failure happened after one was read.
+        status: Option<u16>,
+        /// Endpoint that produced it, for correlating with server logs.
+        url: Option<String>,
+        /// The decode failure and its source chain.
+        detail: String,
+    },
     #[error("registration response missing token for '{agent_name}'")]
     MissingToken { agent_name: String },
     /// The name is taken and registration is create-only.
@@ -333,10 +358,7 @@ impl AgentRegistrationClient {
                 status,
                 detail: api_error_detail(message, code, request_id, attempts),
             }),
-            Err(error) => Err(AgentRegistrationError::Transport {
-                agent_name: trimmed_name.to_string(),
-                detail: error.to_string(),
-            }),
+            Err(error) => Err(classify_registration_failure(trimmed_name, error)),
         }
     }
 
@@ -378,6 +400,56 @@ pub fn registration_is_retryable(error: &AgentRegistrationError) -> bool {
             | AgentRegistrationError::RateLimited { .. }
             | AgentRegistrationError::Transport { .. }
     )
+}
+
+/// Describe a `reqwest` failure with its source chain.
+///
+/// `to_string()` on a reqwest error yields only the outermost layer — "error
+/// decoding response body" — while the cause that names the offending byte or
+/// field sits underneath it. Whoever reads the log needs the chain.
+fn describe_with_sources(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut description = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        description.push_str(&format!(": {cause}"));
+        source = cause.source();
+    }
+    description
+}
+
+/// Separate "the exchange failed" from "the answer was unusable".
+///
+/// A decode failure means the server replied and the reply could not be
+/// understood. Retrying cannot fix that, and worse, the registration it
+/// belonged to may already have committed server-side — so a retry risks a
+/// second registration rather than recovering from a blip.
+fn classify_registration_failure(agent_name: &str, error: RelayError) -> AgentRegistrationError {
+    match error {
+        RelayError::Http(http_error) if http_error.is_decode() => {
+            AgentRegistrationError::InvalidResponse {
+                agent_name: agent_name.to_string(),
+                status: http_error.status().map(|status| status.as_u16()),
+                url: http_error.url().map(|url| url.to_string()),
+                detail: describe_with_sources(&http_error),
+            }
+        }
+        RelayError::Json(json_error) => AgentRegistrationError::InvalidResponse {
+            agent_name: agent_name.to_string(),
+            status: None,
+            url: None,
+            detail: describe_with_sources(&json_error),
+        },
+        RelayError::InvalidResponse(detail) => AgentRegistrationError::InvalidResponse {
+            agent_name: agent_name.to_string(),
+            status: None,
+            url: None,
+            detail,
+        },
+        other => AgentRegistrationError::Transport {
+            agent_name: agent_name.to_string(),
+            detail: describe_with_sources(&other),
+        },
+    }
 }
 
 /// Format a human-readable registration error message.
@@ -837,5 +909,63 @@ mod tests {
         let message = format_registration_error("worker-d", &error);
         assert!(message.contains("worker-d"));
         assert!(message.contains("retry after"));
+    }
+}
+
+#[cfg(test)]
+mod invalid_response_classification {
+    use super::*;
+
+    /// A decode failure is the server answering unusably, not the exchange
+    /// failing. It was reported as `Transport` and retried three times, which
+    /// named no status, no URL and no cause — and could not have helped.
+    #[test]
+    fn a_decode_failure_is_not_transport() {
+        let error = classify_registration_failure("probe", RelayError::InvalidResponse("body was not JSON".into()));
+        assert!(
+            matches!(error, AgentRegistrationError::InvalidResponse { .. }),
+            "expected InvalidResponse, got {error:?}"
+        );
+    }
+
+    /// Retrying cannot fix an unusable answer, and registration may already
+    /// have committed server-side — so a retry risks a second registration
+    /// rather than recovering from a blip.
+    #[test]
+    fn an_unusable_answer_is_not_retried() {
+        let error = AgentRegistrationError::InvalidResponse {
+            agent_name: "probe".into(),
+            status: Some(200),
+            url: Some("https://cast.agentrelay.com/v1/agents".into()),
+            detail: "error decoding response body".into(),
+        };
+        assert!(!registration_is_retryable(&error));
+    }
+
+    /// A genuine transport failure keeps its old classification and stays
+    /// retryable: this change narrows what counts as transport, it does not
+    /// stop retrying real network faults.
+    #[test]
+    fn a_real_transport_failure_is_still_retried() {
+        let error = AgentRegistrationError::Transport {
+            agent_name: "probe".into(),
+            detail: "connection reset".into(),
+        };
+        assert!(registration_is_retryable(&error));
+    }
+
+    /// The message has to name what the old one omitted, or the next failure
+    /// is as undiagnosable as this one was.
+    #[test]
+    fn the_message_names_status_and_cause() {
+        let rendered = AgentRegistrationError::InvalidResponse {
+            agent_name: "probe".into(),
+            status: Some(503),
+            url: Some("https://cast.agentrelay.com/v1/agents".into()),
+            detail: "error decoding response body: expected value at line 1 column 1".into(),
+        }
+        .to_string();
+        assert!(rendered.contains("503"), "status missing from {rendered}");
+        assert!(rendered.contains("expected value"), "cause missing from {rendered}");
     }
 }
