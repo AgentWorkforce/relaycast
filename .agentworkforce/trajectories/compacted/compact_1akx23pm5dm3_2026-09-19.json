@@ -1,0 +1,23 @@
+{
+  "id": "compact_1akx23pm5dm3",
+  "version": 1,
+  "type": "compacted",
+  "compactedAt": "2026-09-19T05:15:58.999Z",
+  "sourceTrajectories": [
+    "traj_c5xu27ivwl60"
+  ],
+  "dateRange": {
+    "start": "2026-09-19T05:13:58.329Z",
+    "end": "2026-09-19T05:15:55.144Z"
+  },
+  "summary": {
+    "totalDecisions": 0,
+    "totalEvents": 0,
+    "uniqueAgents": []
+  },
+  "decisionGroups": [],
+  "keyLearnings": [],
+  "keyFindings": [],
+  "filesAffected": [],
+  "commits": []
+}
