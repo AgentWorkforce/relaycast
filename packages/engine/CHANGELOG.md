@@ -9,6 +9,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+- Push `context.update` events only to nodes that can hold a live socket, and at most four at a time. Channel, presence and agent-scoped fan-out previously targeted every node with an active binding, including offline ones; a workspace with thousands of offline nodes sent hundreds of node Durable Object fetches per channel join or presence change. Hosted, that fan-out runs in the background of the triggering request and starved the request's own write-admission lease release, which timed out and held the workspace's write or lifecycle lane for the full lease TTL (`workspace_busy`). Offline WebSocket nodes had no socket, so no event that was previously delivered is dropped. `draining` and `http_push` nodes stay eligible.
+
 ## [8.11.0] - 2026-09-17
 
 - Scope usage counters to a UTC-month billing period (`usage:<wid>:<metric>:<period>`). The previous unscoped key accumulated for the lifetime of the workspace, so once it passed the plan's `api_calls` ceiling every authenticated route — including `GET /v1/workspace` — returned 429 `plan_limit_exceeded` with no window that ever cleared it. Entitlements providers reading these counters directly must use the period-scoped key; existing lifetime counters are abandoned, which is the reset.

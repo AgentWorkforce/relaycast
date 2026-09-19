@@ -10,6 +10,7 @@ import {
   workspaces,
 } from '../../db/schema.js';
 import { publishEvent, publishEventsToAgents, type EventDispatchEngine } from '../eventDispatch.js';
+import { NODE_CONTEXT_SEND_CONCURRENCY } from '../nodeContext.js';
 
 
 // The workspace-log append swallows its own DB errors today, so the only way to
@@ -128,6 +129,44 @@ async function seedSecondNode(db: Awaited<ReturnType<typeof seedFixture>>) {
     status: 'active',
   });
   await db.insert(channelMembers).values({ channelId: CHANNEL_ID, agentId: SECOND_AGENT_ID });
+}
+
+/** Add a ws node in `status` hosting one extra member of the channel. */
+async function seedMemberNode(
+  db: Awaited<ReturnType<typeof seedFixture>>,
+  suffix: string,
+  status: 'online' | 'offline' | 'draining',
+) {
+  const nodeId = `node_${suffix}`;
+  const agentId = `ag_${suffix}`;
+  await db.insert(nodes).values({
+    id: nodeId,
+    workspaceId: WORKSPACE_ID,
+    name: `node-${suffix}`,
+    tokenHash: `hash_node_${suffix}`,
+    kind: 'ws',
+    role: 'broker',
+    deliveryAdapter: 'ws.node.v1',
+    status,
+  });
+  await db.insert(agents).values({
+    id: agentId,
+    workspaceId: WORKSPACE_ID,
+    name: `agent-${suffix}`,
+    tokenHash: `hash_agent_${suffix}`,
+    locationType: 'via_node',
+    locationNodeId: nodeId,
+    providerName: 'default',
+  });
+  await db.insert(agentNodeBindings).values({
+    id: `bind_${suffix}`,
+    workspaceId: WORKSPACE_ID,
+    agentId,
+    nodeId,
+    status: 'active',
+  });
+  await db.insert(channelMembers).values({ channelId: CHANNEL_ID, agentId });
+  return { nodeId, agentId };
 }
 
 function makeEngine(overrides: {
@@ -427,5 +466,113 @@ describe('publishEventsToAgents', () => {
 
     expect(published).toHaveLength(0);
     expect(frames).toHaveLength(0);
+  });
+});
+
+describe('node context audience', () => {
+  it('skips offline WebSocket nodes for channel fan-out but keeps draining ones', async () => {
+    const db = await seedFixture();
+    const draining = await seedMemberNode(db, 'draining', 'draining');
+    // A long-lived workspace accumulates offline nodes whose bindings stay active.
+    for (let i = 0; i < 25; i += 1) await seedMemberNode(db, `offline_${i}`, 'offline');
+    const errors: Array<[string, unknown]> = [];
+    const { engine, frames } = makeEngine();
+
+    await publishEvent({ db, engine }, {
+      workspaceId: WORKSPACE_ID,
+      type: 'member.joined',
+      data: { agent_name: 'dispatch-agent' },
+      scope: { kind: 'channel', channelId: CHANNEL_ID },
+      onSinkError: (sink, err) => errors.push([sink, err]),
+    });
+
+    expect(frames.map((frame) => frame.nodeId).sort()).toEqual([draining.nodeId, NODE_ID].sort());
+    expect(errors).toEqual([]);
+  });
+
+  it('skips offline WebSocket nodes for presence fan-out', async () => {
+    const db = await seedFixture();
+    for (let i = 0; i < 10; i += 1) await seedMemberNode(db, `offline_${i}`, 'offline');
+    const { engine, frames } = makeEngine();
+
+    await publishEvent({ db, engine }, {
+      workspaceId: WORKSPACE_ID,
+      type: 'agent.status.changed',
+      data: { agent_id: AGENT_ID, status: 'idle' },
+      scope: { kind: 'presence', subjectAgentId: AGENT_ID },
+    });
+
+    expect(frames.map((frame) => frame.nodeId)).toEqual([NODE_ID]);
+  });
+
+  it('skips offline WebSocket nodes for agent-scoped fan-out, single and batched', async () => {
+    const db = await seedFixture();
+    const offline = await seedMemberNode(db, 'offline_agent', 'offline');
+    const { engine, frames } = makeEngine();
+
+    await publishEvent({ db, engine }, {
+      workspaceId: WORKSPACE_ID,
+      type: 'delivery.failed',
+      data: { delivery_id: 'dl_1' },
+      scope: { kind: 'agents', agentIds: [AGENT_ID, offline.agentId] },
+    });
+    await publishEventsToAgents({ db, engine }, [
+      { workspaceId: WORKSPACE_ID, agentId: offline.agentId, type: 'delivery.failed', data: { delivery_id: 'dl_2' } },
+      { workspaceId: WORKSPACE_ID, agentId: AGENT_ID, type: 'delivery.failed', data: { delivery_id: 'dl_3' } },
+    ]);
+
+    expect(frames.map((frame) => frame.nodeId)).toEqual([NODE_ID, NODE_ID]);
+  });
+
+  it('bounds concurrent node pushes and still reaches every live node', async () => {
+    const db = await seedFixture();
+    const live = [NODE_ID];
+    for (let i = 0; i < 12; i += 1) live.push((await seedMemberNode(db, `live_${i}`, 'online')).nodeId);
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const { engine, frames } = makeEngine({
+      send: async () => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inFlight -= 1;
+        return true;
+      },
+    });
+
+    await publishEvent({ db, engine }, {
+      workspaceId: WORKSPACE_ID,
+      type: 'member.joined',
+      data: { agent_name: 'dispatch-agent' },
+      scope: { kind: 'channel', channelId: CHANNEL_ID },
+    });
+
+    expect(frames.map((frame) => frame.nodeId).sort()).toEqual([...live].sort());
+    expect(maxInFlight).toBeGreaterThan(1);
+    expect(maxInFlight).toBeLessThanOrEqual(NODE_CONTEXT_SEND_CONCURRENCY);
+  });
+
+  it('keeps reporting a failed push under bounded concurrency', async () => {
+    const db = await seedFixture();
+    for (let i = 0; i < 6; i += 1) await seedMemberNode(db, `live_${i}`, 'online');
+    const errors: Array<[string, unknown]> = [];
+    const { engine, frames } = makeEngine({
+      send: async (nodeId) => {
+        if (nodeId === 'node_live_3') throw new Error('socket gone');
+        return true;
+      },
+    });
+
+    await publishEvent({ db, engine }, {
+      workspaceId: WORKSPACE_ID,
+      type: 'member.joined',
+      data: { agent_name: 'dispatch-agent' },
+      scope: { kind: 'channel', channelId: CHANNEL_ID },
+      onSinkError: (sink, err) => errors.push([sink, err]),
+    });
+
+    expect(frames).toHaveLength(7);
+    expect(errors.map(([sink]) => sink)).toEqual(['node_context']);
+    expect((errors[0][1] as AggregateError).message).toBe('node context push failed for 1 of 7 node targets');
   });
 });
