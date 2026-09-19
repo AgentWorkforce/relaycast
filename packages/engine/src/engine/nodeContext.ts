@@ -1,4 +1,4 @@
-import { and, eq, inArray, or } from 'drizzle-orm';
+import { and, eq, inArray, ne, or } from 'drizzle-orm';
 import type { EngineDb } from '../ports/database.js';
 import type { NodeConnectionRegistry, RealtimeBus } from '../ports/realtime.js';
 import { agents, agentNodeBindings, channelMembers, nodes } from '../db/schema.js';
@@ -30,12 +30,44 @@ type ScopedNodeRow = {
 
 // Node kinds eligible for context updates: WebSocket nodes receive a pushed
 // `context.update` frame; http_push nodes receive a best-effort POST.
-const CONTEXT_NODE_KINDS = ['ws', 'fleet_ws', 'direct_ws', 'http_push'] as const;
-// workspace/status/kind predicates add six bindings, so 80 agent ids leave
-// comfortable room below D1's 100-bound-parameter limit.
+const WS_CONTEXT_NODE_KINDS = ['ws', 'fleet_ws', 'direct_ws'] as const;
+
+/**
+ * Upper bound on concurrent context pushes from one event.
+ *
+ * Every push is an outbound subrequest (a node Durable Object fetch or an
+ * http_push POST). Hosted runtimes cap the connections one invocation may hold
+ * open, and fan-out runs in the background of the request that triggered it —
+ * so an unbounded fan-out queues that request's own bookkeeping subrequests
+ * (for example the hosted write-admission lease release) behind hundreds of
+ * node pushes until they time out. Keep the fan-out below that cap.
+ */
+export const NODE_CONTEXT_SEND_CONCURRENCY = 4;
+
+/**
+ * Only nodes that can hold a live socket are context targets.
+ *
+ * `context.update` is an ephemeral push with no replay: a WebSocket node that
+ * is `offline` has no socket, so a push to it can only fail (and, hosted,
+ * costs a Durable Object round-trip). Long-lived workspaces accumulate
+ * thousands of offline nodes whose bindings are still `active`; without this
+ * predicate a single channel join fanned out to every one of them. `draining`
+ * nodes keep their socket until they disconnect, so they stay eligible.
+ * http_push nodes have no socket and no liveness status, so they are always
+ * eligible.
+ */
+function contextReachableNode() {
+  return or(
+    eq(nodes.kind, 'http_push'),
+    and(inArray(nodes.kind, WS_CONTEXT_NODE_KINDS), ne(nodes.status, 'offline')),
+  )!;
+}
+// workspace/status/kind/liveness predicates add seven bindings, so 80 agent ids
+// leave comfortable room below D1's 100-bound-parameter limit.
 const AGENT_CONTEXT_QUERY_CHUNK_SIZE = 80;
 // A cross-workspace target can bind both workspace and agent id. Forty worst-
-// case one-agent workspaces plus the status/kind predicates use 85 bindings.
+// case one-agent workspaces plus the status/kind/liveness predicates use 86
+// bindings.
 const AGENT_CONTEXT_EVENT_QUERY_CHUNK_SIZE = 40;
 
 /** Collapse the per-kind WebSocket adapter aliases onto the single `ws.node.v1` contract. */
@@ -82,6 +114,30 @@ function groupByNodeProvider(rows: ScopedNodeRow[]): Map<string, GroupedNode> {
 }
 
 /**
+ * `Promise.allSettled` over lazily-started tasks, with at most `limit` in
+ * flight. Results keep the input order.
+ */
+async function settleWithConcurrency<T>(
+  tasks: ReadonlyArray<() => Promise<T>>,
+  limit: number,
+): Promise<PromiseSettledResult<T>[]> {
+  const results: PromiseSettledResult<T>[] = new Array(tasks.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < tasks.length) {
+      const index = next++;
+      try {
+        results[index] = { status: 'fulfilled', value: await tasks[index]() };
+      } catch (reason) {
+        results[index] = { status: 'rejected', reason };
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, limit), tasks.length) }, worker));
+  return results;
+}
+
+/**
  * Push one context event to every (node, provider) target in `rows`.
  *
  * Targets are independent — one failing node never cancels another — but the
@@ -99,12 +155,12 @@ async function sendContextToRows(
   },
 ): Promise<void> {
   const grouped = groupByNodeProvider(rows);
-  const tasks: Promise<unknown>[] = [];
+  const tasks: Array<() => Promise<unknown>> = [];
   for (const group of grouped.values()) {
     const nodeId = group.nodeId;
     const agentIds = [...new Set(group.agentIds)];
     if (normalizeDeliveryAdapter(group.deliveryAdapter, group.nodeKind) === 'ws.node.v1') {
-      tasks.push(
+      tasks.push(() =>
         deps.nodeConnections.sendToProvider(deps.workspaceId, nodeId, group.providerName, {
           v: 1,
           type: 'context.update',
@@ -118,7 +174,7 @@ async function sendContextToRows(
       continue;
     }
     if (group.nodeKind === 'http_push') {
-      tasks.push(
+      tasks.push(() =>
         postEphemeralEventToHttpPushNode({
           deliveryConfig: group.deliveryConfig,
           strict: strictHttpPushDispatch(deps.environment),
@@ -148,7 +204,7 @@ async function sendContextToRows(
       event: message.event,
     });
   }
-  const settled = await Promise.allSettled(tasks);
+  const settled = await settleWithConcurrency(tasks, NODE_CONTEXT_SEND_CONCURRENCY);
   const failures = settled
     .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
     .map((result) => result.reason);
@@ -198,7 +254,7 @@ export async function sendNodeContextForChannel(
     ))
     .where(and(
       eq(channelMembers.channelId, args.channelId),
-      inArray(nodes.kind, CONTEXT_NODE_KINDS),
+      contextReachableNode(),
     ));
 
   await sendContextToRows(deps, rows, {
@@ -242,7 +298,7 @@ export async function sendNodePresenceContext(
     .where(and(
       eq(agentNodeBindings.workspaceId, deps.workspaceId),
       eq(agentNodeBindings.status, 'active'),
-      inArray(nodes.kind, CONTEXT_NODE_KINDS),
+      contextReachableNode(),
     ));
 
   await sendContextToRows(deps, rows, {
@@ -285,7 +341,7 @@ async function listNodeContextRowsForAgents(
         eq(agentNodeBindings.workspaceId, deps.workspaceId),
         eq(agentNodeBindings.status, 'active'),
         inArray(agentNodeBindings.agentId, chunk),
-        inArray(nodes.kind, CONTEXT_NODE_KINDS),
+        contextReachableNode(),
       )));
   }
   return rows;
@@ -372,7 +428,7 @@ export async function sendNodeContextEventsToAgents(
       ))
       .where(and(
         eq(agentNodeBindings.status, 'active'),
-        inArray(nodes.kind, CONTEXT_NODE_KINDS),
+        contextReachableNode(),
         or(...scopes),
       ));
     for (const row of rows) {
