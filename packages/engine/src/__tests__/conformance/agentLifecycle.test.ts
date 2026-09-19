@@ -1848,7 +1848,13 @@ describe('node agent binding adopts the agent location', () => {
   }
 
   /** Attach a node-control socket and register `providerName` on the node. */
-  async function attachProvider(workspaceId: string, nodeId: string, nodeName: string, providerName: string) {
+  async function attachProvider(
+    workspaceId: string,
+    nodeId: string,
+    nodeName: string,
+    providerName: string,
+    capabilities: Array<{ name: string; kind?: string }> = [{ name: 'spawn:claude', kind: 'capacity' }],
+  ) {
     const sock = new FakeSocket();
     const handle = stack.runtime.realtime.attachNodeSocket(workspaceId, nodeId, sock);
     await handle.handleMessage(JSON.stringify({
@@ -1858,7 +1864,7 @@ describe('node agent binding adopts the agent location', () => {
       node_id: nodeId,
       name: nodeName,
       provider: { name: providerName, instance_id: `${providerName}-i1` },
-      capabilities: [{ name: 'spawn:claude', kind: 'capacity' }],
+      capabilities,
       max_agents: 4,
       tags: ['test'],
       version: 'v1',
@@ -2005,6 +2011,78 @@ describe('node agent binding adopts the agent location', () => {
       .from(agents)
       .where(eq(agents.id, target.agentId));
     expect(adopted).toEqual({ providerName: 'broker', locationNodeId: 'node_broker' });
+  });
+
+  it('adopts the live provider when the agent\u2019s own provider row is offline', async () => {
+    const ws = await createWorkspace(stack.app, 'bind-live-provider-only');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'stale-provider-agent');
+    await enrollNode(ws.workspaceKey, 'node_broker', 'broker-host');
+
+    // The node's `default` provider disconnected: its row persists as history
+    // while `broker` keeps the node serving. Adoption must see only the live
+    // side — keeping `default` would point the agent at a socket that is gone.
+    const stale = await attachProvider(ws.workspaceId, 'node_broker', 'broker-host', 'default');
+    await stale.handle.handleClose();
+    const [offline] = await stack.runtime.deps.db
+      .select({ status: nodeProviders.status, handlersLive: nodeProviders.handlersLive })
+      .from(nodeProviders)
+      .where(and(
+        eq(nodeProviders.workspaceId, ws.workspaceId),
+        eq(nodeProviders.nodeId, 'node_broker'),
+        eq(nodeProviders.name, 'default'),
+      ));
+    expect(offline).toEqual({ status: 'offline', handlersLive: false });
+    await attachProvider(ws.workspaceId, 'node_broker', 'broker-host', 'broker');
+
+    expect((await bindAgent(ws.workspaceKey, 'broker-host', target.name)).status).toBe(201);
+
+    const [adopted] = await stack.runtime.deps.db
+      .select({ providerName: agents.providerName })
+      .from(agents)
+      .where(eq(agents.id, target.agentId));
+    expect(adopted).toEqual({ providerName: 'broker' });
+  });
+
+  it('marks a bound agent delivery-ready on a cursor-aware provider and drains its queue', async () => {
+    const ws = await createWorkspace(stack.app, 'bind-cursor-readiness');
+    const speaker = await registerAgent(stack.app, ws.workspaceKey, 'speaker');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'cursor-bound-agent');
+    await enrollNode(ws.workspaceKey, 'node_broker', 'broker-host');
+    const { sock } = await attachProvider(ws.workspaceId, 'node_broker', 'broker-host', 'broker', [
+      { name: 'spawn:claude', kind: 'capacity' },
+      { name: 'relay:delivery-cursor-v1', kind: 'capacity' },
+    ]);
+
+    // A message lands while the agent still sits on its implicit pseudo-node:
+    // the durable delivery is queued with no socket to push through.
+    const posted = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${speaker.token}` },
+      body: JSON.stringify({ text: 'queued while unroutable' }),
+    });
+    expect(posted.status).toBe(201);
+    await stack.settle();
+    expect(deliverFramesOfType(sock, 'message.created')).toEqual([]);
+    expect(
+      stack.runtime.realtime.isProviderAgentDeliveryReady(ws.workspaceId, 'node_broker', 'broker', target.agentId),
+    ).toBe(false);
+
+    const bound = await bindAgent(ws.workspaceKey, 'broker-host', target.name);
+    expect(bound.status).toBe(201);
+    // The bind response hands the caller the agent's authoritative cursor, the
+    // same contract the agent.register/agent.recover replies carry.
+    expect((await bound.json() as { data: { delivery_ack_seq: number } }).data.delivery_ack_seq)
+      .toBe(0);
+
+    // Agent-scoped readiness now names the adopted identity, and the bind's own
+    // drain replays the delivery that queued before the move.
+    expect(
+      stack.runtime.realtime.isProviderAgentDeliveryReady(ws.workspaceId, 'node_broker', 'broker', target.agentId),
+    ).toBe(true);
+    await stack.settle();
+    expect(deliverFramesOfType(sock, 'message.created')).toEqual([
+      expect.objectContaining({ type: 'deliver', agent: target.name }),
+    ]);
   });
 
   it('stamps session, liveness and origin with the move, and keeps the first origin on a later one', async () => {

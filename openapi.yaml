@@ -1307,6 +1307,12 @@ components:
           nullable: true
         priority:
           type: integer
+        delivery_ack_seq:
+          type: integer
+          description: >
+            The agent's authoritative delivery cursor. Returned only by the bind
+            endpoint so cursor-aware providers learn the identity's cursor state
+            when the binding marks it delivery-ready.
         created_at:
           type: string
           format: date-time

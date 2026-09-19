@@ -116,8 +116,10 @@ function isImplicitDirectLocation(agent: Pick<AgentRow, 'id' | 'locationNodeId'>
  *  4. Otherwise (several named providers, none of them the agent's) nothing
  *     identifies the owner, so the existing provider stands rather than guessing.
  *
- * A node with no registered providers at all falls through to (4): no socket
- * exists to adopt, and rewriting to a name nobody serves would not help.
+ * A node with no live providers at all falls through to (4): no socket exists
+ * to adopt, and rewriting to a name nobody serves would not help. Callers pass
+ * only live provider names — a persisted-but-offline row is a historical
+ * manifest entry, not a connection deliveries can reach.
  */
 function adoptNodeProviderName(current: string, nodeProviderNames: string[]): string {
   if (nodeProviderNames.includes(current)) return current;
@@ -1387,6 +1389,7 @@ function serializeBinding(row: {
   status: string;
   sessionRef: string | null;
   priority: number;
+  deliveryAckSeq?: number | null;
   createdAt: Date;
   updatedAt: Date | null;
 }) {
@@ -1401,6 +1404,12 @@ function serializeBinding(row: {
     status: row.status,
     session_ref: row.sessionRef,
     priority: row.priority,
+    // Only the bind response selects this: it hands the caller the agent's
+    // authoritative delivery cursor, the same contract `agent.register` and
+    // `agent.recover` replies carry for cursor-aware providers.
+    ...(row.deliveryAckSeq !== undefined && row.deliveryAckSeq !== null
+      ? { delivery_ack_seq: row.deliveryAckSeq }
+      : {}),
     created_at: row.createdAt.toISOString(),
     updated_at: row.updatedAt?.toISOString() ?? null,
   };
@@ -1412,6 +1421,7 @@ export async function bindAgentToNode(
   nodeName: string,
   agentName: string,
   opts: { session_ref?: string | null; priority?: number } = {},
+  deps: { nodeConnections?: NodeConnectionRegistry } = {},
 ) {
   // `runAtomic` below already owns a transaction on an adapter that has one, so
   // the move's statements must not re-enter `withTransaction` (the shared
@@ -1422,7 +1432,11 @@ export async function bindAgentToNode(
   const hasInteractiveTransaction = typeof (db as EngineDb & {
     withTransaction?: unknown;
   }).withTransaction === 'function';
-  return runAtomic(db, async (tx) => {
+  // The post-commit registry work needs the resolved ids; they only become
+  // authoritative once `runAtomic` has returned, so they are read off the
+  // pending value afterwards rather than trusted mid-transaction.
+  let pendingMove: { nodeId: string; agentId: string; providerName: string } | undefined;
+  const binding = await runAtomic(db, async (tx) => {
     const node = await getNodeByName(tx, workspaceId, nodeName);
     if (!node) throw codedError(`Node "${nodeName}" not found`, 'node_not_found', 404);
 
@@ -1459,12 +1473,23 @@ export async function bindAgentToNode(
       }
     }
 
-    const nodeProviderNames = (await tx
-      .select({ name: nodeProviders.name })
+    // Provider rows persist after a disconnect so the node keeps its capability
+    // manifest; they are history, not sockets. Adopt only among providers that
+    // can actually receive a push right now — keeping or choosing an offline
+    // row while a live sibling serves the node would point the agent at a
+    // provider connection that does not exist.
+    const liveProviderNames = (await tx
+      .select({
+        name: nodeProviders.name,
+        status: nodeProviders.status,
+        handlersLive: nodeProviders.handlersLive,
+        lastHeartbeatAt: nodeProviders.lastHeartbeatAt,
+      })
       .from(nodeProviders)
       .where(and(eq(nodeProviders.workspaceId, workspaceId), eq(nodeProviders.nodeId, node.id))))
+      .filter((provider) => isProviderLive(provider))
       .map((row) => row.name);
-    const adoptedProviderName = adoptNodeProviderName(agent.providerName, nodeProviderNames);
+    const adoptedProviderName = adoptNodeProviderName(agent.providerName, liveProviderNames);
 
     const activeNodeIds = await activeBindingNodeIdsForAgent(tx, workspaceId, agent.id);
     const targetWasActive = activeNodeIds.includes(node.id);
@@ -1520,6 +1545,7 @@ export async function bindAgentToNode(
         status: agentNodeBindings.status,
         sessionRef: agentNodeBindings.sessionRef,
         priority: agentNodeBindings.priority,
+        deliveryAckSeq: agents.deliveryAckSeq,
         createdAt: agentNodeBindings.createdAt,
         updatedAt: agentNodeBindings.updatedAt,
       })
@@ -1532,8 +1558,38 @@ export async function bindAgentToNode(
         eq(agentNodeBindings.nodeId, node.id),
       ));
 
+    pendingMove = { nodeId: node.id, agentId: agent.id, providerName: adoptedProviderName };
     return serializeBinding(binding);
   });
+  // Cursor-aware providers gate every delivery on a per-identity ready mark;
+  // `agent.register`/`agent.recover` grant it after replying with the agent's
+  // authoritative cursor, and the response above carries `delivery_ack_seq` for
+  // the same reason here. A bound agent needs that transition too or it points
+  // at a socket that will never push to it. This runs strictly after the move
+  // commits — marking a rolled-back agent ready would deliver to a location
+  // that does not own it — and only mutates an agent_scoped ready-set;
+  // immediate-mode providers ignore it.
+  const registry = deps.nodeConnections;
+  if (pendingMove && registry) {
+    registry.markProviderAgentsDeliveryReady?.(
+      workspaceId,
+      pendingMove.nodeId,
+      pendingMove.providerName,
+      undefined,
+      [pendingMove.agentId],
+    );
+    try {
+      await deliverPendingToNode(db, registry, workspaceId, pendingMove.nodeId, {
+        providerName: pendingMove.providerName,
+        agentIds: [pendingMove.agentId],
+      });
+    } catch (err) {
+      // The move is durable; a replay failure leaves the pending queue intact
+      // for the next drain rather than reporting a bind failure that committed.
+      console.error('[node.bind] pending delivery replay failed', err);
+    }
+  }
+  return binding;
 }
 
 export async function unbindAgentFromNode(db: Db, workspaceId: string, nodeName: string, agentName: string) {

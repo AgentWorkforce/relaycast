@@ -265,6 +265,7 @@ nodeRoutes.post('/nodes/:name/agents', requireWorkspaceKey, rateLimit, async (c)
         session_ref: parsed.data.session_ref,
         priority: parsed.data.priority,
       },
+      { nodeConnections: c.get('engine').nodeConnections },
     );
     return jsonCreated(c, result);
   } catch (err: unknown) {
