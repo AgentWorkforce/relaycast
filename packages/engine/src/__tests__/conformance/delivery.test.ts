@@ -11,7 +11,7 @@ import {
   contextUpdatesOfType,
   type TestStack,
 } from './harness.js';
-import { agents, deliveries, messages } from '../../db/schema.js';
+import { agents, deliveries, messages, nodeProviders } from '../../db/schema.js';
 import * as messageEngine from '../../engine/message.js';
 import * as deliveryEngine from '../../engine/delivery.js';
 import { ensureDirectNodeForAgent } from '../../engine/node.js';
@@ -1923,7 +1923,7 @@ describe('durable delivery api', () => {
       ws: { workspaceKey: string; workspaceId: string },
       node: { id: string; name: string },
       agents: Array<{ agentId: string; name: string }>,
-      opts: { alreadyReady?: boolean } = {},
+      opts: { alreadyReady?: boolean; heartbeatCapabilities?: string[] } = {},
     ) {
       const reconnected = await enrollAndAttachNode(ws, {
         id: node.id,
@@ -1931,6 +1931,16 @@ describe('durable delivery api', () => {
         cursorHandshake: true,
       });
       expect(reconnected.sock.ofType('deliver')).toHaveLength(0);
+      if (opts.heartbeatCapabilities) {
+        await reconnected.handle.handleMessage(JSON.stringify({
+          v: 1,
+          type: 'node.heartbeat',
+          load: 0,
+          active_agents: agents.length,
+          handlers_live: true,
+          capabilities: opts.heartbeatCapabilities.map((name) => ({ name, kind: 'capacity' })),
+        }));
+      }
       if (opts.alreadyReady !== false) {
         stack.runtime.realtime.markProviderAgentsDeliveryReady(
           ws.workspaceId,
@@ -2081,6 +2091,123 @@ describe('durable delivery api', () => {
       await stack.settle();
       expect(deliverFramesOfType(reconnected.sock, 'message.created').map((frame) => frame.agent))
         .toEqual([bob.name, carol.name]);
+    });
+
+    /**
+     * The handshake belongs to the CONNECTION, not to the provider's roster: a
+     * heartbeat between `node.register` and the certification refreshes spawn
+     * capacity and may omit (or add) the delivery-cursor advertisement. Neither
+     * direction may change how the live connection replays.
+     */
+    it('replays the certified backlog when a heartbeat roster omits the cursor capability', async () => {
+      const ws = await createWorkspace(stack.app, 'mailbox-outage-heartbeat-roster');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+      const bob = await registerViaNode(node, 'bob');
+
+      await node.handle.handleClose();
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text: 'queued before a roster-only heartbeat' }),
+      });
+      expect(post.status).toBe(201);
+      const messageId = ((await post.json()) as { data: { id: string } }).data.id;
+      await stack.settle();
+
+      // The reconnect negotiated the cursor handshake and so got no
+      // register-time flush; the heartbeat that follows advertises spawn
+      // capacity only. The certification is still this connection's only
+      // replay trigger.
+      const reconnected = await reconnectAndSync(ws, node, [bob], {
+        alreadyReady: false,
+        heartbeatCapabilities: ['spawn:claude'],
+      });
+
+      expect(deliverFramesOfType(reconnected.sock, 'message.created')).toEqual([
+        expect.objectContaining({ agent: bob.name, msg_id: messageId, seq: 1 }),
+      ]);
+    });
+
+    it('does not re-flush an immediate connection whose heartbeat roster adds the cursor capability', async () => {
+      const ws = await createWorkspace(stack.app, 'mailbox-outage-heartbeat-promote');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const node = await enrollAndAttachNode(ws);
+      const bob = await registerViaNode(node, 'bob');
+
+      await node.handle.handleClose();
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text: 'flushed by the legacy register' }),
+      });
+      expect(post.status).toBe(201);
+      await stack.settle();
+
+      // Legacy handshake: `node.register` flushes the whole node, so the
+      // backlog is already on the socket (delivered, not yet acked).
+      const reconnected = await enrollAndAttachNode(ws, { id: node.id, name: node.name });
+      await stack.settle();
+      expect(deliverFramesOfType(reconnected.sock, 'message.created')).toHaveLength(1);
+
+      await reconnected.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.heartbeat',
+        load: 0,
+        active_agents: 1,
+        handlers_live: true,
+        capabilities: [
+          { name: 'spawn:claude', kind: 'capacity' },
+          { name: FLEET_DELIVERY_CURSOR_CAPABILITY, kind: 'capacity' },
+        ],
+      }));
+      await reconnected.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'inventory.sync',
+        agents: [{ agent_id: bob.agentId, name: bob.name, session_ref: 'sess-bob' }],
+      }));
+      await stack.settle();
+
+      // A roster heartbeat cannot promote the connection to cursor-gated, so
+      // the certification replays nothing the register-time flush already sent.
+      expect(deliverFramesOfType(reconnected.sock, 'message.created')).toHaveLength(1);
+    });
+
+    it('keeps the registered cursor advertisement out of reach of a heartbeat roster refresh', async () => {
+      const ws = await createWorkspace(stack.app, 'mailbox-heartbeat-capabilities');
+      const cursorNode = await enrollAndAttachNode(ws, { cursorHandshake: true });
+      const legacyNode = await enrollAndAttachNode(ws, { id: 'node_legacy', name: 'legacy-node' });
+
+      const rosterOnly = {
+        v: 1,
+        type: 'node.heartbeat',
+        load: 0,
+        active_agents: 0,
+        handlers_live: true,
+        capabilities: [{ name: 'spawn:claude', kind: 'capacity' }],
+      };
+      await cursorNode.handle.handleMessage(JSON.stringify(rosterOnly));
+      await legacyNode.handle.handleMessage(JSON.stringify({
+        ...rosterOnly,
+        capabilities: [
+          { name: 'spawn:claude', kind: 'capacity' },
+          { name: FLEET_DELIVERY_CURSOR_CAPABILITY, kind: 'capacity' },
+        ],
+      }));
+      await stack.settle();
+
+      const advertised = async (nodeId: string) => {
+        const [row] = await stack.runtime.deps.db
+          .select({ capabilities: nodeProviders.capabilities })
+          .from(nodeProviders)
+          .where(and(eq(nodeProviders.nodeId, nodeId), eq(nodeProviders.name, DEFAULT_PROVIDER_NAME)));
+        return (row?.capabilities ?? []).map((capability) => capability.name);
+      };
+
+      // The negotiated capability survives a heartbeat that omits it...
+      expect(await advertised(cursorNode.id)).toContain(FLEET_DELIVERY_CURSOR_CAPABILITY);
+      // ...and a heartbeat cannot introduce one the registration never made.
+      expect(await advertised(legacyNode.id)).not.toContain(FLEET_DELIVERY_CURSOR_CAPABILITY);
     });
   });
 

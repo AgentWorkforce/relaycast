@@ -636,6 +636,26 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     }
   }
 
+  providerDeliveryReadinessMode(
+    workspaceId: string,
+    nodeId: string,
+    providerName: string,
+    connectionId?: string | undefined,
+  ): 'immediate' | 'agent_scoped' | undefined {
+    const nodeKey = this.nodeKey(workspaceId, nodeId);
+    const currentConnectionId = this.providerConnId(nodeKey, providerName);
+    if (!currentConnectionId || (connectionId && currentConnectionId !== connectionId)) return undefined;
+    const conn = this.nodeConnections.get(currentConnectionId);
+    if (!conn || conn.workspaceId !== workspaceId || conn.nodeId !== nodeId || conn.providerName !== providerName) {
+      return undefined;
+    }
+    // `undefined` is "never configured on this connection" (no node.register
+    // yet), which is not a negotiated mode; null is immediate, a Set is
+    // agent-scoped — the same encoding isProviderAgentDeliveryReady reads.
+    if (conn.deliveryReadyAgentIds === undefined) return undefined;
+    return conn.deliveryReadyAgentIds === null ? 'immediate' : 'agent_scoped';
+  }
+
   markProviderAgentsDeliveryReady(
     workspaceId: string,
     nodeId: string,

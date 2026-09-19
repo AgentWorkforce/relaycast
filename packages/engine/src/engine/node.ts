@@ -226,6 +226,59 @@ async function providerAdvertisesDeliveryCursor(
   ) ?? false;
 }
 
+/**
+ * Capabilities that are NEGOTIATED at `node.register` (answered in its
+ * acceptance list and wired into the connection's delivery mode) rather than
+ * merely advertised. A heartbeat refreshes the provider's roster of spawn /
+ * action capacity; it is not a renegotiation, so it may neither drop nor
+ * introduce one of these. Dropping would demote a live cursor-gated connection
+ * that was deliberately denied the register-time flush — stranding its backlog;
+ * introducing would promote an immediate connection and replay frames that
+ * flush already sent. The registered value stands until the next
+ * `node.register`.
+ */
+const NEGOTIATED_PROTOCOL_CAPABILITIES: readonly string[] = [FLEET_DELIVERY_CURSOR_CAPABILITY];
+
+function isNegotiatedProtocolCapability(capability: FleetCapability): boolean {
+  return NEGOTIATED_PROTOCOL_CAPABILITIES.includes(capability.name);
+}
+
+function withRegisteredProtocolCapabilities(
+  heartbeatCapabilities: FleetCapability[],
+  registeredCapabilities: FleetCapability[],
+): FleetCapability[] {
+  return [
+    ...heartbeatCapabilities.filter((capability) => !isNegotiatedProtocolCapability(capability)),
+    ...registeredCapabilities.filter(isNegotiatedProtocolCapability),
+  ];
+}
+
+/**
+ * Whether the provider's LIVE connection negotiated cursor-gated delivery at
+ * `node.register` — i.e. whether it was denied the register-time flush and so
+ * depends on a later certification to replay.
+ *
+ * The registry owns that answer: `node.register` hands it the negotiated mode
+ * per connection, and a reconnect starts a fresh one. Ask it first. Only a
+ * registry that does not expose the mode (an out-of-process owner on an older
+ * contract) falls back to the persisted advertisement — which heartbeats keep
+ * off-limits (see `heartbeatNode`) precisely so the fallback answers for the
+ * registration rather than for the latest roster snapshot.
+ */
+async function connectionNegotiatedDeliveryCursor(
+  db: EngineDb,
+  registry: NodeConnectionRegistry,
+  workspaceId: string,
+  nodeId: string,
+  providerName: string,
+  connectionId: string | undefined,
+): Promise<boolean> {
+  if (!supportsProviderDeliveryReadiness(registry)) return false;
+  const mode = registry.providerDeliveryReadinessMode?.(workspaceId, nodeId, providerName, connectionId);
+  if (mode !== undefined) return mode === 'agent_scoped';
+  return providerAdvertisesDeliveryCursor(db, workspaceId, nodeId, providerName);
+}
+
 function requestId(message: { id?: string }): string {
   return message.id ?? generateId();
 }
@@ -738,15 +791,23 @@ export async function heartbeatNode(
 
   await runAtomic(db, async (tx) => {
     if (message.capabilities !== undefined) {
-      const caps = normalizeCapabilities(message.capabilities);
       const [existingProvider] = await tx
-        .select({ instanceId: nodeProviders.instanceId, maxAgents: nodeProviders.maxAgents, version: nodeProviders.version })
+        .select({
+          instanceId: nodeProviders.instanceId,
+          maxAgents: nodeProviders.maxAgents,
+          version: nodeProviders.version,
+          capabilities: nodeProviders.capabilities,
+        })
         .from(nodeProviders)
         .where(and(
           eq(nodeProviders.workspaceId, workspaceId),
           eq(nodeProviders.nodeId, nodeId),
           eq(nodeProviders.name, providerName),
         ));
+      const caps = withRegisteredProtocolCapabilities(
+        normalizeCapabilities(message.capabilities),
+        existingProvider?.capabilities ?? [],
+      );
       await upsertProvider(tx, workspaceId, nodeId, {
         name: providerName,
         instanceId: existingProvider?.instanceId ?? `${providerName}:heartbeat`,
@@ -2857,10 +2918,9 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
         // TRANSITION instead stranded a reconnecting node's entire outage
         // backlog whenever the socket owner already reported those identities as
         // delivery-ready — an out-of-process owner whose ready-set is keyed per
-        // node+provider rather than per connection, or a registry without the
-        // optional readiness hooks, where the shared helper defaults to ready.
-        // The diff came back empty, the drain ran with an empty scope, and rows
-        // queued during the outage sat unsent until their mailbox TTL.
+        // node+provider rather than per connection. The diff came back empty,
+        // the drain ran with an empty scope, and rows queued during the outage
+        // sat unsent until their mailbox TTL.
         //
         // A legacy immediate-delivery connection already had the whole node
         // flushed to it at `node.register` and gates nothing afterwards, so only
@@ -2871,8 +2931,17 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
         // identity on delivery readiness inside the drain, and deduped by the
         // cumulative delivery cursor, so an identity that is already drained and
         // acked re-sends nothing.
-        const cursorGated = supportsProviderDeliveryReadiness(args.registry)
-          && await providerAdvertisesDeliveryCursor(args.db, args.workspaceId, args.nodeId, frameProviderName);
+        // The mode is the CONNECTION's, recovered from the registry that
+        // `node.register` configured it on — not re-derived from roster state
+        // that a heartbeat can rewrite between registration and certification.
+        const cursorGated = await connectionNegotiatedDeliveryCursor(
+          args.db,
+          args.registry,
+          args.workspaceId,
+          args.nodeId,
+          frameProviderName,
+          args.connectionId,
+        );
         await deliverPendingToNode(
           args.db,
           args.registry,
