@@ -238,6 +238,24 @@ export interface NodeConnectionRegistry {
     mode: 'immediate' | 'agent_scoped',
   ): void;
 
+  /**
+   * The mode {@link setProviderDeliveryReadiness} last configured for the
+   * provider's CURRENT connection, or `undefined` when no connection is bound
+   * (or the registry does not track it). This is the negotiated handshake of
+   * the live connection, so a later frame on that connection can recover what
+   * `node.register` agreed to instead of re-deriving it from roster state a
+   * heartbeat may have rewritten since. Implementations must resolve the
+   * connection exactly as {@link setProviderDeliveryReadiness} does, and return
+   * `undefined` for a `connectionId` that is no longer the provider's current
+   * connection.
+   */
+  providerDeliveryReadinessMode?(
+    workspaceId: string,
+    nodeId: string,
+    providerName: string,
+    connectionId?: string | undefined,
+  ): 'immediate' | 'agent_scoped' | undefined;
+
   /** Mark identities ready after their cursor-bearing reply is on the socket. */
   markProviderAgentsDeliveryReady?(
     workspaceId: string,

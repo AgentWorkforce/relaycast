@@ -11,7 +11,7 @@ import {
   contextUpdatesOfType,
   type TestStack,
 } from './harness.js';
-import { agents, deliveries, messages } from '../../db/schema.js';
+import { agents, deliveries, messages, nodeProviders } from '../../db/schema.js';
 import * as messageEngine from '../../engine/message.js';
 import * as deliveryEngine from '../../engine/delivery.js';
 import { ensureDirectNodeForAgent } from '../../engine/node.js';
@@ -1902,6 +1902,378 @@ describe('durable delivery api', () => {
         msg_id: messageId,
       }),
     ]);
+  });
+
+  /**
+   * A reconnecting broker certifies its surviving sessions with `inventory.sync`,
+   * and that certified set is what gets replayed. These cases pin the reconnect
+   * drain to the certification itself rather than to a readiness/routing
+   * transition: a socket owner that already reports the listed identities as
+   * delivery-ready (an out-of-process owner whose ready-set is keyed per
+   * node+provider, not per connection) must still get the outage backlog.
+   */
+  describe('reconnect replay of an outage backlog', () => {
+    /**
+     * Reconnect a cursor-negotiated node and certify `agentIds` through
+     * `inventory.sync`, with the socket owner already reporting them
+     * delivery-ready — the state a remote socket owner presents when its
+     * ready-set survives the transport reconnect.
+     */
+    async function reconnectAndSync(
+      ws: { workspaceKey: string; workspaceId: string },
+      node: { id: string; name: string },
+      agents: Array<{ agentId: string; name: string }>,
+      opts: { alreadyReady?: boolean; heartbeatCapabilities?: string[] } = {},
+    ) {
+      const reconnected = await enrollAndAttachNode(ws, {
+        id: node.id,
+        name: node.name,
+        cursorHandshake: true,
+      });
+      expect(reconnected.sock.ofType('deliver')).toHaveLength(0);
+      if (opts.heartbeatCapabilities) {
+        await reconnected.handle.handleMessage(JSON.stringify({
+          v: 1,
+          type: 'node.heartbeat',
+          load: 0,
+          active_agents: agents.length,
+          handlers_live: true,
+          capabilities: opts.heartbeatCapabilities.map((name) => ({ name, kind: 'capacity' })),
+        }));
+      }
+      if (opts.alreadyReady !== false) {
+        stack.runtime.realtime.markProviderAgentsDeliveryReady(
+          ws.workspaceId,
+          node.id,
+          DEFAULT_PROVIDER_NAME,
+          undefined,
+          agents.map((agent) => agent.agentId),
+        );
+      }
+      await reconnected.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'inventory.sync',
+        agents: agents.map((agent) => ({
+          agent_id: agent.agentId,
+          name: agent.name,
+          session_ref: `sess-${agent.name}`,
+        })),
+      }));
+      await stack.settle();
+      return reconnected;
+    }
+
+    it('replays a message queued while the node socket was down', async () => {
+      const ws = await createWorkspace(stack.app, 'mailbox-outage-replay');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+      const bob = await registerViaNode(node, 'bob');
+
+      await node.handle.handleClose();
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text: 'queued during the outage' }),
+      });
+      expect(post.status).toBe(201);
+      const messageId = ((await post.json()) as { data: { id: string } }).data.id;
+      await stack.settle();
+
+      const reconnected = await reconnectAndSync(ws, node, [bob]);
+
+      expect(deliverFramesOfType(reconnected.sock, 'message.created')).toEqual([
+        expect.objectContaining({ agent: bob.name, msg_id: messageId, seq: 1 }),
+      ]);
+    });
+
+    it('does not re-send a delivery the node already acked before the outage', async () => {
+      const ws = await createWorkspace(stack.app, 'mailbox-outage-acked');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+      const bob = await registerViaNode(node, 'bob');
+
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text: 'acked before the outage' }),
+      });
+      expect(post.status).toBe(201);
+      await waitForAssertion(() => {
+        expect(deliverFramesOfType(node.sock, 'message.created')).toHaveLength(1);
+      });
+      await node.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'delivery.ack',
+        agent: bob.name,
+        up_to_seq: 1,
+      }));
+      await node.handle.handleClose();
+
+      const reconnected = await reconnectAndSync(ws, node, [bob]);
+
+      expect(deliverFramesOfType(reconnected.sock, 'message.created')).toEqual([]);
+    });
+
+    it('drains two outage deliveries oldest-first, exactly once across repeated syncs', async () => {
+      const ws = await createWorkspace(stack.app, 'mailbox-outage-ordering');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+      const bob = await registerViaNode(node, 'bob');
+
+      await node.handle.handleClose();
+      const texts = ['first while offline', 'second while offline'];
+      const messageIds: string[] = [];
+      for (const text of texts) {
+        const post = await stack.app.request('/v1/channels/general/messages', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+          body: JSON.stringify({ text }),
+        });
+        expect(post.status).toBe(201);
+        messageIds.push(((await post.json()) as { data: { id: string } }).data.id);
+      }
+      await stack.settle();
+
+      const reconnected = await reconnectAndSync(ws, node, [bob]);
+      expect(deliverFramesOfType(reconnected.sock, 'message.created')).toEqual([
+        expect.objectContaining({ msg_id: messageIds[0], seq: 1 }),
+        expect.objectContaining({ msg_id: messageIds[1], seq: 2 }),
+      ]);
+
+      // The cumulative cursor is the only dedupe: once the node acks the drained
+      // range, a further certification of the same session replays nothing.
+      await reconnected.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'delivery.ack',
+        agent: bob.name,
+        up_to_seq: 2,
+      }));
+      await reconnected.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'inventory.sync',
+        agents: [{ agent_id: bob.agentId, name: bob.name, session_ref: 'sess-bob' }],
+      }));
+      await stack.settle();
+      expect(deliverFramesOfType(reconnected.sock, 'message.created')).toHaveLength(2);
+    });
+
+    it('does not push to an agent that the reconnect has not made delivery-ready', async () => {
+      const ws = await createWorkspace(stack.app, 'mailbox-outage-not-ready');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+      const bob = await registerViaNode(node, 'bob');
+      const carol = await registerViaNode(node, 'carol');
+
+      await node.handle.handleClose();
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text: 'queued for both sessions' }),
+      });
+      expect(post.status).toBe(201);
+      await stack.settle();
+
+      // Only bob's session survived the reconnect; carol's restarted and is not
+      // certified by this inventory, so she stays gated until she re-announces.
+      const reconnected = await reconnectAndSync(ws, node, [bob]);
+      expect(deliverFramesOfType(reconnected.sock, 'message.created').map((frame) => frame.agent))
+        .toEqual([bob.name]);
+
+      await reconnected.handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'resume-carol',
+        type: 'agent.recover',
+        name: carol.name,
+        expected_agent_id: carol.agentId,
+        resumable: true,
+        session_ref: 'sess-carol',
+      }));
+      await stack.settle();
+      expect(deliverFramesOfType(reconnected.sock, 'message.created').map((frame) => frame.agent))
+        .toEqual([bob.name, carol.name]);
+    });
+
+    /**
+     * The handshake belongs to the CONNECTION, not to the provider's roster: a
+     * heartbeat between `node.register` and the certification refreshes spawn
+     * capacity and may omit (or add) the delivery-cursor advertisement. Neither
+     * direction may change how the live connection replays.
+     */
+    it('replays the certified backlog when a heartbeat roster omits the cursor capability', async () => {
+      const ws = await createWorkspace(stack.app, 'mailbox-outage-heartbeat-roster');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+      const bob = await registerViaNode(node, 'bob');
+
+      await node.handle.handleClose();
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text: 'queued before a roster-only heartbeat' }),
+      });
+      expect(post.status).toBe(201);
+      const messageId = ((await post.json()) as { data: { id: string } }).data.id;
+      await stack.settle();
+
+      // The reconnect negotiated the cursor handshake and so got no
+      // register-time flush; the heartbeat that follows advertises spawn
+      // capacity only. The certification is still this connection's only
+      // replay trigger.
+      const reconnected = await reconnectAndSync(ws, node, [bob], {
+        alreadyReady: false,
+        heartbeatCapabilities: ['spawn:claude'],
+      });
+
+      expect(deliverFramesOfType(reconnected.sock, 'message.created')).toEqual([
+        expect.objectContaining({ agent: bob.name, msg_id: messageId, seq: 1 }),
+      ]);
+    });
+
+    it('does not re-flush an immediate connection whose heartbeat roster adds the cursor capability', async () => {
+      const ws = await createWorkspace(stack.app, 'mailbox-outage-heartbeat-promote');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const node = await enrollAndAttachNode(ws);
+      const bob = await registerViaNode(node, 'bob');
+
+      await node.handle.handleClose();
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text: 'flushed by the legacy register' }),
+      });
+      expect(post.status).toBe(201);
+      await stack.settle();
+
+      // Legacy handshake: `node.register` flushes the whole node, so the
+      // backlog is already on the socket (delivered, not yet acked).
+      const reconnected = await enrollAndAttachNode(ws, { id: node.id, name: node.name });
+      await stack.settle();
+      expect(deliverFramesOfType(reconnected.sock, 'message.created')).toHaveLength(1);
+
+      await reconnected.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.heartbeat',
+        load: 0,
+        active_agents: 1,
+        handlers_live: true,
+        capabilities: [
+          { name: 'spawn:claude', kind: 'capacity' },
+          { name: FLEET_DELIVERY_CURSOR_CAPABILITY, kind: 'capacity' },
+        ],
+      }));
+      await reconnected.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'inventory.sync',
+        agents: [{ agent_id: bob.agentId, name: bob.name, session_ref: 'sess-bob' }],
+      }));
+      await stack.settle();
+
+      // A roster heartbeat cannot promote the connection to cursor-gated, so
+      // the certification replays nothing the register-time flush already sent.
+      expect(deliverFramesOfType(reconnected.sock, 'message.created')).toHaveLength(1);
+    });
+
+    it('keeps the registered cursor advertisement out of reach of a heartbeat roster refresh', async () => {
+      const ws = await createWorkspace(stack.app, 'mailbox-heartbeat-capabilities');
+      const cursorNode = await enrollAndAttachNode(ws, { cursorHandshake: true });
+      const legacyNode = await enrollAndAttachNode(ws, { id: 'node_legacy', name: 'legacy-node' });
+
+      const rosterOnly = {
+        v: 1,
+        type: 'node.heartbeat',
+        load: 0,
+        active_agents: 0,
+        handlers_live: true,
+        capabilities: [{ name: 'spawn:claude', kind: 'capacity' }],
+      };
+      await cursorNode.handle.handleMessage(JSON.stringify(rosterOnly));
+      await legacyNode.handle.handleMessage(JSON.stringify({
+        ...rosterOnly,
+        capabilities: [
+          { name: 'spawn:claude', kind: 'capacity' },
+          { name: FLEET_DELIVERY_CURSOR_CAPABILITY, kind: 'capacity' },
+        ],
+      }));
+      await stack.settle();
+
+      const advertised = async (nodeId: string) => {
+        const [row] = await stack.runtime.deps.db
+          .select({ capabilities: nodeProviders.capabilities })
+          .from(nodeProviders)
+          .where(and(eq(nodeProviders.nodeId, nodeId), eq(nodeProviders.name, DEFAULT_PROVIDER_NAME)));
+        return (row?.capabilities ?? []).map((capability) => capability.name);
+      };
+
+      // The negotiated capability survives a heartbeat that omits it...
+      expect(await advertised(cursorNode.id)).toContain(FLEET_DELIVERY_CURSOR_CAPABILITY);
+      // ...and a heartbeat cannot introduce one the registration never made.
+      expect(await advertised(legacyNode.id)).not.toContain(FLEET_DELIVERY_CURSOR_CAPABILITY);
+    });
+
+    /**
+     * A superseded connection's in-flight `inventory.sync` is not the live
+     * connection's certification. The registry answers `undefined` for a
+     * connection that no longer owns the provider — reading the persisted
+     * advertisement instead would classify the stale frame by whichever
+     * registration owns the provider NOW, replaying certified deliveries to
+     * sessions the replacement never certified.
+     */
+    it('does not replay the outage backlog on a superseded connection certification', async () => {
+      const ws = await createWorkspace(stack.app, 'mailbox-outage-stale-sync');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const nodeA = await enrollAndAttachNode(ws, { cursorHandshake: true });
+      const bob = await registerViaNode(nodeA, 'bob');
+
+      await nodeA.handle.handleClose();
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text: 'queued before the stale certification' }),
+      });
+      expect(post.status).toBe(201);
+      const messageId = ((await post.json()) as { data: { id: string } }).data.id;
+      await stack.settle();
+
+      // The broker's fresh connection owns the provider now and persisted its
+      // own cursor advertisement at register. Nothing is certified yet — but
+      // an out-of-process socket owner can still report bob ready: its
+      // ready-set is keyed per node+provider, not per connection, and survives
+      // the transport reconnect (the state this whole replay path exists for).
+      const nodeB = await enrollAndAttachNode(ws, {
+        id: nodeA.id,
+        name: nodeA.name,
+        cursorHandshake: true,
+      });
+      expect(nodeB.sock.ofType('deliver')).toHaveLength(0);
+      stack.runtime.realtime.markProviderAgentsDeliveryReady(
+        ws.workspaceId,
+        nodeB.id,
+        DEFAULT_PROVIDER_NAME,
+        undefined,
+        [bob.agentId],
+      );
+
+      // The old connection's queued sync finally runs. Its certification is
+      // not this connection's: it must not drain the backlog to bob.
+      await nodeA.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'inventory.sync',
+        agents: [{ agent_id: bob.agentId, name: bob.name, session_ref: 'sess-bob' }],
+      }));
+      await stack.settle();
+      expect(deliverFramesOfType(nodeB.sock, 'message.created')).toHaveLength(0);
+
+      // The replacement's own certification still drains the backlog.
+      await nodeB.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'inventory.sync',
+        agents: [{ agent_id: bob.agentId, name: bob.name, session_ref: 'sess-bob' }],
+      }));
+      await stack.settle();
+      expect(deliverFramesOfType(nodeB.sock, 'message.created')).toEqual([
+        expect.objectContaining({ agent: bob.name, msg_id: messageId, seq: 1 }),
+      ]);
+    });
   });
 
   it('preserves hyphenated mentions through node reconnect replay', async () => {

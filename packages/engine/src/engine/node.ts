@@ -25,7 +25,7 @@ import { codedError } from '../lib/httpError.js';
 import { acceptTaskInvocation, completeTaskInvocation } from './taskInvocation.js';
 import { runAtomic, runAtomicWrites } from '../ports/database.js';
 import type { AtomicWrite, EngineDb } from '../ports/database.js';
-import { isProviderAgentDeliveryReady, type NodeConnectionRegistry } from '../ports/realtime.js';
+import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { generateId } from './snowflake.js';
 import { assertRegistrableAgentName } from './agent.js';
 import { rotateAgentIdentity } from './agentIdentity.js';
@@ -199,6 +199,94 @@ function supportsProviderDeliveryReadiness(registry: NodeConnectionRegistry): bo
   return typeof registry.setProviderDeliveryReadiness === 'function'
     && typeof registry.markProviderAgentsDeliveryReady === 'function'
     && typeof registry.isProviderAgentDeliveryReady === 'function';
+}
+
+/**
+ * Whether a provider's current registration advertised the delivery-cursor
+ * capability. Registration persists the advertised set, so later frames on the
+ * same provider can recover the handshake `node.register` negotiated without
+ * the client re-asserting it.
+ */
+async function providerAdvertisesDeliveryCursor(
+  db: EngineDb,
+  workspaceId: string,
+  nodeId: string,
+  providerName: string,
+): Promise<boolean> {
+  const [provider] = await db
+    .select({ capabilities: nodeProviders.capabilities })
+    .from(nodeProviders)
+    .where(and(
+      eq(nodeProviders.workspaceId, workspaceId),
+      eq(nodeProviders.nodeId, nodeId),
+      eq(nodeProviders.name, providerName),
+    ));
+  return provider?.capabilities?.some(
+    (capability) => capability.name === FLEET_DELIVERY_CURSOR_CAPABILITY,
+  ) ?? false;
+}
+
+/**
+ * Capabilities that are NEGOTIATED at `node.register` (answered in its
+ * acceptance list and wired into the connection's delivery mode) rather than
+ * merely advertised. A heartbeat refreshes the provider's roster of spawn /
+ * action capacity; it is not a renegotiation, so it may neither drop nor
+ * introduce one of these. Dropping would demote a live cursor-gated connection
+ * that was deliberately denied the register-time flush — stranding its backlog;
+ * introducing would promote an immediate connection and replay frames that
+ * flush already sent. The registered value stands until the next
+ * `node.register`.
+ */
+const NEGOTIATED_PROTOCOL_CAPABILITIES: readonly string[] = [FLEET_DELIVERY_CURSOR_CAPABILITY];
+
+function isNegotiatedProtocolCapability(capability: FleetCapability): boolean {
+  return NEGOTIATED_PROTOCOL_CAPABILITIES.includes(capability.name);
+}
+
+function withRegisteredProtocolCapabilities(
+  heartbeatCapabilities: FleetCapability[],
+  registeredCapabilities: FleetCapability[],
+): FleetCapability[] {
+  return [
+    ...heartbeatCapabilities.filter((capability) => !isNegotiatedProtocolCapability(capability)),
+    ...registeredCapabilities.filter(isNegotiatedProtocolCapability),
+  ];
+}
+
+/**
+ * Whether the provider's LIVE connection negotiated cursor-gated delivery at
+ * `node.register` — i.e. whether it was denied the register-time flush and so
+ * depends on a later certification to replay.
+ *
+ * The registry owns that answer: `node.register` hands it the negotiated mode
+ * per connection, and a reconnect starts a fresh one. Ask it first. Only a
+ * registry that does not expose the mode (an out-of-process owner on an older
+ * contract) falls back to the persisted advertisement — which heartbeats keep
+ * off-limits (see `heartbeatNode`) precisely so the fallback answers for the
+ * registration rather than for the latest roster snapshot.
+ *
+ * When the method DOES exist, its `undefined` is an answer too: the connection
+ * asking is not the provider's current owner (a superseded connection whose
+ * frame queued behind the replacement's register). Reading the persisted
+ * advertisement then would classify a stale connection's sync by whichever
+ * registration owns the provider now — replaying certified deliveries to a
+ * connection that has not certified those sessions. A registry that can
+ * answer gets the last word; the fallback is only for one that cannot.
+ */
+async function connectionNegotiatedDeliveryCursor(
+  db: EngineDb,
+  registry: NodeConnectionRegistry,
+  workspaceId: string,
+  nodeId: string,
+  providerName: string,
+  connectionId: string | undefined,
+): Promise<boolean> {
+  if (!supportsProviderDeliveryReadiness(registry)) return false;
+  if (registry.providerDeliveryReadinessMode) {
+    return registry.providerDeliveryReadinessMode(workspaceId, nodeId, providerName, connectionId)
+      === 'agent_scoped';
+  }
+  return providerAdvertisesDeliveryCursor(db, workspaceId, nodeId, providerName);
 }
 
 function requestId(message: { id?: string }): string {
@@ -713,15 +801,23 @@ export async function heartbeatNode(
 
   await runAtomic(db, async (tx) => {
     if (message.capabilities !== undefined) {
-      const caps = normalizeCapabilities(message.capabilities);
       const [existingProvider] = await tx
-        .select({ instanceId: nodeProviders.instanceId, maxAgents: nodeProviders.maxAgents, version: nodeProviders.version })
+        .select({
+          instanceId: nodeProviders.instanceId,
+          maxAgents: nodeProviders.maxAgents,
+          version: nodeProviders.version,
+          capabilities: nodeProviders.capabilities,
+        })
         .from(nodeProviders)
         .where(and(
           eq(nodeProviders.workspaceId, workspaceId),
           eq(nodeProviders.nodeId, nodeId),
           eq(nodeProviders.name, providerName),
         ));
+      const caps = withRegisteredProtocolCapabilities(
+        normalizeCapabilities(message.capabilities),
+        existingProvider?.capabilities ?? [],
+      );
       await upsertProvider(tx, workspaceId, nodeId, {
         name: providerName,
         instanceId: existingProvider?.instanceId ?? `${providerName}:heartbeat`,
@@ -1671,17 +1767,8 @@ export async function registerAgentViaNode(
       .from(nodes)
       .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
     if (!node) throw codedError(`Node "${nodeId}" not found`, 'node_not_found', 404);
-    const [provider] = await tx
-      .select({ capabilities: nodeProviders.capabilities })
-      .from(nodeProviders)
-      .where(and(
-        eq(nodeProviders.workspaceId, workspaceId),
-        eq(nodeProviders.nodeId, nodeId),
-        eq(nodeProviders.name, providerName),
-      ));
-    const cursorHandshake = (options.deliveryCursorSupported ?? true) && (provider?.capabilities?.some(
-      (capability) => capability.name === FLEET_DELIVERY_CURSOR_CAPABILITY,
-    ) ?? false);
+    const cursorHandshake = (options.deliveryCursorSupported ?? true)
+      && await providerAdvertisesDeliveryCursor(tx, workspaceId, nodeId, providerName);
 
     // Preserve the established identity conflict even when this node is full.
     // A concurrent create after this read is still caught by the unique insert
@@ -1800,17 +1887,8 @@ export async function recoverAgentViaNode(
       .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
     if (!node) throw codedError(`Node "${nodeId}" not found`, 'node_not_found', 404);
 
-    const [provider] = await tx
-      .select({ capabilities: nodeProviders.capabilities })
-      .from(nodeProviders)
-      .where(and(
-        eq(nodeProviders.workspaceId, workspaceId),
-        eq(nodeProviders.nodeId, nodeId),
-        eq(nodeProviders.name, providerName),
-      ));
-    const cursorHandshake = (options.deliveryCursorSupported ?? true) && (provider?.capabilities?.some(
-      (capability) => capability.name === FLEET_DELIVERY_CURSOR_CAPABILITY,
-    ) ?? false);
+    const cursorHandshake = (options.deliveryCursorSupported ?? true)
+      && await providerAdvertisesDeliveryCursor(tx, workspaceId, nodeId, providerName);
 
     const [target] = await tx
       .select()
@@ -2831,15 +2909,6 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           data: result.reply,
         });
         if (!replySent) return;
-        const newlyReadyAgentIds = result.reconciledAgentIds.filter((agentId) => (
-          !isProviderAgentDeliveryReady(
-            args.registry,
-            args.workspaceId,
-            args.nodeId,
-            frameProviderName,
-            agentId,
-          )
-        ));
         args.registry.markProviderAgentsDeliveryReady?.(
           args.workspaceId,
           args.nodeId,
@@ -2848,16 +2917,50 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           result.reconciledAgentIds,
         );
         // Inventory represents sessions that survived a transport reconnect and
-        // therefore retain their in-memory cursors. Restrict replay to exactly
-        // those provider-owned identities; restarted sessions not in inventory
-        // become ready individually through `agent.register`.
-        const replayAgentIds = [...new Set([...newlyReadyAgentIds, ...result.newlyRoutedAgentIds])];
+        // therefore retain their in-memory cursors. Restarted sessions not in
+        // the inventory stay excluded either way — they become ready
+        // individually through `agent.register`.
+        //
+        // A cursor-negotiated connection receives NO replay at `node.register`
+        // (each identity is seeded by its own cursor-bearing reply), so this
+        // certification is the whole node's only reconnect-replay trigger and
+        // must cover every certified identity. Scoping it to a readiness/routing
+        // TRANSITION instead stranded a reconnecting node's entire outage
+        // backlog whenever the socket owner already reported those identities as
+        // delivery-ready — an out-of-process owner whose ready-set is keyed per
+        // node+provider rather than per connection. The diff came back empty,
+        // the drain ran with an empty scope, and rows queued during the outage
+        // sat unsent until their mailbox TTL.
+        //
+        // A legacy immediate-delivery connection already had the whole node
+        // flushed to it at `node.register` and gates nothing afterwards, so only
+        // identities this sync newly routed here still need a push; re-sending
+        // the rest would duplicate that flush.
+        //
+        // Either way replay stays bounded, ordered oldest-first, gated per
+        // identity on delivery readiness inside the drain, and deduped by the
+        // cumulative delivery cursor, so an identity that is already drained and
+        // acked re-sends nothing.
+        // The mode is the CONNECTION's, recovered from the registry that
+        // `node.register` configured it on — not re-derived from roster state
+        // that a heartbeat can rewrite between registration and certification.
+        const cursorGated = await connectionNegotiatedDeliveryCursor(
+          args.db,
+          args.registry,
+          args.workspaceId,
+          args.nodeId,
+          frameProviderName,
+          args.connectionId,
+        );
         await deliverPendingToNode(
           args.db,
           args.registry,
           args.workspaceId,
           args.nodeId,
-          { providerName: frameProviderName, agentIds: replayAgentIds },
+          {
+            providerName: frameProviderName,
+            agentIds: cursorGated ? result.reconciledAgentIds : result.newlyRoutedAgentIds,
+          },
         );
         return;
       }
