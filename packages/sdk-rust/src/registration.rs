@@ -125,18 +125,17 @@ pub enum AgentRegistrationError {
     /// The server answered, and the answer could not be understood.
     ///
     /// Distinct from `Transport`, which means the exchange did not complete.
-    /// Here it did: a body arrived and failed to decode, or decoded into
-    /// something this client's schema does not accept. Collapsing the two lost
-    /// the difference between "the network failed" and "the server is wrong",
-    /// and reported the second as the first:
+    /// Here it did: a body arrived on a success status and was not valid JSON,
+    /// or the client already knew the response was malformed. Retrying cannot
+    /// help, and the registration it answered may already have committed.
     ///
-    ///   register transport error: HTTP error: error decoding response body
-    ///
-    /// which named no status, no URL, and no cause — and was retried as though
-    /// a retry could help.
+    /// Note what is NOT this: a reqwest error whose kind is `decode`. In this
+    /// client that arises from `bytes()` failing to read the body — a reset or
+    /// timeout after headers — which is a transport fault and stays retryable.
     #[error(
-        "registration for '{agent_name}' got a response it could not understand{}: {detail}",
-        status.map(|code| format!(" ({code})")).unwrap_or_default()
+        "registration for '{agent_name}' got a response it could not understand{}{}: {detail}",
+        status.map(|code| format!(" ({code})")).unwrap_or_default(),
+        url.as_ref().map(|url| format!(" from {url}")).unwrap_or_default()
     )]
     InvalidResponse {
         agent_name: String,
@@ -425,14 +424,31 @@ fn describe_with_sources(error: &(dyn std::error::Error + 'static)) -> String {
 /// second registration rather than recovering from a blip.
 fn classify_registration_failure(agent_name: &str, error: RelayError) -> AgentRegistrationError {
     match error {
-        RelayError::Http(http_error) if http_error.is_decode() => {
-            AgentRegistrationError::InvalidResponse {
+        // A reqwest error — decode kind included — is the exchange failing, not
+        // the answer being wrong. In this client every body is read with
+        // `bytes()`, which routes a read failure (connection reset mid-body,
+        // timeout after headers) through reqwest's `decode` kind, so
+        // `is_decode()` here means "the body never fully arrived". Parsing
+        // happens afterwards with serde_json and fails as `RelayError::Json`.
+        // Treating a decode-kind reqwest error as InvalidResponse would make
+        // every mid-body reset permanent. Keep it Transport, keep it retryable,
+        // but carry the URL, status, and cause chain so the log is diagnosable.
+        RelayError::Http(http_error) => {
+            let mut detail = describe_with_sources(&http_error);
+            if let Some(status) = http_error.status() {
+                detail = format!("{detail} (status {})", status.as_u16());
+            }
+            if let Some(url) = http_error.url() {
+                detail = format!("{detail} [{url}]");
+            }
+            AgentRegistrationError::Transport {
                 agent_name: agent_name.to_string(),
-                status: http_error.status().map(|status| status.as_u16()),
-                url: http_error.url().map(|url| url.to_string()),
-                detail: describe_with_sources(&http_error),
+                detail,
             }
         }
+        // The body arrived on a success status and was not valid JSON. The
+        // server answered; the answer is unusable. Registration may already
+        // have committed, so this must not be retried.
         RelayError::Json(json_error) => AgentRegistrationError::InvalidResponse {
             agent_name: agent_name.to_string(),
             status: None,
@@ -916,16 +932,60 @@ mod tests {
 mod invalid_response_classification {
     use super::*;
 
-    /// A decode failure is the server answering unusably, not the exchange
-    /// failing. It was reported as `Transport` and retried three times, which
-    /// named no status, no URL and no cause — and could not have helped.
+    /// A body that arrived on a success status and was not JSON is the server
+    /// answering unusably, not the exchange failing. That is `RelayError::Json`
+    /// in this client, and it must not be retried: the registration it
+    /// answered may already have committed.
     #[test]
-    fn a_decode_failure_is_not_transport() {
-        let error = classify_registration_failure("probe", RelayError::InvalidResponse("body was not JSON".into()));
+    fn an_unparseable_success_body_is_invalid_response() {
+        let json_error = serde_json::from_str::<serde_json::Value>("<html>").unwrap_err();
+        let error = classify_registration_failure("probe", RelayError::Json(json_error));
         assert!(
             matches!(error, AgentRegistrationError::InvalidResponse { .. }),
             "expected InvalidResponse, got {error:?}"
         );
+        assert!(!registration_is_retryable(&error));
+    }
+
+    /// The client already knew the response was malformed.
+    #[test]
+    fn a_known_malformed_response_is_invalid_response() {
+        let error = classify_registration_failure("probe", RelayError::InvalidResponse("body was not JSON".into()));
+        assert!(matches!(error, AgentRegistrationError::InvalidResponse { .. }));
+    }
+
+    /// A reqwest error stays Transport — the decode kind included. In this
+    /// client `is_decode()` arises from `bytes()` failing to read the body (a
+    /// reset or timeout after headers), which is the exchange failing, not the
+    /// answer being wrong. An earlier revision of this change routed it to
+    /// InvalidResponse and would have made every mid-body reset permanent.
+    #[test]
+    fn a_reqwest_error_stays_transport_and_retryable() {
+        // A reqwest error is not constructible directly; a failed request to an
+        // unroutable address yields a real one.
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let http_error = rt
+            .block_on(reqwest::Client::new().get("http://127.0.0.1:1/").send())
+            .expect_err("connecting to port 1 must fail");
+        let error = classify_registration_failure("probe", RelayError::Http(http_error));
+        assert!(
+            matches!(error, AgentRegistrationError::Transport { .. }),
+            "expected Transport, got {error:?}"
+        );
+        assert!(registration_is_retryable(&error));
+    }
+
+    /// Transport detail now carries the URL, so a transport failure in a log
+    /// names the endpoint it was talking to.
+    #[test]
+    fn transport_detail_names_the_endpoint() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let http_error = rt
+            .block_on(reqwest::Client::new().get("http://127.0.0.1:1/v1/agents").send())
+            .expect_err("connecting to port 1 must fail");
+        let error = classify_registration_failure("probe", RelayError::Http(http_error));
+        let rendered = error.to_string();
+        assert!(rendered.contains("127.0.0.1:1/v1/agents"), "url missing from {rendered}");
     }
 
     /// Retrying cannot fix an unusable answer, and registration may already
@@ -966,6 +1026,7 @@ mod invalid_response_classification {
         }
         .to_string();
         assert!(rendered.contains("503"), "status missing from {rendered}");
+        assert!(rendered.contains("cast.agentrelay.com/v1/agents"), "url missing from {rendered}");
         assert!(rendered.contains("expected value"), "cause missing from {rendered}");
     }
 }
