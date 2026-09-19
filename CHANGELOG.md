@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- A node that reconnects after its delivery socket dropped now receives every message queued during the outage. Reconnect replay for cursor-aware brokers was scoped to the sessions whose delivery readiness or node routing changed while re-announcing their inventory, so a host that already reported those sessions as delivery-ready replayed nothing: the queued messages stayed in the mailbox until their TTL and the agents were never woken.
 
 ## [8.11.3] - 2026-09-19
 

@@ -7,8 +7,9 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
 
+- Replay a reconnecting node's queued deliveries for every session its `inventory.sync` certifies, instead of only the sessions whose delivery readiness or provider routing changed during that sync. A cursor-negotiated connection gets no replay at `node.register` by contract, so the certification is its only reconnect-replay trigger; scoping it to a readiness transition stranded the whole outage backlog on any socket owner that already reported the listed identities as delivery-ready (a `NodeConnectionRegistry` whose ready-set is keyed per node and provider rather than per connection, or one that omits the optional readiness hooks). Legacy immediate-delivery connections are unchanged — `node.register` still flushes the node to them, and a later sync replays only the identities it newly routed there. Replay remains bounded, ordered by ascending `seq`, gated on per-identity delivery readiness, and deduped by the cumulative delivery cursor, so acked deliveries are never re-sent.
 - Push `context.update` events only to nodes that can hold a live socket, and at most four at a time. Channel, presence and agent-scoped fan-out previously targeted every node with an active binding, including offline ones; a workspace with thousands of offline nodes sent hundreds of node Durable Object fetches per channel join or presence change. Hosted, that fan-out runs in the background of the triggering request and starved the request's own write-admission lease release, which timed out and held the workspace's write or lifecycle lane for the full lease TTL (`workspace_busy`). Offline WebSocket nodes had no socket, so no event that was previously delivered is dropped. `draining` and `http_push` nodes stay eligible.
 
 ## [8.11.0] - 2026-09-17

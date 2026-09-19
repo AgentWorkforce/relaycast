@@ -1904,6 +1904,186 @@ describe('durable delivery api', () => {
     ]);
   });
 
+  /**
+   * A reconnecting broker certifies its surviving sessions with `inventory.sync`,
+   * and that certified set is what gets replayed. These cases pin the reconnect
+   * drain to the certification itself rather than to a readiness/routing
+   * transition: a socket owner that already reports the listed identities as
+   * delivery-ready (an out-of-process owner whose ready-set is keyed per
+   * node+provider, not per connection) must still get the outage backlog.
+   */
+  describe('reconnect replay of an outage backlog', () => {
+    /**
+     * Reconnect a cursor-negotiated node and certify `agentIds` through
+     * `inventory.sync`, with the socket owner already reporting them
+     * delivery-ready — the state a remote socket owner presents when its
+     * ready-set survives the transport reconnect.
+     */
+    async function reconnectAndSync(
+      ws: { workspaceKey: string; workspaceId: string },
+      node: { id: string; name: string },
+      agents: Array<{ agentId: string; name: string }>,
+      opts: { alreadyReady?: boolean } = {},
+    ) {
+      const reconnected = await enrollAndAttachNode(ws, {
+        id: node.id,
+        name: node.name,
+        cursorHandshake: true,
+      });
+      expect(reconnected.sock.ofType('deliver')).toHaveLength(0);
+      if (opts.alreadyReady !== false) {
+        stack.runtime.realtime.markProviderAgentsDeliveryReady(
+          ws.workspaceId,
+          node.id,
+          DEFAULT_PROVIDER_NAME,
+          undefined,
+          agents.map((agent) => agent.agentId),
+        );
+      }
+      await reconnected.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'inventory.sync',
+        agents: agents.map((agent) => ({
+          agent_id: agent.agentId,
+          name: agent.name,
+          session_ref: `sess-${agent.name}`,
+        })),
+      }));
+      await stack.settle();
+      return reconnected;
+    }
+
+    it('replays a message queued while the node socket was down', async () => {
+      const ws = await createWorkspace(stack.app, 'mailbox-outage-replay');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+      const bob = await registerViaNode(node, 'bob');
+
+      await node.handle.handleClose();
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text: 'queued during the outage' }),
+      });
+      expect(post.status).toBe(201);
+      const messageId = ((await post.json()) as { data: { id: string } }).data.id;
+      await stack.settle();
+
+      const reconnected = await reconnectAndSync(ws, node, [bob]);
+
+      expect(deliverFramesOfType(reconnected.sock, 'message.created')).toEqual([
+        expect.objectContaining({ agent: bob.name, msg_id: messageId, seq: 1 }),
+      ]);
+    });
+
+    it('does not re-send a delivery the node already acked before the outage', async () => {
+      const ws = await createWorkspace(stack.app, 'mailbox-outage-acked');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+      const bob = await registerViaNode(node, 'bob');
+
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text: 'acked before the outage' }),
+      });
+      expect(post.status).toBe(201);
+      await waitForAssertion(() => {
+        expect(deliverFramesOfType(node.sock, 'message.created')).toHaveLength(1);
+      });
+      await node.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'delivery.ack',
+        agent: bob.name,
+        up_to_seq: 1,
+      }));
+      await node.handle.handleClose();
+
+      const reconnected = await reconnectAndSync(ws, node, [bob]);
+
+      expect(deliverFramesOfType(reconnected.sock, 'message.created')).toEqual([]);
+    });
+
+    it('drains two outage deliveries oldest-first, exactly once across repeated syncs', async () => {
+      const ws = await createWorkspace(stack.app, 'mailbox-outage-ordering');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+      const bob = await registerViaNode(node, 'bob');
+
+      await node.handle.handleClose();
+      const texts = ['first while offline', 'second while offline'];
+      const messageIds: string[] = [];
+      for (const text of texts) {
+        const post = await stack.app.request('/v1/channels/general/messages', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+          body: JSON.stringify({ text }),
+        });
+        expect(post.status).toBe(201);
+        messageIds.push(((await post.json()) as { data: { id: string } }).data.id);
+      }
+      await stack.settle();
+
+      const reconnected = await reconnectAndSync(ws, node, [bob]);
+      expect(deliverFramesOfType(reconnected.sock, 'message.created')).toEqual([
+        expect.objectContaining({ msg_id: messageIds[0], seq: 1 }),
+        expect.objectContaining({ msg_id: messageIds[1], seq: 2 }),
+      ]);
+
+      // The cumulative cursor is the only dedupe: once the node acks the drained
+      // range, a further certification of the same session replays nothing.
+      await reconnected.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'delivery.ack',
+        agent: bob.name,
+        up_to_seq: 2,
+      }));
+      await reconnected.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'inventory.sync',
+        agents: [{ agent_id: bob.agentId, name: bob.name, session_ref: 'sess-bob' }],
+      }));
+      await stack.settle();
+      expect(deliverFramesOfType(reconnected.sock, 'message.created')).toHaveLength(2);
+    });
+
+    it('does not push to an agent that the reconnect has not made delivery-ready', async () => {
+      const ws = await createWorkspace(stack.app, 'mailbox-outage-not-ready');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+      const bob = await registerViaNode(node, 'bob');
+      const carol = await registerViaNode(node, 'carol');
+
+      await node.handle.handleClose();
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text: 'queued for both sessions' }),
+      });
+      expect(post.status).toBe(201);
+      await stack.settle();
+
+      // Only bob's session survived the reconnect; carol's restarted and is not
+      // certified by this inventory, so she stays gated until she re-announces.
+      const reconnected = await reconnectAndSync(ws, node, [bob]);
+      expect(deliverFramesOfType(reconnected.sock, 'message.created').map((frame) => frame.agent))
+        .toEqual([bob.name]);
+
+      await reconnected.handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'resume-carol',
+        type: 'agent.recover',
+        name: carol.name,
+        expected_agent_id: carol.agentId,
+        resumable: true,
+        session_ref: 'sess-carol',
+      }));
+      await stack.settle();
+      expect(deliverFramesOfType(reconnected.sock, 'message.created').map((frame) => frame.agent))
+        .toEqual([bob.name, carol.name]);
+    });
+  });
+
   it('preserves hyphenated mentions through node reconnect replay', async () => {
     const ws = await createWorkspace(stack.app, 'mention-replay');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
