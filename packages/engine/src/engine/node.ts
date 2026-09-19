@@ -1421,8 +1421,10 @@ export async function bindAgentToNode(
   nodeName: string,
   agentName: string,
   opts: { session_ref?: string | null; priority?: number } = {},
-  deps: { nodeConnections?: NodeConnectionRegistry } = {},
-) {
+): Promise<{
+  binding: ReturnType<typeof serializeBinding>;
+  move: { nodeId: string; agentId: string; providerName: string };
+}> {
   // `runAtomic` below already owns a transaction on an adapter that has one, so
   // the move's statements must not re-enter `withTransaction` (the shared
   // connection serializes transactions and would deadlock on itself) — they run
@@ -1432,11 +1434,7 @@ export async function bindAgentToNode(
   const hasInteractiveTransaction = typeof (db as EngineDb & {
     withTransaction?: unknown;
   }).withTransaction === 'function';
-  // The post-commit registry work needs the resolved ids; they only become
-  // authoritative once `runAtomic` has returned, so they are read off the
-  // pending value afterwards rather than trusted mid-transaction.
-  let pendingMove: { nodeId: string; agentId: string; providerName: string } | undefined;
-  const binding = await runAtomic(db, async (tx) => {
+  return runAtomic(db, async (tx) => {
     const node = await getNodeByName(tx, workspaceId, nodeName);
     if (!node) throw codedError(`Node "${nodeName}" not found`, 'node_not_found', 404);
 
@@ -1558,38 +1556,38 @@ export async function bindAgentToNode(
         eq(agentNodeBindings.nodeId, node.id),
       ));
 
-    pendingMove = { nodeId: node.id, agentId: agent.id, providerName: adoptedProviderName };
-    return serializeBinding(binding);
+    return {
+      binding: serializeBinding(binding),
+      move: { nodeId: node.id, agentId: agent.id, providerName: adoptedProviderName },
+    };
   });
-  // Cursor-aware providers gate every delivery on a per-identity ready mark;
-  // `agent.register`/`agent.recover` grant it after replying with the agent's
-  // authoritative cursor, and the response above carries `delivery_ack_seq` for
-  // the same reason here. A bound agent needs that transition too or it points
-  // at a socket that will never push to it. This runs strictly after the move
-  // commits — marking a rolled-back agent ready would deliver to a location
-  // that does not own it — and only mutates an agent_scoped ready-set;
-  // immediate-mode providers ignore it.
-  const registry = deps.nodeConnections;
-  if (pendingMove && registry) {
-    registry.markProviderAgentsDeliveryReady?.(
-      workspaceId,
-      pendingMove.nodeId,
-      pendingMove.providerName,
-      undefined,
-      [pendingMove.agentId],
-    );
-    try {
-      await deliverPendingToNode(db, registry, workspaceId, pendingMove.nodeId, {
-        providerName: pendingMove.providerName,
-        agentIds: [pendingMove.agentId],
-      });
-    } catch (err) {
-      // The move is durable; a replay failure leaves the pending queue intact
-      // for the next drain rather than reporting a bind failure that committed.
-      console.error('[node.bind] pending delivery replay failed', err);
-    }
-  }
-  return binding;
+}
+
+/**
+ * The second half of a bind, run by the caller only after the cursor-bearing
+ * response is on the wire — `agent.register`/`agent.recover` order their
+ * cursor reply ahead of the ready mark and replay for the same reason.
+ * Cursor-aware providers gate every delivery on a per-identity ready mark,
+ * so a bound agent needs this transition or it points at a socket that will
+ * never push to it; immediate-mode providers treat the mark as a no-op.
+ */
+export async function completeBoundAgentDelivery(
+  db: Db,
+  registry: NodeConnectionRegistry,
+  workspaceId: string,
+  move: { nodeId: string; agentId: string; providerName: string },
+): Promise<void> {
+  registry.markProviderAgentsDeliveryReady?.(
+    workspaceId,
+    move.nodeId,
+    move.providerName,
+    undefined,
+    [move.agentId],
+  );
+  await deliverPendingToNode(db, registry, workspaceId, move.nodeId, {
+    providerName: move.providerName,
+    agentIds: [move.agentId],
+  });
 }
 
 export async function unbindAgentFromNode(db: Db, workspaceId: string, nodeName: string, agentName: string) {

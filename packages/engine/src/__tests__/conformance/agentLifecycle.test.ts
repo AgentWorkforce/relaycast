@@ -2075,11 +2075,12 @@ describe('node agent binding adopts the agent location', () => {
       .toBe(0);
 
     // Agent-scoped readiness now names the adopted identity, and the bind's own
-    // drain replays the delivery that queued before the move.
+    // drain replays the delivery that queued before the move. Both run in the
+    // request background, strictly after the cursor-bearing response.
+    await stack.settle();
     expect(
       stack.runtime.realtime.isProviderAgentDeliveryReady(ws.workspaceId, 'node_broker', 'broker', target.agentId),
     ).toBe(true);
-    await stack.settle();
     expect(deliverFramesOfType(sock, 'message.created')).toEqual([
       expect.objectContaining({ type: 'deliver', agent: target.name }),
     ]);
