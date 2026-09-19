@@ -156,6 +156,11 @@ async function sendContextToRows(
 ): Promise<void> {
   const grouped = groupByNodeProvider(rows);
   const tasks: Array<() => Promise<unknown>> = [];
+  // WebSocket pushes are node Durable Object calls that answer in
+  // milliseconds; an http_push POST can hold a slot for its whole timeout.
+  // Queue every WebSocket push first so a slow HTTP target never delays a
+  // healthy socket behind it. Row order is not a priority order.
+  const httpTasks: Array<() => Promise<unknown>> = [];
   for (const group of grouped.values()) {
     const nodeId = group.nodeId;
     const agentIds = [...new Set(group.agentIds)];
@@ -174,7 +179,7 @@ async function sendContextToRows(
       continue;
     }
     if (group.nodeKind === 'http_push') {
-      tasks.push(() =>
+      httpTasks.push(() =>
         postEphemeralEventToHttpPushNode({
           deliveryConfig: group.deliveryConfig,
           strict: strictHttpPushDispatch(deps.environment),
@@ -204,6 +209,7 @@ async function sendContextToRows(
       event: message.event,
     });
   }
+  tasks.push(...httpTasks);
   const settled = await settleWithConcurrency(tasks, NODE_CONTEXT_SEND_CONCURRENCY);
   const failures = settled
     .filter((result): result is PromiseRejectedResult => result.status === 'rejected')

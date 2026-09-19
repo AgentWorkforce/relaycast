@@ -37,6 +37,26 @@ vi.mock('../workspaceEvents.js', async (importOriginal) => {
   };
 });
 
+// Records http_push context posts; `gate` lets a test hold them open.
+const httpPush = vi.hoisted(() => ({
+  starts: [] as string[],
+  gate: null as Promise<void> | null,
+}));
+
+vi.mock('../httpPushDispatch.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../httpPushDispatch.js')>();
+  return {
+    ...actual,
+    postEphemeralEventToHttpPushNode: async (
+      ...args: Parameters<typeof actual.postEphemeralEventToHttpPushNode>
+    ) => {
+      httpPush.starts.push('http');
+      if (httpPush.gate) await httpPush.gate;
+      return undefined as unknown as Awaited<ReturnType<typeof actual.postEphemeralEventToHttpPushNode>>;
+    },
+  };
+});
+
 const WORKSPACE_ID = 'ws_dispatch';
 const CHANNEL_ID = 'ch_dispatch';
 const AGENT_ID = 'ag_dispatch';
@@ -136,6 +156,7 @@ async function seedMemberNode(
   db: Awaited<ReturnType<typeof seedFixture>>,
   suffix: string,
   status: 'online' | 'offline' | 'draining',
+  kind: 'ws' | 'http_push' = 'ws',
 ) {
   const nodeId = `node_${suffix}`;
   const agentId = `ag_${suffix}`;
@@ -144,9 +165,9 @@ async function seedMemberNode(
     workspaceId: WORKSPACE_ID,
     name: `node-${suffix}`,
     tokenHash: `hash_node_${suffix}`,
-    kind: 'ws',
+    kind,
     role: 'broker',
-    deliveryAdapter: 'ws.node.v1',
+    deliveryAdapter: kind === 'ws' ? 'ws.node.v1' : 'http.hmac.v1',
     status,
   });
   await db.insert(agents).values({
@@ -550,6 +571,38 @@ describe('node context audience', () => {
     expect(frames.map((frame) => frame.nodeId).sort()).toEqual([...live].sort());
     expect(maxInFlight).toBeGreaterThan(1);
     expect(maxInFlight).toBeLessThanOrEqual(NODE_CONTEXT_SEND_CONCURRENCY);
+  });
+
+  it('sends every WebSocket push before any slow http_push target holds a slot', async () => {
+    const db = await seedFixture();
+    // Seeded first, so row order alone would put them ahead of the sockets.
+    for (let i = 0; i < 6; i += 1) await seedMemberNode(db, `http_${i}`, 'online', 'http_push');
+    for (let i = 0; i < 5; i += 1) await seedMemberNode(db, `ws_${i}`, 'online');
+    httpPush.starts = [];
+    let release!: () => void;
+    httpPush.gate = new Promise<void>((resolve) => { release = resolve; });
+    const order: string[] = [];
+    const { engine, frames } = makeEngine({
+      send: async () => {
+        order.push('ws');
+        return true;
+      },
+    });
+
+    const published = publishEvent({ db, engine }, {
+      workspaceId: WORKSPACE_ID,
+      type: 'member.joined',
+      data: { agent_name: 'dispatch-agent' },
+      scope: { kind: 'channel', channelId: CHANNEL_ID },
+    });
+    // Every socket is delivered while the HTTP targets are still hanging.
+    await vi.waitFor(() => expect(frames).toHaveLength(6));
+    expect(httpPush.starts.length).toBeLessThanOrEqual(NODE_CONTEXT_SEND_CONCURRENCY);
+    release();
+    await published;
+    httpPush.gate = null;
+    expect(httpPush.starts).toHaveLength(6);
+    expect(order).toHaveLength(6);
   });
 
   it('keeps reporting a failed push under bounded concurrency', async () => {
