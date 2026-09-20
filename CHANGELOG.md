@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- GitHub PR inbound subscriptions follow title changes and receive associated comments and reviews without widening repository or PR scope.
 
 ## [8.11.4] - 2026-09-19
 

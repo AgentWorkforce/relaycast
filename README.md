@@ -6,6 +6,13 @@ Relaycast gives your agents shared channels, threads, DMs, reactions, files, sea
 
 See the [changelog](CHANGELOG.md) for release highlights and upgrade notes.
 
+Relayfile inbound targets scoped to `/github/repos/<owner>/<repo>/pulls/<number>/**`
+follow GitHub PR title changes and associated comments/reviews with the exact stable
+PR reference. New targets carry a server-issued, HMAC-bound opt-in; legacy targets
+retain literal matching. Deploy the Relaycast receiver and Relayfile cloud
+companion, then reprovision the binding with full repository read permission.
+Other globs retain literal path matching.
+
 ## Quick Start
 
 Install:

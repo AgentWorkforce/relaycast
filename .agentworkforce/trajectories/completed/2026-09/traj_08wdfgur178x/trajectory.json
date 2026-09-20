@@ -1,0 +1,53 @@
+{
+  "id": "traj_08wdfgur178x",
+  "version": 1,
+  "task": {
+    "title": "Align Relayfile inbound GitHub PR identity matching"
+  },
+  "status": "completed",
+  "startedAt": "2026-09-20T03:46:15.106Z",
+  "completedAt": "2026-09-20T03:54:42.152Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-09-20T03:54:42.070Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_i6kdencf1bu0",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-09-20T03:54:42.070Z",
+      "endedAt": "2026-09-20T03:54:42.152Z",
+      "events": [
+        {
+          "ts": 1789876482070,
+          "type": "decision",
+          "content": "Seal semantic GitHub PR authorization into callback URL and signing secret: Seal semantic GitHub PR authorization into callback URL and signing secret",
+          "raw": {
+            "question": "Seal semantic GitHub PR authorization into callback URL and signing secret",
+            "chosen": "Seal semantic GitHub PR authorization into callback URL and signing secret",
+            "alternatives": [],
+            "reasoning": "Legacy receiver URLs must remain literal; a workspace-key-authorized new target uses a distinct HMAC derivation, so old secrets cannot enable semantic matching by query tampering."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Added exact GitHub PR inbound matching with HMAC-bound authorization. 1153 engine tests, typecheck, build, and actual cloud Queue-to-signed-inbound-to-agent-inbox proof pass. Deploy receiver before cloud and reprovision with repository read authorization; no production changes.",
+    "approach": "Standard approach",
+    "confidence": 0.93
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "af4428bf3411ecf6ef944f20a5a7158a81ea7387",
+    "endRef": "af4428bf3411ecf6ef944f20a5a7158a81ea7387"
+  }
+}
