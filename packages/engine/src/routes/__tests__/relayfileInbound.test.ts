@@ -71,6 +71,72 @@ class FailingKeyValueStore implements KeyValueStore {
 }
 
 describe('relayfile inbound bridge', () => {
+  it('delivers titled PR and related events to the subscribed channel without crossing identities', async () => {
+    const stack = makeStack();
+    const ws = await createWorkspace(stack.app, 'github-pr-matching');
+    const agent = await registerAgent(stack.app, ws.workspaceKey, 'github-reader');
+    await stack.app.request('/v1/channels/general/join', { method: 'POST', headers: { authorization: `Bearer ${agent.token}` } });
+    const targetResponse = await stack.app.request('/v1/integrations/relayfile/inbound-target', {
+      method: 'POST', headers: { authorization: `Bearer ${ws.workspaceKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ channel: 'general', provider: 'github', path_glob: '/github/repos/AgentWorkforce/relay/pulls/1815/**' }),
+    });
+    expect(targetResponse.status).toBe(201);
+    const { data: target } = await targetResponse.json();
+    const targetUrl = new URL(target.url);
+    expect(targetUrl.searchParams.get('github_pr_identity')).toBe('1');
+    const legacyUrl = new URL(target.url);
+    legacyUrl.searchParams.delete('github_pr_identity');
+    const legacySecret = await deriveRelayfileInboundSecret('relaycast-master', {
+      workspaceId: target.workspace_id, channelId: target.channel_id, provider: 'github',
+      pathGlob: '/github/repos/AgentWorkforce/relay/pulls/1815/**',
+    });
+    const protectedBody = JSON.stringify({ eventId: 'evt_protected', type: 'file.updated', provider: 'github', origin: 'provider_sync',
+      path: '/github/repos/AgentWorkforce/relay/issues/1815__title/comments/1/meta.json',
+      resourceRef: '/github/repos/AgentWorkforce__relay/pulls/by-id/1815.json', githubPrIdentityAuthorized: true });
+    // Legacy targets remain literal even if the signed body claims authorization.
+    const legacyResponse = await stack.app.request(legacyUrl.toString(), { method: 'POST', body: protectedBody, headers: signedHeaders(legacySecret, protectedBody) });
+    expect(await legacyResponse.json()).toMatchObject({ data: { skipped: 'path_mismatch' } });
+    // Adding the opt-in to a legacy callback or omitting it from a new callback
+    // cannot reuse either target's signature.
+    expect((await stack.app.request(target.url, { method: 'POST', body: protectedBody, headers: signedHeaders(legacySecret, protectedBody) })).status).toBe(401);
+    expect((await stack.app.request(legacyUrl.toString(), { method: 'POST', body: protectedBody, headers: signedHeaders(target.secret, protectedBody) })).status).toBe(401);
+    const prefix = '/github/repos/AgentWorkforce/relay';
+    const ref = '/github/repos/AgentWorkforce__relay/pulls/by-id/1815.json';
+    const matrix = [
+      [`${prefix}/pulls/1815__original/meta.json`, undefined, 'pull_request.opened', true],
+      [`${prefix}/pulls/1815__renamed/meta.json`, undefined, 'pull_request.edited', true],
+      [`${prefix}/issues/1815__title/comments/5747223870/meta.json`, ref, 'issue_comment.created', true],
+      [`${prefix}/reviews/5259274136.json`, ref, 'pull_request_review.submitted', true],
+      [`${prefix}/comments/4055945245.json`, ref, 'pull_request_review_comment.created', true],
+      [`${prefix}/pulls/1815/meta.json`, undefined, 'pull_request.edited', true],
+      [`${prefix}-other/reviews/1.json`, ref, 'pull_request_review.submitted', false],
+      ['/github/repos/Other/relay/reviews/1.json', ref, 'pull_request_review.submitted', false],
+      [`${prefix}/pulls/18150__title/meta.json`, undefined, 'pull_request.edited', false],
+      [`${prefix}/reviews/1.json`, ref.replace('1815', '1816'), 'pull_request_review.submitted', false],
+      [`${prefix}/reviews/1.json`, ref.replace('AgentWorkforce__relay', 'Other__relay'), 'pull_request_review.submitted', false],
+      [`${prefix}/issues/1815__title/comments/1/meta.json`, undefined, 'issue_comment.created', false],
+      [`${prefix}/issues/1815__title/comments/1/meta.json`, ref.replace('/pulls/', '/issues/'), 'issue_comment.created', false],
+    ] as const;
+    const deliveredIds: string[] = [];
+    for (const [index, [path, resourceRef, providerEventType, expected]] of matrix.entries()) {
+      const eventId = `evt_github_${index}`;
+      const body = JSON.stringify({ eventId, type: 'file.updated', provider: 'github', origin: 'provider_sync', path, resourceRef, providerEventType, revision: eventId });
+      const emit = () => stack.app.request(target.url, { method: 'POST', body, headers: { ...signedHeaders(target.secret, body), 'X-Relay-Event-Id': eventId } });
+      const response = await emit();
+      if (expected) {
+        expect(response.status).toBe(201);
+        const { data } = await response.json();
+        deliveredIds.push(data.message_id);
+        expect(await (await emit()).json()).toMatchObject({ data: { replayed: true, message_id: data.message_id } });
+      } else {
+        expect(await response.json()).toMatchObject({ data: { skipped: 'path_mismatch' } });
+      }
+    }
+    const inbox = await stack.app.request('/v1/deliveries', { headers: { authorization: `Bearer ${agent.token}` } });
+    const { data: queued } = await inbox.json();
+    expect(queued.filter((delivery: { message_id: string }) => deliveredIds.includes(delivery.message_id))).toHaveLength(6);
+  });
+
   it('returns retryable overflow and accepts the same unique event after capacity recovers', async () => {
     const stack = makeStack({ depthCap: 1 });
     const ws = await createWorkspace(stack.app, 'inbound-backpressure');

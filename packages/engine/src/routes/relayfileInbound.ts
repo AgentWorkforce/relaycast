@@ -104,15 +104,20 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound-target', requireWor
 
   const provider = normalizeProvider(parsed.data.provider);
   const pathGlob = normalizePathGlob(parsed.data.path_glob);
+  // This route requires a workspace key. Seal its authorization into the
+  // callback URL/secret; legacy target secrets cannot opt themselves in.
+  const githubPrIdentityAuthorized = provider === 'github' && /^\/github\/repos\/([^/*]+)\/([^/*]+)\/pulls\/[1-9]\d*\/\*\*$/.test(pathGlob);
   const secret = await deriveRelayfileInboundSecret(master, {
     workspaceId: workspace.id,
     channelId: channel.id,
     provider,
     pathGlob,
+    githubPrIdentityAuthorized,
   });
   const url = new URL(`/v1/integrations/relayfile/inbound/${encodeURIComponent(workspace.id)}/${encodeURIComponent(channel.id)}`, c.req.url);
   url.searchParams.set('provider', provider);
   url.searchParams.set('path_glob', pathGlob);
+  if (githubPrIdentityAuthorized) url.searchParams.set('github_pr_identity', '1');
 
   return jsonCreated(c, {
     url: url.toString(),
@@ -135,6 +140,7 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
     return jsonError(c, 'bad_request', 'missing relayfile inbound route parameters', 400);
   }
   const pathGlob = normalizePathGlob(rawPathGlob);
+  const githubPrIdentityAuthorized = c.req.query('github_pr_identity') === '1';
 
   const master = c.get('engine').config?.relayfileInboundSecret?.trim();
   if (!master) {
@@ -146,7 +152,7 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
     return jsonError(c, 'payload_too_large', 'relayfile event body exceeds maximum size', 413);
   }
   const rawBody = rawBodyResult.body;
-  const secret = await deriveRelayfileInboundSecret(master, { workspaceId, channelId, provider, pathGlob });
+  const secret = await deriveRelayfileInboundSecret(master, { workspaceId, channelId, provider, pathGlob, githubPrIdentityAuthorized });
   const verified = await verifyRelayfileSignature(c.req.raw.headers, rawBody, secret, Date.now());
   if (!verified.ok) {
     logger.warn('relayfile inbound signature rejected', { workspace_id: workspaceId, channel_id: channelId, reason: verified.reason });
@@ -181,7 +187,7 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
   if (event.provider && normalizeProvider(event.provider) !== provider) {
     return jsonOk(c, { skipped: 'provider_mismatch' });
   }
-  if (!eventMatchesGlob(event.path, pathGlob)) {
+  if (!eventMatchesSubscription(event, pathGlob, githubPrIdentityAuthorized)) {
     return jsonOk(c, { skipped: 'path_mismatch' });
   }
   if (event.origin === 'agent_write') {
@@ -338,9 +344,9 @@ async function getChannelById(db: AppEnv['Variables']['db'], workspaceId: string
 
 export async function deriveRelayfileInboundSecret(
   master: string,
-  input: { workspaceId: string; channelId: string; provider: string; pathGlob: string },
+  input: { workspaceId: string; channelId: string; provider: string; pathGlob: string; githubPrIdentityAuthorized?: boolean },
 ): Promise<string> {
-  const label = `${SECRET_LABEL}:${input.workspaceId}:${input.channelId}:${normalizeProvider(input.provider)}:${normalizePathGlob(input.pathGlob)}`;
+  const label = `${SECRET_LABEL}:${input.workspaceId}:${input.channelId}:${normalizeProvider(input.provider)}:${normalizePathGlob(input.pathGlob)}${input.githubPrIdentityAuthorized ? ':github-pr-identity-v1' : ''}`;
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(master), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   const signed = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(label));
   return bytesToHex(new Uint8Array(signed));
@@ -468,6 +474,24 @@ function eventMatchesGlob(path: string, glob: string): boolean {
   }
   if (normalizedGlob.endsWith('*')) return normalizedPath.startsWith(normalizedGlob.slice(0, -1));
   return false;
+}
+
+function eventMatchesSubscription(event: RelayfileEvent, glob: string, githubPrIdentityAuthorized: boolean): boolean {
+  if (eventMatchesGlob(event.path ?? '', glob)) return true;
+  if (!githubPrIdentityAuthorized || event.provider !== 'github' || event.origin !== 'provider_sync') return false;
+
+  // Keep aligned with relayfile-cloud eventMatchesWebhookSubscription. Only
+  // whole numeric PR subtrees gain identity semantics; generic globs stay literal.
+  const match = /^\/github\/repos\/([^/*]+)\/([^/*]+)\/pulls\/([1-9]\d*)\/\*\*$/.exec(normalizePathGlob(glob));
+  if (!match) return false;
+  const [, owner, repo, number] = match;
+  const repoPath = `/github/repos/${owner}/${repo}`;
+  const eventPath = normalizePathGlob(event.path ?? '');
+  if (eventPath.split('/').some(segment => segment === '.' || segment === '..')) return false;
+  if (!eventPath.startsWith(`${repoPath}/`)) return false;
+  const pullSegment = eventPath.slice(`${repoPath}/pulls/`.length).split('/')[0];
+  if (eventPath.startsWith(`${repoPath}/pulls/`) && pullSegment.startsWith(`${number}__`) && pullSegment.length > `${number}__`.length) return true;
+  return event.resourceRef === `/github/repos/${owner}__${repo}/pulls/by-id/${number}.json`;
 }
 
 function eventWorkspaceId(event: RelayfileEvent): string | undefined {

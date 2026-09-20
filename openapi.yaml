@@ -5921,6 +5921,11 @@ paths:
       description: >
         Provision a relayfile inbound callback URL and derived HMAC secret for a
         workspace channel/provider/path binding.
+        Numeric GitHub PR subtree bindings also match titled PR directories and
+        associated provider-sync events with the exact stable PR resource reference
+        in the same repository. Other path globs retain literal matching.
+        This requires a newly provisioned target with a server-issued HMAC-bound
+        github_pr_identity opt-in; legacy target URLs remain literal.
       tags:
         - Relayfile
       security:
@@ -5995,6 +6000,13 @@ paths:
           required: true
           schema:
             type: string
+        - name: github_pr_identity
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ['1']
+          description: Server-issued opt-in sealed into the target signing secret. Do not add to legacy URLs; reprovision the target with a workspace key.
         - name: X-Relay-Timestamp
           in: header
           required: true
