@@ -143,6 +143,7 @@ describe('relayfile inbound bridge', () => {
     for (const [index, [path, resourceRef, providerEventType, expected]] of matrix.entries()) {
       const eventId = `evt_github_${index}`;
       const body = JSON.stringify({ eventId, type: 'file.updated', provider: 'github', origin: 'provider_sync', path, resourceRef, providerEventType, revision: eventId });
+      /** Send the same signed event again to verify delivery and replay deduplication. */
       const emit = () => stack.app.request(target.url, { method: 'POST', body, headers: { ...signedHeaders(target.secret, body), 'X-Relay-Event-Id': eventId } });
       const response = await emit();
       if (expected) {

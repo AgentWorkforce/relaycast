@@ -86,7 +86,13 @@ interface RelayfileEventPublic {
   snapshot?: RelayfileSnapshot;
 }
 
-relayfileInboundRoutes.post('/integrations/relayfile/inbound-target', requireWorkspaceKey, rateLimit, async (c) => {
+relayfileInboundRoutes.post('/integrations/relayfile/inbound-target', requireWorkspaceKey, rateLimit,
+/**
+ * Provision a channel callback using workspace-key authority.
+ * Numeric GitHub PR targets receive an HMAC-bound semantic opt-in; other targets
+ * retain literal matching. The response returns the callback and signing secret.
+ */
+async (c) => {
   const parsed = await parseJsonBody(c, createTargetSchema, 'invalid relayfile inbound target body');
   if (!parsed.ok) return parsed.response;
 
@@ -130,7 +136,13 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound-target', requireWor
   });
 });
 
-relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:channelId', async (c) => {
+relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:channelId',
+/**
+ * Verify a Relayfile delivery before matching it against its authenticated target.
+ * Accepted events become channel messages and subscriber deliveries; replayed
+ * events are deduplicated and nonmatching events receive an explicit skip result.
+ */
+async (c) => {
   const logger = getRequestLogger(c, 'relayfile.inbound');
   const workspaceId = c.req.param('workspaceId');
   const channelId = c.req.param('channelId');
