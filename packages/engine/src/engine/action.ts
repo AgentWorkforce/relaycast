@@ -3,7 +3,12 @@ import type { getDb } from '../db/index.js';
 import { actions, actionInvocations, agents, agentNodeBindings, channelMembers, dmParticipants, nodes } from '../db/schema.js';
 import { waitForPendingInvocationRetry } from './invocationRetry.js';
 import { generateId } from './snowflake.js';
-import { assertRegistrableAgentName, RELEASED_AGENT_STATUS, releasedAgentName } from './agent.js';
+import {
+  assertRegistrableAgentName,
+  buildDeadLetterReleasedAgentDeliveriesWrite,
+  RELEASED_AGENT_STATUS,
+  releasedAgentName,
+} from './agent.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { D1_SAFE_IN_QUERY_CHUNK_SIZE } from '../lib/queryChunks.js';
@@ -1337,6 +1342,13 @@ async function dispatchRelease(args: {
           invocationCompleted,
           generationStillCurrent,
         )));
+      writes.push(buildDeadLetterReleasedAgentDeliveriesWrite(
+        writeDb,
+        args.workspaceId,
+        agent.id,
+        completedAt,
+        and(invocationCompleted, generationStillCurrent),
+      ));
       writes.push(writeDb
         .delete(nodes)
         .where(and(
@@ -1375,7 +1387,7 @@ async function dispatchRelease(args: {
         )));
 
       return writes;
-    }, expectedTokenHash || expectedAgentId ? { requireAtomic: true } : undefined);
+    }, { requireAtomic: true });
     const generationConflict = results[0] as Array<{ id: string }>;
     const completed = results[1] as Array<{ id: string; handlerNodeId: string | null }>;
     const completedExitNodeId = completed[0]?.handlerNodeId ?? null;
@@ -2227,7 +2239,7 @@ function publicInvocation(row: InvocationRow) {
   };
 }
 
-async function completeGuardedReleaseNodeInvocation(
+async function completeReleaseNodeInvocation(
   db: Db,
   workspaceId: string,
   nodeId: string,
@@ -2244,7 +2256,7 @@ async function completeGuardedReleaseNodeInvocation(
     ? persistedTokenHash
     : null;
   const expectedAgentId = releaseExpectedAgentId(input);
-  if (!name || (!expectedTokenHash && !expectedAgentId)) {
+  if (!name || (persistedTokenHash !== undefined && !expectedTokenHash && !expectedAgentId)) {
     const [failed] = await db
       .update(actionInvocations)
       .set({
@@ -2330,10 +2342,9 @@ async function completeGuardedReleaseNodeInvocation(
   const results = await runAtomicWrites(db, (writeDb) => {
     const writes: AtomicWrite[] = [];
 
-    // The conflict settlement comes first. In a sequential SQLite batch it
-    // closes the invocation before every mutation below if either the token
-    // generation or node binding changed; on transactional adapters the same
-    // statement ordering and rollback guarantee apply.
+    // Settle conflicts before lifecycle mutations. Every statement belongs
+    // to one required transaction or atomic batch, including legacy releases
+    // without an explicit identity or token guard.
     writes.push(writeDb
       .update(actionInvocations)
       .set({
@@ -2422,6 +2433,16 @@ async function completeGuardedReleaseNodeInvocation(
       invocationCompleted,
     );
     if (input.delete_agent === true) {
+      // Settle while the release generation is still current. The tombstone
+      // update below intentionally rotates its token and name, after which the
+      // same generation predicate must no longer match.
+      writes.push(buildDeadLetterReleasedAgentDeliveriesWrite(
+        writeDb,
+        workspaceId,
+        agent.id,
+        completedAt,
+        and(invocationCompleted, generationStillCurrent),
+      ));
       writes.push(writeDb
         .update(agents)
         .set({
@@ -2500,136 +2521,6 @@ async function completeGuardedReleaseNodeInvocation(
     });
   }
   return publicInvocation(settled);
-}
-
-async function applyReleaseCompletionEffect(
-  db: Db,
-  workspaceId: string,
-  nodeId: string | null,
-  invocation: Pick<InvocationRow, 'actionName' | 'invocationOrigin' | 'input'>,
-  data: { error?: string },
-  deps?: InvocationCompletionDeps,
-  options: { allowMissingBinding?: boolean; expectedAgentId?: string } = {},
-): Promise<boolean> {
-  if (!isBuiltinReleaseInvocation(invocation) || data.error) return false;
-
-  const input = recordInput(invocation.input);
-  const name = typeof input.name === 'string' ? input.name : null;
-  if (!name) return false;
-
-  const [agent] = await db
-    .select()
-    .from(agents)
-    .where(and(
-      eq(agents.workspaceId, workspaceId),
-      eq(agents.name, name),
-      ...(options.expectedAgentId ? [eq(agents.id, options.expectedAgentId)] : []),
-      ...(!options.allowMissingBinding && nodeId ? [
-        eq(agents.locationType, 'via_node'),
-        eq(agents.locationNodeId, nodeId),
-      ] : []),
-    ));
-  if (!agent) return false;
-
-  // Only proceed if an active binding actually flipped to inactive. This guards
-  // against a second release (e.g. a retry) double-decrementing activeAgents for
-  // an agent that was already released from this node.
-  const deactivatedBindings = await db
-    .update(agentNodeBindings)
-    .set({ status: 'inactive', updatedAt: new Date() })
-    .where(and(
-      eq(agentNodeBindings.workspaceId, workspaceId),
-      eq(agentNodeBindings.agentId, agent.id),
-      eq(agentNodeBindings.status, 'active'),
-      ...(nodeId ? [eq(agentNodeBindings.nodeId, nodeId)] : []),
-    ))
-    .returning({ nodeId: agentNodeBindings.nodeId });
-  if (deactivatedBindings.length === 0 && !options.allowMissingBinding) return false;
-
-  // Capture exit correlation BEFORE the mutation deletes the row or strips the
-  // spawn/cli metadata, so a durable agent.exited can still be emitted.
-  const exited = { agentId: agent.id, agentName: agent.name, invocationId: fleetInvocationId(agent.metadata) };
-
-  const deactivatedNodeIds = Array.from(new Set(deactivatedBindings.map((binding) => binding.nodeId)));
-  if (deactivatedNodeIds.length > 0) {
-    await db
-      .update(nodes)
-      .set({
-        activeAgents: sql`CASE WHEN ${nodes.activeAgents} > 0 THEN ${nodes.activeAgents} - 1 ELSE 0 END`,
-      })
-      .where(and(eq(nodes.workspaceId, workspaceId), inArray(nodes.id, deactivatedNodeIds)));
-  }
-
-  if (input.delete_agent === true) {
-    // Tombstone rather than DELETE, matching `dispatchRelease`'s
-    // `completeLocally`. Four FKs reference `agents.id` without an ON DELETE
-    // action (`messages.agent_id`, `channels.created_by`, `files.uploaded_by`,
-    // `webhooks.created_by`), so a bare delete is refused for any agent that
-    // has ever spoken — and this runs inside the completion's atomic unit, so
-    // that refusal aborts the invocation completion too. The seat and the name
-    // then stay claimed forever and the caller only ever sees `dispatched`.
-    // Renaming frees the unique `(workspace_id, name)` immediately while every
-    // FK target stays valid and every message keeps its sender.
-    const releasedName = releasedAgentName(agent.name, agent.id);
-    // The row survives, so its credential must not. `token_hash` is NOT NULL
-    // UNIQUE and cannot be cleared, so rotate it to a value nobody holds.
-    const releasedTokenHash = await sha256Hex(`released:${agent.id}:${randomHex(16)}`);
-    await db
-      .update(agents)
-      .set({
-        name: releasedName,
-        handle: `@${releasedName}`,
-        status: RELEASED_AGENT_STATUS,
-        tokenHash: releasedTokenHash,
-        // Same reason as the other release paths — the grace slot survives
-        // `token_hash` rewrites unless we clear it. See 0035_agent_token_grace.
-        previousTokenHash: null,
-        previousTokenExpiresAt: null,
-        locationType: 'self_connected',
-        locationNodeId: null,
-        lastSeen: new Date(),
-      })
-      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agent.id)));
-    // `channel_members` and `dm_participants` reference `agents.id` ON DELETE
-    // CASCADE; an UPDATE does not fire that cascade, so drop the memberships
-    // explicitly or the released agent stays a delivery target.
-    await db.delete(channelMembers).where(eq(channelMembers.agentId, agent.id));
-    await db.delete(dmParticipants).where(eq(dmParticipants.agentId, agent.id));
-    const implicitNodeId = `node_direct_${agent.id}`;
-    await db.delete(nodes).where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, implicitNodeId)));
-  } else {
-    const existingMetadata = agent.metadata ?? {};
-    const { spawn: _spawn, cli: _cli, ...restMetadata } = existingMetadata;
-    await db
-      .update(agents)
-      .set({
-        status: 'offline',
-        // Clear the node location so the agent is no longer routable to the released
-        // node and a repeat release can't re-decrement the node's active count.
-        locationType: 'self_connected',
-        locationNodeId: null,
-        lastSeen: new Date(),
-        metadata: {
-          ...restMetadata,
-          release: {
-            reason: typeof input.reason === 'string' ? input.reason : null,
-            released_at: new Date().toISOString(),
-          },
-        },
-      })
-      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agent.id)));
-  }
-
-  if (deps && nodeId) {
-    await emitAgentExitedEffects(deps, workspaceId, {
-      agentId: exited.agentId,
-      agentName: exited.agentName,
-      nodeId,
-      invocationId: exited.invocationId,
-      reason: 'released',
-    });
-  }
-  return true;
 }
 
 async function dispatchNodeAttempt(
@@ -3807,13 +3698,8 @@ export async function completeNodeInvocation(
     }
   }
 
-  const existingInput = recordInput(existing.input);
-  if (
-    !data.error
-    && isBuiltinReleaseInvocation(existing)
-    && (existingInput.expected_token_hash !== undefined || existingInput.expected_agent_id !== undefined)
-  ) {
-    return completeGuardedReleaseNodeInvocation(
+  if (!data.error && isBuiltinReleaseInvocation(existing)) {
+    return completeReleaseNodeInvocation(
       db,
       workspaceId,
       nodeId,
@@ -3847,10 +3733,6 @@ export async function completeNodeInvocation(
   // would decrement capacity owned by another spawn.
   if (updated && isSpawnInvocation(updated.actionName) && updated.dispatchedNodeId && existing.spawnReservedAt) {
     await releaseNodeCapacity(db, workspaceId, updated.dispatchedNodeId);
-  }
-
-  if (updated) {
-    await applyReleaseCompletionEffect(db, workspaceId, nodeId, existing, data, deps);
   }
 
   return updated ? publicInvocation(updated) : null;

@@ -694,6 +694,7 @@ describe('agent presence and release lifecycle', () => {
   it('reaps a hostless agent that has already spoken', async () => {
     const ws = await createWorkspace(stack.app, 'hostless-agent-delete-with-history');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'talkative-agent');
+    const sender = await registerAgent(stack.app, ws.workspaceKey, 'hostless-release-sender');
     const nodeId = `node_direct_${target.agentId}`;
 
     // Every agent worth reaping has history. Four FKs reference agents.id
@@ -710,6 +711,15 @@ describe('agent presence and release lifecycle', () => {
       body: JSON.stringify({ text: 'i have said something' }),
     });
     expect(posted.status).toBe(201);
+    const queued = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${sender.token}`,
+      },
+      body: JSON.stringify({ text: 'this delivery must be settled by local release' }),
+    });
+    expect(queued.status).toBe(201);
 
     await stack.runtime.deps.db
       .update(agents)
@@ -745,6 +755,17 @@ describe('agent presence and release lifecycle', () => {
         eq(actionInvocations.actionName, 'release'),
       ));
     expect(invocation.status).toBe('completed');
+    expect(
+      await stack.runtime.deps.db
+        .select({ status: deliveries.status, error: deliveries.error })
+        .from(deliveries)
+        .where(eq(deliveries.agentId, target.agentId)),
+    ).toEqual([
+      expect.objectContaining({
+        status: 'dead_lettered',
+        error: 'recipient agent released',
+      }),
+    ]);
   });
 
   it('refuses to register into the reserved released-agent namespace', async () => {

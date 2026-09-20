@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Permanently releasing an agent now dead-letters its active `queued` and `delivered` deliveries immediately, restoring workspace messaging capacity instead of waiting for delivery TTL expiry.
 
 ## [8.11.5] - 2026-09-20
 

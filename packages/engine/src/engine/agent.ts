@@ -1,4 +1,4 @@
-import { eq, and, gt, lt, ne, sql, inArray } from 'drizzle-orm';
+import { eq, and, gt, lt, ne, sql, inArray, type SQL } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { agents, agentNodeBindings, agentRecoveryCredentials, channels, channelMembers, dmParticipants, actions, deliveries, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
@@ -66,6 +66,50 @@ type AgentPresenceRow = Pick<typeof agents.$inferSelect, 'status' | 'lastSeen'>;
  * delivery target.
  */
 export const RELEASED_AGENT_STATUS = 'released';
+
+/** Terminal reason applied to deliveries whose recipient is permanently released. */
+export const RELEASED_AGENT_DELIVERY_ERROR = 'recipient agent released';
+
+/**
+ * Build the terminal delivery transition that accompanies an irreversible
+ * agent release.
+ *
+ * Removing channel/DM membership prevents future fan-out, but it does not
+ * touch already queued rows. Those rows count against the workspace delivery
+ * cap until they are acknowledged, failed, dead-lettered, or expire. A
+ * tombstoned agent can never acknowledge them, so leaving them active turns a
+ * clean fleet teardown into a workspace-wide messaging outage until TTL.
+ *
+ * Callers include this statement in the same required atomic release unit.
+ * `releaseGuard` binds the transition to the caller's own CAS (for
+ * example a successfully completed release invocation), so a losing release
+ * race cannot discard deliveries owned by the surviving generation.
+ */
+export function buildDeadLetterReleasedAgentDeliveriesWrite(
+  db: Db,
+  workspaceId: string,
+  agentId: string,
+  releasedAt: Date,
+  releaseGuard?: SQL,
+): AtomicWrite {
+  return db
+    .update(deliveries)
+    .set({
+      status: 'dead_lettered',
+      error: RELEASED_AGENT_DELIVERY_ERROR,
+      retryable: false,
+      nextAttemptAt: null,
+      deadLetteredAt: releasedAt,
+      updatedAt: releasedAt,
+    })
+    .where(and(
+      eq(deliveries.workspaceId, workspaceId),
+      eq(deliveries.agentId, agentId),
+      // Keep the active predicate literal so SQLite can use the partial index.
+      sql`${deliveries.status} IN ('queued', 'delivered')`,
+      releaseGuard,
+    ));
+}
 
 /**
  * Marker separating a released agent's original name from its tombstone
@@ -616,7 +660,7 @@ export async function deleteAgent(db: Db, workspaceId: string, name: string) {
   if (!agent) return false;
 
   // Tombstone rather than DELETE, matching both release paths
-  // (`dispatchRelease` -> `completeLocally`, and `applyReleaseCompletionEffect`).
+  // (`dispatchRelease` -> `completeLocally`, and `completeReleaseNodeInvocation`).
   // Four FKs reference `agents.id` with no ON DELETE action —
   // `messages.agent_id`, `channels.created_by`, `files.uploaded_by`,
   // `webhooks.created_by` — so a bare DELETE is refused for any agent that has
@@ -668,8 +712,14 @@ export async function deleteAgent(db: Db, workspaceId: string, name: string) {
     // a tombstone, matching the release paths.
     writes.push(writeDb.delete(agentNodeBindings).where(eq(agentNodeBindings.agentId, agent.id)));
     writes.push(writeDb.delete(nodes).where(eq(nodes.id, directNodeIdForAgent(agent.id))));
+    writes.push(buildDeadLetterReleasedAgentDeliveriesWrite(
+      writeDb,
+      workspaceId,
+      agent.id,
+      releasedAt,
+    ));
     return writes;
-  });
+  }, { requireAtomic: true });
   // Capture memberships at deletion, not a preflight read that can race joins.
   const removed = releaseResults[1] as Array<{ channelId: string }>;
   const joinedChannels = await queryInChunks(removed.map(row => row.channelId), ids => db

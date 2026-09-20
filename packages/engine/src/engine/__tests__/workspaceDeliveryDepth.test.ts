@@ -143,6 +143,32 @@ describe('workspace delivery growth guard (channel broadcast)', () => {
     expect(await currentWorkspaceDepth(db, ws)).toBe(3);
   });
 
+  it('does not charge expired unswept rows against workspace capacity', async () => {
+    stack = makeNodeStack();
+    const db = stack.runtime.deps.db;
+    const { ws, channel } = await seedWorkspace(db, 1);
+    const policy = { cap: 1 };
+
+    await send(db, ws, channel, 'msg_expired', policy);
+    await db
+      .update(deliveries)
+      .set({ expiresAt: new Date(Date.now() - 60_000) })
+      .where(eq(deliveries.workspaceId, ws));
+
+    // The row deliberately remains stored as `queued`; capacity admission
+    // must use effective (unexpired) depth rather than depend on a maintenance
+    // sweep having rewritten its durable status first.
+    expect(await db
+      .select({ status: deliveries.status })
+      .from(deliveries)
+      .where(eq(deliveries.messageId, 'msg_expired')))
+      .toEqual([{ status: 'queued' }]);
+    expect(await currentWorkspaceDepth(db, ws)).toBe(0);
+
+    await expect(send(db, ws, channel, 'msg_after_expiry', policy)).resolves.toBeUndefined();
+    expect(await activeDepth(db, ws)).toBe(1);
+  });
+
   it('resolves the dynamic host policy through the async resolver, clamped within cap', async () => {
     const config = {
       workspaceDelivery: {
