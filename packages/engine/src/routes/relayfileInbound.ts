@@ -342,6 +342,11 @@ async function getChannelById(db: AppEnv['Variables']['db'], workspaceId: string
   return row ?? null;
 }
 
+/**
+ * Derive a target-specific HMAC secret binding workspace, channel, provider and glob.
+ * Authorized PR targets use a versioned JSON tuple so field boundaries and the
+ * semantic opt-in cannot collide with legacy literal-target labels.
+ */
 export async function deriveRelayfileInboundSecret(
   master: string,
   input: { workspaceId: string; channelId: string; provider: string; pathGlob: string; githubPrIdentityAuthorized?: boolean },
@@ -480,6 +485,11 @@ function eventMatchesGlob(path: string, glob: string): boolean {
   return false;
 }
 
+/**
+ * Match literal paths first, then authorized GitHub PR identities within one repo.
+ * The provider comes from the authenticated target; only provider-sync events may
+ * use titled pull paths or stable PR references to match sibling event layouts.
+ */
 function eventMatchesSubscription(event: RelayfileEvent, glob: string, githubPrIdentityAuthorized: boolean, provider: string): boolean {
   if (eventMatchesGlob(event.path ?? '', glob)) return true;
   // The route provider is normalized and authenticated by the target HMAC;

@@ -19,6 +19,7 @@ interface Stack {
 
 const stacks: Stack[] = [];
 
+/** Create an isolated SQLite engine and register its cleanup for the current test. */
 function makeStack(opts: { kv?: KeyValueStore; depthCap?: number } = {}): Stack {
   const runtime = createNodeRuntime({
     dbPath: ':memory:',
@@ -43,6 +44,7 @@ afterEach(() => {
   for (const stack of stacks.splice(0)) stack.runtime.close();
 });
 
+/** Sign the exact serialized event bytes with the target secret and supplied timestamp. */
 function signedHeaders(secret: string, body: string, timestamp = String(Math.floor(Date.now() / 1000))) {
   return {
     'content-type': 'application/json',

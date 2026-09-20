@@ -14,6 +14,10 @@ const runtime = createNodeRuntime({ dbPath: ':memory:', baseUrl: 'http://localho
   presence: { sweepIntervalMs: 0 }, eventQueue: { pollIntervalMs: 0 } });
 runtime.webhookQueue.stop();
 const app = createEngine(runtime.deps);
+/**
+ * Call the in-memory engine with an optional bearer token and JSON body.
+ * Fail the proof on HTTP errors and return the successful response data.
+ */
 async function request(path, token, body) {
   const response = await app.request(path, { method: body ? 'POST' : 'GET',
     headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
