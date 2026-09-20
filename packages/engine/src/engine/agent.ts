@@ -80,8 +80,8 @@ export const RELEASED_AGENT_DELIVERY_ERROR = 'recipient agent released';
  * tombstoned agent can never acknowledge them, so leaving them active turns a
  * clean fleet teardown into a workspace-wide messaging outage until TTL.
  *
- * Callers include this statement in the same atomic release unit whenever
- * possible. `releaseGuard` binds the transition to the caller's own CAS (for
+ * Callers include this statement in the same required atomic release unit.
+ * `releaseGuard` binds the transition to the caller's own CAS (for
  * example a successfully completed release invocation), so a losing release
  * race cannot discard deliveries owned by the surviving generation.
  */
@@ -660,7 +660,7 @@ export async function deleteAgent(db: Db, workspaceId: string, name: string) {
   if (!agent) return false;
 
   // Tombstone rather than DELETE, matching both release paths
-  // (`dispatchRelease` -> `completeLocally`, and `applyReleaseCompletionEffect`).
+  // (`dispatchRelease` -> `completeLocally`, and `completeReleaseNodeInvocation`).
   // Four FKs reference `agents.id` with no ON DELETE action —
   // `messages.agent_id`, `channels.created_by`, `files.uploaded_by`,
   // `webhooks.created_by` — so a bare DELETE is refused for any agent that has
@@ -719,7 +719,7 @@ export async function deleteAgent(db: Db, workspaceId: string, name: string) {
       releasedAt,
     ));
     return writes;
-  });
+  }, { requireAtomic: true });
   // Capture memberships at deletion, not a preflight read that can race joins.
   const removed = releaseResults[1] as Array<{ channelId: string }>;
   const joinedChannels = await queryInChunks(removed.map(row => row.channelId), ids => db

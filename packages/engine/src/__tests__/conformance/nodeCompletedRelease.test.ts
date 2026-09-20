@@ -65,7 +65,7 @@ describe('node-completed release preserves attributed history', () => {
     await post(target.token, 'this message must keep its author');
     await post(sender.token, 'this delivery must be settled by guarded release');
     // A LIVE node binding is what routes the release through
-    // `applyReleaseCompletionEffect` instead of the local tombstone path.
+    // `completeReleaseNodeInvocation` instead of the local tombstone path.
     const { sock, handle } = await attachDirectNodeSocket(stack, ws.workspaceId, target);
 
     const { data } = await release(

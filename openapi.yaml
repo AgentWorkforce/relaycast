@@ -2584,7 +2584,10 @@ paths:
 
     delete:
       summary: Delete agent
-      description: Delete an agent from the workspace
+      description: >-
+        Tombstone an agent, remove memberships, and dead-letter its active deliveries
+        in one atomic write. Database adapters without transaction or atomic batch
+        support are refused before these changes.
       tags:
         - Agents
       security:
@@ -2926,7 +2929,10 @@ paths:
         release fails explicitly with `503 agent_host_unavailable`; it never
         creates an ownerless pending invocation. With `delete_agent`, the engine
         can reap the database record directly and returns a completed invocation,
-        deleting the agent and any implicit direct node.
+        tombstoning the agent and deleting any implicit direct node. Irreversible
+        release removes memberships and dead-letters active deliveries in the
+        same atomic write. Database adapters without transaction or atomic batch
+        support are refused before these changes.
       tags:
         - Agents
       security:

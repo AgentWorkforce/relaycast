@@ -701,7 +701,11 @@ live host when one exists. If the host is absent or offline, a normal release
 fails explicitly with `agent_host_unavailable` instead of creating an ownerless
 pending invocation. A `delete_agent` request can be completed locally in that
 case: Relaycast deactivates bindings, frees the live name, and removes its
-implicit direct node. Cleanup callers that retain the issued agent token can
+implicit direct node. Irreversible releases and agent deletion require a database
+transaction or atomic batch; adapters without either capability are refused
+before identity, membership, or queued deliveries change. Successful cleanup
+dead-letters the released agent's active deliveries in the same atomic write.
+Cleanup callers that retain the issued agent token can
 send its SHA-256 hash as `expected_token_hash`; Relaycast then rejects a stale
 release with `agent_release_generation_conflict` before dispatch or completion,
 so a same-name takeover is left untouched.

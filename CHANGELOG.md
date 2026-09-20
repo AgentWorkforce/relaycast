@@ -20,7 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
-- Permanently releasing an agent now dead-letters its queued deliveries immediately, restoring workspace messaging capacity instead of waiting for delivery TTL expiry.
+- Permanently releasing an agent now dead-letters its active `queued` and `delivered` deliveries immediately, restoring workspace messaging capacity instead of waiting for delivery TTL expiry.
 
 ## [8.11.5] - 2026-09-20
 
