@@ -71,6 +71,15 @@ class FailingKeyValueStore implements KeyValueStore {
 }
 
 describe('relayfile inbound bridge', () => {
+  it('uses unambiguous field boundaries for semantic target secrets', async () => {
+    const common = { provider: 'github', pathGlob: '/github/repos/o/r/pulls/1/**', githubPrIdentityAuthorized: true };
+    const first = await deriveRelayfileInboundSecret('master', { ...common, workspaceId: 'ws:channel', channelId: 'id' });
+    const second = await deriveRelayfileInboundSecret('master', { ...common, workspaceId: 'ws', channelId: 'channel:id' });
+    expect(first).not.toBe(second);
+    const quoted = await deriveRelayfileInboundSecret('master', { ...common, workspaceId: 'ws","channel', channelId: 'id' });
+    expect(quoted).not.toBe(first);
+  });
+
   it('delivers titled PR and related events to the subscribed channel without crossing identities', async () => {
     const stack = makeStack();
     const ws = await createWorkspace(stack.app, 'github-pr-matching');
@@ -100,6 +109,17 @@ describe('relayfile inbound bridge', () => {
     // cannot reuse either target's signature.
     expect((await stack.app.request(target.url, { method: 'POST', body: protectedBody, headers: signedHeaders(legacySecret, protectedBody) })).status).toBe(401);
     expect((await stack.app.request(legacyUrl.toString(), { method: 'POST', body: protectedBody, headers: signedHeaders(target.secret, protectedBody) })).status).toBe(401);
+    const collisionSecret = await deriveRelayfileInboundSecret('relaycast-master', {
+      workspaceId: target.workspace_id, channelId: target.channel_id, provider: 'github',
+      pathGlob: '/github/repos/AgentWorkforce/relay/pulls/1815/**:github-pr-identity-v1',
+    });
+    expect(collisionSecret).not.toBe(target.secret);
+    expect((await stack.app.request(target.url, { method: 'POST', body: protectedBody, headers: signedHeaders(collisionSecret, protectedBody) })).status).toBe(401);
+    for (const [index, provider] of ['GitHub', undefined].entries()) {
+      const eventId = `evt_provider_${index}`;
+      const body = JSON.stringify({ ...JSON.parse(protectedBody), provider, eventId });
+      expect((await stack.app.request(target.url, { method: 'POST', body, headers: { ...signedHeaders(target.secret, body), 'X-Relay-Event-Id': eventId } })).status).toBe(201);
+    }
     const prefix = '/github/repos/AgentWorkforce/relay';
     const ref = '/github/repos/AgentWorkforce__relay/pulls/by-id/1815.json';
     const matrix = [

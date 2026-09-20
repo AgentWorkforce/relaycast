@@ -187,7 +187,7 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
   if (event.provider && normalizeProvider(event.provider) !== provider) {
     return jsonOk(c, { skipped: 'provider_mismatch' });
   }
-  if (!eventMatchesSubscription(event, pathGlob, githubPrIdentityAuthorized)) {
+  if (!eventMatchesSubscription(event, pathGlob, githubPrIdentityAuthorized, provider)) {
     return jsonOk(c, { skipped: 'path_mismatch' });
   }
   if (event.origin === 'agent_write') {
@@ -346,7 +346,11 @@ export async function deriveRelayfileInboundSecret(
   master: string,
   input: { workspaceId: string; channelId: string; provider: string; pathGlob: string; githubPrIdentityAuthorized?: boolean },
 ): Promise<string> {
-  const label = `${SECRET_LABEL}:${input.workspaceId}:${input.channelId}:${normalizeProvider(input.provider)}:${normalizePathGlob(input.pathGlob)}${input.githubPrIdentityAuthorized ? ':github-pr-identity-v1' : ''}`;
+  // New targets use a disjoint, structured domain. Appending a marker to the
+  // legacy glob would collide with a literal glob ending in that same marker.
+  const label = input.githubPrIdentityAuthorized
+    ? JSON.stringify([`${SECRET_LABEL}:github-pr-identity-v1`, input.workspaceId, input.channelId, normalizeProvider(input.provider), normalizePathGlob(input.pathGlob)])
+    : `${SECRET_LABEL}:${input.workspaceId}:${input.channelId}:${normalizeProvider(input.provider)}:${normalizePathGlob(input.pathGlob)}`;
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(master), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   const signed = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(label));
   return bytesToHex(new Uint8Array(signed));
@@ -476,9 +480,11 @@ function eventMatchesGlob(path: string, glob: string): boolean {
   return false;
 }
 
-function eventMatchesSubscription(event: RelayfileEvent, glob: string, githubPrIdentityAuthorized: boolean): boolean {
+function eventMatchesSubscription(event: RelayfileEvent, glob: string, githubPrIdentityAuthorized: boolean, provider: string): boolean {
   if (eventMatchesGlob(event.path ?? '', glob)) return true;
-  if (!githubPrIdentityAuthorized || event.provider !== 'github' || event.origin !== 'provider_sync') return false;
+  // The route provider is normalized and authenticated by the target HMAC;
+  // the caller already rejected any conflicting event provider above.
+  if (!githubPrIdentityAuthorized || provider !== 'github' || event.origin !== 'provider_sync') return false;
 
   // Keep aligned with relayfile-cloud eventMatchesWebhookSubscription. Only
   // whole numeric PR subtrees gain identity semantics; generic globs stay literal.
