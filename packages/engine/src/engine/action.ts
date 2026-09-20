@@ -3,7 +3,12 @@ import type { getDb } from '../db/index.js';
 import { actions, actionInvocations, agents, agentNodeBindings, channelMembers, dmParticipants, nodes } from '../db/schema.js';
 import { waitForPendingInvocationRetry } from './invocationRetry.js';
 import { generateId } from './snowflake.js';
-import { assertRegistrableAgentName, RELEASED_AGENT_STATUS, releasedAgentName } from './agent.js';
+import {
+  assertRegistrableAgentName,
+  buildDeadLetterReleasedAgentDeliveriesWrite,
+  RELEASED_AGENT_STATUS,
+  releasedAgentName,
+} from './agent.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { D1_SAFE_IN_QUERY_CHUNK_SIZE } from '../lib/queryChunks.js';
@@ -1337,6 +1342,13 @@ async function dispatchRelease(args: {
           invocationCompleted,
           generationStillCurrent,
         )));
+      writes.push(buildDeadLetterReleasedAgentDeliveriesWrite(
+        writeDb,
+        args.workspaceId,
+        agent.id,
+        completedAt,
+        and(invocationCompleted, generationStillCurrent),
+      ));
       writes.push(writeDb
         .delete(nodes)
         .where(and(
@@ -2422,6 +2434,16 @@ async function completeGuardedReleaseNodeInvocation(
       invocationCompleted,
     );
     if (input.delete_agent === true) {
+      // Settle while the release generation is still current. The tombstone
+      // update below intentionally rotates its token and name, after which the
+      // same generation predicate must no longer match.
+      writes.push(buildDeadLetterReleasedAgentDeliveriesWrite(
+        writeDb,
+        workspaceId,
+        agent.id,
+        completedAt,
+        and(invocationCompleted, generationStillCurrent),
+      ));
       writes.push(writeDb
         .update(agents)
         .set({
@@ -2595,6 +2617,12 @@ async function applyReleaseCompletionEffect(
     // explicitly or the released agent stays a delivery target.
     await db.delete(channelMembers).where(eq(channelMembers.agentId, agent.id));
     await db.delete(dmParticipants).where(eq(dmParticipants.agentId, agent.id));
+    await buildDeadLetterReleasedAgentDeliveriesWrite(
+      db,
+      workspaceId,
+      agent.id,
+      new Date(),
+    );
     const implicitNodeId = `node_direct_${agent.id}`;
     await db.delete(nodes).where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, implicitNodeId)));
   } else {

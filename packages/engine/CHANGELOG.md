@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Irreversible agent release paths atomically dead-letter that recipient's active deliveries with `recipient agent released`, so tombstoned identities cannot hold workspace delivery-depth capacity until TTL.
 
 ## [8.11.5] - 2026-09-20
 

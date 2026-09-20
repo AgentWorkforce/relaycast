@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { attachDirectNodeSocket, createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
-import { actionInvocations, agentNodeBindings, agents, messages, nodes } from '../../db/schema.js';
+import { actionInvocations, agentNodeBindings, agents, deliveries, messages, nodes } from '../../db/schema.js';
 import { sha256Hex } from '../../lib/crypto.js';
 
 /**
@@ -61,7 +61,9 @@ describe('node-completed release preserves attributed history', () => {
   it('tombstones an agent that has spoken when a NODE completes the release', async () => {
     const ws = await createWorkspace(stack.app, 'node-release-with-history');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'spoke-then-released');
+    const sender = await registerAgent(stack.app, ws.workspaceKey, 'release-sender');
     await post(target.token, 'this message must keep its author');
+    await post(sender.token, 'this delivery must be settled by guarded release');
     // A LIVE node binding is what routes the release through
     // `applyReleaseCompletionEffect` instead of the local tombstone path.
     const { sock, handle } = await attachDirectNodeSocket(stack, ws.workspaceId, target);
@@ -138,6 +140,18 @@ describe('node-completed release preserves attributed history', () => {
       },
     });
 
+    expect(
+      await stack.runtime.deps.db
+        .select({ status: deliveries.status, error: deliveries.error })
+        .from(deliveries)
+        .where(eq(deliveries.agentId, target.agentId)),
+    ).toEqual([
+      expect.objectContaining({
+        status: 'dead_lettered',
+        error: 'recipient agent released',
+      }),
+    ]);
+
     // Attribution intact, and the old credential is dead.
     expect(
       await stack.runtime.deps.db.select().from(messages).where(eq(messages.agentId, target.agentId)),
@@ -159,6 +173,8 @@ describe('node-completed release preserves attributed history', () => {
   it('releases an agent that never spoke through the same node-completed path', async () => {
     const ws = await createWorkspace(stack.app, 'node-release-no-history');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'never-spoke');
+    const sender = await registerAgent(stack.app, ws.workspaceKey, 'legacy-release-sender');
+    await post(sender.token, 'this delivery must be settled by legacy release');
     const { handle } = await attachDirectNodeSocket(stack, ws.workspaceId, target);
 
     const { data } = await release(ws.workspaceKey, target.name);
@@ -181,6 +197,17 @@ describe('node-completed release preserves attributed history', () => {
         .from(agents)
         .where(and(eq(agents.workspaceId, ws.workspaceId), eq(agents.name, target.name))),
     ).toHaveLength(0);
+    expect(
+      await stack.runtime.deps.db
+        .select({ status: deliveries.status, error: deliveries.error })
+        .from(deliveries)
+        .where(eq(deliveries.agentId, target.agentId)),
+    ).toEqual([
+      expect.objectContaining({
+        status: 'dead_lettered',
+        error: 'recipient agent released',
+      }),
+    ]);
   });
 
   it('does not apply a guarded completion to a same-id takeover generation', async () => {
