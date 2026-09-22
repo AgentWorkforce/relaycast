@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { invalidateChannelCache } from './cache.js';
-import { and, asc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from 'drizzle-orm';
+import { and, asc, eq, exists, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, notExists, or, sql } from 'drizzle-orm';
 import type {
   FleetAgentRecoverMessage,
   FleetAgentRegisterMessage,
@@ -2085,6 +2085,8 @@ export async function reconcileInventory(
   const existingByName = new Map<string, typeof agents.$inferSelect>();
   const acceptedInventoryAgents: FleetInventoryAgent[] = [];
   const rejectedInventoryErrors: Array<ReturnType<typeof codedError>> = [];
+  const legacyDefaultAdoptions = new Set<string>();
+  let canAdoptLegacyDefault: boolean | undefined;
   let acceptedExistingAgentCount = 0;
   for (const item of inventoryAgents) {
     const [existing] = await db
@@ -2097,12 +2099,42 @@ export async function reconcileInventory(
     }
     let rejection: ReturnType<typeof codedError> | undefined;
     if (existing.providerName !== providerName) {
-      rejection = codedError(
-        `Agent "${item.name}" belongs to provider "${existing.providerName}"`,
-        'agent_provider_conflict',
-        409,
-      );
-    } else if (existing.status === 'active') {
+      // A pre-provider registration can be bound to this node while no
+      // provider is connected, leaving its row on synthetic `default` even
+      // though the surviving session is in the named broker's inventory.
+      // Only the broker on the *same* node may adopt that exact identity, and
+      // only after the old default provider has ceased to be live. Other
+      // provider/name conflicts retain the fail-closed behavior.
+      const legacyDefaultClaim = existing.providerName === DEFAULT_PROVIDER_NAME
+        && providerName === 'broker'
+        && existing.locationType === 'via_node'
+        && existing.locationNodeId === nodeId
+        && existing.id === item.agent_id;
+      if (legacyDefaultClaim && canAdoptLegacyDefault === undefined) {
+        const providerRows = await db
+          .select()
+          .from(nodeProviders)
+          .where(and(
+            eq(nodeProviders.workspaceId, workspaceId),
+            eq(nodeProviders.nodeId, nodeId),
+            inArray(nodeProviders.name, [DEFAULT_PROVIDER_NAME, 'broker']),
+          ));
+        const defaultProvider = providerRows.find((row) => row.name === DEFAULT_PROVIDER_NAME);
+        const brokerProvider = providerRows.find((row) => row.name === 'broker');
+        canAdoptLegacyDefault = !!brokerProvider && isProviderLive(brokerProvider)
+          && (!defaultProvider || !isProviderLive(defaultProvider));
+      }
+      if (legacyDefaultClaim && canAdoptLegacyDefault) {
+        legacyDefaultAdoptions.add(item.name);
+      } else {
+        rejection = codedError(
+          `Agent "${item.name}" belongs to provider "${existing.providerName}"`,
+          'agent_provider_conflict',
+          409,
+        );
+      }
+    }
+    if (!rejection && existing.status === 'active') {
       const [boundNode] = await db
         .select()
         .from(nodes)
@@ -2212,6 +2244,7 @@ export async function reconcileInventory(
       const targetWasActive = activeNodeIds.includes(nodeId);
       const wasRoutableThroughProvider = existing.locationType === 'via_node'
         && existing.locationNodeId === nodeId
+        && existing.providerName === providerName
         && targetWasActive;
       let reservedTargetSlot = false;
       try {
@@ -2223,9 +2256,39 @@ export async function reconcileInventory(
           });
           reservedTargetSlot = true;
         }
-        await db
+        const adoptingLegacyDefault = legacyDefaultAdoptions.has(item.name);
+        // The earlier liveness check is for a useful error decision. This
+        // compare-and-set fences broker liveness loss, a default provider
+        // reconnecting, and concurrent ownership changes during the apply pass.
+        const adoptionNow = Date.now();
+        const noLiveDefaultProvider = notExists(db
+          .select({ id: nodeProviders.id })
+          .from(nodeProviders)
+          .where(and(
+            eq(nodeProviders.workspaceId, workspaceId),
+            eq(nodeProviders.nodeId, nodeId),
+            eq(nodeProviders.name, DEFAULT_PROVIDER_NAME),
+            eq(nodeProviders.status, 'online'),
+            eq(nodeProviders.handlersLive, true),
+            gte(nodeProviders.lastHeartbeatAt, new Date(adoptionNow - NODE_LIVENESS_TTL_MS)),
+            lte(nodeProviders.lastHeartbeatAt, new Date(adoptionNow)),
+          )));
+        const liveBrokerProvider = exists(db
+          .select({ id: nodeProviders.id })
+          .from(nodeProviders)
+          .where(and(
+            eq(nodeProviders.workspaceId, workspaceId),
+            eq(nodeProviders.nodeId, nodeId),
+            eq(nodeProviders.name, 'broker'),
+            eq(nodeProviders.status, 'online'),
+            eq(nodeProviders.handlersLive, true),
+            gte(nodeProviders.lastHeartbeatAt, new Date(adoptionNow - NODE_LIVENESS_TTL_MS)),
+            lte(nodeProviders.lastHeartbeatAt, new Date(adoptionNow)),
+          )));
+        const [updated] = await db
           .update(agents)
           .set({
+            ...(adoptingLegacyDefault ? { providerName } : {}),
             status: 'active',
             lastSeen: new Date(),
             locationType: 'via_node',
@@ -2233,7 +2296,21 @@ export async function reconcileInventory(
             originNodeId: existing.originNodeId ?? nodeId,
             sessionRef: item.session_ref ?? existing.sessionRef,
           })
-          .where(eq(agents.id, existing.id));
+          .where(and(
+            eq(agents.workspaceId, workspaceId),
+            eq(agents.id, existing.id),
+            ...(adoptingLegacyDefault ? [
+              eq(agents.providerName, DEFAULT_PROVIDER_NAME),
+              eq(agents.locationType, 'via_node'),
+              eq(agents.locationNodeId, nodeId),
+              noLiveDefaultProvider,
+              liveBrokerProvider,
+            ] : []),
+          ))
+          .returning({ id: agents.id });
+        if (!updated) {
+          throw codedError(`Agent "${item.name}" changed ownership during inventory reconciliation`, 'agent_provider_conflict', 409);
+        }
         await upsertAgentNodeBinding(db, workspaceId, existing, nodeId, {
           sessionRef: item.session_ref ?? existing.sessionRef,
           deactivateExisting: true,

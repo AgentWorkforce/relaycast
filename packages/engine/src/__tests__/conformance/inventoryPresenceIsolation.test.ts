@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq, inArray } from 'drizzle-orm';
 import { FLEET_DELIVERY_CURSOR_CAPABILITY } from '@relaycast/types';
 import {
@@ -8,7 +8,8 @@ import {
   registerAgent,
   type TestStack,
 } from './harness.js';
-import { agents, nodes } from '../../db/schema.js';
+import { agents, nodeProviders, nodes } from '../../db/schema.js';
+import { NODE_LIVENESS_TTL_MS } from '../../engine/placement.js';
 import { AGENT_LIVENESS_TTL_MS } from '../../engine/agent.js';
 
 type Workspace = Awaited<ReturnType<typeof createWorkspace>>;
@@ -37,7 +38,12 @@ describe('node inventory presence isolation', () => {
 
   afterEach(() => stack.close());
 
-  async function connectNode(ws: Workspace, id: string, name: string): Promise<AttachedNode> {
+  async function connectNode(
+    ws: Workspace,
+    id: string,
+    name: string,
+    providerName = 'broker',
+  ): Promise<AttachedNode> {
     const sock = new FakeSocket();
     const handle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, id, sock);
     await handle.handleMessage(JSON.stringify({
@@ -46,7 +52,7 @@ describe('node inventory presence isolation', () => {
       type: 'node.register',
       name,
       node_id: id,
-      provider: { name: 'broker', instance_id: `${id}-broker` },
+      provider: { name: providerName, instance_id: `${id}-${providerName}` },
       capabilities: [
         { name: 'spawn:codex', kind: 'capacity' },
         { name: FLEET_DELIVERY_CURSOR_CAPABILITY, kind: 'capacity' },
@@ -60,13 +66,13 @@ describe('node inventory presence isolation', () => {
     if (!registerReply) throw new Error(`node registration failed: ${JSON.stringify(sock.received)}`);
     expect(registerReply).toMatchObject({
       ok: true,
-      data: { provider: { name: 'broker' } },
+      data: { provider: { name: providerName } },
     });
     await handle.handleMessage(JSON.stringify({
       v: 1,
       id: `heartbeat-${id}`,
       type: 'node.heartbeat',
-      provider: { name: 'broker', instance_id: `${id}-broker` },
+      provider: { name: providerName, instance_id: `${id}-${providerName}` },
       load: 0,
       active_agents: 0,
       handlers_live: true,
@@ -172,6 +178,198 @@ describe('node inventory presence isolation', () => {
       up_to_seq: delivery!.seq,
     }));
   }
+
+  async function setProvider(agent: NodeAgent, providerName: string, status: 'active' | 'offline') {
+    await stack.runtime.handle.db
+      .update(agents)
+      .set({ providerName, status })
+      .where(eq(agents.id, agent.agentId));
+  }
+
+  it.each(['active', 'offline'] as const)(
+    'adopts a %s same-node legacy default worker into the broker and restores delivery',
+    async (status) => {
+      const ws = await createWorkspace(stack.app, `inventory-legacy-default-${status}`);
+      const sender = await registerAgent(stack.app, ws.workspaceKey, `legacy-sender-${status}`);
+      let node = await attachNode(ws, `node_legacy_${status}`, `legacy-node-${status}`);
+      const worker = await registerViaNode(node, `legacy-worker-${status}`);
+      await setProvider(worker, 'default', status);
+
+      node = await reconnectNode(ws, node);
+      await syncInventory(node, `legacy-renewal-${status}`, [worker]);
+      expect(node.sock.ofType('reply').find((frame) => frame.id === `legacy-renewal-${status}`)).toMatchObject({
+        ok: true,
+        data: { rebound_agents: 1, rejected_agents: 0 },
+      });
+
+      const [row] = await stack.runtime.handle.db
+        .select({ status: agents.status, providerName: agents.providerName, locationNodeId: agents.locationNodeId })
+        .from(agents)
+        .where(eq(agents.id, worker.agentId));
+      expect(row).toEqual({ status: 'active', providerName: 'broker', locationNodeId: node.id });
+
+      node.sock.received.length = 0;
+      await postFrom(sender.token, 'delivery after legacy adoption');
+      expect(node.sock.ofType('deliver').filter((frame) => frame.agent === worker.name)).toHaveLength(1);
+      await ackFirstDelivery(node, worker);
+      expect((await readAgent(ws, worker.name)).pending_deliveries).toHaveLength(0);
+    },
+  );
+
+  it('does not let a broker claim a worker while the default provider is live', async () => {
+    const ws = await createWorkspace(stack.app, 'inventory-live-default-provider');
+    const broker = await attachNode(ws, 'node_live_default', 'live-default-node');
+    const legacy = await connectNode(ws, broker.id, broker.name, 'default');
+    const worker = await registerViaNode(legacy, 'live-default-worker');
+
+    await syncInventory(broker, 'live-default-claim', [worker]);
+    expect(broker.sock.ofType('error').find((frame) => frame.id === 'live-default-claim')).toMatchObject({
+      code: 'agent_provider_conflict',
+    });
+    const [row] = await stack.runtime.handle.db
+      .select({ providerName: agents.providerName })
+      .from(agents)
+      .where(eq(agents.id, worker.agentId));
+    expect(row.providerName).toBe('default');
+  });
+
+  it('adopts a worker after its persisted default provider disconnects', async () => {
+    const ws = await createWorkspace(stack.app, 'inventory-disconnected-default-provider');
+    const broker = await attachNode(ws, 'node_disconnected_default', 'disconnected-default-node');
+    const legacy = await connectNode(ws, broker.id, broker.name, 'default');
+    const worker = await registerViaNode(legacy, 'disconnected-default-worker');
+    await legacy.handle.handleClose();
+
+    await syncInventory(broker, 'disconnected-default-renewal', [worker]);
+    expect(broker.sock.ofType('reply').find((frame) => frame.id === 'disconnected-default-renewal')).toMatchObject({
+      ok: true,
+      data: { rebound_agents: 1, rejected_agents: 0 },
+    });
+    const [row] = await stack.runtime.handle.db
+      .select({ providerName: agents.providerName, status: agents.status })
+      .from(agents)
+      .where(eq(agents.id, worker.agentId));
+    expect(row).toEqual({ providerName: 'broker', status: 'active' });
+  });
+
+  it('adopts a worker when the default provider heartbeat is in the future', async () => {
+    const ws = await createWorkspace(stack.app, 'inventory-future-default');
+    const broker = await attachNode(ws, 'node_future_default', 'future-default');
+    const legacy = await connectNode(ws, broker.id, broker.name, 'default');
+    const worker = await registerViaNode(legacy, 'future-default-worker');
+    await stack.runtime.handle.db.update(nodeProviders)
+      .set({ lastHeartbeatAt: new Date(Date.now() + 60_000) })
+      .where(and(eq(nodeProviders.nodeId, broker.id), eq(nodeProviders.name, 'default')));
+
+    await syncInventory(broker, 'future-default-adoption', [worker]);
+    expect(broker.sock.ofType('reply').find((frame) => frame.id === 'future-default-adoption')).toMatchObject({
+      ok: true,
+      data: { rebound_agents: 1, rejected_agents: 0 },
+    });
+    const [row] = await stack.runtime.handle.db.select().from(agents).where(eq(agents.id, worker.agentId));
+    expect(row.providerName).toBe('broker');
+  });
+
+  it.each(['offline', 'handlers-down', 'expired', 'future', 'missing-heartbeat', 'default-reconnected'])(
+    'fences legacy adoption when provider liveness changes before the update: %s',
+    async (change) => {
+      const ws = await createWorkspace(stack.app, `inventory-race-${change}`);
+      const broker = await attachNode(ws, 'node_race', 'race-node');
+      const legacy = await connectNode(ws, broker.id, broker.name, 'default');
+      const worker = await registerViaNode(legacy, 'race-worker');
+      await legacy.handle.handleClose();
+      await setProvider(worker, 'default', 'offline');
+      await stack.settle();
+      const db = stack.runtime.handle.db;
+      const update = db.update.bind(db);
+      let changed = false;
+      // Change persisted liveness after validation, immediately before the
+      // ownership update is built. The real database evaluates the CAS.
+      const spy = vi.spyOn(db, 'update').mockImplementation((table) => {
+        if (table === agents && !changed) {
+          changed = true;
+          update(nodeProviders).set(change === 'default-reconnected'
+            ? { status: 'online', handlersLive: true, lastHeartbeatAt: new Date() }
+            : change === 'offline' ? { status: 'offline' }
+            : change === 'handlers-down' ? { handlersLive: false }
+            : { lastHeartbeatAt: change === 'missing-heartbeat' ? null
+              : new Date(Date.now() + (change === 'future' ? 60_000 : -NODE_LIVENESS_TTL_MS - 1_000)) })
+            .where(and(eq(nodeProviders.nodeId, broker.id),
+              eq(nodeProviders.name, change === 'default-reconnected' ? 'default' : 'broker'))).run();
+        }
+        return update(table);
+      });
+      try {
+        await syncInventory(broker, 'race-adoption', [worker]);
+        expect(changed).toBe(true);
+        expect(broker.sock.ofType('error').find((frame) => frame.id === 'race-adoption')).toMatchObject({
+          code: 'agent_provider_conflict',
+        });
+        const [row] = await db.select().from(agents).where(eq(agents.id, worker.agentId));
+        expect(row).toMatchObject({ providerName: 'default', status: 'offline' });
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
+
+  it('does not adopt a legacy worker with a wrong id or from another node', async () => {
+    const ws = await createWorkspace(stack.app, 'inventory-legacy-foreign-claim');
+    const owner = await attachNode(ws, 'node_legacy_owner', 'legacy-owner');
+    const worker = await registerViaNode(owner, 'legacy-owned-worker');
+    await setProvider(worker, 'default', 'offline');
+
+    await syncInventory(owner, 'wrong-id-claim', [{ ...worker, agentId: 'agt_wrong_identity' }]);
+    expect(owner.sock.ofType('error').find((frame) => frame.id === 'wrong-id-claim')).toMatchObject({
+      code: 'agent_provider_conflict',
+    });
+
+    const foreign = await attachNode(ws, 'node_legacy_foreign', 'legacy-foreign');
+    await syncInventory(foreign, 'foreign-node-claim', [worker]);
+    expect(foreign.sock.ofType('error').find((frame) => frame.id === 'foreign-node-claim')).toMatchObject({
+      code: 'agent_provider_conflict',
+    });
+    const [row] = await stack.runtime.handle.db
+      .select({ providerName: agents.providerName, locationNodeId: agents.locationNodeId })
+      .from(agents)
+      .where(eq(agents.id, worker.agentId));
+    expect(row).toEqual({ providerName: 'default', locationNodeId: owner.id });
+  });
+
+  it('does not transfer ownership from a different named provider', async () => {
+    const ws = await createWorkspace(stack.app, 'inventory-named-provider-claim');
+    const broker = await attachNode(ws, 'node_named_provider', 'named-provider-node');
+    const worker = await registerViaNode(broker, 'named-provider-worker');
+    await setProvider(worker, 'other-provider', 'offline');
+
+    await syncInventory(broker, 'named-provider-claim', [worker]);
+    expect(broker.sock.ofType('error').find((frame) => frame.id === 'named-provider-claim')).toMatchObject({
+      code: 'agent_provider_conflict',
+    });
+    const [row] = await stack.runtime.handle.db
+      .select({ providerName: agents.providerName })
+      .from(agents)
+      .where(eq(agents.id, worker.agentId));
+    expect(row.providerName).toBe('other-provider');
+  });
+
+  it('does not let a sibling named provider adopt the legacy default identity', async () => {
+    const ws = await createWorkspace(stack.app, 'inventory-sibling-provider-claim');
+    const broker = await attachNode(ws, 'node_sibling_provider', 'sibling-provider-node');
+    const worker = await registerViaNode(broker, 'sibling-provider-worker');
+    await setProvider(worker, 'default', 'offline');
+    const sibling = await connectNode(ws, broker.id, broker.name, 'sibling');
+
+    await syncInventory(sibling, 'sibling-provider-claim', [worker]);
+    expect(sibling.sock.ofType('error').find((frame) => frame.id === 'sibling-provider-claim')).toMatchObject({
+      code: 'agent_provider_conflict',
+    });
+    const [row] = await stack.runtime.handle.db
+      .select({ providerName: agents.providerName })
+      .from(agents)
+      .where(eq(agents.id, worker.agentId));
+    expect(row.providerName).toBe('default');
+  });
 
   it('keeps a healthy two-agent node active and drains both deliveries after inventory renewal', async () => {
     const ws = await createWorkspace(stack.app, 'inventory-presence-control');
