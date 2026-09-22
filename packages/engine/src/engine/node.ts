@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { invalidateChannelCache } from './cache.js';
-import { and, asc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, notExists, or, sql } from 'drizzle-orm';
+import { and, asc, eq, exists, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, notExists, or, sql } from 'drizzle-orm';
 import type {
   FleetAgentRecoverMessage,
   FleetAgentRegisterMessage,
@@ -2258,9 +2258,9 @@ export async function reconcileInventory(
         }
         const adoptingLegacyDefault = legacyDefaultAdoptions.has(item.name);
         // The earlier liveness check is for a useful error decision. This
-        // compare-and-set also fences a default provider that reconnects while
-        // the inventory is being applied, and prevents a concurrent owner
-        // change from silently being overwritten.
+        // compare-and-set fences broker liveness loss, a default provider
+        // reconnecting, and concurrent ownership changes during the apply pass.
+        const adoptionNow = Date.now();
         const noLiveDefaultProvider = notExists(db
           .select({ id: nodeProviders.id })
           .from(nodeProviders)
@@ -2270,7 +2270,20 @@ export async function reconcileInventory(
             eq(nodeProviders.name, DEFAULT_PROVIDER_NAME),
             eq(nodeProviders.status, 'online'),
             eq(nodeProviders.handlersLive, true),
-            gte(nodeProviders.lastHeartbeatAt, new Date(Date.now() - NODE_LIVENESS_TTL_MS)),
+            gte(nodeProviders.lastHeartbeatAt, new Date(adoptionNow - NODE_LIVENESS_TTL_MS)),
+            lte(nodeProviders.lastHeartbeatAt, new Date(adoptionNow)),
+          )));
+        const liveBrokerProvider = exists(db
+          .select({ id: nodeProviders.id })
+          .from(nodeProviders)
+          .where(and(
+            eq(nodeProviders.workspaceId, workspaceId),
+            eq(nodeProviders.nodeId, nodeId),
+            eq(nodeProviders.name, 'broker'),
+            eq(nodeProviders.status, 'online'),
+            eq(nodeProviders.handlersLive, true),
+            gte(nodeProviders.lastHeartbeatAt, new Date(adoptionNow - NODE_LIVENESS_TTL_MS)),
+            lte(nodeProviders.lastHeartbeatAt, new Date(adoptionNow)),
           )));
         const [updated] = await db
           .update(agents)
@@ -2291,6 +2304,7 @@ export async function reconcileInventory(
               eq(agents.locationType, 'via_node'),
               eq(agents.locationNodeId, nodeId),
               noLiveDefaultProvider,
+              liveBrokerProvider,
             ] : []),
           ))
           .returning({ id: agents.id });

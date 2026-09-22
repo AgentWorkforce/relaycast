@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq, inArray } from 'drizzle-orm';
 import { FLEET_DELIVERY_CURSOR_CAPABILITY } from '@relaycast/types';
 import {
@@ -8,7 +8,8 @@ import {
   registerAgent,
   type TestStack,
 } from './harness.js';
-import { agents, nodes } from '../../db/schema.js';
+import { agents, nodeProviders, nodes } from '../../db/schema.js';
+import { NODE_LIVENESS_TTL_MS } from '../../engine/placement.js';
 import { AGENT_LIVENESS_TTL_MS } from '../../engine/agent.js';
 
 type Workspace = Awaited<ReturnType<typeof createWorkspace>>;
@@ -250,6 +251,67 @@ describe('node inventory presence isolation', () => {
       .where(eq(agents.id, worker.agentId));
     expect(row).toEqual({ providerName: 'broker', status: 'active' });
   });
+
+  it('adopts a worker when the default provider heartbeat is in the future', async () => {
+    const ws = await createWorkspace(stack.app, 'inventory-future-default');
+    const broker = await attachNode(ws, 'node_future_default', 'future-default');
+    const legacy = await connectNode(ws, broker.id, broker.name, 'default');
+    const worker = await registerViaNode(legacy, 'future-default-worker');
+    await stack.runtime.handle.db.update(nodeProviders)
+      .set({ lastHeartbeatAt: new Date(Date.now() + 60_000) })
+      .where(and(eq(nodeProviders.nodeId, broker.id), eq(nodeProviders.name, 'default')));
+
+    await syncInventory(broker, 'future-default-adoption', [worker]);
+    expect(broker.sock.ofType('reply').find((frame) => frame.id === 'future-default-adoption')).toMatchObject({
+      ok: true,
+      data: { rebound_agents: 1, rejected_agents: 0 },
+    });
+    const [row] = await stack.runtime.handle.db.select().from(agents).where(eq(agents.id, worker.agentId));
+    expect(row.providerName).toBe('broker');
+  });
+
+  it.each(['offline', 'handlers-down', 'expired', 'future', 'missing-heartbeat', 'default-reconnected'])(
+    'fences legacy adoption when provider liveness changes before the update: %s',
+    async (change) => {
+      const ws = await createWorkspace(stack.app, `inventory-race-${change}`);
+      const broker = await attachNode(ws, 'node_race', 'race-node');
+      const legacy = await connectNode(ws, broker.id, broker.name, 'default');
+      const worker = await registerViaNode(legacy, 'race-worker');
+      await legacy.handle.handleClose();
+      await setProvider(worker, 'default', 'offline');
+      await stack.settle();
+      const db = stack.runtime.handle.db;
+      const update = db.update.bind(db);
+      let changed = false;
+      // Change persisted liveness after validation, immediately before the
+      // ownership update is built. The real database evaluates the CAS.
+      const spy = vi.spyOn(db, 'update').mockImplementation((table) => {
+        if (table === agents && !changed) {
+          changed = true;
+          update(nodeProviders).set(change === 'default-reconnected'
+            ? { status: 'online', handlersLive: true, lastHeartbeatAt: new Date() }
+            : change === 'offline' ? { status: 'offline' }
+            : change === 'handlers-down' ? { handlersLive: false }
+            : { lastHeartbeatAt: change === 'missing-heartbeat' ? null
+              : new Date(Date.now() + (change === 'future' ? 60_000 : -NODE_LIVENESS_TTL_MS - 1_000)) })
+            .where(and(eq(nodeProviders.nodeId, broker.id),
+              eq(nodeProviders.name, change === 'default-reconnected' ? 'default' : 'broker'))).run();
+        }
+        return update(table);
+      });
+      try {
+        await syncInventory(broker, 'race-adoption', [worker]);
+        expect(changed).toBe(true);
+        expect(broker.sock.ofType('error').find((frame) => frame.id === 'race-adoption')).toMatchObject({
+          code: 'agent_provider_conflict',
+        });
+        const [row] = await db.select().from(agents).where(eq(agents.id, worker.agentId));
+        expect(row).toMatchObject({ providerName: 'default', status: 'offline' });
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
 
   it('does not adopt a legacy worker with a wrong id or from another node', async () => {
     const ws = await createWorkspace(stack.app, 'inventory-legacy-foreign-claim');

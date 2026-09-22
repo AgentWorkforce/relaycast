@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- Inventory reconciliation adopts a bound legacy `default` worker into its named broker only when the agent ID and node match and no live default provider owns it; conflicting claims still fail closed.
+- Inventory reconciliation adopts a bound legacy `default` worker into its named broker only when the agent ID and node match and no live default provider owns it; conflicting claims still fail closed; adoption rechecks provider liveness and ignores future-dated default heartbeats.
 
 ## [8.11.6] - 2026-09-20
 

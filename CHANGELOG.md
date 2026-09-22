@@ -20,7 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
-- Reconnecting brokers recover same-node legacy `default` workers without letting another provider or node claim their identities.
+- Reconnecting brokers recover same-node legacy `default` workers without letting another provider or node claim their identities; adoption rechecks provider liveness and ignores future-dated default heartbeats.
 
 ## [8.11.6] - 2026-09-20
 
