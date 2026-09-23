@@ -16,7 +16,15 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- The observer dashboard draws a relayflow run: a channel whose messages carry `metadata.relayflow` run snapshots shows the run's step graph, with each step's state and timing, pinned above the feed.
+
+### Fixed
+
+- Realtime `message.created` events carry the message's `metadata`, so structured messages render live instead of only after a refetch.
 
 ## [8.11.7] - 2026-09-22
 

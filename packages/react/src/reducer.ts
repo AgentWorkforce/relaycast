@@ -74,6 +74,7 @@ function handleMessageCreated(store: RelayStore, event: MessageCreatedEvent): vo
       hasAttachments: (event.message.attachments?.length ?? 0) > 0,
       threadId: null,
       attachments: event.message.attachments ?? [],
+      ...(event.message.metadata ? { metadata: event.message.metadata } : {}),
       createdAt: new Date().toISOString(),
       replyCount: 0,
       reactions: [],

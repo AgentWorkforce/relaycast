@@ -23,6 +23,17 @@ function ev(partial: Partial<WsEvent> & { type: string; data: Record<string, unk
 }
 
 describe('transformForClient - message.created', () => {
+  it('carries message metadata, and omits it when absent or not an object', () => {
+    const base = { id: 'msg_2', channel_name: 'wf-run', agent_id: 'a', from_name: 'flow', text: 't' };
+    const metadata = { relayflow: { version: 1, run: { steps: [{ id: 'greet' }] } } };
+    const withMeta = transformForClient(ev({ type: 'message.created', data: { ...base, metadata } }));
+    expect((withMeta.message as Record<string, unknown>).metadata).toEqual(metadata);
+    for (const value of [undefined, null, 'x', [1]]) {
+      const out = transformForClient(ev({ type: 'message.created', data: { ...base, metadata: value } }));
+      expect(out.message).not.toHaveProperty('metadata');
+    }
+  });
+
   it('renames from_name -> agent_name, derives stable id, keeps channel_id, prefers data.created_at', () => {
     const out = transformForClient(
       ev({
