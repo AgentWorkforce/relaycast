@@ -36,6 +36,9 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
           text: d.text as string,
           attachments: (d.attachments as unknown[]) ?? [],
           injection_mode: d.injection_mode as 'wait' | 'steer' | undefined,
+          // The same document `GET .../messages` returns; a live feed that
+          // drops it cannot render structured messages until a refetch.
+          ...(isRecord(d.metadata) ? { metadata: d.metadata } : {}),
         },
       };
 
@@ -260,4 +263,9 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
       return { ...rest, ...data, ...withCreatedAt };
     }
   }
+}
+
+/** Narrow public metadata to a JSON object before projecting it to clients. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

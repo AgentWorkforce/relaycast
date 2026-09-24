@@ -72,6 +72,23 @@ describe('handleServerEvent', () => {
       expect(state.channelMessages['general'].messages[0].text).toBe('hello');
     });
 
+    it('keeps live metadata and the server creation time', () => {
+      const store = createStore();
+      const metadata = { relayflow: { version: 1 } };
+
+      handleServerEvent(store, {
+        type: 'message.created',
+        createdAt: '2026-09-24T05:00:00.000Z',
+        channel: 'general',
+        message: { id: 'msg1', agentName: 'Alice', text: 'hello', attachments: [], metadata },
+      });
+
+      expect(store.getState().channelMessages['general'].messages[0]).toMatchObject({
+        createdAt: '2026-09-24T05:00:00.000Z',
+        metadata,
+      });
+    });
+
     it('deduplicates by id', () => {
       const store = createStore();
 
