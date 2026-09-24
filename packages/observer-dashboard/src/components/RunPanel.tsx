@@ -1,5 +1,6 @@
 'use client';
 
+import React from 'react';
 import { CheckCircle2, ChevronRight, Circle, Loader2, PauseCircle, Workflow, XCircle } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { stepColumns, type RelayflowRun, type RelayflowStep, type RelayflowStepState } from '../lib/relayflow-run';
@@ -55,9 +56,11 @@ export function RunPanel({ run }: { run: RelayflowRun }) {
   );
 }
 
+/** Render one step with a visible, screen-reader-readable state label. */
 function StepChip({ step }: { step: RelayflowStep }) {
   const { icon: Icon, tone } = STATE_STYLE[step.state];
   const detail = [
+    step.state,
     step.type,
     step.elapsedMs === undefined ? undefined : formatElapsed(step.elapsedMs),
     step.attempt !== undefined && step.attempt > 1 ? `attempt ${step.attempt}` : undefined,
@@ -76,6 +79,7 @@ function StepChip({ step }: { step: RelayflowStep }) {
   );
 }
 
+/** Format a millisecond duration compactly for the run panel. */
 function formatElapsed(ms: number): string {
   if (ms < 1_000) return `${ms}ms`;
   if (ms < 60_000) return `${(ms / 1_000).toFixed(1)}s`;

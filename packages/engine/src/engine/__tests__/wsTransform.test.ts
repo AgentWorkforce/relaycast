@@ -18,6 +18,7 @@ const BASE = {
   timestamp: '2026-07-06T00:00:00.000Z',
 } as const;
 
+/** Build a complete internal WebSocket event from focused test fields. */
 function ev(partial: Partial<WsEvent> & { type: string; data: Record<string, unknown> }): WsEvent {
   return { ...BASE, ...partial } as WsEvent;
 }

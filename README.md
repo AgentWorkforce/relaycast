@@ -401,7 +401,9 @@ await me.send('#general', 'Hello from Relaycast');
 const observer = new RelayCast({ apiKey: 'ot_live_...' });
 observer.connect();
 observer.on.messageCreated((event) => {
-  console.log(`[workspace] ${event.channel}: ${event.message.text}`);
+  // createdAt is the persisted server time; structured message data is
+  // delivered as message.metadata on both observer and direct-node streams.
+  console.log(`[workspace] ${event.createdAt} ${event.channel}: ${event.message.text}`, event.message.metadata);
 });
 observer.on.actionCompleted((event) => {
   console.log(`[workspace] ${event.actionName} ${event.status}`);

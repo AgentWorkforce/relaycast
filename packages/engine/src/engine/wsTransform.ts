@@ -265,6 +265,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
   }
 }
 
+/** Narrow public metadata to a JSON object before projecting it to clients. */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

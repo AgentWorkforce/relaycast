@@ -29,25 +29,29 @@ export interface RelayflowRun {
 
 const STATES = new Set<string>(['pending', 'running', 'completed', 'failed', 'parked']);
 
-/** The newest run snapshot among `messages` (any order), or null. */
+/**
+ * Return the newest valid run snapshot among `messages`, regardless of array
+ * or delivery order. Relaycast message IDs are sortable snowflakes, so their
+ * server-assigned order is authoritative even under replay or clock skew.
+ */
 export function latestRelayflowRun(messages: readonly MessageWithMeta[]): RelayflowRun | null {
-  let latest: { at: number; id: string; run: RelayflowRun } | null = null;
+  let latest: { id: string; run: RelayflowRun } | null = null;
   for (const message of messages) {
     const run = parseRun((message.metadata as Record<string, unknown> | undefined)?.relayflow);
     if (run === null) continue;
-    const at = Date.parse(message.createdAt) || 0;
-    // Ids are snowflakes: on a timestamp tie the later id is the later message.
-    if (latest === null || at > latest.at || (at === latest.at && compareIds(message.id, latest.id) > 0)) {
-      latest = { at, id: message.id, run };
+    if (latest === null || compareIds(message.id, latest.id) > 0) {
+      latest = { id: message.id, run };
     }
   }
   return latest?.run ?? null;
 }
 
+/** Compare decimal snowflake IDs without losing precision to Number. */
 function compareIds(a: string, b: string): number {
   return a.length === b.length ? a.localeCompare(b) : a.length - b.length;
 }
 
+/** Parse the closed relayflow v1 run projection, ignoring invalid snapshots. */
 function parseRun(value: unknown): RelayflowRun | null {
   if (!isRecord(value) || value.version !== 1 || !isRecord(value.run)) return null;
   const run = value.run;
@@ -62,6 +66,7 @@ function parseRun(value: unknown): RelayflowRun | null {
   };
 }
 
+/** Parse one relayflow v1 step, returning no value for a malformed step. */
 function parseStep(value: unknown): RelayflowStep[] {
   if (!isRecord(value) || typeof value.id !== 'string' || typeof value.state !== 'string'
     || !STATES.has(value.state)) return [];
@@ -83,22 +88,52 @@ function parseStep(value: unknown): RelayflowStep[] {
  */
 export function stepColumns(steps: readonly RelayflowStep[]): RelayflowStep[][] {
   const byId = new Map(steps.map(step => [step.id, step]));
+  const cyclic = findCyclicSteps(byId);
   const depth = new Map<string, number>();
-  const visit = (step: RelayflowStep, seen: Set<string>): number => {
+  const visit = (step: RelayflowStep): number => {
+    if (cyclic.has(step.id)) return 0;
     const known = depth.get(step.id);
     if (known !== undefined) return known;
-    if (seen.has(step.id)) return 0;
-    seen.add(step.id);
     const parents = step.dependsOn.map(id => byId.get(id)).filter((parent): parent is RelayflowStep => parent !== undefined);
-    const value = parents.length === 0 ? 0 : 1 + Math.max(...parents.map(parent => visit(parent, seen)));
+    const value = parents.length === 0 ? 0 : 1 + Math.max(...parents.map(visit));
     depth.set(step.id, value);
     return value;
   };
   const columns: RelayflowStep[][] = [];
-  for (const step of steps) (columns[visit(step, new Set())] ??= []).push(step);
+  for (const step of steps) (columns[visit(step)] ??= []).push(step);
   return columns.filter(column => column !== undefined);
 }
 
+/** Find every step participating in a dependency cycle. */
+function findCyclicSteps(byId: ReadonlyMap<string, RelayflowStep>): Set<string> {
+  const visited = new Set<string>();
+  const visiting = new Set<string>();
+  const path: string[] = [];
+  const cyclic = new Set<string>();
+
+  const visit = (step: RelayflowStep): void => {
+    if (visited.has(step.id)) return;
+    if (visiting.has(step.id)) {
+      const start = path.lastIndexOf(step.id);
+      for (const id of path.slice(start)) cyclic.add(id);
+      return;
+    }
+    visiting.add(step.id);
+    path.push(step.id);
+    for (const dependencyId of step.dependsOn) {
+      const dependency = byId.get(dependencyId);
+      if (dependency) visit(dependency);
+    }
+    path.pop();
+    visiting.delete(step.id);
+    visited.add(step.id);
+  };
+
+  for (const step of byId.values()) visit(step);
+  return cyclic;
+}
+
+/** Narrow unknown metadata containers to plain records. */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

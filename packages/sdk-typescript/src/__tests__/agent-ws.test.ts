@@ -224,18 +224,25 @@ describe('AgentClient WebSocket integration', () => {
         type: 'message.created',
         data: {
           id: 'm_1',
+          created_at: '2026-09-24T05:00:00.000Z',
           channel_name: 'general',
           agent_id: 'bot_1',
           from_name: 'Bot',
           text: 'hi',
           attachments: [],
+          metadata: { relayflow: { version: 1 } },
         },
       },
     });
 
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'message.created', channel: 'general' }),
+      expect.objectContaining({
+        type: 'message.created',
+        createdAt: '2026-09-24T05:00:00.000Z',
+        channel: 'general',
+        message: expect.objectContaining({ metadata: { relayflow: { version: 1 } } }),
+      }),
     );
     expect(ws.send).toHaveBeenCalledWith(JSON.stringify({
       v: 1,

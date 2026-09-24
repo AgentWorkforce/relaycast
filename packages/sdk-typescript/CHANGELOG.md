@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- Direct-node `message.created` events preserve public message metadata and the server creation timestamp, matching workspace WebSocket delivery.
+
 ## [8.11.1] - 2026-09-17
 
 ### Fixed

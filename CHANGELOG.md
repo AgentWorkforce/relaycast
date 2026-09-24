@@ -24,7 +24,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
-- Realtime `message.created` events carry the message's `metadata`, so structured messages render live instead of only after a refetch.
+- Realtime `message.created` events carry the message's `metadata` on workspace and direct-node transports and preserve the server creation time, so structured messages render live without replayed events appearing newer than persisted messages.
+- Relayflow observer panels order snapshots by their server-assigned snowflake IDs, render cyclic dependencies without inventing an execution sequence, and expose each step state as text instead of color alone.
 
 ## [8.11.7] - 2026-09-22
 

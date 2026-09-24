@@ -190,6 +190,7 @@ function FeedList({
   );
 }
 
+/** Render one channel's live feed and its newest valid relayflow snapshot. */
 function ChannelMessages({ channel, scrollRef, onOpenThread, mentionNames, onOpenAgent }: { channel: string; scrollRef: RefObject<HTMLDivElement>; onOpenThread?: (messageId: string) => void; mentionNames?: string[]; onOpenAgent?: (agentName: string | null) => void; }) {
   const { messages, loading, fetchMore } = useMessages(channel);
   const sorted = sortMessagesChronologically(messages);

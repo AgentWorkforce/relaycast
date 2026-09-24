@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- `MessageCreatedEvent` accepts the server-provided `created_at` timestamp used to keep replayed realtime messages in persisted creation order.
+
 ## [8.11.0] - 2026-09-17
 
 - Add task action capability mode, correlated execution metadata, action.accept, and fenced final/interim result validation.

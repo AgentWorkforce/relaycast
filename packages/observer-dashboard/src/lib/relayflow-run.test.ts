@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { MessageWithMeta } from '@relaycast/sdk';
 import { latestRelayflowRun, stepColumns, type RelayflowStep } from './relayflow-run';
 
+/** Build a minimal persisted or realtime message for projection selection. */
 function message(id: string, createdAt: string, metadata?: Record<string, unknown>): MessageWithMeta {
   return {
     id, channelId: 'c', agentName: 'flow', agentId: 'a', text: 't', blocks: null,
@@ -10,6 +11,7 @@ function message(id: string, createdAt: string, metadata?: Record<string, unknow
   } as MessageWithMeta;
 }
 
+/** Build a valid single-step relayflow v1 snapshot. */
 function snapshot(status: string, state: string) {
   return { relayflow: { version: 1, event: 'x', run: {
     runId: 'R1', flow: 'hello', status,
@@ -28,11 +30,10 @@ describe('latestRelayflowRun', () => {
     expect(run?.steps[0]?.state).toBe('completed');
   });
 
-  it('breaks a timestamp tie by the later snowflake id', () => {
-    const at = '2026-09-23T00:00:00.000Z';
+  it('uses the later snowflake even when timestamps are skewed or replayed', () => {
     const run = latestRelayflowRun([
-      message('228601462569775105', at, snapshot('completed', 'completed')),
-      message('228601462569775104', at, snapshot('running', 'running')),
+      message('228601462569775105', '2026-09-23T00:00:00.000Z', snapshot('completed', 'completed')),
+      message('228601462569775104', '2026-09-23T00:05:00.000Z', snapshot('running', 'running')),
     ]);
     expect(run?.status).toBe('completed');
   });
@@ -46,6 +47,15 @@ describe('latestRelayflowRun', () => {
     } } })]);
     expect(run?.steps.map(step => step.id)).toEqual(['ok']);
   });
+
+  it('selects the newest valid snapshot across malformed messages', () => {
+    const run = latestRelayflowRun([
+      message('228601462569775104', '2026-09-23T00:00:00.000Z', snapshot('running', 'running')),
+      message('228601462569775105', '2026-09-23T00:00:01.000Z', { relayflow: { version: 1, run: { runId: 7 } } }),
+      message('228601462569775106', '2026-09-23T00:00:02.000Z', snapshot('completed', 'completed')),
+    ]);
+    expect(run?.status).toBe('completed');
+  });
 });
 
 describe('stepColumns', () => {
@@ -56,8 +66,16 @@ describe('stepColumns', () => {
     expect(columns.map(column => column.map(s => s.id))).toEqual([['a', 'b'], ['c'], ['d']]);
   });
 
-  it('keeps steps with unknown dependencies or cycles visible', () => {
-    const columns = stepColumns([step('x', ['missing']), step('y', ['z']), step('z', ['y'])]);
-    expect(columns.flat().map(s => s.id).sort()).toEqual(['x', 'y', 'z']);
+  it('puts every cycle member at depth zero and its dependents after it', () => {
+    const columns = stepColumns([
+      step('x', ['missing']),
+      step('y', ['z']),
+      step('z', ['y']),
+      step('after-cycle', ['z']),
+    ]);
+    expect(columns.map(column => column.map(s => s.id))).toEqual([
+      ['x', 'y', 'z'],
+      ['after-cycle'],
+    ]);
   });
 });
