@@ -1,6 +1,5 @@
 'use client';
 
-import React from 'react';
 import { CheckCircle2, ChevronRight, Circle, Loader2, PauseCircle, Workflow, XCircle } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { stepColumns, type RelayflowRun, type RelayflowStep, type RelayflowStepState } from '../lib/relayflow-run';
