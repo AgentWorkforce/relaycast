@@ -34,6 +34,11 @@ export type {
   TelemetryEvent,
 } from './ports/index.js';
 
+// The one filter that decides what a scoped observer token may see on the
+// workspace stream. A realtime adapter that fans events out to observer sockets
+// must apply it per socket — the Cloudflare stream lives outside this package.
+export { observerAllowsEvent, type ObserverToken } from './engine/observerToken.js';
+
 // OSS default providers (self-host). Cloud injects its own.
 export { SqliteApiKeyAuthProvider, hashToken } from './auth/index.js';
 export { StaticEntitlementsProvider, PLAN_LIMITS } from './providers/static-entitlements.js';

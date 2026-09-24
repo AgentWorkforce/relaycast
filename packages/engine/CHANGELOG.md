@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased - Patch]
 
+### Added
+
+- `observerAllowsEvent` and the `ObserverToken` type are exported from the package entry, so a realtime adapter hosted outside the engine can apply the same per-socket observer filter the Node adapter uses.
+
 ### Fixed
 
 - The realtime `message.created` event includes the message `metadata` that `GET /v1/channels/:name/messages` already returns.
