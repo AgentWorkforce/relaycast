@@ -35,14 +35,18 @@ export function addressSplits(address: string): AgentAddress[] {
 /**
  * Canonical address: the broker node's name, or `direct` for a direct node.
  * `direct` is reserved, so a broker whose name is `direct` is addressed by its
- * machine_id instead. Null when the agent has no node — released, finished,
- * or its node was deleted (a torn-down sandbox) — because nothing could
- * deliver to it, or when a broker has no usable identifier.
+ * machine_id instead. A machine identifier without `@` is preferred, so the
+ * address has one reading wherever the node offers one (an `@` in the machine
+ * can make the address read as a different agent on a different machine).
+ * Null when the agent has no node — released, finished, or its node was
+ * deleted (a torn-down sandbox) — because nothing could deliver to it, or
+ * when a broker has no usable identifier.
  */
 export function formatAgentAddress(agentName: string, node: AddressNode): string | null {
   if (!node) return null;
   if (node.role === 'direct') return `${agentName}@${DIRECT_MACHINE}`;
-  const machine = [node.name, node.machineId].find((id) => id && id !== DIRECT_MACHINE);
+  const usable = [node.name, node.machineId].filter((id): id is string => !!id && id !== DIRECT_MACHINE);
+  const machine = usable.find((id) => !id.includes('@')) ?? usable[0];
   return machine ? `${agentName}@${machine}` : null;
 }
 

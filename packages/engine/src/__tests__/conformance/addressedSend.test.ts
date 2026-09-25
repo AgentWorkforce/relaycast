@@ -122,6 +122,14 @@ describe('addressed send', () => {
     expect(await errorCode(ambiguous)).toBe('ambiguous_address');
   });
 
+  it('publishes a machine identifier without @ when the node has one', async () => {
+    const { ws } = await seed();
+    const node = await enrollBroker(ws, 'node_email_alias', 'ops@example.com', 'mach-ops');
+    await registerOnNode(node, 'x');
+    const res = await stack.app.request('/v1/agents/x', { headers: { authorization: `Bearer ${ws.workspaceKey}` } });
+    expect(((await res.json()) as { data: Json }).data.address).toBe('x@mach-ops');
+  });
+
   it('reserves `direct`: a broker named direct is addressed by machine_id, never @direct', async () => {
     const { ws, alice } = await seed();
     const node = await enrollBroker(ws, 'node_named_direct', 'direct', 'mach-d');
