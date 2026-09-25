@@ -6,7 +6,7 @@ import { rateLimit } from '../middleware/rateLimit.js';
 import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import { sha256Hex } from '../lib/crypto.js';
 import * as dmEngine from '../engine/dm.js';
-import { resolveAgentAddress } from '../engine/address.js';
+import { requireAgentAddress } from '../engine/address.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
 import { resolveWorkspaceDeliveryPolicyFor } from '../engine/workspaceDeliveryPolicy.js';
 import { publishWorkspaceEvent } from './fanout.js';
@@ -38,9 +38,10 @@ const sendAddressedSchema = sendDmSchema.omit({ to: true });
 
 /**
  * Send a DM from the authenticated agent. Shared by POST /v1/dm (recipient by
- * name) and POST /v1/to/:address (recipient by `agent@machine`).
+ * name) and POST /v1/to/:address (recipient by `agent@machine`, passed as
+ * `address` and checked by the engine against the recipient it sends to).
  */
-async function sendDirectMessage(c: Context<AppEnv>, input: z.infer<typeof sendDmSchema>) {
+async function sendDirectMessage(c: Context<AppEnv>, input: z.infer<typeof sendDmSchema>, address?: string) {
   const db = c.get('db');
   const workspace = c.get('workspace');
   const agent = c.get('agent');
@@ -53,8 +54,11 @@ async function sendDirectMessage(c: Context<AppEnv>, input: z.infer<typeof sendD
   // it put ~256 KiB per DM into the KV record and made each replay compare
   // the whole payload. A digest answers the only question the fingerprint
   // asks — "is this the same request?" — in constant size.
+  // An addressed send fingerprints its address, so reusing a key for a
+  // different address is a conflict rather than a replay of the first.
   const fingerprintBody = {
     to,
+    ...(address !== undefined ? { address } : {}),
     text,
     ...(normalizedAttachments ? { attachments: normalizedAttachments } : {}),
     ...(data !== undefined ? { data_sha256: await sha256Hex(JSON.stringify(data)) } : {}),
@@ -95,7 +99,7 @@ async function sendDirectMessage(c: Context<AppEnv>, input: z.infer<typeof sendD
       attachments: normalizedAttachments,
       data,
       mode,
-    }, { mailbox, resolveWorkspaceDeliveryPolicy: () => resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace), idempotencyKey,
+    }, { mailbox, resolveWorkspaceDeliveryPolicy: () => resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace), idempotencyKey, address,
       afterAdmission: (data, event) => {
         runInBackground(c, c.get('engine').realtime.publishToWorkspaceStream({
           workspaceId: workspace.id, event: { ...event.payload, seq: event.seq },
@@ -193,8 +197,9 @@ dmRoutes.post(
       if (!parsed.ok) {
         return parsed.response;
       }
-      const target = await resolveAgentAddress(c.get('db'), c.get('workspace').id, c.req.param('address'));
-      return await sendDirectMessage(c, { ...parsed.data, to: target.agent_name });
+      const address = c.req.param('address');
+      const { agent } = requireAgentAddress(address);
+      return await sendDirectMessage(c, { ...parsed.data, to: agent }, address);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

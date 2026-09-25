@@ -8,6 +8,7 @@ import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { isProviderAgentDeliveryReady } from '../ports/realtime.js';
 import { buildDeliverFrame, buildDeliverPayload, buildMessageCreatedEventData, buildThreadReplyEventData, buildDmReceivedEventData, buildGroupDmReceivedEventData } from './deliveryWire.js';
 import { displayAgentName, publicMessageMetadata } from './messageMetadata.js';
+import { senderAddressField } from './address.js';
 import { toIso } from '../lib/serialize.js';
 import { readNodeRedriveCandidates } from './nodeRedriveCandidates.js';
 import { fetchAttachmentsBatch, type AttachmentRow } from './attachments.js';
@@ -595,6 +596,7 @@ function buildRoutableDeliveryEvent(
           id: row.delivery.messageId,
           agent_id: row.senderAgentId,
           agent_name: senderName,
+          ...senderAddressField(row.metadata as Record<string, unknown> | null),
           text: row.body,
           injection_mode: injectionMode,
           attachments,

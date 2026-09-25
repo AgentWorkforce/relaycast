@@ -11,7 +11,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `POST /v1/to/:address` resolves `agent@machine` (node name or `machine_id`) to the agent hosted there and sends it a DM; stale addresses return `404 address_not_found`.
+- `POST /v1/to/:address` resolves `agent@machine` (broker node name or `machine_id`, or `direct` for agents not on a broker) to the agent hosted there and sends it a DM; stale addresses return `404 address_not_found`, and idempotent retries replay even after the agent moves.
+- Agent resources include `address`; DM responses, `dm.received` deliveries, and DM history include the sender's `message.agent_address`.
 
 ## [8.12.0] - 2026-09-24
 

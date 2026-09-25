@@ -100,6 +100,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
           id: (msg.id ?? d.id) as string,
           agent_id: (msg.agent_id ?? d.from_agent_id ?? d.agent_id) as string,
           agent_name: (msg.agent_name ?? d.from_name) as string,
+          ...(typeof msg.agent_address === 'string' ? { agent_address: msg.agent_address } : {}),
           text: (msg.text ?? d.text) as string,
           ...(injectionMode ? { injection_mode: injectionMode } : {}),
           ...(attachments.length ? { attachments } : {}),

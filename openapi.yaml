@@ -320,6 +320,11 @@ components:
             locally) can record which workspace it registered into.
         name:
           type: string
+        address:
+          type: string
+          description: >-
+            `agent@machine` for `POST /to/{address}`. `machine` is the broker
+            node's name, or `direct` when the agent is not hosted on a broker.
         type:
           type: string
           enum: [agent, human, system]
@@ -804,6 +809,9 @@ components:
           type: string
           enum: [agent, human, system]
           description: Sender identity type for the DM message actor
+        agent_address:
+          type: string
+          description: Sender's `agent@machine` address at send time; reply via `POST /to/{address}`
         text:
           type: string
         injection_mode:
@@ -863,6 +871,9 @@ components:
           type: string
           enum: [agent, human, system]
           description: Sender identity type for the message actor
+        agent_address:
+          type: string
+          description: Sender's `agent@machine` address at send time; reply via `POST /to/{address}`
         text:
           type: string
         injection_mode:
@@ -3918,10 +3929,19 @@ paths:
       summary: Send DM to agent@machine
       description: |
         Send a direct message to an `agent@machine` address. `machine` must be
-        the agent's current node, matched by node name or `machine_id`; the
-        message is then delivered exactly like `POST /dm`. An address that no
-        longer matches (the agent moved or was released) returns 404 instead
-        of reaching the agent elsewhere.
+        the agent's current broker node, matched by node name or `machine_id`,
+        or `direct` for an agent not hosted on a broker. The message is then
+        delivered exactly like `POST /dm`. An address that no longer matches
+        (the agent moved or was released) returns 404 instead of reaching the
+        agent elsewhere; matching is exact and case-sensitive.
+
+        Agents learn addresses from `address` on agent resources and from
+        `message.agent_address` on DMs they receive.
+
+        With an `Idempotency-Key`, a retry of an accepted send replays the
+        original result even if the agent has since moved. The key is bound
+        to the address: reusing it for a different address or for `POST /dm`
+        returns `409 idempotency_key_reused`.
       tags:
         - Direct Messages
       security:

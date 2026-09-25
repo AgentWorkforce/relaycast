@@ -13,6 +13,8 @@ export type AgentStatus = z.infer<typeof AgentStatusSchema>;
 export const AgentSchema = z.object({
   id: z.string(),
   name: z.string(),
+  /** `agent@machine` for POST /v1/to/:address; `machine` is `direct` when not on a broker. */
+  address: z.string().optional(),
   type: AgentTypeSchema,
   status: AgentStatusSchema,
   persona: z.string().nullable(),

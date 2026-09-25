@@ -1,14 +1,21 @@
-import { and, eq } from 'drizzle-orm';
-import type { getDb } from '../db/index.js';
-import { agents, nodes } from '../db/schema.js';
+import { nodes } from '../db/schema.js';
 import { codedError } from '../lib/httpError.js';
 
-type Db = ReturnType<typeof getDb>;
+/**
+ * Machine name for agents not hosted on a broker: self-connected agents and
+ * agents on an implicit direct node, whose node name is an internal id.
+ */
+export const DIRECT_MACHINE = 'direct';
+
+/** Server-owned message metadata key holding the sender's address at send time. */
+export const SENDER_ADDRESS_METADATA_KEY = '__relaycast_sender_address';
 
 export interface AgentAddress {
   agent: string;
   machine: string;
 }
+
+type AddressNode = { name: string; role: string; machineId: string | null } | null;
 
 /**
  * Parse an `agent@machine` address. The split is on the last `@` so agent
@@ -20,43 +27,54 @@ export function parseAgentAddress(address: string): AgentAddress | null {
   return { agent: address.slice(0, at), machine: address.slice(at + 1) };
 }
 
-/**
- * Resolve an `agent@machine` address to the agent currently hosted there.
- * `machine` matches the agent's location node by node name or `machine_id`,
- * so a stale address (the agent moved or was released) fails instead of
- * silently reaching the agent somewhere else.
- */
-export async function resolveAgentAddress(db: Db, workspaceId: string, address: string) {
+/** Canonical address: the broker node's name, or `direct` when there is no broker. */
+export function formatAgentAddress(agentName: string, node: AddressNode): string {
+  const machine = node && node.role !== 'direct' ? node.name : DIRECT_MACHINE;
+  return `${agentName}@${machine}`;
+}
+
+/** Whether `machine` names the node the agent is on: node name, machine_id, or `direct`. */
+function machineMatches(machine: string, node: AddressNode): boolean {
+  if (machine === DIRECT_MACHINE && (!node || node.role === 'direct')) return true;
+  return node !== null && (machine === node.name || machine === node.machineId);
+}
+
+/** Node columns needed to format or match an address; select them via a left join on the agent's location node. */
+export const addressNodeSelection = { name: nodes.name, role: nodes.role, machineId: nodes.machineId };
+
+/** Reject an address that is not `agent@machine` before any other work. */
+export function requireAgentAddress(address: string): AgentAddress {
   const parsed = parseAgentAddress(address);
   if (!parsed) {
     throw codedError('Address must be of the form "agent@machine"', 'invalid_address', 400);
   }
+  return parsed;
+}
 
-  const [row] = await db
-    .select({
-      agentId: agents.id,
-      agentName: agents.name,
-      status: agents.status,
-      nodeId: nodes.id,
-      nodeName: nodes.name,
-      machineId: nodes.machineId,
-    })
-    .from(agents)
-    .leftJoin(nodes, eq(nodes.id, agents.locationNodeId))
-    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, parsed.agent)));
-
-  if (
-    !row
-    || row.status === 'released'
-    || (row.nodeName !== parsed.machine && row.machineId !== parsed.machine)
-  ) {
-    throw codedError(`No agent at address "${address}"`, 'address_not_found', 404);
+/**
+ * Throw unless `agent` (looked up by the address's agent name) is live and
+ * hosted on the address's machine. A stale address (the agent moved or was
+ * released) fails instead of silently reaching the agent somewhere else.
+ */
+export function assertAgentAtAddress(
+  address: string,
+  agent: { status: string } | undefined,
+  node: AddressNode,
+): void {
+  const parsed = requireAgentAddress(address);
+  if (!agent || agent.status === 'released' || !machineMatches(parsed.machine, node)) {
+    throw addressNotFound(address);
   }
+}
 
-  return {
-    address: `${row.agentName}@${parsed.machine}`,
-    agent_id: row.agentId,
-    agent_name: row.agentName,
-    node_id: row.nodeId!,
-  };
+function addressNotFound(address: string) {
+  return codedError(`No agent at address "${address}"`, 'address_not_found', 404);
+}
+
+/** `{ agent_address }` for a DM message whose persisted metadata carries the sender's address, else `{}`. */
+export function senderAddressField(
+  metadata: Record<string, unknown> | null | undefined,
+): { agent_address?: string } {
+  const value = metadata?.[SENDER_ADDRESS_METADATA_KEY];
+  return typeof value === 'string' ? { agent_address: value } : {};
 }

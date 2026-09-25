@@ -626,9 +626,12 @@ Activity feed channel-message items include `channel_id` and `channel_name`; DM 
 `conversation_id`.
 
 `POST /to/:address` routes by address instead of bare name: `agent@machine` resolves to the
-agent only while it is hosted on that machine (its node's name or `machine_id`), then delivers
-like `POST /dm`. A stale address returns `404 address_not_found`; a malformed one returns
-`400 invalid_address`.
+agent only while it is hosted on that machine (its broker node's name or `machine_id`, or
+`direct` for an agent not on a broker), then delivers like `POST /dm`. Agents expose their
+address as `address` on agent resources, and each DM carries the sender's as
+`message.agent_address`, so a recipient can reply on it. A stale address returns
+`404 address_not_found`; a malformed one returns `400 invalid_address`. An idempotent retry
+replays even if the agent has moved; reusing the key for another address is a `409`.
 
 `POST /dm` can return **`409 dm_conversation_id_collision`**. A 1:1 conversation id is derived
 deterministically from `(workspace, sorted agent pair)`, and that binding is reserved
