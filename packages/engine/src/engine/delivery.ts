@@ -144,6 +144,7 @@ export async function listDeliveries(
       agentId: messages.agentId,
       agentName: agents.name,
       body: messages.body,
+      metadata: messages.metadata,
       threadId: messages.threadId,
       createdAt: messages.createdAt,
     })
@@ -163,6 +164,7 @@ export async function listDeliveries(
           channel_id: msg.channelId,
           agent_id: msg.agentId ?? null,
           agent_name: msg.agentName ?? null,
+          ...senderAddressField(msg.metadata),
           text: msg.body,
           thread_id: msg.threadId ?? null,
           created_at: msg.createdAt.toISOString(),

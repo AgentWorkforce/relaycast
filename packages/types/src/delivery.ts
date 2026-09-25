@@ -17,6 +17,8 @@ export const DeliveryMessageSchema = z.object({
   channel_id: z.string(),
   agent_id: z.string().nullable(),
   agent_name: z.string().nullable(),
+  /** Sender's `agent@machine` at send time; present on direct messages. */
+  agent_address: z.string().optional(),
   text: z.string(),
   thread_id: z.string().nullable(),
   created_at: z.string(),

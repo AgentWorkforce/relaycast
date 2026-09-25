@@ -381,6 +381,11 @@ describe('addressed send', () => {
       const [delivered] = deliveredDms(laptop.sock);
       expect(delivered.agent_address).toBe('alice@direct');
 
+      const queued = (await (await stack.app.request('/v1/deliveries', {
+        headers: { authorization: `Bearer ${bob.token}` },
+      })).json()) as { data: Array<{ message: Json }> };
+      expect(queued.data[0].message.agent_address).toBe('alice@direct');
+
       const history = (await (await stack.app.request(`/v1/dm/${sent.data.conversation_id}/messages`, {
         headers: { authorization: `Bearer ${bob.token}` },
       })).json()) as { data: Json[] };

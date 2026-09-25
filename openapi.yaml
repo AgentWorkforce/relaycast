@@ -1073,6 +1073,9 @@ components:
                 agent_name:
                   type: string
                   nullable: true
+                agent_address:
+                  type: string
+                  description: Sender's `agent@machine` at send time; present on direct messages
                 text:
                   type: string
                 thread_id:
