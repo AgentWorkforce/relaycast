@@ -291,7 +291,7 @@ async function resolveConversation(
  */
 function dmMessageMetadata(
   data: { mode?: 'wait' | 'steer'; data?: Record<string, unknown> | null },
-  senderAddress: string | undefined,
+  senderAddress: string | null | undefined,
 ): Record<string, unknown> {
   return {
     ...sanitizeUserMessageMetadata(data.data),
@@ -320,7 +320,7 @@ function buildDmMessageWrites(
   messageId: string,
   createdAt = new Date(),
   inboundRegistration?: { id: string; tokenHash?: string },
-  senderAddress?: string,
+  senderAddress?: string | null,
 ): AtomicWrite[] {
   const hasAttachments = attachments.length > 0;
   const metadata = dmMessageMetadata(data, senderAddress);

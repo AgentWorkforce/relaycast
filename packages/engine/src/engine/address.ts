@@ -2,8 +2,8 @@ import { nodes } from '../db/schema.js';
 import { codedError } from '../lib/httpError.js';
 
 /**
- * Machine name for agents not hosted on a broker: self-connected agents and
- * agents on an implicit direct node, whose node name is an internal id.
+ * Machine name for agents on a direct node (self-connected agents), whose node
+ * name is an internal id rather than a machine.
  */
 export const DIRECT_MACHINE = 'direct';
 
@@ -27,16 +27,21 @@ export function parseAgentAddress(address: string): AgentAddress | null {
   return { agent: address.slice(0, at), machine: address.slice(at + 1) };
 }
 
-/** Canonical address: the broker node's name, or `direct` when there is no broker. */
-export function formatAgentAddress(agentName: string, node: AddressNode): string {
-  const machine = node && node.role !== 'direct' ? node.name : DIRECT_MACHINE;
-  return `${agentName}@${machine}`;
+/**
+ * Canonical address: the broker node's name, or `direct` for a direct node.
+ * Null when the agent has no node — released, finished, or its node was
+ * deleted (a torn-down sandbox) — because nothing could deliver to it.
+ */
+export function formatAgentAddress(agentName: string, node: AddressNode): string | null {
+  if (!node) return null;
+  return `${agentName}@${node.role === 'direct' ? DIRECT_MACHINE : node.name}`;
 }
 
 /** Whether `machine` names the node the agent is on: node name, machine_id, or `direct`. */
 function machineMatches(machine: string, node: AddressNode): boolean {
-  if (machine === DIRECT_MACHINE && (!node || node.role === 'direct')) return true;
-  return node !== null && (machine === node.name || machine === node.machineId);
+  if (!node) return false;
+  if (machine === DIRECT_MACHINE && node.role === 'direct') return true;
+  return machine === node.name || machine === node.machineId;
 }
 
 /** Node columns needed to format or match an address; select them via a left join on the agent's location node. */

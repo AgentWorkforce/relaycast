@@ -322,9 +322,12 @@ components:
           type: string
         address:
           type: string
+          nullable: true
           description: >-
             `agent@machine` for `POST /to/{address}`. `machine` is the broker
-            node's name, or `direct` when the agent is not hosted on a broker.
+            node's name (for a cloud sandbox, its node name), or `direct` for a
+            self-connected agent. Null when the agent is not hosted anywhere:
+            released, finished, or its node was deleted.
         type:
           type: string
           enum: [agent, human, system]
@@ -3929,8 +3932,9 @@ paths:
       summary: Send DM to agent@machine
       description: |
         Send a direct message to an `agent@machine` address. `machine` must be
-        the agent's current broker node, matched by node name or `machine_id`,
-        or `direct` for an agent not hosted on a broker. The message is then
+        the agent's current broker node (a cloud sandbox is one), matched by
+        node name or `machine_id`, or `direct` for a self-connected agent. An
+        agent whose node was deleted has no address. The message is then
         delivered exactly like `POST /dm`. An address that no longer matches
         (the agent moved or was released) returns 404 instead of reaching the
         agent elsewhere; matching is exact and case-sensitive.

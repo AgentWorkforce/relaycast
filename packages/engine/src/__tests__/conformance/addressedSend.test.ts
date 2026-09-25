@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { makeNodeStack, createWorkspace, registerAgent, FakeSocket, type TestStack } from './harness.js';
-import { agents, messages } from '../../db/schema.js';
+import { agents, messages, nodes } from '../../db/schema.js';
 import { parseAgentAddress, SENDER_ADDRESS_METADATA_KEY } from '../../engine/address.js';
 
 type Json = Record<string, unknown>;
@@ -18,12 +18,18 @@ describe('addressed send', () => {
     await stack.close();
   });
 
-  async function enrollBroker(ws: { workspaceKey: string; workspaceId: string }, nodeId: string, name: string, machineId: string) {
+  async function enrollBroker(
+    ws: { workspaceKey: string; workspaceId: string },
+    nodeId: string,
+    name: string,
+    machineId?: string,
+    tags: string[] = [],
+  ) {
     const enroll = await stack.app.request('/v1/nodes', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
       body: JSON.stringify({
-        node_id: nodeId, name, machine_id: machineId,
+        node_id: nodeId, name, ...(machineId ? { machine_id: machineId } : {}), tags,
         capabilities: ['spawn:claude'], max_agents: 4, version: 'test-node',
       }),
     });
@@ -172,6 +178,67 @@ describe('addressed send', () => {
     expect(deliveredDms(reconnected.sock)).toEqual([
       expect.objectContaining({ text: 'while offline', agent_address: 'alice@direct' }),
     ]);
+  });
+
+  describe('cloud sandboxes', () => {
+    // Cloud enrolls a sandbox as a broker node named `fleet-ensure-<id>` with
+    // server-owned `cloud:*` tags and no machine_id, and tears it down by
+    // deleting the node row, which nulls its agents' location.
+    const SANDBOX = 'fleet-ensure-3f9a1c2d';
+
+    async function seedSandbox() {
+      const { ws, alice, bob } = await seed();
+      const sandbox = await enrollBroker(ws, 'node_sandbox', SANDBOX, undefined,
+        ['cloud:sandbox-provider:daytona', 'cloud:sandbox-id:sbx_123']);
+      await sandbox.handle.handleMessage(JSON.stringify({
+        v: 1, type: 'agent.register', name: 'worker', resumable: true, session_ref: 'sess-worker',
+      }));
+      const reply = sandbox.sock.ofType('reply').at(-1) as { ok: boolean; data: { token: string } };
+      expect(reply?.ok).toBe(true);
+      return { ws, alice, bob, sandbox, worker: { token: reply.data.token } };
+    }
+
+    async function addressOf(ws: { workspaceKey: string }, name: string) {
+      const res = await stack.app.request(`/v1/agents/${name}`, {
+        headers: { authorization: `Bearer ${ws.workspaceKey}` },
+      });
+      return ((await res.json()) as { data: Json }).data.address;
+    }
+
+    it('addresses a sandboxed agent by its sandbox node name, both ways', async () => {
+      const { ws, alice, sandbox, worker } = await seedSandbox();
+      expect(await addressOf(ws, 'worker')).toBe(`worker@${SANDBOX}`);
+
+      expect((await send(alice.token, `worker@${SANDBOX}`, { text: 'into the sandbox' })).status).toBe(201);
+      await stack.settle();
+      expect(deliveredDms(sandbox.sock).map((message) => message.text)).toEqual(['into the sandbox']);
+
+      // Out of the sandbox, carrying the sandbox address for the reply.
+      const res = await send(worker.token, 'alice@direct', { text: 'from the sandbox' });
+      expect(((await res.json()) as { data: { message: Json } }).data.message.agent_address)
+        .toBe(`worker@${SANDBOX}`);
+      // Server-owned cloud tags are not machine names.
+      expect(await errorCode(await send(alice.token, 'worker@sbx_123', { text: 'x' }))).toBe('address_not_found');
+    });
+
+    it('leaves a torn-down sandbox agent with no address instead of falling back to direct', async () => {
+      const { ws, alice } = await seedSandbox();
+      await stack.runtime.deps.db.delete(nodes).where(eq(nodes.id, 'node_sandbox'));
+
+      expect(await addressOf(ws, 'worker')).toBeNull();
+      for (const address of [`worker@${SANDBOX}`, 'worker@direct']) {
+        expect(await errorCode(await send(alice.token, address, { text: 'x' })), address).toBe('address_not_found');
+      }
+    });
+
+    it('sends from an unhosted agent without an agent_address', async () => {
+      const { ws, alice, bob } = await seedSandbox();
+      await stack.runtime.deps.db.update(agents).set({ locationNodeId: null }).where(eq(agents.id, bob.agentId));
+      const res = await send(bob.token, 'alice@direct', { text: 'from nowhere' });
+      expect(res.status).toBe(201);
+      expect(((await res.json()) as { data: { message: Json } }).data.message).not.toHaveProperty('agent_address');
+      void ws; void alice;
+    });
   });
 
   describe('idempotent retries', () => {

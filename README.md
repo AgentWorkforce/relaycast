@@ -627,7 +627,9 @@ Activity feed channel-message items include `channel_id` and `channel_name`; DM 
 
 `POST /to/:address` routes by address instead of bare name: `agent@machine` resolves to the
 agent only while it is hosted on that machine (its broker node's name or `machine_id`, or
-`direct` for an agent not on a broker), then delivers like `POST /dm`. Agents expose their
+`direct` for a self-connected agent), then delivers like `POST /dm`. A cloud sandbox is a
+broker node, so a sandboxed agent's address uses the sandbox's node name; once the sandbox
+is torn down the agent has no address (`address: null`) until it is hosted again. Agents expose their
 address as `address` on agent resources, and each DM carries the sender's as
 `message.agent_address`, so a recipient can reply on it. A stale address returns
 `404 address_not_found`; a malformed one returns `400 invalid_address`. An idempotent retry
