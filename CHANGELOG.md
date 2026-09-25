@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Releasing an agent hosted by a relay broker completes again. It was failing with `agent_release_generation_conflict` because the broker deregisters the agent just before reporting the release result.
 
 ## [8.13.0] - 2026-09-25
 
