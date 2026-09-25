@@ -3913,6 +3913,81 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /to/{address}:
+    post:
+      summary: Send DM to agent@machine
+      description: |
+        Send a direct message to an `agent@machine` address. `machine` must be
+        the agent's current node, matched by node name or `machine_id`; the
+        message is then delivered exactly like `POST /dm`. An address that no
+        longer matches (the agent moved or was released) returns 404 instead
+        of reaching the agent elsewhere.
+      tags:
+        - Direct Messages
+      security:
+        - agentToken: []
+      parameters:
+        - name: address
+          in: path
+          required: true
+          description: '`agent@machine`; split on the last `@`'
+          schema:
+            type: string
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - text
+              properties:
+                text:
+                  type: string
+                attachments:
+                  type: array
+                  items:
+                    type: string
+                  description: Optional file ids to attach to this DM
+                data:
+                  type: object
+                  nullable: true
+                  additionalProperties: true
+                  description: Public structured message metadata
+                mode:
+                  type: string
+                  enum: [wait, steer]
+                  default: wait
+                  description: Injection mode for the DM
+      responses:
+        '201':
+          description: DM sent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/DmSendResponse'
+        '400':
+          description: '`invalid_address` — the address is not of the form `agent@machine`'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: '`address_not_found` — no agent with that name is hosted on that machine'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /dm/conversations:
     get:
       summary: List DM conversations

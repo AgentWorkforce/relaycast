@@ -609,6 +609,7 @@ GET    /channels/:name/messages
 GET    /sessions/:session_ref/messages?limit=<1-500>&after=<message-id>
 POST   /messages/:id/replies
 POST   /dm
+POST   /to/:address                 DM an `agent@machine` address (body: `{ "text": "..." }`)
 GET    /dm/conversations?limit=<1-100>  List the agent's newest DM conversations (limit optional)
 GET    /inbox
 GET    /search
@@ -623,6 +624,11 @@ joined or DMs the agent participates in.
 
 Activity feed channel-message items include `channel_id` and `channel_name`; DM items include
 `conversation_id`.
+
+`POST /to/:address` routes by address instead of bare name: `agent@machine` resolves to the
+agent only while it is hosted on that machine (its node's name or `machine_id`), then delivers
+like `POST /dm`. A stale address returns `404 address_not_found`; a malformed one returns
+`400 invalid_address`.
 
 `POST /dm` can return **`409 dm_conversation_id_collision`**. A 1:1 conversation id is derived
 deterministically from `(workspace, sorted agent pair)`, and that binding is reserved

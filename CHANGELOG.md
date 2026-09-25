@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `POST /v1/to/:address` sends a DM to an `agent@machine` address, delivering to the agent only while it is hosted on that machine.
 
 ## [8.12.0] - 2026-09-24
 

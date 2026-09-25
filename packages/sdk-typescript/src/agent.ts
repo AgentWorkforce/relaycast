@@ -616,6 +616,25 @@ export class AgentClient {
     return this.client.post('/v1/dm', body, idempotencyHeaders(opts));
   }
 
+  /** DM an `agent@machine` address; fails if the agent is no longer on that machine. */
+  async sendTo(
+    address: string,
+    text: string,
+    opts?: (IdempotencyOption & {
+      mode?: 'wait' | 'steer';
+      attachments?: string[];
+      data?: Record<string, unknown> | null;
+    }),
+  ): Promise<SendDmResponse> {
+    const body = {
+      text,
+      ...(opts?.attachments ? { attachments: opts.attachments } : {}),
+      ...(opts?.data !== undefined ? { data: opts.data } : {}),
+      mode: opts?.mode ?? 'wait',
+    };
+    return this.client.post(`/v1/to/${encodeURIComponent(address)}`, body, idempotencyHeaders(opts));
+  }
+
   dms = {
     conversations: (opts?: Pick<MessageListQuery, 'limit'>): Promise<DmConversationSummary[]> => {
       const query: Record<string, string> = {};

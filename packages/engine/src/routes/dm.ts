@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAgentToken } from '../middleware/auth.js';
@@ -6,6 +6,7 @@ import { rateLimit } from '../middleware/rateLimit.js';
 import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import { sha256Hex } from '../lib/crypto.js';
 import * as dmEngine from '../engine/dm.js';
+import { resolveAgentAddress } from '../engine/address.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
 import { resolveWorkspaceDeliveryPolicyFor } from '../engine/workspaceDeliveryPolicy.js';
 import { publishWorkspaceEvent } from './fanout.js';
@@ -32,6 +33,129 @@ const listDmConversationsQuerySchema = z.object({
   limit: positiveIntQueryParam({ max: 100 }),
 });
 
+// Body of POST /v1/to/:address — the recipient comes from the path.
+const sendAddressedSchema = sendDmSchema.omit({ to: true });
+
+/**
+ * Send a DM from the authenticated agent. Shared by POST /v1/dm (recipient by
+ * name) and POST /v1/to/:address (recipient by `agent@machine`).
+ */
+async function sendDirectMessage(c: Context<AppEnv>, input: z.infer<typeof sendDmSchema>) {
+  const db = c.get('db');
+  const workspace = c.get('workspace');
+  const agent = c.get('agent');
+  const { to, text, attachments, data, mode } = input;
+  const normalizedAttachments = attachments && attachments.length > 0 ? attachments : undefined;
+  // `data` is digested rather than embedded. It is caller-supplied and can
+  // be large — a Ratify proof bundle runs to MAX_PROOF_BUNDLE_BYTES (128
+  // KiB) — and the fingerprint is serialized into the stored idempotency
+  // record, kept for the TTL, and string-compared on every replay. Inlining
+  // it put ~256 KiB per DM into the KV record and made each replay compare
+  // the whole payload. A digest answers the only question the fingerprint
+  // asks — "is this the same request?" — in constant size.
+  const fingerprintBody = {
+    to,
+    text,
+    ...(normalizedAttachments ? { attachments: normalizedAttachments } : {}),
+    ...(data !== undefined ? { data_sha256: await sha256Hex(JSON.stringify(data)) } : {}),
+  };
+
+  const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
+  if (idempotencyError) {
+    return jsonError(c, 'invalid_idempotency_key', idempotencyError, 400);
+  }
+
+  const mailbox = resolveMailboxConfig(c.get('engine').config, workspace.id);
+  const toDmReceivedEventData = (data: Awaited<ReturnType<typeof dmEngine.sendDm>>) => buildDmReceivedEventData(data, {
+    fromName: agent!.name,
+  });
+
+  const trackDmSent = (data: { conversation_id: string; id: string }) => emitServerEvent(c, workspace.id, 'relaycast_server_dm_sent', {
+    conversation_id: data.conversation_id,
+    message_id: data.id,
+    from_agent_id: agent!.id,
+    to_agent_name: to,
+  });
+
+  const idempotent = await runIdempotent({
+    workspaceId: workspace.id,
+    actorId: agent!.id,
+    scope: 'dm:direct',
+    key: idempotencyKey,
+    status: 201,
+    // Backward compatibility: historical fingerprint excluded mode (equivalent to wait).
+    // Only include mode when explicit steer is requested.
+    fingerprint: mode === 'steer'
+      ? JSON.stringify({ ...fingerprintBody, mode })
+      : JSON.stringify(fingerprintBody),
+    kv: c.get('engine').kv,
+    operation: () => dmEngine.sendDm(db, workspace.id, agent!.id, {
+      to,
+      text,
+      attachments: normalizedAttachments,
+      data,
+      mode,
+    }, { mailbox, resolveWorkspaceDeliveryPolicy: () => resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace), idempotencyKey,
+      afterAdmission: (data, event) => {
+        runInBackground(c, c.get('engine').realtime.publishToWorkspaceStream({
+          workspaceId: workspace.id, event: { ...event.payload, seq: event.seq },
+        }), 'publish admitted dm.received');
+        runInBackground(c, c.get('engine').webhookQueue.send({
+          type: 'dm.received', workspaceId: workspace.id,
+          data: event.data, outboxId: event.outboxId,
+        }), 'queue admitted dm.received');
+        if (data._delivery) runInBackground(c,
+          routeDeliveryOutcomes(c, [data._delivery], 'dm.received', event.data),
+          'route admitted dm delivery');
+        if (data._delivery_rejections.length) runInBackground(c,
+          notifyDeliveryRejections(c, agent!.id, data._delivery_rejections),
+          'notify admitted dm delivery rejection');
+        trackDmSent(data);
+      },
+    }),
+    afterOperation: async (data) => {
+      if (data._notifications_durable) return;
+      await sendWebhookEvent(c, {
+        type: 'dm.received',
+        workspaceId: workspace.id,
+        data: toDmReceivedEventData(data),
+      });
+    },
+  });
+
+  if (!idempotent.replayed && !idempotent.data._notifications_durable) {
+    const {
+      _delivery,
+      _delivery_rejections,
+      ...publicDmData
+    } = idempotent.data as typeof idempotent.data & {
+      _delivery?: Parameters<typeof routeDeliveryOutcomes>[1][number] | null;
+      _delivery_rejections?: Parameters<typeof notifyDeliveryRejections>[2];
+    };
+    const eventData = toDmReceivedEventData(idempotent.data);
+    runInBackground(c, publishWorkspaceEvent(c, 'dm.received', eventData), 'publish dm.received');
+
+    if (_delivery) {
+      runInBackground(
+        c,
+        routeDeliveryOutcomes(c, [_delivery], 'dm.received', eventData),
+        'route dm delivery',
+      );
+    }
+    if (_delivery_rejections && _delivery_rejections.length > 0) {
+      runInBackground(
+        c,
+        notifyDeliveryRejections(c, agent!.id, _delivery_rejections),
+        'fanout delivery rejected',
+      );
+    }
+
+    trackDmSent(publicDmData);
+  }
+
+  return jsonIdempotentOk(c, idempotent);
+}
+
 // POST /v1/dm - send a DM
 dmRoutes.post(
   '/dm',
@@ -39,9 +163,6 @@ dmRoutes.post(
   rateLimit,
   async (c) => {
     try {
-      const db = c.get('db');
-      const workspace = c.get('workspace');
-      const agent = c.get('agent');
       const parsed = await parseJsonBody(c, sendDmSchema, (failure) => {
         const hasToIssue = failure.error.issues.some((issue) => issue.path[0] === 'to');
         const hasTextIssue = failure.error.issues.some((issue) => issue.path[0] === 'text');
@@ -54,116 +175,26 @@ dmRoutes.post(
       if (!parsed.ok) {
         return parsed.response;
       }
-      const { to, text, attachments, data, mode } = parsed.data;
-      const normalizedAttachments = attachments && attachments.length > 0 ? attachments : undefined;
-      // `data` is digested rather than embedded. It is caller-supplied and can
-      // be large — a Ratify proof bundle runs to MAX_PROOF_BUNDLE_BYTES (128
-      // KiB) — and the fingerprint is serialized into the stored idempotency
-      // record, kept for the TTL, and string-compared on every replay. Inlining
-      // it put ~256 KiB per DM into the KV record and made each replay compare
-      // the whole payload. A digest answers the only question the fingerprint
-      // asks — "is this the same request?" — in constant size.
-      const fingerprintBody = {
-        to,
-        text,
-        ...(normalizedAttachments ? { attachments: normalizedAttachments } : {}),
-        ...(data !== undefined ? { data_sha256: await sha256Hex(JSON.stringify(data)) } : {}),
-      };
+      return await sendDirectMessage(c, parsed.data);
+    } catch (err: unknown) {
+      return errorResponse(c, err);
+    }
+  },
+);
 
-      const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
-      if (idempotencyError) {
-        return jsonError(c, 'invalid_idempotency_key', idempotencyError, 400);
+// POST /v1/to/:address - send a DM to an `agent@machine` address
+dmRoutes.post(
+  '/to/:address',
+  requireAgentToken,
+  rateLimit,
+  async (c) => {
+    try {
+      const parsed = await parseJsonBody(c, sendAddressedSchema, 'text is required');
+      if (!parsed.ok) {
+        return parsed.response;
       }
-
-      const mailbox = resolveMailboxConfig(c.get('engine').config, workspace.id);
-      const toDmReceivedEventData = (data: Awaited<ReturnType<typeof dmEngine.sendDm>>) => buildDmReceivedEventData(data, {
-        fromName: agent!.name,
-      });
-
-      const trackDmSent = (data: { conversation_id: string; id: string }) => emitServerEvent(c, workspace.id, 'relaycast_server_dm_sent', {
-        conversation_id: data.conversation_id,
-        message_id: data.id,
-        from_agent_id: agent!.id,
-        to_agent_name: to,
-      });
-
-      const idempotent = await runIdempotent({
-        workspaceId: workspace.id,
-        actorId: agent!.id,
-        scope: 'dm:direct',
-        key: idempotencyKey,
-        status: 201,
-        // Backward compatibility: historical fingerprint excluded mode (equivalent to wait).
-        // Only include mode when explicit steer is requested.
-        fingerprint: mode === 'steer'
-          ? JSON.stringify({ ...fingerprintBody, mode })
-          : JSON.stringify(fingerprintBody),
-        kv: c.get('engine').kv,
-        operation: () => dmEngine.sendDm(db, workspace.id, agent!.id, {
-          to,
-          text,
-          attachments: normalizedAttachments,
-          data,
-          mode,
-        }, { mailbox, resolveWorkspaceDeliveryPolicy: () => resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace), idempotencyKey,
-          afterAdmission: (data, event) => {
-            runInBackground(c, c.get('engine').realtime.publishToWorkspaceStream({
-              workspaceId: workspace.id, event: { ...event.payload, seq: event.seq },
-            }), 'publish admitted dm.received');
-            runInBackground(c, c.get('engine').webhookQueue.send({
-              type: 'dm.received', workspaceId: workspace.id,
-              data: event.data, outboxId: event.outboxId,
-            }), 'queue admitted dm.received');
-            if (data._delivery) runInBackground(c,
-              routeDeliveryOutcomes(c, [data._delivery], 'dm.received', event.data),
-              'route admitted dm delivery');
-            if (data._delivery_rejections.length) runInBackground(c,
-              notifyDeliveryRejections(c, agent!.id, data._delivery_rejections),
-              'notify admitted dm delivery rejection');
-            trackDmSent(data);
-          },
-        }),
-        afterOperation: async (data) => {
-          if (data._notifications_durable) return;
-          await sendWebhookEvent(c, {
-            type: 'dm.received',
-            workspaceId: workspace.id,
-            data: toDmReceivedEventData(data),
-          });
-        },
-      });
-
-      if (!idempotent.replayed && !idempotent.data._notifications_durable) {
-        const {
-          _delivery,
-          _delivery_rejections,
-          ...publicDmData
-        } = idempotent.data as typeof idempotent.data & {
-          _delivery?: Parameters<typeof routeDeliveryOutcomes>[1][number] | null;
-          _delivery_rejections?: Parameters<typeof notifyDeliveryRejections>[2];
-        };
-        const eventData = toDmReceivedEventData(idempotent.data);
-        runInBackground(c, publishWorkspaceEvent(c, 'dm.received', eventData), 'publish dm.received');
-
-        if (_delivery) {
-          runInBackground(
-            c,
-            routeDeliveryOutcomes(c, [_delivery], 'dm.received', eventData),
-            'route dm delivery',
-          );
-        }
-        if (_delivery_rejections && _delivery_rejections.length > 0) {
-          runInBackground(
-            c,
-            notifyDeliveryRejections(c, agent!.id, _delivery_rejections),
-            'fanout delivery rejected',
-          );
-        }
-
-        trackDmSent(publicDmData);
-      }
-
-      return jsonIdempotentOk(c, idempotent);
+      const target = await resolveAgentAddress(c.get('db'), c.get('workspace').id, c.req.param('address'));
+      return await sendDirectMessage(c, { ...parsed.data, to: target.agent_name });
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
