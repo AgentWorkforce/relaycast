@@ -93,11 +93,12 @@ dmRoutes.post(
         fromName: agent!.name,
       });
 
-      const trackDmSent = (data: { conversation_id: string; id: string }) => emitServerEvent(c, workspace.id, 'relaycast_server_dm_sent', {
+      // `data.to` is the resolved recipient name; `to` may be a raw address.
+      const trackDmSent = (data: { conversation_id: string; id: string; to?: string }) => emitServerEvent(c, workspace.id, 'relaycast_server_dm_sent', {
         conversation_id: data.conversation_id,
         message_id: data.id,
         from_agent_id: agent!.id,
-        to_agent_name: to,
+        to_agent_name: data.to ?? to,
       });
 
       const idempotent = await runIdempotent({

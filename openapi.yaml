@@ -325,8 +325,9 @@ components:
           nullable: true
           description: >-
             `agent@machine` for `address` on `POST /dm`. `machine` is the broker
-            node's name (for a cloud sandbox, its node name), or `direct` for a
-            self-connected agent. Null when the agent is not hosted anywhere:
+            node's name (for a cloud sandbox, its node name), or its
+            `machine_id` when the name contains `@` or is `direct`; `direct`
+            for a self-connected agent. Null when the agent is not hosted anywhere:
             released, finished, or its node was deleted.
         type:
           type: string
