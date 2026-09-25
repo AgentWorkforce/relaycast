@@ -7,7 +7,12 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `POST /v1/dm` accepts `address` (`agent@machine`) in place of `to`, delivering only while the agent is hosted on that machine (broker node name or `machine_id`, or `direct` for self-connected agents). Stale addresses return `404 address_not_found`, including a move that races the send; idempotent retries replay even after the agent moves; names containing `@` resolve, with `400 ambiguous_address` when two readings match.
+- Agent resources include `address` (null when the agent is not hosted anywhere, e.g. after its sandbox node is deleted); DM responses, `dm.received` deliveries, `GET /v1/deliveries` items, and DM history include the sender's `message.agent_address`.
 
 ## [8.12.0] - 2026-09-24
 

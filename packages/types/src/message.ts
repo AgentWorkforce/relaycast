@@ -75,6 +75,8 @@ export const CoreMessagePayloadSchema = z.object({
   agent_id: z.string(),
   agent_name: z.string(),
   agent_type: AgentTypeSchema.optional(),
+  /** Sender's `agent@machine` address at send time; present on direct messages. */
+  agent_address: z.string().optional(),
   text: z.string(),
   injection_mode: MessageInjectionModeSchema.optional(),
   attachments: z.array(FileAttachmentSchema).optional(),

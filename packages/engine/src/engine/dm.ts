@@ -16,6 +16,7 @@ import {
   a2aAgents,
   pendingEvents,
   messageLogs,
+  nodes,
 } from '../db/schema.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { runAtomicWrites, databaseConstraintKind, type AtomicWrite } from '../ports/database.js';
@@ -36,6 +37,15 @@ import { buildDmReceivedEventData } from './deliveryWire.js';
 import { buildWorkspaceEventWrite } from './workspaceEvents.js';
 import { transformForClient } from './wsTransform.js';
 import { codedError } from '../lib/httpError.js';
+import {
+  addressNodeSelection,
+  addressNotFound,
+  addressSplits,
+  formatAgentAddress,
+  selectAddressedRecipient,
+  SENDER_ADDRESS_METADATA_KEY,
+  senderAddressField,
+} from './address.js';
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 import { fetchAttachmentsBatch, resolveSendAttachments, type AttachmentRow } from './attachments.js';
 import { canonicalUserMessageMetadata, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
@@ -62,6 +72,12 @@ interface SendDmOptions {
   mailbox?: MailboxConfig;
   /** Server-resolved workspace growth policy; absent => no workspace guard. */
   workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy;
+  /**
+   * `agent@machine` the caller addressed; replaces the `to` lookup. Resolved
+   * after durable replay lookup, so an accepted retry still replays after the
+   * agent moves, and re-checked inside the admission write.
+   */
+  address?: string;
 }
 
 /**
@@ -270,6 +286,23 @@ async function resolveConversation(
 }
 
 /**
+ * Persisted DM metadata. Server-owned keys go after caller metadata so a
+ * federated peer cannot override how the local runtime is injected, and
+ * `sanitizeUserMessageMetadata` already drops any caller-supplied
+ * `__relaycast_` key such as the sender address.
+ */
+function dmMessageMetadata(
+  data: { mode?: 'wait' | 'steer'; data?: Record<string, unknown> | null },
+  senderAddress: string | null | undefined,
+): Record<string, unknown> {
+  return {
+    ...sanitizeUserMessageMetadata(data.data),
+    injection_mode: data.mode ?? 'wait',
+    ...(senderAddress ? { [SENDER_ADDRESS_METADATA_KEY]: senderAddress } : {}),
+  };
+}
+
+/**
  * Build the message + attachment-junction inserts for a DM without executing
  * them, so the send path can run them inside one atomic unit. The message
  * insert is always first and carries `.returning()`.
@@ -289,14 +322,11 @@ function buildDmMessageWrites(
   messageId: string,
   createdAt = new Date(),
   inboundRegistration?: { id: string; tokenHash?: string },
+  senderAddress?: string | null,
+  addressedRecipient?: { agentId: string; nodeId: string },
 ): AtomicWrite[] {
   const hasAttachments = attachments.length > 0;
-  const metadata = {
-    // Keep the server-owned delivery mode after caller metadata so a
-    // federated peer cannot override how the local runtime is injected.
-    ...sanitizeUserMessageMetadata(data.data),
-    injection_mode: data.mode ?? 'wait',
-  };
+  const metadata = dmMessageMetadata(data, senderAddress);
   const sessionRef = requireSessionRefFromMetadata(metadata);
   const writes: AtomicWrite[] = [
     db
@@ -314,7 +344,16 @@ function buildDmMessageWrites(
             AND a.id = ${fromAgentId} AND a.workspace_id = ${workspaceId}
             ${inboundRegistration.tokenHash === undefined ? sql`` : sql`AND a.token_hash = ${inboundRegistration.tokenHash}`}
         )` : fromAgentId,
-        body: data.text,
+        // NULL violates messages.body when an addressed recipient left the
+        // addressed node (or was released) after it was selected, so the whole
+        // admission rolls back instead of delivering to its new location.
+        body: addressedRecipient ? sql<string>`(
+          SELECT ${data.text} WHERE EXISTS (
+            SELECT 1 FROM agents a
+            WHERE a.id = ${addressedRecipient.agentId} AND a.workspace_id = ${workspaceId}
+              AND a.status <> 'released' AND a.location_node_id = ${addressedRecipient.nodeId}
+          )
+        )` : data.text,
         hasAttachments,
         metadata,
         sessionRef,
@@ -356,6 +395,7 @@ function buildDmResult(
       id: message.id,
       agent_id: message.agentId,
       agent_name: fromAgent.name,
+      ...senderAddressField(message.metadata),
       text: message.body,
       injection_mode: injectionMode,
       attachments,
@@ -504,28 +544,37 @@ export async function sendDm(
   const workspacePolicy = options.resolveWorkspaceDeliveryPolicy
     ? await options.resolveWorkspaceDeliveryPolicy() : options.workspaceDeliveryPolicy;
 
-  const [toAgent] = data.to === '@self'
-    ? await db
-      .select()
-      .from(agents)
-      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, fromAgentId)))
-    : await db
-      .select()
-      .from(agents)
-      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, data.to)));
-
+  const recipientQuery = db
+    .select({ agent: agents, node: addressNodeSelection })
+    .from(agents)
+    .leftJoin(nodes, eq(nodes.id, agents.locationNodeId));
+  const [recipient] = options.address !== undefined
+    ? [selectAddressedRecipient(options.address, await recipientQuery.where(and(
+      eq(agents.workspaceId, workspaceId),
+      inArray(agents.name, addressSplits(options.address).map((split) => split.agent)),
+    )))]
+    : await recipientQuery.where(and(
+      eq(agents.workspaceId, workspaceId),
+      data.to === '@self' ? eq(agents.id, fromAgentId) : eq(agents.name, data.to),
+    ));
+  const addressedRecipient = options.address !== undefined && recipient?.agent.locationNodeId
+    ? { agentId: recipient.agent.id, nodeId: recipient.agent.locationNodeId }
+    : undefined;
+  const toAgent = recipient?.agent;
   if (!toAgent) {
     throw codedError(`Agent "${data.to}" not found`, 'agent_not_found', 404);
   }
 
   const [fromAgent] = await db
-    .select({ name: agents.name })
+    .select({ name: agents.name, node: addressNodeSelection })
     .from(agents)
+    .leftJoin(nodes, eq(nodes.id, agents.locationNodeId))
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, fromAgentId)));
 
   if (!fromAgent?.name) {
     throw codedError('Sender agent not found', 'internal_error', 500);
   }
+  const senderAddress = formatAgentAddress(fromAgent.name, fromAgent.node);
 
   // Resolve attachments first so invalid attachments fail before any DM
   // metadata (channel/conversation/participant rows) is created.
@@ -579,8 +628,8 @@ export async function sendDm(
 
   const publicResult = buildDmResult({
     id: messageId, agentId: fromAgentId, body: data.text, createdAt,
-    metadata: { ...sanitizeUserMessageMetadata(data.data), injection_mode: data.mode ?? 'wait' },
-  }, conv, fromAgent, data, attachments);
+    metadata: dmMessageMetadata(data, senderAddress),
+  }, conv, fromAgent, options.address !== undefined ? { ...data, to: toAgent.name } : data, attachments);
   const eventData = buildDmReceivedEventData(publicResult, { fromName: fromAgent.name });
   const workspacePayload = transformForClient({
     type: 'dm.received', workspace_id: workspaceId, data: eventData, timestamp: createdAt.toISOString(),
@@ -589,7 +638,8 @@ export async function sendDm(
   // None can escape a capacity rollback, or depend on external transport success.
   const persist = () => runAtomicWrites(db, (writeDb) => {
     const writes = buildDmMessageWrites(writeDb, workspaceId, fromAgentId, conv.channelId, data, attachments, messageId, createdAt,
-      options.receivedA2aAgentId ? { id: options.receivedA2aAgentId, tokenHash: options.receivedA2aTokenHash } : undefined);
+      options.receivedA2aAgentId ? { id: options.receivedA2aAgentId, tokenHash: options.receivedA2aTokenHash } : undefined,
+      senderAddress, addressedRecipient);
 
     if (egressId && a2aTarget && egressPayload) {
       // First statement owns the request identity; a competing attempt rolls
@@ -655,6 +705,9 @@ export async function sendDm(
     const results = await persist();
     if (egressId || options.receivedA2aAgentId || inboundId) admittedEventSeq = (results[results.length - 1] as { seq: number }[])[0].seq;
   } catch (error) {
+    if (options.address !== undefined && databaseConstraintKind(error) === 'address_changed') {
+      throw addressNotFound(options.address);
+    }
     if (options.receivedA2aAgentId && databaseConstraintKind(error) === 'a2a_registration_changed') {
       throw codedError('Authenticated A2A registration changed before admission', 'a2a_registration_changed', 401);
     }
@@ -878,6 +931,7 @@ export async function getDmMessages(
     id: r.id,
     agent_id: r.agentId,
     agent_name: r.agentName,
+    ...senderAddressField(r.metadata),
     text: r.body,
     injection_mode: r.metadata?.injection_mode as 'wait' | 'steer' | undefined,
     metadata: publicMessageMetadata(r.metadata),

@@ -13,6 +13,11 @@ export type AgentStatus = z.infer<typeof AgentStatusSchema>;
 export const AgentSchema = z.object({
   id: z.string(),
   name: z.string(),
+  /**
+   * `agent@machine` for `address` on POST /v1/dm; `machine` is `direct` for a
+   * self-connected agent. Null when the agent is not hosted anywhere.
+   */
+  address: z.string().nullable().optional(),
   type: AgentTypeSchema,
   status: AgentStatusSchema,
   persona: z.string().nullable(),

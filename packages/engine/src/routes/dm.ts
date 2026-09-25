@@ -6,6 +6,7 @@ import { rateLimit } from '../middleware/rateLimit.js';
 import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import { sha256Hex } from '../lib/crypto.js';
 import * as dmEngine from '../engine/dm.js';
+import { requireAgentAddress } from '../engine/address.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
 import { resolveWorkspaceDeliveryPolicyFor } from '../engine/workspaceDeliveryPolicy.js';
 import { publishWorkspaceEvent } from './fanout.js';
@@ -20,12 +21,17 @@ import { parsePaginationQuery, positiveIntQueryParam } from '../lib/httpQuery.js
 
 export const dmRoutes = new Hono<AppEnv>();
 
+// Exactly one recipient: `to` (agent name or `@self`), or `address`
+// (`agent@machine`, which also requires the agent to be on that machine).
 const sendDmSchema = z.object({
-  to: z.string().min(1),
+  to: z.string().min(1).optional(),
+  address: z.string().min(1).optional(),
   text: z.string().min(1),
   attachments: z.array(z.string()).optional(),
   data: z.record(z.string(), z.unknown()).nullable().optional(),
   mode: z.enum(['wait', 'steer']).default('wait'),
+}).refine((body) => (body.to === undefined) !== (body.address === undefined), {
+  path: ['to'],
 });
 
 const listDmConversationsQuerySchema = z.object({
@@ -46,7 +52,7 @@ dmRoutes.post(
         const hasToIssue = failure.error.issues.some((issue) => issue.path[0] === 'to');
         const hasTextIssue = failure.error.issues.some((issue) => issue.path[0] === 'text');
         return hasToIssue
-          ? '"to" agent name is required'
+          ? 'exactly one of "to" (agent name) or "address" (agent@machine) is required'
           : hasTextIssue
             ? 'text is required'
             : 'invalid dm body';
@@ -54,7 +60,11 @@ dmRoutes.post(
       if (!parsed.ok) {
         return parsed.response;
       }
-      const { to, text, attachments, data, mode } = parsed.data;
+      const { address, text, attachments, data, mode } = parsed.data;
+      if (address !== undefined) requireAgentAddress(address);
+      // The engine resolves an addressed recipient from `address`; `to` then
+      // only names the request in the idempotency fingerprint.
+      const to = parsed.data.to ?? address!;
       const normalizedAttachments = attachments && attachments.length > 0 ? attachments : undefined;
       // `data` is digested rather than embedded. It is caller-supplied and can
       // be large — a Ratify proof bundle runs to MAX_PROOF_BUNDLE_BYTES (128
@@ -63,8 +73,11 @@ dmRoutes.post(
       // it put ~256 KiB per DM into the KV record and made each replay compare
       // the whole payload. A digest answers the only question the fingerprint
       // asks — "is this the same request?" — in constant size.
+      // An addressed send fingerprints its address, so reusing a key for a
+      // different address (or for a send by name) is a conflict, not a replay.
       const fingerprintBody = {
         to,
+        ...(address !== undefined ? { address } : {}),
         text,
         ...(normalizedAttachments ? { attachments: normalizedAttachments } : {}),
         ...(data !== undefined ? { data_sha256: await sha256Hex(JSON.stringify(data)) } : {}),
@@ -80,11 +93,12 @@ dmRoutes.post(
         fromName: agent!.name,
       });
 
-      const trackDmSent = (data: { conversation_id: string; id: string }) => emitServerEvent(c, workspace.id, 'relaycast_server_dm_sent', {
+      // `data.to` is the resolved recipient name; `to` may be a raw address.
+      const trackDmSent = (data: { conversation_id: string; id: string; to?: string }) => emitServerEvent(c, workspace.id, 'relaycast_server_dm_sent', {
         conversation_id: data.conversation_id,
         message_id: data.id,
         from_agent_id: agent!.id,
-        to_agent_name: to,
+        to_agent_name: data.to ?? to,
       });
 
       const idempotent = await runIdempotent({
@@ -105,7 +119,7 @@ dmRoutes.post(
           attachments: normalizedAttachments,
           data,
           mode,
-        }, { mailbox, resolveWorkspaceDeliveryPolicy: () => resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace), idempotencyKey,
+        }, { mailbox, resolveWorkspaceDeliveryPolicy: () => resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace), idempotencyKey, address,
           afterAdmission: (data, event) => {
             runInBackground(c, c.get('engine').realtime.publishToWorkspaceStream({
               workspaceId: workspace.id, event: { ...event.payload, seq: event.seq },

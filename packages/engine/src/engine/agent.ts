@@ -7,6 +7,7 @@ import { invalidateChannelCache } from './cache.js';
 import { queryInChunks } from '../lib/queryChunks.js';
 import { codedError } from '../lib/httpError.js';
 import { directNodeIdForAgent } from './node.js';
+import { addressNodeSelection, formatAgentAddress } from './address.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { AGENT_RECOVERY_PROOF_HASH_PATTERN } from '@relaycast/types';
 
@@ -386,16 +387,18 @@ export async function listAgents(db: Db, workspaceId: string, status?: string) {
   }
 
   const rows = await db
-    .select()
+    .select({ agent: agents, node: addressNodeSelection })
     .from(agents)
+    .leftJoin(nodes, eq(nodes.id, agents.locationNodeId))
     // Released rows are tombstones retained only to keep history attributable;
     // they are not roster members, so `agent list` must not fill with them.
     .where(and(...conditions));
 
-  return rows.map((a) => ({
+  return rows.map(({ agent: a, node }) => ({
     id: a.id,
     name: a.name,
     handle: `@${a.name}`,
+    address: formatAgentAddress(a.name, node),
     type: a.type,
     status: effectiveAgentStatus(a, now),
     persona: a.persona,
@@ -407,12 +410,14 @@ export async function listAgents(db: Db, workspaceId: string, status?: string) {
 }
 
 export async function getAgentByName(db: Db, workspaceId: string, name: string) {
-  const [agent] = await db
-    .select()
+  const [row] = await db
+    .select({ agent: agents, node: addressNodeSelection })
     .from(agents)
+    .leftJoin(nodes, eq(nodes.id, agents.locationNodeId))
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, name)));
 
-  if (!agent) return null;
+  if (!row) return null;
+  const { agent, node } = row;
 
   // Get channels, actions, and pending deliveries in parallel
   const [memberships, allActions, pendingDeliveryRows] = await Promise.all([
@@ -478,6 +483,7 @@ export async function getAgentByName(db: Db, workspaceId: string, name: string) 
     workspace_id: workspaceId,
     name: agent.name,
     handle: agent.handle ?? `@${agent.name}`,
+    address: formatAgentAddress(agent.name, node),
     type: agent.type,
     status: effectiveAgentStatus(agent),
     persona: agent.persona,
@@ -587,11 +593,15 @@ export async function updateAgentById(
     .returning();
 
   if (!updated) return null;
+  const [node] = updated.locationNodeId
+    ? await db.select(addressNodeSelection).from(nodes).where(eq(nodes.id, updated.locationNodeId))
+    : [];
 
   return {
     id: updated.id,
     name: updated.name,
     handle: `@${updated.name}`,
+    address: formatAgentAddress(updated.name, node ?? null),
     type: updated.type,
     status: effectiveAgentStatus(updated),
     persona: updated.persona,
@@ -636,11 +646,15 @@ export async function claimLegacyAgentIdentity(
     .returning();
 
   if (!updated) return null;
+  const [node] = updated.locationNodeId
+    ? await db.select(addressNodeSelection).from(nodes).where(eq(nodes.id, updated.locationNodeId))
+    : [];
 
   return {
     id: updated.id,
     name: updated.name,
     handle: `@${updated.name}`,
+    address: formatAgentAddress(updated.name, node ?? null),
     type: updated.type,
     status: updated.status,
     persona: updated.persona,

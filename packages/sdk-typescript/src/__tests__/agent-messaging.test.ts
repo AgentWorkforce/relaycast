@@ -252,6 +252,19 @@ describe('AgentClient', () => {
     });
   });
 
+  describe('sendTo()', () => {
+    it('sends an addressed DM via POST /v1/dm', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ id: 'dm_1' }));
+
+      await me.sendTo('Worker-1@laptop', 'hi');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/dm');
+      expect(init.method).toBe('POST');
+      expect(init.body).toBe(JSON.stringify({ address: 'Worker-1@laptop', text: 'hi', mode: 'wait' }));
+    });
+  });
+
   describe('dm()', () => {
     it('sends DM via POST /v1/dm', async () => {
       mockFetch.mockImplementation(() => mockResponse({ id: 'dm_1' }));

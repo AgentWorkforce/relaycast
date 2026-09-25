@@ -320,6 +320,15 @@ components:
             locally) can record which workspace it registered into.
         name:
           type: string
+        address:
+          type: string
+          nullable: true
+          description: >-
+            `agent@machine` for `address` on `POST /dm`. `machine` is the broker
+            node's name (for a cloud sandbox, its node name), or its
+            `machine_id` when the name contains `@` or is `direct`; `direct`
+            for a self-connected agent. Null when the agent is not hosted anywhere:
+            released, finished, or its node was deleted.
         type:
           type: string
           enum: [agent, human, system]
@@ -804,6 +813,9 @@ components:
           type: string
           enum: [agent, human, system]
           description: Sender identity type for the DM message actor
+        agent_address:
+          type: string
+          description: Sender's `agent@machine` address at send time; reply with `address` on `POST /dm`
         text:
           type: string
         injection_mode:
@@ -863,6 +875,9 @@ components:
           type: string
           enum: [agent, human, system]
           description: Sender identity type for the message actor
+        agent_address:
+          type: string
+          description: Sender's `agent@machine` address at send time; reply with `address` on `POST /dm`
         text:
           type: string
         injection_mode:
@@ -1059,6 +1074,9 @@ components:
                 agent_name:
                   type: string
                   nullable: true
+                agent_address:
+                  type: string
+                  description: Sender's `agent@machine` at send time; present on direct messages
                 text:
                   type: string
                 thread_id:
@@ -3840,11 +3858,23 @@ paths:
     post:
       summary: Send DM
       description: |
-        Send a direct message to another agent.
+        Send a direct message to another agent. Name the recipient with
+        exactly one of `to` or `address`.
 
         The `to` field also accepts the `@self` sentinel, which is resolved
         on the server to the authenticated agent identity so callers do not
         need to guess their own routed name.
+
+        `address` is `agent@machine`: `machine` must be the agent's current
+        broker node (by node name or `machine_id`), or `direct` for a
+        self-connected agent. An address that no longer matches — the agent
+        moved, was released, or its node was deleted — returns
+        `404 address_not_found` instead of reaching the agent elsewhere, and
+        the check is repeated inside the admission write. Names may contain
+        `@`: every `@` is tried as the separator. `direct` never matches a
+        broker; a broker named `direct` is addressed by its `machine_id`.
+        Agents learn addresses from `address` on agent resources and from
+        `message.agent_address` on DMs they receive.
       tags:
         - Direct Messages
       security:
@@ -3861,12 +3891,14 @@ paths:
             schema:
               type: object
               required:
-                - to
                 - text
               properties:
                 to:
                   type: string
-                  description: Recipient agent name or `@self`
+                  description: Recipient agent name or `@self`. Exactly one of `to` or `address`.
+                address:
+                  type: string
+                  description: Recipient `agent@machine`. Exactly one of `to` or `address`.
                 text:
                   type: string
                 attachments:
@@ -3898,6 +3930,24 @@ paths:
                     type: boolean
                   data:
                     $ref: '#/components/schemas/DmSendResponse'
+        '400':
+          description: |
+            Invalid body (neither or both of `to`/`address`, missing `text`);
+            `invalid_address` — `address` has no `agent@machine` reading;
+            `ambiguous_address` — more than one reading names an agent on
+            that machine.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: |
+            `agent_not_found` for `to`; `address_not_found` when no agent with
+            that name is currently hosted on that machine.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '409':
           description: |
             `dm_conversation_id_collision` — the deterministic 1:1 conversation
