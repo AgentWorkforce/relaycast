@@ -14,7 +14,7 @@ export const AgentSchema = z.object({
   id: z.string(),
   name: z.string(),
   /**
-   * `agent@machine` for POST /v1/to/:address; `machine` is `direct` for a
+   * `agent@machine` for `address` on POST /v1/dm; `machine` is `direct` for a
    * self-connected agent. Null when the agent is not hosted anywhere.
    */
   address: z.string().nullable().optional(),

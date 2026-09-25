@@ -324,7 +324,7 @@ components:
           type: string
           nullable: true
           description: >-
-            `agent@machine` for `POST /to/{address}`. `machine` is the broker
+            `agent@machine` for `address` on `POST /dm`. `machine` is the broker
             node's name (for a cloud sandbox, its node name), or `direct` for a
             self-connected agent. Null when the agent is not hosted anywhere:
             released, finished, or its node was deleted.
@@ -814,7 +814,7 @@ components:
           description: Sender identity type for the DM message actor
         agent_address:
           type: string
-          description: Sender's `agent@machine` address at send time; reply via `POST /to/{address}`
+          description: Sender's `agent@machine` address at send time; reply with `address` on `POST /dm`
         text:
           type: string
         injection_mode:
@@ -876,7 +876,7 @@ components:
           description: Sender identity type for the message actor
         agent_address:
           type: string
-          description: Sender's `agent@machine` address at send time; reply via `POST /to/{address}`
+          description: Sender's `agent@machine` address at send time; reply with `address` on `POST /dm`
         text:
           type: string
         injection_mode:
@@ -3854,11 +3854,23 @@ paths:
     post:
       summary: Send DM
       description: |
-        Send a direct message to another agent.
+        Send a direct message to another agent. Name the recipient with
+        exactly one of `to` or `address`.
 
         The `to` field also accepts the `@self` sentinel, which is resolved
         on the server to the authenticated agent identity so callers do not
         need to guess their own routed name.
+
+        `address` is `agent@machine`: `machine` must be the agent's current
+        broker node (by node name or `machine_id`), or `direct` for a
+        self-connected agent. An address that no longer matches — the agent
+        moved, was released, or its node was deleted — returns
+        `404 address_not_found` instead of reaching the agent elsewhere, and
+        the check is repeated inside the admission write. Names may contain
+        `@`: every `@` is tried as the separator. `direct` never matches a
+        broker; a broker named `direct` is addressed by its `machine_id`.
+        Agents learn addresses from `address` on agent resources and from
+        `message.agent_address` on DMs they receive.
       tags:
         - Direct Messages
       security:
@@ -3875,12 +3887,14 @@ paths:
             schema:
               type: object
               required:
-                - to
                 - text
               properties:
                 to:
                   type: string
-                  description: Recipient agent name or `@self`
+                  description: Recipient agent name or `@self`. Exactly one of `to` or `address`.
+                address:
+                  type: string
+                  description: Recipient `agent@machine`. Exactly one of `to` or `address`.
                 text:
                   type: string
                 attachments:
@@ -3912,6 +3926,24 @@ paths:
                     type: boolean
                   data:
                     $ref: '#/components/schemas/DmSendResponse'
+        '400':
+          description: |
+            Invalid body (neither or both of `to`/`address`, missing `text`);
+            `invalid_address` — `address` has no `agent@machine` reading;
+            `ambiguous_address` — more than one reading names an agent on
+            that machine.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: |
+            `agent_not_found` for `to`; `address_not_found` when no agent with
+            that name is currently hosted on that machine.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '409':
           description: |
             `dm_conversation_id_collision` — the deterministic 1:1 conversation
@@ -3922,109 +3954,6 @@ paths:
             cases produce it: the identifier is already bound to a different
             pair, or the pair is already bound to a different identifier. It is
             not retryable — the same inputs will collide again.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-
-  /to/{address}:
-    post:
-      summary: Send DM to agent@machine
-      description: |
-        Send a direct message to an `agent@machine` address. `machine` must be
-        the agent's current broker node (a cloud sandbox is one), matched by
-        node name or `machine_id`, or `direct` for a self-connected agent. An
-        agent whose node was deleted has no address. The message is then
-        delivered exactly like `POST /dm`. An address that no longer matches
-        (the agent moved or was released) returns 404 instead of reaching the
-        agent elsewhere; matching is exact and case-sensitive. The check is
-        repeated inside the admission write, so a move that races the send
-        also returns 404.
-
-        Agent names, node names and `machine_id` values may contain `@`: every
-        `@` is tried as the separator, and the one reading that names an agent
-        on that machine is used. `direct` is reserved and never matches a
-        broker; a broker named `direct` is addressed by its `machine_id`.
-
-        Agents learn addresses from `address` on agent resources and from
-        `message.agent_address` on DMs they receive.
-
-        With an `Idempotency-Key`, a retry of an accepted send replays the
-        original result even if the agent has since moved. The key is bound
-        to the address: reusing it for a different address or for `POST /dm`
-        returns `409 idempotency_key_reused`.
-      tags:
-        - Direct Messages
-      security:
-        - agentToken: []
-      parameters:
-        - name: address
-          in: path
-          required: true
-          description: '`agent@machine`; split on the last `@`'
-          schema:
-            type: string
-        - name: Idempotency-Key
-          in: header
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - text
-              properties:
-                text:
-                  type: string
-                attachments:
-                  type: array
-                  items:
-                    type: string
-                  description: Optional file ids to attach to this DM
-                data:
-                  type: object
-                  nullable: true
-                  additionalProperties: true
-                  description: Public structured message metadata
-                mode:
-                  type: string
-                  enum: [wait, steer]
-                  default: wait
-                  description: Injection mode for the DM
-      responses:
-        '201':
-          description: DM sent
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  ok:
-                    type: boolean
-                  data:
-                    $ref: '#/components/schemas/DmSendResponse'
-        '400':
-          description: |
-            `invalid_address` — the address has no `agent@machine` reading;
-            `ambiguous_address` — more than one reading names an agent on
-            that machine; or the body is invalid (missing or empty `text`).
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
-          description: '`address_not_found` — no agent with that name is hosted on that machine'
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '409':
-          description: |
-            `idempotency_key_reused` or `dm_conversation_id_collision`, with
-            the same semantics as `POST /dm`.
           content:
             application/json:
               schema:

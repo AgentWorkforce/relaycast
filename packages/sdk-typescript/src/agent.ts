@@ -626,13 +626,14 @@ export class AgentClient {
       data?: Record<string, unknown> | null;
     }),
   ): Promise<SendDmResponse> {
-    const body = {
+    const body: SendDmRequest = {
+      address,
       text,
       ...(opts?.attachments ? { attachments: opts.attachments } : {}),
       ...(opts?.data !== undefined ? { data: opts.data } : {}),
       mode: opts?.mode ?? 'wait',
     };
-    return this.client.post(`/v1/to/${encodeURIComponent(address)}`, body, idempotencyHeaders(opts));
+    return this.client.post('/v1/dm', body, idempotencyHeaders(opts));
   }
 
   dms = {

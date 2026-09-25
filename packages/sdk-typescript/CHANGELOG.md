@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `agent.sendTo(address, text)` sends a DM to an `agent@machine` address via `POST /v1/to/:address`.
+- `agent.sendTo(address, text)` sends a DM to an `agent@machine` address (`POST /v1/dm` with `address`).
 
 ## [8.12.0] - 2026-09-24
 

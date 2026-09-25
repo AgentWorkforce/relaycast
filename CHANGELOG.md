@@ -20,7 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Added
 
-- `POST /v1/to/:address` sends a DM to an `agent@machine` address, delivering to the agent only while it is hosted on that machine.
+- `POST /v1/dm` accepts `address` (`agent@machine`) in place of `to`, delivering to the agent only while it is hosted on that machine.
 - Agents report their `address`, and received DMs carry the sender's as `message.agent_address`, so agents can reply by address.
 
 ## [8.12.0] - 2026-09-24

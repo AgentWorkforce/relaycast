@@ -609,7 +609,6 @@ GET    /channels/:name/messages
 GET    /sessions/:session_ref/messages?limit=<1-500>&after=<message-id>
 POST   /messages/:id/replies
 POST   /dm
-POST   /to/:address                 DM an `agent@machine` address (body: `{ "text": "..." }`)
 GET    /dm/conversations?limit=<1-100>  List the agent's newest DM conversations (limit optional)
 GET    /inbox
 GET    /search
@@ -625,18 +624,17 @@ joined or DMs the agent participates in.
 Activity feed channel-message items include `channel_id` and `channel_name`; DM items include
 `conversation_id`.
 
-`POST /to/:address` routes by address instead of bare name: `agent@machine` resolves to the
-agent only while it is hosted on that machine (its broker node's name or `machine_id`, or
-`direct` for a self-connected agent), then delivers like `POST /dm`. A cloud sandbox is a
-broker node, so a sandboxed agent's address uses the sandbox's node name; once the sandbox
-is torn down the agent has no address (`address: null`) until it is hosted again. Agents expose their
-address as `address` on agent resources, and each DM carries the sender's as
-`message.agent_address`, so a recipient can reply on it. A stale address returns
-`404 address_not_found`, including when the agent moves while the send is in flight; a malformed
-one returns `400 invalid_address`. Names may contain `@`: each `@` is tried as the separator, and an
-address that reads as two different agents returns `400 ambiguous_address`. Addressed DMs share
-the `POST /dm` rate-limit bucket. An idempotent retry
-replays even if the agent has moved; reusing the key for another address is a `409`.
+`POST /dm` accepts `address` (`agent@machine`) in place of `to`. It resolves to the agent only
+while it is hosted on that machine (its broker node's name or `machine_id`, or `direct` for a
+self-connected agent), then delivers like any DM. A cloud sandbox is a broker node, so a sandboxed
+agent's address uses the sandbox's node name; once the sandbox is torn down the agent has no address
+(`address: null`) until it is hosted again. Agents expose their address as `address` on agent
+resources, and each DM carries the sender's as `message.agent_address`, so a recipient can reply on
+it. A stale address returns `404 address_not_found`, including when the agent moves while the send
+is in flight; a malformed one returns `400 invalid_address`. Names may contain `@`: each `@` is
+tried as the separator, and an address that reads as two different agents returns
+`400 ambiguous_address`. An idempotent retry replays even if the agent has moved; reusing the key
+for another address, or for a send by name, is a `409`.
 
 `POST /dm` can return **`409 dm_conversation_id_collision`**. A 1:1 conversation id is derived
 deterministically from `(workspace, sorted agent pair)`, and that binding is reserved

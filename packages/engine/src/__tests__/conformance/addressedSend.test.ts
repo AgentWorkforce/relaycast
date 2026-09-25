@@ -7,9 +7,9 @@ import { addressSplits, SENDER_ADDRESS_METADATA_KEY } from '../../engine/address
 type Json = Record<string, unknown>;
 
 /**
- * POST /v1/to/:address — send a DM to `agent@machine`, where `machine` is the
- * agent's current broker node (by node name or machine_id), or `direct` for an
- * agent not hosted on a broker.
+ * POST /v1/dm with `address` — send a DM to `agent@machine`, where `machine` is
+ * the agent's current broker node (by node name or machine_id), or `direct` for
+ * a self-connected agent.
  */
 describe('addressed send', () => {
   let stack: TestStack;
@@ -66,11 +66,11 @@ describe('addressed send', () => {
     return { ws, alice, bob, laptop };
   }
 
-  function send(token: string, address: string, body: unknown, headers: Record<string, string> = {}) {
-    return stack.app.request(`/v1/to/${encodeURIComponent(address)}`, {
+  function send(token: string, address: string, body: Json, headers: Record<string, string> = {}) {
+    return stack.app.request('/v1/dm', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${token}`, ...headers },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ address, ...body }),
     });
   }
 
@@ -167,14 +167,16 @@ describe('addressed send', () => {
       .toEqual(['hi via bob@laptop', 'hi via bob@mach-123']);
   });
 
-  it('accepts an unencoded @ in the path', async () => {
+  it('requires exactly one of to or address', async () => {
     const { alice } = await seed();
-    const res = await stack.app.request('/v1/to/bob@laptop', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
-      body: JSON.stringify({ text: 'raw' }),
-    });
-    expect(res.status).toBe(201);
+    for (const body of [{ text: 'x' }, { to: 'bob', address: 'bob@laptop', text: 'x' }]) {
+      const res = await stack.app.request('/v1/dm', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify(body),
+      });
+      expect(res.status, JSON.stringify(body)).toBe(400);
+    }
   });
 
   it('addresses agents without a broker as agent@direct', async () => {
@@ -318,7 +320,7 @@ describe('addressed send', () => {
       expect(sent).toHaveLength(1);
     });
 
-    it('rejects reusing a key for a different address or for /v1/dm', async () => {
+    it('rejects reusing a key for a different address or for a send by name', async () => {
       const { alice } = await seed();
       const key = { 'Idempotency-Key': 'retry-2' };
       expect((await send(alice.token, 'bob@laptop', { text: 'same' }, key)).status).toBe(201);

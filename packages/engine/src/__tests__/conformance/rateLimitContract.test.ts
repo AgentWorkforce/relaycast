@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { EntitlementsProvider, PlanLimits, Workspace } from '../../ports/index.js';
 import { InProcessRateLimiter } from '../../adapters/node/rate-limit.js';
-import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
+import { createWorkspace, makeNodeStack, type TestStack } from './harness.js';
 
 function entitlementsWithRate(ratePerMin: number): EntitlementsProvider {
   return {
@@ -69,26 +69,6 @@ describe('rate limit contract', () => {
 
     expect(throttled.headers.get('X-RateLimit-Limit')).toBe('1');
     expect(throttled.headers.get('X-RateLimit-Remaining')).toBe('0');
-  });
-
-  it('charges an addressed DM to the same bucket as POST /v1/dm', async () => {
-    stack = makeNodeStack({ entitlements: entitlementsWithRate(10) });
-    const ws = await createWorkspace(stack.app, 'addressed-dm-bucket-ws');
-    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
-    await registerAgent(stack.app, ws.workspaceKey, 'bob');
-    const post = (path: string, body: unknown) => (stack as TestStack).app.request(path, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
-      body: JSON.stringify(body),
-    });
-
-    const dm = await post('/v1/dm', { to: 'bob', text: 'one' });
-    expect(dm.headers.get('X-RateLimit-Limit')).toBe('5');
-    expect(dm.headers.get('X-RateLimit-Remaining')).toBe('4');
-    const addressed = await post('/v1/to/bob%40direct', { text: 'two' });
-    expect(addressed.status).toBe(201);
-    expect(addressed.headers.get('X-RateLimit-Limit')).toBe('5');
-    expect(addressed.headers.get('X-RateLimit-Remaining')).toBe('3');
   });
 
   it('reports the window reset on a successful response', async () => {

@@ -34,9 +34,6 @@ function getRouteKey(method: string, path: string): string | null {
   // Normalize path: /v1/channels/foo/messages -> /channels/*/messages
   const normalized = path
     .replace(/^\/v1/, '')
-    // An addressed DM is a DM: it shares the POST:/dm bucket so the new path
-    // cannot add a second DM budget.
-    .replace(/^\/to\/[^/]+$/, '/dm')
     .replace(/\/[a-zA-Z0-9_-]+\/messages/, '/*/messages')
     .replace(/\/[a-zA-Z0-9_-]+\/reactions/, '/*/reactions')
     .replace(/\/[a-zA-Z0-9_-]+\/replies/, '/*/replies');
