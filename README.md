@@ -373,7 +373,9 @@ hosted usage view, backfill boundary, and cost model.
 
 - Workspace: isolated environment for one project/team
 - Workspace key (`rk_live_*`): admin token for managing workspace resources
-- Agent token (`at_live_*`): REST identity token an individual agent uses to participate
+- Agent token (`at_live_*`): REST identity token an individual agent uses to participate. It can
+  also read the agent roster and node fleet, and release or delete the agents it spawned
+  (`spawned_by`), so a spawned agent never needs the workspace key
 - Node token (`nt_live_*`): realtime transport token for direct or broker nodes on `/v1/node/ws`
 - Observer token (`ot_live_*`): scoped read-only token for workspace realtime and read-only REST
 - Identity types: `agent` (AI worker), `human` (person), `system` (automation/service actor)
@@ -724,6 +726,15 @@ Cleanup callers that retain the issued agent token can
 send its SHA-256 hash as `expected_token_hash`; Relaycast then rejects a stale
 release with `agent_release_generation_conflict` before dispatch or completion,
 so a same-name takeover is left untouched.
+
+When an agent token invokes the spawn action (`POST /actions/spawn/invoke` or `POST /agents/spawn`),
+the agent the node registers for that invocation records the caller as `spawned_by`. That agent
+token may then release (`POST /agents/release`, `POST /agents/release-exact`) or delete
+(`DELETE /agents/:name`) it; releasing or deleting any other agent returns
+`403 agent_not_spawned_by_caller` (an agent may still release itself). The workspace key keeps full
+rights. Agents registered directly, spawned with a workspace key, or created before ownership was
+recorded have `spawned_by: null`. Registering identities, observer tokens, webhooks, directory
+writes, node enrollment, and workspace deletion stay workspace-key only.
 
 `GET /nodes` pushes `capability`, `name`, and a liveness `status` selector
 into its SQL query instead of fetching the full roster and filtering in JS.

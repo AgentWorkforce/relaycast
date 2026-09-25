@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
 import { AGENT_TOKEN_HASH_PATTERN, AgentTypeSchema, CliTypeSchema } from '@relaycast/types';
@@ -181,6 +181,33 @@ async function identityTargetByName(db: EngineDb, workspaceId: string, name: str
 
 function agentNotFound(c: Parameters<typeof jsonNotFound>[0], name: string) {
   return jsonNotFound(c, 'agent_not_found', `Agent "${name}" not found`);
+}
+
+/**
+ * Agent tokens manage only the agents they spawned (and, when `allowSelf`, the
+ * caller itself). Workspace keys and node tokens are not restricted here. A
+ * missing target passes through so the route keeps its own not-found answer.
+ */
+async function rejectUnownedAgentTarget(
+  c: Context<AppEnv>,
+  name: string,
+  options: { allowSelf: boolean },
+): Promise<Response | null> {
+  const caller = c.get('agent');
+  if (!caller) return null;
+  const [target] = await c.get('db')
+    .select({ id: agents.id, spawnedBy: agents.spawnedBy })
+    .from(agents)
+    .where(and(eq(agents.workspaceId, c.get('workspace').id), eq(agents.name, name)));
+  if (!target) return null;
+  if (target.spawnedBy === caller.id) return null;
+  if (options.allowSelf && target.id === caller.id) return null;
+  return jsonError(
+    c,
+    'agent_not_spawned_by_caller',
+    `Agent "${name}" was not spawned by this agent; managing it requires a workspace key`,
+    403,
+  );
 }
 
 /** Fan an agent status change out to the workspace stream, presence-observing nodes, and webhooks. */
@@ -542,10 +569,10 @@ agentRoutes.post(
   },
 );
 
-// GET /v1/agents - list agents
+// GET /v1/agents - list agents (workspace key, agent token, or scoped observer token)
 agentRoutes.get(
   '/agents',
-  requireWorkspaceRead('agents:read', { allowAgent: false, allowNode: false }),
+  requireWorkspaceRead('agents:read', { allowNode: false }),
   rateLimit,
   async (c) => {
     try {
@@ -565,7 +592,7 @@ agentRoutes.get(
 // GET /v1/agents/:name - get agent by name
 agentRoutes.get(
   '/agents/:name',
-  requireWorkspaceRead('agents:read', { allowAgent: false, allowNode: false }),
+  requireWorkspaceRead('agents:read', { allowNode: false }),
   rateLimit,
   async (c) => {
     try {
@@ -730,16 +757,18 @@ agentRoutes.patch(
   },
 );
 
-// DELETE /v1/agents/:name - delete agent
+// DELETE /v1/agents/:name - delete agent (an agent token may delete only agents it spawned)
 agentRoutes.delete(
   '/agents/:name',
-  requireWorkspaceKey,
+  requireAuth,
   rateLimit,
   async (c) => {
     try {
       const db = c.get('db');
       const workspace = c.get('workspace');
       const name = c.req.param('name');
+      const unowned = await rejectUnownedAgentTarget(c, name, { allowSelf: false });
+      if (unowned) return unowned;
       const deleted = await agentEngine.deleteAgent(db, workspace.id, name);
       if (!deleted) {
         return agentNotFound(c, name);
@@ -984,7 +1013,8 @@ agentRoutes.get(
   },
 );
 
-// POST /v1/agents/release - request a node to release an agent
+// POST /v1/agents/release - request a node to release an agent (an agent token
+// may release itself or agents it spawned)
 agentRoutes.post(
   '/agents/release',
   requireAuth,
@@ -1000,6 +1030,8 @@ agentRoutes.post(
         return parsed.response;
       }
       const { name, reason, delete_agent, expected_token_hash } = parsed.data;
+      const unowned = await rejectUnownedAgentTarget(c, name, { allowSelf: true });
+      if (unowned) return unowned;
 
       const input = {
         name,
@@ -1071,6 +1103,8 @@ agentRoutes.post(
       if (callerAgent?.id === parsed.data.expected_agent_id && parsed.data.delete_agent === true) {
         return jsonError(c, 'agent_self_release_requires_workspace_key', 'Self-release with delete_agent requires a workspace or node credential', 400);
       }
+      const unowned = await rejectUnownedAgentTarget(c, parsed.data.name, { allowSelf: true });
+      if (unowned) return unowned;
 
       const result = await actionEngine.dispatchAgentRelease(
         db,

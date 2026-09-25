@@ -48,10 +48,11 @@ function snapshot(handle: SqliteDbHandle) {
   return tables.map(({ name }) => {
     const rows = handle.sqlite.prepare(`SELECT * FROM "${name}"`).all().map(row => {
       // 0056 adds a conservative reconciliation witness and backfills it from
-      // the existing last_seen value. Exclude that additive bookkeeping field
-      // so this regression continues to compare all pre-existing user data.
+      // the existing last_seen value, and 0062 adds the NULL spawned_by owner.
+      // Exclude those additive fields so this regression continues to compare
+      // all pre-existing user data.
       if (name === 'agents') {
-        const { status_updated_at: _statusUpdatedAt, ...existing } = row as Record<string, unknown>;
+        const { status_updated_at: _statusUpdatedAt, spawned_by: _spawnedBy, ...existing } = row as Record<string, unknown>;
         return JSON.stringify(existing);
       }
       return JSON.stringify(row);

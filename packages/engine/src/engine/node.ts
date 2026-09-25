@@ -1746,6 +1746,34 @@ export async function listNodeAgents(db: Db, workspaceId: string, nodeName: stri
   return rows.map(serializeBinding);
 }
 
+/**
+ * The agent that invoked the spawn this registration answers. The invocation
+ * must be a spawn dispatched to this node for this agent name, so a node can
+ * only attribute agents to the spawns it was actually asked to run. NULL when
+ * the spawn came from a workspace key or node, or is not correlated.
+ */
+async function spawnInvocationCaller(
+  db: Db,
+  workspaceId: string,
+  registration: { invocationId?: string; nodeId: string; agentName: string },
+): Promise<string | null> {
+  if (!registration.invocationId) return null;
+  const [row] = await db
+    .select({ callerId: actionInvocations.callerId })
+    .from(actionInvocations)
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.id, registration.invocationId),
+      eq(actionInvocations.dispatchedNodeId, registration.nodeId),
+      or(
+        eq(actionInvocations.actionName, 'spawn'),
+        sql`${actionInvocations.actionName} LIKE 'spawn:%'`,
+      ),
+      sql`json_extract(${actionInvocations.input}, '$.name') = ${registration.agentName}`,
+    ));
+  return row?.callerId ?? null;
+}
+
 export async function registerAgentViaNode(
   db: Db,
   workspaceId: string,
@@ -1785,6 +1813,11 @@ export async function registerAgentViaNode(
       );
     }
 
+    const spawnedBy = await spawnInvocationCaller(tx, workspaceId, {
+      invocationId: message.invocation_id,
+      nodeId,
+      agentName: message.name,
+    });
     const token = `at_live_${randomHex(16)}`;
     const tokenHash = await sha256Hex(token);
     const now = new Date().toISOString();
@@ -1820,6 +1853,7 @@ export async function registerAgentViaNode(
           originNodeId: nodeId,
           resumable: message.resumable ?? false,
           sessionRef: message.session_ref ?? null,
+          spawnedBy,
         })
         .onConflictDoNothing({ target: [agents.workspaceId, agents.name] })
         .returning();

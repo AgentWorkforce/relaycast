@@ -16,7 +16,15 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Agent tokens can read the agent roster (`GET /v1/agents`, `GET /v1/agents/:name`) and release or delete the agents they spawned, so spawned agents can work without the workspace key. Agents report who spawned them as `spawned_by`.
+
+### Changed
+
+- `POST /v1/agents/release` and `POST /v1/agents/release-exact` with an agent token accept only the caller itself or agents it spawned; other targets return `403 agent_not_spawned_by_caller` and need a workspace key.
 
 ## [8.13.0] - 2026-09-25
 

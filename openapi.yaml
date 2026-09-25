@@ -355,6 +355,13 @@ components:
           type: string
           format: date-time
           description: Last presence update timestamp.
+        spawned_by:
+          type: string
+          nullable: true
+          description: >-
+            Id of the agent whose spawn created this agent. That agent's token
+            may release or delete it. Null when registered directly, spawned
+            with a workspace key, or created before ownership was recorded.
         channels:
           type: array
           description: Channels this agent belongs to. Present on agent detail responses.
@@ -2398,11 +2405,13 @@ paths:
         active or legacy online rows are returned as offline. Reads do not write
         to the database; durable cleanup runs separately. Status filters are
         applied in SQL against derived presence, with online aliasing active.
-        Observer tokens require `agents:read`.
+        Agent tokens may read the roster. Observer tokens require `agents:read`
+        and see only the agents their filters allow.
       tags:
         - Agents
       security:
         - workspaceKey: []
+        - agentToken: []
         - observerToken: []
       parameters:
         - name: status
@@ -2530,11 +2539,13 @@ paths:
       summary: Get agent
       description: >-
         Get agent by name. Presence uses the same five-minute last_seen TTL as
-        the roster, without database writes. Observer tokens require `agents:read`.
+        the roster, without database writes. Agent tokens may read any agent.
+        Observer tokens require `agents:read`.
       tags:
         - Agents
       security:
         - workspaceKey: []
+        - agentToken: []
         - observerToken: []
       parameters:
         - name: name
@@ -2605,11 +2616,13 @@ paths:
       description: >-
         Tombstone an agent, remove memberships, and dead-letter its active deliveries
         in one atomic write. Database adapters without transaction or atomic batch
-        support are refused before these changes.
+        support are refused before these changes. An agent token may delete only
+        agents it spawned (`spawned_by`); other agents need a workspace key.
       tags:
         - Agents
       security:
         - workspaceKey: []
+        - agentToken: []
       parameters:
         - name: name
           in: path
@@ -2619,6 +2632,14 @@ paths:
       responses:
         '204':
           description: Agent deleted
+        '403':
+          description: agent_not_spawned_by_caller; the agent token did not spawn this agent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Agent not found
 
   /agents/{name}/subscription-channel:
     post:
@@ -2950,7 +2971,9 @@ paths:
         tombstoning the agent and deleting any implicit direct node. Irreversible
         release removes memberships and dead-letters active deliveries in the
         same atomic write. Database adapters without transaction or atomic batch
-        support are refused before these changes.
+        support are refused before these changes. An agent token may release
+        itself or agents it spawned (`spawned_by`); releasing any other agent
+        needs a workspace key or node token.
       tags:
         - Agents
       security:
@@ -3000,6 +3023,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: agent_not_spawned_by_caller; the agent token did not spawn this agent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Agent not found
           content:
@@ -3031,7 +3060,8 @@ paths:
         replacement is never released by this operation. Replaying a key
         returns the original terminal invocation and does not enqueue a second
         `action.invoked` webhook, while reusing it with another payload
-        conflicts.
+        conflicts. An agent token may release itself or agents it spawned
+        (`spawned_by`).
       tags: [Agents]
       security:
         - workspaceKey: []
@@ -3074,6 +3104,8 @@ paths:
                   data: { $ref: '#/components/schemas/LifecycleActionInvocation' }
         '400':
           description: Missing or invalid identity/key
+        '403':
+          description: agent_not_spawned_by_caller; the agent token did not spawn this agent
         '409':
           description: agent_identity_mismatch or idempotency_key_reused; no replacement mutation occurred
         '503':

@@ -146,6 +146,9 @@ export const agents = sqliteTable(
     // Migration 0056 backfills historical rows from last_seen and its SQLite
     // trigger advances this value for every later status/liveness write.
     statusUpdatedAt: integer('status_updated_at', { mode: 'timestamp' }),
+    // Id of the agent whose spawn invocation created this one (migration 0062).
+    // Grants that agent release/delete rights over it; NULL when unowned.
+    spawnedBy: text('spawned_by'),
   },
   (table) => [
     uniqueIndex('agents_workspace_name_unique').on(table.workspaceId, table.name),

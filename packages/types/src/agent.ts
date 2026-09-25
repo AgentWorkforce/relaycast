@@ -24,6 +24,8 @@ export const AgentSchema = z.object({
   metadata: z.record(z.string(), z.unknown()),
   last_seen: z.string(),
   created_at: z.string().optional(),
+  /** Id of the agent whose spawn created this one; its token may release or delete it. */
+  spawned_by: z.string().nullable().optional(),
   channels: z.array(z.object({
     id: z.string(),
     name: z.string(),

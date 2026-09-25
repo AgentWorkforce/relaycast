@@ -23,7 +23,7 @@ it('upgrades existing actions and results additively, preserving rows and every 
       rows: db.prepare(`SELECT * FROM ${name}`).all(),
       fks: db.pragma(`foreign_key_list(${name})`),
     }));
-    expect(runMigrations(handle).applied).toEqual([
+    expect(runMigrations(handle).applied.slice(0, 2)).toEqual([
       '0060_durable_task_invocations.sql',
       '0061_messages_workspace_length_id_index.sql',
     ]);
