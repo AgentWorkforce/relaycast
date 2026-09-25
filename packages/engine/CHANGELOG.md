@@ -7,7 +7,17 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `GET /v1/agents` and `GET /v1/agents/:name` accept agent tokens (read-only); observer tokens keep their scope and filters.
+- Migration `0062_agent_spawned_by.sql` adds `agents.spawned_by`. A node's `agent.register` for a spawn invocation dispatched to it (matching the invocation's agent name) records the invoking agent; workspace-key spawns and existing rows stay `null`. Agent resources expose it as `spawned_by`.
+- `DELETE /v1/agents/:name` accepts an agent token for agents it spawned.
+
+### Changed
+
+- `POST /v1/agents/release` and `POST /v1/agents/release-exact` with an agent token accept only the caller itself or agents it spawned; other targets return `403 agent_not_spawned_by_caller`. Workspace keys and node tokens are unchanged.
 
 ## [8.13.0] - 2026-09-25
 
