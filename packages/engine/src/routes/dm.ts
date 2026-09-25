@@ -198,8 +198,10 @@ dmRoutes.post(
         return parsed.response;
       }
       const address = c.req.param('address');
-      const { agent } = requireAgentAddress(address);
-      return await sendDirectMessage(c, { ...parsed.data, to: agent }, address);
+      requireAgentAddress(address);
+      // The engine resolves the recipient from `address`; `to` only feeds the
+      // idempotency fingerprint.
+      return await sendDirectMessage(c, { ...parsed.data, to: address }, address);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

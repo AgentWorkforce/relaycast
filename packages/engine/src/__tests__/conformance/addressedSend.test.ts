@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { makeNodeStack, createWorkspace, registerAgent, FakeSocket, type TestStack } from './harness.js';
+import { attachFakeBatch, makeNodeStack, createWorkspace, registerAgent, FakeSocket, type TestStack } from './harness.js';
 import { agents, messages, nodes } from '../../db/schema.js';
-import { parseAgentAddress, SENDER_ADDRESS_METADATA_KEY } from '../../engine/address.js';
+import { addressSplits, SENDER_ADDRESS_METADATA_KEY } from '../../engine/address.js';
 
 type Json = Record<string, unknown>;
 
@@ -48,17 +48,21 @@ describe('addressed send', () => {
     return { sock, handle };
   }
 
+  async function registerOnNode(node: Awaited<ReturnType<typeof enrollBroker>>, name: string) {
+    await node.handle.handleMessage(JSON.stringify({
+      v: 1, type: 'agent.register', name, resumable: true, session_ref: `sess-${name}`,
+    }));
+    const reply = node.sock.ofType('reply').at(-1) as { ok: boolean; data: { agent_id: string; token: string } };
+    expect(reply?.ok).toBe(true);
+    return { agentId: reply.data.agent_id, token: reply.data.token };
+  }
+
   /** alice is self-connected; bob runs on broker node `laptop` (machine_id `mach-123`). */
   async function seed() {
     const ws = await createWorkspace(stack.app, 'address-ws');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
     const laptop = await enrollBroker(ws, 'node_laptop', 'laptop', 'mach-123');
-    await laptop.handle.handleMessage(JSON.stringify({
-      v: 1, type: 'agent.register', name: 'bob', resumable: true, session_ref: 'sess-bob',
-    }));
-    const reply = laptop.sock.ofType('reply').at(-1) as { ok: boolean; data: { agent_id: string; token: string } };
-    expect(reply?.ok).toBe(true);
-    const bob = { agentId: reply.data.agent_id, token: reply.data.token };
+    const bob = await registerOnNode(laptop, 'bob');
     return { ws, alice, bob, laptop };
   }
 
@@ -85,12 +89,66 @@ describe('addressed send', () => {
     await stack.runtime.deps.db.update(agents).set({ locationNodeId: nodeId }).where(eq(agents.id, agentId));
   }
 
-  it('parses agent@machine on the last @', () => {
-    expect(parseAgentAddress('bob@laptop')).toEqual({ agent: 'bob', machine: 'laptop' });
-    expect(parseAgentAddress('a@b@laptop')).toEqual({ agent: 'a@b', machine: 'laptop' });
-    expect(parseAgentAddress('bob')).toBeNull();
-    expect(parseAgentAddress('@laptop')).toBeNull();
-    expect(parseAgentAddress('bob@')).toBeNull();
+  it('reads every @ as a candidate agent/machine split', () => {
+    expect(addressSplits('bob@laptop')).toEqual([{ agent: 'bob', machine: 'laptop' }]);
+    expect(addressSplits('a@b@laptop')).toEqual([
+      { agent: 'a', machine: 'b@laptop' },
+      { agent: 'a@b', machine: 'laptop' },
+    ]);
+    expect(addressSplits('bob')).toEqual([]);
+    expect(addressSplits('@laptop')).toEqual([]);
+    expect(addressSplits('bob@')).toEqual([]);
+  });
+
+  it('resolves @ inside an agent name or a machine name, and rejects an ambiguous address', async () => {
+    const { ws, alice } = await seed();
+    const email = await enrollBroker(ws, 'node_email', 'ops@example.com', undefined);
+    await registerOnNode(email, 'carol');
+    const plain = await enrollBroker(ws, 'node_example', 'example.com', undefined);
+    await registerOnNode(plain, 'dave@ops');
+
+    expect((await send(alice.token, 'carol@ops@example.com', { text: 'machine has @' })).status).toBe(201);
+    expect((await send(alice.token, 'dave@ops@example.com', { text: 'agent has @' })).status).toBe(201);
+    await stack.settle();
+    expect(deliveredDms(email.sock).map((message) => message.text)).toEqual(['machine has @']);
+    expect(deliveredDms(plain.sock).map((message) => message.text)).toEqual(['agent has @']);
+
+    // `x@ops@example.com` is agent `x` on `ops@example.com` or agent `x@ops`
+    // on `example.com`; when both exist the address names neither.
+    await registerOnNode(email, 'x');
+    await registerOnNode(plain, 'x@ops');
+    const ambiguous = await send(alice.token, 'x@ops@example.com', { text: 'which one?' });
+    expect(ambiguous.status).toBe(400);
+    expect(await errorCode(ambiguous)).toBe('ambiguous_address');
+  });
+
+  it('reserves `direct`: a broker named direct is addressed by machine_id, never @direct', async () => {
+    const { ws, alice } = await seed();
+    const node = await enrollBroker(ws, 'node_named_direct', 'direct', 'mach-d');
+    await registerOnNode(node, 'erin');
+
+    const res = await stack.app.request('/v1/agents/erin', { headers: { authorization: `Bearer ${ws.workspaceKey}` } });
+    expect(((await res.json()) as { data: Json }).data.address).toBe('erin@mach-d');
+    expect(await errorCode(await send(alice.token, 'erin@direct', { text: 'x' }))).toBe('address_not_found');
+    expect((await send(alice.token, 'erin@mach-d', { text: 'x' })).status).toBe(201);
+  });
+
+  it('rolls back an addressed send when the agent moves between selection and commit', async () => {
+    const { ws, alice, bob } = await seed();
+    await enrollBroker(ws, 'node_desktop', 'desktop', 'mach-456');
+    const sqlite = stack.runtime.handle.sqlite;
+    let moved = false;
+    attachFakeBatch(stack, stack.runtime.deps.db, async () => {
+      if (moved) return;
+      moved = true;
+      sqlite.prepare('UPDATE agents SET location_node_id = ? WHERE id = ?').run('node_desktop', bob.agentId);
+    });
+
+    const res = await send(alice.token, 'bob@laptop', { text: 'raced' });
+    expect(moved).toBe(true);
+    expect(res.status).toBe(404);
+    expect(await errorCode(res)).toBe('address_not_found');
+    expect(await stack.runtime.deps.db.select().from(messages).where(eq(messages.body, 'raced'))).toHaveLength(0);
   });
 
   it('routes to the agent by node name and by machine_id, delivering on that machine', async () => {
@@ -302,6 +360,13 @@ describe('addressed send', () => {
         headers: { authorization: `Bearer ${bob.token}` },
       })).json()) as { data: Json };
       expect(self.data.address).toBe('bob@laptop');
+
+      const patched = (await (await stack.app.request('/v1/agents/bob', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json', ...auth },
+        body: JSON.stringify({ persona: 'reviewer' }),
+      })).json()) as { data: Json };
+      expect(patched.data.address).toBe('bob@laptop');
     });
 
     it('carries the sender address on the DM response, live delivery, and history, and it round-trips', async () => {

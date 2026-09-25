@@ -187,7 +187,7 @@ export async function runAtomicWrites(
 /** Normalize atomic admission sentinels across SQLite adapters (D1 wraps the message).
  * Keep driver-specific error decoding at this port boundary; engine callers use a stable kind.
  */
-export type DatabaseConstraintKind = 'mailbox_capacity' | 'workspace_delivery_capacity' | 'a2a_registration_changed';
+export type DatabaseConstraintKind = 'mailbox_capacity' | 'workspace_delivery_capacity' | 'a2a_registration_changed' | 'address_changed';
 
 export function databaseConstraintKind(error: unknown): DatabaseConstraintKind | undefined {
   const seen = new Set<unknown>();
@@ -204,6 +204,8 @@ export function databaseConstraintKind(error: unknown): DatabaseConstraintKind |
     // only for a row that trips both; either is a capacity refusal.
     if (/NOT NULL constraint failed: deliveries\.workspace_id/i.test(message)) return 'mailbox_capacity';
     if (/NOT NULL constraint failed: deliveries\.status/i.test(message)) return 'workspace_delivery_capacity';
+    // Addressed DM admission: the recipient left the addressed node before commit.
+    if (/NOT NULL constraint failed: messages\.body/i.test(message)) return 'address_changed';
     cause = record.cause;
   }
   return undefined;

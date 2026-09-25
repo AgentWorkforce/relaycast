@@ -39,8 +39,10 @@ import { transformForClient } from './wsTransform.js';
 import { codedError } from '../lib/httpError.js';
 import {
   addressNodeSelection,
-  assertAgentAtAddress,
+  addressNotFound,
+  addressSplits,
   formatAgentAddress,
+  selectAddressedRecipient,
   SENDER_ADDRESS_METADATA_KEY,
   senderAddressField,
 } from './address.js';
@@ -71,9 +73,9 @@ interface SendDmOptions {
   /** Server-resolved workspace growth policy; absent => no workspace guard. */
   workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy;
   /**
-   * `agent@machine` the caller addressed. Checked against the same recipient
-   * row the DM is sent to, after durable replay lookup, so an accepted retry
-   * still replays after the agent moves.
+   * `agent@machine` the caller addressed; replaces the `to` lookup. Resolved
+   * after durable replay lookup, so an accepted retry still replays after the
+   * agent moves, and re-checked inside the admission write.
    */
   address?: string;
 }
@@ -321,6 +323,7 @@ function buildDmMessageWrites(
   createdAt = new Date(),
   inboundRegistration?: { id: string; tokenHash?: string },
   senderAddress?: string | null,
+  addressedRecipient?: { agentId: string; nodeId: string },
 ): AtomicWrite[] {
   const hasAttachments = attachments.length > 0;
   const metadata = dmMessageMetadata(data, senderAddress);
@@ -341,7 +344,16 @@ function buildDmMessageWrites(
             AND a.id = ${fromAgentId} AND a.workspace_id = ${workspaceId}
             ${inboundRegistration.tokenHash === undefined ? sql`` : sql`AND a.token_hash = ${inboundRegistration.tokenHash}`}
         )` : fromAgentId,
-        body: data.text,
+        // NULL violates messages.body when an addressed recipient left the
+        // addressed node (or was released) after it was selected, so the whole
+        // admission rolls back instead of delivering to its new location.
+        body: addressedRecipient ? sql<string>`(
+          SELECT ${data.text} WHERE EXISTS (
+            SELECT 1 FROM agents a
+            WHERE a.id = ${addressedRecipient.agentId} AND a.workspace_id = ${workspaceId}
+              AND a.status <> 'released' AND a.location_node_id = ${addressedRecipient.nodeId}
+          )
+        )` : data.text,
         hasAttachments,
         metadata,
         sessionRef,
@@ -532,20 +544,22 @@ export async function sendDm(
   const workspacePolicy = options.resolveWorkspaceDeliveryPolicy
     ? await options.resolveWorkspaceDeliveryPolicy() : options.workspaceDeliveryPolicy;
 
-  const [recipient] = await db
+  const recipientQuery = db
     .select({ agent: agents, node: addressNodeSelection })
     .from(agents)
-    .leftJoin(nodes, eq(nodes.id, agents.locationNodeId))
-    .where(and(
+    .leftJoin(nodes, eq(nodes.id, agents.locationNodeId));
+  const [recipient] = options.address !== undefined
+    ? [selectAddressedRecipient(options.address, await recipientQuery.where(and(
+      eq(agents.workspaceId, workspaceId),
+      inArray(agents.name, addressSplits(options.address).map((split) => split.agent)),
+    )))]
+    : await recipientQuery.where(and(
       eq(agents.workspaceId, workspaceId),
       data.to === '@self' ? eq(agents.id, fromAgentId) : eq(agents.name, data.to),
     ));
-
-  // Checked on the same row the DM is sent to: there is no separate
-  // resolve-then-send lookup for a concurrent move or re-register to slip into.
-  if (options.address !== undefined) {
-    assertAgentAtAddress(options.address, recipient?.agent, recipient?.node ?? null);
-  }
+  const addressedRecipient = options.address !== undefined && recipient?.agent.locationNodeId
+    ? { agentId: recipient.agent.id, nodeId: recipient.agent.locationNodeId }
+    : undefined;
   const toAgent = recipient?.agent;
   if (!toAgent) {
     throw codedError(`Agent "${data.to}" not found`, 'agent_not_found', 404);
@@ -615,7 +629,7 @@ export async function sendDm(
   const publicResult = buildDmResult({
     id: messageId, agentId: fromAgentId, body: data.text, createdAt,
     metadata: dmMessageMetadata(data, senderAddress),
-  }, conv, fromAgent, data, attachments);
+  }, conv, fromAgent, options.address !== undefined ? { ...data, to: toAgent.name } : data, attachments);
   const eventData = buildDmReceivedEventData(publicResult, { fromName: fromAgent.name });
   const workspacePayload = transformForClient({
     type: 'dm.received', workspace_id: workspaceId, data: eventData, timestamp: createdAt.toISOString(),
@@ -625,7 +639,7 @@ export async function sendDm(
   const persist = () => runAtomicWrites(db, (writeDb) => {
     const writes = buildDmMessageWrites(writeDb, workspaceId, fromAgentId, conv.channelId, data, attachments, messageId, createdAt,
       options.receivedA2aAgentId ? { id: options.receivedA2aAgentId, tokenHash: options.receivedA2aTokenHash } : undefined,
-      senderAddress);
+      senderAddress, addressedRecipient);
 
     if (egressId && a2aTarget && egressPayload) {
       // First statement owns the request identity; a competing attempt rolls
@@ -691,6 +705,9 @@ export async function sendDm(
     const results = await persist();
     if (egressId || options.receivedA2aAgentId || inboundId) admittedEventSeq = (results[results.length - 1] as { seq: number }[])[0].seq;
   } catch (error) {
+    if (options.address !== undefined && databaseConstraintKind(error) === 'address_changed') {
+      throw addressNotFound(options.address);
+    }
     if (options.receivedA2aAgentId && databaseConstraintKind(error) === 'a2a_registration_changed') {
       throw codedError('Authenticated A2A registration changed before admission', 'a2a_registration_changed', 401);
     }
