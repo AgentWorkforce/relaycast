@@ -163,8 +163,8 @@ export function DashboardLayout() {
   const mobileDetailsLabel = selectedAgentData ? 'Agent' : threadMessageId ? 'Thread' : 'Console';
 
   return (
-    <div className="brand-grid min-h-screen">
-      <div className="hidden min-h-screen lg:flex lg:gap-3">
+    <div className="brand-grid h-dvh overflow-hidden">
+      <div className="hidden h-full min-h-0 overflow-hidden lg:flex lg:gap-3">
         <AgentSidebar
           channels={channels}
           agents={agents}
@@ -175,10 +175,10 @@ export function DashboardLayout() {
           wsStatus={wsStatus}
           onSelectChannel={handleSelectChannel}
           onSelectAgent={handleSelectAgent}
-          className="m-3 mr-0 lg:sticky lg:top-3 lg:self-start lg:h-[calc(100vh-1.5rem)]"
+          className="m-3 mr-0 min-h-0"
         />
 
-        <main className="flex min-w-0 flex-1 flex-col py-3 pr-3">
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden py-3 pr-3">
           <div className="flex min-h-0 flex-1 gap-3">
             <ChatFeed
               selectedChannel={selectedChannel}
@@ -194,8 +194,8 @@ export function DashboardLayout() {
         </main>
       </div>
 
-      <div className="flex min-h-screen flex-col gap-3 p-3 lg:hidden">
-        <div className="brand-glass flex items-center gap-2 p-2">
+      <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden p-3 lg:hidden">
+        <div className="brand-glass flex shrink-0 items-center gap-2 p-2">
           <MobilePaneButton
             label="Browse"
             icon={<PanelLeft className="h-4 w-4" />}

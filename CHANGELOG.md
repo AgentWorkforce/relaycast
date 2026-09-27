@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Observer chat and activity now scroll independently within the viewport, display oldest to newest, and preserve reading position when new entries arrive.
 
 ## [8.13.0] - 2026-09-25
 
