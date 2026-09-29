@@ -45,7 +45,12 @@ export function addressSplits(address: string): AgentAddress[] {
  */
 export function formatAgentAddress(agentName: string, node: AddressNode): string | null {
   if (!node) return null;
-  if (node.role === 'direct') return `${agentName}@${node.machineId || DIRECT_MACHINE}`;
+  // A direct node may predate the desktop's address-safe machine IDs. Do not
+  // publish an ambiguous address when such a client sends an `@` in its ID.
+  if (node.role === 'direct') {
+    const machine = node.machineId && !node.machineId.includes('@') ? node.machineId : DIRECT_MACHINE;
+    return `${agentName}@${machine}`;
+  }
   const usable = [node.name, node.machineId].filter((id): id is string => !!id && id !== DIRECT_MACHINE);
   const machine = usable.find((id) => !id.includes('@')) ?? usable[0];
   return machine ? `${agentName}@${machine}` : null;

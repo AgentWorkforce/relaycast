@@ -159,6 +159,27 @@ describe('addressed send', () => {
     expect(await stack.runtime.deps.db.select().from(messages).where(eq(messages.body, 'raced'))).toHaveLength(0);
   });
 
+  it('rejects a stale direct machine address when node.register changes its machine ID before admission', async () => {
+    const { alice, bob } = await seed();
+    const nodeId = `node_direct_${alice.agentId}`;
+    await stack.runtime.deps.db.update(nodes).set({ machineId: 'old-machine' }).where(eq(nodes.id, nodeId));
+    const sqlite = stack.runtime.handle.sqlite;
+    let changed = false;
+    attachFakeBatch(stack, stack.runtime.deps.db, async () => {
+      if (changed) return;
+      changed = true;
+      sqlite.prepare('UPDATE nodes SET machine_id = ? WHERE id = ?').run('new-machine', nodeId);
+    });
+
+    const stale = await send(bob.token, 'alice@old-machine', { text: 'stale address' });
+    expect(changed).toBe(true);
+    expect(stale.status).toBe(404);
+    expect(await errorCode(stale)).toBe('address_not_found');
+    expect(await stack.runtime.deps.db.select().from(messages).where(eq(messages.body, 'stale address'))).toHaveLength(0);
+    expect((await send(bob.token, 'alice@new-machine', { text: 'current address' })).status).toBe(201);
+    expect((await send(bob.token, 'alice@direct', { text: 'legacy alias' })).status).toBe(201);
+  });
+
   it('routes to the agent by node name and by machine_id, delivering on that machine', async () => {
     const { alice, laptop } = await seed();
 
@@ -240,6 +261,23 @@ describe('addressed send', () => {
       tags: ['implicit', 'direct', 'sdk'], version: 'relay-desktop/test',
     }));
     expect((await send(bob.token, 'alice@khaliqs-macbook-pro-a1b2c3', { text: 'after restart' })).status).toBe(201);
+  });
+
+  it('publishes a replyable legacy alias for a direct machine ID containing @', async () => {
+    const { ws, alice, bob } = await seed();
+    const nodeId = `node_direct_${alice.agentId}`;
+    await stack.runtime.deps.db.update(nodes).set({ machineId: 'ops@example.com' }).where(eq(nodes.id, nodeId));
+    const example = await enrollBroker(ws, 'node_example', 'example.com');
+    await registerOnNode(example, 'alice@ops');
+
+    const roster = await stack.app.request('/v1/agents', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    const entries = ((await roster.json()) as { data: Array<{ name: string; address: string }> }).data;
+    expect(entries.find((entry) => entry.name === 'alice')?.address).toBe('alice@direct');
+    expect(await errorCode(await send(bob.token, 'alice@ops@example.com', { text: 'ambiguous' })))
+      .toBe('ambiguous_address');
+    expect((await send(bob.token, 'alice@direct', { text: 'replyable' })).status).toBe(201);
   });
 
   it('rejects addresses that do not match the agent, without revealing which part failed', async () => {
