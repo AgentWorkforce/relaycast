@@ -2,8 +2,8 @@ import { nodes } from '../db/schema.js';
 import { codedError } from '../lib/httpError.js';
 
 /**
- * Machine name for agents on a direct node (self-connected agents), whose node
- * name is an internal id rather than a machine.
+ * Legacy machine alias for agents on a direct node. Older clients do not send
+ * a machine_id, and existing exact addresses must keep resolving.
  */
 export const DIRECT_MACHINE = 'direct';
 
@@ -33,7 +33,8 @@ export function addressSplits(address: string): AgentAddress[] {
 }
 
 /**
- * Canonical address: the broker node's name, or `direct` for a direct node.
+ * Canonical address: the broker node's name, or the direct node's machine_id
+ * when its client supplies one. Older direct nodes still use `direct`.
  * `direct` is reserved, so a broker whose name is `direct` is addressed by its
  * machine_id instead. A machine identifier without `@` is preferred, so the
  * address has one reading wherever the node offers one (an `@` in the machine
@@ -44,21 +45,20 @@ export function addressSplits(address: string): AgentAddress[] {
  */
 export function formatAgentAddress(agentName: string, node: AddressNode): string | null {
   if (!node) return null;
-  if (node.role === 'direct') return `${agentName}@${DIRECT_MACHINE}`;
+  if (node.role === 'direct') return `${agentName}@${node.machineId || DIRECT_MACHINE}`;
   const usable = [node.name, node.machineId].filter((id): id is string => !!id && id !== DIRECT_MACHINE);
   const machine = usable.find((id) => !id.includes('@')) ?? usable[0];
   return machine ? `${agentName}@${machine}` : null;
 }
 
 /**
- * Whether `machine` names the node the agent is on. `direct` matches only a
- * direct node; a broker matches by node name or machine_id, never `direct`.
+ * Whether `machine` names the node the agent is on. `direct` remains an alias
+ * for every direct node; a broker matches by node name or machine_id.
  */
 export function machineMatches(machine: string, node: AddressNode): boolean {
   if (!node) return false;
-  if (machine === DIRECT_MACHINE || node.role === 'direct') {
-    return machine === DIRECT_MACHINE && node.role === 'direct';
-  }
+  if (node.role === 'direct') return machine === DIRECT_MACHINE || machine === node.machineId;
+  if (machine === DIRECT_MACHINE) return false;
   return machine === node.name || machine === node.machineId;
 }
 

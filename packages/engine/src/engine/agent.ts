@@ -208,6 +208,7 @@ export async function registerAgent(
   workspaceId: string,
   data: {
     name: string;
+    directMachinePrefix?: string;
     type?: string;
     persona?: string;
     metadata?: Record<string, unknown>;
@@ -236,6 +237,7 @@ export async function registerAgent(
     );
   }
   const agentId = generateId();
+  const directMachineId = data.directMachinePrefix ? `${data.directMachinePrefix}-${agentId}` : null;
   const token = `at_live_${randomHex(16)}`;
   const tokenHash = await sha256Hex(token);
   const directNodeId = directNodeIdForAgent(agentId);
@@ -257,6 +259,7 @@ export async function registerAgent(
         id: directNodeId,
         workspaceId,
         name: `direct-${agentId}`,
+        machineId: directMachineId,
         tokenHash: directNodeTokenHash,
         kind: 'ws',
         role: 'direct',
@@ -356,6 +359,7 @@ export async function registerAgent(
     // instead of falling back to an "unknown workspace" placeholder.
     workspace_id: workspaceId,
     name: agent.name,
+    address: `${agent.name}@${directMachineId ?? 'direct'}`,
     handle: agent.handle ?? `@${agent.name}`,
     token,
     status: agent.status,

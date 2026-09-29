@@ -327,7 +327,9 @@ components:
             `agent@machine` for `address` on `POST /dm`. `machine` is the broker
             node's name (for a cloud sandbox, its node name), or its
             `machine_id` when the name contains `@` or is `direct`; `direct`
-            for a self-connected agent. Null when the agent is not hosted anywhere:
+            for a self-connected agent without a supplied `machine_id` (newer
+            direct-node clients publish their readable `machine_id` instead).
+            Null when the agent is not hosted anywhere:
             released, finished, or its node was deleted.
         type:
           type: string
@@ -2359,6 +2361,14 @@ paths:
               properties:
                 name:
                   type: string
+                direct_machine_prefix:
+                  type: string
+                  pattern: '^[a-z0-9]+(-[a-z0-9]+)*$'
+                  maxLength: 40
+                  description: >-
+                    Optional normalized computer name for an implicit direct node.
+                    Relaycast appends the new agent id to make its published
+                    machine address unique. Omit for legacy `agent@direct`.
                 type:
                   type: string
                   enum: [agent, human, system]
@@ -3866,8 +3876,9 @@ paths:
         need to guess their own routed name.
 
         `address` is `agent@machine`: `machine` must be the agent's current
-        broker node (by node name or `machine_id`), or `direct` for a
-        self-connected agent. An address that no longer matches — the agent
+        broker node (by node name or `machine_id`), or a self-connected direct
+        node's `machine_id`; `direct` remains an alias for direct nodes. An
+        address that no longer matches — the agent
         moved, was released, or its node was deleted — returns
         `404 address_not_found` instead of reaching the agent elsewhere, and
         the check is repeated inside the admission write. Names may contain

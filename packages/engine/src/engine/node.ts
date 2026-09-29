@@ -709,6 +709,7 @@ export async function registerNode(
         maxAgents: 1,
         activeAgents: 1,
         tags: directTags,
+        machineId: message.machine_id ?? existing.machineId,
         version: message.version,
         status: 'online',
         handlersLive: false,

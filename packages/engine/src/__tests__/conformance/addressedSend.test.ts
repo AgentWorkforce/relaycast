@@ -197,6 +197,51 @@ describe('addressed send', () => {
     expect(await errorCode(await send(bob.token, 'alice@laptop', { text: 'x' }))).toBe('address_not_found');
   });
 
+  it('returns unique readable addresses at registration for direct nodes on one computer', async () => {
+    const ws = await createWorkspace(stack.app, 'desktop-registration');
+    const register = async (name: string, prefix: string) => {
+      const response = await stack.app.request('/v1/agents', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+        body: JSON.stringify({ name, direct_machine_prefix: prefix }),
+      });
+      return { status: response.status, body: await response.json() as { data: { id: string; address: string } } };
+    };
+    const first = await register('desktop-one', 'khaliqs-macbook-pro');
+    const second = await register('desktop-two', 'khaliqs-macbook-pro');
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(first.body.data.address).toBe(`desktop-one@khaliqs-macbook-pro-${first.body.data.id}`);
+    expect(second.body.data.address).toBe(`desktop-two@khaliqs-macbook-pro-${second.body.data.id}`);
+    expect(first.body.data.address).not.toBe(second.body.data.address);
+    expect((await register('bad-prefix', 'Khaliq’s MacBook')).status).toBe(400);
+  });
+
+  it('publishes a direct node machine_id and keeps @direct as a delivery alias', async () => {
+    const { ws, alice, bob } = await seed();
+    const nodeId = `node_direct_${alice.agentId}`;
+    const sock = new FakeSocket();
+    const handle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, nodeId, sock);
+    await handle.handleMessage(JSON.stringify({
+      v: 1, type: 'node.register', node_id: nodeId, name: `direct-${alice.agentId}`,
+      machine_id: 'khaliqs-macbook-pro-a1b2c3', capabilities: [], max_agents: 1,
+      tags: ['implicit', 'direct', 'sdk'], version: 'relay-desktop/test',
+    }));
+    expect(sock.ofType('reply').at(-1)?.ok).toBe(true);
+    const roster = await stack.app.request('/v1/agents', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    expect(JSON.stringify(await roster.json())).toContain('alice@khaliqs-macbook-pro-a1b2c3');
+    expect((await send(bob.token, 'alice@khaliqs-macbook-pro-a1b2c3', { text: 'new address' })).status).toBe(201);
+    expect((await send(bob.token, 'alice@direct', { text: 'old address' })).status).toBe(201);
+    await handle.handleMessage(JSON.stringify({
+      v: 1, type: 'node.register', node_id: nodeId, name: `direct-${alice.agentId}`,
+      machine_id: 'khaliqs-macbook-pro-a1b2c3', capabilities: [], max_agents: 1,
+      tags: ['implicit', 'direct', 'sdk'], version: 'relay-desktop/test',
+    }));
+    expect((await send(bob.token, 'alice@khaliqs-macbook-pro-a1b2c3', { text: 'after restart' })).status).toBe(201);
+  });
+
   it('rejects addresses that do not match the agent, without revealing which part failed', async () => {
     const { ws, alice } = await seed();
     for (const address of ['bob@desktop', 'carol@laptop', 'Bob@laptop', 'bob@Laptop', ' bob@laptop']) {
