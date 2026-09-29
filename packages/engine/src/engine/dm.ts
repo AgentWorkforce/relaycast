@@ -323,7 +323,7 @@ function buildDmMessageWrites(
   createdAt = new Date(),
   inboundRegistration?: { id: string; tokenHash?: string },
   senderAddress?: string | null,
-  addressedRecipient?: { agentId: string; nodeId: string },
+  addressedRecipient?: { agentId: string; nodeId: string; machine: string },
 ): AtomicWrite[] {
   const hasAttachments = attachments.length > 0;
   const metadata = dmMessageMetadata(data, senderAddress);
@@ -349,9 +349,14 @@ function buildDmMessageWrites(
         // admission rolls back instead of delivering to its new location.
         body: addressedRecipient ? sql<string>`(
           SELECT ${data.text} WHERE EXISTS (
-            SELECT 1 FROM agents a
+            SELECT 1 FROM agents a JOIN nodes n ON n.id = a.location_node_id
             WHERE a.id = ${addressedRecipient.agentId} AND a.workspace_id = ${workspaceId}
               AND a.status <> 'released' AND a.location_node_id = ${addressedRecipient.nodeId}
+              AND (
+                (n.role = 'direct' AND (${addressedRecipient.machine} = 'direct' OR n.machine_id = ${addressedRecipient.machine}))
+                OR (n.role <> 'direct' AND ${addressedRecipient.machine} <> 'direct'
+                  AND (n.name = ${addressedRecipient.machine} OR n.machine_id = ${addressedRecipient.machine}))
+              )
           )
         )` : data.text,
         hasAttachments,
@@ -558,7 +563,11 @@ export async function sendDm(
       data.to === '@self' ? eq(agents.id, fromAgentId) : eq(agents.name, data.to),
     ));
   const addressedRecipient = options.address !== undefined && recipient?.agent.locationNodeId
-    ? { agentId: recipient.agent.id, nodeId: recipient.agent.locationNodeId }
+    ? {
+      agentId: recipient.agent.id,
+      nodeId: recipient.agent.locationNodeId,
+      machine: addressSplits(options.address).find((split) => split.agent === recipient.agent.name)!.machine,
+    }
     : undefined;
   const toAgent = recipient?.agent;
   if (!toAgent) {
