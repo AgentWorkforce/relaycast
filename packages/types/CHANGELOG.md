@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- Node-provider `action.invoke` frames may carry authenticated `caller_id` and `caller_name` provenance.
+- Opted-in node-provider `action.invoke` frames may carry authenticated `caller_id` and `caller_name` provenance; exported metadata constants identify protocol version `v1`.
 
 ## [8.13.0] - 2026-09-25
 

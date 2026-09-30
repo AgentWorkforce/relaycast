@@ -16,6 +16,7 @@ import {
   actionInvocations,
   agentNodeBindings,
   agents,
+  nodeProviders,
   observerTokens,
 } from '../../db/schema.js';
 import { handleNodeControlMessage, handleProviderDisconnect, markNodeOffline } from '../../engine/node.js';
@@ -25,7 +26,11 @@ import { providerAttachDecision } from '../../engine/placement.js';
 import { drainNodeInvocations } from '../../engine/action.js';
 import { observerAllowsEvent } from '../../engine/observerToken.js';
 import type { InvocationCompletionDeps } from '../../engine/invocationCompletion.js';
-import type { FleetRelaycastToBrokerMessage } from '@relaycast/types';
+import {
+  FLEET_ACTION_CALLER_METADATA_KEY,
+  FLEET_ACTION_CALLER_METADATA_VERSION,
+  type FleetRelaycastToBrokerMessage,
+} from '@relaycast/types';
 
 /**
  * Transport-agnostic socket the adapter writes to. The Node entrypoint adapts a
@@ -476,7 +481,17 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     if (socket) {
       let socketAccepted = false;
       try {
-        socket.send(JSON.stringify(message));
+        // Caller provenance is deliberately rebuilt here, at the serialized
+        // socket boundary. The action builder cannot safely snapshot it: the
+        // caller may be deleted while later placement/claim operations await,
+        // and old providers use a strict parser that rejects unknown fields.
+        // The single query below both negotiates support for this exact action
+        // and re-reads the invocation's live FK. No await occurs after it and
+        // before the synchronous send.
+        const outbound = message.type === 'action.invoke'
+          ? await this.actionInvokeAtSendBoundary(workspaceId, nodeId, providerName, message)
+          : message;
+        socket.send(JSON.stringify(outbound));
         socketAccepted = true;
       } catch {
         this.detachProvider(workspaceId, nodeId, providerName);
@@ -500,6 +515,44 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     while (queue.length > 100) queue.shift();
     this.nodeQueues.set(queueKey, queue);
     return true;
+  }
+
+  private async actionInvokeAtSendBoundary(
+    workspaceId: string,
+    nodeId: string,
+    providerName: string,
+    message: Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }>,
+  ): Promise<Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }>> {
+    // Strip any caller fields supplied by an earlier layer. Only this durable
+    // re-read may authenticate the caller presented to a provider.
+    const { caller_id: _callerId, caller_name: _callerName, ...base } = message;
+    const [snapshot] = await this.db
+      .select({
+        callerId: actionInvocations.callerId,
+        callerName: actionInvocations.callerName,
+        capabilities: nodeProviders.capabilities,
+      })
+      .from(actionInvocations)
+      .innerJoin(nodeProviders, and(
+        eq(nodeProviders.workspaceId, workspaceId),
+        eq(nodeProviders.nodeId, nodeId),
+        eq(nodeProviders.name, providerName),
+      ))
+      .where(and(
+        eq(actionInvocations.workspaceId, workspaceId),
+        eq(actionInvocations.id, message.invocation_id),
+      ));
+    const supportsCaller = snapshot?.capabilities?.some((capability) => (
+      capability.name === message.action
+      && capability.metadata?.[FLEET_ACTION_CALLER_METADATA_KEY]
+        === FLEET_ACTION_CALLER_METADATA_VERSION
+    )) ?? false;
+    if (!supportsCaller || !snapshot?.callerId) return base;
+    return {
+      ...base,
+      caller_id: snapshot.callerId,
+      ...(snapshot.callerName ? { caller_name: snapshot.callerName } : {}),
+    };
   }
 
   isNodeConnected(workspaceId: string, nodeId: string): boolean {

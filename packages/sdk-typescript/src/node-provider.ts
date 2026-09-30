@@ -1,4 +1,6 @@
 import {
+  FLEET_ACTION_CALLER_METADATA_KEY,
+  FLEET_ACTION_CALLER_METADATA_VERSION,
   parseFleetRelaycastToBrokerMessage,
   type FleetCapability,
   type FleetCapabilityAcceptance,
@@ -349,7 +351,13 @@ export class NodeProviderClient {
       ...(cap.options.kind ? { kind: cap.options.kind } : {}),
       ...(cap.options.global ? { global: true } : {}),
       ...(cap.options.queue ? { queue: true } : {}),
-      ...(cap.options.metadata ? { metadata: cap.options.metadata } : {}),
+      // This SDK understands the optional caller fields on action.invoke.
+      // Advertise that fact per action so a newer engine can preserve wire
+      // compatibility with providers still running an older strict parser.
+      metadata: {
+        ...(cap.options.metadata ?? {}),
+        [FLEET_ACTION_CALLER_METADATA_KEY]: FLEET_ACTION_CALLER_METADATA_VERSION,
+      },
     }));
     this.request(id, {
       type: 'node.register',

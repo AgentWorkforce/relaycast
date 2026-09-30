@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NodeProviderClient } from '../node-provider.js';
+import {
+  FLEET_ACTION_CALLER_METADATA_KEY,
+  FLEET_ACTION_CALLER_METADATA_VERSION,
+} from '@relaycast/types';
 
 /**
  * A fake node-ws server: captures frames the client sends and lets the test
@@ -111,7 +115,12 @@ describe('NodeProviderClient', () => {
     expect(register).toMatchObject({ type: 'node.register', name: 'alpha', node_id: 'node_a' });
     expect(register.provider).toMatchObject({ name: 'py' });
     expect((register.provider as { instance_id: string }).instance_id).toBeTruthy();
-    expect(register.capabilities).toEqual([{ name: 'run-etl' }]);
+    expect(register.capabilities).toEqual([{
+      name: 'run-etl',
+      metadata: {
+        [FLEET_ACTION_CALLER_METADATA_KEY]: FLEET_ACTION_CALLER_METADATA_VERSION,
+      },
+    }]);
 
     sock.emit(acceptAll(register));
     await expect(node.whenRegistered()).resolves.toBeTruthy();

@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- Node-provider action dispatch includes the durable authenticated caller identity on `action.invoke` frames.
+- Node-provider action dispatch includes the durable authenticated caller identity on opted-in `action.invoke` frames, reloaded at the final send boundary; non-opted-in strict providers retain the prior wire shape.
 
 ## [8.13.1] - 2026-09-30
 

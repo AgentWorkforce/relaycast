@@ -2928,24 +2928,14 @@ async function dispatchNodeInvocation(args: {
   type ActionInvokeFrame = {
     v: 1; type: 'action.invoke'; invocation_id: string; action: string;
     agent_id?: string; agent_name?: string; input: ReturnType<typeof toFleetWireJson>;
-    caller_id?: string; caller_name?: string;
     task_execution?: ReturnType<typeof taskExecution>;
   };
-  const [caller] = await args.db
-    .select({ id: actionInvocations.callerId, name: actionInvocations.callerName })
-    .from(actionInvocations)
-    .where(and(
-      eq(actionInvocations.workspaceId, args.workspaceId),
-      eq(actionInvocations.id, args.invocationId),
-    ));
   const frame: ActionInvokeFrame = {
     v: 1 as const,
     type: 'action.invoke' as const,
     invocation_id: args.invocationId,
     action: args.action,
     ...(args.agent ? { agent_id: args.agent.id, agent_name: args.agent.name } : {}),
-    ...(caller?.id ? { caller_id: caller.id } : {}),
-    ...(caller?.name ? { caller_name: caller.name } : {}),
     input: toFleetWireJson(args.input),
   };
   // Agent-hosted createInvocation() already persisted the immutable handler

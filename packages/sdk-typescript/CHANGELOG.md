@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `NodeHandlerContext` exposes the authenticated action caller as `callerAgentId` and `callerAgentName`.
+- `NodeProviderClient` negotiates caller-provenance support per action, and `NodeHandlerContext` exposes the authenticated caller as `callerAgentId` and `callerAgentName` when present.
 
 ## [8.13.0] - 2026-09-25
 
