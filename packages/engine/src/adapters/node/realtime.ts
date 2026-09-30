@@ -524,12 +524,29 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     return sql<number>`EXISTS (
       SELECT 1
       FROM node_providers AS caller_provider,
-           json_each(caller_provider.capabilities) AS caller_capability
+           json_each(
+             CASE
+               WHEN json_valid(caller_provider.capabilities)
+                 AND json_type(caller_provider.capabilities) = 'array'
+               THEN caller_provider.capabilities
+               ELSE '[]'
+             END
+           ) AS caller_capability
       WHERE caller_provider.workspace_id = ${workspaceId}
         AND caller_provider.node_id = ${nodeId}
         AND caller_provider.name = ${providerName}
-        AND json_extract(caller_capability.value, '$.name') = ${actionName}
-        AND json_extract(caller_capability.value, ${metadataPath})
+        AND json_extract(
+              CASE WHEN json_valid(caller_capability.value)
+                THEN caller_capability.value ELSE '{}'
+              END,
+              '$.name'
+            ) = ${actionName}
+        AND json_extract(
+              CASE WHEN json_valid(caller_capability.value)
+                THEN caller_capability.value ELSE '{}'
+              END,
+              ${metadataPath}
+            )
           = ${FLEET_ACTION_CALLER_METADATA_VERSION}
     )`;
   }

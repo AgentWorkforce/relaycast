@@ -502,6 +502,42 @@ describe('node providers', () => {
     expect(frame).not.toHaveProperty('caller_name');
   });
 
+  it('tolerates primitive entries while negotiating caller metadata', async () => {
+    const ws = await createWorkspace(stack.app, 'np-invoke-mixed-capabilities');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    await enrollNode(ws, 'node_a', 'alpha');
+    const provider = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'py', [{
+      name: 'run-etl',
+      kind: 'action',
+      metadata: callerAware,
+    }]);
+    await stack.runtime.handle.db
+      .update(nodeProviders)
+      .set({
+        capabilities: [
+          'legacy-capability',
+          { name: 'run-etl', kind: 'action', metadata: callerAware },
+        ] as unknown as Cap[],
+      })
+      .where(and(
+        eq(nodeProviders.workspaceId, ws.workspaceId),
+        eq(nodeProviders.nodeId, 'node_a'),
+        eq(nodeProviders.name, 'py'),
+      ));
+
+    const res = await stack.app.request('/v1/nodes/alpha/actions/run-etl/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { rows: 3 } }),
+    });
+    expect(res.status).toBe(201);
+    expect(provider.sock.ofType('action.invoke').at(-1)).toMatchObject({
+      action: 'run-etl',
+      caller_id: caller.agentId,
+      caller_name: 'caller',
+    });
+  });
+
   it('reloads caller provenance at the socket boundary and omits a deleted caller', async () => {
     const ws = await createWorkspace(stack.app, 'np-invoke-deleted-caller');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
