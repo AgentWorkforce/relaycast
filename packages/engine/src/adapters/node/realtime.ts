@@ -16,7 +16,6 @@ import {
   actionInvocations,
   agentNodeBindings,
   agents,
-  nodeProviders,
   observerTokens,
 } from '../../db/schema.js';
 import { handleNodeControlMessage, handleProviderDisconnect, markNodeOffline } from '../../engine/node.js';
@@ -85,6 +84,12 @@ const OBSERVER_TOKEN_REVALIDATE_MS = 5_000;
 interface QueuedNodeMessage {
   key: string;
   message: Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }>;
+}
+
+interface ActionCallerSnapshot {
+  callerId: string | null;
+  callerName: string | null;
+  callerSupported: number;
 }
 
 /**
@@ -282,7 +287,17 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
         return false;
       }
       const [authorized] = await this.db
-        .select({ id: actionInvocations.id })
+        .select({
+          id: actionInvocations.id,
+          callerId: actionInvocations.callerId,
+          callerName: actionInvocations.callerName,
+          callerSupported: this.actionCallerSupport(
+            workspaceId,
+            nodeId,
+            providerName,
+            message.action,
+          ),
+        })
         .from(actionInvocations)
         .innerJoin(agents, and(
           eq(agents.workspaceId, workspaceId),
@@ -343,7 +358,12 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       // rotation cannot interleave after acceptance but before the frame is
       // handed to the provider. Remote owners implement this proof inside
       // their own serialized send boundary.
-      return this.sendToProviderUnchecked(workspaceId, nodeId, providerName, message);
+      return this.sendToProviderUnchecked(
+        workspaceId,
+        nodeId,
+        providerName,
+        this.actionInvokeWithCaller(message, authorized),
+      );
     }
 
     // V1 carried no dispatch-attempt generation. Reject it explicitly so an
@@ -389,13 +409,28 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
               AND ${actions.isActive} = 1
           )`,
         ))
-        .returning({ id: actionInvocations.id });
+        .returning({
+          id: actionInvocations.id,
+          callerId: actionInvocations.callerId,
+          callerName: actionInvocations.callerName,
+          callerSupported: this.actionCallerSupport(
+            workspaceId,
+            nodeId,
+            providerName,
+            message.action,
+          ),
+        });
       if (!accepted) return false;
 
       // No await occurs after the exact identity update resumes and before the
       // synchronous socket handoff. A prune/replacement must therefore win
       // before authorization or after this frame has already been accepted.
-      return this.sendToProviderUnchecked(workspaceId, nodeId, providerName, message);
+      return this.sendToProviderUnchecked(
+        workspaceId,
+        nodeId,
+        providerName,
+        this.actionInvokeWithCaller(message, accepted),
+      );
     }
 
     if (
@@ -452,7 +487,17 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
             AND ${actions.isActive} = 1
         )`,
       ))
-      .returning({ id: actionInvocations.id });
+      .returning({
+        id: actionInvocations.id,
+        callerId: actionInvocations.callerId,
+        callerName: actionInvocations.callerName,
+        callerSupported: this.actionCallerSupport(
+          workspaceId,
+          nodeId,
+          providerName,
+          message.action,
+        ),
+      });
     if (!accepted) return false;
 
     // No await occurs between the acceptance CAS above resuming and
@@ -461,7 +506,47 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     // `action.invoke` is never rejected by the send itself here (an
     // unreachable provider queues it), so a recorded attempt always has a
     // frame behind it.
-    return this.sendToProviderUnchecked(workspaceId, nodeId, providerName, message);
+    return this.sendToProviderUnchecked(
+      workspaceId,
+      nodeId,
+      providerName,
+      this.actionInvokeWithCaller(message, accepted),
+    );
+  }
+
+  private actionCallerSupport(
+    workspaceId: string,
+    nodeId: string,
+    providerName: string,
+    actionName: string,
+  ) {
+    const metadataPath = `$.metadata."${FLEET_ACTION_CALLER_METADATA_KEY}"`;
+    return sql<number>`EXISTS (
+      SELECT 1
+      FROM node_providers AS caller_provider,
+           json_each(caller_provider.capabilities) AS caller_capability
+      WHERE caller_provider.workspace_id = ${workspaceId}
+        AND caller_provider.node_id = ${nodeId}
+        AND caller_provider.name = ${providerName}
+        AND json_extract(caller_capability.value, '$.name') = ${actionName}
+        AND json_extract(caller_capability.value, ${metadataPath})
+          = ${FLEET_ACTION_CALLER_METADATA_VERSION}
+    )`;
+  }
+
+  private actionInvokeWithCaller(
+    message: Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }>,
+    snapshot: ActionCallerSnapshot,
+  ): Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }> {
+    // Discard fields supplied by earlier layers. Only the snapshot returned by
+    // the final authorization statement is allowed to authenticate a caller.
+    const { caller_id: _callerId, caller_name: _callerName, ...base } = message;
+    if (!snapshot.callerSupported || !snapshot.callerId) return base;
+    return {
+      ...base,
+      caller_id: snapshot.callerId,
+      ...(snapshot.callerName ? { caller_name: snapshot.callerName } : {}),
+    };
   }
 
   private async sendToProviderUnchecked(
@@ -481,17 +566,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     if (socket) {
       let socketAccepted = false;
       try {
-        // Caller provenance is deliberately rebuilt here, at the serialized
-        // socket boundary. The action builder cannot safely snapshot it: the
-        // caller may be deleted while later placement/claim operations await,
-        // and old providers use a strict parser that rejects unknown fields.
-        // The single query below both negotiates support for this exact action
-        // and re-reads the invocation's live FK. No await occurs after it and
-        // before the synchronous send.
-        const outbound = message.type === 'action.invoke'
-          ? await this.actionInvokeAtSendBoundary(workspaceId, nodeId, providerName, message)
-          : message;
-        socket.send(JSON.stringify(outbound));
+        socket.send(JSON.stringify(message));
         socketAccepted = true;
       } catch {
         this.detachProvider(workspaceId, nodeId, providerName);
@@ -515,44 +590,6 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     while (queue.length > 100) queue.shift();
     this.nodeQueues.set(queueKey, queue);
     return true;
-  }
-
-  private async actionInvokeAtSendBoundary(
-    workspaceId: string,
-    nodeId: string,
-    providerName: string,
-    message: Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }>,
-  ): Promise<Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }>> {
-    // Strip any caller fields supplied by an earlier layer. Only this durable
-    // re-read may authenticate the caller presented to a provider.
-    const { caller_id: _callerId, caller_name: _callerName, ...base } = message;
-    const [snapshot] = await this.db
-      .select({
-        callerId: actionInvocations.callerId,
-        callerName: actionInvocations.callerName,
-        capabilities: nodeProviders.capabilities,
-      })
-      .from(actionInvocations)
-      .innerJoin(nodeProviders, and(
-        eq(nodeProviders.workspaceId, workspaceId),
-        eq(nodeProviders.nodeId, nodeId),
-        eq(nodeProviders.name, providerName),
-      ))
-      .where(and(
-        eq(actionInvocations.workspaceId, workspaceId),
-        eq(actionInvocations.id, message.invocation_id),
-      ));
-    const supportsCaller = snapshot?.capabilities?.some((capability) => (
-      capability.name === message.action
-      && capability.metadata?.[FLEET_ACTION_CALLER_METADATA_KEY]
-        === FLEET_ACTION_CALLER_METADATA_VERSION
-    )) ?? false;
-    if (!supportsCaller || !snapshot?.callerId) return base;
-    return {
-      ...base,
-      caller_id: snapshot.callerId,
-      ...(snapshot.callerName ? { caller_name: snapshot.callerName } : {}),
-    };
   }
 
   isNodeConnected(workspaceId: string, nodeId: string): boolean {
