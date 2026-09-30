@@ -81,6 +81,15 @@ info:
     establish support; clients must validate the current connection and provider.
     Lost registration replies are not safe to retry automatically.
 
+    Node action capabilities negotiate authenticated caller provenance with
+    capability metadata `{ "relay.action-caller": "v1" }`. Only an exact
+    opt-in permits Relaycast to add optional `caller_id` and `caller_name` to
+    that capability's `action.invoke` frames. The values are re-read from the
+    authenticated invocation at the final serialized socket-send boundary and
+    are omitted when the caller was deleted. Non-opted-in providers retain the
+    legacy strict frame shape. Providers must treat an absent `caller_id` as no
+    authenticated caller; `caller_name` is informational and never authority.
+
     Telemetry attribution (optional, all requests):
 
     Clients may declare who is driving a request so server-side product
@@ -5503,6 +5512,10 @@ paths:
         socket. A `spawn:<harness>` name with no shadow action falls through to
         the node's native capacity. Fails fast with `handler_unavailable` when
         the owning provider is offline unless the capability opted into queueing.
+        An action capability whose metadata contains
+        `relay.action-caller: "v1"` receives the authenticated agent principal
+        in optional `caller_id` / `caller_name` `action.invoke` fields, loaded
+        at the final send boundary. Other providers receive the legacy frame.
       tags:
         - Nodes
       security:

@@ -935,6 +935,22 @@ adapters accept this capability only when their `NodeConnectionRegistry` impleme
 the provider delivery-readiness hooks; adapters without those hooks remain on legacy
 immediate delivery and receive a rejected capability result.
 
+Node action providers negotiate authenticated caller provenance per capability.
+An action capability that includes metadata
+`{ "relay.action-caller": "v1" }` may receive optional `caller_id` and
+`caller_name` fields on its `action.invoke` frames. Relaycast derives those
+fields from the authenticated invocation record at the final socket-send
+boundary; provider input can neither set nor override them. If the caller has
+been deleted, both fields are omitted. Providers that do not advertise the
+exact metadata value receive the legacy frame shape, which preserves rolling
+upgrade compatibility with strict older parsers. The current TypeScript
+`NodeProviderClient` adds this metadata to each registered handler and exposes
+the values as `ctx.callerAgentId` and `ctx.callerAgentName`. Authorization-sensitive
+handlers must fail closed when `callerAgentId` is absent; a name alone is never
+an authenticated identity. Realtime adapters that terminate the provider socket
+outside the engine must apply the same durable re-read and negotiation inside
+their final serialized send boundary, including redispatch after reconnect.
+
 Queue/cron-backed adapters that own node dispatch outside the Node adapter should call
 `drainNodeInvocations` after node reconnect/register/heartbeat and
 `sweepTimedOutInvocations` from cron via `@relaycast/engine/node-invocations`.
@@ -948,6 +964,10 @@ input. Completion emits `action.completed` or `action.failed` to the caller's no
 workspace observers, and subscriptions. Action discovery is filtered by `available_to`
 for agent-token callers, workspace-key callers do not see restricted actions without
 an agent identity, and invoke enforces the same rule.
+
+For opted-in node providers, `action.invoke` also carries the live authenticated
+caller identity as optional `caller_id` and `caller_name`; see the node-provider
+negotiation above. These fields are transport authority, not action input.
 
 Action invocation retries are idempotent. `POST /v1/actions/:name/invoke` accepts an
 `Idempotency-Key` scoped to the authenticated workspace, agent, and action; replaying

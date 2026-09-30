@@ -2925,11 +2925,12 @@ async function dispatchNodeInvocation(args: {
     }
   }
 
-  const frame: {
+  type ActionInvokeFrame = {
     v: 1; type: 'action.invoke'; invocation_id: string; action: string;
     agent_id?: string; agent_name?: string; input: ReturnType<typeof toFleetWireJson>;
     task_execution?: ReturnType<typeof taskExecution>;
-  } = {
+  };
+  const frame: ActionInvokeFrame = {
     v: 1 as const,
     type: 'action.invoke' as const,
     invocation_id: args.invocationId,

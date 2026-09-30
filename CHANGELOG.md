@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Opted-in node-provider action handlers receive the authenticated invoking agent identity in their handler context, with legacy strict providers retaining the prior wire shape.
 
 ## [8.13.1] - 2026-09-30
 

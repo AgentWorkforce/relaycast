@@ -32,6 +32,15 @@ export type FleetDeliveryMode = z.infer<typeof FleetDeliveryModeSchema>;
  */
 export const FLEET_DELIVERY_CURSOR_CAPABILITY = 'relay:delivery-cursor-v1';
 
+/**
+ * Capability metadata opt-in for authenticated caller provenance on
+ * `action.invoke`. Engines must omit the additive caller fields unless the
+ * exact action capability advertises this value, keeping older strict wire
+ * parsers compatible during rolling upgrades.
+ */
+export const FLEET_ACTION_CALLER_METADATA_KEY = 'relay.action-caller';
+export const FLEET_ACTION_CALLER_METADATA_VERSION = 'v1';
+
 const FleetWireEnvelopeFields = {
   v: FleetWireVersionSchema,
 } as const;
@@ -480,6 +489,8 @@ export const FleetActionInvokeMessageSchema = z
     action: z.string(),
     agent_id: z.string().optional(),
     agent_name: z.string().optional(),
+    caller_id: z.string().optional(),
+    caller_name: z.string().optional(),
     input: FleetWireJsonValueSchema,
     task_execution: FleetTaskExecutionSchema.optional(),
   })
