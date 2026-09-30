@@ -502,6 +502,48 @@ describe('node providers', () => {
     expect(frame).not.toHaveProperty('caller_name');
   });
 
+  it('omits caller fields on a default-provider replacement before it registers', async () => {
+    const ws = await createWorkspace(stack.app, 'np-invoke-default-reconnect-before-register');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    await enrollNode(ws, 'node_a', 'alpha');
+    const original = await attachProvider(ws.workspaceId, 'node_a', 'alpha', undefined, [{
+      name: 'run-etl',
+      kind: 'action',
+      metadata: callerAware,
+    }]);
+    const registry = stack.runtime.realtime;
+    const originalSend = registry.sendAuthorizedActionToProvider!.bind(registry);
+    let releaseAuthorization!: () => void;
+    let markAuthorizationStarted!: () => void;
+    const authorizationStarted = new Promise<void>((resolve) => { markAuthorizationStarted = resolve; });
+    const authorizationRelease = new Promise<void>((resolve) => { releaseAuthorization = resolve; });
+    vi.spyOn(registry, 'sendAuthorizedActionToProvider').mockImplementationOnce(async (...args) => {
+      markAuthorizationStarted();
+      await authorizationRelease;
+      return originalSend(...args);
+    });
+
+    const invoked = stack.app.request('/v1/nodes/alpha/actions/run-etl/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { rows: 3 } }),
+    });
+    await authorizationStarted;
+
+    // Keep the prior persisted capability row while replacing the socket,
+    // matching a reconnect that reaches dispatch before node.register.
+    registry.detachProvider(ws.workspaceId, 'node_a', 'default');
+    const replacement = attachSocket(ws.workspaceId, 'node_a');
+    await original.handle.handleClose();
+    releaseAuthorization();
+
+    expect((await invoked).status).toBe(201);
+    const frame = replacement.sock.ofType('action.invoke').at(-1)!;
+    expect(frame).toMatchObject({ action: 'run-etl', input: { rows: 3 } });
+    expect(frame).not.toHaveProperty('caller_id');
+    expect(frame).not.toHaveProperty('caller_name');
+  });
+
   it('tolerates primitive entries while negotiating caller metadata', async () => {
     const ws = await createWorkspace(stack.app, 'np-invoke-mixed-capabilities');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');

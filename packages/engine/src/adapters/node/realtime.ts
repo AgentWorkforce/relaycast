@@ -25,11 +25,7 @@ import { providerAttachDecision } from '../../engine/placement.js';
 import { drainNodeInvocations } from '../../engine/action.js';
 import { observerAllowsEvent } from '../../engine/observerToken.js';
 import type { InvocationCompletionDeps } from '../../engine/invocationCompletion.js';
-import {
-  FLEET_ACTION_CALLER_METADATA_KEY,
-  FLEET_ACTION_CALLER_METADATA_VERSION,
-  type FleetRelaycastToBrokerMessage,
-} from '@relaycast/types';
+import type { FleetRelaycastToBrokerMessage } from '@relaycast/types';
 
 /**
  * Transport-agnostic socket the adapter writes to. The Node entrypoint adapts a
@@ -63,6 +59,8 @@ interface NodeConn {
   instanceId?: string;
   /** Null means legacy/immediate; a set means cursor-gated ready identities. */
   deliveryReadyAgentIds?: Set<string> | null;
+  /** Exact actions that negotiated authenticated caller provenance on this socket. */
+  callerAwareActions?: ReadonlySet<string>;
   lastSeen: number;
 }
 
@@ -89,7 +87,6 @@ interface QueuedNodeMessage {
 interface ActionCallerSnapshot {
   callerId: string | null;
   callerName: string | null;
-  callerSupported: number;
 }
 
 /**
@@ -291,12 +288,6 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
           id: actionInvocations.id,
           callerId: actionInvocations.callerId,
           callerName: actionInvocations.callerName,
-          callerSupported: this.actionCallerSupport(
-            workspaceId,
-            nodeId,
-            providerName,
-            message.action,
-          ),
         })
         .from(actionInvocations)
         .innerJoin(agents, and(
@@ -362,7 +353,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
         workspaceId,
         nodeId,
         providerName,
-        this.actionInvokeWithCaller(message, authorized),
+        this.actionInvokeWithCaller(workspaceId, nodeId, providerName, message, authorized),
       );
     }
 
@@ -413,12 +404,6 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
           id: actionInvocations.id,
           callerId: actionInvocations.callerId,
           callerName: actionInvocations.callerName,
-          callerSupported: this.actionCallerSupport(
-            workspaceId,
-            nodeId,
-            providerName,
-            message.action,
-          ),
         });
       if (!accepted) return false;
 
@@ -429,7 +414,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
         workspaceId,
         nodeId,
         providerName,
-        this.actionInvokeWithCaller(message, accepted),
+        this.actionInvokeWithCaller(workspaceId, nodeId, providerName, message, accepted),
       );
     }
 
@@ -491,12 +476,6 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
         id: actionInvocations.id,
         callerId: actionInvocations.callerId,
         callerName: actionInvocations.callerName,
-        callerSupported: this.actionCallerSupport(
-          workspaceId,
-          nodeId,
-          providerName,
-          message.action,
-        ),
       });
     if (!accepted) return false;
 
@@ -510,55 +489,22 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       workspaceId,
       nodeId,
       providerName,
-      this.actionInvokeWithCaller(message, accepted),
+      this.actionInvokeWithCaller(workspaceId, nodeId, providerName, message, accepted),
     );
   }
 
-  private actionCallerSupport(
+  private actionInvokeWithCaller(
     workspaceId: string,
     nodeId: string,
     providerName: string,
-    actionName: string,
-  ) {
-    const metadataPath = `$.metadata."${FLEET_ACTION_CALLER_METADATA_KEY}"`;
-    return sql<number>`EXISTS (
-      SELECT 1
-      FROM node_providers AS caller_provider,
-           json_each(
-             CASE
-               WHEN json_valid(caller_provider.capabilities)
-                 AND json_type(caller_provider.capabilities) = 'array'
-               THEN caller_provider.capabilities
-               ELSE '[]'
-             END
-           ) AS caller_capability
-      WHERE caller_provider.workspace_id = ${workspaceId}
-        AND caller_provider.node_id = ${nodeId}
-        AND caller_provider.name = ${providerName}
-        AND json_extract(
-              CASE WHEN json_valid(caller_capability.value)
-                THEN caller_capability.value ELSE '{}'
-              END,
-              '$.name'
-            ) = ${actionName}
-        AND json_extract(
-              CASE WHEN json_valid(caller_capability.value)
-                THEN caller_capability.value ELSE '{}'
-              END,
-              ${metadataPath}
-            )
-          = ${FLEET_ACTION_CALLER_METADATA_VERSION}
-    )`;
-  }
-
-  private actionInvokeWithCaller(
     message: Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }>,
     snapshot: ActionCallerSnapshot,
   ): Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }> {
     // Discard fields supplied by earlier layers. Only the snapshot returned by
     // the final authorization statement is allowed to authenticate a caller.
     const { caller_id: _callerId, caller_name: _callerName, ...base } = message;
-    if (!snapshot.callerSupported || !snapshot.callerId) return base;
+    const connection = this.providerConnection(this.nodeKey(workspaceId, nodeId), providerName);
+    if (!connection?.callerAwareActions?.has(message.action) || !snapshot.callerId) return base;
     return {
       ...base,
       caller_id: snapshot.callerId,
@@ -663,6 +609,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     providerName: string,
     instanceId: string,
     connectionId: string,
+    callerAwareActions: readonly string[] = [],
   ): void {
     const conn = this.nodeConnections.get(connectionId);
     if (!conn) return;
@@ -710,6 +657,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     }
     conn.providerName = providerName;
     conn.instanceId = instanceId;
+    conn.callerAwareActions = new Set(callerAwareActions);
     conn.lastSeen = Date.now();
     providers.set(providerName, connectionId);
   }
@@ -802,6 +750,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       if (conn) {
         conn.providerName = undefined;
         conn.deliveryReadyAgentIds = undefined;
+        conn.callerAwareActions = undefined;
       }
     }
     this.nodeQueues.delete(this.providerQueueKey(nodeKey, providerName));

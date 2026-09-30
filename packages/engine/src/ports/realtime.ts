@@ -218,6 +218,7 @@ export interface NodeConnectionRegistry {
     providerName: string,
     instanceId: string,
     connectionId: string,
+    callerAwareActions?: readonly string[],
   ): void;
 
   /**
