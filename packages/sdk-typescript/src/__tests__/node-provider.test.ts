@@ -151,9 +151,15 @@ describe('NodeProviderClient', () => {
   });
 
   it('runs a handler on action.invoke and replies with the output', async () => {
+    let handlerContext: unknown;
     const node = new NodeProviderClient({
       ...baseOptions,
-      capabilities: { 'run-etl': async (input: unknown) => ({ echoed: input }) },
+      capabilities: {
+        'run-etl': async (input: unknown, context) => {
+          handlerContext = context;
+          return { echoed: input };
+        },
+      },
     });
     node.serve();
     const sock = newSocket();
@@ -161,8 +167,21 @@ describe('NodeProviderClient', () => {
     sock.emit(acceptAll(sock.lastRegister()));
     await node.whenRegistered();
 
-    sock.emit({ v: 1, type: 'action.invoke', invocation_id: 'inv-1', action: 'run-etl', input: { rows: 3 } });
+    sock.emit({
+      v: 1,
+      type: 'action.invoke',
+      invocation_id: 'inv-1',
+      action: 'run-etl',
+      caller_id: 'agent-caller',
+      caller_name: 'listener',
+      input: { rows: 3 },
+    });
     await vi.waitFor(() => expect(sock.sentOfType('action.result')).toHaveLength(1));
+    expect(handlerContext).toMatchObject({
+      invocationId: 'inv-1',
+      callerAgentId: 'agent-caller',
+      callerAgentName: 'listener',
+    });
     expect(sock.sentOfType('action.result').at(-1)).toEqual({
       v: 1,
       type: 'action.result',

@@ -451,11 +451,17 @@ describe('node providers', () => {
     const res = await stack.app.request('/v1/nodes/alpha/actions/run-etl/invoke', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
-      body: JSON.stringify({ input: { rows: 3 } }),
+      body: JSON.stringify({ input: { rows: 3, caller_id: 'spoofed' } }),
     });
     expect(res.status).toBe(201);
     const body = await res.json() as { data: { invocation_id: string } };
-    expect(py.sock.ofType('action.invoke').at(-1)).toMatchObject({ invocation_id: body.data.invocation_id, action: 'run-etl' });
+    expect(py.sock.ofType('action.invoke').at(-1)).toMatchObject({
+      invocation_id: body.data.invocation_id,
+      action: 'run-etl',
+      caller_id: caller.agentId,
+      caller_name: 'caller',
+      input: { rows: 3, caller_id: 'spoofed' },
+    });
     expect(rb.sock.ofType('action.invoke')).toHaveLength(0);
   });
 
