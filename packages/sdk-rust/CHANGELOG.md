@@ -8,7 +8,11 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased - Major]
 
+- Workspace creation accepts arbitrary JSON metadata, and updates shallow merge metadata with top-level null values deleting keys.
+
 ### Fixed
+
+- Workspace reads and updates accept current engine responses that omit the private API key hash.
 
 - Anonymous keyed workspace bootstrap rejects remote HTTP and redirects, preventing its recovery capability from reaching another origin.
 - `RelayError::retry_after_ms()` exposes the authoritative server delay for exact-release overload handling.

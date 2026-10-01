@@ -6,6 +6,10 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 
 ## [Unreleased]
 
+## [8.16.0] - 2026-10-01
+
+- Workspace creation accepts arbitrary JSON metadata, and updates shallow merge metadata with top-level null values deleting keys.
+
 ## [7.0.0] - 2026-08-07
 
 - `NodeRosterEntry.load` is optional; provider and direct-agent heartbeats no longer label placeholder utilization as measured.

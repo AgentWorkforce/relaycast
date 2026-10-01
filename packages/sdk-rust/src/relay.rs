@@ -164,6 +164,7 @@ impl RelayCast {
         let WorkspaceBootstrapOptions {
             base_url,
             provenance,
+            metadata,
             idempotency_key,
             bootstrap_secret,
         } = options;
@@ -213,13 +214,17 @@ impl RelayCast {
         } else {
             reqwest::Client::new()
         };
+        let mut body = serde_json::json!({ "name": name, "provenance": provenance });
+        if let Some(metadata) = metadata {
+            body["metadata"] = serde_json::Value::Object(metadata);
+        }
         let mut request = client
             .post(&url)
             .header("Content-Type", "application/json")
             .header("X-SDK-Version", SDK_VERSION)
             .header("X-Relaycast-Origin-Client", DEFAULT_ORIGIN_CLIENT)
             .header("X-Relaycast-Origin-Version", SDK_VERSION)
-            .json(&serde_json::json!({ "name": name, "provenance": provenance }));
+            .json(&body);
         if let Some(key) = idempotency_key {
             request = request.header("Idempotency-Key", key);
         }

@@ -10,7 +10,8 @@ import { getRequestLogger, toErrorDetails } from './lib/logger.js';
 import { asCodedError, safeClientErrorMessage } from './lib/httpError.js';
 import { jsonError, jsonMalformedBody, jsonNotFound } from './lib/httpResponse.js';
 import { requiredOriginInfo } from './lib/origin.js';
-import { emitServerEvent } from './lib/serverTelemetry.js';
+import { emitServerEvent, loadTelemetryWorkspace } from './lib/serverTelemetry.js';
+import { runInBackground } from './routes/background.js';
 import {
   authenticateNodeWs,
   authenticateRealtimeWs,
@@ -129,7 +130,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     if (response.status === 101) {
       emitServerEvent(c, authResult.workspace.id, 'relaycast_server_ws_session_started', {
         session_scope: 'workspace',
-      });
+      }, { workspace: authResult.workspace });
     }
     return response;
   });
@@ -172,10 +173,18 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
       originActor,
     });
     if (response.status === 101) {
-      emitServerEvent(c, authResult.node.workspaceId, 'relaycast_server_ws_session_started', {
-        node_id: authResult.node.id,
-        session_scope: 'node',
-      });
+      const workspaceId = authResult.node.workspaceId;
+      runInBackground(
+        c,
+        (async () => {
+          const workspace = await loadTelemetryWorkspace(db, workspaceId);
+          emitServerEvent(c, workspaceId, 'relaycast_server_ws_session_started', {
+            node_id: authResult.node.id,
+            session_scope: 'node',
+          }, { workspace });
+        })(),
+        'emit node session telemetry',
+      );
     }
     return response;
   });

@@ -180,6 +180,27 @@ if (ensured.existed) {
 }
 ```
 
+### Workspace metadata
+
+Set labels when creating a workspace with `RelayCast.createWorkspace(name, { metadata })`
+or `POST /v1/workspaces`. Owners can update them with `PATCH /v1/workspace`:
+
+```json
+{ "metadata": { "cloud_workspace_id": "ws_123", "cloud_org_id": "org_456", "old_label": null } }
+```
+
+Updates shallow-merge top-level keys; `null` removes a key, and nested objects are
+replaced in full. `GET /v1/workspace` returns the resulting `metadata`. TypeScript,
+Python, Rust, and Swift SDKs support these fields. Metadata is visible to any
+valid workspace observer token and must never contain credentials; secret-like
+key rejection only guards against accidental labeling of secrets. Metadata is
+limited to 16 KiB of serialized UTF-8 JSON, 100 top-level keys, and 128 Unicode
+code points per key. Objects and arrays may nest eight levels below the top-level
+metadata object; primitive values do not add a nesting level. Secret-like keys (including tokens, passwords, credentials,
+and API/private keys) and prototype keys are rejected at any depth. The merged
+result must fit the same limits. Creation retries include metadata in the request
+digest, so changing metadata with the same idempotency key returns `409`.
+
 ### Workspace lifecycle
 
 Persistent workspaces are the default. For CI, previews, and other throwaway
@@ -323,11 +344,11 @@ const relay = new RelayCast({
 `agent-relay-cli/agent/claude-code` or `pear/user/send-message-box`. (It
 replaced the older `harness` option and its `X-Relaycast-Harness` header.)
 
-Relaycast has no user table of its own — a workspace is an API-key row — so
-these identity fields are the only way hosted usage can be reported per person
-or per organization rather than only per workspace. `agentRelayUserId` doubles
-as the analytics person key when `agentRelayDistinctId` is unset, so a host that
-knows the user only has to set one field. `agentRelayMachineId` is sent
+An acting agent whose `metadata.cloud_user_id` is set attributes events to that
+user, ahead of these fields. Otherwise `agentRelayUserId`, then
+`agentRelayDistinctId`, is the analytics person key, so a host that knows the
+user only has to set one field. Without any of them an event belongs to the
+workspace and creates no person. `agentRelayMachineId` is sent
 *alongside* the person key rather than instead of it, which is what makes
 "how many machines share this workspace" and "are they one account or several"
 answerable.

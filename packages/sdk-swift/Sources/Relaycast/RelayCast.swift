@@ -51,11 +51,13 @@ public struct RelayCastOptions: Equatable, Sendable {
 }
 
 public struct WorkspaceBootstrapOptions: Equatable, Sendable {
+    public var metadata: [String: JSONValue]?
     public var apiKey: String?
     public var baseURL: String?
     public var agentRelayDistinctID: String?
 
-    public init(apiKey: String? = nil, baseURL: String? = nil, agentRelayDistinctID: String? = nil) {
+    public init(apiKey: String? = nil, baseURL: String? = nil, agentRelayDistinctID: String? = nil, metadata: [String: JSONValue]? = nil) {
+        self.metadata = metadata
         self.apiKey = apiKey
         self.baseURL = baseURL
         self.agentRelayDistinctID = agentRelayDistinctID
@@ -155,7 +157,7 @@ public final class RelayCast: @unchecked Sendable {
         let (workspace, _) = try await workspaceRequest(
             method: "POST",
             path: "/v1/workspaces",
-            body: CreateWorkspaceRequest(name: name),
+            body: CreateWorkspaceRequest(name: name, metadata: options.metadata),
             options: options
         ) as (CreateWorkspaceResponse, Int)
         return workspace
@@ -189,7 +191,7 @@ public final class RelayCast: @unchecked Sendable {
         let (workspace, status) = try await workspaceRequest(
             method: "POST",
             path: "/v1/workspaces",
-            body: CreateWorkspaceRequest(name: name),
+            body: CreateWorkspaceRequest(name: name, metadata: options.metadata),
             options: options
         ) as (CreateWorkspaceResponse, Int)
         return EnsureWorkspaceResponse(

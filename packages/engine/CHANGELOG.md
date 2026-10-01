@@ -13,6 +13,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - `emitServerEvent` only accepts `SERVER_TELEMETRY_EVENTS` names and requires each event's required properties at compile time; `workspace_id` always comes from the `workspaceId` argument.
 
+## [8.16.0] - 2026-10-01
+
+### Added
+
+- Workspace creation accepts public metadata; workspace updates merge top-level keys, with null deleting a key, while enforcing JSON size limits and rejecting secret-like keys.
+
+## [8.15.0] - 2026-10-01
+
+### Added
+
+- Server events belong to the acting agent's cloud user, carry sender fields and org/workspace groups, and fall back to a non-person workspace id; `TelemetryEvent` gains optional `groups`, `setOnce` and `processPersonProfile` for sinks (see [TELEMETRY.md](../../TELEMETRY.md)).
+
 ## [8.14.0] - 2026-09-30
 
 ### Added
