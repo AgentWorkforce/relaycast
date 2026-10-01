@@ -275,11 +275,11 @@ agent tokens return `agent_token_invalid` with HTTP 401. Recover only with an
 explicit current-token, origin-node, or enrolled work-unit proof; use the
 audited owner takeover when those proofs are unavailable.
 
-Credentials belonging to a workspace created with `expires_in_seconds` return
-`workspace_expired` with HTTP 401 from `expires_at` onwards — workspace keys,
-agent tokens, node tokens, observer tokens, and both WebSocket upgrades. The
-cutoff is the stored deadline, not the moment the background reap deletes the
-workspace.
+The workspace key and the agent, node, and observer tokens of a workspace
+created with `expires_in_seconds` return `workspace_expired` with HTTP 401 from
+`expires_at` onwards; both WebSocket upgrades are refused with a bare
+`401 Unauthorized`, which carries no error body. The cutoff is the stored
+deadline, not the moment the background reap deletes the workspace.
 
 ### Throttling
 
@@ -573,7 +573,7 @@ curl -X POST https://cast.agentrelay.com/v1/workspaces \
   -d '{"name": "my-project"}'
 
 # Create an explicitly ephemeral workspace that expires after one hour.
-# Every credential for it stops working at expires_at with 401 workspace_expired.
+# Its workspace key and agent/node/observer tokens stop working at expires_at.
 curl -X POST https://cast.agentrelay.com/v1/workspaces \
   -H "Content-Type: application/json" \
   -d '{"name": "ci-run", "expires_in_seconds": 3600}'

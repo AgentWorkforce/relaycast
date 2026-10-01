@@ -158,6 +158,25 @@ describe('workspace expiry at authentication', () => {
     expect((await get('/v1/agents', ws.workspaceKey)).status).toBe(200);
   });
 
+  it('refuses a node whose workspace row is gone rather than admitting it', async () => {
+    const room = await makeRoom('orphaned-node-room');
+    const deps = { auth: stack.runtime.deps.auth, db: stack.runtime.deps.db };
+    expect(await authenticateNodeWs(deps, room.nodeToken)).toMatchObject({ ok: true });
+
+    // The expiry read is the node upgrade's only workspace lookup, so a missing
+    // row must fail closed instead of falling through to `ok: true`.
+    stack.runtime.handle.sqlite.pragma('foreign_keys = OFF');
+    try {
+      await stack.runtime.handle.db.delete(workspaces).where(eq(workspaces.id, room.workspaceId));
+    } finally {
+      stack.runtime.handle.sqlite.pragma('foreign_keys = ON');
+    }
+
+    expect(await authenticateNodeWs(deps, room.nodeToken)).toMatchObject({
+      ok: false, status: 401, code: 'invalid_token',
+    });
+  });
+
   it('refuses to mint a child workspace from an expired owner key', async () => {
     const room = await makeRoom('expired-owner-room');
     await setExpiry(room.workspaceId, new Date(Date.now() - 1_000));
