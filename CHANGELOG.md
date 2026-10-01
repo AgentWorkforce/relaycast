@@ -26,6 +26,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
+- Observer chat and activity now scroll independently within the viewport, display oldest to newest, and preserve reading position when new entries arrive. Clearing activity resumes following new events.
 - Python and Rust workspace reads accept public responses without private API-key hashes; Python workspace creation retries safely only when an idempotency key is supplied.
 
 ## [8.15.0] - 2026-10-01

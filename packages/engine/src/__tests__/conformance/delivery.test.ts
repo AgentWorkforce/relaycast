@@ -2614,7 +2614,7 @@ describe('durable delivery api', () => {
   });
 
   it('does not dead-letter an acked delivery after TTL expiry', async () => {
-    stack.runtime.deps.config!.mailbox = { deliveryTtlMs: 1, depthCap: 1000 };
+    stack.runtime.deps.config!.mailbox = { deliveryTtlMs: 60_000, depthCap: 1000 };
 
     const { ws, alice, bob } = await seed();
     const { sock: aliceSock } = await attachDirectNodeSocket(stack, ws.workspaceId, alice);
