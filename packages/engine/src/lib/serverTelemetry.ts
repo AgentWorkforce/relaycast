@@ -16,8 +16,8 @@ import {
  * Properties for a server event. The hosted sink validates events with
  * `parseInternalTelemetryEvent`, which drops any event missing a required
  * property (or whose name is not in `SERVER_TELEMETRY_EVENTS`), so both are
- * enforced here at compile time. `workspace_id` is always added by
- * {@link emitServerEvent}. Required values must not be `undefined`, which the
+ * enforced here at compile time. `workspace_id` always comes from the
+ * `workspaceId` argument. Required values must not be `undefined`, which the
  * sanitizer strips.
  */
 type ServerEventProperties<E extends ServerTelemetryEventName> = Record<
@@ -90,7 +90,6 @@ export function emitServerEvent<E extends ServerTelemetryEventName>(
     properties: {
       app: "relaycast-server",
       surface: "cloud",
-      workspace_id: workspaceId,
       ...(clientDistinctId ? { client_distinct_id: clientDistinctId } : {}),
       is_authenticated: Boolean(actor.actor_user_id),
       ...actor,
@@ -98,6 +97,8 @@ export function emitServerEvent<E extends ServerTelemetryEventName>(
       origin_client: origin.origin_client,
       origin_version: origin.origin_version,
       ...normalizedProperties,
+      // After the spread so a caller can never drop the required id.
+      workspace_id: workspaceId,
     },
   });
 }
