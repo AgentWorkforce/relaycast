@@ -65,13 +65,15 @@ export type Workspace = z.infer<typeof WorkspaceSchema>;
 /** Metadata is public descriptive JSON, never a credential store. */
 export const WORKSPACE_METADATA_MAX_BYTES = 16 * 1024;
 export const WORKSPACE_METADATA_MAX_KEYS = 100;
+/** Object/array nesting below the metadata root; primitive values add no level. */
 export const WORKSPACE_METADATA_MAX_DEPTH = 8;
+/** Unicode code points, rather than UTF-16 code units. */
 export const WORKSPACE_METADATA_MAX_KEY_LENGTH = 128;
 
 function metadataProblem(value: unknown, depth = 0): string | undefined {
-  if (depth > WORKSPACE_METADATA_MAX_DEPTH) return 'metadata nesting exceeds 8 levels';
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return;
   if (typeof value === 'number' && Number.isFinite(value)) return;
+  if (depth > WORKSPACE_METADATA_MAX_DEPTH) return 'metadata must contain at most 8 nested object/array levels below its root';
   if (Array.isArray(value)) {
     for (const item of value) {
       const problem = metadataProblem(item, depth + 1);
@@ -83,11 +85,13 @@ function metadataProblem(value: unknown, depth = 0): string | undefined {
     return 'metadata values must be JSON values';
   }
   for (const [key, item] of Object.entries(value)) {
-    if (key.length > WORKSPACE_METADATA_MAX_KEY_LENGTH) return 'metadata keys must be at most 128 characters';
+    if ([...key].length > WORKSPACE_METADATA_MAX_KEY_LENGTH) return 'metadata keys must be at most 128 Unicode code points';
     const normalized = key.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
     if (['__proto__', 'prototype', 'constructor'].includes(key)
       || /(?:^|[^a-z0-9])(?:tokens?|secrets?|passwords?|passwd|authorization|credentials?)(?:$|[^a-z0-9])/.test(normalized)
-      || /(?:api|private|access|refresh)[^a-z0-9]*keys?/.test(normalized)) {
+      || /(?:api|private|access|refresh)[^a-z0-9]*keys?/.test(normalized)
+      || normalized.split(/[^a-z0-9]+/).some((part) =>
+        /^(?:(?:access|refresh|api|auth|bearer|session|client|id)tokens?|(?:client|app|shared|signing|webhook|consumer)secrets?|secretkeys?|password(?:hash|digest|salt))$/.test(part))) {
       return 'metadata must not contain secret-like keys';
     }
     const problem = metadataProblem(item, depth + 1);

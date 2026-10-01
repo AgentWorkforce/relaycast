@@ -63,34 +63,54 @@ async def test_async_create(metadata, api_key):
 @respx.mock
 def test_sync_info_update():
     respx.get(f"{BASE}/v1/workspace").mock(return_value=ok(WORKSPACE))
-    route = respx.patch(f"{BASE}/v1/workspace").mock(return_value=ok(WORKSPACE))
+    merged_metadata = {"nested": {"child": None}, "list": [False, 3]}
+    updated_workspace = {**WORKSPACE, "metadata": merged_metadata}
+    route = respx.patch(f"{BASE}/v1/workspace").mock(side_effect=[
+        ok(updated_workspace),
+        ok({**updated_workspace, "name": "Renamed"}),
+        ok({**updated_workspace, "name": "Renamed"}),
+    ])
     with Relay(KEY, base_url=BASE) as relay:
         workspace = relay.workspace.info()
         assert workspace.metadata == METADATA
         assert workspace.api_key_hash is None
         patch = {"project_id": None, "nested": {"child": None}}
-        assert relay.workspace.update(metadata=patch).metadata == METADATA
+        updated = relay.workspace.update(metadata=patch)
+        assert updated.metadata == merged_metadata
+        assert "project_id" not in updated.metadata
         assert json.loads(route.calls.last.request.content) == {"metadata": patch}
-        relay.workspace.update(name="Renamed")
+        renamed = relay.workspace.update(name="Renamed")
+        assert renamed.name == "Renamed"
+        assert renamed.metadata == merged_metadata
         assert json.loads(route.calls.last.request.content) == {"name": "Renamed"}
-        relay.workspace.update(metadata={})
+        assert relay.workspace.update(metadata={}).metadata == merged_metadata
         assert json.loads(route.calls.last.request.content) == {"metadata": {}}
 
 
 @respx.mock
 async def test_async_info_update():
     respx.get(f"{BASE}/v1/workspace").mock(return_value=ok(WORKSPACE))
-    route = respx.patch(f"{BASE}/v1/workspace").mock(return_value=ok(WORKSPACE))
+    merged_metadata = {"nested": {"child": None}, "list": [False, 3]}
+    updated_workspace = {**WORKSPACE, "metadata": merged_metadata}
+    route = respx.patch(f"{BASE}/v1/workspace").mock(side_effect=[
+        ok(updated_workspace),
+        ok({**updated_workspace, "name": "Renamed"}),
+        ok({**updated_workspace, "name": "Renamed"}),
+    ])
     async with AsyncRelay(KEY, base_url=BASE) as relay:
         workspace = await relay.workspace.info()
         assert workspace.metadata == METADATA
         assert workspace.api_key_hash is None
         patch = {"project_id": None, "nested": {"child": None}}
-        assert (await relay.workspace.update(metadata=patch)).metadata == METADATA
+        updated = await relay.workspace.update(metadata=patch)
+        assert updated.metadata == merged_metadata
+        assert "project_id" not in updated.metadata
         assert json.loads(route.calls.last.request.content) == {"metadata": patch}
-        await relay.workspace.update(name="Renamed")
+        renamed = await relay.workspace.update(name="Renamed")
+        assert renamed.name == "Renamed"
+        assert renamed.metadata == merged_metadata
         assert json.loads(route.calls.last.request.content) == {"name": "Renamed"}
-        await relay.workspace.update(metadata={})
+        assert (await relay.workspace.update(metadata={})).metadata == merged_metadata
         assert json.loads(route.calls.last.request.content) == {"metadata": {}}
 
 

@@ -194,8 +194,9 @@ replaced in full. `GET /v1/workspace` returns the resulting `metadata`. TypeScri
 Python, Rust, and Swift SDKs support these fields. Metadata is visible to any
 valid workspace observer token and must never contain credentials; secret-like
 key rejection only guards against accidental labeling of secrets. Metadata is
-limited to 16 KiB of serialized UTF-8 JSON, 100 top-level keys, 128 characters per key, and eight
-levels of nesting. Secret-like keys (including tokens, passwords, credentials,
+limited to 16 KiB of serialized UTF-8 JSON, 100 top-level keys, and 128 Unicode
+code points per key. Objects and arrays may nest eight levels below the top-level
+metadata object; primitive values do not add a nesting level. Secret-like keys (including tokens, passwords, credentials,
 and API/private keys) and prototype keys are rejected at any depth. The merged
 result must fit the same limits. Creation retries include metadata in the request
 digest, so changing metadata with the same idempotency key returns `409`.

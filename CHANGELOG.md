@@ -641,6 +641,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
 [Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v8.15.0...HEAD
+[Unreleased - Minor]: https://github.com/AgentWorkforce/relaycast/compare/v8.15.0...HEAD
 [8.15.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.14.0...v8.15.0
 [8.14.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.13.1...v8.14.0
 [8.13.1]: https://github.com/AgentWorkforce/relaycast/compare/v8.13.0...v8.13.1

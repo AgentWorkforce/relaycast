@@ -19,7 +19,9 @@ describe('workspace metadata validation', () => {
   });
 
   it.each(['api_key', 'apiKey', 'APIKey', 'accessToken', 'client_secret', 'password',
-    'authorization', 'credentials', 'private-key', '__proto__', 'constructor', 'prototype']) (
+    'authorization', 'credentials', 'private-key', '__proto__', 'constructor', 'prototype',
+    'accesstoken', 'secretkey', 'clientsecret', 'apitoken', 'passwordhash', 'refreshtoken',
+    'sessiontoken', 'appsecret', 'PASSWORDHASH', 'service_accesstoken', 'service-clientsecret']) (
     'rejects nested secret or unsafe key %s', (key) => {
       expect(WorkspaceMetadataSchema.safeParse(JSON.parse(JSON.stringify({ [key]: 'value' }))).success).toBe(false);
       expect(WorkspaceMetadataSchema.safeParse({ config: JSON.parse(JSON.stringify({ [key]: 'value' })) }).success).toBe(false);
@@ -32,13 +34,43 @@ describe('workspace metadata validation', () => {
     }
   });
 
-  it('bounds UTF-8 bytes, key counts, key length, and depth', () => {
+  it('allows ordinary labels resembling parts of credential names', () => {
+    const metadata = { tokenizer: 'v1', secretariat: 'team', passwordless: true, monkey: 'mascot', keyboard: 'en' };
+    expect(WorkspaceMetadataSchema.parse(metadata)).toEqual(metadata);
+  });
+
+  it.each(['x', '🙂'])('counts key length in Unicode code points: %s', (character) => {
+    const metadata = { [character.repeat(128)]: 1 };
+    expect(WorkspaceMetadataSchema.parse(metadata)).toEqual(metadata);
+    expect(WorkspaceMetadataSchema.safeParse({ [character.repeat(129)]: 1 }).success).toBe(false);
+    expect(WorkspaceMetadataSchema.safeParse({ nested: { [character.repeat(129)]: 1 } }).success).toBe(false);
+  });
+
+  it.each([
+    { label: 'empty object', leaf: {}, kind: 'object' },
+    { label: 'object with primitive', leaf: { value: 1 }, kind: 'object' },
+    { label: 'empty array', leaf: [], kind: 'array' },
+    { label: 'array with primitive', leaf: [null, true, 1, 'value'], kind: 'array' },
+  ])('allows eight nested container levels and rejects nine: $label', ({ leaf, kind }) => {
+    function nestedContainers(levels: number): Record<string, unknown> {
+      let nested: unknown = leaf;
+      for (let i = 1; i < levels; i++) nested = kind === 'array' ? [nested] : { nested };
+      return { nested };
+    }
+    expect(WorkspaceMetadataSchema.safeParse(nestedContainers(8)).success).toBe(true);
+    expect(WorkspaceMetadataSchema.safeParse(nestedContainers(9)).success).toBe(false);
+  });
+
+  it('counts mixed array/object nesting together', () => {
+    let nested: unknown = { value: 1 };
+    for (let i = 1; i < 8; i++) nested = i % 2 ? [nested] : { nested };
+    expect(WorkspaceMetadataSchema.safeParse({ nested }).success).toBe(true);
+    expect(WorkspaceMetadataSchema.safeParse({ nested: [nested] }).success).toBe(false);
+  });
+
+  it('bounds UTF-8 bytes, key counts, and cycles', () => {
     expect(WorkspaceMetadataSchema.safeParse({ value: '🙂'.repeat(4096) }).success).toBe(false);
     expect(WorkspaceMetadataSchema.safeParse(Object.fromEntries(Array.from({ length: 101 }, (_, i) => [`k${i}`, i]))).success).toBe(false);
-    expect(WorkspaceMetadataSchema.safeParse({ ['k'.repeat(129)]: 1 }).success).toBe(false);
-    let nested: unknown = 1;
-    for (let i = 0; i < 9; i++) nested = { nested };
-    expect(WorkspaceMetadataSchema.safeParse(nested).success).toBe(false);
     const circular: Record<string, unknown> = {};
     circular.self = circular;
     expect(WorkspaceMetadataSchema.safeParse(circular).success).toBe(false);
