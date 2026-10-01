@@ -16,12 +16,13 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Minor]
+## [Unreleased]
+
+## [8.15.0] - 2026-10-01
 
 ### Added
 
 - Server telemetry attributes each event to the cloud user behind the acting agent (`metadata.cloud_user_id`) and groups it by the workspace's cloud org and workspace; events with no known person use `relaycast-ws:<workspace_id>` without a person profile.
-
 
 ## [8.14.0] - 2026-09-30
 
@@ -631,7 +632,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v8.14.0...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v8.15.0...HEAD
+[8.15.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.14.0...v8.15.0
 [8.14.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.13.1...v8.14.0
 [8.13.1]: https://github.com/AgentWorkforce/relaycast/compare/v8.13.0...v8.13.1
 [8.13.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.12.0...v8.13.0

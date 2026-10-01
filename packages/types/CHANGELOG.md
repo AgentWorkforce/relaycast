@@ -7,12 +7,13 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Minor]
+## [Unreleased]
+
+## [8.15.0] - 2026-10-01
 
 ### Added
 
 - `internalTelemetryEventSchema` accepts optional `groups`, `set_once` and `process_person_profile`; `TelemetrySenderProperties`, `TelemetryGroups` and `TelemetryPersonSetOnce` describe them.
-
 
 ## [8.14.0] - 2026-09-30
 
