@@ -7,7 +7,12 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Server events belong to the acting agent's cloud user, carry sender fields and org/workspace groups, and fall back to a non-person workspace id; `TelemetryEvent` gains optional `groups`, `setOnce` and `processPersonProfile` for sinks (see [TELEMETRY.md](../../TELEMETRY.md)).
+
 
 ## [8.14.0] - 2026-09-30
 

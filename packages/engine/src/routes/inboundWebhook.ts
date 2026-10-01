@@ -14,7 +14,7 @@ import { fanoutToChannel } from './fanout.js';
 import { routeDeliveryOutcomes } from './deliveryRouting.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
-import { emitServerEvent } from '../lib/serverTelemetry.js';
+import { emitServerEvent, loadTelemetryWorkspace } from '../lib/serverTelemetry.js';
 import {
   jsonCreated,
   jsonNoContent,
@@ -205,13 +205,20 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
         },
       });
     }
-    emitServerEvent(c, workspace_id, 'relaycast_server_inbound_webhook_triggered', {
-      webhook_id: result.webhook_id,
-      message_id: result.message_id,
-      channel_id,
-      source: result.source ?? null,
-      author: result.author ?? null,
-    });
+    runInBackground(
+      c,
+      (async () => {
+        const workspace = await loadTelemetryWorkspace(db, workspace_id);
+        emitServerEvent(c, workspace_id, 'relaycast_server_inbound_webhook_triggered', {
+          webhook_id: result.webhook_id,
+          message_id: result.message_id,
+          channel_id,
+          source: result.source ?? null,
+          author: result.author ?? null,
+        }, { workspace });
+      })(),
+      'emit inbound webhook telemetry',
+    );
 
     return jsonCreated(c, responseData);
   } catch (err: unknown) {
