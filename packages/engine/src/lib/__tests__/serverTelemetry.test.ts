@@ -129,10 +129,17 @@ describe('emitServerEvent attribution', () => {
     expect(event.setOnce).toBeUndefined();
   });
 
-  it('reports a system actor as system', async () => {
-    const event = await emit({ agent: agentRow({ type: 'system' }) });
+  it('reports a system actor as system without stamping a first agent message', async () => {
+    const event = await emit({
+      agent: agentRow({ type: 'system', metadata: { cloud_user_id: 'user_owner' } }),
+    });
 
-    expect(event.properties.sender_type).toBe('system');
+    expect(event.distinctId).toBe('user_owner');
+    expect(event.properties).toMatchObject({
+      sender_type: 'system',
+      agent_owner_user_id: 'user_owner',
+    });
+    expect(event.setOnce).toBeUndefined();
   });
 
   it('omits sender fields when no agent acts', async () => {

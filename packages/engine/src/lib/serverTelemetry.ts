@@ -6,8 +6,10 @@ import type {
   TelemetrySenderProperties,
   TelemetrySenderType,
 } from "@relaycast/types";
-import type { agents, workspaces } from "../db/schema.js";
+import { eq } from "drizzle-orm";
+import { workspaces, type agents } from "../db/schema.js";
 import type { AppEnv } from "../env.js";
+import type { EngineDb } from "../ports/index.js";
 import {
   extractActorIdentity,
   extractAgentRelayDistinctId,
@@ -60,6 +62,22 @@ export type TelemetryWorkspace = Pick<
 export interface ServerEventAttribution {
   actor?: TelemetryActor;
   workspace?: TelemetryWorkspace;
+}
+
+/**
+ * Load the workspace fields that carry its PostHog groups, for emitters that
+ * run without an authenticated workspace in context (external webhooks, node
+ * sockets).
+ */
+export async function loadTelemetryWorkspace(
+  db: EngineDb,
+  workspaceId: string,
+): Promise<TelemetryWorkspace | undefined> {
+  const [workspace] = await db
+    .select({ id: workspaces.id, metadata: workspaces.metadata })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId));
+  return workspace;
 }
 
 /** Sends whose first occurrence is stamped on the person via `$set_once`. */
@@ -124,8 +142,11 @@ function firstSendSetOnce(
 ): TelemetryPersonSetOnce {
   const now = new Date().toISOString();
   if (sender.sender_type === "human") return { first_human_message_at: now };
-  // An agent send counts toward a person only when an owner is known.
-  return sender.agent_owner_user_id ? { first_agent_message_at: now } : {};
+  // An agent send counts toward a person only when an owner is known; system
+  // actors are not the person's agents.
+  return sender.sender_type === "agent" && sender.agent_owner_user_id
+    ? { first_agent_message_at: now }
+    : {};
 }
 
 /**
