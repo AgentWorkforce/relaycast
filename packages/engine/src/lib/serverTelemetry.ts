@@ -65,6 +65,9 @@ export function emitServerEvent<E extends ServerTelemetryEventName>(
   properties: ServerEventProperties<E>,
 ): void {
   const normalizedProperties: Record<string, unknown> = { ...properties };
+  // The `workspaceId` argument is authoritative; a caller value must not
+  // replace it.
+  delete normalizedProperties.workspace_id;
   if (typeof normalizedProperties.route_path === "string") {
     normalizedProperties.route_path = normalizeRoutePathForTelemetry(
       normalizedProperties.route_path,
@@ -90,6 +93,8 @@ export function emitServerEvent<E extends ServerTelemetryEventName>(
     properties: {
       app: "relaycast-server",
       surface: "cloud",
+      // Early, so the sink's 64-property cap can never truncate it away.
+      workspace_id: workspaceId,
       ...(clientDistinctId ? { client_distinct_id: clientDistinctId } : {}),
       is_authenticated: Boolean(actor.actor_user_id),
       ...actor,
@@ -97,8 +102,6 @@ export function emitServerEvent<E extends ServerTelemetryEventName>(
       origin_client: origin.origin_client,
       origin_version: origin.origin_version,
       ...normalizedProperties,
-      // After the spread so a caller can never drop the required id.
-      workspace_id: workspaceId,
     },
   });
 }
