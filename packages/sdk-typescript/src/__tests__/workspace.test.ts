@@ -16,6 +16,40 @@ describe('Relay workspace methods', () => {
     mockFetch.mockReset();
   });
 
+  it.each(['create', 'ensure'])('%s forwards workspace metadata verbatim', async (method) => {
+    const { RelayCast } = await import('../relay.js');
+    const metadata = { project_id: 'p1', nested: { camelKey: true }, list: [null, 4] };
+    mockFetch.mockImplementation(() => mockResponse({
+      workspace_id: 'ws_1', api_key: 'rk_live_test', created_at: '2026-10-01',
+    }));
+    const create = method === 'create' ? RelayCast.createWorkspace : RelayCast.ensureWorkspace;
+    await create('Test', { metadata });
+    expect(JSON.parse(mockFetch.mock.calls[0]![1].body).metadata).toEqual(metadata);
+  });
+
+  it('workspace.info and update preserve metadata and null deletion values', async () => {
+    const { RelayCast } = await import('../relay.js');
+    const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+    const metadata = { project_id: 'p1', nested: { camelKey: true }, retained_key: [false, 3] };
+    const mergedMetadata = { nested: { snake_key: null }, retained_key: [false, 3] };
+    const workspace = { id: 'ws_1', name: 'Test', created_at: '2026-10-01' };
+    mockFetch
+      .mockImplementationOnce(() => mockResponse({ ...workspace, metadata }))
+      .mockImplementationOnce(() => mockResponse({ ...workspace, metadata: mergedMetadata }));
+    const loaded = await relay.workspace.info();
+    expect(mockFetch.mock.calls[0]![1].method).toBe('GET');
+    expect(loaded.metadata).toEqual(metadata);
+    const updated = await relay.workspace.update({
+      metadata: { nested: { snake_key: null }, project_id: null },
+    });
+    expect(mockFetch.mock.calls[1]![1].method).toBe('PATCH');
+    expect(updated.metadata).toEqual(mergedMetadata);
+    expect(updated.metadata).not.toHaveProperty('project_id');
+    expect(JSON.parse(mockFetch.mock.calls[1]![1].body)).toEqual({
+      metadata: { nested: { snake_key: null }, project_id: null },
+    });
+  });
+
   it('activity() calls GET /v1/activity without params', async () => {
     const { RelayCast } = await import('../relay.js');
     const relay = new RelayCast({ apiKey: 'rk_live_test123' });

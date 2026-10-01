@@ -16,7 +16,15 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Create, read, and update workspace metadata across the API and TypeScript, Python, Rust, and Swift SDKs, with shallow merging, null deletion, and size limits and rejection of secret-like keys.
+
+### Fixed
+
+- Python and Rust workspace reads accept public responses without private API-key hashes; Python workspace creation retries safely only when an idempotency key is supplied.
 
 ## [8.15.0] - 2026-10-01
 
@@ -633,6 +641,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
 [Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v8.15.0...HEAD
+[Unreleased - Minor]: https://github.com/AgentWorkforce/relaycast/compare/v8.15.0...HEAD
 [8.15.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.14.0...v8.15.0
 [8.14.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.13.1...v8.14.0
 [8.13.1]: https://github.com/AgentWorkforce/relaycast/compare/v8.13.0...v8.13.1

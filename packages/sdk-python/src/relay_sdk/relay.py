@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import quote
+from ipaddress import ip_address
+from urllib.parse import quote, urlsplit
 
 from .agent import AgentClient, AsyncAgentClient
 from .client import AsyncHttpClient, HttpClient
@@ -33,6 +34,8 @@ from .models import (
     Agent,
     CreateAgentRequest,
     CreateAgentResponse,
+    CreateWorkspaceRequest,
+    CreateWorkspaceResponse,
     CreateObserverTokenRequest,
     ObserverToken,
     PublishToDirectoryRequest,
@@ -46,6 +49,32 @@ def _enc(value: str) -> str:
     return quote(value, safe="")
 
 
+def _workspace_create_headers(
+    idempotency_key: str | None, api_key: str | None, base_url: str | None,
+) -> dict[str, str]:
+    if idempotency_key is None:
+        return {}
+    # Preserve authenticated keys exactly, including an explicitly empty key,
+    # so the API owns invalid_idempotency_key errors as in the TypeScript SDK.
+    if not api_key:
+        if len(idempotency_key) < 32:
+            raise ValueError("Anonymous idempotency_key must be at least 32 characters")
+        if len(idempotency_key) > 255 or not all("!" <= char <= "~" for char in idempotency_key):
+            raise ValueError("idempotency_key must contain 1-255 visible ASCII characters")
+        destination = urlsplit(base_url or "https://cast.agentrelay.com")
+        host = destination.hostname or ""
+        loopback = host.lower() == "localhost"
+        try:
+            loopback = loopback or ip_address(host).is_loopback
+        except ValueError:
+            pass
+        if not host or destination.username is not None or destination.password is not None or not (
+            destination.scheme == "https" or (destination.scheme == "http" and loopback)
+        ):
+            raise ValueError("Anonymous keyed workspace creation requires HTTPS or loopback HTTP")
+    return {"Idempotency-Key": idempotency_key}
+
+
 class _WorkspaceNamespace:
     """Sync workspace operations."""
 
@@ -56,12 +85,18 @@ class _WorkspaceNamespace:
         result = self._client.get("/v1/workspace")
         return Workspace.model_validate(result)
 
-    def update(self, *, name: str | None = None, system_prompt: str | None = None) -> Workspace:
+    def update(
+        self, *, name: str | None = None, system_prompt: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> Workspace:
+        """Update workspace fields; metadata shallow-merges, with null values deleting keys."""
         body: dict[str, Any] = {}
         if name is not None:
             body["name"] = name
         if system_prompt is not None:
             body["system_prompt"] = system_prompt
+        if metadata is not None:
+            body["metadata"] = metadata
         result = self._client.patch("/v1/workspace", body)
         return Workspace.model_validate(result)
 
@@ -288,6 +323,27 @@ class Relay:
         me.send("#general", "Hello from Python")
     """
 
+    @staticmethod
+    def create_workspace(
+        name: str, *, metadata: dict[str, Any] | None = None,
+        api_key: str | None = None, base_url: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> CreateWorkspaceResponse:
+        """Create a workspace; automatic retries require an idempotency key.
+
+        Anonymous keys are reveal-once recovery capabilities: generate with a
+        CSPRNG (for example uuid.uuid4()), and retain the key for safe retries.
+        An owner api_key scopes delegated keys to that owner.
+        """
+        headers = _workspace_create_headers(idempotency_key, api_key, base_url)
+        data = CreateWorkspaceRequest(name=name, metadata=metadata)
+        with HttpClient(api_key or "", base_url) as client:
+            result = client.request(
+                "POST", "/v1/workspaces", data.model_dump(exclude_none=True),
+                headers=headers, retry=idempotency_key is not None,
+            )
+        return CreateWorkspaceResponse.model_validate(result)
+
     def __init__(
         self,
         api_key: str | None = None,
@@ -479,12 +535,18 @@ class _AsyncWorkspaceNamespace:
         result = await self._client.get("/v1/workspace")
         return Workspace.model_validate(result)
 
-    async def update(self, *, name: str | None = None, system_prompt: str | None = None) -> Workspace:
+    async def update(
+        self, *, name: str | None = None, system_prompt: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> Workspace:
+        """Update workspace fields; metadata shallow-merges, with null values deleting keys."""
         body: dict[str, Any] = {}
         if name is not None:
             body["name"] = name
         if system_prompt is not None:
             body["system_prompt"] = system_prompt
+        if metadata is not None:
+            body["metadata"] = metadata
         result = await self._client.patch("/v1/workspace", body)
         return Workspace.model_validate(result)
 
@@ -710,6 +772,27 @@ class AsyncRelay:
             me = relay.as_agent(agent.token)
             await me.send("#general", "Hello from Python")
     """
+
+    @staticmethod
+    async def create_workspace(
+        name: str, *, metadata: dict[str, Any] | None = None,
+        api_key: str | None = None, base_url: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> CreateWorkspaceResponse:
+        """Create a workspace; automatic retries require an idempotency key.
+
+        Anonymous keys are reveal-once recovery capabilities: generate with a
+        CSPRNG (for example uuid.uuid4()), and retain the key for safe retries.
+        An owner api_key scopes delegated keys to that owner.
+        """
+        headers = _workspace_create_headers(idempotency_key, api_key, base_url)
+        data = CreateWorkspaceRequest(name=name, metadata=metadata)
+        async with AsyncHttpClient(api_key or "", base_url) as client:
+            result = await client.request(
+                "POST", "/v1/workspaces", data.model_dump(exclude_none=True),
+                headers=headers, retry=idempotency_key is not None,
+            )
+        return CreateWorkspaceResponse.model_validate(result)
 
     def __init__(
         self,
