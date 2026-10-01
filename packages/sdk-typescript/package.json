@@ -24,8 +24,9 @@
   "scripts": {
     "build": "tsc",
     "prepublishOnly": "npm run build",
-    "test": "vitest run",
-    "lint": "eslint src/"
+    "test": "npm run test:types && vitest run",
+    "lint": "eslint src/",
+    "test:types": "tsc -p tsconfig.workspace-types.json"
   },
   "dependencies": {
     "@relaycast/types": "8.15.0",

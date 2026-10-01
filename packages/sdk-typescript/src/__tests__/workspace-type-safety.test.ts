@@ -14,5 +14,4 @@ describe('Workspace creation types', () => {
     expectTypeOf<{ value: null; nested: { list: [string, boolean, number] } }>()
       .toMatchTypeOf<Record<string, JsonValue>>();
   });
-
 });
