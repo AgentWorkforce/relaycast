@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- `emitServerEvent` only accepts `SERVER_TELEMETRY_EVENTS` names and requires each event's required properties at compile time; `workspace_id` always comes from the `workspaceId` argument.
 
 ## [8.14.0] - 2026-09-30
 

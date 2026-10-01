@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Server telemetry events can no longer be emitted with an unlisted name, a missing required property, or an overridden `workspace_id`, any of which made hosted ingestion silently drop them.
 
 ## [8.14.0] - 2026-09-30
 
