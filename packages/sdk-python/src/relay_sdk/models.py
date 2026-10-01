@@ -135,11 +135,13 @@ class Workspace(BaseModel):
 
 class CreateWorkspaceRequest(BaseModel):
     name: str
+    metadata: dict[str, Any] | None = None
 
 
 class UpdateWorkspaceRequest(BaseModel):
     name: str | None = None
     system_prompt: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class CreateWorkspaceResponse(BaseModel):

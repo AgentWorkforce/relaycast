@@ -30,9 +30,11 @@ public struct Workspace: Codable, Equatable, Sendable {
 
 public struct CreateWorkspaceRequest: Codable, Equatable, Sendable {
     public var name: String
+    public var metadata: [String: JSONValue]?
 
-    public init(name: String) {
+    public init(name: String, metadata: [String: JSONValue]? = nil) {
         self.name = name
+        self.metadata = metadata
     }
 }
 
@@ -60,9 +62,13 @@ public struct UpdateWorkspaceRequest: Codable, Equatable, Sendable {
     public var name: String?
     public var systemPrompt: String?
 
-    public init(name: String? = nil, systemPrompt: String? = nil) {
+    /// Shallow merge into workspace metadata; top-level `.null` values delete keys.
+    public var metadata: [String: JSONValue]?
+
+    public init(name: String? = nil, systemPrompt: String? = nil, metadata: [String: JSONValue]? = nil) {
         self.name = name
         self.systemPrompt = systemPrompt
+        self.metadata = metadata
     }
 }
 

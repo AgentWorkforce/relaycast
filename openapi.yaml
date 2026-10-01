@@ -234,6 +234,19 @@ components:
             actor_org_slug:
               type: string
 
+    WorkspaceMetadata:
+      type: object
+      additionalProperties: true
+      maxProperties: 100
+      description: >-
+        Workspace labels, limited to 16384 bytes of serialized UTF-8 JSON, 100
+        top-level keys, 128 characters per key, and eight nesting levels.
+        Secret-like keys (tokens, passwords, credentials, authorization, and
+        API/private/access/refresh keys) and prototype keys are rejected
+        recursively. PATCH shallow-merges top-level keys, with null deleting a
+        key; nested objects are replaced in full. The merged result is subject
+        to the same limits. Create idempotency digests include metadata.
+
     Workspace:
       type: object
       properties:
@@ -242,6 +255,8 @@ components:
           description: Snowflake ID
         name:
           type: string
+        metadata:
+          $ref: '#/components/schemas/WorkspaceMetadata'
         key:
           type: string
           description: Workspace API key (only returned on creation)
@@ -1782,6 +1797,8 @@ paths:
                     the sole automatic whole-workspace deletion predicate.
                 provenance:
                   $ref: '#/components/schemas/WorkspaceProvenanceInput'
+                metadata:
+                  $ref: '#/components/schemas/WorkspaceMetadata'
       parameters:
         - name: Idempotency-Key
           in: header
@@ -1978,7 +1995,7 @@ paths:
 
     patch:
       summary: Update workspace
-      description: Update workspace settings
+      description: Update workspace settings; metadata shallow-merges and top-level null values delete keys.
       tags:
         - Workspaces
       security:
@@ -1991,6 +2008,11 @@ paths:
               properties:
                 name:
                   type: string
+                system_prompt:
+                  type: string
+                  nullable: true
+                metadata:
+                  $ref: '#/components/schemas/WorkspaceMetadata'
       responses:
         '200':
           description: Workspace updated

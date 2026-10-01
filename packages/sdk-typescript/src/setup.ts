@@ -272,6 +272,7 @@ export class RelaycastSetup {
         ...(options.expiresInSeconds !== undefined
           ? { expires_in_seconds: options.expiresInSeconds }
           : {}),
+        ...(options.metadata !== undefined ? { metadata: options.metadata } : {}),
         provenance: toWorkspaceProvenanceInput(options.provenance),
       },
       headers: options.idempotencyKey !== undefined

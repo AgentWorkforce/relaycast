@@ -16,6 +16,31 @@ describe('Relay workspace methods', () => {
     mockFetch.mockReset();
   });
 
+  it.each(['create', 'ensure'])('%s forwards workspace metadata verbatim', async (method) => {
+    const { RelayCast } = await import('../relay.js');
+    const metadata = { project_id: 'p1', nested: { camelKey: true }, list: [null, 4] };
+    mockFetch.mockImplementation(() => mockResponse({
+      workspace_id: 'ws_1', api_key: 'rk_live_test', created_at: '2026-10-01',
+    }));
+    const create = method === 'create' ? RelayCast.createWorkspace : RelayCast.ensureWorkspace;
+    await create('Test', { metadata });
+    expect(JSON.parse(mockFetch.mock.calls[0]![1].body).metadata).toEqual(metadata);
+  });
+
+  it('workspace.info and update preserve metadata and null deletion values', async () => {
+    const { RelayCast } = await import('../relay.js');
+    const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+    const metadata = { project_id: 'p1', nested: { camelKey: true } };
+    mockFetch.mockImplementation(() => mockResponse({
+      id: 'ws_1', name: 'Test', api_key_hash: 'hash', created_at: '2026-10-01', metadata,
+    }));
+    expect((await relay.workspace.info()).metadata).toEqual(metadata);
+    expect((await relay.workspace.update({ metadata: { nested: { snake_key: null }, project_id: null } })).metadata).toEqual(metadata);
+    expect(JSON.parse(mockFetch.mock.calls[1]![1].body)).toEqual({
+      metadata: { nested: { snake_key: null }, project_id: null },
+    });
+  });
+
   it('activity() calls GET /v1/activity without params', async () => {
     const { RelayCast } = await import('../relay.js');
     const relay = new RelayCast({ apiKey: 'rk_live_test123' });

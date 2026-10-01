@@ -199,6 +199,8 @@ export interface WorkspaceIdentityOptions {
 }
 
 export interface WorkspaceBootstrapOptions extends WorkspaceIdentityOptions {
+  /** Application-defined JSON stored on the workspace. */
+  metadata?: Record<string, unknown>;
   apiKey?: string;
   baseUrl?: string;
   /** Explicit lifetime for a throwaway workspace; omit for persistence. */
@@ -486,6 +488,7 @@ export class RelayCast {
         ...(resolved.expiresInSeconds !== undefined
           ? { expires_in_seconds: resolved.expiresInSeconds }
           : {}),
+        ...(resolved.metadata !== undefined ? { metadata: resolved.metadata } : {}),
         provenance: toWorkspaceProvenanceInput(resolved.provenance),
       }),
     });

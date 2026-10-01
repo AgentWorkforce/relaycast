@@ -54,11 +54,12 @@ class HttpClient:
 
     def _headers(self, with_body: bool = False) -> dict[str, str]:
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
             "X-SDK-Version": SDK_VERSION,
             "X-Relaycast-Origin-Client": self.origin_client,
             "X-Relaycast-Origin-Version": self.origin_version,
         }
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         if self.agent_relay_distinct_id:
             headers[AGENT_RELAY_DISTINCT_ID_HEADER] = self.agent_relay_distinct_id
         if with_body:
@@ -172,11 +173,12 @@ class AsyncHttpClient:
 
     def _headers(self, with_body: bool = False) -> dict[str, str]:
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
             "X-SDK-Version": SDK_VERSION,
             "X-Relaycast-Origin-Client": self.origin_client,
             "X-Relaycast-Origin-Version": self.origin_version,
         }
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         if self.agent_relay_distinct_id:
             headers[AGENT_RELAY_DISTINCT_ID_HEADER] = self.agent_relay_distinct_id
         if with_body:

@@ -33,6 +33,8 @@ from .models import (
     Agent,
     CreateAgentRequest,
     CreateAgentResponse,
+    CreateWorkspaceRequest,
+    CreateWorkspaceResponse,
     CreateObserverTokenRequest,
     ObserverToken,
     PublishToDirectoryRequest,
@@ -56,12 +58,18 @@ class _WorkspaceNamespace:
         result = self._client.get("/v1/workspace")
         return Workspace.model_validate(result)
 
-    def update(self, *, name: str | None = None, system_prompt: str | None = None) -> Workspace:
+    def update(
+        self, *, name: str | None = None, system_prompt: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> Workspace:
+        """Update workspace fields; metadata shallow-merges, with null values deleting keys."""
         body: dict[str, Any] = {}
         if name is not None:
             body["name"] = name
         if system_prompt is not None:
             body["system_prompt"] = system_prompt
+        if metadata is not None:
+            body["metadata"] = metadata
         result = self._client.patch("/v1/workspace", body)
         return Workspace.model_validate(result)
 
@@ -288,6 +296,17 @@ class Relay:
         me.send("#general", "Hello from Python")
     """
 
+    @staticmethod
+    def create_workspace(
+        name: str, *, metadata: dict[str, Any] | None = None,
+        api_key: str | None = None, base_url: str | None = None,
+    ) -> CreateWorkspaceResponse:
+        """Create a workspace, optionally using an owner key for delegated creation."""
+        data = CreateWorkspaceRequest(name=name, metadata=metadata)
+        with HttpClient(api_key or "", base_url) as client:
+            result = client.post("/v1/workspaces", data.model_dump(exclude_none=True))
+        return CreateWorkspaceResponse.model_validate(result)
+
     def __init__(
         self,
         api_key: str | None = None,
@@ -479,12 +498,18 @@ class _AsyncWorkspaceNamespace:
         result = await self._client.get("/v1/workspace")
         return Workspace.model_validate(result)
 
-    async def update(self, *, name: str | None = None, system_prompt: str | None = None) -> Workspace:
+    async def update(
+        self, *, name: str | None = None, system_prompt: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> Workspace:
+        """Update workspace fields; metadata shallow-merges, with null values deleting keys."""
         body: dict[str, Any] = {}
         if name is not None:
             body["name"] = name
         if system_prompt is not None:
             body["system_prompt"] = system_prompt
+        if metadata is not None:
+            body["metadata"] = metadata
         result = await self._client.patch("/v1/workspace", body)
         return Workspace.model_validate(result)
 
@@ -710,6 +735,17 @@ class AsyncRelay:
             me = relay.as_agent(agent.token)
             await me.send("#general", "Hello from Python")
     """
+
+    @staticmethod
+    async def create_workspace(
+        name: str, *, metadata: dict[str, Any] | None = None,
+        api_key: str | None = None, base_url: str | None = None,
+    ) -> CreateWorkspaceResponse:
+        """Create a workspace, optionally using an owner key for delegated creation."""
+        data = CreateWorkspaceRequest(name=name, metadata=metadata)
+        async with AsyncHttpClient(api_key or "", base_url) as client:
+            result = await client.post("/v1/workspaces", data.model_dump(exclude_none=True))
+        return CreateWorkspaceResponse.model_validate(result)
 
     def __init__(
         self,

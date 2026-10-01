@@ -32,6 +32,8 @@ export interface RelaycastSetupOptions {
 }
 
 export interface CreateWorkspaceOptions {
+  /** Application-defined JSON stored on the workspace. */
+  metadata?: Record<string, unknown>;
   /**
    * Human-readable name for the workspace.
    */

@@ -3,7 +3,7 @@ import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { createMiddleware } from 'hono/factory';
 import { z } from 'zod';
-import { WorkspaceProvenanceInputSchema } from '@relaycast/types';
+import { CreateWorkspaceRequestSchema, UpdateWorkspaceRequestSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { requireAgentToken, requireWorkspaceKey, requireWorkspaceRead } from '../middleware/auth.js';
 import { parseIdempotencyKey } from '../middleware/idempotency.js';
@@ -47,16 +47,8 @@ import { runInBackground } from './background.js';
 
 export const workspaceRoutes = new Hono<AppEnv>();
 
-const createWorkspaceSchema = z.object({
-  name: z.string().min(1),
-  expires_in_seconds: z.number().int().min(60).max(30 * 24 * 60 * 60).optional(),
-  provenance: WorkspaceProvenanceInputSchema.optional(),
-});
-
-const updateWorkspaceSchema = z.object({
-  name: z.string().optional(),
-  system_prompt: z.string().nullable().optional(),
-});
+const createWorkspaceSchema = CreateWorkspaceRequestSchema.extend({ name: z.string().min(1) });
+const updateWorkspaceSchema = UpdateWorkspaceRequestSchema;
 
 const activityQuerySchema = z.object({
   limit: positiveIntQueryParam({ defaultValue: 20, max: 500 }),
@@ -209,6 +201,7 @@ workspaceRoutes.post('/workspaces', async (c) => {
       name,
       expires_in_seconds: expiresInSeconds,
       provenance: declaredProvenance,
+      metadata,
     } = parsed.data;
     const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
     if (idempotencyError) {
@@ -231,6 +224,7 @@ workspaceRoutes.post('/workspaces', async (c) => {
     const requestDigest = idempotencyKey
       ? await workspaceEngine.workspaceCreateRequestDigest({
         name,
+        ...(metadata === undefined ? {} : { metadata }),
         ...(expiresInSeconds === undefined ? {} : { expiresInSeconds }),
         ...(declaredProvenance === undefined ? {} : { provenance: declaredProvenance }),
       })
@@ -253,6 +247,7 @@ workspaceRoutes.post('/workspaces', async (c) => {
         ...(expiresInSeconds
           ? { expiresAt: new Date(Date.now() + expiresInSeconds * 1_000) }
           : {}),
+        ...(metadata === undefined ? {} : { metadata }),
         ...attribution,
       },
     );
