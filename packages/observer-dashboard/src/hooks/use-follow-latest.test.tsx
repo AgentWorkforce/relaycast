@@ -22,6 +22,7 @@ afterEach(() => {
   disconnect.mockClear();
 });
 
+/** Create a scroll pane with measurable overflow in jsdom. */
 function makePane() {
   const pane = document.createElement('div');
   Object.defineProperties(pane, {
@@ -31,6 +32,7 @@ function makePane() {
   return pane;
 }
 
+/** Simulate a reader scroll, including the event that changes follow mode. */
 function scroll(pane: HTMLDivElement, top: number) {
   act(() => {
     pane.scrollTop = top;
@@ -66,6 +68,21 @@ describe('useFollowLatest', () => {
     Object.defineProperty(pane, 'scrollHeight', { value: 1400 });
     rerender({ id: 'third' });
     expect(pane.scrollTop).toBe(1400);
+  });
+
+  it('resumes following after clearing a feed at the top without a scroll event', () => {
+    const pane = makePane();
+    const ref = { current: pane };
+    const { rerender } = renderHook(({ id }: { id?: string }) => useFollowLatest(ref, id), {
+      initialProps: { id: 'first' },
+    });
+    scroll(pane, 0);
+    Object.defineProperty(pane, 'scrollHeight', { value: 200 });
+    rerender({ id: undefined });
+    expect(pane.scrollTop).toBe(0);
+    Object.defineProperty(pane, 'scrollHeight', { value: 1200 });
+    rerender({ id: 'after-clear' });
+    expect(pane.scrollTop).toBe(1200);
   });
 
   it('does not jump when older entries are prepended without changing the latest id', () => {

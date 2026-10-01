@@ -26,6 +26,7 @@ interface ChatFeedProps {
   className?: string;
 }
 
+/** Render the selected conversation inside its own bounded scroll pane. */
 export function ChatFeed({
   selectedChannel,
   selectedChannelMemberCount,
@@ -154,6 +155,7 @@ function usePaginatedFeed(
   return { topRef, showSentinel, loadingMore };
 }
 
+/** Render chronological messages and the sentinel for loading older pages. */
 function FeedList({
   sorted,
   feed,

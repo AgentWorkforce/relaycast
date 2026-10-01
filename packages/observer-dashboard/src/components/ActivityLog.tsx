@@ -43,6 +43,7 @@ interface ActivityLogProps {
   className?: string;
 }
 
+/** Show live activity chronologically in a pane that follows incoming events. */
 export function ActivityLog({ className }: ActivityLogProps) {
   const { status, events: wsEvents, latestEventAt, clearEvents } = useWebSocketFeed();
 

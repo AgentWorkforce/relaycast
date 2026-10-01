@@ -9,8 +9,13 @@ export function useFollowLatest(scrollRef: RefObject<HTMLDivElement>, latestId?:
   const following = useRef(true);
 
   useClientLayoutEffect(() => {
+    if (latestId === undefined) {
+      // Clearing an empty feed may not emit a scroll event. Resume following.
+      following.current = true;
+      return;
+    }
     const pane = scrollRef.current;
-    if (pane && latestId && following.current) pane.scrollTop = pane.scrollHeight;
+    if (pane && following.current) pane.scrollTop = pane.scrollHeight;
   }, [latestId, scrollRef]);
 
   useEffect(() => {

@@ -14,6 +14,8 @@ import type {
   AgentRegisterReplyData,
 } from '@relaycast/types';
 import {
+  FLEET_ACTION_CALLER_METADATA_KEY,
+  FLEET_ACTION_CALLER_METADATA_VERSION,
   FLEET_DELIVERY_CURSOR_CAPABILITY,
   NODE_REGISTRATION_CONTRACT_V1,
   parseFleetBrokerToRelaycastMessage,
@@ -709,6 +711,7 @@ export async function registerNode(
         maxAgents: 1,
         activeAgents: 1,
         tags: directTags,
+        machineId: message.machine_id ?? existing.machineId,
         version: message.version,
         status: 'online',
         handlersLive: false,
@@ -2773,12 +2776,25 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           (capability) => capability.accepted && capability.name === FLEET_DELIVERY_CURSOR_CAPABILITY,
         );
         if (args.connectionId && args.registry.attachProvider) {
+          const acceptedActions = new Set(
+            acceptance
+              .filter((capability) => capability.accepted && capability.kind === 'action')
+              .map((capability) => capability.name),
+          );
+          const callerAwareActions = message.capabilities
+            .filter((capability) => (
+              acceptedActions.has(capability.name)
+              && capability.metadata?.[FLEET_ACTION_CALLER_METADATA_KEY]
+                === FLEET_ACTION_CALLER_METADATA_VERSION
+            ))
+            .map((capability) => capability.name);
           args.registry.attachProvider(
             args.workspaceId,
             args.nodeId,
             provider.name,
             provider.instance_id,
             args.connectionId,
+            callerAwareActions,
           );
         }
         args.registry.setProviderDeliveryReadiness?.(

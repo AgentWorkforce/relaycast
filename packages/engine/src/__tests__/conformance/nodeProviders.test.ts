@@ -13,12 +13,26 @@ import { actions, actionInvocations, agents, nodeProviders, nodes } from '../../
 import { NODE_LIVENESS_TTL_MS, PROVIDER_ATTACH_LIVENESS_MS } from '../../engine/placement.js';
 import { drainNodeInvocations } from '../../index.js';
 import {
+  FLEET_ACTION_CALLER_METADATA_KEY,
+  FLEET_ACTION_CALLER_METADATA_VERSION,
+} from '@relaycast/types';
+import {
   rescheduleInvocationsForLostNode,
   rescheduleNodeInvocation,
   sweepTimedOutInvocations,
 } from '../../engine/action.js';
 
-type Cap = { name: string; kind?: string; global?: boolean; queue?: boolean };
+type Cap = {
+  name: string;
+  kind?: string;
+  global?: boolean;
+  queue?: boolean;
+  metadata?: Record<string, string>;
+};
+
+const callerAware = {
+  [FLEET_ACTION_CALLER_METADATA_KEY]: FLEET_ACTION_CALLER_METADATA_VERSION,
+};
 
 /**
  * Multi-provider node model: N provider sockets per node, node-scoped actions,
@@ -445,8 +459,37 @@ describe('node providers', () => {
     const ws = await createWorkspace(stack.app, 'np-invoke');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
     await enrollNode(ws, 'node_a', 'alpha');
-    const py = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'py', [{ name: 'run-etl', kind: 'action' }]);
+    const py = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'py', [{
+      name: 'run-etl',
+      kind: 'action',
+      metadata: callerAware,
+    }]);
     const rb = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'rb', [{ name: 'build', kind: 'action' }]);
+
+    const res = await stack.app.request('/v1/nodes/alpha/actions/run-etl/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { rows: 3, caller_id: 'spoofed' } }),
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json() as { data: { invocation_id: string } };
+    expect(py.sock.ofType('action.invoke').at(-1)).toMatchObject({
+      invocation_id: body.data.invocation_id,
+      action: 'run-etl',
+      caller_id: caller.agentId,
+      caller_name: 'caller',
+      input: { rows: 3, caller_id: 'spoofed' },
+    });
+    expect(rb.sock.ofType('action.invoke')).toHaveLength(0);
+  });
+
+  it('omits additive caller fields for an older strict provider that did not opt in', async () => {
+    const ws = await createWorkspace(stack.app, 'np-invoke-legacy');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    await enrollNode(ws, 'node_a', 'alpha');
+    const legacy = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'legacy', [
+      { name: 'run-etl', kind: 'action' },
+    ]);
 
     const res = await stack.app.request('/v1/nodes/alpha/actions/run-etl/invoke', {
       method: 'POST',
@@ -454,9 +497,117 @@ describe('node providers', () => {
       body: JSON.stringify({ input: { rows: 3 } }),
     });
     expect(res.status).toBe(201);
-    const body = await res.json() as { data: { invocation_id: string } };
-    expect(py.sock.ofType('action.invoke').at(-1)).toMatchObject({ invocation_id: body.data.invocation_id, action: 'run-etl' });
-    expect(rb.sock.ofType('action.invoke')).toHaveLength(0);
+    const frame = legacy.sock.ofType('action.invoke').at(-1)!;
+    expect(frame).not.toHaveProperty('caller_id');
+    expect(frame).not.toHaveProperty('caller_name');
+  });
+
+  it('omits caller fields on a default-provider replacement before it registers', async () => {
+    const ws = await createWorkspace(stack.app, 'np-invoke-default-reconnect-before-register');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    await enrollNode(ws, 'node_a', 'alpha');
+    const original = await attachProvider(ws.workspaceId, 'node_a', 'alpha', undefined, [{
+      name: 'run-etl',
+      kind: 'action',
+      metadata: callerAware,
+    }]);
+    const registry = stack.runtime.realtime;
+    const originalSend = registry.sendAuthorizedActionToProvider!.bind(registry);
+    let releaseAuthorization!: () => void;
+    let markAuthorizationStarted!: () => void;
+    const authorizationStarted = new Promise<void>((resolve) => { markAuthorizationStarted = resolve; });
+    const authorizationRelease = new Promise<void>((resolve) => { releaseAuthorization = resolve; });
+    vi.spyOn(registry, 'sendAuthorizedActionToProvider').mockImplementationOnce(async (...args) => {
+      markAuthorizationStarted();
+      await authorizationRelease;
+      return originalSend(...args);
+    });
+
+    const invoked = stack.app.request('/v1/nodes/alpha/actions/run-etl/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { rows: 3 } }),
+    });
+    await authorizationStarted;
+
+    // Keep the prior persisted capability row while replacing the socket,
+    // matching a reconnect that reaches dispatch before node.register.
+    registry.detachProvider(ws.workspaceId, 'node_a', 'default');
+    const replacement = attachSocket(ws.workspaceId, 'node_a');
+    await original.handle.handleClose();
+    releaseAuthorization();
+
+    expect((await invoked).status).toBe(201);
+    const frame = replacement.sock.ofType('action.invoke').at(-1)!;
+    expect(frame).toMatchObject({ action: 'run-etl', input: { rows: 3 } });
+    expect(frame).not.toHaveProperty('caller_id');
+    expect(frame).not.toHaveProperty('caller_name');
+  });
+
+  it('tolerates primitive entries while negotiating caller metadata', async () => {
+    const ws = await createWorkspace(stack.app, 'np-invoke-mixed-capabilities');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    await enrollNode(ws, 'node_a', 'alpha');
+    const provider = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'py', [{
+      name: 'run-etl',
+      kind: 'action',
+      metadata: callerAware,
+    }]);
+    await stack.runtime.handle.db
+      .update(nodeProviders)
+      .set({
+        capabilities: [
+          'legacy-capability',
+          { name: 'run-etl', kind: 'action', metadata: callerAware },
+        ] as unknown as Cap[],
+      })
+      .where(and(
+        eq(nodeProviders.workspaceId, ws.workspaceId),
+        eq(nodeProviders.nodeId, 'node_a'),
+        eq(nodeProviders.name, 'py'),
+      ));
+
+    const res = await stack.app.request('/v1/nodes/alpha/actions/run-etl/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { rows: 3 } }),
+    });
+    expect(res.status).toBe(201);
+    expect(provider.sock.ofType('action.invoke').at(-1)).toMatchObject({
+      action: 'run-etl',
+      caller_id: caller.agentId,
+      caller_name: 'caller',
+    });
+  });
+
+  it('reloads caller provenance at the socket boundary and omits a deleted caller', async () => {
+    const ws = await createWorkspace(stack.app, 'np-invoke-deleted-caller');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    await enrollNode(ws, 'node_a', 'alpha');
+    const provider = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'py', [{
+      name: 'run-etl',
+      kind: 'action',
+      metadata: callerAware,
+    }]);
+    const registry = stack.runtime.realtime;
+    const originalSend = registry.sendAuthorizedActionToProvider!.bind(registry);
+    vi.spyOn(registry, 'sendAuthorizedActionToProvider').mockImplementationOnce(async (...args) => {
+      await stack.runtime.handle.db.delete(agents).where(and(
+        eq(agents.workspaceId, ws.workspaceId),
+        eq(agents.id, caller.agentId),
+      ));
+      return originalSend(...args);
+    });
+
+    const res = await stack.app.request('/v1/nodes/alpha/actions/run-etl/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { rows: 3 } }),
+    });
+    expect(res.status).toBe(201);
+    const frame = provider.sock.ofType('action.invoke').at(-1)!;
+    expect(frame).not.toHaveProperty('caller_id');
+    expect(frame).not.toHaveProperty('caller_name');
   });
 
   it('shadows native spawn capacity with a provider action and never silently bypasses it', async () => {
@@ -1862,6 +2013,29 @@ describe('node providers', () => {
     await stack.settle();
     // Delivery routing came for free from the canonical route.
     expect(deliverFramesOfType(py.sock, 'message.created').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('attributes node-token message telemetry to the `from` agent', async () => {
+    const ws = await createWorkspace(stack.app, 'nt-msg-telemetry');
+    const poster = await registerAgent(stack.app, ws.workspaceKey, 'poster');
+    await stack.runtime.deps.db
+      .update(agents)
+      .set({ type: 'human', metadata: { cloud_user_id: 'user_poster' } })
+      .where(eq(agents.id, poster.agentId));
+    const nodeToken = await enrollNodeWithToken(ws, 'node_a', 'alpha');
+    const capture = vi.spyOn(stack.runtime.deps.telemetry, 'capture');
+
+    const res = await postMessage(nodeToken, 'general', { text: 'hi', from: 'poster' });
+    expect(res.status).toBe(201);
+
+    const created = capture.mock.calls
+      .map(([event]) => event)
+      .find((event) => event.name === 'relaycast_server_message_created');
+    expect(created).toMatchObject({
+      distinctId: 'user_poster',
+      setOnce: { first_human_message_at: expect.any(String) },
+      properties: { sender_type: 'human', agent_id: poster.agentId, agent_name: 'poster' },
+    });
   });
 
   it('requires `from` on a node-token message', async () => {

@@ -68,6 +68,7 @@ const capabilitiesSchema = z.record(z.string(), z.unknown());
 const registerAgentSchema = z.object({
   auto_join_general: z.boolean().optional(),
   name: z.string().min(1),
+  direct_machine_prefix: z.string().max(40).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).optional(),
   type: AgentTypeSchema.optional(),
   persona: z.string().optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
@@ -281,6 +282,7 @@ agentRoutes.post(
       }
       const {
         name,
+        direct_machine_prefix: directMachinePrefix,
         type,
         persona,
         metadata,
@@ -297,6 +299,7 @@ agentRoutes.post(
 
       const result = await agentEngine.registerAgent(db, workspace.id, {
         name,
+        directMachinePrefix,
         type,
         persona,
         metadata: nextMetadata,

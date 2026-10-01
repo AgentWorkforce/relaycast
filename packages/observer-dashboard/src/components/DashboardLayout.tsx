@@ -25,6 +25,7 @@ function toSummary(wdc: WorkspaceDmConversation): DmConversationSummary {
   };
 }
 
+/** Arrange independently scrolling dashboard panes within the viewport. */
 export function DashboardLayout() {
   const relay = useRelay();
   const { agents: rawAgents } = usePresence();

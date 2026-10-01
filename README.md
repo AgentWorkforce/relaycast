@@ -323,11 +323,11 @@ const relay = new RelayCast({
 `agent-relay-cli/agent/claude-code` or `pear/user/send-message-box`. (It
 replaced the older `harness` option and its `X-Relaycast-Harness` header.)
 
-Relaycast has no user table of its own — a workspace is an API-key row — so
-these identity fields are the only way hosted usage can be reported per person
-or per organization rather than only per workspace. `agentRelayUserId` doubles
-as the analytics person key when `agentRelayDistinctId` is unset, so a host that
-knows the user only has to set one field. `agentRelayMachineId` is sent
+An acting agent whose `metadata.cloud_user_id` is set attributes events to that
+user, ahead of these fields. Otherwise `agentRelayUserId`, then
+`agentRelayDistinctId`, is the analytics person key, so a host that knows the
+user only has to set one field. Without any of them an event belongs to the
+workspace and creates no person. `agentRelayMachineId` is sent
 *alongside* the person key rather than instead of it, which is what makes
 "how many machines share this workspace" and "are they one account or several"
 answerable.
@@ -625,9 +625,11 @@ Activity feed channel-message items include `channel_id` and `channel_name`; DM 
 `conversation_id`.
 
 `POST /dm` accepts `address` (`agent@machine`) in place of `to`. It resolves to the agent only
-while it is hosted on that machine (its broker node's name or `machine_id`, or `direct` for a
-self-connected agent; the published address uses `machine_id` when the name contains `@` or is
-`direct`), then delivers like any DM. A cloud sandbox is a broker node, so a sandboxed
+while it is hosted on that machine (its broker node's name or `machine_id`, or a
+self-connected direct node's `machine_id`; legacy `@direct` stays valid). The published address
+uses the broker's `machine_id` when its name contains `@` or is `direct`.
+`POST /v1/agents` can take a normalized `direct_machine_prefix`; Relaycast appends the agent id
+and returns the resulting address at registration. A cloud sandbox is a broker node, so a sandboxed
 agent's address uses the sandbox's node name; once the sandbox is torn down the agent has no address
 (`address: null`) until it is hosted again. Agents expose their address as `address` on agent
 resources, and each DM carries the sender's as `message.agent_address`, so a recipient can reply on
@@ -933,6 +935,22 @@ adapters accept this capability only when their `NodeConnectionRegistry` impleme
 the provider delivery-readiness hooks; adapters without those hooks remain on legacy
 immediate delivery and receive a rejected capability result.
 
+Node action providers negotiate authenticated caller provenance per capability.
+An action capability that includes metadata
+`{ "relay.action-caller": "v1" }` may receive optional `caller_id` and
+`caller_name` fields on its `action.invoke` frames. Relaycast derives those
+fields from the authenticated invocation record at the final socket-send
+boundary; provider input can neither set nor override them. If the caller has
+been deleted, both fields are omitted. Providers that do not advertise the
+exact metadata value receive the legacy frame shape, which preserves rolling
+upgrade compatibility with strict older parsers. The current TypeScript
+`NodeProviderClient` adds this metadata to each registered handler and exposes
+the values as `ctx.callerAgentId` and `ctx.callerAgentName`. Authorization-sensitive
+handlers must fail closed when `callerAgentId` is absent; a name alone is never
+an authenticated identity. Realtime adapters that terminate the provider socket
+outside the engine must apply the same durable re-read and negotiation inside
+their final serialized send boundary, including redispatch after reconnect.
+
 Queue/cron-backed adapters that own node dispatch outside the Node adapter should call
 `drainNodeInvocations` after node reconnect/register/heartbeat and
 `sweepTimedOutInvocations` from cron via `@relaycast/engine/node-invocations`.
@@ -946,6 +964,10 @@ input. Completion emits `action.completed` or `action.failed` to the caller's no
 workspace observers, and subscriptions. Action discovery is filtered by `available_to`
 for agent-token callers, workspace-key callers do not see restricted actions without
 an agent identity, and invoke enforces the same rule.
+
+For opted-in node providers, `action.invoke` also carries the live authenticated
+caller identity as optional `caller_id` and `caller_name`; see the node-provider
+negotiation above. These fields are transport authority, not action input.
 
 Action invocation retries are idempotent. `POST /v1/actions/:name/invoke` accepts an
 `Idempotency-Key` scoped to the authenticated workspace, agent, and action; replaying

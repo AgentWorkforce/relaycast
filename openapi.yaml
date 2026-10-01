@@ -81,6 +81,15 @@ info:
     establish support; clients must validate the current connection and provider.
     Lost registration replies are not safe to retry automatically.
 
+    Node action capabilities negotiate authenticated caller provenance with
+    capability metadata `{ "relay.action-caller": "v1" }`. Only an exact
+    opt-in permits Relaycast to add optional `caller_id` and `caller_name` to
+    that capability's `action.invoke` frames. The values are re-read from the
+    authenticated invocation at the final serialized socket-send boundary and
+    are omitted when the caller was deleted. Non-opted-in providers retain the
+    legacy strict frame shape. Providers must treat an absent `caller_id` as no
+    authenticated caller; `caller_name` is informational and never authority.
+
     Telemetry attribution (optional, all requests):
 
     Clients may declare who is driving a request so server-side product
@@ -93,13 +102,15 @@ info:
     | `X-Relaycast-Origin-Actor` | `origin_actor` | UA-style path identifying the caller, `{app}/{type}[/{name}]` (e.g. `agent-relay-cli/agent/claude-code`). Supersedes the former `X-Relaycast-Harness`. |
     | `X-Agent-Relay-Distinct-Id` | `agent_relay_distinct_id` | Analytics person key for the caller. |
     | `X-Agent-Relay-Machine-Id` | `agent_relay_machine_id` | Anonymous hashed id of the host machine. Sent alongside the distinct id, not instead of it. |
-    | `X-Agent-Relay-User-Id` | `agent_relay_user_id` | Signed-in user id from the calling product's own account system. Used as the person key when present. |
+    | `X-Agent-Relay-User-Id` | `agent_relay_user_id` | Signed-in user id from the calling product's own account system. Used as the person key when the acting agent has no `metadata.cloud_user_id`. |
     | `X-Agent-Relay-Org-Id` | `agent_relay_org_id` | Organization id, for per-customer rollups. |
     | `X-Agent-Relay-Org-Slug` | `agent_relay_org_slug` | Human-readable organization slug. |
 
-    Relaycast has no user table of its own — a workspace is an API-key row — so
-    these are the only way hosted usage can be reported per person or per
-    organization rather than only per workspace.
+    The person key is the acting agent's `metadata.cloud_user_id` when set,
+    then `X-Agent-Relay-User-Id`, then `X-Agent-Relay-Distinct-Id`. Without any
+    of them the event belongs to the workspace and creates no person. Organization
+    and workspace groups come from the workspace's `metadata.cloud_org_id` and
+    `metadata.cloud_workspace_id`.
 
     The query-parameter forms exist for WebSocket upgrades (`/v1/ws`,
     `/v1/node/ws`), where browsers cannot set custom headers; the header wins
@@ -327,7 +338,9 @@ components:
             `agent@machine` for `address` on `POST /dm`. `machine` is the broker
             node's name (for a cloud sandbox, its node name), or its
             `machine_id` when the name contains `@` or is `direct`; `direct`
-            for a self-connected agent. Null when the agent is not hosted anywhere:
+            for a self-connected agent without a supplied `machine_id` (newer
+            direct-node clients publish their readable `machine_id` instead).
+            Null when the agent is not hosted anywhere:
             released, finished, or its node was deleted.
         type:
           type: string
@@ -2359,6 +2372,14 @@ paths:
               properties:
                 name:
                   type: string
+                direct_machine_prefix:
+                  type: string
+                  pattern: '^[a-z0-9]+(-[a-z0-9]+)*$'
+                  maxLength: 40
+                  description: >-
+                    Optional normalized computer name for an implicit direct node.
+                    Relaycast appends the new agent id to make its published
+                    machine address unique. Omit for legacy `agent@direct`.
                 type:
                   type: string
                   enum: [agent, human, system]
@@ -3866,8 +3887,9 @@ paths:
         need to guess their own routed name.
 
         `address` is `agent@machine`: `machine` must be the agent's current
-        broker node (by node name or `machine_id`), or `direct` for a
-        self-connected agent. An address that no longer matches — the agent
+        broker node (by node name or `machine_id`), or a self-connected direct
+        node's `machine_id`; `direct` remains an alias for direct nodes. An
+        address that no longer matches — the agent
         moved, was released, or its node was deleted — returns
         `404 address_not_found` instead of reaching the agent elsewhere, and
         the check is repeated inside the admission write. Names may contain
@@ -5492,6 +5514,10 @@ paths:
         socket. A `spawn:<harness>` name with no shadow action falls through to
         the node's native capacity. Fails fast with `handler_unavailable` when
         the owning provider is offline unless the capability opted into queueing.
+        An action capability whose metadata contains
+        `relay.action-caller: "v1"` receives the authenticated agent principal
+        in optional `caller_id` / `caller_name` `action.invoke` fields, loaded
+        at the final send boundary. Other providers receive the legacy frame.
       tags:
         - Nodes
       security:

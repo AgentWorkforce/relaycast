@@ -1,3 +1,5 @@
+import type { TelemetryGroups, TelemetryPersonSetOnce } from '@relaycast/types';
+
 /**
  * Pluggable telemetry sink — the observability seam.
  *
@@ -9,9 +11,15 @@
 export interface TelemetryEvent {
   /** Event name, e.g. `relaycast_server_message_posted`. */
   name: string;
-  /** Stable per-workspace (or per-actor) id for aggregation. */
+  /** The person the event belongs to, or `relaycast-ws:<workspace_id>` when none is known. */
   distinctId: string;
   properties: Record<string, unknown>;
+  /** PostHog groups (`$groups`); absent when the workspace carries no cloud ids. */
+  groups?: TelemetryGroups;
+  /** Person properties written once (`$set_once`). */
+  setOnce?: TelemetryPersonSetOnce;
+  /** `false` when `distinctId` is not a person (`$process_person_profile`). */
+  processPersonProfile?: boolean;
 }
 
 export interface TelemetrySink {

@@ -16,11 +16,27 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
+
+### Added
+
+- Server telemetry attributes each event to the cloud user behind the acting agent (`metadata.cloud_user_id`) and groups it by the workspace's cloud org and workspace; events with no known person use `relaycast-ws:<workspace_id>` without a person profile.
 
 ### Fixed
 
-- Observer chat and activity now scroll independently within the viewport, display oldest to newest, and preserve reading position when new entries arrive.
+- Observer chat and activity now scroll independently within the viewport, display oldest to newest, and preserve reading position when new entries arrive. Clearing activity resumes following new events.
+
+## [8.14.0] - 2026-09-30
+
+### Added
+
+- Opted-in node-provider action handlers receive the authenticated invoking agent identity in their handler context, with legacy strict providers retaining the prior wire shape.
+
+## [8.13.1] - 2026-09-30
+
+### Fixed
+
+- Direct-node agents can publish a readable machine address from registration onward while legacy `@direct` addresses continue to deliver.
 
 ## [8.13.0] - 2026-09-25
 
@@ -618,7 +634,9 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v8.13.0...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v8.14.0...HEAD
+[8.14.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.13.1...v8.14.0
+[8.13.1]: https://github.com/AgentWorkforce/relaycast/compare/v8.13.0...v8.13.1
 [8.13.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.12.0...v8.13.0
 [8.12.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.11.7...v8.12.0
 [8.11.7]: https://github.com/AgentWorkforce/relaycast/compare/v8.11.6...v8.11.7
