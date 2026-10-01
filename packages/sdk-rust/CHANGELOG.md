@@ -23,7 +23,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Changed
 
-- **BREAKING:** `RelayCastOptions` struct literals must include the new `origin_client` and `origin_version` fields; prefer `RelayCastOptions::new(...)` and builders.
+- **BREAKING:** `RelayCastOptions` and `WorkspaceBootstrapOptions` struct literals must include the new `origin_client` and `origin_version` fields; prefer `RelayCastOptions::new(...)` and builders.
 
 - Automatic 5xx retries require an idempotent request or an idempotency key.
 - **BREAKING:** `RelayCast::rotate_agent_token` now requires the current agent token; use `take_over_agent` or `recover_agent` to replace an identity you cannot authenticate as.
@@ -32,6 +32,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - `NodeRosterEntry.load` is now `Option<f64>`, matching the API's explicit unreported state; direct-agent heartbeats no longer label a constant utilization as measured.
 
 ### Added
+
+- `WorkspaceBootstrapOptions::with_origin(client, version)` and `RelayCast::lookup_workspace_with_options(WorkspaceLookupOptions)` identify products on anonymous workspace creation and lookup; legacy calls retain SDK defaults.
 
 - `RelayCastOptions::with_origin(client, version)` and `AgentClient::with_options(ClientOptions)` configure product attribution, inherited by agent HTTP/WebSocket traffic and preserved across token replacement.
 

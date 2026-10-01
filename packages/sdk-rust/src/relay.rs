@@ -182,6 +182,8 @@ impl RelayCast {
     ) -> Result<CreateWorkspaceResponse> {
         let WorkspaceBootstrapOptions {
             base_url,
+            origin_client,
+            origin_version,
             provenance,
             metadata,
             idempotency_key,
@@ -241,8 +243,14 @@ impl RelayCast {
             .post(&url)
             .header("Content-Type", "application/json")
             .header("X-SDK-Version", SDK_VERSION)
-            .header("X-Relaycast-Origin-Client", DEFAULT_ORIGIN_CLIENT)
-            .header("X-Relaycast-Origin-Version", SDK_VERSION)
+            .header(
+                "X-Relaycast-Origin-Client",
+                origin_client.as_deref().unwrap_or(DEFAULT_ORIGIN_CLIENT),
+            )
+            .header(
+                "X-Relaycast-Origin-Version",
+                origin_version.as_deref().unwrap_or(SDK_VERSION),
+            )
             .json(&body);
         if let Some(key) = idempotency_key {
             request = request.header("Idempotency-Key", key);
@@ -1018,9 +1026,21 @@ impl RelayCast {
         name: &str,
         base_url: Option<&str>,
     ) -> Result<Option<WorkspaceLookup>> {
+        let mut options = WorkspaceLookupOptions::new();
+        if let Some(base_url) = base_url {
+            options = options.with_base_url(base_url);
+        }
+        Self::lookup_workspace_with_options(name, options).await
+    }
+
+    /// Look up a workspace with configurable product origin metadata.
+    pub async fn lookup_workspace_with_options(
+        name: &str,
+        options: WorkspaceLookupOptions,
+    ) -> Result<Option<WorkspaceLookup>> {
         let url = format!(
             "{}/v1/workspaces/by-name/{}",
-            base_url.unwrap_or(DEFAULT_BASE_URL),
+            options.base_url.as_deref().unwrap_or(DEFAULT_BASE_URL),
             urlencoding::encode(name)
         );
 
@@ -1029,8 +1049,14 @@ impl RelayCast {
             .get(&url)
             .header("Content-Type", "application/json")
             .header("X-SDK-Version", SDK_VERSION)
-            .header("X-Relaycast-Origin-Client", DEFAULT_ORIGIN_CLIENT)
-            .header("X-Relaycast-Origin-Version", SDK_VERSION)
+            .header(
+                "X-Relaycast-Origin-Client",
+                options.origin_client.as_deref().unwrap_or(DEFAULT_ORIGIN_CLIENT),
+            )
+            .header(
+                "X-Relaycast-Origin-Version",
+                options.origin_version.as_deref().unwrap_or(SDK_VERSION),
+            )
             .send()
             .await?;
 

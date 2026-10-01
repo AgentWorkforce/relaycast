@@ -271,3 +271,125 @@ async fn inherited_and_standalone_agents_forward_origin_to_websocket() {
         server.join().unwrap();
     }
 }
+
+#[tokio::test]
+async fn anonymous_bootstrap_origin_fields_default_independently() {
+    use relaycast::{WorkspaceBootstrapOptions, WorkspaceProvenance};
+    let server = MockServer::start().await;
+    for (client, version) in [
+        (None, None),
+        (Some("relay-desktop"), None),
+        (None, Some("1.2.3")),
+        (Some("relay-desktop"), Some("1.2.3")),
+    ] {
+        Mock::given(method("POST"))
+            .and(path("/v1/workspaces"))
+            .and(header(
+                "x-relaycast-origin-client",
+                client.unwrap_or("@relaycast/sdk-rust"),
+            ))
+            .and(header(
+                "x-relaycast-origin-version",
+                version.unwrap_or(VERSION),
+            ))
+            .and(header("x-sdk-version", VERSION))
+            .respond_with(ok(
+                json!({"workspace_id": "ws_1", "api_key": "rk_created", "created_at": "now"}),
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut options =
+            WorkspaceBootstrapOptions::new(WorkspaceProvenance::sdk()).with_base_url(server.uri());
+        options.origin_client = client.map(str::to_owned);
+        options.origin_version = version.map(str::to_owned);
+        RelayCast::create_workspace_with_options("desktop", options)
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn anonymous_lookup_origin_fields_default_independently() {
+    use relaycast::WorkspaceLookupOptions;
+    let server = MockServer::start().await;
+    for (client, version) in [
+        (None, None),
+        (Some("relay-desktop"), None),
+        (None, Some("1.2.3")),
+        (Some("relay-desktop"), Some("1.2.3")),
+    ] {
+        Mock::given(method("GET"))
+            .and(path("/v1/workspaces/by-name/desktop"))
+            .and(header(
+                "x-relaycast-origin-client",
+                client.unwrap_or("@relaycast/sdk-rust"),
+            ))
+            .and(header(
+                "x-relaycast-origin-version",
+                version.unwrap_or(VERSION),
+            ))
+            .and(header("x-sdk-version", VERSION))
+            .respond_with(ok(
+                json!({"id": "ws_1", "name": "desktop", "created_at": "now"}),
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut options = WorkspaceLookupOptions::new().with_base_url(server.uri());
+        options.origin_client = client.map(str::to_owned);
+        options.origin_version = version.map(str::to_owned);
+        RelayCast::lookup_workspace_with_options("desktop", options)
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn anonymous_workspace_builders_send_custom_origin_and_legacy_lookup_keeps_defaults() {
+    use relaycast::{WorkspaceBootstrapOptions, WorkspaceLookupOptions, WorkspaceProvenance};
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/workspaces"))
+        .and(header("x-relaycast-origin-client", "relay-desktop"))
+        .and(header("x-relaycast-origin-version", "1.2.3"))
+        .respond_with(ok(
+            json!({"workspace_id": "ws_1", "api_key": "rk_created", "created_at": "now"}),
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    for (client, version) in [("relay-desktop", "1.2.3"), ("@relaycast/sdk-rust", VERSION)] {
+        Mock::given(method("GET"))
+            .and(path("/v1/workspaces/by-name/desktop"))
+            .and(header("x-relaycast-origin-client", client))
+            .and(header("x-relaycast-origin-version", version))
+            .respond_with(ResponseTemplate::new(404).set_body_json(
+                json!({"ok": false, "error": {"code": "not_found", "message": "Not found"}}),
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    RelayCast::create_workspace_with_options(
+        "desktop",
+        WorkspaceBootstrapOptions::new(WorkspaceProvenance::sdk())
+            .with_base_url(server.uri())
+            .with_origin("relay-desktop", "1.2.3"),
+    )
+    .await
+    .unwrap();
+    assert!(RelayCast::lookup_workspace_with_options(
+        "desktop",
+        WorkspaceLookupOptions::new()
+            .with_base_url(server.uri())
+            .with_origin("relay-desktop", "1.2.3"),
+    )
+    .await
+    .unwrap()
+    .is_none());
+    assert!(RelayCast::lookup_workspace("desktop", Some(&server.uri()))
+        .await
+        .unwrap()
+        .is_none());
+}

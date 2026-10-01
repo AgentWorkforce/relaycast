@@ -58,6 +58,23 @@ let standalone = AgentClient::with_options(
 )?;
 ```
 
+Anonymous workspace calls take their own origin options because they run before a
+workspace client exists:
+
+```rust
+use relaycast::{RelayCast, WorkspaceBootstrapOptions, WorkspaceLookupOptions, WorkspaceProvenance};
+
+let created = RelayCast::create_workspace_with_options(
+    "my-workspace",
+    WorkspaceBootstrapOptions::new(WorkspaceProvenance::sdk())
+        .with_origin("relay-desktop", "1.2.3"),
+).await?;
+let existing = RelayCast::lookup_workspace_with_options(
+    "my-workspace",
+    WorkspaceLookupOptions::new().with_origin("relay-desktop", "1.2.3"),
+).await?;
+```
+
 Without overrides, the origin remains `@relaycast/sdk-rust` with the crate version.
 Token replacement and `reconnect_agent` preserve these values.
 
