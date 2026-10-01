@@ -210,12 +210,14 @@ function bumpFixtureVersion(root, version, dockerIntegrities) {
 function seedFixtureChangelogs(root) {
   const contents =
     "# Changelog\n\n## [Unreleased - Patch]\n\n### Fixed\n\n- Release fixture.\n\n## [8.5.4] - 2026-09-08\n\n### Fixed\n\n- Previous release.\n";
-  for (const relativePath of [
-    "CHANGELOG.md",
-    ...PUBLISHED_PACKAGE_DIRS.map(
-      (directory) => `packages/${directory}/CHANGELOG.md`,
-    ),
-  ]) {
+  // The release contract also checks non-npm SDK changelogs. Seed every
+  // package changelog so fixtures do not inherit the real repository's version.
+  const packageChangelogs = readdirSync(path.join(root, "packages"), {
+    withFileTypes: true,
+  })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => `packages/${entry.name}/CHANGELOG.md`);
+  for (const relativePath of ["CHANGELOG.md", ...packageChangelogs]) {
     const changelogPath = path.join(root, relativePath);
     if (existsSync(changelogPath)) writeFileSync(changelogPath, contents);
   }
