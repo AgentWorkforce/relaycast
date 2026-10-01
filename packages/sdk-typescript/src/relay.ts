@@ -1,4 +1,5 @@
 import type {
+  JsonValue,
   A2aAgentCard,
   A2aAgentRecord,
   Agent,
@@ -200,7 +201,7 @@ export interface WorkspaceIdentityOptions {
 
 export interface WorkspaceBootstrapOptions extends WorkspaceIdentityOptions {
   /** Application-defined JSON stored on the workspace. */
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, JsonValue>;
   apiKey?: string;
   baseUrl?: string;
   /** Explicit lifetime for a throwaway workspace; omit for persistence. */

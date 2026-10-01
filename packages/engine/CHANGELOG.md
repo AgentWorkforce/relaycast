@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- Workspace creation accepts public metadata; workspace updates merge top-level keys, with null deleting a key, while enforcing JSON size and credential-key limits.
+- Workspace creation accepts public metadata; workspace updates merge top-level keys, with null deleting a key, while enforcing JSON size limits and rejecting secret-like keys.
 
 ## [8.15.0] - 2026-10-01
 

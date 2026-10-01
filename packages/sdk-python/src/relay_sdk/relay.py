@@ -54,11 +54,13 @@ def _workspace_create_headers(
 ) -> dict[str, str]:
     if idempotency_key is None:
         return {}
-    if not (1 <= len(idempotency_key) <= 255) or not all("!" <= char <= "~" for char in idempotency_key):
-        raise ValueError("idempotency_key must contain 1-255 visible ASCII characters")
+    # Preserve authenticated keys exactly, including an explicitly empty key,
+    # so the API owns invalid_idempotency_key errors as in the TypeScript SDK.
     if not api_key:
         if len(idempotency_key) < 32:
             raise ValueError("Anonymous idempotency_key must be at least 32 characters")
+        if len(idempotency_key) > 255 or not all("!" <= char <= "~" for char in idempotency_key):
+            raise ValueError("idempotency_key must contain 1-255 visible ASCII characters")
         destination = urlsplit(base_url or "https://cast.agentrelay.com")
         host = destination.hostname or ""
         loopback = host.lower() == "localhost"

@@ -1,4 +1,4 @@
-import type { CreateAgentRequest, CreateAgentResponse } from './types.js';
+import type { CreateAgentRequest, CreateAgentResponse, JsonValue } from './types.js';
 import type { WorkspaceProvenanceOptions } from './workspace-provenance.js';
 
 export interface RelaycastSetupOptions {
@@ -33,7 +33,7 @@ export interface RelaycastSetupOptions {
 
 export interface CreateWorkspaceOptions {
   /** Application-defined JSON stored on the workspace. */
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, JsonValue>;
   /**
    * Human-readable name for the workspace.
    */

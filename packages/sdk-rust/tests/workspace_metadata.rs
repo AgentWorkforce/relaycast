@@ -99,3 +99,33 @@ fn workspace_preserves_legacy_api_key_hash_when_present() {
     .unwrap();
     assert_eq!(workspace.api_key_hash, "legacy-hash");
 }
+
+#[test]
+fn workspace_bootstrap_debug_redacts_metadata_and_preserves_presence() {
+    let options = WorkspaceBootstrapOptions::new(WorkspaceProvenance::sdk());
+    assert!(format!("{options:?}").contains("metadata: None"));
+
+    let metadata = json!({
+        "private_label": "sensitive-description",
+        "nested": {"values": ["sensitive-nested-value", 42]}
+    });
+    let options = options.with_metadata(metadata.as_object().unwrap().clone());
+    let debug = format!("{options:?}");
+    assert!(debug.contains("metadata: Some(\"<redacted>\")"));
+    for value in [
+        "private_label",
+        "sensitive-description",
+        "nested",
+        "sensitive-nested-value",
+        "42",
+    ] {
+        assert!(
+            !debug.contains(value),
+            "metadata leaked in Debug output: {value}"
+        );
+    }
+
+    let empty_options = WorkspaceBootstrapOptions::new(WorkspaceProvenance::sdk())
+        .with_metadata(serde_json::Map::new());
+    assert!(format!("{empty_options:?}").contains("metadata: Some(\"<redacted>\")"));
+}

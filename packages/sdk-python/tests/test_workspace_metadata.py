@@ -186,3 +186,28 @@ async def test_async_rejects_unsafe_keys_before_request(kwargs):
     with pytest.raises(ValueError):
         await AsyncRelay.create_workspace("Test", **kwargs)
     assert not respx.calls
+
+
+INVALID_KEY_RESPONSE = httpx.Response(400, json={
+    "ok": False, "error": {"code": "invalid_idempotency_key", "message": "Invalid idempotency key"},
+})
+
+
+@respx.mock
+def test_sync_authenticated_empty_key_is_preserved_for_api_validation():
+    route = respx.post(f"{BASE}/v1/workspaces").mock(return_value=INVALID_KEY_RESPONSE)
+    with pytest.raises(RelayError) as caught:
+        Relay.create_workspace("Test", api_key=KEY, base_url=BASE, idempotency_key="")
+    assert caught.value.code == "invalid_idempotency_key"
+    assert route.call_count == 1
+    assert route.calls.last.request.headers["Idempotency-Key"] == ""
+
+
+@respx.mock
+async def test_async_authenticated_empty_key_is_preserved_for_api_validation():
+    route = respx.post(f"{BASE}/v1/workspaces").mock(return_value=INVALID_KEY_RESPONSE)
+    with pytest.raises(RelayError) as caught:
+        await AsyncRelay.create_workspace("Test", api_key=KEY, base_url=BASE, idempotency_key="")
+    assert caught.value.code == "invalid_idempotency_key"
+    assert route.call_count == 1
+    assert route.calls.last.request.headers["Idempotency-Key"] == ""

@@ -450,6 +450,7 @@ workspaceRoutes.patch('/workspace', requireWorkspaceKey, rateLimit, async (c) =>
     emitServerEvent(c, workspace.id, 'relaycast_server_workspace_updated', {
       changed_name: typeof body?.name === 'string',
       changed_system_prompt: typeof body?.system_prompt === 'string',
+      changed_metadata: body.metadata !== undefined,
     });
     return jsonOk(c, updated);
   } catch (err: unknown) {

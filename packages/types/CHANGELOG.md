@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- Workspace create/update requests accept public JSON metadata validated by `WorkspaceMetadataSchema` (16 KiB, 100 keys, 8 levels; secret-like keys rejected).
+- Workspace create/update requests accept public JSON metadata validated by `WorkspaceMetadataSchema` (16 KiB, 100 top-level keys, 128 Unicode code points per key, eight nested object/array levels below the root; secret-like keys rejected).
 
 ## [8.15.0] - 2026-10-01
 
