@@ -22,6 +22,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Create, read, and update workspace metadata across the API and TypeScript, Python, Rust, and Swift SDKs, with shallow merging, null deletion, and size limits and rejection of secret-like keys.
 
+### Fixed
+
+- Python and Rust workspace reads accept public responses without private API-key hashes; Python workspace creation retries safely only when an idempotency key is supplied.
+
 ## [8.15.0] - 2026-10-01
 
 ### Added

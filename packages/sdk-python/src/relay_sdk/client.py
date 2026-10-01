@@ -72,6 +72,9 @@ class HttpClient:
         path: str,
         body: Any = None,
         query: dict[str, str] | None = None,
+        *,
+        headers: dict[str, str] | None = None,
+        retry: bool = True,
     ) -> Any:
         url = f"{self.base_url}{path}"
         if query:
@@ -80,7 +83,7 @@ class HttpClient:
                 url = f"{url}?{urlencode(filtered)}"
 
         has_body = body is not None and method.upper() != "GET"
-        headers = self._headers(with_body=has_body)
+        headers = {**self._headers(with_body=has_body), **(headers or {})}
 
         for attempt in range(len(_RETRY_BACKOFFS) + 1):
             response = self._client.request(
@@ -90,7 +93,7 @@ class HttpClient:
                 json=body if has_body else None,
             )
 
-            if 500 <= response.status_code <= 599 and attempt < len(_RETRY_BACKOFFS):
+            if retry and 500 <= response.status_code <= 599 and attempt < len(_RETRY_BACKOFFS):
                 import time
                 time.sleep(_RETRY_BACKOFFS[attempt])
                 continue
@@ -191,6 +194,9 @@ class AsyncHttpClient:
         path: str,
         body: Any = None,
         query: dict[str, str] | None = None,
+        *,
+        headers: dict[str, str] | None = None,
+        retry: bool = True,
     ) -> Any:
         url = f"{self.base_url}{path}"
         if query:
@@ -199,7 +205,7 @@ class AsyncHttpClient:
                 url = f"{url}?{urlencode(filtered)}"
 
         has_body = body is not None and method.upper() != "GET"
-        headers = self._headers(with_body=has_body)
+        headers = {**self._headers(with_body=has_body), **(headers or {})}
 
         for attempt in range(len(_RETRY_BACKOFFS) + 1):
             response = await self._client.request(
@@ -209,7 +215,7 @@ class AsyncHttpClient:
                 json=body if has_body else None,
             )
 
-            if 500 <= response.status_code <= 599 and attempt < len(_RETRY_BACKOFFS):
+            if retry and 500 <= response.status_code <= 599 and attempt < len(_RETRY_BACKOFFS):
                 await asyncio.sleep(_RETRY_BACKOFFS[attempt])
                 continue
 

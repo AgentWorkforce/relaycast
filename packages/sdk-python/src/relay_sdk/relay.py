@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import quote
+from ipaddress import ip_address
+from urllib.parse import quote, urlsplit
 
 from .agent import AgentClient, AsyncAgentClient
 from .client import AsyncHttpClient, HttpClient
@@ -46,6 +47,30 @@ from .models import (
 
 def _enc(value: str) -> str:
     return quote(value, safe="")
+
+
+def _workspace_create_headers(
+    idempotency_key: str | None, api_key: str | None, base_url: str | None,
+) -> dict[str, str]:
+    if idempotency_key is None:
+        return {}
+    if not (1 <= len(idempotency_key) <= 255) or not all("!" <= char <= "~" for char in idempotency_key):
+        raise ValueError("idempotency_key must contain 1-255 visible ASCII characters")
+    if not api_key:
+        if len(idempotency_key) < 32:
+            raise ValueError("Anonymous idempotency_key must be at least 32 characters")
+        destination = urlsplit(base_url or "https://cast.agentrelay.com")
+        host = destination.hostname or ""
+        loopback = host.lower() == "localhost"
+        try:
+            loopback = loopback or ip_address(host).is_loopback
+        except ValueError:
+            pass
+        if not host or destination.username is not None or destination.password is not None or not (
+            destination.scheme == "https" or (destination.scheme == "http" and loopback)
+        ):
+            raise ValueError("Anonymous keyed workspace creation requires HTTPS or loopback HTTP")
+    return {"Idempotency-Key": idempotency_key}
 
 
 class _WorkspaceNamespace:
@@ -300,11 +325,21 @@ class Relay:
     def create_workspace(
         name: str, *, metadata: dict[str, Any] | None = None,
         api_key: str | None = None, base_url: str | None = None,
+        idempotency_key: str | None = None,
     ) -> CreateWorkspaceResponse:
-        """Create a workspace, optionally using an owner key for delegated creation."""
+        """Create a workspace; automatic retries require an idempotency key.
+
+        Anonymous keys are reveal-once recovery capabilities: generate with a
+        CSPRNG (for example uuid.uuid4()), and retain the key for safe retries.
+        An owner api_key scopes delegated keys to that owner.
+        """
+        headers = _workspace_create_headers(idempotency_key, api_key, base_url)
         data = CreateWorkspaceRequest(name=name, metadata=metadata)
         with HttpClient(api_key or "", base_url) as client:
-            result = client.post("/v1/workspaces", data.model_dump(exclude_none=True))
+            result = client.request(
+                "POST", "/v1/workspaces", data.model_dump(exclude_none=True),
+                headers=headers, retry=idempotency_key is not None,
+            )
         return CreateWorkspaceResponse.model_validate(result)
 
     def __init__(
@@ -740,11 +775,21 @@ class AsyncRelay:
     async def create_workspace(
         name: str, *, metadata: dict[str, Any] | None = None,
         api_key: str | None = None, base_url: str | None = None,
+        idempotency_key: str | None = None,
     ) -> CreateWorkspaceResponse:
-        """Create a workspace, optionally using an owner key for delegated creation."""
+        """Create a workspace; automatic retries require an idempotency key.
+
+        Anonymous keys are reveal-once recovery capabilities: generate with a
+        CSPRNG (for example uuid.uuid4()), and retain the key for safe retries.
+        An owner api_key scopes delegated keys to that owner.
+        """
+        headers = _workspace_create_headers(idempotency_key, api_key, base_url)
         data = CreateWorkspaceRequest(name=name, metadata=metadata)
         async with AsyncHttpClient(api_key or "", base_url) as client:
-            result = await client.post("/v1/workspaces", data.model_dump(exclude_none=True))
+            result = await client.request(
+                "POST", "/v1/workspaces", data.model_dump(exclude_none=True),
+                headers=headers, retry=idempotency_key is not None,
+            )
         return CreateWorkspaceResponse.model_validate(result)
 
     def __init__(

@@ -127,7 +127,7 @@ class ObserverToken(BaseModel):
 class Workspace(BaseModel):
     id: str
     name: str
-    api_key_hash: str
+    api_key_hash: str | None = None
     system_prompt: str | None = None
     created_at: str
     metadata: dict[str, Any] = Field(default_factory=dict)

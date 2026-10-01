@@ -30,6 +30,8 @@ pub struct Cursor {
 pub struct Workspace {
     pub id: String,
     pub name: String,
+    /// Legacy field; current engines omit this private value from responses.
+    #[serde(default)]
     pub api_key_hash: String,
     pub system_prompt: Option<String>,
     pub plan: String,

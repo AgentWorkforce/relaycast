@@ -24,7 +24,27 @@ async fn workspace_metadata_create_update_and_read() {
     .await
     .unwrap();
 
-    let workspace = json!({"id": "ws_1", "name": "metadata", "api_key_hash": "hash", "system_prompt": null, "plan": "free", "created_at": "now", "metadata": metadata});
+    // Exact public shape returned by engine getWorkspace for both GET and PATCH:
+    // api_key_hash is private and deliberately omitted.
+    let merged_metadata = json!({"camelKey": {"replacement": false}, "empty": ""});
+    let workspace = json!({
+        "id": "ws_1",
+        "name": "metadata",
+        "plan": "free",
+        "system_prompt": null,
+        "created_at": "2026-10-01T00:00:00.000Z",
+        "metadata": merged_metadata,
+        "effective_retention": {"messages": {
+            "policy": "unknown", "message_ttl_days": null, "retained_since": null,
+            "source": "unknown", "reason": "boundary_unavailable"
+        }},
+        "expires_at": null,
+        "provenance": null,
+        "usage_classification": "unknown",
+        "classification_source": "unclassified",
+        "classification_reason": null,
+        "classified_at": null
+    });
     let patch = json!({"remove": null, "camelKey": {"replacement": false}});
     Mock::given(method("PATCH"))
         .and(path("/v1/workspace"))
@@ -52,19 +72,30 @@ async fn workspace_metadata_create_update_and_read() {
         })
         .await
         .unwrap();
-    assert_eq!(json!(updated.metadata), metadata);
-    assert_eq!(
-        json!(relay.workspace_info().await.unwrap().metadata),
-        metadata
-    );
+    assert_eq!(json!(updated.metadata), merged_metadata);
+    assert!(updated.api_key_hash.is_empty());
+    let loaded = relay.workspace_info().await.unwrap();
+    assert_eq!(json!(loaded.metadata), merged_metadata);
+    assert!(loaded.api_key_hash.is_empty());
 }
 
 #[test]
 fn workspace_without_metadata_defaults_to_empty_object() {
-    let workspace: Workspace = serde_json::from_value(json!({"id": "ws_1", "name": "legacy", "api_key_hash": "hash", "system_prompt": null, "plan": "free", "created_at": "now"})).unwrap();
+    let workspace: Workspace = serde_json::from_value(json!({"id": "ws_1", "name": "legacy", "system_prompt": null, "plan": "free", "created_at": "now"})).unwrap();
     assert!(workspace.metadata.is_empty());
+    assert!(workspace.api_key_hash.is_empty());
     assert_eq!(
         serde_json::to_value(UpdateWorkspaceRequest::default()).unwrap(),
         json!({})
     );
+}
+
+#[test]
+fn workspace_preserves_legacy_api_key_hash_when_present() {
+    let workspace: Workspace = serde_json::from_value(json!({
+        "id": "ws_1", "name": "legacy", "api_key_hash": "legacy-hash",
+        "system_prompt": null, "plan": "free", "created_at": "now", "metadata": {}
+    }))
+    .unwrap();
+    assert_eq!(workspace.api_key_hash, "legacy-hash");
 }

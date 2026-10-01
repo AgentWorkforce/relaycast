@@ -239,7 +239,9 @@ components:
       additionalProperties: true
       maxProperties: 100
       description: >-
-        Workspace labels, limited to 16384 bytes of serialized UTF-8 JSON, 100
+        Workspace labels readable by any valid workspace observer token; never
+        store credentials in metadata. Key rejection is an accidental-secret
+        guardrail, not a guarantee about values. Limited to 16384 bytes of serialized UTF-8 JSON, 100
         top-level keys, 128 characters per key, and eight nesting levels.
         Secret-like keys (tokens, passwords, credentials, authorization, and
         API/private/access/refresh keys) and prototype keys are rejected
