@@ -78,4 +78,32 @@ describe('telemetry schemas', () => {
       nested: '{"hello":"world"}',
     });
   });
+
+  it('carries groups, set_once and the person-profile flag on internal events', () => {
+    const parsed = parseInternalTelemetryEvent({
+      event: 'relaycast_server_message_created',
+      distinct_id: 'user_123',
+      origin_client: '@relaycast/sdk-ts',
+      origin_version: '0.3.1',
+      groups: { organization: 'org_1', workspace: 'cws_1' },
+      set_once: { first_human_message_at: '2026-09-30T00:00:00.000Z' },
+      process_person_profile: true,
+      properties: { workspace_id: 'ws_123', channel_id: 'ch_1', message_id: '1' },
+    });
+
+    expect(parsed.groups).toEqual({ organization: 'org_1', workspace: 'cws_1' });
+    expect(parsed.set_once).toEqual({ first_human_message_at: '2026-09-30T00:00:00.000Z' });
+    expect(parsed.process_person_profile).toBe(true);
+  });
+
+  it('rejects unknown group types', () => {
+    expect(() => parseInternalTelemetryEvent({
+      event: 'relaycast_server_workspace_updated',
+      distinct_id: 'user_123',
+      origin_client: '@relaycast/sdk-ts',
+      origin_version: '0.3.1',
+      groups: { team: 't_1' },
+      properties: { workspace_id: 'ws_123' },
+    })).toThrow();
+  });
 });

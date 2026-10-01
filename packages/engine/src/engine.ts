@@ -129,7 +129,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     if (response.status === 101) {
       emitServerEvent(c, authResult.workspace.id, 'relaycast_server_ws_session_started', {
         session_scope: 'workspace',
-      });
+      }, { workspace: authResult.workspace });
     }
     return response;
   });

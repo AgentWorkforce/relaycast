@@ -124,6 +124,36 @@ export const telemetryPropertiesSchema = z
     }
   });
 
+export const TELEMETRY_SENDER_TYPES = ['human', 'agent', 'system'] as const;
+
+export type TelemetrySenderType = typeof TELEMETRY_SENDER_TYPES[number];
+
+/** Who acted on a server event, from the acting agent row. */
+export interface TelemetrySenderProperties {
+  /** `human` when `agents.type = 'human'`; otherwise the agent's type. */
+  sender_type: TelemetrySenderType;
+  agent_id: string;
+  agent_name: string;
+  /** The cloud user who owns a non-human actor; that user is the event's person. */
+  agent_owner_user_id?: string;
+}
+
+/** PostHog groups, taken from the cloud ids cloud writes onto `workspaces.metadata`. */
+export const telemetryGroupsSchema = z.object({
+  organization: telemetryString(128).optional(),
+  workspace: telemetryString(128).optional(),
+}).strict();
+
+export type TelemetryGroups = z.infer<typeof telemetryGroupsSchema>;
+
+/** Person properties written once, on the person's first send of each kind. */
+export const telemetryPersonSetOnceSchema = z.object({
+  first_human_message_at: telemetryString(64).optional(),
+  first_agent_message_at: telemetryString(64).optional(),
+}).strict();
+
+export type TelemetryPersonSetOnce = z.infer<typeof telemetryPersonSetOnceSchema>;
+
 const telemetryEnvelopeBaseSchema = z.object({
   distinct_id: telemetryString(128),
   properties: telemetryPropertiesSchema.default({}),
@@ -137,6 +167,10 @@ export type TelemetryIngestionEvent = z.infer<typeof telemetryIngestionEventSche
 
 export const internalTelemetryEventSchema = telemetryEnvelopeBaseSchema.extend({
   event: telemetryEventSchema,
+  groups: telemetryGroupsSchema.optional(),
+  set_once: telemetryPersonSetOnceSchema.optional(),
+  /** `false` for events whose distinct id is not a person (the workspace fallback). */
+  process_person_profile: z.boolean().optional(),
 }).merge(telemetryOriginSchema);
 
 export type InternalTelemetryEvent = z.infer<typeof internalTelemetryEventSchema>;
