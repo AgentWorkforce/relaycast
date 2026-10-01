@@ -52,6 +52,14 @@ impl AgentClient {
         if let Some(url) = base_url {
             options = options.with_base_url(url);
         }
+        Self::with_options(options)
+    }
+
+    /// Create an agent client with HTTP options, including product origin metadata.
+    ///
+    /// Use `ClientOptions::with_origin` to identify the calling product on HTTP
+    /// requests and WebSocket connections. The API key is the agent token.
+    pub fn with_options(options: ClientOptions) -> Result<Self> {
         let client = HttpClient::new(options)?;
         Ok(Self { client, ws: None })
     }

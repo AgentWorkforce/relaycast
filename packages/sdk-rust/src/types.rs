@@ -55,6 +55,10 @@ pub struct CreateWorkspaceResponse {
 #[derive(Clone)]
 pub struct WorkspaceBootstrapOptions {
     pub base_url: Option<String>,
+    /// Product identifier for origin attribution; defaults to the Rust SDK.
+    pub origin_client: Option<String>,
+    /// Product version for origin attribution; defaults to the crate version.
+    pub origin_version: Option<String>,
     pub provenance: WorkspaceProvenance,
     /// Optional application metadata with arbitrary JSON values.
     pub metadata: Option<serde_json::Map<String, serde_json::Value>>,
@@ -73,6 +77,8 @@ impl std::fmt::Debug for WorkspaceBootstrapOptions {
         formatter
             .debug_struct("WorkspaceBootstrapOptions")
             .field("base_url", &self.base_url)
+            .field("origin_client", &self.origin_client)
+            .field("origin_version", &self.origin_version)
             .field("provenance", &self.provenance)
             .field(
                 "metadata",
@@ -94,6 +100,8 @@ impl WorkspaceBootstrapOptions {
     pub fn new(provenance: WorkspaceProvenance) -> Self {
         Self {
             base_url: None,
+            origin_client: None,
+            origin_version: None,
             provenance,
             metadata: None,
             idempotency_key: None,
@@ -103,6 +111,17 @@ impl WorkspaceBootstrapOptions {
 
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = Some(base_url.into());
+        self
+    }
+
+    /// Set the product identifier and version sent on workspace creation.
+    pub fn with_origin(
+        mut self,
+        origin_client: impl Into<String>,
+        origin_version: impl Into<String>,
+    ) -> Self {
+        self.origin_client = Some(origin_client.into());
+        self.origin_version = Some(origin_version.into());
         self
     }
 
@@ -123,6 +142,38 @@ impl WorkspaceBootstrapOptions {
     /// secret from the caller.
     pub fn with_bootstrap_secret(mut self, bootstrap_secret: impl Into<String>) -> Self {
         self.bootstrap_secret = Some(bootstrap_secret.into());
+        self
+    }
+}
+
+/// Options for an unauthenticated workspace lookup request.
+#[derive(Debug, Clone, Default)]
+pub struct WorkspaceLookupOptions {
+    pub base_url: Option<String>,
+    /// Product identifier for origin attribution; defaults to the Rust SDK.
+    pub origin_client: Option<String>,
+    /// Product version for origin attribution; defaults to the crate version.
+    pub origin_version: Option<String>,
+}
+
+impl WorkspaceLookupOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = Some(base_url.into());
+        self
+    }
+
+    /// Set the product identifier and version sent on workspace lookup.
+    pub fn with_origin(
+        mut self,
+        origin_client: impl Into<String>,
+        origin_version: impl Into<String>,
+    ) -> Self {
+        self.origin_client = Some(origin_client.into());
+        self.origin_version = Some(origin_version.into());
         self
     }
 }
