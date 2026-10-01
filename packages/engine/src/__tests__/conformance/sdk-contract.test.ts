@@ -670,6 +670,20 @@ describe('SDK v8 service contract', () => {
     expect(created.data.url).toContain(`/v1/hooks/${created.data.webhook_id}`);
     expect(created.data.token).toMatch(/^wh_live_/);
 
+    const list = await stack.app.request('/v1/webhooks', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    expect(list.status).toBe(200);
+    const listed = await list.json() as { data: Array<Record<string, unknown>> };
+    expect(listed.data[0]).toMatchObject({
+      id: created.data.webhook_id,
+      workspace_id: ws.workspaceId,
+      channel_name: 'general',
+      channel: 'general',
+    });
+    expect(listed.data[0].channel_id).toEqual(expect.any(String));
+    expect(listed.data[0].created_by).toEqual(expect.any(String));
+
     const missingAuth = await stack.app.request(`/v1/hooks/${created.data.webhook_id}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

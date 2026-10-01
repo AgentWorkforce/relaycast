@@ -25,6 +25,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Fixed
 
 - Server telemetry events can no longer be emitted with an unlisted name, a missing required property, or an overridden `workspace_id`, any of which made hosted ingestion silently drop them.
+- Fix webhook listing responses so published SDKs can deserialize them, restoring webhook cleanup for integrations.
 
 ## [8.16.0] - 2026-10-01
 

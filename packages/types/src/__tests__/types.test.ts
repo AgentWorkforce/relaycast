@@ -6,6 +6,7 @@ import {
   SessionMessagesResultSchema,
   WorkspaceSchema,
   CreateWorkspaceResponseSchema,
+  WebhookSchema,
 } from '../index.js';
 import type {
   Workspace,
@@ -56,9 +57,31 @@ import type {
   MessageReactedEvent,
   AgentStatusActiveEvent,
   PongEvent,
+  Webhook,
 } from '../index.js';
 
 describe('Type definitions', () => {
+  it('preserves inbound webhook ownership and channel identity fields', () => {
+    const webhook = WebhookSchema.parse({
+      id: 'wh_1',
+      workspace_id: 'ws_1',
+      name: 'Relayfile',
+      channel_id: 'ch_1',
+      channel_name: 'agent-events',
+      created_by: 'agent_1',
+      channel: 'agent-events',
+      url: '/v1/hooks/wh_1',
+      created_at: '2026-10-01T00:00:00.000Z',
+      is_active: true,
+    });
+
+    expect(webhook.workspace_id).toBe('ws_1');
+    expect(webhook.channel_id).toBe('ch_1');
+    expect(webhook.channel_name).toBe('agent-events');
+    expect(webhook.created_by).toBe('agent_1');
+    expectTypeOf<Webhook>().toHaveProperty('workspace_id');
+  });
+
   // ============================================
   // Workspace types
   // ============================================
