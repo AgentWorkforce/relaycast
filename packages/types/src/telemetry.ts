@@ -138,10 +138,13 @@ export interface TelemetrySenderProperties {
   agent_owner_user_id?: string;
 }
 
+/** Longest cloud user, org or workspace id that telemetry attributes to. */
+export const TELEMETRY_CLOUD_ID_MAX_LENGTH = 128;
+
 /** PostHog groups, taken from the cloud ids cloud writes onto `workspaces.metadata`. */
 export const telemetryGroupsSchema = z.object({
-  organization: telemetryString(128).optional(),
-  workspace: telemetryString(128).optional(),
+  organization: telemetryString(TELEMETRY_CLOUD_ID_MAX_LENGTH).optional(),
+  workspace: telemetryString(TELEMETRY_CLOUD_ID_MAX_LENGTH).optional(),
 }).strict();
 
 export type TelemetryGroups = z.infer<typeof telemetryGroupsSchema>;

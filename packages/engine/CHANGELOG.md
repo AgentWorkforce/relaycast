@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `TelemetryEvent` carries optional `groups`, `setOnce` and `processPersonProfile`. Server events resolve `distinctId` from the acting agent's `metadata.cloud_user_id`, then `X-Agent-Relay-User-Id` / `X-Agent-Relay-Distinct-Id`, then `relaycast-ws:<workspace_id>` with `processPersonProfile: false`; they add `sender_type`, `agent_id`, `agent_name`, `agent_owner_user_id`, groups from `workspaces.metadata.cloud_org_id` / `cloud_workspace_id`, and `first_human_message_at` / `first_agent_message_at` on sends.
+- Server events belong to the acting agent's cloud user, carry sender fields and org/workspace groups, and fall back to a non-person workspace id; `TelemetryEvent` gains optional `groups`, `setOnce` and `processPersonProfile` for sinks (see `TELEMETRY.md`).
 
 
 ## [8.14.0] - 2026-09-30

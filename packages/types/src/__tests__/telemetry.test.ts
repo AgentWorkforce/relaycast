@@ -96,6 +96,17 @@ describe('telemetry schemas', () => {
     expect(parsed.process_person_profile).toBe(true);
   });
 
+  it('rejects unknown set_once properties', () => {
+    expect(() => parseInternalTelemetryEvent({
+      event: 'relaycast_server_workspace_updated',
+      distinct_id: 'user_123',
+      origin_client: '@relaycast/sdk-ts',
+      origin_version: '0.3.1',
+      set_once: { first_human_message_at: '2026-09-30T00:00:00.000Z', plan: 'pro' },
+      properties: { workspace_id: 'ws_123' },
+    })).toThrow();
+  });
+
   it('rejects unknown group types', () => {
     expect(() => parseInternalTelemetryEvent({
       event: 'relaycast_server_workspace_updated',

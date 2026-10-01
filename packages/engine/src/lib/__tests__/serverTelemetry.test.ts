@@ -108,6 +108,26 @@ describe('emitServerEvent attribution', () => {
     expect(event.properties.client_distinct_id).toBe('anon_cli');
   });
 
+  it('prefers the acting agent owner over the declared user', async () => {
+    const event = await emit({
+      agent: agentRow({ metadata: { cloud_user_id: 'user_owner' } }),
+      headers: { 'X-Agent-Relay-User-Id': 'user_header' },
+    });
+
+    expect(event.distinctId).toBe('user_owner');
+    expect(event.properties).toMatchObject({ actor_user_id: 'user_header', is_authenticated: true });
+  });
+
+  it('falls back to the declared user over the client distinct id for an unowned agent', async () => {
+    const event = await emit({
+      agent: agentRow(),
+      headers: { 'X-Agent-Relay-User-Id': 'user_header', 'X-Agent-Relay-Distinct-Id': 'anon_cli' },
+    });
+
+    expect(event.distinctId).toBe('user_header');
+    expect(event.processPersonProfile).toBeUndefined();
+  });
+
   it('falls back to the client distinct id for an unowned agent', async () => {
     const event = await emit({
       agent: agentRow(),
@@ -181,7 +201,10 @@ describe('emitServerEvent attribution', () => {
       type: 'human',
       metadata: { cloud_user_id: 'user_from' },
     };
-    const event = await emit({ attribution: { actor } });
+    const event = await emit({
+      agent: agentRow({ metadata: { cloud_user_id: 'user_token_holder' } }),
+      attribution: { actor },
+    });
 
     expect(event.distinctId).toBe('user_from');
     expect(event.properties).toMatchObject({ agent_id: 'agent_from', sender_type: 'human' });

@@ -36,7 +36,7 @@ Set either environment variable:
 
 ## Identifiers
 
-Client telemetry uses anonymous identifiers.
+Client telemetry uses an anonymous identifier unless `RELAYCAST_TELEMETRY_DISTINCT_ID` sets one.
 
 ### Server events: person
 
@@ -61,7 +61,7 @@ Events with an acting agent carry:
 
 An event's own `agent_id`/`agent_name` (for example the subject of `relaycast_server_channel_joined`) takes precedence over the sender's.
 
-Send events (`relaycast_server_message_created`, `relaycast_server_thread_reply_created`, `relaycast_server_dm_sent`, `relaycast_server_group_dm_message_sent`) set `$set_once` on the person:
+Send events (`relaycast_server_message_created`, `relaycast_server_thread_reply_created`, `relaycast_server_dm_sent`, `relaycast_server_group_dm_message_sent`) set `$set_once` when the event has a person (never on the workspace fallback):
 
 - `first_human_message_at` when a human sends
 - `first_agent_message_at` when an agent (`sender_type: agent`) with an owner sends

@@ -1,10 +1,11 @@
 import type { Context } from "hono";
-import type {
-  ServerTelemetryEventName,
-  TelemetryGroups,
-  TelemetryPersonSetOnce,
-  TelemetrySenderProperties,
-  TelemetrySenderType,
+import {
+  TELEMETRY_CLOUD_ID_MAX_LENGTH,
+  type ServerTelemetryEventName,
+  type TelemetryGroups,
+  type TelemetryPersonSetOnce,
+  type TelemetrySenderProperties,
+  type TelemetrySenderType,
 } from "@relaycast/types";
 import { eq } from "drizzle-orm";
 import { workspaces, type agents } from "../db/schema.js";
@@ -67,17 +68,22 @@ export interface ServerEventAttribution {
 /**
  * Load the workspace fields that carry its PostHog groups, for emitters that
  * run without an authenticated workspace in context (external webhooks, node
- * sockets).
+ * sockets). Groups are optional, so a failed lookup yields none rather than
+ * dropping the event.
  */
 export async function loadTelemetryWorkspace(
   db: EngineDb,
   workspaceId: string,
 ): Promise<TelemetryWorkspace | undefined> {
-  const [workspace] = await db
-    .select({ id: workspaces.id, metadata: workspaces.metadata })
-    .from(workspaces)
-    .where(eq(workspaces.id, workspaceId));
-  return workspace;
+  try {
+    const [workspace] = await db
+      .select({ id: workspaces.id, metadata: workspaces.metadata })
+      .from(workspaces)
+      .where(eq(workspaces.id, workspaceId));
+    return workspace;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Sends whose first occurrence is stamped on the person via `$set_once`. */
@@ -87,8 +93,6 @@ const SEND_EVENTS: ReadonlySet<ServerTelemetryEventName> = new Set([
   "relaycast_server_dm_sent",
   "relaycast_server_group_dm_message_sent",
 ]);
-
-const CLOUD_ID_MAX_LENGTH = 128;
 
 /** Distinct id for events with no person; a workspace is never a person. */
 export function workspaceTelemetryDistinctId(workspaceId: string): string {
@@ -102,7 +106,7 @@ function cloudId(
   const value = metadata?.[key];
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
-  if (!trimmed || trimmed.length > CLOUD_ID_MAX_LENGTH) return undefined;
+  if (!trimmed || trimmed.length > TELEMETRY_CLOUD_ID_MAX_LENGTH) return undefined;
   return trimmed;
 }
 
