@@ -4,7 +4,9 @@ All notable changes to `relaycast-swift` will be documented in this file.
 
 See the [root changelog](../../CHANGELOG.md) for cross-package release highlights.
 
-## [Unreleased - Minor]
+## [Unreleased]
+
+## [8.16.0] - 2026-10-01
 
 - Workspace creation accepts arbitrary JSON metadata, and updates shallow merge metadata with top-level null values deleting keys.
 
