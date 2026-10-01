@@ -110,7 +110,12 @@ export async function listWebhooks(db: Db, workspaceId: string) {
 
   return rows.map((r) => ({
     id: r.id,
+    workspace_id: workspaceId,
     name: r.name,
+    channel_id: r.channelId,
+    channel_name: r.channelName,
+    created_by: r.createdBy,
+    // Kept for clients using the original REST response shape.
     channel: r.channelName,
     url: `/v1/hooks/${r.id}`,
     is_active: r.isActive,

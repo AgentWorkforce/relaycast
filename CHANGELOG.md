@@ -22,6 +22,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Rust workspace and agent clients accept product origin metadata across HTTP, WebSocket, token replacement, and anonymous workspace bootstrap.
 
+### Fixed
+
+- Fix webhook listing responses so published SDKs can deserialize them, restoring webhook cleanup for integrations.
+
 ## [8.16.0] - 2026-10-01
 
 ### Added
