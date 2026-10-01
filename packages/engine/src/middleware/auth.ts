@@ -4,6 +4,7 @@ import { touchLastSeen } from '../engine/agent.js';
 import type { AppEnv } from '../env.js';
 import type { AuthRequire } from '../ports/auth.js';
 import { getAuthTokenKind } from '../auth/tokenKind.js';
+import { authenticateUnexpired } from '../auth/workspaceExpiry.js';
 import { jsonError } from '../lib/httpResponse.js';
 import {
   hasAnyObserverScope,
@@ -29,7 +30,7 @@ function makeAuthMiddleware(require: AuthRequire) {
     }
 
     const db = c.get('db');
-    const result = await c.get('engine').auth.authenticate({ token, require, db });
+    const result = await authenticateUnexpired(c.get('engine').auth, { token, require, db });
     if (!result.ok) {
       return jsonError(c, result.code, result.message, result.status as ContentfulStatusCode);
     }
@@ -82,7 +83,7 @@ export function requireWorkspaceRead(
       : allowAgent || allowNode
         ? 'any'
         : 'workspace';
-    const result = await c.get('engine').auth.authenticate({ token, require, db });
+    const result = await authenticateUnexpired(c.get('engine').auth, { token, require, db });
     if (!result.ok) {
       return jsonError(c, result.code, result.message, result.status as ContentfulStatusCode);
     }

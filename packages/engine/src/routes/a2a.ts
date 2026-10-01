@@ -6,6 +6,7 @@ import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { a2aAgents, a2aInbound, agents, messages, workspaces } from '../db/schema.js';
 import { requireAuth, hashToken } from '../middleware/auth.js';
+import { authenticateUnexpired } from '../auth/workspaceExpiry.js';
 import { asCodedError, codedError, errorResponse, type CodedError } from '../lib/httpError.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { buildIdempotencyStorageKey, runIdempotent } from '../middleware/idempotency.js';
@@ -342,7 +343,7 @@ async function resolveWorkspaceFromAuth(c: Context<AppEnv>): Promise<{ id: strin
   if (!authHeader?.startsWith('Bearer ')) return null;
 
   const token = authHeader.slice(7);
-  const result = await c.get('engine').auth.authenticate({
+  const result = await authenticateUnexpired(c.get('engine').auth, {
     token,
     require: 'any',
     db: c.get('db'),
