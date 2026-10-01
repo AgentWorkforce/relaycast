@@ -22,6 +22,9 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Server telemetry attributes each event to the cloud user behind the acting agent (`metadata.cloud_user_id`) and groups it by the workspace's cloud org and workspace; events with no known person use `relaycast-ws:<workspace_id>` without a person profile.
 
+### Fixed
+
+- Node delivery replay now stops an affected agent's sequence stream after a failed send, preventing a higher-sequence message from arriving first while other agents continue receiving.
 
 ## [8.14.0] - 2026-09-30
 

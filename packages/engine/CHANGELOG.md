@@ -13,6 +13,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Server events belong to the acting agent's cloud user, carry sender fields and org/workspace groups, and fall back to a non-person workspace id; `TelemetryEvent` gains optional `groups`, `setOnce` and `processPersonProfile` for sinks (see [TELEMETRY.md](../../TELEMETRY.md)).
 
+### Fixed
+
+- Node delivery replay now stops an affected agent's sequence stream after a failed send, preventing a higher-sequence message from arriving first while other agents continue receiving.
 
 ## [8.14.0] - 2026-09-30
 
