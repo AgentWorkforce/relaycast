@@ -66,6 +66,10 @@ pub struct RelayCastOptions {
     /// To self-host, run the engine (`relaycast-engine`, default port 8787) and
     /// set this to e.g. `http://localhost:8787`.
     pub base_url: Option<String>,
+    /// Product identifier sent as `X-Relaycast-Origin-Client`; defaults to `@relaycast/sdk-rust`.
+    pub origin_client: Option<String>,
+    /// Product version sent as `X-Relaycast-Origin-Version`; defaults to the crate version.
+    pub origin_version: Option<String>,
     /// User-Agent-style identifier for the origin_actor driving requests
     /// (e.g. `"claude-code/2.3 (model=opus-4.8)"`, `"codex"`, `"human"`). Sent as
     /// the `X-Relaycast-Origin-Actor` header so server-side telemetry can attribute
@@ -82,6 +86,8 @@ impl RelayCastOptions {
         Self {
             api_key: api_key.into(),
             base_url: None,
+            origin_client: None,
+            origin_version: None,
             origin_actor: None,
             agent_relay_distinct_id: None,
         }
@@ -90,6 +96,17 @@ impl RelayCastOptions {
     /// Set a custom base URL.
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = Some(base_url.into());
+        self
+    }
+
+    /// Set the product identifier and version used for HTTP and agent WebSocket traffic.
+    pub fn with_origin(
+        mut self,
+        origin_client: impl Into<String>,
+        origin_version: impl Into<String>,
+    ) -> Self {
+        self.origin_client = Some(origin_client.into());
+        self.origin_version = Some(origin_version.into());
         self
     }
 
@@ -127,6 +144,8 @@ impl RelayCast {
 
         let mut client_options = ClientOptions::new(options.api_key);
         client_options = client_options.with_base_url(base_url);
+        client_options.origin_client = options.origin_client;
+        client_options.origin_version = options.origin_version;
         if let Some(origin_actor) = options.origin_actor {
             client_options = client_options.with_origin_actor(origin_actor);
         }

@@ -40,6 +40,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## Product attribution
+
+Identify your product on workspace requests and inherited agent HTTP/WebSocket traffic:
+
+```rust
+use relaycast::{RelayCast, RelayCastOptions, AgentClient, ClientOptions};
+
+let relay = RelayCast::new(
+    RelayCastOptions::new("rk_live_xxx").with_origin("relay-desktop", "1.2.3")
+)?;
+let agent = relay.as_agent("at_live_xxx")?;
+
+// Standalone agent clients accept the same metadata through HTTP options.
+let standalone = AgentClient::with_options(
+    ClientOptions::new("at_live_xxx").with_origin("relay-desktop", "1.2.3")
+)?;
+```
+
+Without overrides, the origin remains `@relaycast/sdk-rust` with the crate version.
+Token replacement and `reconnect_agent` preserve these values.
+
 ## Features
 
 ### Workspace Operations

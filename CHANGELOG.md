@@ -16,9 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Minor]
+## [Unreleased - Major]
 
 ### Added
+
+- Rust workspace and agent clients accept product origin metadata and preserve it across HTTP, WebSocket, and token replacement.
 
 - Create, read, and update workspace metadata across the API and TypeScript, Python, Rust, and Swift SDKs, with shallow merging, null deletion, and size limits and rejection of secret-like keys.
 

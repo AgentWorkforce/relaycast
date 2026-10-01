@@ -23,6 +23,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Changed
 
+- **BREAKING:** `RelayCastOptions` struct literals must include the new `origin_client` and `origin_version` fields; prefer `RelayCastOptions::new(...)` and builders.
+
 - Automatic 5xx retries require an idempotent request or an idempotency key.
 - **BREAKING:** `RelayCast::rotate_agent_token` now requires the current agent token; use `take_over_agent` or `recover_agent` to replace an identity you cannot authenticate as.
 - **BREAKING:** `AgentRegistrationClient::register_agent_token` is create-only and returns `AgentRegistrationError::AlreadyExists` on conflicts; use a unique name or persist the token for self-rollover.
@@ -30,6 +32,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - `NodeRosterEntry.load` is now `Option<f64>`, matching the API's explicit unreported state; direct-agent heartbeats no longer label a constant utilization as measured.
 
 ### Added
+
+- `RelayCastOptions::with_origin(client, version)` and `AgentClient::with_options(ClientOptions)` configure product attribution, inherited by agent HTTP/WebSocket traffic and preserved across token replacement.
 
 - `RelayCast::emit_agent_event_with_idempotency_key` preserves a stable event key across retries.
 
