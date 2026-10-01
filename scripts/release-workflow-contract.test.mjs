@@ -212,9 +212,11 @@ function seedFixtureChangelogs(root) {
     "# Changelog\n\n## [Unreleased - Patch]\n\n### Fixed\n\n- Release fixture.\n\n## [8.5.4] - 2026-09-08\n\n### Fixed\n\n- Previous release.\n";
   for (const relativePath of [
     "CHANGELOG.md",
-    ...PUBLISHED_PACKAGE_DIRS.map(
-      (directory) => `packages/${directory}/CHANGELOG.md`,
-    ),
+    // All package changelogs except Rust ship on the shared release line,
+    // including Swift, which is absent from the npm publication matrix.
+    ...readdirSync(path.join(root, "packages"), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name !== "sdk-rust")
+      .map((entry) => `packages/${entry.name}/CHANGELOG.md`),
   ]) {
     const changelogPath = path.join(root, relativePath);
     if (existsSync(changelogPath)) writeFileSync(changelogPath, contents);
