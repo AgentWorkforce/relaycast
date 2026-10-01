@@ -10,6 +10,14 @@ describe('workspace metadata validation', () => {
     expect(UpdateWorkspaceRequestSchema.parse({ metadata: { project: null } }).metadata).toEqual({ project: null });
   });
 
+  it('allows the owner-written Cloud analytics labels required by workspace provisioning', () => {
+    const metadata = { cloud_org_id: 'org_123', cloud_workspace_id: 'ws_456' };
+    expect(CreateWorkspaceRequestSchema.parse({ name: 'cloud-workspace', metadata }).metadata).toEqual(metadata);
+    expect(UpdateWorkspaceRequestSchema.parse({ metadata }).metadata).toEqual(metadata);
+    expect(UpdateWorkspaceRequestSchema.parse({ metadata: { cloud_org_id: null, cloud_workspace_id: null } }).metadata)
+      .toEqual({ cloud_org_id: null, cloud_workspace_id: null });
+  });
+
   it.each(['api_key', 'apiKey', 'APIKey', 'accessToken', 'client_secret', 'password',
     'authorization', 'credentials', 'private-key', '__proto__', 'constructor', 'prototype']) (
     'rejects nested secret or unsafe key %s', (key) => {
