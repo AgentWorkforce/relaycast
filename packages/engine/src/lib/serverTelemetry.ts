@@ -81,7 +81,11 @@ export async function loadTelemetryWorkspace(
       .from(workspaces)
       .where(eq(workspaces.id, workspaceId));
     return workspace;
-  } catch {
+  } catch (error) {
+    console.warn('[telemetry] workspace lookup failed; event sent without groups', {
+      workspace_id: workspaceId,
+      error: error instanceof Error ? error.message : String(error),
+    });
     return undefined;
   }
 }

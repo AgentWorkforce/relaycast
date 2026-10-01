@@ -1,9 +1,11 @@
 import { Hono } from 'hono';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { AppEnv } from '../../env.js';
 import type { TelemetryEvent } from '../../ports/telemetry.js';
+import type { EngineDb } from '../../ports/index.js';
 import {
   emitServerEvent,
+  loadTelemetryWorkspace,
   type ServerEventAttribution,
   type TelemetryActor,
 } from '../serverTelemetry.js';
@@ -218,5 +220,21 @@ describe('emitServerEvent attribution', () => {
 
     expect(event.distinctId).toBe('user_will');
     expect(event.setOnce).toBeUndefined();
+  });
+});
+
+describe('loadTelemetryWorkspace', () => {
+  it('reports a failed lookup and yields no workspace', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const db = {
+      select: () => ({ from: () => ({ where: () => Promise.reject(new Error('db down')) }) }),
+    } as unknown as EngineDb;
+
+    await expect(loadTelemetryWorkspace(db, WORKSPACE_ID)).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(
+      '[telemetry] workspace lookup failed; event sent without groups',
+      { workspace_id: WORKSPACE_ID, error: 'db down' },
+    );
+    warn.mockRestore();
   });
 });
