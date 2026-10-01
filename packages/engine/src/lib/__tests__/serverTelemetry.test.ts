@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AppEnv } from '../../env.js';
 import type { TelemetryEvent } from '../../ports/telemetry.js';
 import type { EngineDb } from '../../ports/index.js';
@@ -224,6 +224,10 @@ describe('emitServerEvent attribution', () => {
 });
 
 describe('loadTelemetryWorkspace', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('reports a failed lookup and yields no workspace', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const db = {
@@ -235,6 +239,5 @@ describe('loadTelemetryWorkspace', () => {
       '[telemetry] workspace lookup failed; event sent without groups',
       { workspace_id: WORKSPACE_ID, error: 'db down' },
     );
-    warn.mockRestore();
   });
 });
