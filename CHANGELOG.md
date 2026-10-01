@@ -20,7 +20,11 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Added
 
-- Rust workspace and agent clients accept product origin metadata and preserve it across HTTP, WebSocket, and token replacement.
+- Rust workspace and agent clients accept product origin metadata across HTTP, WebSocket, token replacement, and anonymous workspace bootstrap.
+
+## [8.16.0] - 2026-10-01
+
+### Added
 
 - Create, read, and update workspace metadata across the API and TypeScript, Python, Rust, and Swift SDKs, with shallow merging, null deletion, and size limits and rejection of secret-like keys.
 
@@ -642,8 +646,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v8.15.0...HEAD
-[Unreleased - Minor]: https://github.com/AgentWorkforce/relaycast/compare/v8.15.0...HEAD
+[Unreleased - Major]: https://github.com/AgentWorkforce/relaycast/compare/v8.16.0...HEAD
+[8.16.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.15.0...v8.16.0
 [8.15.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.14.0...v8.15.0
 [8.14.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.13.1...v8.14.0
 [8.13.1]: https://github.com/AgentWorkforce/relaycast/compare/v8.13.0...v8.13.1
