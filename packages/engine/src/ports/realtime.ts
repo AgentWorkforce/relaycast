@@ -62,6 +62,66 @@ export interface NodeUpgradeArgs {
   originActor?: string;
 }
 
+/**
+ * Serializable proof inputs for an agent-hosted action dispatch. Remote socket
+ * owners (for example a Cloudflare Durable Object) must re-read these durable
+ * identities immediately before accepting the frame; a closure created in the
+ * engine process cannot cross that transport boundary.
+ */
+export interface AgentActionProviderAuthorization {
+  kind: 'agent-action-v1';
+  invocationId: string;
+  actionId: string;
+  handlerAgentId: string;
+  /** False when a queued attempt was already counted before this delivery. */
+  recordAttempt: boolean;
+}
+
+/** Exact token-generation proof for a release accepted by the socket owner. */
+export type ReleaseActionProviderAuthorization = {
+  kind: 'release-generation-v1';
+  invocationId: string;
+  agentName: string;
+} & (
+  | { expectedTokenHash: string; expectedAgentId?: string }
+  | { expectedTokenHash?: string; expectedAgentId: string }
+);
+
+/** Legacy registered action proof, retained only so current owners fail it closed. */
+export interface LegacyRegisteredNodeActionProviderAuthorization {
+  kind: 'registered-node-action-v1';
+  invocationId: string;
+  actionId: string;
+  /** Immutable API-level name persisted on the invocation (for example `spawn`). */
+  invocationActionName: string;
+  /** Exact provider capability being dispatched (for example `spawn:claude`). */
+  actionName: string;
+}
+
+/** Exact registered node-action identity and attempt accepted by the socket owner. */
+export interface RegisteredNodeActionProviderAuthorization {
+  kind: 'registered-node-action-v2';
+  invocationId: string;
+  actionId: string;
+  /** Exact dispatch-attempt generation claimed before entering the socket owner. */
+  dispatchAttempt: number;
+  /** Immutable API-level name persisted on the invocation (for example `spawn`). */
+  invocationActionName: string;
+  /** Exact provider capability being dispatched (for example `spawn:claude`). */
+  actionName: string;
+}
+
+export type ActionProviderAuthorization =
+  | AgentActionProviderAuthorization
+  | ReleaseActionProviderAuthorization
+  | LegacyRegisteredNodeActionProviderAuthorization
+  | RegisteredNodeActionProviderAuthorization;
+
+export interface NodeDrainOptions {
+  /** Include pending rows whose prior retry deadline has not elapsed yet. */
+  includeDeferred?: boolean;
+}
+
 export interface NodeConnectionRegistry {
   /**
    * Upgrade an incoming node-control request. Cloudflare adapters own the 101
@@ -86,6 +146,31 @@ export interface NodeConnectionRegistry {
     nodeId: string,
     providerName: string,
     message: FleetRelaycastToBrokerMessage,
+  ): Promise<boolean>;
+
+  /**
+   * Send an `action.invoke` only after the socket owner verifies that the
+   * durable invocation is open and the exact action or release generation
+   * still owns the route. The owner also records acceptance before resolving
+   * when the selected authorization kind requires it.
+   *
+   * Before the final synchronous socket write, the owner must discard any
+   * caller fields already present on the supplied frame, re-read the
+   * invocation's live caller FK, and add caller_id/caller_name only when the
+   * exact provider action advertises `relay.action-caller: v1`. This must also
+   * hold for queued/reconnected dispatch so deleted callers and stale frame
+   * snapshots never retain authentication authority.
+   *
+   * Optional for adapter source compatibility, but agent-hosted dispatch fails
+   * closed when it is absent. This prevents an older remote adapter from
+   * silently accepting a callback or option that it cannot enforce.
+   */
+  sendAuthorizedActionToProvider?(
+    workspaceId: string,
+    nodeId: string,
+    providerName: string,
+    message: Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }>,
+    authorization: ActionProviderAuthorization,
   ): Promise<boolean>;
 
   /** True when the node currently has at least one connected provider. */
@@ -133,6 +218,7 @@ export interface NodeConnectionRegistry {
     providerName: string,
     instanceId: string,
     connectionId: string,
+    callerAwareActions?: readonly string[],
   ): void;
 
   /**
@@ -160,6 +246,24 @@ export interface NodeConnectionRegistry {
     mode: 'immediate' | 'agent_scoped',
   ): void;
 
+  /**
+   * The mode {@link setProviderDeliveryReadiness} last configured for the
+   * provider's CURRENT connection, or `undefined` when no connection is bound
+   * (or the registry does not track it). This is the negotiated handshake of
+   * the live connection, so a later frame on that connection can recover what
+   * `node.register` agreed to instead of re-deriving it from roster state a
+   * heartbeat may have rewritten since. Implementations must resolve the
+   * connection exactly as {@link setProviderDeliveryReadiness} does, and return
+   * `undefined` for a `connectionId` that is no longer the provider's current
+   * connection.
+   */
+  providerDeliveryReadinessMode?(
+    workspaceId: string,
+    nodeId: string,
+    providerName: string,
+    connectionId?: string | undefined,
+  ): 'immediate' | 'agent_scoped' | undefined;
+
   /** Mark identities ready after their cursor-bearing reply is on the socket. */
   markProviderAgentsDeliveryReady?(
     workspaceId: string,
@@ -185,11 +289,15 @@ export interface NodeConnectionRegistry {
 
   /**
    * Flush any queued `action.invoke` frames to the node's live connection.
-   * Must be invoked once the node is marked online (post node.register /
-   * node.heartbeat) so capacity reservation for queued spawns can succeed.
+   * Must be invoked once the node is marked online (post node.register) and
+   * when heartbeat liveness/capacity transitions make queued work dispatchable.
    * Implementations serialize concurrent drains per node.
    */
-  drainNode(workspaceId: string, nodeId: string): Promise<void>;
+  drainNode(
+    workspaceId: string,
+    nodeId: string,
+    options?: NodeDrainOptions,
+  ): Promise<void>;
 }
 
 /** Registries without cursor-readiness support retain legacy immediate delivery. */

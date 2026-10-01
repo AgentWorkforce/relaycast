@@ -495,12 +495,14 @@ export class WsClient {
     }
   }
 
+  /** Normalize a direct-node delivery into the public workspace event shape. */
   private transformServerLikeEvent(eventType: string, data: Record<string, unknown>): Record<string, unknown> {
     switch (eventType) {
       case 'message.created':
         return {
           id: stableRelaycastEventId(String(data.id ?? '')),
           type: 'message.created',
+          ...(typeof data.created_at === 'string' ? { created_at: data.created_at } : {}),
           channel: data.channel_name,
           message: {
             id: data.id,
@@ -509,6 +511,7 @@ export class WsClient {
             text: data.text,
             attachments: Array.isArray(data.attachments) ? data.attachments : [],
             ...(typeof data.injection_mode === 'string' ? { injection_mode: data.injection_mode } : {}),
+            ...(isRecord(data.metadata) ? { metadata: data.metadata } : {}),
           },
         };
       case 'thread.reply':

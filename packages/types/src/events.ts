@@ -48,6 +48,7 @@ export type ChannelMessagePayload = z.infer<typeof ChannelMessagePayloadSchema>;
 export const MessageCreatedEventSchema = z.object({
   id: z.string().uuid(),
   type: z.literal('message.created'),
+  created_at: z.string().optional(),
   channel: z.string(),
   message: ChannelMessagePayloadSchema,
 });

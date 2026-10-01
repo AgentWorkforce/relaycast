@@ -11,7 +11,15 @@ import {
 } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
-import type { FleetCapability } from '@relaycast/types';
+import type { FleetCapability, FleetTaskContext, WorkspaceProvenance } from '@relaycast/types';
+
+export interface TaskInvocationState extends FleetTaskContext {
+  deadline: string;
+  execution_id?: string;
+  worker_generation?: string;
+  accepted_at?: string;
+  accounting?: Record<string, number>;
+}
 
 // ============================================
 // Workspaces
@@ -28,6 +36,8 @@ export interface WorkspaceRetentionSettings {
   workspace_event_ttl_days?: number | null;
 }
 
+export type WorkspaceProvenanceRecord = WorkspaceProvenance;
+
 export interface ObserverTokenFilters {
   channel_ids?: string[];
   channel_names?: string[];
@@ -38,16 +48,62 @@ export interface ObserverTokenFilters {
   created_after?: string;
 }
 
-export const workspaces = sqliteTable('workspaces', {
-  id: text('id').primaryKey(),
-  name: text('name').notNull(),
-  apiKeyHash: text('api_key_hash').notNull().unique(),
-  systemPrompt: text('system_prompt'),
-  plan: text('plan').notNull().default('free'),
-  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
-  metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>().default({}),
-  retention: text('retention', { mode: 'json' }).$type<WorkspaceRetentionSettings>(),
-});
+export const workspaces = sqliteTable(
+  'workspaces',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    apiKeyHash: text('api_key_hash').notNull().unique(),
+    systemPrompt: text('system_prompt'),
+    plan: text('plan').notNull().default('free'),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>().default({}),
+    retention: text('retention', { mode: 'json' }).$type<WorkspaceRetentionSettings>(),
+    // A non-null deadline is an explicit, immutable opt-in to whole-workspace
+    // deletion. Persistent workspaces always leave this null.
+    expiresAt: integer('expires_at', { mode: 'timestamp' }),
+    provenance: text('provenance', { mode: 'json' }).$type<WorkspaceProvenanceRecord>(),
+    usageClassification: text('usage_classification').notNull().default('unknown'),
+    classificationSource: text('classification_source').notNull().default('unclassified'),
+    classificationReason: text('classification_reason'),
+    classifiedAt: integer('classified_at', { mode: 'timestamp' }),
+  },
+  (table) => [
+    index('idx_workspaces_expires_at').on(table.expiresAt),
+    check(
+      'workspaces_usage_classification_source_check',
+      sql`(
+        (${table.usageClassification} = 'unknown' AND ${table.classificationSource} = 'unclassified')
+        OR (
+          ${table.usageClassification} IN ('internal', 'external')
+          AND ${table.classificationSource} IN ('creator', 'operator')
+        )
+      )`,
+    ),
+  ],
+);
+
+/**
+ * Durable owner-scoped idempotency bindings for delegated workspace creates.
+ * The child API key is derived at replay time and is never persisted in
+ * plaintext.
+ */
+export const workspaceCreateIdempotency = sqliteTable(
+  'workspace_create_idempotency',
+  {
+    ownerScopeHash: text('owner_scope_hash').notNull(),
+    idempotencyKeyHash: text('idempotency_key_hash').notNull(),
+    requestDigest: text('request_digest').notNull(),
+    workspaceId: text('workspace_id').notNull(),
+    status: text('status').notNull().default('active'),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    terminalizedAt: integer('terminalized_at', { mode: 'timestamp' }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.ownerScopeHash, table.idempotencyKeyHash] }),
+    uniqueIndex('workspace_create_idempotency_workspace_unique').on(table.workspaceId),
+  ],
+);
 
 // ============================================
 // Agents
@@ -86,13 +142,91 @@ export const agents = sqliteTable(
     deliverySeq: integer('delivery_seq').notNull().default(0),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
     lastSeen: integer('last_seen', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    // Conservative witness used to reconcile pre-0056 keyed status events.
+    // Migration 0056 backfills historical rows from last_seen and its SQLite
+    // trigger advances this value for every later status/liveness write.
+    statusUpdatedAt: integer('status_updated_at', { mode: 'timestamp' }),
   },
   (table) => [
     uniqueIndex('agents_workspace_name_unique').on(table.workspaceId, table.name),
     uniqueIndex('agents_workspace_id_unique').on(table.workspaceId, table.id),
     index('idx_agents_workspace').on(table.workspaceId),
+    index('idx_agents_roster')
+      .on(table.workspaceId, table.status, table.lastSeen)
+      .where(sql`${table.status} <> 'released'`),
+    index('idx_agents_location_node_fk').on(table.locationNodeId)
+      .where(sql`${table.locationNodeId} IS NOT NULL`),
+    index('idx_agents_origin_node_fk').on(table.originNodeId)
+      .where(sql`${table.originNodeId} IS NOT NULL`),
     index('idx_agents_token').on(table.tokenHash),
     index('idx_agents_previous_token').on(table.previousTokenHash),
+    index('idx_agents_active_last_seen')
+      .on(table.lastSeen)
+      .where(sql`${table.status} IN ('active', 'online')`),
+  ],
+);
+
+// ============================================
+// Agent Identity Recovery
+// ============================================
+/**
+ * Server-owned verifier state for explicit identity recovery.
+ *
+ * This deliberately does not live in `agents.metadata`: generic metadata is a
+ * caller-facing document and therefore cannot be an authorization boundary.
+ * Raw recovery proofs are never stored; callers present the proof and the
+ * engine compares its SHA-256 verifier.
+ */
+export const agentRecoveryCredentials = sqliteTable(
+  'agent_recovery_credentials',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    agentId: text('agent_id').notNull(),
+    proofKind: text('proof_kind').notNull(),
+    verifierHash: text('verifier_hash').notNull(),
+    workUnitId: text('work_unit_id'),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (table) => [
+    uniqueIndex('agent_recovery_credentials_agent_unique').on(table.workspaceId, table.agentId),
+    uniqueIndex('agent_recovery_credentials_verifier_unique').on(table.verifierHash),
+    foreignKey({
+      columns: [table.workspaceId, table.agentId],
+      foreignColumns: [agents.workspaceId, agents.id],
+      name: 'agent_recovery_credentials_agent_fk',
+    }).onDelete('cascade'),
+  ],
+);
+
+/**
+ * Append-only security record. There is intentionally no agent foreign key:
+ * an identity audit must survive release/deletion and retention pruning.
+ */
+export const agentIdentityAudit = sqliteTable(
+  'agent_identity_audit',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    agentId: text('agent_id').notNull(),
+    agentName: text('agent_name').notNull(),
+    action: text('action').notNull(),
+    authority: text('authority').notNull(),
+    actor: text('actor').notNull(),
+    reason: text('reason').notNull(),
+    sessionRef: text('session_ref'),
+    nodeId: text('node_id'),
+    originActor: text('origin_actor').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (table) => [
+    index('idx_agent_identity_audit_workspace').on(table.workspaceId, table.createdAt),
+    index('idx_agent_identity_audit_agent').on(table.workspaceId, table.agentId, table.createdAt),
   ],
 );
 
@@ -109,7 +243,8 @@ export const nodes = sqliteTable(
     name: text('name').notNull(),
     tokenHash: text('token_hash').notNull().unique(),
     // Physical machine grouping in fleet views and a placement input; never a
-    // capability scope. Null until a provider reports it on register.
+    // capability scope. Set at enrollment when the caller supplies it, and by a
+    // provider on register; null when neither reports one.
     machineId: text('machine_id'),
     kind: text('kind').notNull().default('ws'),
     role: text('role').notNull().default('broker'),
@@ -127,6 +262,11 @@ export const nodes = sqliteTable(
     load: real('load').notNull().default(0),
     loadReported: integer('load_reported', { mode: 'boolean' }).notNull().default(false),
     lastHeartbeatAt: integer('last_heartbeat_at', { mode: 'timestamp' }),
+    // Written ONLY by an arriving heartbeat frame — never by registration or
+    // disconnect cleanup, both of which write lastHeartbeatAt. Cleared when
+    // enrollment re-issues this row's token. This is the only column that means
+    // "this node proved it was alive", and the machine_id reuse gate reads it.
+    provenLiveAt: integer('proven_live_at', { mode: 'timestamp' }),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   },
   (table) => [
@@ -135,6 +275,9 @@ export const nodes = sqliteTable(
     index('idx_nodes_workspace').on(table.workspaceId),
     index('idx_nodes_token').on(table.tokenHash),
     index('idx_nodes_status').on(table.workspaceId, table.status),
+    index('idx_nodes_status_heartbeat').on(table.workspaceId, table.status, table.lastHeartbeatAt),
+    index('idx_nodes_workspace_machine').on(table.workspaceId, table.machineId),
+    index('idx_nodes_workspace_machine_proven').on(table.workspaceId, table.machineId, table.provenLiveAt),
   ],
 );
 
@@ -176,6 +319,7 @@ export const nodeProviders = sqliteTable(
   (table) => [
     uniqueIndex('node_providers_node_name_unique').on(table.workspaceId, table.nodeId, table.name),
     index('idx_node_providers_node').on(table.workspaceId, table.nodeId),
+    index('idx_node_providers_node_fk').on(table.nodeId),
   ],
 );
 
@@ -248,6 +392,7 @@ export const agentNodeBindings = sqliteTable(
     index('idx_agent_node_bindings_workspace').on(table.workspaceId, table.status),
     index('idx_agent_node_bindings_agent').on(table.workspaceId, table.agentId, table.status),
     index('idx_agent_node_bindings_node').on(table.workspaceId, table.nodeId, table.status),
+    index('idx_agent_node_bindings_node_fk').on(table.nodeId),
   ],
 );
 
@@ -368,6 +513,7 @@ export const directoryRatings = sqliteTable(
   (table) => [
     uniqueIndex('directory_ratings_agent_rater_unique').on(table.directoryAgentId, table.raterAgentId),
     index('idx_directory_ratings_workspace').on(table.workspaceId, table.createdAt),
+    index('idx_directory_ratings_rater').on(table.raterAgentId),
     index('idx_directory_ratings_directory_agent').on(table.directoryAgentId, table.createdAt),
   ],
 );
@@ -412,6 +558,7 @@ export const routingFailures = sqliteTable(
   (table) => [
     primaryKey({ columns: [table.workspaceId, table.agentId] }),
     index('idx_routing_failures_workspace').on(table.workspaceId, table.updatedAt),
+    index('idx_routing_failures_agent').on(table.agentId),
     index('idx_routing_failures_circuit').on(table.workspaceId, table.circuitOpenUntil),
   ],
 );
@@ -468,6 +615,7 @@ export const channels = sqliteTable(
   (table) => [
     uniqueIndex('channels_workspace_name_unique').on(table.workspaceId, table.name),
     index('idx_channels_workspace').on(table.workspaceId),
+    index('idx_channels_creator').on(table.createdBy),
   ],
 );
 
@@ -514,6 +662,10 @@ export const messages = sqliteTable(
     body: text('body').notNull(),
     blocks: text('blocks', { mode: 'json' }),
     metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>().default({}),
+    // Denormalized from public metadata.session_ref at write time. Keeping the
+    // join key in a real column makes replay lookup bounded and index-backed;
+    // callers must never scan JSON metadata across workspace history.
+    sessionRef: text('session_ref'),
     hasAttachments: integer('has_attachments', { mode: 'boolean' }).notNull().default(false),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
     updatedAt: integer('updated_at', { mode: 'timestamp' }),
@@ -521,8 +673,42 @@ export const messages = sqliteTable(
   },
   (table) => [
     index('idx_messages_channel_time').on(table.channelId, table.id),
+    index('idx_messages_retention').on(sql`length(${table.id})`, table.id),
     index('idx_messages_thread').on(table.threadId, table.id),
     index('idx_messages_workspace').on(table.workspaceId, table.id),
+    index('idx_messages_workspace_length_id').on(
+      table.workspaceId,
+      sql`length(${table.id})`,
+      table.id,
+    ),
+    index('idx_messages_agent').on(table.agentId),
+    index('idx_messages_workspace_session').on(
+      table.workspaceId,
+      table.sessionRef,
+      sql`length(${table.id})`,
+      table.id,
+    ),
+  ],
+);
+
+// Durable, payload-free evidence that a session_ref existed in a workspace.
+// Message retention may remove every matching message; this ledger deliberately
+// survives that pruning so the resolver can report aged_out instead of guessing
+// that an empty live-message query means "no conversation".
+export const messageSessions = sqliteTable(
+  'message_sessions',
+  {
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    sessionRef: text('session_ref').notNull(),
+    firstMessageAt: integer('first_message_at', { mode: 'timestamp' }).notNull(),
+    lastMessageAt: integer('last_message_at', { mode: 'timestamp' }).notNull(),
+    startIsKnown: integer('start_is_known', { mode: 'boolean' }).notNull().default(true),
+  },
+  (table) => [
+    primaryKey({ columns: [table.workspaceId, table.sessionRef] }),
+    index('idx_message_sessions_workspace_last').on(table.workspaceId, table.lastMessageAt),
   ],
 );
 
@@ -558,6 +744,7 @@ export const messageLogs = sqliteTable(
   (table) => [
     uniqueIndex('message_logs_message_unique').on(table.messageId),
     index('idx_message_logs_workspace_time').on(table.workspaceId, table.id),
+    index('idx_message_logs_retention').on(sql`length(${table.id})`, table.id),
     index('idx_message_logs_agent_time').on(table.agentId, table.id),
     index('idx_message_logs_channel_time').on(table.channelId, table.id),
     index('idx_message_logs_conversation_time').on(table.conversationId, table.id),
@@ -587,6 +774,7 @@ export const reactions = sqliteTable(
       table.emoji,
     ),
     index('idx_reactions_message').on(table.messageId),
+    index('idx_reactions_agent').on(table.agentId),
   ],
 );
 
@@ -609,6 +797,7 @@ export const dmConversations = sqliteTable(
   },
   (table) => [
     index('idx_dm_conversations_workspace').on(table.workspaceId),
+    index('idx_dm_conversations_channel').on(table.channelId),
   ],
 );
 
@@ -677,6 +866,10 @@ export const files = sqliteTable(
     contentType: text('content_type').notNull(),
     sizeBytes: integer('size_bytes').notNull(),
     storageKey: text('storage_key').notNull(),
+    // Persist the exact lifetime of the issued PUT capability. Workspace
+    // deletion keeps a cleanup tombstone through this deadline so a late PUT
+    // cannot permanently recreate an object after the first delete attempt.
+    uploadExpiresAt: integer('upload_expires_at', { mode: 'timestamp' }),
     status: text('status').notNull().default('pending'),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   },
@@ -684,6 +877,28 @@ export const files = sqliteTable(
     index('idx_files_workspace').on(table.workspaceId, table.createdAt),
     index('idx_files_uploader').on(table.uploadedBy),
   ],
+);
+
+// ============================================
+// File Cleanup Outbox
+// ============================================
+/**
+ * Durable object-deletion tombstones created by a trigger whenever a file row
+ * is physically removed. There is deliberately no workspace foreign key: the
+ * row must survive the workspace cascade until external storage confirms the
+ * object is gone after every issued upload capability has expired.
+ */
+export const fileCleanupQueue = sqliteTable(
+  'file_cleanup_queue',
+  {
+    storageKey: text('storage_key').primaryKey(),
+    deleteAfter: integer('delete_after', { mode: 'timestamp' }).notNull(),
+    processAfter: integer('process_after', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    attempts: integer('attempts').notNull().default(0),
+    lastError: text('last_error'),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (table) => [index('idx_file_cleanup_due').on(table.processAfter, table.storageKey)],
 );
 
 // ============================================
@@ -722,7 +937,7 @@ export const readReceipts = sqliteTable(
   },
   (table) => [
     primaryKey({ columns: [table.messageId, table.agentId] }),
-    index('idx_read_receipts_message').on(table.messageId),
+    uniqueIndex('idx_read_receipts_retention').on(table.messageId, table.agentId),
     index('idx_read_receipts_agent').on(table.agentId, table.readAt),
   ],
 );
@@ -773,6 +988,7 @@ export const webhooks = sqliteTable(
   (table) => [
     uniqueIndex('webhooks_workspace_name_unique').on(table.workspaceId, table.name),
     index('idx_webhooks_workspace').on(table.workspaceId),
+    index('idx_webhooks_creator').on(table.createdBy),
     index('idx_webhooks_token').on(table.tokenHash),
   ],
 );
@@ -825,6 +1041,7 @@ export const actions = sqliteTable(
     // When true, an invoke whose provider is offline queues instead of failing
     // fast (the per-provider offline queue).
     queue: integer('queue', { mode: 'boolean' }).notNull().default(false),
+    executionMode: text('execution_mode').$type<'short' | 'task'>().notNull().default('short'),
     inputSchema: text('input_schema', { mode: 'json' }).$type<Record<string, unknown>>().default({}),
     outputSchema: text('output_schema', { mode: 'json' }).$type<Record<string, unknown>>().default({}),
     availableTo: text('available_to', { mode: 'json' }).$type<string[]>(),
@@ -858,15 +1075,32 @@ export const actionInvocations = sqliteTable(
       .references(() => workspaces.id, { onDelete: 'cascade' }),
     actionId: text('action_id').references(() => actions.id, { onDelete: 'set null' }),
     actionName: text('action_name').notNull(),
+    // Immutable invocation provenance. action_id is a mutable FK that becomes
+    // null when a materialized provider action is pruned, so it cannot safely
+    // distinguish built-in lifecycle work from a user action with the same name.
+    invocationOrigin: text('invocation_origin')
+      .$type<'legacy_unknown' | 'registered_action' | 'builtin'>()
+      .notNull()
+      .default('legacy_unknown'),
     callerId: text('caller_id').references(() => agents.id, { onDelete: 'set null' }),
     callerName: text('caller_name'),
+    // Immutable response snapshots for idempotent replay. Deliberately not
+    // foreign keys: a later handler release/deletion or routing move must not
+    // rewrite the 201 acknowledgement for the invocation already dispatched.
+    handlerAgentId: text('handler_agent_id'),
+    handlerNodeId: text('handler_node_id'),
     input: text('input', { mode: 'json' }).default({}),
+    taskState: text('task_state', { mode: 'json' }).$type<TaskInvocationState>(),
     output: text('output', { mode: 'json' }),
     status: text('status').notNull().default('pending'),
     error: text('error'),
     durationMs: integer('duration_ms'),
     dispatchedNodeId: text('dispatched_node_id').references(() => nodes.id, { onDelete: 'set null' }),
     dispatchedAt: integer('dispatched_at', { mode: 'timestamp' }),
+    // Dispatch-attempt generation accepted atomically by the socket owner.
+    // Unlike action_id, this survives capability pruning without granting a
+    // later retry generation the previous attempt's acceptance.
+    providerAcceptedAttempt: integer('provider_accepted_attempt'),
     spawnReservedAt: integer('spawn_reserved_at', { mode: 'timestamp' }),
     attemptedNodeIds: text('attempted_node_ids', { mode: 'json' }).$type<string[]>().notNull().default([]),
     dispatchAttempts: integer('dispatch_attempts').notNull().default(0),
@@ -886,6 +1120,9 @@ export const actionInvocations = sqliteTable(
     index('idx_action_invocations_action').on(table.actionId, table.createdAt),
     index('idx_action_invocations_caller').on(table.callerId, table.createdAt),
     index('idx_action_invocations_dispatched_node').on(table.dispatchedNodeId, table.createdAt),
+    index('idx_action_invocations_pending_workspace')
+      .on(table.workspaceId, table.createdAt)
+      .where(sql`${table.status} = 'pending'`),
   ],
 );
 
@@ -930,11 +1167,27 @@ export const sessionEvents = sqliteTable(
       .references(() => agents.id, { onDelete: 'cascade' }),
     type: text('type').notNull(),
     payload: text('payload', { mode: 'json' }).notNull().default({}),
+    // Optional stable identity for callers that may retry after losing the
+    // response. NULL keeps the legacy append-only contract for unkeyed calls.
+    idempotencyKeyHash: text('idempotency_key_hash'),
+    requestDigest: text('request_digest'),
     sequence: integer('sequence').notNull().default(0),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    // Durable completion marker for a `status.*` event's agent-row mutation.
+    // NULL means "not yet applied" — set atomically with the `agents` row
+    // write (see `applyStatusEventEffect`) so a crash between the durable
+    // event insert and the status update leaves this NULL, letting a replay
+    // finish the interrupted mutation instead of silently skipping it forever.
+    statusAppliedAt: integer('status_applied_at', { mode: 'timestamp' }),
+    // Migration 0056 marks keyed status events created before this marker
+    // existed. Their old event insert and agent update were separate writes,
+    // so replay reconciles only when the agent write-time witness proves the
+    // row predates the event; otherwise it claims without clobbering state.
+    statusLegacyPending: integer('status_legacy_pending', { mode: 'boolean' }).notNull().default(false),
   },
   (table) => [
     uniqueIndex('session_events_agent_sequence_unique').on(table.agentId, table.sequence),
+    uniqueIndex('session_events_agent_idempotency_unique').on(table.workspaceId, table.agentId, table.idempotencyKeyHash),
     index('idx_session_events_agent').on(table.agentId, table.createdAt),
     index('idx_session_events_workspace').on(table.workspaceId, table.createdAt),
     index('idx_session_events_type').on(table.workspaceId, table.type, table.createdAt),
@@ -985,15 +1238,39 @@ export const deliveries = sqliteTable(
   },
   (table) => [
     uniqueIndex('deliveries_message_agent_unique').on(table.messageId, table.agentId),
+    index('idx_deliveries_location_node_fk').on(table.locationNodeId)
+      .where(sql`${table.locationNodeId} IS NOT NULL`),
+    index('idx_deliveries_route_node_fk').on(table.routeNodeId)
+      .where(sql`${table.routeNodeId} IS NOT NULL`),
+    uniqueIndex('idx_deliveries_id_lookup').on(table.id),
     uniqueIndex('deliveries_agent_seq_unique').on(table.workspaceId, table.agentId, table.seq),
     index('idx_deliveries_agent').on(table.agentId, table.createdAt),
     index('idx_deliveries_agent_status_seq').on(table.workspaceId, table.agentId, table.status, table.seq),
+    index('idx_deliveries_agent_active_seq').on(table.workspaceId, table.agentId, table.seq)
+      .where(sql`${table.status} IN ('queued', 'delivered')`),
+    index('idx_deliveries_agent_active_expiry').on(table.workspaceId, table.agentId, table.expiresAt)
+      .where(sql`${table.status} IN ('queued', 'delivered')`),
+    index('idx_deliveries_settled_retention').on(table.createdAt, table.id)
+      .where(sql`${table.status} IN ('acked', 'failed', 'dead_lettered')`),
+    index('idx_deliveries_agent_active_created')
+      .on(table.workspaceId, table.agentId, table.createdAt, table.id)
+      .where(sql`${table.status} IN ('queued', 'delivered')`),
     index('idx_deliveries_expires').on(table.workspaceId, table.status, table.expiresAt),
     index('idx_deliveries_active_expiry')
       .on(table.expiresAt, table.id)
       .where(sql`${table.status} IN ('queued', 'delivered') AND ${table.expiresAt} IS NOT NULL`),
+    index('idx_deliveries_retry_due')
+      .on(table.status, table.nextAttemptAt, table.createdAt, table.id)
+      .where(sql`${table.nextAttemptAt} IS NOT NULL`),
+    index('idx_deliveries_node_initial').on(table.createdAt, table.id)
+      .where(sql`${table.status} = 'queued' AND ${table.routeNodeKind} IN ('http_push', 'ws', 'fleet_ws', 'direct_ws') AND ${table.nextAttemptAt} IS NULL`),
+    index('idx_deliveries_node_initial_workspace').on(table.workspaceId, table.createdAt, table.id)
+      .where(sql`${table.status} = 'queued' AND ${table.routeNodeKind} IN ('http_push', 'ws', 'fleet_ws', 'direct_ws') AND ${table.nextAttemptAt} IS NULL`),
+    index('idx_deliveries_node_retry').on(table.nextAttemptAt, table.createdAt, table.id)
+      .where(sql`${table.status} = 'queued' AND ${table.routeNodeKind} IN ('http_push', 'ws', 'fleet_ws', 'direct_ws') AND ${table.nextAttemptAt} IS NOT NULL`),
+    index('idx_deliveries_node_retry_workspace').on(table.workspaceId, table.nextAttemptAt, table.createdAt, table.id)
+      .where(sql`${table.status} = 'queued' AND ${table.routeNodeKind} IN ('http_push', 'ws', 'fleet_ws', 'direct_ws') AND ${table.nextAttemptAt} IS NOT NULL`),
     index('idx_deliveries_status').on(table.workspaceId, table.status, table.createdAt),
-    index('idx_deliveries_http_push_due').on(table.workspaceId, table.routeNodeKind, table.status, table.nextAttemptAt),
   ],
 );
 
@@ -1032,7 +1309,7 @@ export const pendingEvents = sqliteTable(
  * the exact `transformForClient(event)` JSON published to the stream (without
  * `seq` — the cursor lives in the column and is stamped onto the published
  * frame). No FK to `workspaces` by design: appends are best-effort and rows
- * are pruned by retention, not cascades.
+ * are pruned by retention or explicitly removed with their workspace.
  */
 export const workspaceEvents = sqliteTable(
   'workspace_events',
@@ -1047,5 +1324,49 @@ export const workspaceEvents = sqliteTable(
   (table) => [
     primaryKey({ columns: [table.workspaceId, table.seq] }),
     index('idx_workspace_events_created').on(table.workspaceId, table.createdAt),
+    index('idx_workspace_events_retention').on(table.createdAt, table.workspaceId, table.seq),
   ],
 );
+
+/** Durable scan positions; never used as delivery ACKs or event sequence authority. */
+export const maintenanceCursors = sqliteTable('maintenance_cursors', {
+  id: text('id').primaryKey().notNull(),
+  cursor: text('cursor').notNull(),
+});
+
+/** Admission and transport state; inserted atomically with the guarded DM. */
+export const a2aEgress = sqliteTable('a2a_egress', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+  messageId: text('message_id').notNull(),
+  targetId: text('target_id').notNull(),
+  externalUrl: text('external_url').notNull(),
+  fingerprint: text('fingerprint').notNull(),
+  payload: text('payload', { mode: 'json' }).$type<import('@relaycast/a2a').A2aJsonRpcRequest>(),
+  status: text('status').notNull().default('pending'),
+  claimToken: text('claim_token'),
+  leaseUntil: integer('lease_until', { mode: 'timestamp' }),
+  attempts: integer('attempts').notNull().default(0),
+  lastError: text('last_error'),
+  errorStatus: integer('error_status'),
+  errorCode: text('error_code'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+}, (table) => [index('idx_a2a_egress_workspace').on(table.workspaceId), index('idx_a2a_egress_due').on(table.status, table.leaseUntil), index('idx_a2a_egress_retention').on(table.createdAt, table.id)]);
+
+/** Public accepted response only; never transport authentication or mutable target state. */
+export const a2aEgressContext = sqliteTable('a2a_egress_context', {
+  id: text('id').primaryKey().notNull().references(() => a2aEgress.id, { onDelete: 'cascade' }),
+  messageId: text('message_id').notNull().references(() => messages.id, { onDelete: 'cascade' }),
+  response: text('response', { mode: 'json' }).notNull().$type<import('../engine/dm.js').AcceptedDmResult>(),
+}, (table) => [index('idx_a2a_egress_context_message').on(table.messageId)]);
+
+/** Durable inbound identity. Migration 0059 scrubs response before source deletion;
+ * the nullable source FK leaves a content-free tombstone until indexed expiry. */
+export const a2aInbound = sqliteTable('a2a_inbound', {
+  id: text('id').primaryKey().notNull(),
+  workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+  messageId: text('message_id').references(() => messages.id, { onDelete: 'set null' }),
+  fingerprint: text('fingerprint').notNull(),
+  response: text('response', { mode: 'json' }).$type<import('../engine/dm.js').AcceptedDmResult>(),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+}, table => [index('idx_a2a_inbound_workspace').on(table.workspaceId), index('idx_a2a_inbound_message').on(table.messageId), index('idx_a2a_inbound_retention').on(table.createdAt, table.id)]);

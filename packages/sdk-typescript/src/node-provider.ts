@@ -1,4 +1,6 @@
 import {
+  FLEET_ACTION_CALLER_METADATA_KEY,
+  FLEET_ACTION_CALLER_METADATA_VERSION,
   parseFleetRelaycastToBrokerMessage,
   type FleetCapability,
   type FleetCapabilityAcceptance,
@@ -42,6 +44,10 @@ export interface NodeHandlerContext {
   node: { name: string; capabilities: string[] };
   /** The invocation being handled. */
   invocationId: string;
+  /** Authenticated Relaycast agent that invoked this action, when still present. */
+  callerAgentId?: string;
+  /** Authenticated Relaycast agent name that invoked this action, when still present. */
+  callerAgentName?: string;
   /**
    * Post a channel message, attributed to `from` (an agent name resolved in the
    * workspace). Resolves with the posted message.
@@ -345,7 +351,13 @@ export class NodeProviderClient {
       ...(cap.options.kind ? { kind: cap.options.kind } : {}),
       ...(cap.options.global ? { global: true } : {}),
       ...(cap.options.queue ? { queue: true } : {}),
-      ...(cap.options.metadata ? { metadata: cap.options.metadata } : {}),
+      // This SDK understands the optional caller fields on action.invoke.
+      // Advertise that fact per action so a newer engine can preserve wire
+      // compatibility with providers still running an older strict parser.
+      metadata: {
+        ...(cap.options.metadata ?? {}),
+        [FLEET_ACTION_CALLER_METADATA_KEY]: FLEET_ACTION_CALLER_METADATA_VERSION,
+      },
     }));
     this.request(id, {
       type: 'node.register',
@@ -458,7 +470,13 @@ export class NodeProviderClient {
         // Stop accepting new invokes once shutting down/draining; the engine
         // reschedules an undispatched invocation when the node goes offline.
         if (this.stopped) return;
-        const task = this.dispatchInvoke(message.invocation_id, message.action, message.input);
+        const task = this.dispatchInvoke(
+          message.invocation_id,
+          message.action,
+          message.input,
+          message.caller_id,
+          message.caller_name,
+        );
         this.invokeTasks.add(task);
         void task.finally(() => this.invokeTasks.delete(task));
         return;
@@ -469,7 +487,13 @@ export class NodeProviderClient {
     }
   }
 
-  private async dispatchInvoke(invocationId: string, action: string, input: FleetWireJsonValue): Promise<void> {
+  private async dispatchInvoke(
+    invocationId: string,
+    action: string,
+    input: FleetWireJsonValue,
+    callerAgentId?: string,
+    callerAgentName?: string,
+  ): Promise<void> {
     const cap = this.capabilities.get(action);
     if (!cap) {
       this.sendFrame({ type: 'action.result', invocation_id: invocationId, error: `No handler registered for action "${action}"` });
@@ -479,7 +503,7 @@ export class NodeProviderClient {
     let output: unknown;
     let handlerError: unknown;
     try {
-      output = await cap.handler(input, this.makeContext(invocationId));
+      output = await cap.handler(input, this.makeContext(invocationId, callerAgentId, callerAgentName));
     } catch (err) {
       handlerError = err;
     }
@@ -490,10 +514,16 @@ export class NodeProviderClient {
     this.sendFrame({ type: 'action.result', invocation_id: invocationId, output: (output ?? null) as FleetWireJsonValue });
   }
 
-  private makeContext(invocationId: string): NodeHandlerContext {
+  private makeContext(
+    invocationId: string,
+    callerAgentId?: string,
+    callerAgentName?: string,
+  ): NodeHandlerContext {
     return {
       node: { name: this.nodeName, capabilities: [...this.capabilities.keys()] },
       invocationId,
+      ...(callerAgentId ? { callerAgentId } : {}),
+      ...(callerAgentName ? { callerAgentName } : {}),
       sendMessage: (input) => this.postChannelMessage(input),
       // Capacity-direct: the engine always targets this connection's own node,
       // so the frame carries no node target.

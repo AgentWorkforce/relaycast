@@ -1,4 +1,47 @@
 import { z } from 'zod';
+import { EffectiveMessageRetentionSchema } from './message.js';
+
+export const WORKSPACE_CREATION_SOURCES = [
+  'api',
+  'sdk',
+  'cli',
+  'mcp',
+  'ci',
+  'relayflow',
+  'dashboard',
+  'other',
+] as const;
+export const WorkspaceCreationSourceSchema = z.enum(WORKSPACE_CREATION_SOURCES);
+export type WorkspaceCreationSource = z.infer<typeof WorkspaceCreationSourceSchema>;
+
+export const WORKSPACE_USAGE_CLASSIFICATIONS = ['internal', 'external', 'unknown'] as const;
+export const WorkspaceUsageClassificationSchema = z.enum(WORKSPACE_USAGE_CLASSIFICATIONS);
+export type WorkspaceUsageClassification = z.infer<typeof WorkspaceUsageClassificationSchema>;
+
+const provenanceIdentifier = z
+  .string()
+  .min(1)
+  .max(256)
+  .regex(/^[A-Za-z0-9._:/@-]+$/, 'must contain only letters, numbers, dot, underscore, colon, slash, @, or dash');
+
+/** Caller-declared creation context. Analytics only; never an authorization claim. */
+export const WorkspaceProvenanceInputSchema = z.object({
+  source: WorkspaceCreationSourceSchema,
+  origin_id: provenanceIdentifier.optional(),
+  classification: WorkspaceUsageClassificationSchema.optional(),
+});
+export type WorkspaceProvenanceInput = z.infer<typeof WorkspaceProvenanceInputSchema>;
+
+/** Durable provenance snapshot recorded by the server when a workspace is created. */
+export const WorkspaceProvenanceSchema = WorkspaceProvenanceInputSchema.extend({
+  source_basis: z.enum(['declared', 'origin_client', 'default']),
+  origin_actor: z.string().optional(),
+  actor_user_id: z.string().optional(),
+  actor_machine_id: z.string().optional(),
+  actor_org_id: z.string().optional(),
+  actor_org_slug: z.string().optional(),
+});
+export type WorkspaceProvenance = z.infer<typeof WorkspaceProvenanceSchema>;
 
 export const WorkspaceSchema = z.object({
   id: z.string(),
@@ -7,18 +50,30 @@ export const WorkspaceSchema = z.object({
   plan: z.enum(['free', 'pro', 'enterprise']),
   created_at: z.string(),
   metadata: z.record(z.string(), z.unknown()),
+  effective_retention: z.object({
+    messages: EffectiveMessageRetentionSchema,
+  }).optional(),
+  expires_at: z.string().nullable().optional(),
+  provenance: WorkspaceProvenanceSchema.nullable().default(null),
+  usage_classification: WorkspaceUsageClassificationSchema.default('unknown'),
+  classification_source: z.enum(['creator', 'operator', 'unclassified']).default('unclassified'),
+  classification_reason: z.string().nullable().default(null),
+  classified_at: z.string().nullable().default(null),
 });
 export type Workspace = z.infer<typeof WorkspaceSchema>;
 
 export const CreateWorkspaceRequestSchema = z.object({
   name: z.string(),
+  expires_in_seconds: z.number().int().min(60).max(30 * 24 * 60 * 60).optional(),
+  provenance: WorkspaceProvenanceInputSchema.optional(),
 });
 export type CreateWorkspaceRequest = z.infer<typeof CreateWorkspaceRequestSchema>;
 
 export const CreateWorkspaceResponseSchema = z.object({
   workspace_id: z.string(),
-  api_key: z.string().optional(),
+  api_key: z.string(),
   created_at: z.string(),
+  expires_at: z.string().nullable().optional(),
 });
 export type CreateWorkspaceResponse = z.infer<typeof CreateWorkspaceResponseSchema>;
 

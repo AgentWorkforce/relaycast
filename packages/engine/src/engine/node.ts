@@ -1,5 +1,8 @@
-import { and, eq, inArray, lt, ne, or, sql } from 'drizzle-orm';
+import { z } from 'zod';
+import { invalidateChannelCache } from './cache.js';
+import { and, asc, eq, exists, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, notExists, or, sql } from 'drizzle-orm';
 import type {
+  FleetAgentRecoverMessage,
   FleetAgentRegisterMessage,
   FleetBrokerToRelaycastMessage,
   FleetCapabilityAcceptance,
@@ -11,23 +14,29 @@ import type {
   AgentRegisterReplyData,
 } from '@relaycast/types';
 import {
+  FLEET_ACTION_CALLER_METADATA_KEY,
+  FLEET_ACTION_CALLER_METADATA_VERSION,
   FLEET_DELIVERY_CURSOR_CAPABILITY,
+  NODE_REGISTRATION_CONTRACT_V1,
   parseFleetBrokerToRelaycastMessage,
 } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import { actionInvocations, agents, agentNodeBindings, channelMembers, channels, nodeProviders, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
-import { runAtomic } from '../ports/database.js';
-import type { EngineDb } from '../ports/database.js';
-import { isProviderAgentDeliveryReady, type NodeConnectionRegistry } from '../ports/realtime.js';
+import { acceptTaskInvocation, completeTaskInvocation } from './taskInvocation.js';
+import { runAtomic, runAtomicWrites } from '../ports/database.js';
+import type { AtomicWrite, EngineDb } from '../ports/database.js';
+import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { generateId } from './snowflake.js';
-import { AGENT_RECLAIM_GRACE_MS, assertRegistrableAgentName } from './agent.js';
-import { isNodeLive, nodeHasCapability } from './placement.js';
+import { assertRegistrableAgentName } from './agent.js';
+import { rotateAgentIdentity } from './agentIdentity.js';
+import { isNodeLive, isReusableForMachineMatch, nodeHasCapacity, NODE_LIVENESS_TTL_MS } from './placement.js';
 import {
   DEFAULT_PROVIDER_NAME,
   capabilityKind,
   heartbeatProvider,
+  isProviderLive,
   markProviderOffline,
   materializeProviderActions,
   recomputeNodeAggregate,
@@ -94,10 +103,98 @@ function isImplicitDirectLocation(agent: Pick<AgentRow, 'id' | 'locationNodeId'>
   return agent.locationNodeId === directNodeIdForAgent(agent.id);
 }
 
+/**
+ * An agent adopted onto a node keeps a provider identity that node can serve:
+ * deliveries are pushed to the `(node, provider)` socket named by
+ * `agents.provider_name`, so a provider the node does not serve is a silent
+ * dead end. Precedence, most specific first:
+ *
+ *  1. The node already serves the agent's provider — keep it. It routes today,
+ *     and it is the closest thing to evidence of which provider owns the agent;
+ *     rewriting it would hand the agent to a sibling provider on the same host.
+ *  2. The node serves exactly one provider — adopt it; there is no other answer.
+ *  3. The node serves the synthetic `default` — adopt it as the generic
+ *     fallback, since the agent's own provider is not served here.
+ *  4. Otherwise (several named providers, none of them the agent's) nothing
+ *     identifies the owner, so the existing provider stands rather than guessing.
+ *
+ * A node with no live providers at all falls through to (4): no socket exists
+ * to adopt, and rewriting to a name nobody serves would not help. Callers pass
+ * only live provider names — a persisted-but-offline row is a historical
+ * manifest entry, not a connection deliveries can reach.
+ */
+function adoptNodeProviderName(current: string, nodeProviderNames: string[]): string {
+  if (nodeProviderNames.includes(current)) return current;
+  if (nodeProviderNames.length === 1) return nodeProviderNames[0];
+  if (nodeProviderNames.includes(DEFAULT_PROVIDER_NAME)) return DEFAULT_PROVIDER_NAME;
+  return current;
+}
+
 function normalizeCapabilities(capabilities: CapabilityLike[]): FleetCapability[] {
   return capabilities.map((capability) => (
     typeof capability === 'string' ? { name: capability } : capability
   ));
+}
+
+const REPO_TAG_PREFIX = 'repo:';
+
+function isRepoTag(tag: string): boolean {
+  return tag.startsWith(REPO_TAG_PREFIX);
+}
+
+// Placement matches a node to an assignment by its `repo:<owner/name>` tag, so
+// a node that can inject its own `repo:` tag can claim work for repositories it
+// has no checkout of. Structured `repo_keys` is therefore the only source of
+// repo advertisements: once a registration carries the field at all - even as an
+// empty list - every caller-supplied `repo:` tag is dropped rather than merged.
+// Registrations that omit the field entirely are pre-`repo_keys` clients and
+// stay on the legacy tag-only path. Other tags round-trip, except server-owned
+// tags (below), which a registration can never supply.
+function registrationTags(message: FleetNodeRegisterMessage): string[] {
+  const callerTags = message.tags.filter((tag) => !isServerOwnedTag(tag));
+  if (!message.repo_keys) return [...new Set(callerTags)];
+  return [...new Set([
+    ...callerTags.filter((tag) => !isRepoTag(tag)),
+    ...message.repo_keys.map((repoKey) => `repo:${repoKey}`),
+  ])];
+}
+
+// `cloud:*` tags are server-owned lifecycle identity (sandbox provider, node
+// type, sandbox id, route). The control plane writes them at enrollment through
+// POST /v1/nodes; the broker on the node never learns them and re-registers
+// with its own tag list, often `[]`. So `node.register` carries the enrolled
+// `cloud:*` tags over and ignores any `cloud:*` tag in the frame: a connected
+// node must not be able to shed the identity reclaim uses to find it, or forge
+// one that makes it look like a different sandbox. Only enrollment sets them,
+// and only enrollment clears them: re-enrolling replaces the whole tag set, so
+// a `cloud:*` value a pre-reservation broker once registered is removed by
+// re-enrolling the node, not by a later register frame. A frame's `cloud:*`
+// tags are ignored with a server-side warning rather than rejected, so a
+// broker still configured with one keeps coming online.
+export const SERVER_OWNED_NODE_TAG_PREFIX = 'cloud:';
+
+function isServerOwnedTag(tag: string): boolean {
+  return tag.startsWith(SERVER_OWNED_NODE_TAG_PREFIX);
+}
+
+// The tags a broker registration writes: the row's current `cloud:*` tags,
+// then the broker's own (already stripped of `cloud:*` by registrationTags).
+// This is computed inside the UPDATE rather than from a row read earlier,
+// because a concurrent re-enroll can replace the `cloud:*` set in between and
+// a read-then-write would put the stale set back. runAtomic is not isolated on
+// every adapter (it runs unwrapped on D1) and enrollment does not take the
+// node lock, so a single statement is the only boundary that holds everywhere.
+// `substr` keeps the match case-sensitive like isServerOwnedTag; LIKE would not.
+function brokerTagsPreservingServerOwned(callerTags: string[]) {
+  return sql<string[]>`(
+    SELECT json_group_array(value) FROM (
+      SELECT 0 AS src, key AS pos, value FROM json_each(${nodes.tags})
+        WHERE substr(value, 1, ${SERVER_OWNED_NODE_TAG_PREFIX.length}) = ${SERVER_OWNED_NODE_TAG_PREFIX}
+      UNION ALL
+      SELECT 1 AS src, key AS pos, value FROM json_each(${JSON.stringify(callerTags)})
+      ORDER BY src, pos
+    )
+  )`;
 }
 
 function supportsProviderDeliveryReadiness(registry: NodeConnectionRegistry): boolean {
@@ -106,17 +203,106 @@ function supportsProviderDeliveryReadiness(registry: NodeConnectionRegistry): bo
     && typeof registry.isProviderAgentDeliveryReady === 'function';
 }
 
+/**
+ * Whether a provider's current registration advertised the delivery-cursor
+ * capability. Registration persists the advertised set, so later frames on the
+ * same provider can recover the handshake `node.register` negotiated without
+ * the client re-asserting it.
+ */
+async function providerAdvertisesDeliveryCursor(
+  db: EngineDb,
+  workspaceId: string,
+  nodeId: string,
+  providerName: string,
+): Promise<boolean> {
+  const [provider] = await db
+    .select({ capabilities: nodeProviders.capabilities })
+    .from(nodeProviders)
+    .where(and(
+      eq(nodeProviders.workspaceId, workspaceId),
+      eq(nodeProviders.nodeId, nodeId),
+      eq(nodeProviders.name, providerName),
+    ));
+  return provider?.capabilities?.some(
+    (capability) => capability.name === FLEET_DELIVERY_CURSOR_CAPABILITY,
+  ) ?? false;
+}
+
+/**
+ * Capabilities that are NEGOTIATED at `node.register` (answered in its
+ * acceptance list and wired into the connection's delivery mode) rather than
+ * merely advertised. A heartbeat refreshes the provider's roster of spawn /
+ * action capacity; it is not a renegotiation, so it may neither drop nor
+ * introduce one of these. Dropping would demote a live cursor-gated connection
+ * that was deliberately denied the register-time flush — stranding its backlog;
+ * introducing would promote an immediate connection and replay frames that
+ * flush already sent. The registered value stands until the next
+ * `node.register`.
+ */
+const NEGOTIATED_PROTOCOL_CAPABILITIES: readonly string[] = [FLEET_DELIVERY_CURSOR_CAPABILITY];
+
+function isNegotiatedProtocolCapability(capability: FleetCapability): boolean {
+  return NEGOTIATED_PROTOCOL_CAPABILITIES.includes(capability.name);
+}
+
+function withRegisteredProtocolCapabilities(
+  heartbeatCapabilities: FleetCapability[],
+  registeredCapabilities: FleetCapability[],
+): FleetCapability[] {
+  return [
+    ...heartbeatCapabilities.filter((capability) => !isNegotiatedProtocolCapability(capability)),
+    ...registeredCapabilities.filter(isNegotiatedProtocolCapability),
+  ];
+}
+
+/**
+ * Whether the provider's LIVE connection negotiated cursor-gated delivery at
+ * `node.register` — i.e. whether it was denied the register-time flush and so
+ * depends on a later certification to replay.
+ *
+ * The registry owns that answer: `node.register` hands it the negotiated mode
+ * per connection, and a reconnect starts a fresh one. Ask it first. Only a
+ * registry that does not expose the mode (an out-of-process owner on an older
+ * contract) falls back to the persisted advertisement — which heartbeats keep
+ * off-limits (see `heartbeatNode`) precisely so the fallback answers for the
+ * registration rather than for the latest roster snapshot.
+ *
+ * When the method DOES exist, its `undefined` is an answer too: the connection
+ * asking is not the provider's current owner (a superseded connection whose
+ * frame queued behind the replacement's register). Reading the persisted
+ * advertisement then would classify a stale connection's sync by whichever
+ * registration owns the provider now — replaying certified deliveries to a
+ * connection that has not certified those sessions. A registry that can
+ * answer gets the last word; the fallback is only for one that cannot.
+ */
+async function connectionNegotiatedDeliveryCursor(
+  db: EngineDb,
+  registry: NodeConnectionRegistry,
+  workspaceId: string,
+  nodeId: string,
+  providerName: string,
+  connectionId: string | undefined,
+): Promise<boolean> {
+  if (!supportsProviderDeliveryReadiness(registry)) return false;
+  if (registry.providerDeliveryReadinessMode) {
+    return registry.providerDeliveryReadinessMode(workspaceId, nodeId, providerName, connectionId)
+      === 'agent_scoped';
+  }
+  return providerAdvertisesDeliveryCursor(db, workspaceId, nodeId, providerName);
+}
+
 function requestId(message: { id?: string }): string {
   return message.id ?? generateId();
 }
 
-function publicNode(row: NodeRow) {
-  const live = isNodeLive(row);
+function publicNode(row: NodeRow, now?: number) {
+  const live = isNodeLive(row, now);
   return {
     id: row.id,
     name: row.name,
     kind: row.kind,
     role: row.role,
+    machine_id: row.machineId,
     delivery_adapter: row.deliveryAdapter,
     delivery: redactDeliveryConfig(row.deliveryConfig),
     capabilities: row.capabilities,
@@ -127,6 +313,13 @@ function publicNode(row: NodeRow) {
     handlers_live: live && row.handlersLive,
     load: row.loadReported ? row.load : null,
     active_agents: row.activeAgents,
+    // `active_agents` is only an authoritative live occupancy count while the
+    // node is proven live within NODE_LIVENESS_TTL_MS. Once a node goes
+    // offline, its last-reported value is frozen history: it can no longer
+    // change and must not be presented as current capacity. Callers that
+    // need current occupancy must check this flag rather than assuming a
+    // non-null `active_agents` means "right now".
+    active_agents_stale: !live,
     max_agents: row.maxAgents,
     last_heartbeat_at: row.lastHeartbeatAt?.toISOString() ?? null,
     created_at: row.createdAt.toISOString(),
@@ -194,6 +387,7 @@ export async function createNodeToken(
   data: {
     node_id?: string;
     name: string;
+    machine_id?: string;
     kind?: NodeKind;
     role?: NodeRole;
     delivery_adapter?: string;
@@ -259,6 +453,12 @@ export async function createNodeToken(
         deliveryAdapter,
         deliveryConfig,
         capabilities: normalizeCapabilities(data.capabilities ?? existing.capabilities),
+        machineId: data.machine_id ?? existing.machineId,
+        // The credential just changed, so whatever the previous holder proved
+        // no longer applies to this row. Without clearing it, a row reused once
+        // still looks proven and could be reused again immediately, revoking
+        // the token this call is handing out.
+        provenLiveAt: null,
         maxAgents,
         tags: data.tags ?? existing.tags,
         version: data.version ?? existing.version,
@@ -284,6 +484,7 @@ export async function createNodeToken(
       deliveryAdapter,
       deliveryConfig,
       capabilities: normalizeCapabilities(data.capabilities ?? []),
+      machineId: data.machine_id ?? null,
       maxAgents,
       tags: data.tags ?? [],
       version: data.version ?? 'unknown',
@@ -321,18 +522,124 @@ export async function getNodeById(db: Db, workspaceId: string, nodeId: string) {
 }
 
 /**
+ * How many *reusable* rows sharing one machine_id the enroll lookup will
+ * consider. Live rows are excluded in SQL before this bound applies, so a
+ * machine with many live brokers cannot push its one offline row out of range.
+ */
+const MACHINE_MATCH_SCAN_LIMIT = 20;
+
+/**
+ * The broker a machine already has on the roster and is no longer running.
+ *
+ * Scoped to `broker` deliberately: a broker is the node-of-many fleet host and
+ * a machine runs one, so machine_id identifies it. A `direct` node is a
+ * node-of-one delivery host and a single machine legitimately runs many of
+ * them, so machine_id is not a key there and must never collapse them.
+ *
+ * A LIVE incumbent is never returned. Adopting one would rename a running
+ * broker and rotate its token out from under it — the caller cannot be that
+ * host coming back, because that host has not left. Only a node that is gone
+ * can be the one re-enrolling. Skipping the live row lets the caller fall
+ * through to a new node instead, which is the right answer for the legitimate
+ * duplicate too: a VM cloned from a snapshot, or containers baked from one
+ * image, carry the same machine_id and run CONCURRENTLY, so they are genuinely
+ * separate nodes. Declining the match costs an extra roster row; rejecting the
+ * enrollment outright would break a whole fleet booted from one image.
+ *
+ * Ordered oldest-first so a roster that already holds several rows for one
+ * machine converges onto its earliest reusable row instead of picking
+ * arbitrarily.
+ */
+export async function getBrokerNodeByMachineId(db: Db, workspaceId: string, machineId: string) {
+  // Exclude live rows in SQL so the bound below counts only reusable
+  // candidates. Bounding first and filtering after would let a machine with
+  // enough live brokers hide its one offline row past the limit, and enrollment
+  // would insert a new row instead of reusing it.
+  const now = new Date();
+  const liveCutoff = new Date(now.getTime() - NODE_LIVENESS_TTL_MS);
+  const candidates = await db
+    .select()
+    .from(nodes)
+    .where(and(
+      eq(nodes.workspaceId, workspaceId),
+      eq(nodes.machineId, machineId),
+      eq(nodes.role, 'broker'),
+      // Mirrors isReusableForMachineMatch in full, so the scan bound below
+      // counts only rows that are actually reusable. A stale proof alone is not
+      // enough: a broker that registered recently has a fresh lastHeartbeatAt
+      // and is therefore live, and admitting those here would let them crowd
+      // the window and hide the one reusable row behind them.
+      isNotNull(nodes.provenLiveAt),
+      lt(nodes.provenLiveAt, liveCutoff),
+      // not live — mirrors isNodeLive
+      or(
+        ne(nodes.status, 'online'),
+        isNull(nodes.lastHeartbeatAt),
+        lt(nodes.lastHeartbeatAt, liveCutoff),
+      ),
+      // no future-dated heartbeat — server clock rollback
+      or(isNull(nodes.lastHeartbeatAt), lte(nodes.lastHeartbeatAt, now)),
+    ))
+    .orderBy(asc(nodes.createdAt), asc(nodes.id))
+    .limit(MACHINE_MATCH_SCAN_LIMIT);
+  // The SQL above is a pre-filter for `isReusableForMachineMatch`, which is the
+  // single definition of reusability and mirrors it exactly — including
+  // treating an `online` row with a future heartbeat as live. Re-checking here
+  // keeps that definition authoritative rather than trusting the query alone.
+  return candidates.find((node) => isReusableForMachineMatch(node)) ?? null;
+}
+
+/**
+ * The role an enroll is asking for, derived from the request alone.
+ *
+ * Enrollment's role default depends on `kind` (`ws` is a broker; `http_push`
+ * and `poll` are direct) and on `max_agents`, and the machine lookup has to
+ * know it *before* it runs. Otherwise a machine that already has a broker has
+ * that broker rotated -- and its transport rewritten to http_push or poll --
+ * by a node enrolling alongside it without an explicit `role`. That failure
+ * would be silent and would move a live node's identity, which is worse than
+ * the roster growth this dedupe exists to stop.
+ */
+export function requestedNodeRole(data: { kind?: string; role?: NodeRole; max_agents?: number }): NodeRole {
+  if (data.role) return data.role;
+  return normalizeLegacyNodeShape(
+    data.kind ?? 'ws',
+    data.max_agents !== undefined && data.max_agents > 1 ? 'broker' : undefined,
+  ).role;
+}
+
+/**
  * Resolve the node an enroll (POST /v1/nodes) targets: by node_id when
- * supplied, by name otherwise.
+ * supplied, then by name, then by machine_id.
+ *
+ * The machine_id step is what stops the roster refilling. A host that enrolls
+ * without a persisted node_id arrives under a fresh name on every boot, and
+ * each of those names used to mint a brand-new row that nothing ever reclaimed.
+ * Falling back to the machine's existing broker turns re-enrollment into a
+ * token rotation on the row that is already there.
+ *
+ * node_id and name still win, so a caller that pins either keeps the exact
+ * identity it asked for; passing node_id is the way to opt out of machine
+ * grouping and run two brokers on one host.
+ *
+ * The machine step only ever matches a node that is not live — see
+ * getBrokerNodeByMachineId — so a running broker is never adopted by another
+ * caller presenting its machine_id.
  */
 export async function resolveNodeForEnroll(
   db: Db,
   workspaceId: string,
-  data: { node_id?: string; name: string },
+  data: { node_id?: string; name: string; machine_id?: string; kind?: string; role?: NodeRole; max_agents?: number },
 ) {
   if (data.node_id !== undefined) {
     return getNodeById(db, workspaceId, data.node_id);
   }
-  return getNodeByName(db, workspaceId, data.name);
+  const byName = await getNodeByName(db, workspaceId, data.name);
+  if (byName) return byName;
+  if (data.machine_id !== undefined && requestedNodeRole(data) === 'broker') {
+    return getBrokerNodeByMachineId(db, workspaceId, data.machine_id);
+  }
+  return null;
 }
 
 export interface RegisterNodeResult {
@@ -361,6 +668,20 @@ export async function registerNode(
     throw codedError('Node token is not enrolled in this workspace', 'node_not_found', 404);
   }
 
+  const tags = registrationTags(message);
+  const ignoredServerOwnedTags = [...new Set(message.tags.filter(isServerOwnedTag))];
+  if (ignoredServerOwnedTags.length > 0) {
+    // Not rejected: a broker whose manifest predates the reserved namespace
+    // must still come online. But dropping part of a valid frame without a
+    // trace hides the misconfiguration, so record which tags were ignored.
+    console.warn('[node.register] ignored server-owned tags', {
+      workspaceId,
+      nodeId: authenticatedNodeId,
+      prefix: SERVER_OWNED_NODE_TAG_PREFIX,
+      tags: ignoredServerOwnedTags,
+    });
+  }
+
   const [existingByName] = await db
     .select()
     .from(nodes)
@@ -372,6 +693,12 @@ export async function registerNode(
 
   // Direct nodes are the per-agent delivery hosts: they never carry providers.
   if (existing.role === 'direct') {
+    // Direct-node registration historically preserved enrollment tags. Keep
+    // those non-repo tags while refreshing only the node's repo advertisement.
+    const directTags = [...new Set([
+      ...existing.tags.filter((tag) => !isRepoTag(tag)),
+      ...tags,
+    ])];
     const [updated] = await db
       .update(nodes)
       .set({
@@ -383,7 +710,8 @@ export async function registerNode(
         deliveryConfig: existing.deliveryConfig,
         maxAgents: 1,
         activeAgents: 1,
-        tags: existing.tags,
+        tags: directTags,
+        machineId: message.machine_id ?? existing.machineId,
         version: message.version,
         status: 'online',
         handlersLive: false,
@@ -409,7 +737,7 @@ export async function registerNode(
     await materializeProviderActions(tx, workspaceId, authenticatedNodeId, provider.name, capabilities);
     await tx
       .update(nodes)
-      .set({ name: message.name, kind: 'ws', role: 'broker', deliveryAdapter: 'ws.node.v1', deliveryConfig: null, tags: message.tags })
+      .set({ name: message.name, kind: 'ws', role: 'broker', deliveryAdapter: 'ws.node.v1', deliveryConfig: null, tags: brokerTagsPreservingServerOwned(tags) })
       .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, authenticatedNodeId)));
     await recomputeNodeAggregate(tx, workspaceId, authenticatedNodeId, {
       version: message.version,
@@ -465,6 +793,9 @@ export async function heartbeatNode(
         activeAgents: 1,
         handlersLive: false,
         lastHeartbeatAt: new Date(),
+        // A heartbeat frame arrived: this is proof of life, unlike the
+        // registration and disconnect writes that also touch lastHeartbeatAt.
+        provenLiveAt: new Date(),
       })
       .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)))
       .returning();
@@ -473,15 +804,23 @@ export async function heartbeatNode(
 
   await runAtomic(db, async (tx) => {
     if (message.capabilities !== undefined) {
-      const caps = normalizeCapabilities(message.capabilities);
       const [existingProvider] = await tx
-        .select({ instanceId: nodeProviders.instanceId, maxAgents: nodeProviders.maxAgents, version: nodeProviders.version })
+        .select({
+          instanceId: nodeProviders.instanceId,
+          maxAgents: nodeProviders.maxAgents,
+          version: nodeProviders.version,
+          capabilities: nodeProviders.capabilities,
+        })
         .from(nodeProviders)
         .where(and(
           eq(nodeProviders.workspaceId, workspaceId),
           eq(nodeProviders.nodeId, nodeId),
           eq(nodeProviders.name, providerName),
         ));
+      const caps = withRegisteredProtocolCapabilities(
+        normalizeCapabilities(message.capabilities),
+        existingProvider?.capabilities ?? [],
+      );
       await upsertProvider(tx, workspaceId, nodeId, {
         name: providerName,
         instanceId: existingProvider?.instanceId ?? `${providerName}:heartbeat`,
@@ -509,6 +848,13 @@ export async function heartbeatNode(
       await tx.update(nodes).set({ name: message.name }).where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
     }
     await recomputeNodeAggregate(tx, workspaceId, nodeId, message.version !== undefined ? { version: message.version } : {});
+    // Stamped after the aggregate so it cannot be overwritten by it: the
+    // aggregate derives lastHeartbeatAt from provider rows, which registration
+    // also writes, whereas this column is only ever set by an arriving frame.
+    await tx
+      .update(nodes)
+      .set({ provenLiveAt: new Date() })
+      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
   });
 
   const [updated] = await db
@@ -710,57 +1056,101 @@ async function autoJoinGeneral(db: Db, workspaceId: string, agentId: string) {
   }
 }
 
-async function upsertAgentNodeBinding(
+interface AgentNodeBindingOpts {
+  sessionRef?: string | null;
+  priority?: number;
+  deactivateExisting?: boolean;
+  /** Provider identity to adopt with the move; omitted leaves it untouched. */
+  providerName?: string;
+  /** Origin node to stamp when the agent has none; omitted leaves it untouched. */
+  originNodeId?: string;
+}
+
+/**
+ * Statements that bind `agent` to `nodeId` and move its routable location onto
+ * that node. Built, not executed: a caller that owns the whole move hands them
+ * to {@link runAtomicWrites} so the binding row, the location move and the
+ * retirement of the bindings left behind commit as one unit — on D1 too, where
+ * there is no interactive transaction to roll a half-applied move back.
+ *
+ * Statement order is the last-resort story for a caller that still runs them
+ * one at a time inside its own transaction: every prefix has to leave the agent
+ * routable, so the new binding is inserted first (inert on its own — delivery
+ * joins bindings only where `agents.location_node_id` matches), then the agent
+ * moves onto it, then the bindings it left behind are retired (inert once the
+ * agent has moved off them). Deactivating first, or moving the agent before its
+ * binding exists, would strand the agent with no active binding at its
+ * location. Callers that mutate `agents` themselves must write through
+ * `providerName`/`originNodeId` here rather than updating the row up front,
+ * for the same reason.
+ */
+function agentNodeBindingWrites(
   db: Db,
   workspaceId: string,
   agent: Pick<AgentRow, 'id' | 'locationNodeId'>,
   nodeId: string,
-  opts: { sessionRef?: string | null; priority?: number; deactivateExisting?: boolean } = {},
-) {
+  opts: AgentNodeBindingOpts = {},
+): AtomicWrite[] {
+  const now = new Date();
+  const writes: AtomicWrite[] = [
+    db
+      .insert(agentNodeBindings)
+      .values({
+        id: `anb_${generateId()}`,
+        workspaceId,
+        agentId: agent.id,
+        nodeId,
+        status: 'active',
+        sessionRef: opts.sessionRef ?? null,
+        priority: opts.priority ?? 0,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [agentNodeBindings.agentId, agentNodeBindings.nodeId],
+        set: {
+          status: 'active',
+          sessionRef: opts.sessionRef ?? null,
+          priority: opts.priority ?? 0,
+          updatedAt: now,
+        },
+      }),
+    db
+      .update(agents)
+      .set({
+        locationType: 'via_node',
+        locationNodeId: nodeId,
+        sessionRef: opts.sessionRef ?? undefined,
+        providerName: opts.providerName ?? undefined,
+        originNodeId: opts.originNodeId ?? undefined,
+        status: 'active',
+        lastSeen: now,
+      })
+      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agent.id))),
+  ];
+
   if (opts.deactivateExisting ?? true) {
-    await db
+    writes.push(db
       .update(agentNodeBindings)
-      .set({ status: 'inactive', updatedAt: new Date() })
+      .set({ status: 'inactive', updatedAt: now })
       .where(and(
         eq(agentNodeBindings.workspaceId, workspaceId),
         eq(agentNodeBindings.agentId, agent.id),
         eq(agentNodeBindings.status, 'active'),
         ne(agentNodeBindings.nodeId, nodeId),
-      ));
+      )));
   }
+  return writes;
+}
 
-  await db
-    .insert(agentNodeBindings)
-    .values({
-      id: `anb_${generateId()}`,
-      workspaceId,
-      agentId: agent.id,
-      nodeId,
-      status: 'active',
-      sessionRef: opts.sessionRef ?? null,
-      priority: opts.priority ?? 0,
-      updatedAt: new Date(),
-    })
-    .onConflictDoUpdate({
-      target: [agentNodeBindings.agentId, agentNodeBindings.nodeId],
-      set: {
-        status: 'active',
-        sessionRef: opts.sessionRef ?? null,
-        priority: opts.priority ?? 0,
-        updatedAt: new Date(),
-      },
-    });
-
-  await db
-    .update(agents)
-    .set({
-      locationType: 'via_node',
-      locationNodeId: nodeId,
-      sessionRef: opts.sessionRef ?? undefined,
-      status: 'active',
-      lastSeen: new Date(),
-    })
-    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agent.id)));
+/** Run {@link agentNodeBindingWrites} one statement at a time. */
+async function upsertAgentNodeBinding(
+  db: Db,
+  workspaceId: string,
+  agent: Pick<AgentRow, 'id' | 'locationNodeId'>,
+  nodeId: string,
+  opts: AgentNodeBindingOpts = {},
+) {
+  for (const write of agentNodeBindingWrites(db, workspaceId, agent, nodeId, opts)) await write;
 }
 
 async function activeBindingNodeIdsForAgent(db: Db, workspaceId: string, agentId: string): Promise<string[]> {
@@ -775,7 +1165,43 @@ async function activeBindingNodeIdsForAgent(db: Db, workspaceId: string, agentId
   return rows.map((row) => row.nodeId);
 }
 
-async function reserveNodeAgentSlot(db: Db, workspaceId: string, node: NodeRow): Promise<void> {
+interface SpawnReservationClaim {
+  invocationId?: string;
+  providerName: string;
+  agentName: string;
+}
+
+async function reserveNodeAgentSlot(
+  db: Db,
+  workspaceId: string,
+  node: NodeRow,
+  claim?: SpawnReservationClaim,
+): Promise<void> {
+  const reservationCorrelation = claim?.invocationId
+    ? eq(actionInvocations.id, claim.invocationId)
+    : claim
+      ? and(
+        eq(actionInvocations.dispatchedNodeId, node.id),
+        eq(actionInvocations.dispatchedProvider, claim.providerName),
+        sql`json_extract(${actionInvocations.input}, '$.name') = ${claim.agentName}`,
+      )
+      : sql`0`;
+  const ownsSpawnReservation = claim
+    ? sql`EXISTS (
+        SELECT 1 FROM ${actionInvocations}
+        WHERE ${actionInvocations.workspaceId} = ${workspaceId}
+          AND ${reservationCorrelation}
+          AND ${actionInvocations.status} IN ('pending', 'dispatched', 'invoked')
+          AND ${actionInvocations.spawnReservedAt} IS NOT NULL
+          AND ${actionInvocations.dispatchedNodeId} = ${node.id}
+          AND ${actionInvocations.dispatchedProvider} = ${claim.providerName}
+          AND (
+            ${actionInvocations.actionName} = 'spawn'
+            OR ${actionInvocations.actionName} LIKE 'spawn:%'
+          )
+          AND json_extract(${actionInvocations.input}, '$.name') = ${claim.agentName}
+      )`
+    : sql`0`;
   const [reserved] = await db
     .update(nodes)
     .set({
@@ -784,7 +1210,14 @@ async function reserveNodeAgentSlot(db: Db, workspaceId: string, node: NodeRow):
     .where(and(
       eq(nodes.workspaceId, workspaceId),
       eq(nodes.id, node.id),
-      or(eq(nodes.maxAgents, 0), sql`${nodes.activeAgents} < ${nodes.maxAgents}`),
+      or(
+        eq(nodes.maxAgents, 0),
+        and(ownsSpawnReservation, sql`${nodes.activeAgents} < ${nodes.maxAgents}`),
+        and(
+          sql`NOT (${ownsSpawnReservation})`,
+          sql`${nodes.activeAgents} + ${nodes.reservedAgents} < ${nodes.maxAgents}`,
+        ),
+      ),
     ))
     .returning({ id: nodes.id });
   if (!reserved) {
@@ -792,10 +1225,76 @@ async function reserveNodeAgentSlot(db: Db, workspaceId: string, node: NodeRow):
   }
 }
 
-async function releaseNodeAgentSlots(db: Db, workspaceId: string, nodeIds: string[]): Promise<void> {
+async function rejectMigrationCanceledSpawnRegistration(
+  db: Db,
+  workspaceId: string,
+  registration: {
+    invocationId?: string;
+    nodeId: string;
+    providerName: string;
+    agentName: string;
+  },
+): Promise<void> {
+  // Provider ownership added in migration 0030 is intentionally NULL for
+  // legacy rows whose multi-provider owner could not be inferred. Treat that
+  // unknown owner conservatively as matching any provider on the exact node
+  // and agent-name tuple; otherwise a stale worker could escape the migration
+  // tombstone after its reservation was released.
+  const providerCorrelation = or(
+    eq(actionInvocations.dispatchedProvider, registration.providerName),
+    isNull(actionInvocations.dispatchedProvider),
+  );
+  const correlation = registration.invocationId
+    ? and(
+      eq(actionInvocations.id, registration.invocationId),
+      eq(actionInvocations.dispatchedNodeId, registration.nodeId),
+      providerCorrelation,
+      sql`json_extract(${actionInvocations.input}, '$.name') = ${registration.agentName}`,
+    )
+    : and(
+      eq(actionInvocations.dispatchedNodeId, registration.nodeId),
+      providerCorrelation,
+      sql`json_extract(${actionInvocations.input}, '$.name') = ${registration.agentName}`,
+    );
+  const [canceled] = await db
+    .select({ id: actionInvocations.id })
+    .from(actionInvocations)
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      correlation,
+      eq(actionInvocations.invocationOrigin, 'legacy_unknown'),
+      eq(actionInvocations.status, 'failed'),
+      eq(actionInvocations.error, 'invocation_origin_unavailable'),
+      or(
+        eq(actionInvocations.actionName, 'spawn'),
+        sql`${actionInvocations.actionName} LIKE 'spawn:%'`,
+      ),
+    ));
+  if (canceled) {
+    // An ID-less legacy registration cannot distinguish a stale canceled
+    // worker from a newer reservation for the same tuple. Fail closed until
+    // the replacement echoes its invocation id; otherwise the stale process
+    // can consume the replacement generation's capacity and identity.
+    throw codedError(
+      `Spawn invocation "${canceled.id}" was canceled during migration`,
+      'spawn_invocation_canceled',
+      409,
+    );
+  }
+}
+
+/**
+ * The statement (at most one) that gives back one agent slot on each of
+ * `nodeIds`. Built, not executed, so a caller can commit the decrement in the
+ * same atomic unit as the binding retirement that justifies it: a decrement
+ * that lands without the retirement lets the node overshoot `maxAgents`, and a
+ * retirement that lands without the decrement charges capacity to a binding
+ * nothing will ever release.
+ */
+function releaseNodeAgentSlotWrites(db: Db, workspaceId: string, nodeIds: string[]): AtomicWrite[] {
   const uniqueNodeIds = [...new Set(nodeIds)];
-  if (uniqueNodeIds.length === 0) return;
-  await db
+  if (uniqueNodeIds.length === 0) return [];
+  return [db
     .update(nodes)
     .set({
       activeAgents: sql`CASE WHEN ${nodes.activeAgents} > 0 THEN ${nodes.activeAgents} - 1 ELSE 0 END`,
@@ -803,7 +1302,11 @@ async function releaseNodeAgentSlots(db: Db, workspaceId: string, nodeIds: strin
     .where(and(
       eq(nodes.workspaceId, workspaceId),
       inArray(nodes.id, uniqueNodeIds),
-    ));
+    ))];
+}
+
+async function releaseNodeAgentSlots(db: Db, workspaceId: string, nodeIds: string[]): Promise<void> {
+  for (const write of releaseNodeAgentSlotWrites(db, workspaceId, nodeIds)) await write;
 }
 
 export async function ensureDirectNodeForAgent(
@@ -985,6 +1488,7 @@ function serializeBinding(row: {
   status: string;
   sessionRef: string | null;
   priority: number;
+  deliveryAckSeq?: number | null;
   createdAt: Date;
   updatedAt: Date | null;
 }) {
@@ -999,6 +1503,12 @@ function serializeBinding(row: {
     status: row.status,
     session_ref: row.sessionRef,
     priority: row.priority,
+    // Only the bind response selects this: it hands the caller the agent's
+    // authoritative delivery cursor, the same contract `agent.register` and
+    // `agent.recover` replies carry for cursor-aware providers.
+    ...(row.deliveryAckSeq !== undefined && row.deliveryAckSeq !== null
+      ? { delivery_ack_seq: row.deliveryAckSeq }
+      : {}),
     created_at: row.createdAt.toISOString(),
     updated_at: row.updatedAt?.toISOString() ?? null,
   };
@@ -1010,7 +1520,19 @@ export async function bindAgentToNode(
   nodeName: string,
   agentName: string,
   opts: { session_ref?: string | null; priority?: number } = {},
-) {
+): Promise<{
+  binding: ReturnType<typeof serializeBinding>;
+  move: { nodeId: string; agentId: string; providerName: string };
+}> {
+  // `runAtomic` below already owns a transaction on an adapter that has one, so
+  // the move's statements must not re-enter `withTransaction` (the shared
+  // connection serializes transactions and would deadlock on itself) — they run
+  // in order inside it instead. Without one, the move has to be a D1 batch, and
+  // a handle offering neither is refused before a single statement lands rather
+  // than committing half a move it cannot undo.
+  const hasInteractiveTransaction = typeof (db as EngineDb & {
+    withTransaction?: unknown;
+  }).withTransaction === 'function';
   return runAtomic(db, async (tx) => {
     const node = await getNodeByName(tx, workspaceId, nodeName);
     if (!node) throw codedError(`Node "${nodeName}" not found`, 'node_not_found', 404);
@@ -1021,6 +1543,51 @@ export async function bindAgentToNode(
       .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, agentName)));
     if (!agent) throw codedError(`Agent "${agentName}" not found`, 'agent_not_found', 404);
 
+    // A bind moves the agent's routable location onto this node. Delivery
+    // routing joins bindings only where `agents.location_node_id` matches the
+    // bound node, so a binding row alone leaves an HTTP-registered agent
+    // stranded on its implicit `direct-*` pseudo-node and never woken — the
+    // exact shape of the broker's create-only register falling back to this
+    // endpoint. `unbindAgentFromNode` already assumes this move happened.
+    if (
+      agent.status === 'active'
+      && agent.locationNodeId
+      && agent.locationNodeId !== node.id
+      && !isImplicitDirectLocation(agent)
+    ) {
+      const [locatedNode] = await tx
+        .select()
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, agent.locationNodeId)));
+      // A dead or missing prior location is not a conflict — it is exactly what
+      // a bind is for. Only a live one still owns the identity.
+      if (locatedNode && isNodeLive(locatedNode)) {
+        throw codedError(
+          `Agent "${agentName}" is already active on another live location`,
+          'agent_location_conflict',
+          409,
+        );
+      }
+    }
+
+    // Provider rows persist after a disconnect so the node keeps its capability
+    // manifest; they are history, not sockets. Adopt only among providers that
+    // can actually receive a push right now — keeping or choosing an offline
+    // row while a live sibling serves the node would point the agent at a
+    // provider connection that does not exist.
+    const liveProviderNames = (await tx
+      .select({
+        name: nodeProviders.name,
+        status: nodeProviders.status,
+        handlersLive: nodeProviders.handlersLive,
+        lastHeartbeatAt: nodeProviders.lastHeartbeatAt,
+      })
+      .from(nodeProviders)
+      .where(and(eq(nodeProviders.workspaceId, workspaceId), eq(nodeProviders.nodeId, node.id))))
+      .filter((provider) => isProviderLive(provider))
+      .map((row) => row.name);
+    const adoptedProviderName = adoptNodeProviderName(agent.providerName, liveProviderNames);
+
     const activeNodeIds = await activeBindingNodeIdsForAgent(tx, workspaceId, agent.id);
     const targetWasActive = activeNodeIds.includes(node.id);
     let reservedTargetSlot = false;
@@ -1029,12 +1596,34 @@ export async function bindAgentToNode(
         await reserveNodeAgentSlot(tx, workspaceId, node);
         reservedTargetSlot = true;
       }
-      await upsertAgentNodeBinding(tx, workspaceId, agent, node.id, {
-        sessionRef: opts.session_ref ?? null,
-        priority: opts.priority ?? 0,
-      });
-      await releaseNodeAgentSlots(tx, workspaceId, activeNodeIds.filter((nodeId) => nodeId !== node.id));
+      // The binding row, the location move, the provider adoption, the
+      // retirement of the bindings left behind and the slots those bindings
+      // held are one mutation. Committing any subset is a corruption that no
+      // retry repairs: a binding without its reservation lets the node exceed
+      // `maxAgents`, and a retired binding whose slot was never given back
+      // charges the old node forever, because the retry that would fix either
+      // reads the half-applied state as already done.
+      const buildMoveWrites = (writeDb: Db): AtomicWrite[] => [
+        ...agentNodeBindingWrites(writeDb, workspaceId, agent, node.id, {
+          sessionRef: opts.session_ref ?? null,
+          priority: opts.priority ?? 0,
+          providerName: adoptedProviderName,
+          originNodeId: agent.originNodeId ?? node.id,
+        }),
+        ...releaseNodeAgentSlotWrites(
+          writeDb,
+          workspaceId,
+          activeNodeIds.filter((nodeId) => nodeId !== node.id),
+        ),
+      ];
+      if (hasInteractiveTransaction) {
+        for (const write of buildMoveWrites(tx)) await write;
+      } else {
+        await runAtomicWrites(tx, buildMoveWrites, { requireAtomic: true });
+      }
     } catch (err) {
+      // Every statement of the move either landed or did not, so a throw means
+      // none of it did and the slot reserved for it belongs to nobody.
       if (reservedTargetSlot) {
         await releaseNodeAgentSlots(tx, workspaceId, [node.id]);
       }
@@ -1053,6 +1642,7 @@ export async function bindAgentToNode(
         status: agentNodeBindings.status,
         sessionRef: agentNodeBindings.sessionRef,
         priority: agentNodeBindings.priority,
+        deliveryAckSeq: agents.deliveryAckSeq,
         createdAt: agentNodeBindings.createdAt,
         updatedAt: agentNodeBindings.updatedAt,
       })
@@ -1065,7 +1655,37 @@ export async function bindAgentToNode(
         eq(agentNodeBindings.nodeId, node.id),
       ));
 
-    return serializeBinding(binding);
+    return {
+      binding: serializeBinding(binding),
+      move: { nodeId: node.id, agentId: agent.id, providerName: adoptedProviderName },
+    };
+  });
+}
+
+/**
+ * The second half of a bind, run by the caller only after the cursor-bearing
+ * response is on the wire — `agent.register`/`agent.recover` order their
+ * cursor reply ahead of the ready mark and replay for the same reason.
+ * Cursor-aware providers gate every delivery on a per-identity ready mark,
+ * so a bound agent needs this transition or it points at a socket that will
+ * never push to it; immediate-mode providers treat the mark as a no-op.
+ */
+export async function completeBoundAgentDelivery(
+  db: Db,
+  registry: NodeConnectionRegistry,
+  workspaceId: string,
+  move: { nodeId: string; agentId: string; providerName: string },
+): Promise<void> {
+  registry.markProviderAgentsDeliveryReady?.(
+    workspaceId,
+    move.nodeId,
+    move.providerName,
+    undefined,
+    [move.agentId],
+  );
+  await deliverPendingToNode(db, registry, workspaceId, move.nodeId, {
+    providerName: move.providerName,
+    agentIds: [move.agentId],
   });
 }
 
@@ -1138,138 +1758,246 @@ export async function registerAgentViaNode(
   options: { deliveryCursorSupported?: boolean } = {},
 ): Promise<AgentRegisterReplyData> {
   assertRegistrableAgentName(message.name);
+  const registered = await runAtomic(db, async (tx) => {
+    await rejectMigrationCanceledSpawnRegistration(tx, workspaceId, {
+      invocationId: message.invocation_id,
+      nodeId,
+      providerName,
+      agentName: message.name,
+    });
+    const [node] = await tx
+      .select()
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+    if (!node) throw codedError(`Node "${nodeId}" not found`, 'node_not_found', 404);
+    const cursorHandshake = (options.deliveryCursorSupported ?? true)
+      && await providerAdvertisesDeliveryCursor(tx, workspaceId, nodeId, providerName);
+
+    // Preserve the established identity conflict even when this node is full.
+    // A concurrent create after this read is still caught by the unique insert
+    // below, whose reserved slot is then compensated in the catch path.
+    const [existing] = await tx
+      .select({ id: agents.id })
+      .from(agents)
+      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, message.name)));
+    if (existing) {
+      throw codedError(
+        `Agent "${message.name}" already exists; use agent.recover with proof of the immutable id`,
+        'agent_already_exists',
+        409,
+      );
+    }
+
+    const token = `at_live_${randomHex(16)}`;
+    const tokenHash = await sha256Hex(token);
+    const now = new Date().toISOString();
+    const agentId = generateId();
+    let reservedTargetSlot = false;
+    let createdAgent = false;
+
+    // D1 has no interactive transaction, so acquire capacity before the first
+    // durable agent or membership write. Any later failure compensates both
+    // the exact new identity and the slot rather than leaving a ghost agent.
+    await reserveNodeAgentSlot(tx, workspaceId, node, {
+      invocationId: message.invocation_id,
+      providerName,
+      agentName: message.name,
+    });
+    reservedTargetSlot = true;
+    try {
+      const [result] = await tx
+        .insert(agents)
+        .values({
+          id: agentId,
+          workspaceId,
+          name: message.name,
+          handle: `@${message.name}`,
+          type: 'agent',
+          tokenHash,
+          status: 'active',
+          persona: null,
+          metadata: { fleet: { node_id: nodeId, invocation_id: message.invocation_id ?? null, registered_at: now } },
+          locationType: 'via_node',
+          locationNodeId: nodeId,
+          providerName,
+          originNodeId: nodeId,
+          resumable: message.resumable ?? false,
+          sessionRef: message.session_ref ?? null,
+        })
+        .onConflictDoNothing({ target: [agents.workspaceId, agents.name] })
+        .returning();
+
+      if (!result) {
+        throw codedError(
+          `Agent "${message.name}" already exists; use agent.recover with proof of the immutable id`,
+          'agent_already_exists',
+          409,
+        );
+      }
+
+      createdAgent = true;
+      if (message.auto_join_general !== false) await autoJoinGeneral(tx, workspaceId, result.id);
+      await upsertAgentNodeBinding(tx, workspaceId, result, nodeId, {
+        sessionRef: message.session_ref ?? null,
+        deactivateExisting: true,
+      });
+      return {
+        agent_id: result.id,
+        name: result.name,
+        token,
+        ...(cursorHandshake ? { delivery_ack_seq: result.deliveryAckSeq } : {}),
+      };
+    } catch (err) {
+      try {
+        if (createdAgent) {
+          await tx
+            .delete(agents)
+            .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId)));
+        }
+      } finally {
+        if (reservedTargetSlot) {
+          await releaseNodeAgentSlots(tx, workspaceId, [nodeId]);
+        }
+      }
+      throw err;
+    }
+  });
+  if (message.auto_join_general !== false) await invalidateChannelCache(workspaceId, 'general');
+  return registered;
+}
+
+/**
+ * Recover an existing agent using the authenticated node as the authority.
+ * The immutable id and server-owned `origin_node_id` must both match; name,
+ * presence, silence, and the synthetic direct-node convention grant nothing.
+ */
+export async function recoverAgentViaNode(
+  db: Db,
+  workspaceId: string,
+  nodeId: string,
+  providerName: string,
+  message: FleetAgentRecoverMessage,
+  options: { deliveryCursorSupported?: boolean } = {},
+): Promise<AgentRegisterReplyData> {
+  assertRegistrableAgentName(message.name);
+  const hasInteractiveTransaction = typeof (db as EngineDb & {
+    withTransaction?: unknown;
+  }).withTransaction === 'function';
   return runAtomic(db, async (tx) => {
     const [node] = await tx
       .select()
       .from(nodes)
       .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
     if (!node) throw codedError(`Node "${nodeId}" not found`, 'node_not_found', 404);
-    const [provider] = await tx
-      .select({ capabilities: nodeProviders.capabilities })
-      .from(nodeProviders)
-      .where(and(
-        eq(nodeProviders.workspaceId, workspaceId),
-        eq(nodeProviders.nodeId, nodeId),
-        eq(nodeProviders.name, providerName),
-      ));
-    const cursorHandshake = (options.deliveryCursorSupported ?? true) && (provider?.capabilities?.some(
-      (capability) => capability.name === FLEET_DELIVERY_CURSOR_CAPABILITY,
-    ) ?? false);
 
-    const token = `at_live_${randomHex(16)}`;
-    const tokenHash = await sha256Hex(token);
-    const now = new Date().toISOString();
-    const fleetMetadata = sql`json_object(
-      'node_id', ${nodeId},
-      'invocation_id', ${message.invocation_id ?? null},
-      'registered_at', ${now}
-    )`;
-    const [result] = await tx
-      .insert(agents)
-      .values({
-        id: generateId(),
-        workspaceId,
-        name: message.name,
-        handle: `@${message.name}`,
-        type: 'agent',
-        tokenHash,
-        status: 'active',
-        persona: null,
-        metadata: { fleet: { node_id: nodeId, invocation_id: message.invocation_id ?? null, registered_at: now } },
-        locationType: 'via_node',
-        locationNodeId: nodeId,
+    const cursorHandshake = (options.deliveryCursorSupported ?? true)
+      && await providerAdvertisesDeliveryCursor(tx, workspaceId, nodeId, providerName);
+
+    const [target] = await tx
+      .select()
+      .from(agents)
+      .where(and(
+        eq(agents.workspaceId, workspaceId),
+        eq(agents.name, message.name),
+      ));
+    if (!target) {
+      throw codedError(`Agent "${message.name}" not found`, 'agent_not_found', 404);
+    }
+    if (target.id !== message.expected_agent_id || target.originNodeId !== nodeId) {
+      throw codedError(
+        `Node "${nodeId}" does not own expected agent "${message.expected_agent_id}"`,
+        'agent_recovery_not_authorized',
+        403,
+      );
+    }
+
+    const activeNodeIds = await activeBindingNodeIdsForAgent(tx, workspaceId, target.id);
+    const targetWasActive = activeNodeIds.includes(nodeId);
+    let reservedTargetSlot = false;
+    // D1 has no interactive transaction, so capacity must be acquired before
+    // any agent/location mutation. A full node now fails with the incumbent
+    // row and bindings untouched; a later failure releases this reservation.
+    if (!targetWasActive) {
+      await reserveNodeAgentSlot(tx, workspaceId, node, {
+        invocationId: message.invocation_id,
         providerName,
-        originNodeId: nodeId,
-        resumable: message.resumable ?? false,
-        sessionRef: message.session_ref ?? null,
-      })
-      .onConflictDoUpdate({
-        target: [agents.workspaceId, agents.name],
-        set: {
-          tokenHash,
+        agentName: message.name,
+      });
+      reservedTargetSlot = true;
+    }
+    try {
+      const now = new Date().toISOString();
+      const fleetMetadata = sql`json_object(
+        'node_id', ${nodeId},
+        'invocation_id', ${message.invocation_id ?? null},
+        'registered_at', ${now}
+      )`;
+      const [result] = await tx
+        .update(agents)
+        .set({
           status: 'active',
           lastSeen: new Date(),
           metadata: sql`json_patch(COALESCE(${agents.metadata}, '{}'), ${fleetMetadata})`,
           locationType: 'via_node',
           locationNodeId: nodeId,
           providerName,
-          originNodeId: sql`COALESCE(${agents.originNodeId}, ${nodeId})`,
           resumable: message.resumable ?? false,
           sessionRef: message.session_ref ?? null,
-        },
-        // Who may take this name and be issued a token for it.
-        //
-        // The first disjunct gates on OBSERVED SILENCE (`last_seen`), not on
-        // the `status` column. Those are not the same question and must not
-        // share a field. `status` is maintained by `sweepStaleAgents`, which
-        // runs on every roster read — so while identity was gated on it, an
-        // `agent list` flipped records to 'offline' and thereby moved them
-        // from "reclaimable only by their own node" to "reclaimable by any
-        // node, on name alone, with a `token_hash` overwrite". A read must
-        // never widen who may claim an identity.
-        //
-        // Precisely: the sweep's status update cannot affect this gate at all
-        // any more. The sweep does also clamp a FUTURE `last_seen` back to the
-        // server clock, which is a write — but it can only move the reclaim
-        // moment later-or-equal relative to that bogus timestamp, never make a
-        // row claimable now, since the clamped value is `now` and this
-        // predicate needs `now - AGENT_RECLAIM_GRACE_MS`. That clamp exists so
-        // a client with a skewed clock cannot make its name permanently
-        // unreclaimable; it is deliberate, and it is the only path by which a
-        // read touches this column.
-        //
-        // The grace window is far longer than the presence TTL: an agent goes
-        // 'offline' on the roster after 5 minutes of silence, but its name is
-        // not reclaimable by a stranger until AGENT_RECLAIM_GRACE_MS. Between
-        // those two points the agent reads as away and its identity is still
-        // its own.
-        //
-        // The second disjunct is unchanged: the agent's own node may always
-        // re-register it, so a node restart or reconnect is never blocked by
-        // the grace window.
-        setWhere: or(
-          lt(agents.lastSeen, new Date(Date.now() - AGENT_RECLAIM_GRACE_MS)),
-          and(
-            eq(agents.locationType, 'via_node'),
-            or(
-              eq(agents.locationNodeId, nodeId),
-              sql`${agents.locationNodeId} = 'node_direct_' || ${agents.id}`,
-            ),
-          ),
-        ),
-      })
-      .returning();
-
-    if (!result) {
-      throw codedError(`Agent "${message.name}" already has an active location`, 'agent_location_conflict', 409);
-    }
-
-    await autoJoinGeneral(tx, workspaceId, result.id);
-    const activeNodeIds = await activeBindingNodeIdsForAgent(tx, workspaceId, result.id);
-    const targetWasActive = activeNodeIds.includes(nodeId);
-    let reservedTargetSlot = false;
-    try {
-      if (!targetWasActive) {
-        await reserveNodeAgentSlot(tx, workspaceId, node);
-        reservedTargetSlot = true;
+        })
+        .where(and(
+          eq(agents.workspaceId, workspaceId),
+          eq(agents.id, message.expected_agent_id),
+          eq(agents.name, message.name),
+          eq(agents.originNodeId, nodeId),
+        ))
+        .returning();
+      if (!result) {
+        throw codedError(
+          `Agent "${message.name}" changed during node recovery`,
+          'agent_identity_conflict',
+          409,
+        );
       }
+
+      // Recovery preserves memberships, including an intentionally isolated identity.
       await upsertAgentNodeBinding(tx, workspaceId, result, nodeId, {
         sessionRef: message.session_ref ?? null,
         deactivateExisting: true,
       });
-      await releaseNodeAgentSlots(tx, workspaceId, activeNodeIds.filter((activeNodeId) => activeNodeId !== nodeId));
+      await releaseNodeAgentSlots(
+        tx,
+        workspaceId,
+        activeNodeIds.filter((activeNodeId) => activeNodeId !== nodeId),
+      );
+      // Rotate only after every fallible routing/capacity mutation. On Node the
+      // surrounding transaction still makes the whole recovery atomic; on D1
+      // the rotation+audit pair remains one atomic batch.
+      const rotated = await rotateAgentIdentity(tx, {
+        workspaceId,
+        agentId: target.id,
+        agentName: target.name,
+      }, {
+        authority: 'origin_node',
+        actor: `node:${node.name}`,
+        reason: 'explicit node identity recovery',
+        sessionRef: message.session_ref ?? target.sessionRef,
+        nodeId,
+        originActor: 'node-control/agent.recover',
+      }, 'recover', {
+        requireAtomic: !hasInteractiveTransaction,
+        alreadyAtomic: hasInteractiveTransaction,
+      });
+
+      return {
+        agent_id: result.id,
+        name: result.name,
+        token: rotated.token,
+        ...(cursorHandshake ? { delivery_ack_seq: result.deliveryAckSeq } : {}),
+      };
     } catch (err) {
-      if (reservedTargetSlot) {
-        await releaseNodeAgentSlots(tx, workspaceId, [nodeId]);
-      }
+      if (reservedTargetSlot) await releaseNodeAgentSlots(tx, workspaceId, [nodeId]);
       throw err;
     }
-    return {
-      agent_id: result.id,
-      name: result.name,
-      token,
-      ...(cursorHandshake ? { delivery_ack_seq: result.deliveryAckSeq } : {}),
-    };
   });
 }
 
@@ -1331,6 +2059,12 @@ export async function deregisterAgentViaNode(
   return updated ?? null;
 }
 
+/** Inventory proves identity/presence, never a harness's ready state. */
+const spawnReadinessSchema = z.object({ verify_ready: z.literal(true) }).passthrough();
+function requiresSpawnReadiness(input: unknown): boolean {
+  return spawnReadinessSchema.safeParse(input).success;
+}
+
 export async function reconcileInventory(
   db: Db,
   registry: NodeConnectionRegistry,
@@ -1340,10 +2074,6 @@ export async function reconcileInventory(
   inventoryAgents: FleetInventoryAgent[],
   completionDeps?: InvocationCompletionDeps,
 ) {
-  const names = new Set(inventoryAgents.map((agent) => agent.name));
-  const liveInvocationIds = new Set(inventoryAgents.flatMap((agent) => (
-    agent.invocation_id ? [agent.invocation_id] : []
-  )));
   let completedInvocations = 0;
   const [node] = await db
     .select()
@@ -1351,25 +2081,63 @@ export async function reconcileInventory(
     .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
   if (!node) throw codedError(`Node "${nodeId}" not found`, 'node_not_found', 404);
 
-  // Pre-validate every item against the current state BEFORE mutating anything,
-  // so a conflict on a later item can't leave earlier items partially
-  // reconciled (the control handler turns a throw into an error reply). Existing
-  // rows are cached for reuse in the apply pass below.
+  // Validate the whole snapshot before applying it, but isolate rejected
+  // members from valid siblings. A single stale/conflicting identity must stay
+  // fail-closed without preventing every other live worker on the node from
+  // renewing its presence lease. Existing rows are cached for the apply pass.
   const existingByName = new Map<string, typeof agents.$inferSelect>();
+  const acceptedInventoryAgents: FleetInventoryAgent[] = [];
+  const rejectedInventoryErrors: Array<ReturnType<typeof codedError>> = [];
+  const legacyDefaultAdoptions = new Set<string>();
+  let canAdoptLegacyDefault: boolean | undefined;
+  let acceptedExistingAgentCount = 0;
   for (const item of inventoryAgents) {
     const [existing] = await db
       .select()
       .from(agents)
       .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, item.name)));
-    if (!existing) continue;
-    if (existing.providerName !== providerName) {
-      throw codedError(
-        `Agent "${item.name}" belongs to provider "${existing.providerName}"`,
-        'agent_provider_conflict',
-        409,
-      );
+    if (!existing) {
+      acceptedInventoryAgents.push(item);
+      continue;
     }
-    if (existing.status === 'active') {
+    let rejection: ReturnType<typeof codedError> | undefined;
+    if (existing.providerName !== providerName) {
+      // A pre-provider registration can be bound to this node while no
+      // provider is connected, leaving its row on synthetic `default` even
+      // though the surviving session is in the named broker's inventory.
+      // Only the broker on the *same* node may adopt that exact identity, and
+      // only after the old default provider has ceased to be live. Other
+      // provider/name conflicts retain the fail-closed behavior.
+      const legacyDefaultClaim = existing.providerName === DEFAULT_PROVIDER_NAME
+        && providerName === 'broker'
+        && existing.locationType === 'via_node'
+        && existing.locationNodeId === nodeId
+        && existing.id === item.agent_id;
+      if (legacyDefaultClaim && canAdoptLegacyDefault === undefined) {
+        const providerRows = await db
+          .select()
+          .from(nodeProviders)
+          .where(and(
+            eq(nodeProviders.workspaceId, workspaceId),
+            eq(nodeProviders.nodeId, nodeId),
+            inArray(nodeProviders.name, [DEFAULT_PROVIDER_NAME, 'broker']),
+          ));
+        const defaultProvider = providerRows.find((row) => row.name === DEFAULT_PROVIDER_NAME);
+        const brokerProvider = providerRows.find((row) => row.name === 'broker');
+        canAdoptLegacyDefault = !!brokerProvider && isProviderLive(brokerProvider)
+          && (!defaultProvider || !isProviderLive(defaultProvider));
+      }
+      if (legacyDefaultClaim && canAdoptLegacyDefault) {
+        legacyDefaultAdoptions.add(item.name);
+      } else {
+        rejection = codedError(
+          `Agent "${item.name}" belongs to provider "${existing.providerName}"`,
+          'agent_provider_conflict',
+          409,
+        );
+      }
+    }
+    if (!rejection && existing.status === 'active') {
       const [boundNode] = await db
         .select()
         .from(nodes)
@@ -1391,29 +2159,70 @@ export async function reconcileInventory(
           existing_location_type: existing.locationType,
           existing_location_node_id: existing.locationNodeId,
         });
-        throw codedError(`Agent "${item.name}" is already active on another live location`, 'agent_location_conflict', 409);
+        rejection = codedError(
+          `Agent "${item.name}" is already active on another live location`,
+          'agent_location_conflict',
+          409,
+        );
       }
     }
-    if (existing.id !== item.agent_id) {
-      throw codedError(
+    if (!rejection && existing.id !== item.agent_id) {
+      rejection = codedError(
         `Inventory identity for agent "${item.name}" does not match its registered agent_id`,
         'agent_identity_mismatch',
         409,
       );
     }
+    if (rejection) {
+      console.warn('[node.inventory] isolated rejected member', {
+        workspace_id: workspaceId,
+        node_id: nodeId,
+        provider_name: providerName,
+        agent_id: item.agent_id,
+        agent_name: item.name,
+        code: rejection.code,
+      });
+      rejectedInventoryErrors.push(rejection);
+      continue;
+    }
+    acceptedInventoryAgents.push(item);
+    acceptedExistingAgentCount++;
     existingByName.set(item.name, existing);
   }
+
+  // Preserve the existing all-or-nothing error contract when the snapshot has
+  // no trustworthy member to apply. Mixed snapshots instead renew the valid
+  // subset and report how many members were rejected.
+  if (acceptedExistingAgentCount === 0 && rejectedInventoryErrors.length > 0) {
+    throw rejectedInventoryErrors[0];
+  }
+
+  // A rejected member is still PRESENT on the node — its process reported the
+  // inventory; only its identity claim is stale or conflicting. The missing
+  // sweep below must therefore run against every REPORTED name, not the
+  // accepted subset: excluding a rejected-but-present member there would take
+  // its real live row offline and emit a false `agent.exited`, exactly the
+  // outage shape the isolation change was meant to prevent. Rejected members
+  // stay excluded from reconciliation and delivery readiness via
+  // `acceptedInventoryAgents` / `liveInvocationIds`.
+  const reportedNames = new Set(inventoryAgents.map((agent) => agent.name));
+  const liveInvocationIds = new Set(acceptedInventoryAgents.flatMap((agent) => (
+    agent.invocation_id ? [agent.invocation_id] : []
+  )));
 
   const openInvocations = await db
     .select({
       id: actionInvocations.id,
       workspaceId: actionInvocations.workspaceId,
+      actionId: actionInvocations.actionId,
+      invocationOrigin: actionInvocations.invocationOrigin,
       actionName: actionInvocations.actionName,
       callerId: actionInvocations.callerId,
       input: actionInvocations.input,
       status: actionInvocations.status,
       dispatchedNodeId: actionInvocations.dispatchedNodeId,
       dispatchedProvider: actionInvocations.dispatchedProvider,
+      providerAcceptedAttempt: actionInvocations.providerAcceptedAttempt,
       spawnReservedAt: actionInvocations.spawnReservedAt,
       attemptedNodeIds: actionInvocations.attemptedNodeIds,
       dispatchAttempts: actionInvocations.dispatchAttempts,
@@ -1425,27 +2234,64 @@ export async function reconcileInventory(
       eq(actionInvocations.dispatchedProvider, providerName),
       inArray(actionInvocations.status, ['pending', 'dispatched']),
     ));
-  const providerInvocationIds = new Set(openInvocations.map((invocation) => invocation.id));
+  const providerInvocationIds = new Set(openInvocations
+    .filter((invocation) => !requiresSpawnReadiness(invocation.input))
+    .map((invocation) => invocation.id));
 
   const reconciledAgentIds: string[] = [];
   const newlyRoutedAgentIds: string[] = [];
-  for (const item of inventoryAgents) {
+  for (const item of acceptedInventoryAgents) {
     const existing = existingByName.get(item.name);
     if (existing) {
       const activeNodeIds = await activeBindingNodeIdsForAgent(db, workspaceId, existing.id);
       const targetWasActive = activeNodeIds.includes(nodeId);
       const wasRoutableThroughProvider = existing.locationType === 'via_node'
         && existing.locationNodeId === nodeId
+        && existing.providerName === providerName
         && targetWasActive;
       let reservedTargetSlot = false;
       try {
         if (!targetWasActive) {
-          await reserveNodeAgentSlot(db, workspaceId, node);
+          await reserveNodeAgentSlot(db, workspaceId, node, {
+            invocationId: item.invocation_id,
+            providerName,
+            agentName: item.name,
+          });
           reservedTargetSlot = true;
         }
-        await db
+        const adoptingLegacyDefault = legacyDefaultAdoptions.has(item.name);
+        // The earlier liveness check is for a useful error decision. This
+        // compare-and-set fences broker liveness loss, a default provider
+        // reconnecting, and concurrent ownership changes during the apply pass.
+        const adoptionNow = Date.now();
+        const noLiveDefaultProvider = notExists(db
+          .select({ id: nodeProviders.id })
+          .from(nodeProviders)
+          .where(and(
+            eq(nodeProviders.workspaceId, workspaceId),
+            eq(nodeProviders.nodeId, nodeId),
+            eq(nodeProviders.name, DEFAULT_PROVIDER_NAME),
+            eq(nodeProviders.status, 'online'),
+            eq(nodeProviders.handlersLive, true),
+            gte(nodeProviders.lastHeartbeatAt, new Date(adoptionNow - NODE_LIVENESS_TTL_MS)),
+            lte(nodeProviders.lastHeartbeatAt, new Date(adoptionNow)),
+          )));
+        const liveBrokerProvider = exists(db
+          .select({ id: nodeProviders.id })
+          .from(nodeProviders)
+          .where(and(
+            eq(nodeProviders.workspaceId, workspaceId),
+            eq(nodeProviders.nodeId, nodeId),
+            eq(nodeProviders.name, 'broker'),
+            eq(nodeProviders.status, 'online'),
+            eq(nodeProviders.handlersLive, true),
+            gte(nodeProviders.lastHeartbeatAt, new Date(adoptionNow - NODE_LIVENESS_TTL_MS)),
+            lte(nodeProviders.lastHeartbeatAt, new Date(adoptionNow)),
+          )));
+        const [updated] = await db
           .update(agents)
           .set({
+            ...(adoptingLegacyDefault ? { providerName } : {}),
             status: 'active',
             lastSeen: new Date(),
             locationType: 'via_node',
@@ -1453,7 +2299,21 @@ export async function reconcileInventory(
             originNodeId: existing.originNodeId ?? nodeId,
             sessionRef: item.session_ref ?? existing.sessionRef,
           })
-          .where(eq(agents.id, existing.id));
+          .where(and(
+            eq(agents.workspaceId, workspaceId),
+            eq(agents.id, existing.id),
+            ...(adoptingLegacyDefault ? [
+              eq(agents.providerName, DEFAULT_PROVIDER_NAME),
+              eq(agents.locationType, 'via_node'),
+              eq(agents.locationNodeId, nodeId),
+              noLiveDefaultProvider,
+              liveBrokerProvider,
+            ] : []),
+          ))
+          .returning({ id: agents.id });
+        if (!updated) {
+          throw codedError(`Agent "${item.name}" changed ownership during inventory reconciliation`, 'agent_provider_conflict', 409);
+        }
         await upsertAgentNodeBinding(db, workspaceId, existing, nodeId, {
           sessionRef: item.session_ref ?? existing.sessionRef,
           deactivateExisting: true,
@@ -1496,7 +2356,7 @@ export async function reconcileInventory(
       eq(agents.providerName, providerName),
       eq(agents.status, 'active'),
     ));
-  const missingAgents = nodeAgents.filter((agent) => !names.has(agent.name));
+  const missingAgents = nodeAgents.filter((agent) => !reportedNames.has(agent.name));
   const missing = missingAgents.map((agent) => agent.id);
   if (missing.length > 0) {
     await db
@@ -1518,7 +2378,10 @@ export async function reconcileInventory(
 
   let rescheduledInvocations = 0;
   for (const invocation of openInvocations) {
-    if (liveInvocationIds.has(invocation.id)) continue;
+    // A live broker owns the bounded readiness wait and cleanup. A transient
+    // empty inventory during launch/teardown must not redispatch this spawn.
+    // Actual provider disconnect and invocation expiry retain their own recovery.
+    if (liveInvocationIds.has(invocation.id) || requiresSpawnReadiness(invocation.input)) continue;
     try {
       if (await rescheduleNodeInvocation(db, registry, invocation)) {
         rescheduledInvocations++;
@@ -1540,6 +2403,7 @@ export async function reconcileInventory(
   return {
     reply: {
       rebound_agents: reconciledAgentIds.length,
+      rejected_agents: rejectedInventoryErrors.length,
       open_invocations: openInvocations.length,
       completed_invocations: completedInvocations,
       rescheduled_invocations: rescheduledInvocations,
@@ -1549,16 +2413,193 @@ export async function reconcileInventory(
   };
 }
 
+/** Default page size for the explicit, bounded node-history cursor contract. */
+export const NODE_LIST_HISTORY_DEFAULT_LIMIT = 100;
+/** Hard cap on a single history page, regardless of caller-requested `limit`. */
+export const NODE_LIST_HISTORY_MAX_LIMIT = 500;
+
+export interface ListNodesFilters {
+  capability?: string;
+  name?: string;
+  /**
+   * Selects on computed liveness (persisted `status` plus a fresh heartbeat
+   * within `NODE_LIVENESS_TTL_MS`), pushed into SQL rather than applied after
+   * a full-table fetch. Omitted: no liveness selection (legacy behavior).
+   */
+  status?: 'online' | 'offline';
+  /**
+   * Switches the response to the bounded, paginated history contract:
+   * `{ nodes, nextCursor }` instead of a bare array, ordered by `id` so a
+   * caller can page through every historical row exactly once with no gaps
+   * or silent truncation, however many rows the workspace has retained.
+   */
+  history?: boolean;
+  /** Resume point for `history`: the `id` of the last row already consumed. */
+  cursor?: string | null;
+  /** Page size for `history`, clamped to [1, NODE_LIST_HISTORY_MAX_LIMIT]. */
+  limit?: number;
+  /**
+   * Restricts the result to nodes with at least one active binding to one of
+   * these agent ids — the SQL-pushed form of an observer token's `agent_ids`
+   * filter. Applied as a WHERE condition alongside `name`/`capability`/`status`,
+   * *before* the cursor/limit page is computed, so:
+   *   - a hidden node's id is never selected into the page, let alone into
+   *     `nextCursor` — an observer can't learn a hidden node's id or presence
+   *     by watching the cursor advance past it;
+   *   - the page-then-filter ordering can't shrink a page's visible count
+   *     below `limit` while still reporting more rows exist, and can't stop
+   *     paging while an authorized row beyond the current page is unvisited —
+   *     the authorization predicate is part of what "the next row" means.
+   * An empty array (as opposed to undefined) is a real, deliberate filter
+   * that authorizes nothing.
+   */
+  observerAgentIds?: string[];
+}
+
+export interface ListNodesHistoryPage {
+  nodes: ReturnType<typeof publicNode>[];
+  nextCursor: string | null;
+}
+
+/**
+ * Pushes a capability match (string or `{ name }` shape) into a SQL EXISTS
+ * clause. `cap.value` is only a valid `json_extract` target when the array
+ * element is itself a JSON object; a legacy/primitive string element (the
+ * common shape) is not valid JSON on its own (e.g. `read` vs `"read"`), and
+ * `json_extract` raises `malformed JSON` if evaluated against it. Gate the
+ * object-shape branch behind `json_valid` so `AND` short-circuits before
+ * `json_extract` ever sees a bare string, leaving the string-equality branch
+ * to match primitive capabilities exactly as before.
+ */
+function capabilityMatchCondition(capability: string) {
+  return sql`EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(${nodes.capabilities}) THEN ${nodes.capabilities} ELSE '[]' END) AS cap
+    WHERE cap.value = ${capability}
+       OR (json_valid(cap.value) AND json_extract(cap.value, '$.name') = ${capability}))`;
+}
+
+/**
+ * Pushes an observer token's `agent_ids` filter into a SQL EXISTS clause: a
+ * node is visible only if it has at least one *active* binding to one of the
+ * authorized agent ids. `agentIds: []` (filter present but empty) matches no
+ * node, mirroring `observerAllowsAgent`'s fail-closed behavior for an empty
+ * allow-list rather than falling open.
+ */
+function observerNodeVisibilityCondition(agentIds: string[]) {
+  if (agentIds.length === 0) return sql`0`;
+  return sql`EXISTS (
+    SELECT 1 FROM ${agentNodeBindings} AS b
+    JOIN json_each(${JSON.stringify(agentIds)}) AS allowed
+      ON allowed.value = b.agent_id
+    WHERE b.node_id = ${nodes.id}
+      AND b.status = 'active'
+  )`;
+}
+
+/**
+ * Active-agent counts for a page of nodes, scoped to an observer's
+ * authorized agent ids, in one query — not one `listNodeAgents` query per
+ * node. Used to override each visible node's `active_agents` with the count
+ * the observer is actually authorized to see (mirrors the prior per-node
+ * `filterNodeAgentsForObserver(...).length` behavior).
+ */
+async function visibleActiveAgentCounts(
+  db: Db,
+  workspaceId: string,
+  nodeIds: string[],
+  agentIds: string[],
+): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  if (nodeIds.length === 0 || agentIds.length === 0) return counts;
+  // Both `nodeIds` and `agentIds` are bound as single JSON-array parameters
+  // (via `json_each`) rather than expanded through `inArray`/`IN (...)`,
+  // which would otherwise emit one bind parameter per id. A history page or
+  // a high-cardinality legacy (unpaginated) observer request can carry
+  // hundreds of node ids, and D1 caps a statement at 100 bound parameters —
+  // two JSON binds keep this query's parameter count constant regardless of
+  // how many nodes or agents are being counted.
+  const rows = await db
+    .select({ nodeId: agentNodeBindings.nodeId, count: sql<number>`count(*)` })
+    .from(agentNodeBindings)
+    .where(and(
+      eq(agentNodeBindings.workspaceId, workspaceId),
+      eq(agentNodeBindings.status, 'active'),
+      sql`${agentNodeBindings.nodeId} IN (SELECT value FROM json_each(${JSON.stringify(nodeIds)}))`,
+      sql`${agentNodeBindings.agentId} IN (SELECT value FROM json_each(${JSON.stringify(agentIds)}))`,
+    ))
+    .groupBy(agentNodeBindings.nodeId);
+  for (const row of rows) counts.set(row.nodeId, Number(row.count));
+  return counts;
+}
+
+/** Liveness predicate mirroring {@link isNodeLive}, pushed into SQL. */
+function livenessCondition(status: 'online' | 'offline', now: Date) {
+  const staleBefore = new Date(now.getTime() - NODE_LIVENESS_TTL_MS);
+  const live = and(
+    eq(nodes.status, 'online'),
+    isNotNull(nodes.lastHeartbeatAt),
+    lte(nodes.lastHeartbeatAt, now),
+    gte(nodes.lastHeartbeatAt, staleBefore),
+  )!;
+  return status === 'online' ? live : or(
+    ne(nodes.status, 'online'),
+    isNull(nodes.lastHeartbeatAt),
+    lt(nodes.lastHeartbeatAt, staleBefore),
+    // A heartbeat clock skewed into the future never counts as live either.
+    gt(nodes.lastHeartbeatAt, now),
+  )!;
+}
+
 export async function listNodes(
   db: Db,
   workspaceId: string,
-  filters: { capability?: string; name?: string } = {},
-) {
-  const rows = await db.select().from(nodes).where(eq(nodes.workspaceId, workspaceId));
-  return rows
-    .filter((node) => !filters.name || node.name === filters.name)
-    .filter((node) => !filters.capability || nodeHasCapability(node, filters.capability))
-    .map(publicNode);
+  filters: ListNodesFilters = {},
+): Promise<ListNodesHistoryPage> {
+  const now = new Date();
+  const conditions = [eq(nodes.workspaceId, workspaceId)];
+  if (filters.name) conditions.push(eq(nodes.name, filters.name));
+  if (filters.capability) conditions.push(capabilityMatchCondition(filters.capability));
+  if (filters.status) conditions.push(livenessCondition(filters.status, now));
+  // Observer authorization is a WHERE condition, evaluated in the same query
+  // as every other filter and therefore before pagination/cursor computation
+  // below — a hidden node is excluded from row selection entirely, so it can
+  // never land in `nextCursor`, and cursor advancement always tracks "the
+  // next authorized row" rather than "the next row, authorized or not".
+  if (filters.observerAgentIds) conditions.push(observerNodeVisibilityCondition(filters.observerAgentIds));
+
+  if (!filters.history) {
+    // Legacy/default shape: a bare array, unpaginated, matching every caller
+    // that predates the history/status selector. `name`/`capability`/`status`
+    // are still evaluated in SQL instead of after a full-table fetch.
+    const rows = await db.select().from(nodes).where(and(...conditions));
+    const page = rows.map((row) => publicNode(row, now.getTime()));
+    if (!filters.observerAgentIds) return { nodes: page, nextCursor: null };
+    const counts = await visibleActiveAgentCounts(db, workspaceId, rows.map((row) => row.id), filters.observerAgentIds);
+    return {
+      nodes: page.map((node) => ({ ...node, active_agents: counts.get(node.id) ?? 0 })),
+      nextCursor: null,
+    };
+  }
+
+  if (filters.cursor) conditions.push(gt(nodes.id, filters.cursor));
+  const limit = Math.min(
+    Math.max(1, filters.limit ?? NODE_LIST_HISTORY_DEFAULT_LIMIT),
+    NODE_LIST_HISTORY_MAX_LIMIT,
+  );
+  const rows = await db
+    .select()
+    .from(nodes)
+    .where(and(...conditions))
+    .orderBy(asc(nodes.id))
+    .limit(limit + 1);
+  const page = rows.slice(0, limit);
+  const nextCursor = rows.length > limit ? page[page.length - 1].id : null;
+  const publicPage = page.map((row) => publicNode(row, now.getTime()));
+  if (!filters.observerAgentIds) return { nodes: publicPage, nextCursor };
+  const counts = await visibleActiveAgentCounts(db, workspaceId, page.map((row) => row.id), filters.observerAgentIds);
+  return {
+    nodes: publicPage.map((node) => ({ ...node, active_agents: counts.get(node.id) ?? 0 })),
+    nextCursor,
+  };
 }
 
 export async function getPublicNode(db: Db, workspaceId: string, name: string) {
@@ -1573,6 +2614,68 @@ async function readNodeStatus(db: Db, workspaceId: string, nodeId: string): Prom
     .from(nodes)
     .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
   return row?.status;
+}
+
+async function readHeartbeatDrainState(
+  db: Db,
+  workspaceId: string,
+  nodeId: string,
+  providerName: string,
+) {
+  const [nodeRows, providerRows] = await Promise.all([
+    db
+      .select({
+        status: nodes.status,
+        handlersLive: nodes.handlersLive,
+        maxAgents: nodes.maxAgents,
+        activeAgents: nodes.activeAgents,
+        reservedAgents: nodes.reservedAgents,
+        lastHeartbeatAt: nodes.lastHeartbeatAt,
+      })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId))),
+    db
+      .select({
+        status: nodeProviders.status,
+        handlersLive: nodeProviders.handlersLive,
+        lastHeartbeatAt: nodeProviders.lastHeartbeatAt,
+      })
+      .from(nodeProviders)
+      .where(and(
+        eq(nodeProviders.workspaceId, workspaceId),
+        eq(nodeProviders.nodeId, nodeId),
+        eq(nodeProviders.name, providerName),
+      )),
+  ]);
+  return { node: nodeRows[0], provider: providerRows[0] };
+}
+
+/**
+ * A steady heartbeat only refreshes liveness metadata; draining every such
+ * frame turns node cadence into a workspace-wide pending-invocation scan. A
+ * drain is needed only when the heartbeat makes queued work dispatchable.
+ */
+function shouldDrainAfterHeartbeat(
+  prior: Awaited<ReturnType<typeof readHeartbeatDrainState>>,
+  current: ReturnType<typeof publicNode> | null,
+  message: FleetNodeHeartbeatMessage,
+): boolean {
+  if (!current?.live) return false;
+  if (!prior.node || !isNodeLive(prior.node)) return true;
+  if (!prior.node.handlersLive && current.handlers_live) return true;
+
+  // A provider can become dispatchable while another provider kept the node's
+  // aggregate handlers_live flag true, so preserve the provider transition too.
+  if (
+    message.handlers_live
+    && (!prior.provider || !isProviderLive(prior.provider) || !prior.provider.handlersLive)
+  ) {
+    return true;
+  }
+
+  const currentHasCapacity = current.max_agents === 0
+    || current.active_agents + prior.node.reservedAgents < current.max_agents;
+  return !nodeHasCapacity(prior.node) && currentHasCapacity;
 }
 
 /**
@@ -1673,12 +2776,25 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           (capability) => capability.accepted && capability.name === FLEET_DELIVERY_CURSOR_CAPABILITY,
         );
         if (args.connectionId && args.registry.attachProvider) {
+          const acceptedActions = new Set(
+            acceptance
+              .filter((capability) => capability.accepted && capability.kind === 'action')
+              .map((capability) => capability.name),
+          );
+          const callerAwareActions = message.capabilities
+            .filter((capability) => (
+              acceptedActions.has(capability.name)
+              && capability.metadata?.[FLEET_ACTION_CALLER_METADATA_KEY]
+                === FLEET_ACTION_CALLER_METADATA_VERSION
+            ))
+            .map((capability) => capability.name);
           args.registry.attachProvider(
             args.workspaceId,
             args.nodeId,
             provider.name,
             provider.instance_id,
             args.connectionId,
+            callerAwareActions,
           );
         }
         args.registry.setProviderDeliveryReadiness?.(
@@ -1697,6 +2813,14 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
             ...registered.node,
             provider: registered.provider,
             accepted_capabilities: acceptance,
+            // Only claim authenticated provider registration when this adapter
+            // actually bound the connection. Echoed client capabilities are not
+            // evidence of a server contract; legacy adapters omit the field.
+            ...(args.connectionId
+              && args.registry.providerNameForConnection?.(args.connectionId) === provider.name
+              && args.registry.isProviderAttached?.(args.workspaceId, args.nodeId, provider.name)
+              ? { registration_contract: NODE_REGISTRATION_CONTRACT_V1 }
+              : {}),
           },
         });
         // The node row is already persisted online, so emit the durable
@@ -1706,7 +2830,9 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           .catch((err) => console.error('[node.status] online event emission failed', err));
         // Node is now marked online: flush any queued action.invoke frames so
         // spawns queued while it was offline can reserve capacity and dispatch.
-        await args.registry.drainNode(args.workspaceId, args.nodeId);
+        // Reconnect makes deferred work dispatchable too; bypass a retry delay
+        // that may have been armed only because the prior socket was unavailable.
+        await args.registry.drainNode(args.workspaceId, args.nodeId, { includeDeferred: true });
         // The success reply was already sent above; keep the pending flush
         // best-effort so a delivery error cannot trigger a second error reply
         // for the same request id from the outer catch.
@@ -1726,16 +2852,24 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
         return;
       }
       case 'node.heartbeat': {
-        const priorStatus = await readNodeStatus(args.db, args.workspaceId, args.nodeId);
+        const prior = await readHeartbeatDrainState(
+          args.db,
+          args.workspaceId,
+          args.nodeId,
+          frameProviderName,
+        );
         const beat = await heartbeatNode(args.db, args.workspaceId, args.nodeId, frameProviderName, message);
         // The node row is already persisted, so emit the durable online
         // transition before draining: a drainNode rejection must not skip the
         // node.status.online event. Isolated so its own failure can't either.
-        await emitNodeOnlineTransition(args.completionDeps, args.workspaceId, priorStatus, beat)
+        await emitNodeOnlineTransition(args.completionDeps, args.workspaceId, prior.node?.status, beat)
           .catch((err) => console.error('[node.status] online event emission failed', err));
-        // Heartbeat refreshes online/capacity state; re-drain as a backstop in
-        // case a queued spawn could not reserve capacity at register time.
-        await args.registry.drainNode(args.workspaceId, args.nodeId);
+        if (shouldDrainAfterHeartbeat(prior, beat, message)) {
+          // A readiness transition invalidates the old backoff condition. Include
+          // retry-delayed rows in this one bounded pass so a transition just
+          // before retryAfterAt cannot strand work until another reconnect.
+          await args.registry.drainNode(args.workspaceId, args.nodeId, { includeDeferred: true });
+        }
         return;
       }
       case 'node.deregister':
@@ -1809,8 +2943,46 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
         );
         return;
       }
+      case 'agent.recover': {
+        const recovered = await recoverAgentViaNode(
+          args.db,
+          args.workspaceId,
+          args.nodeId,
+          frameProviderName,
+          message,
+          { deliveryCursorSupported: supportsProviderDeliveryReadiness(args.registry) },
+        );
+        const replySent = sendControl(args.socket, {
+          v: 1,
+          id: requestId(message),
+          type: 'reply',
+          ok: true,
+          data: recovered,
+        });
+        if (!replySent) return;
+        args.registry.markProviderAgentsDeliveryReady?.(
+          args.workspaceId,
+          args.nodeId,
+          frameProviderName,
+          args.connectionId,
+          [recovered.agent_id],
+        );
+        await deliverPendingToNode(
+          args.db,
+          args.registry,
+          args.workspaceId,
+          args.nodeId,
+          { providerName: frameProviderName, agentIds: [recovered.agent_id] },
+        );
+        return;
+      }
       case 'agent.deregister':
         await deregisterAgentViaNode(args.db, args.workspaceId, args.nodeId, message, args.completionDeps);
+        // A caller deleting an owned identity must know the live binding is gone
+        // before invoking release. Older fire-and-forget callers omit the id.
+        if (message.id) {
+          sendControl(args.socket, { v: 1, id: message.id, type: 'reply', ok: true, data: { deregistered: true } });
+        }
         return;
       case 'inventory.sync': {
         const result = await reconcileInventory(
@@ -1830,15 +3002,6 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           data: result.reply,
         });
         if (!replySent) return;
-        const newlyReadyAgentIds = result.reconciledAgentIds.filter((agentId) => (
-          !isProviderAgentDeliveryReady(
-            args.registry,
-            args.workspaceId,
-            args.nodeId,
-            frameProviderName,
-            agentId,
-          )
-        ));
         args.registry.markProviderAgentsDeliveryReady?.(
           args.workspaceId,
           args.nodeId,
@@ -1847,20 +3010,73 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           result.reconciledAgentIds,
         );
         // Inventory represents sessions that survived a transport reconnect and
-        // therefore retain their in-memory cursors. Restrict replay to exactly
-        // those provider-owned identities; restarted sessions not in inventory
-        // become ready individually through `agent.register`.
-        const replayAgentIds = [...new Set([...newlyReadyAgentIds, ...result.newlyRoutedAgentIds])];
+        // therefore retain their in-memory cursors. Restarted sessions not in
+        // the inventory stay excluded either way — they become ready
+        // individually through `agent.register`.
+        //
+        // A cursor-negotiated connection receives NO replay at `node.register`
+        // (each identity is seeded by its own cursor-bearing reply), so this
+        // certification is the whole node's only reconnect-replay trigger and
+        // must cover every certified identity. Scoping it to a readiness/routing
+        // TRANSITION instead stranded a reconnecting node's entire outage
+        // backlog whenever the socket owner already reported those identities as
+        // delivery-ready — an out-of-process owner whose ready-set is keyed per
+        // node+provider rather than per connection. The diff came back empty,
+        // the drain ran with an empty scope, and rows queued during the outage
+        // sat unsent until their mailbox TTL.
+        //
+        // A legacy immediate-delivery connection already had the whole node
+        // flushed to it at `node.register` and gates nothing afterwards, so only
+        // identities this sync newly routed here still need a push; re-sending
+        // the rest would duplicate that flush.
+        //
+        // Either way replay stays bounded, ordered oldest-first, gated per
+        // identity on delivery readiness inside the drain, and deduped by the
+        // cumulative delivery cursor, so an identity that is already drained and
+        // acked re-sends nothing.
+        // The mode is the CONNECTION's, recovered from the registry that
+        // `node.register` configured it on — not re-derived from roster state
+        // that a heartbeat can rewrite between registration and certification.
+        const cursorGated = await connectionNegotiatedDeliveryCursor(
+          args.db,
+          args.registry,
+          args.workspaceId,
+          args.nodeId,
+          frameProviderName,
+          args.connectionId,
+        );
         await deliverPendingToNode(
           args.db,
           args.registry,
           args.workspaceId,
           args.nodeId,
-          { providerName: frameProviderName, agentIds: replayAgentIds },
+          {
+            providerName: frameProviderName,
+            agentIds: cursorGated ? result.reconciledAgentIds : result.newlyRoutedAgentIds,
+          },
         );
         return;
       }
+      case 'action.accept': {
+        const accepted = await acceptTaskInvocation(args.db, args.workspaceId, args.nodeId, frameProviderName, message);
+        sendControl(args.socket, { v: 1, id: message.id, type: 'reply', ok: true, data: accepted });
+        return;
+      }
       case 'action.result': {
+        const task = await completeTaskInvocation(args.db, args.workspaceId, args.nodeId, frameProviderName, message);
+        if (task) {
+          // The state CAS has committed before this reply. A lost reply is
+          // reconciled by replaying the same fenced result or acceptance.
+          sendControl(args.socket, { v: 1, id: message.id, type: 'reply', ok: true, data: task.receipt });
+          if (task.completed && args.completionDeps) {
+            const row = task.completed;
+            await emitInvocationCompletionEffects(args.completionDeps, args.workspaceId, {
+              invocation_id: row.id, action_name: row.actionName, caller_id: row.callerId,
+              status: row.status, output: row.output, error: row.error,
+            });
+          }
+          return;
+        }
         const completed = await completeNodeInvocation(
           args.db,
           args.registry,

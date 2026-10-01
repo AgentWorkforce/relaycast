@@ -1,5 +1,12 @@
 import { describe, it, expect, expectTypeOf } from 'vitest';
-import { DeliverySchema, DeliveryItemSchema, ServerEventSchema } from '../index.js';
+import {
+  DeliverySchema,
+  DeliveryItemSchema,
+  ServerEventSchema,
+  SessionMessagesResultSchema,
+  WorkspaceSchema,
+  CreateWorkspaceResponseSchema,
+} from '../index.js';
 import type {
   Workspace,
   CreateWorkspaceRequest,
@@ -71,13 +78,41 @@ describe('Type definitions', () => {
     expectTypeOf<'enterprise'>().toMatchTypeOf<Workspace['plan']>();
   });
 
+  it('defaults attribution fields for responses from pre-attribution engines', () => {
+    const workspace = WorkspaceSchema.parse({
+      id: 'rw_legacy',
+      name: 'legacy',
+      api_key_hash: 'hash',
+      system_prompt: null,
+      plan: 'free',
+      created_at: '2026-08-18T00:00:00.000Z',
+      metadata: {},
+    });
+    expect(workspace).toMatchObject({
+      provenance: null,
+      usage_classification: 'unknown',
+      classification_source: 'unclassified',
+      classification_reason: null,
+      classified_at: null,
+    });
+  });
+
   it('CreateWorkspaceRequest has name', () => {
     expectTypeOf<CreateWorkspaceRequest>().toHaveProperty('name');
+    expectTypeOf<CreateWorkspaceRequest>().toHaveProperty('expires_in_seconds');
   });
 
   it('CreateWorkspaceResponse has api_key', () => {
     expectTypeOf<CreateWorkspaceResponse>().toHaveProperty('api_key');
     expectTypeOf<CreateWorkspaceResponse>().toHaveProperty('workspace_id');
+    expectTypeOf<CreateWorkspaceResponse>().toHaveProperty('expires_at');
+  });
+
+  it('CreateWorkspaceResponse requires the returned api_key', () => {
+    expect(() => CreateWorkspaceResponseSchema.parse({
+      workspace_id: 'ws_missing_key',
+      created_at: '2026-09-05T00:00:00.000Z',
+    })).toThrow();
   });
 
   it('WorkspaceLookup exposes public lookup fields', () => {
@@ -158,6 +193,26 @@ describe('Type definitions', () => {
     expectTypeOf<MessageWithMeta>().toHaveProperty('reactions');
     expectTypeOf<MessageWithMeta>().toHaveProperty('read_by_count');
     expectTypeOf<MessageWithMeta>().toHaveProperty('attachments');
+  });
+
+  it('rejects replayable availability when the retention boundary is unknown', () => {
+    const parsed = SessionMessagesResultSchema.safeParse({
+      session_ref: 'session-1',
+      availability: 'retained',
+      retention: {
+        policy: 'unknown',
+        message_ttl_days: null,
+        retained_since: null,
+        source: 'unknown',
+        reason: 'boundary_unavailable',
+      },
+      session_started_at: '2026-08-18T00:00:00.000Z',
+      session_last_message_at: '2026-08-18T00:01:00.000Z',
+      messages: [],
+      page: { next_cursor: null, has_more: false },
+    });
+
+    expect(parsed.success).toBe(false);
   });
 
   // ============================================

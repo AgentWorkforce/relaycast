@@ -59,16 +59,21 @@ export class InProcessKeyValueStore implements KeyValueStore {
     this.store.delete(key);
   }
 
-  async increment(key: string, delta: number): Promise<number> {
+  async increment(key: string, delta: number, ttlSeconds?: number): Promise<number> {
     // Single-process: there is no await between read and write, so this is
     // atomic with respect to other JS turns — no lost-update window.
-    const raw = this.live(key)?.value;
+    const existing = this.live(key);
     // Treat missing or non-integer values as 0 (avoid parseInt's partial parse
     // of e.g. "12abc" → 12).
+    const raw = existing?.value;
     const current = raw !== undefined && /^-?\d+$/.test(raw) ? parseInt(raw, 10) : 0;
     const next = current + delta;
-    const existing = this.store.get(key);
-    this.store.set(key, { value: String(next), expiresAt: existing?.expiresAt ?? null });
+    // Only a newly created key takes the TTL; re-stamping it on every increment
+    // would let a counter keep itself alive indefinitely.
+    const expiresAt = existing
+      ? existing.expiresAt
+      : ttlSeconds !== undefined ? Date.now() + ttlSeconds * 1000 : null;
+    this.store.set(key, { value: String(next), expiresAt });
     return next;
   }
 }

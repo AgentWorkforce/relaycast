@@ -1,0 +1,48 @@
+{
+  "id": "compact_fpw0o45zzacc",
+  "version": 1,
+  "type": "compacted",
+  "compactedAt": "2026-08-20T10:45:34.490Z",
+  "sourceTrajectories": [
+    "traj_81fds1zrt376"
+  ],
+  "dateRange": {
+    "start": "2026-08-20T10:44:26.483Z",
+    "end": "2026-08-20T10:44:37.424Z"
+  },
+  "summary": {
+    "totalDecisions": 2,
+    "totalEvents": 2,
+    "uniqueAgents": [
+      "default"
+    ]
+  },
+  "decisionGroups": [
+    {
+      "category": "security",
+      "decisions": [
+        {
+          "question": "Made registration create-only and moved all identity replacement to explicit proof-authorized routes",
+          "chosen": "Made registration create-only and moved all identity replacement to explicit proof-authorized routes",
+          "reasoning": "The accepted issue decision forbids name, liveness, offline state, and caller-controlled metadata from acting as identity authority",
+          "fromTrajectory": "traj_81fds1zrt376"
+        }
+      ]
+    },
+    {
+      "category": "database",
+      "decisions": [
+        {
+          "question": "Stored only SHA-256 recovery verifiers and paired token mutations with append-only audit writes",
+          "chosen": "Stored only SHA-256 recovery verifiers and paired token mutations with append-only audit writes",
+          "reasoning": "Recovery secrets must remain server-owned and D1/SQLite changes must be atomic",
+          "fromTrajectory": "traj_81fds1zrt376"
+        }
+      ]
+    }
+  ],
+  "keyLearnings": [],
+  "keyFindings": [],
+  "filesAffected": [],
+  "commits": []
+}

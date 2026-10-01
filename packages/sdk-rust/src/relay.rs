@@ -1,9 +1,11 @@
 //! Main RelayCast client for workspace-level operations.
 
 use crate::agent::AgentClient;
-use crate::client::{ClientOptions, HttpClient};
+use crate::client::{ClientOptions, HttpClient, RequestOptions};
 use crate::error::{RelayError, Result};
 use crate::types::*;
+use serde::Serialize;
+use url::Url;
 
 use crate::DEFAULT_BASE_URL;
 
@@ -12,6 +14,46 @@ const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/sdk-rust";
 
 fn strip_hash(channel: &str) -> &str {
     channel.strip_prefix('#').unwrap_or(channel)
+}
+
+fn validate_anonymous_keyed_bootstrap_destination(base_url: &str) -> Result<Url> {
+    let parsed = Url::parse(base_url).map_err(|_| {
+        RelayError::InvalidResponse(
+            "Anonymous keyed workspace bootstrap requires a valid baseUrl".to_string(),
+        )
+    })?;
+    let hostname = parsed
+        .host_str()
+        .unwrap_or_default()
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    let loopback_http =
+        parsed.scheme() == "http" && matches!(hostname.as_str(), "localhost" | "127.0.0.1" | "::1");
+
+    if parsed.scheme() != "https" && !loopback_http {
+        return Err(RelayError::InvalidResponse(
+            "Anonymous keyed workspace bootstrap requires an HTTPS self-hosted baseUrl (or loopback HTTP for local development)".to_string(),
+        ));
+    }
+
+    Ok(parsed)
+}
+
+fn validate_bootstrap_secret_destination(base_url: &str) -> Result<()> {
+    let parsed = validate_anonymous_keyed_bootstrap_destination(base_url)?;
+    let hostname = parsed
+        .host_str()
+        .unwrap_or_default()
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    if hostname == "cast.agentrelay.com" {
+        return Err(RelayError::InvalidResponse(
+            "Anonymous keyed workspace bootstrap cannot send a bootstrapSecret to the hosted gateway"
+                .to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 /// Options for creating a RelayCast client.
@@ -99,19 +141,94 @@ impl RelayCast {
     pub async fn create_workspace(
         name: &str,
         base_url: Option<&str>,
+        provenance: WorkspaceProvenance,
     ) -> Result<CreateWorkspaceResponse> {
-        let url = format!("{}/v1/workspaces", base_url.unwrap_or(DEFAULT_BASE_URL));
+        let mut options = WorkspaceBootstrapOptions::new(provenance);
+        if let Some(base_url) = base_url {
+            options = options.with_base_url(base_url);
+        }
+        Self::create_workspace_with_options(name, options).await
+    }
 
-        let client = reqwest::Client::new();
-        let response = client
+    /// Create a workspace with optional crash-safe anonymous idempotency.
+    ///
+    /// A hosted anonymous `idempotency_key` must be a CSPRNG-generated
+    /// reveal-once recovery capability. It is never combined with or used to
+    /// transmit a deployment-wide server secret. An optional
+    /// `bootstrap_secret` is sent only to an explicit safe self-hosted origin
+    /// for deployments that opt into proof enforcement.
+    pub async fn create_workspace_with_options(
+        name: &str,
+        options: WorkspaceBootstrapOptions,
+    ) -> Result<CreateWorkspaceResponse> {
+        let WorkspaceBootstrapOptions {
+            base_url,
+            provenance,
+            idempotency_key,
+            bootstrap_secret,
+        } = options;
+
+        if let Some(key) = idempotency_key.as_deref() {
+            if key.len() < 32 {
+                return Err(RelayError::InvalidResponse(
+                    "Anonymous Idempotency-Key must be at least 32 characters".to_string(),
+                ));
+            }
+            if key.len() > 255 || !key.bytes().all(|byte| (b'!'..=b'~').contains(&byte)) {
+                return Err(RelayError::InvalidResponse(
+                    "Idempotency-Key must contain 1-255 visible ASCII characters".to_string(),
+                ));
+            }
+        }
+
+        let anonymous_keyed_request = idempotency_key.is_some();
+        if anonymous_keyed_request {
+            validate_anonymous_keyed_bootstrap_destination(
+                base_url.as_deref().unwrap_or(DEFAULT_BASE_URL),
+            )?;
+        }
+
+        let sends_bootstrap_secret = anonymous_keyed_request && bootstrap_secret.is_some();
+        if sends_bootstrap_secret {
+            let explicit_base_url = base_url.as_deref().ok_or_else(|| {
+                RelayError::InvalidResponse(
+                    "Anonymous keyed workspace bootstrap with a bootstrapSecret requires an explicit self-hosted baseUrl"
+                        .to_string(),
+                )
+            })?;
+            validate_bootstrap_secret_destination(explicit_base_url)?;
+        }
+
+        let url = format!(
+            "{}/v1/workspaces",
+            base_url.as_deref().unwrap_or(DEFAULT_BASE_URL)
+        );
+
+        // An anonymous Idempotency-Key is a reveal-once recovery capability,
+        // so never follow a redirect that could forward it to another origin.
+        let client = if anonymous_keyed_request {
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()?
+        } else {
+            reqwest::Client::new()
+        };
+        let mut request = client
             .post(&url)
             .header("Content-Type", "application/json")
             .header("X-SDK-Version", SDK_VERSION)
             .header("X-Relaycast-Origin-Client", DEFAULT_ORIGIN_CLIENT)
             .header("X-Relaycast-Origin-Version", SDK_VERSION)
-            .json(&serde_json::json!({ "name": name }))
-            .send()
-            .await?;
+            .json(&serde_json::json!({ "name": name, "provenance": provenance }));
+        if let Some(key) = idempotency_key {
+            request = request.header("Idempotency-Key", key);
+        }
+        if sends_bootstrap_secret {
+            if let Some(bootstrap_secret) = bootstrap_secret {
+                request = request.header("X-Workspace-Bootstrap-Secret", bootstrap_secret);
+            }
+        }
+        let response = request.send().await?;
 
         let status = response.status().as_u16();
         let json: ApiResponse<CreateWorkspaceResponse> = response.json().await?;
@@ -414,13 +531,83 @@ impl RelayCast {
     }
 
     /// Rotate an agent's token.
-    pub async fn rotate_agent_token(&self, name: &str) -> Result<TokenRotateResponse> {
+    /// Roll the calling agent's own token over.
+    ///
+    /// Requires the agent's *current* token, not a workspace key: since
+    /// engine 8.2.0 (`fix: make agent identity recovery explicit`, #349) this
+    /// route is authenticated self-rollover only. A workspace owner replacing
+    /// an identity they do not hold the token for uses the explicit, audited
+    /// [`Self::take_over_agent`] or [`Self::recover_agent`] instead.
+    ///
+    /// Mirrors the TypeScript SDK's `agents.rotateToken(name, agentToken)`,
+    /// which took the same `agentToken` parameter in that release.
+    pub async fn rotate_agent_token(
+        &self,
+        name: &str,
+        agent_token: impl Into<String>,
+    ) -> Result<TokenRotateResponse> {
         self.client
+            .with_api_key(agent_token)?
             .post(
                 &format!("/v1/agents/{}/rotate-token", urlencoding::encode(name)),
                 Some(serde_json::json!({})),
                 None,
             )
+            .await
+    }
+
+    /// Recover an existing identity with current-token, node, or work-unit proof.
+    pub async fn recover_agent(
+        &self,
+        name: &str,
+        request: RecoverAgentRequest,
+    ) -> Result<AgentIdentityRecoveryResponse> {
+        self.client
+            .post(
+                &format!("/v1/agents/{}/recover", urlencoding::encode(name)),
+                Some(request),
+                None,
+            )
+            .await
+    }
+
+    /// Explicit audited workspace-owner takeover.
+    pub async fn take_over_agent(
+        &self,
+        name: &str,
+        request: TakeOverAgentRequest,
+    ) -> Result<AgentIdentityRecoveryResponse> {
+        self.client
+            .post(
+                &format!("/v1/agents/{}/takeover", urlencoding::encode(name)),
+                Some(request),
+                None,
+            )
+            .await
+    }
+
+    /// Immediately revoke both current and grace-period token slots.
+    pub async fn revoke_agent_token(
+        &self,
+        name: &str,
+        request: RevokeAgentTokenRequest,
+    ) -> Result<AgentIdentityRevocationResponse> {
+        self.client
+            .post(
+                &format!("/v1/agents/{}/revoke-token", urlencoding::encode(name)),
+                Some(request),
+                None,
+            )
+            .await
+    }
+
+    /// Enroll or rotate the authenticated agent's server-owned proof verifier.
+    pub async fn enroll_recovery_credential(
+        &self,
+        request: EnrollRecoveryCredentialRequest,
+    ) -> Result<serde_json::Value> {
+        self.client
+            .post("/v1/agent/recovery-credential", Some(request), None)
             .await
     }
 
@@ -447,30 +634,12 @@ impl RelayCast {
         self.client.get("/v1/agents/presence", None, None).await
     }
 
-    /// Register an agent or get existing one (with token rotation).
+    /// Deprecated create-only alias. A name collision fails closed.
     pub async fn register_or_get_agent(
         &self,
         request: CreateAgentRequest,
     ) -> Result<CreateAgentResponse> {
-        match self.register_agent(request.clone()).await {
-            Ok(response) => Ok(response),
-            Err(RelayError::Api { code, status, .. })
-                if code == "agent_already_exists" || status == 409 =>
-            {
-                let agent = self.get_agent(&request.name).await?;
-                let token_response = self.rotate_agent_token(&agent.name).await?;
-                let created_at = agent.created_at.or(agent.last_seen).unwrap_or_default();
-                Ok(CreateAgentResponse {
-                    id: agent.id,
-                    workspace_id: agent.workspace_id,
-                    name: agent.name,
-                    token: token_response.token,
-                    status: agent.status,
-                    created_at,
-                })
-            }
-            Err(e) => Err(e),
-        }
+        self.register_agent(request).await
     }
 
     /// Spawn an agent process (registering if needed).
@@ -487,6 +656,51 @@ impl RelayCast {
     ) -> Result<ReleaseAgentResponse> {
         self.client
             .post("/v1/agents/release", Some(request), None)
+            .await
+    }
+
+    /// Release only the exact immutable agent identity using a durable caller
+    /// idempotency key. Reuse the same key after an overload or lost response.
+    pub async fn release_agent_exact(
+        &self,
+        request: ExactReleaseAgentRequest,
+        idempotency_key: impl Into<String>,
+    ) -> Result<ReleaseAgentResponse> {
+        self.client
+            .post(
+                "/v1/agents/release-exact",
+                Some(request),
+                Some(RequestOptions::with_idempotency_key(idempotency_key)),
+            )
+            .await
+    }
+
+    /// Release only while the agent still owns the exact issued-token hash.
+    ///
+    /// The raw token is never sent in this request. Relaycast returns a 409
+    /// conflict without dispatching or mutating the agent when its token has
+    /// rotated since `expected_token_hash` was captured.
+    pub async fn release_agent_if_token_hash(
+        &self,
+        request: ReleaseAgentRequest,
+        expected_token_hash: String,
+    ) -> Result<ReleaseAgentResponse> {
+        #[derive(Serialize)]
+        struct GuardedReleaseAgentRequest {
+            #[serde(flatten)]
+            request: ReleaseAgentRequest,
+            expected_token_hash: String,
+        }
+
+        self.client
+            .post(
+                "/v1/agents/release",
+                Some(GuardedReleaseAgentRequest {
+                    request,
+                    expected_token_hash,
+                }),
+                None,
+            )
             .await
     }
 
@@ -631,6 +845,23 @@ impl RelayCast {
                 &format!("/v1/agents/{}/events", urlencoding::encode(name)),
                 Some(request),
                 None,
+            )
+            .await
+    }
+
+    /// Emit a session event with a durable identity. Reuse the same key when
+    /// retrying after an ambiguous response so Relaycast replays one event.
+    pub async fn emit_agent_event_with_idempotency_key(
+        &self,
+        name: &str,
+        request: EmitSessionEventRequest,
+        idempotency_key: impl Into<String>,
+    ) -> Result<SessionEvent> {
+        self.client
+            .post(
+                &format!("/v1/agents/{}/events", urlencoding::encode(name)),
+                Some(request),
+                Some(RequestOptions::with_idempotency_key(idempotency_key)),
             )
             .await
     }
@@ -991,10 +1222,7 @@ impl RelayCast {
     pub async fn list_directory_ratings(&self, slug: &str) -> Result<Vec<DirectoryRating>> {
         self.client
             .get(
-                &format!(
-                    "/v1/directory/agents/{}/ratings",
-                    urlencoding::encode(slug)
-                ),
+                &format!("/v1/directory/agents/{}/ratings", urlencoding::encode(slug)),
                 None,
                 None,
             )
@@ -1009,10 +1237,7 @@ impl RelayCast {
     ) -> Result<DirectoryRating> {
         self.client
             .post(
-                &format!(
-                    "/v1/directory/agents/{}/ratings",
-                    urlencoding::encode(slug)
-                ),
+                &format!("/v1/directory/agents/{}/ratings", urlencoding::encode(slug)),
                 Some(request),
                 None,
             )
@@ -1026,7 +1251,9 @@ impl RelayCast {
         &self,
         request: ImportSkillsRequest,
     ) -> Result<Option<DirectoryAgent>> {
-        self.client.post("/v1/skills/sync", Some(request), None).await
+        self.client
+            .post("/v1/skills/sync", Some(request), None)
+            .await
     }
 
     /// Search skills across the directory.
@@ -1162,11 +1389,7 @@ impl RelayCast {
     }
 
     /// Update a trigger.
-    pub async fn update_trigger(
-        &self,
-        id: &str,
-        request: UpdateTriggerRequest,
-    ) -> Result<Trigger> {
+    pub async fn update_trigger(&self, id: &str, request: UpdateTriggerRequest) -> Result<Trigger> {
         self.client
             .patch(
                 &format!("/v1/triggers/{}", urlencoding::encode(id)),
@@ -1258,7 +1481,9 @@ impl RelayCast {
             Some(slice.as_slice())
         };
 
-        self.client.get("/v1/console/messages", query_ref, None).await
+        self.client
+            .get("/v1/console/messages", query_ref, None)
+            .await
     }
 
     /// Get console overview statistics.
@@ -1350,8 +1575,9 @@ mod tests {
     #[tokio::test]
     async fn register_agent_parses_workspace_id() {
         let server = MockServer::start().await;
-        let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
-            .expect("relay init");
+        let relay =
+            RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+                .expect("relay init");
 
         Mock::given(method("POST"))
             .and(path("/v1/agents"))
@@ -1375,8 +1601,9 @@ mod tests {
     async fn register_agent_without_workspace_id_defaults_to_none() {
         // Engines that predate the field omit it; the client must still parse.
         let server = MockServer::start().await;
-        let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
-            .expect("relay init");
+        let relay =
+            RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+                .expect("relay init");
 
         Mock::given(method("POST"))
             .and(path("/v1/agents"))

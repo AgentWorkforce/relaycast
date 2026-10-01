@@ -1,4 +1,5 @@
-import { eq, and, sql, lt, gt, isNull, inArray, desc } from 'drizzle-orm';
+import { z } from 'zod';
+import { eq, and, sql, lt, lte, gt, isNull, inArray, desc } from 'drizzle-orm';
 import type { DmMessage } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import {
@@ -9,9 +10,16 @@ import {
   dmConversationReservations,
   dmParticipants,
   messageAttachments,
+  a2aEgress,
+  a2aEgressContext,
+  a2aInbound,
+  a2aAgents,
+  pendingEvents,
+  messageLogs,
+  nodes,
 } from '../db/schema.js';
 import { sha256Hex } from '../lib/crypto.js';
-import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
+import { runAtomicWrites, databaseConstraintKind, type AtomicWrite } from '../ports/database.js';
 import { generateId } from './snowflake.js';
 import * as a2aEngine from './a2a.js';
 import { buildMessageLogWrite } from './console.js';
@@ -21,16 +29,55 @@ import {
   type DeliveryOutcomeRecords,
 } from './deliveryWrites.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
+import {
+  type WorkspaceDeliveryPolicy,
+} from './workspaceDeliveryPolicy.js';
+import { dispatchA2aEgress } from './a2aEgress.js';
+import { buildDmReceivedEventData } from './deliveryWire.js';
+import { buildWorkspaceEventWrite } from './workspaceEvents.js';
+import { transformForClient } from './wsTransform.js';
 import { codedError } from '../lib/httpError.js';
+import {
+  addressNodeSelection,
+  addressNotFound,
+  addressSplits,
+  formatAgentAddress,
+  selectAddressedRecipient,
+  SENDER_ADDRESS_METADATA_KEY,
+  senderAddressField,
+} from './address.js';
+import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 import { fetchAttachmentsBatch, resolveSendAttachments, type AttachmentRow } from './attachments.js';
-import { publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
+import { canonicalUserMessageMetadata, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
 import { queryInChunks } from '../lib/queryChunks.js';
 
 type Db = ReturnType<typeof getDb>;
 
 interface SendDmOptions {
   skipA2aIntercept?: boolean;
+  /** Stable request identity for resuming already admitted outbound A2A. */
+  idempotencyKey?: string;
+  /** Count an authenticated inbound peer in the same transaction as its DM. */
+  receivedA2aAgentId?: string;
+  /** Token hash authenticated by the route; checked with registration at SQL admission. */
+  receivedA2aTokenHash?: string;
+  /** Verified legacy KV response to promote without admitting another message. */
+  legacyInbound?: unknown;
+  /** Authenticated actor/scope/key identity, never a caller-selected recipient identity. */
+  inboundIdentity?: { scope: string; key: string };
+  /** Resolve only after durable accepted lookup (cached HTTP replay never calls sendDm). */
+  resolveWorkspaceDeliveryPolicy?: () => Promise<WorkspaceDeliveryPolicy | undefined>;
+  /** Fast paths only; durable events and delivery already committed before this hook. */
+  afterAdmission?: (data: SendDmResult, event: { seq: number; payload: Record<string, unknown>; data: Record<string, unknown>; outboxId: string }) => void;
   mailbox?: MailboxConfig;
+  /** Server-resolved workspace growth policy; absent => no workspace guard. */
+  workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy;
+  /**
+   * `agent@machine` the caller addressed; replaces the `to` lookup. Resolved
+   * after durable replay lookup, so an accepted retry still replays after the
+   * agent moves, and re-checked inside the admission write.
+   */
+  address?: string;
 }
 
 /**
@@ -239,6 +286,23 @@ async function resolveConversation(
 }
 
 /**
+ * Persisted DM metadata. Server-owned keys go after caller metadata so a
+ * federated peer cannot override how the local runtime is injected, and
+ * `sanitizeUserMessageMetadata` already drops any caller-supplied
+ * `__relaycast_` key such as the sender address.
+ */
+function dmMessageMetadata(
+  data: { mode?: 'wait' | 'steer'; data?: Record<string, unknown> | null },
+  senderAddress: string | null | undefined,
+): Record<string, unknown> {
+  return {
+    ...sanitizeUserMessageMetadata(data.data),
+    injection_mode: data.mode ?? 'wait',
+    ...(senderAddress ? { [SENDER_ADDRESS_METADATA_KEY]: senderAddress } : {}),
+  };
+}
+
+/**
  * Build the message + attachment-junction inserts for a DM without executing
  * them, so the send path can run them inside one atomic unit. The message
  * insert is always first and carries `.returning()`.
@@ -256,8 +320,14 @@ function buildDmMessageWrites(
   },
   attachments: AttachmentRow[],
   messageId: string,
+  createdAt = new Date(),
+  inboundRegistration?: { id: string; tokenHash?: string },
+  senderAddress?: string | null,
+  addressedRecipient?: { agentId: string; nodeId: string; machine: string },
 ): AtomicWrite[] {
   const hasAttachments = attachments.length > 0;
+  const metadata = dmMessageMetadata(data, senderAddress);
+  const sessionRef = requireSessionRefFromMetadata(metadata);
   const writes: AtomicWrite[] = [
     db
       .insert(messages)
@@ -265,18 +335,45 @@ function buildDmMessageWrites(
         id: messageId,
         workspaceId,
         channelId,
-        agentId: fromAgentId,
-        body: data.text,
+        // NULL violates messages.agent_id inside the atomic write. A vanished,
+        // reassigned registration or rotated caller token cannot silently make
+        // the later counter UPDATE affect zero rows while the DM commits.
+        agentId: inboundRegistration ? sql<string>`(
+          SELECT a.id FROM agents a JOIN a2a_agents peer ON peer.relay_agent_id = a.id
+          WHERE peer.id = ${inboundRegistration.id} AND peer.workspace_id = ${workspaceId}
+            AND a.id = ${fromAgentId} AND a.workspace_id = ${workspaceId}
+            ${inboundRegistration.tokenHash === undefined ? sql`` : sql`AND a.token_hash = ${inboundRegistration.tokenHash}`}
+        )` : fromAgentId,
+        // NULL violates messages.body when an addressed recipient left the
+        // addressed node (or was released) after it was selected, so the whole
+        // admission rolls back instead of delivering to its new location.
+        body: addressedRecipient ? sql<string>`(
+          SELECT ${data.text} WHERE EXISTS (
+            SELECT 1 FROM agents a JOIN nodes n ON n.id = a.location_node_id
+            WHERE a.id = ${addressedRecipient.agentId} AND a.workspace_id = ${workspaceId}
+              AND a.status <> 'released' AND a.location_node_id = ${addressedRecipient.nodeId}
+              AND (
+                (n.role = 'direct' AND (${addressedRecipient.machine} = 'direct' OR n.machine_id = ${addressedRecipient.machine}))
+                OR (n.role <> 'direct' AND ${addressedRecipient.machine} <> 'direct'
+                  AND (n.name = ${addressedRecipient.machine} OR n.machine_id = ${addressedRecipient.machine}))
+              )
+          )
+        )` : data.text,
         hasAttachments,
-        metadata: {
-          // Keep the server-owned delivery mode after caller metadata so a
-          // federated peer cannot override how the local runtime is injected.
-          ...sanitizeUserMessageMetadata(data.data),
-          injection_mode: data.mode ?? 'wait',
-        },
+        metadata,
+        sessionRef,
+        createdAt,
       })
       .returning(),
   ];
+
+  const sessionWrite = buildMessageSessionWrite(
+    db,
+    workspaceId,
+    sessionRef,
+    createdAt,
+  );
+  if (sessionWrite) writes.push(sessionWrite);
 
   if (attachments.length > 0) {
     const attachmentValues = attachments.map((attachment, idx) => ({
@@ -288,6 +385,102 @@ function buildDmMessageWrites(
   }
 
   return writes;
+}
+
+function buildDmResult(
+  message: Pick<typeof messages.$inferSelect, 'id' | 'agentId' | 'body' | 'metadata' | 'createdAt'>,
+  conv: { id: string }, fromAgent: { name: string }, data: { to: string; mode?: 'wait' | 'steer' },
+  attachments: AttachmentRow[],
+) {
+  const injectionMode = data.mode ?? 'wait';
+  return {
+    // Canonical converged shape (new)
+    conversation_id: conv.id,
+    message: {
+      id: message.id,
+      agent_id: message.agentId,
+      agent_name: fromAgent.name,
+      ...senderAddressField(message.metadata),
+      text: message.body,
+      injection_mode: injectionMode,
+      attachments,
+      metadata: publicMessageMetadata(message.metadata),
+    },
+    created_at: message.createdAt.toISOString(),
+
+    // Legacy compatibility fields (scheduled for removal in next major).
+    id: message.id,
+    from_agent_id: message.agentId,
+    to: data.to,
+    text: message.body,
+    injection_mode: injectionMode,
+    attachments,
+    metadata: publicMessageMetadata(message.metadata),
+  };
+}
+
+export type AcceptedDmResult = ReturnType<typeof buildDmResult>;
+export type SendDmResult = AcceptedDmResult & {
+  _delivery: DeliveryOutcomeRecords['deliveries'][number] | null;
+  _delivery_rejections: DeliveryOutcomeRecords['rejections'];
+  _notifications_durable?: boolean;
+};
+
+const legacyPublicFields = {
+  injection_mode: z.enum(['wait', 'steer']), attachments: z.array(z.never()),
+  metadata: z.record(z.string(), z.unknown()),
+};
+const legacyInboundSchema = z.object({
+  conversation_id: z.string().min(1), created_at: z.string().datetime(),
+  id: z.string().min(1), from_agent_id: z.string().min(1), to: z.string().min(1), text: z.string(),
+  ...legacyPublicFields,
+  message: z.object({ id: z.string().min(1), agent_id: z.string().min(1), agent_name: z.string().min(1), text: z.string(), ...legacyPublicFields }),
+});
+
+async function promoteLegacyInbound(
+  db: Db, workspaceId: string, fromAgentId: string, inboundId: string, fingerprint: string,
+  data: { to: string; text: string; mode?: 'wait' | 'steer'; data?: Record<string, unknown> | null },
+  options: SendDmOptions,
+): Promise<SendDmResult> {
+  const parsed = legacyInboundSchema.safeParse(options.legacyInbound);
+  const unverified = () => codedError('Legacy A2A acceptance cannot be verified', 'a2a_legacy_replay_unavailable', 503);
+  if (!parsed.success || !options.receivedA2aAgentId || !options.receivedA2aTokenHash) throw unverified();
+  const legacy = parsed.data;
+  const createdAt = new Date(legacy.created_at);
+  const expectedMetadata = canonicalUserMessageMetadata({ ...sanitizeUserMessageMetadata(data.data), injection_mode: data.mode ?? 'wait' });
+  if (legacy.id !== legacy.message.id || legacy.from_agent_id !== fromAgentId || legacy.message.agent_id !== fromAgentId
+    || legacy.to !== data.to || legacy.text !== data.text || legacy.message.text !== data.text
+    || legacy.injection_mode !== (data.mode ?? 'wait') || legacy.message.injection_mode !== legacy.injection_mode
+    || canonicalUserMessageMetadata(legacy.metadata) !== expectedMetadata
+    || canonicalUserMessageMetadata(legacy.message.metadata) !== expectedMetadata || createdAt.getTime() > Date.now()) throw unverified();
+  // Published records carry no KV expiry timestamp. Source creation is a
+  // conservative lower bound for the original KV write, never a renewed TTL.
+  if (createdAt.getTime() + 86_400_000 <= Date.now()) throw codedError('Legacy A2A replay window expired', 'a2a_message_not_retained', 410);
+  const [source] = await db.select().from(messages).where(eq(messages.id, legacy.id));
+  if (source && (source.workspaceId !== workspaceId || source.agentId !== fromAgentId || source.createdAt.getTime() !== createdAt.getTime())) throw unverified();
+  const sourceId = sql`(SELECT m.id FROM messages m JOIN dm_conversations dc ON dc.channel_id = m.channel_id
+    WHERE m.id = ${legacy.id} AND m.workspace_id = ${workspaceId} AND m.agent_id = ${fromAgentId}
+      AND m.created_at = ${Math.floor(createdAt.getTime() / 1000)} AND dc.id = ${legacy.conversation_id})`;
+  // One atomic statement adopts the retained source or a content-free tombstone.
+  // A delete racing promotion cannot strand plaintext after source pruning.
+  try {
+    await db.insert(a2aInbound).values({
+      id: inboundId,
+      workspaceId: sql<string>`(SELECT a.workspace_id FROM a2a_agents peer JOIN agents a ON a.id = peer.relay_agent_id
+        WHERE peer.id = ${options.receivedA2aAgentId} AND peer.workspace_id = ${workspaceId}
+          AND a.id = ${fromAgentId} AND a.workspace_id = ${workspaceId} AND a.token_hash = ${options.receivedA2aTokenHash})`,
+      messageId: sourceId, fingerprint, createdAt,
+      response: sql`CASE WHEN ${sourceId} IS NOT NULL THEN ${JSON.stringify(legacy)} ELSE NULL END`,
+    }).onConflictDoNothing();
+  } catch (error) {
+    if (databaseConstraintKind(error) === 'a2a_registration_changed') throw codedError('Authenticated A2A registration changed before admission', 'a2a_registration_changed', 401);
+    throw error;
+  }
+  const [retained] = await db.select().from(a2aInbound).where(eq(a2aInbound.id, inboundId));
+  if (!retained) throw unverified();
+  if (retained.fingerprint !== fingerprint) throw codedError('Idempotency-Key was reused with a different request payload', 'idempotency_key_reused', 409);
+  if (!retained.messageId || !retained.response || retained.createdAt.getTime() + 86_400_000 <= Date.now()) throw codedError('Accepted A2A message is no longer retained', 'a2a_message_not_retained', 410);
+  return { ...retained.response, _delivery: null, _delivery_rejections: [], _notifications_durable: true };
 }
 
 export async function sendDm(
@@ -302,30 +495,95 @@ export async function sendDm(
     data?: Record<string, unknown> | null;
   },
   options: SendDmOptions = {},
-) {
+): Promise<SendDmResult> {
   const startedAtMs = Date.now();
-  const [toAgent] = data.to === '@self'
-    ? await db
-      .select()
-      .from(agents)
-      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, fromAgentId)))
-    : await db
-      .select()
-      .from(agents)
-      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, data.to)));
+  // Resolve durable request identity before mutable recipient/attachment metadata.
+  // A removed/recreated target must never turn an accepted retry into a new send.
+  const requestEgressId = !options.skipA2aIntercept && options.idempotencyKey
+    ? `a2ae_${await sha256Hex(JSON.stringify([workspaceId, fromAgentId, options.idempotencyKey]))}`
+    : null;
+  const [accepted] = requestEgressId ? await db.select().from(a2aEgress).where(eq(a2aEgress.id, requestEgressId)) : [];
+  if (accepted) {
+    if (accepted.fingerprint !== await sha256Hex(JSON.stringify(data))) {
+      throw codedError('Idempotency-Key was reused with a different request payload', 'idempotency_key_reused', 409);
+    }
+    await dispatchA2aEgress(db, accepted.id);
+    let [context] = await db.select().from(a2aEgressContext).where(eq(a2aEgressContext.id, accepted.id));
+    if (!context) {
+      // Upgrade compatibility for admissions predating 0058: recover only from
+      // the original retained message/log, never recipient-name resolution or
+      // conversation creation. New admissions always carry the atomic snapshot.
+      const [source] = await db.select({ message: messages, conversationId: messageLogs.conversationId, senderName: agents.name })
+        .from(messages)
+        .leftJoin(messageLogs, eq(messageLogs.messageId, messages.id))
+        .leftJoin(agents, eq(agents.id, messages.agentId))
+        .where(and(eq(messages.id, accepted.messageId), eq(messages.workspaceId, workspaceId)));
+      if (!source) throw codedError('Accepted A2A message is no longer retained', 'a2a_message_not_retained', 410);
+      const retainedAttachments = await fetchAttachmentsBatch(db, workspaceId, [source.message.id]);
+      const response = buildDmResult(source.message, {
+        id: source.conversationId ?? source.message.channelId.replace(/^dmch_/, 'dm_'),
+      }, { name: source.senderName ?? fromAgentId }, data, retainedAttachments.get(source.message.id) ?? []);
+      await db.insert(a2aEgressContext).values({ id: accepted.id, messageId: accepted.messageId, response }).onConflictDoNothing();
+      [context] = await db.select().from(a2aEgressContext).where(eq(a2aEgressContext.id, accepted.id));
+    }
+    return { ...context.response, _delivery: null, _delivery_rejections: [], _notifications_durable: true };
+  }
 
+  const inboundId = options.inboundIdentity
+    ? `a2ai_${await sha256Hex(JSON.stringify([workspaceId, fromAgentId, options.inboundIdentity.scope, options.inboundIdentity.key]))}`
+    : null;
+  const inboundFingerprint = inboundId ? await sha256Hex(JSON.stringify(data)) : '';
+  if (inboundId) {
+    const [retained] = await db.select().from(a2aInbound).where(eq(a2aInbound.id, inboundId));
+    if (retained && retained.createdAt.getTime() + 86_400_000 > Date.now()) {
+      if (retained.fingerprint !== inboundFingerprint) throw codedError('Idempotency-Key was reused with a different request payload', 'idempotency_key_reused', 409);
+      if (!retained.messageId || !retained.response) throw codedError('Accepted A2A message is no longer retained', 'a2a_message_not_retained', 410);
+      return { ...retained.response, _delivery: null, _delivery_rejections: [], _notifications_durable: true };
+    }
+    if (retained) await db.delete(a2aInbound).where(and(eq(a2aInbound.id, inboundId), lte(a2aInbound.createdAt, new Date(Date.now() - 86_400_000))));
+  }
+  if (options.legacyInbound !== undefined) {
+    if (!inboundId) throw codedError('Legacy A2A identity is missing', 'a2a_legacy_replay_unavailable', 503);
+    return promoteLegacyInbound(db, workspaceId, fromAgentId, inboundId, inboundFingerprint, data, options);
+  }
+  const workspacePolicy = options.resolveWorkspaceDeliveryPolicy
+    ? await options.resolveWorkspaceDeliveryPolicy() : options.workspaceDeliveryPolicy;
+
+  const recipientQuery = db
+    .select({ agent: agents, node: addressNodeSelection })
+    .from(agents)
+    .leftJoin(nodes, eq(nodes.id, agents.locationNodeId));
+  const [recipient] = options.address !== undefined
+    ? [selectAddressedRecipient(options.address, await recipientQuery.where(and(
+      eq(agents.workspaceId, workspaceId),
+      inArray(agents.name, addressSplits(options.address).map((split) => split.agent)),
+    )))]
+    : await recipientQuery.where(and(
+      eq(agents.workspaceId, workspaceId),
+      data.to === '@self' ? eq(agents.id, fromAgentId) : eq(agents.name, data.to),
+    ));
+  const addressedRecipient = options.address !== undefined && recipient?.agent.locationNodeId
+    ? {
+      agentId: recipient.agent.id,
+      nodeId: recipient.agent.locationNodeId,
+      machine: addressSplits(options.address).find((split) => split.agent === recipient.agent.name)!.machine,
+    }
+    : undefined;
+  const toAgent = recipient?.agent;
   if (!toAgent) {
     throw codedError(`Agent "${data.to}" not found`, 'agent_not_found', 404);
   }
 
   const [fromAgent] = await db
-    .select({ name: agents.name })
+    .select({ name: agents.name, node: addressNodeSelection })
     .from(agents)
+    .leftJoin(nodes, eq(nodes.id, agents.locationNodeId))
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, fromAgentId)));
 
   if (!fromAgent?.name) {
     throw codedError('Sender agent not found', 'internal_error', 500);
   }
+  const senderAddress = formatAgentAddress(fromAgent.name, fromAgent.node);
 
   // Resolve attachments first so invalid attachments fail before any DM
   // metadata (channel/conversation/participant rows) is created.
@@ -335,19 +593,26 @@ export async function sendDm(
     ? null
     : await a2aEngine.getA2aAgentByRelayName(db, workspaceId, toAgent.name);
 
+  const egressId = a2aTarget
+    ? `a2ae_${await sha256Hex(JSON.stringify([workspaceId, fromAgentId, options.idempotencyKey ?? generateId()]))}`
+    : null;
+  const fingerprint = egressId ? await sha256Hex(JSON.stringify(data)) : '';
   const messageId = generateId();
+  // Match SQLite timestamp precision so live, retained response and delivery replay agree.
+  const createdAt = new Date(Math.floor(Date.now() / 1000) * 1000);
   const mailbox = options.mailbox ?? {
     ttlMs: DEFAULT_MAILBOX_TTL_MS,
     depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
   };
 
+  let egressPayload: ReturnType<typeof a2aEngine.translateRelayToA2a> | undefined;
   if (a2aTarget) {
     const payload = a2aEngine.translateRelayToA2a({
       id: messageId,
       agent_id: fromAgentId,
       agent_name: fromAgent.name,
       text: data.text,
-      created_at: new Date().toISOString(),
+      created_at: createdAt.toISOString(),
       thread_id: conv.id,
       attachments,
       metadata: sanitizeUserMessageMetadata(data.data),
@@ -365,20 +630,38 @@ export async function sendDm(
       },
     };
 
-    await a2aEngine.sendToExternalAgent(a2aTarget.external_url, payload, {
-      scheme: a2aTarget.auth_scheme,
-      credential: a2aTarget.auth_credential,
-    });
-    await a2aEngine.incrementA2aMessagesSent(db, a2aTarget.id);
+    egressPayload = payload;
   }
 
   const deliveryId = toAgent.id !== fromAgentId ? `del_${generateId()}` : null;
 
-  // Durable writes (message + attachments + delivery + message_log) run as one
-  // atomic unit when the adapter supports it; fanout stays in routes.
-  const results = await runAtomicWrites(db, (writeDb) => {
-    const writes = buildDmMessageWrites(writeDb, workspaceId, fromAgentId, conv.channelId, data, attachments, messageId);
+  const publicResult = buildDmResult({
+    id: messageId, agentId: fromAgentId, body: data.text, createdAt,
+    metadata: dmMessageMetadata(data, senderAddress),
+  }, conv, fromAgent, options.address !== undefined ? { ...data, to: toAgent.name } : data, attachments);
+  const eventData = buildDmReceivedEventData(publicResult, { fromName: fromAgent.name });
+  const workspacePayload = transformForClient({
+    type: 'dm.received', workspace_id: workspaceId, data: eventData, timestamp: createdAt.toISOString(),
+  });
+  // The outbox, observer cursor log, response context and delivery share admission.
+  // None can escape a capacity rollback, or depend on external transport success.
+  const persist = () => runAtomicWrites(db, (writeDb) => {
+    const writes = buildDmMessageWrites(writeDb, workspaceId, fromAgentId, conv.channelId, data, attachments, messageId, createdAt,
+      options.receivedA2aAgentId ? { id: options.receivedA2aAgentId, tokenHash: options.receivedA2aTokenHash } : undefined,
+      senderAddress, addressedRecipient);
 
+    if (egressId && a2aTarget && egressPayload) {
+      // First statement owns the request identity; a competing attempt rolls
+      // back before it can consume capacity or invoke the external transport.
+      writes.unshift(writeDb.insert(a2aEgress).values({
+        id: egressId, workspaceId, messageId, targetId: a2aTarget.id,
+        externalUrl: a2aTarget.external_url, fingerprint, payload: egressPayload,
+      }));
+    }
+    if (options.receivedA2aAgentId) {
+      writes.push(writeDb.update(a2aAgents).set({ messagesRecv: sql`${a2aAgents.messagesRecv} + 1`, updatedAt: createdAt })
+        .where(and(eq(a2aAgents.id, options.receivedA2aAgentId), eq(a2aAgents.workspaceId, workspaceId), eq(a2aAgents.relayAgentId, fromAgentId))));
+    }
     if (deliveryId) {
       writes.push(
         buildDirectDeliveryWrite(writeDb, {
@@ -390,6 +673,7 @@ export async function sendDm(
           reason: 'dm',
           ttlMs: mailbox.ttlMs,
           depthCap: mailbox.depthCap,
+          workspacePolicy,
         }),
       );
     }
@@ -415,42 +699,60 @@ export async function sendDm(
       }),
     );
 
+    if (inboundId) writes.push(writeDb.insert(a2aInbound).values({ id: inboundId, workspaceId, messageId, fingerprint: inboundFingerprint, response: publicResult }));
+    if (egressId) writes.push(writeDb.insert(a2aEgressContext).values({ id: egressId, messageId, response: publicResult }));
+    if (egressId || options.receivedA2aAgentId || inboundId) {
+      writes.push(
+        writeDb.insert(pendingEvents).values({ id: messageId, workspaceId, eventType: 'dm.received', payload: eventData }),
+        buildWorkspaceEventWrite(writeDb, workspaceId, { type: 'dm.received', payload: workspacePayload }),
+      );
+    }
     return writes;
-  });
-  const [message] = results[0] as (typeof messages.$inferSelect)[];
+  }, { requireAtomic: Boolean(workspacePolicy || a2aTarget || options.receivedA2aAgentId || inboundId) });
+  let admittedEventSeq: number | undefined;
+  try {
+    const results = await persist();
+    if (egressId || options.receivedA2aAgentId || inboundId) admittedEventSeq = (results[results.length - 1] as { seq: number }[])[0].seq;
+  } catch (error) {
+    if (options.address !== undefined && databaseConstraintKind(error) === 'address_changed') {
+      throw addressNotFound(options.address);
+    }
+    if (options.receivedA2aAgentId && databaseConstraintKind(error) === 'a2a_registration_changed') {
+      throw codedError('Authenticated A2A registration changed before admission', 'a2a_registration_changed', 401);
+    }
+    if (inboundId) {
+      const [winner] = await db.select().from(a2aInbound).where(eq(a2aInbound.id, inboundId));
+      if (winner) {
+        if (winner.fingerprint !== inboundFingerprint) throw codedError('Idempotency-Key was reused with a different request payload', 'idempotency_key_reused', 409);
+        return sendDm(db, workspaceId, fromAgentId, data, options);
+      }
+    }
+    // Inspect the actual committed winner after the losing atomic batch rolls back.
+    const [winner] = egressId ? await db.select().from(a2aEgress).where(eq(a2aEgress.id, egressId)) : [];
+    if (!winner) throw error;
+    if (winner.fingerprint !== fingerprint) {
+      throw codedError('Idempotency-Key was reused with a different request payload', 'idempotency_key_reused', 409);
+    }
+    return sendDm(db, workspaceId, fromAgentId, data, options);
+  }
   const deliveryOutcomes: DeliveryOutcomeRecords = deliveryId
     ? await fetchDirectDeliveryOutcomes(db, { messageId, recipientAgentId: toAgent.id })
     : { deliveries: [], rejections: [] };
   const dmDelivery = deliveryOutcomes.deliveries[0] ?? null;
 
-  const injectionMode = data.mode ?? 'wait';
-  return {
-    // Canonical converged shape (new)
-    conversation_id: conv.id,
-    message: {
-      id: message.id,
-      agent_id: message.agentId,
-      agent_name: fromAgent.name,
-      text: message.body,
-      injection_mode: injectionMode,
-      attachments,
-      metadata: publicMessageMetadata(message.metadata),
-    },
-    created_at: message.createdAt.toISOString(),
-
-    // Legacy compatibility fields (scheduled for removal in next major).
-    id: message.id,
-    from_agent_id: message.agentId,
-    to: data.to,
-    text: message.body,
-    injection_mode: injectionMode,
-    attachments,
-    metadata: publicMessageMetadata(message.metadata),
-
-    // Internal: delivery record for the recipient — stripped by route before response
+  const result: SendDmResult = {
+    ...publicResult,
     _delivery: dmDelivery,
     _delivery_rejections: deliveryOutcomes.rejections,
+    ...((egressId || options.receivedA2aAgentId || inboundId) ? { _notifications_durable: true } : {}),
   };
+  if (egressId || options.receivedA2aAgentId || inboundId) {
+    // Local fast paths run independently of transport. A crash here still leaves
+    // the webhook outbox, workspace cursor log and queued delivery recoverable.
+    options.afterAdmission?.(result, { seq: admittedEventSeq!, payload: workspacePayload, data: eventData, outboxId: messageId });
+  }
+  if (egressId) await dispatchA2aEgress(db, egressId);
+  return result;
 }
 
 export async function listConversations(
@@ -638,6 +940,7 @@ export async function getDmMessages(
     id: r.id,
     agent_id: r.agentId,
     agent_name: r.agentName,
+    ...senderAddressField(r.metadata),
     text: r.body,
     injection_mode: r.metadata?.injection_mode as 'wait' | 'steer' | undefined,
     metadata: publicMessageMetadata(r.metadata),

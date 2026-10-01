@@ -1,0 +1,57 @@
+{
+  "id": "traj_poanyuhwylp7",
+  "version": 1,
+  "task": {
+    "title": "Fail closed when published Relaycast migrations are absent",
+    "source": {
+      "system": "plain",
+      "id": "relaycast#400"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-09-09T06:09:52.010Z",
+  "completedAt": "2026-09-09T06:09:52.880Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-09-09T06:09:52.505Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_m9bexqgs84wq",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-09-09T06:09:52.505Z",
+      "endedAt": "2026-09-09T06:09:52.880Z",
+      "events": [
+        {
+          "ts": 1788934192505,
+          "type": "decision",
+          "content": "Treat a missing published migrations directory as malformed: Treat a missing published migrations directory as malformed",
+          "raw": {
+            "question": "Treat a missing published migrations directory as malformed",
+            "chosen": "Treat a missing published migrations directory as malformed",
+            "alternatives": [],
+            "reasoning": "Interpreting it as an empty baseline would allow a release to remove all published migration history without detection."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Made the published-engine migration release gate fail closed on absent migration directories and added a regression test; focused, release-contract, and live registry stream checks passed.",
+    "approach": "Standard approach",
+    "confidence": 0.96
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "d9189126752b0301d3c4112d5d6738174b3ad22a",
+    "endRef": "d9189126752b0301d3c4112d5d6738174b3ad22a"
+  }
+}

@@ -1,0 +1,82 @@
+{
+  "id": "traj_a8ldf56q5b68",
+  "version": 1,
+  "task": {
+    "title": "Stabilize PR #333 lost-response recovery regression",
+    "source": {
+      "system": "plain",
+      "id": "relaycast#333"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-08-18T09:03:51.053Z",
+  "completedAt": "2026-08-18T09:04:41.430Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-08-18T09:03:56.543Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_7yrkxksb7ani",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-08-18T09:03:56.543Z",
+      "endedAt": "2026-08-18T09:04:41.430Z",
+      "events": [
+        {
+          "ts": 1787043836544,
+          "type": "decision",
+          "content": "Auto-advance the fake retry clock: Auto-advance the fake retry clock",
+          "raw": {
+            "question": "Auto-advance the fake retry clock",
+            "chosen": "Auto-advance the fake retry clock",
+            "alternatives": [],
+            "reasoning": "The test started timer advancement before asynchronous key hashing had necessarily scheduled the first retry; auto-advancing fake time preserves fast deterministic backoff under full-suite load."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1787043881146,
+          "type": "reflection",
+          "content": "The full monorepo test exposed a timer-start race in the lost-response regression; auto-advancing fake time removed the race, and focused, full-engine, build, lint, and test gates now pass.",
+          "raw": {
+            "focalPoints": [
+              "test-determinism",
+              "retry-coverage",
+              "verification"
+            ],
+            "confidence": 0.96
+          },
+          "significance": "high",
+          "tags": [
+            "focal:test-determinism",
+            "focal:retry-coverage",
+            "focal:verification",
+            "confidence:0.96"
+          ]
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Stabilized the lost-response retry regression under full-suite load and revalidated all local gates.",
+    "approach": "Standard approach",
+    "confidence": 0.96
+  },
+  "commits": [
+    "7b4794c"
+  ],
+  "filesChanged": [
+    "packages/engine/src/engine/__tests__/workspace.test.ts"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "b2eadefa957626305a54d641d4baa3989f395341",
+    "endRef": "7b4794c14a95f657bb925612bef0b6de36bf569f",
+    "traceId": "4cce42d1-fcdf-41c1-8b46-7b792240ef1e"
+  }
+}

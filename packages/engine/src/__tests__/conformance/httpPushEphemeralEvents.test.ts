@@ -48,13 +48,9 @@ describe('http_push ephemeral event delivery', () => {
     expect(res.status).toBe(201);
   }
 
-  async function waitFor(assertion: () => void | Promise<void>, timeoutMs = 1000) {
-    const started = Date.now();
-    let lastError: unknown;
-    while (Date.now() - started < timeoutMs) {
-      try { await assertion(); return; } catch (err) { lastError = err; await new Promise((r) => setTimeout(r, 10)); }
-    }
-    throw lastError;
+  async function waitFor(assertion: () => void | Promise<void>) {
+    await stack.settle();
+    await assertion();
   }
 
   function postsOfType(fetchMock: ReturnType<typeof vi.spyOn>, type: string): Array<Record<string, unknown>> {

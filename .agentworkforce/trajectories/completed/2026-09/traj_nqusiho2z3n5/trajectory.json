@@ -1,0 +1,78 @@
+{
+  "id": "traj_nqusiho2z3n5",
+  "version": 1,
+  "task": {
+    "title": "Repair Relaycast release tag Docker lock provenance validation",
+    "source": {
+      "system": "plain",
+      "id": "relaycast#393"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-09-08T23:53:42.526Z",
+  "completedAt": "2026-09-09T00:09:52.801Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-09-09T00:08:43.826Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_sugxkaq72wjz",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-09-09T00:08:43.826Z",
+      "endedAt": "2026-09-09T00:09:52.801Z",
+      "events": [
+        {
+          "ts": 1788912523827,
+          "type": "decision",
+          "content": "Bind Docker lock reuse to the full release provenance manifest: Bind Docker lock reuse to the full release provenance manifest",
+          "raw": {
+            "question": "Bind Docker lock reuse to the full release provenance manifest",
+            "chosen": "Bind Docker lock reuse to the full release provenance manifest",
+            "alternatives": [],
+            "reasoning": "A valid SHA-512 shape does not identify the published bytes. The workflow artifact already binds package integrities to the immutable source and annotated digest, so the validator derives exact a2a, types, and engine values from that manifest."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1788912524082,
+          "type": "reflection",
+          "content": "The prior engine-only gate is replaced and the real 8.5.4-to-8.5.5 fixture passes while valid-but-wrong integrities for each Docker package fail.",
+          "raw": {
+            "focalPoints": [
+              "release-retry",
+              "artifact-provenance",
+              "docker-lock"
+            ],
+            "adjustments": "Retained cross-day, regular-file, arbitrary-content, symlink/type, and multi-parent adversarial coverage.",
+            "confidence": 0.93
+          },
+          "significance": "high",
+          "tags": [
+            "focal:release-retry",
+            "focal:artifact-provenance",
+            "focal:docker-lock",
+            "confidence:0.93"
+          ]
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Historical self-report about binding reusable release-tag Docker lock validation to release provenance. This trajectory captured no commands, outputs, commits, or changed-file evidence, so implementation and validation claims are non-authoritative and non-gating.",
+    "approach": "Historical decision record (non-gating)",
+    "confidence": 0.2
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": ["historical", "self-reported", "non-authoritative", "non-gating"],
+  "_trace": {
+    "startRef": "4612e040f93d8898910075ba5adda4e8f07cb5fd",
+    "endRef": "4612e040f93d8898910075ba5adda4e8f07cb5fd"
+  }
+}

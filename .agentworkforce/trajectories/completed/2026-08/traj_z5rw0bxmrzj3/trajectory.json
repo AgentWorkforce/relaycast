@@ -1,0 +1,88 @@
+{
+  "id": "traj_z5rw0bxmrzj3",
+  "version": 1,
+  "task": {
+    "title": "Fix expired delivery backlog drain and redrive indexing"
+  },
+  "status": "completed",
+  "startedAt": "2026-08-19T19:24:19.977Z",
+  "completedAt": "2026-08-19T19:39:06.973Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-08-19T19:32:57.060Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_2awgjbvuku3t",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-08-19T19:32:57.060Z",
+      "endedAt": "2026-08-19T19:39:06.973Z",
+      "events": [
+        {
+          "ts": 1787167977062,
+          "type": "decision",
+          "content": "Kept 50-row expiry SQL batches and bounded each sweep at 50 batches: Kept 50-row expiry SQL batches and bounded each sweep at 50 batches",
+          "raw": {
+            "question": "Kept 50-row expiry SQL batches and bounded each sweep at 50 batches",
+            "chosen": "Kept 50-row expiry SQL batches and bounded each sweep at 50 batches",
+            "alternatives": [],
+            "reasoning": "A 50-row UPDATE leaves headroom under D1's 100 bound-parameter ceiling and keeps each write lock short; 2,500 rows per */5 invocation yields 720,000/day, exceeding the measured 519,000/day peak by 201,000/day."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1787167977183,
+          "type": "decision",
+          "content": "Batch durable failure fanout and split NULL from due-retry redrive reads: Batch durable failure fanout and split NULL from due-retry redrive reads",
+          "raw": {
+            "question": "Batch durable failure fanout and split NULL from due-retry redrive reads",
+            "chosen": "Batch durable failure fanout and split NULL from due-retry redrive reads",
+            "alternatives": [],
+            "reasoning": "Fifty expiry batches would otherwise multiply D1 reads per notice and exceed the 1,000-query invocation limit. Splitting the OR query lets a small non-NULL partial index serve due retries after the backlog drains."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1787168329937,
+          "type": "reflection",
+          "content": "The drain, fanout batching, partial index, and query split are validated. Full engine suite passes (659 tests), build and lint pass, and EXPLAIN changes due retries from SCAN deliveries + temp B-tree to SEARCH USING idx_deliveries_retry_due.",
+          "raw": {
+            "focalPoints": [
+              "D1 query budget",
+              "write contention",
+              "planner evidence",
+              "rollout order"
+            ],
+            "adjustments": "Keep migration 0040 drain-first; quote both the remaining NULL-branch scan and indexed due-retry branch in the PR so the tradeoff is explicit.",
+            "confidence": 0.9
+          },
+          "significance": "high",
+          "tags": [
+            "focal:D1 query budget",
+            "focal:write contention",
+            "focal:planner evidence",
+            "focal:rollout order",
+            "confidence:0.9"
+          ]
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Raised expiry capacity to 2,500 deliveries per invocation with bounded 50-row D1 writes, batched failure fanout, and migration 0040's drain-first partial retry index; verified planner, full engine tests, build, and lint.",
+    "approach": "Standard approach",
+    "confidence": 0.9
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "2bb9f32aa7817f5442e59ad97d76595b299a7cfb",
+    "endRef": "2bb9f32aa7817f5442e59ad97d76595b299a7cfb"
+  }
+}

@@ -10,11 +10,11 @@ import type {
 import { agents, agentNodeBindings, deliveries as deliveryRows, nodes } from '../db/schema.js';
 import { buildHttpPushHeaders, resolveHttpPushProxy } from '../engine/httpPushDispatch.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
-import { transformForClient, type WsEvent } from '../engine/wsTransform.js';
+import { settlePool } from '../lib/settlePool.js';
+import { queryInChunks } from '../lib/queryChunks.js';
 import { isProviderAgentDeliveryReady, type EngineDb, type EngineDeps } from '../ports/index.js';
 import { fanoutToAgents } from './fanout.js';
-import { sendNodeContextToAgents } from '../engine/nodeContext.js';
-import { appendAndPublishWorkspaceEvent } from '../engine/workspaceEvents.js';
+import { publishEvent, publishEventsToAgents } from '../engine/eventDispatch.js';
 type HonoContext = Context<AppEnv>;
 type RoutingEngine = EngineRuntime | EngineDeps;
 type RoutingContext = {
@@ -34,6 +34,10 @@ type DeliveryTarget = {
 };
 
 const DISPATCH_RETRY_DELAY_MS = 30_000;
+// Fifty 50-row statements expire at most 2,500 deliveries per invocation.
+// On a */5 schedule that is 720,000/day: above the measured 519,000/day peak
+// while each UPDATE remains well below D1's 100-bound-parameter ceiling.
+export const DELIVERY_EXPIRY_MAX_BATCHES = 50;
 
 function routingContextFromHono(c: HonoContext, workspaceIdOverride?: string): RoutingContext {
   const workspaceId = workspaceIdOverride ?? c.get('workspace')?.id;
@@ -51,54 +55,22 @@ function wireMode(mode: string): 'wait' | 'steer' {
   return mode === 'next-tool-call' ? 'steer' : 'wait';
 }
 
+/** Outside tests, node delivery URLs must pass the SSRF-safe external URL check. */
 function strictExternalUrl(engine: RoutingEngine): boolean {
   return engine.config?.environment !== 'test';
 }
 
-function buildEvent(
-  type: string,
-  workspaceId: string,
-  data: Record<string, unknown>,
-): WsEvent {
-  return {
-    type,
-    workspace_id: workspaceId,
-    data,
-    timestamp: new Date().toISOString(),
-  };
-}
-
+/** Dispatch an agent-scoped routing event (stream + node context) for `agentIds`. */
 async function fanoutToAgentsForContext(
   ctx: RoutingContext,
   agentIds: string[],
   type: string,
   data: Record<string, unknown>,
 ): Promise<void> {
-  const payload = transformForClient(buildEvent(type, ctx.workspaceId, data));
-  const unique = [...new Set(agentIds)];
-  const tasks: Promise<unknown>[] = [
-    appendAndPublishWorkspaceEvent(
-      { db: ctx.db, realtime: ctx.engine.realtime },
-      ctx.workspaceId,
-      { type, payload },
-    ),
-    sendNodeContextToAgents(
-      {
-        db: ctx.db,
-        nodeConnections: ctx.engine.nodeConnections,
-        realtime: ctx.engine.realtime,
-        workspaceId: ctx.workspaceId,
-        environment: ctx.engine.config?.environment,
-        httpPushProxy: ctx.engine.config?.httpPushProxy,
-      },
-      {
-        agentIds: unique,
-        event: type,
-        data,
-      },
-    ),
-  ];
-  await Promise.allSettled(tasks);
+  await publishEvent(
+    { db: ctx.db, engine: ctx.engine },
+    { workspaceId: ctx.workspaceId, type, data, scope: { kind: 'agents', agentIds } },
+  );
 }
 
 async function resolveLiveLocations(
@@ -108,7 +80,7 @@ async function resolveLiveLocations(
   const uniqueAgentIds = [...new Set(deliveries.map((delivery) => delivery.agentId))];
   if (uniqueAgentIds.length === 0) return new Map();
 
-  const bindings = await ctx.db
+  const bindings = await queryInChunks(uniqueAgentIds, chunk => ctx.db
     .select({
       agentId: agentNodeBindings.agentId,
       nodeId: agentNodeBindings.nodeId,
@@ -128,9 +100,9 @@ async function resolveLiveLocations(
     .where(and(
       eq(agentNodeBindings.workspaceId, ctx.workspaceId),
       eq(agentNodeBindings.status, 'active'),
-      inArray(agentNodeBindings.agentId, uniqueAgentIds),
+      inArray(agentNodeBindings.agentId, chunk),
     ))
-    .orderBy(sql`${agentNodeBindings.priority} DESC`, agentNodeBindings.createdAt);
+    .orderBy(sql`${agentNodeBindings.priority} DESC`, agentNodeBindings.createdAt));
 
   const byAgent = new Map<string, DeliveryTarget>();
   for (const binding of bindings) {
@@ -146,7 +118,7 @@ async function resolveLiveLocations(
     });
   }
 
-  const fallbackRows = await ctx.db
+  const fallbackRows = await queryInChunks(uniqueAgentIds, chunk => ctx.db
     .select({
       id: agents.id,
       locationType: agents.locationType,
@@ -159,7 +131,7 @@ async function resolveLiveLocations(
     })
     .from(agents)
     .leftJoin(nodes, eq(agents.locationNodeId, nodes.id))
-    .where(and(eq(agents.workspaceId, ctx.workspaceId), inArray(agents.id, uniqueAgentIds)));
+    .where(and(eq(agents.workspaceId, ctx.workspaceId), inArray(agents.id, chunk))));
 
   for (const row of fallbackRows) {
     if (byAgent.has(row.id)) continue;
@@ -539,8 +511,14 @@ async function redriveWsBacklogForAgent(
   ctx: RoutingContext,
   agentId: string,
   now: Date,
+  wsBacklogLimit: number | undefined,
 ): Promise<void> {
-  const backlog = await deliveryEngine.fetchQueuedWsBacklogEvents(ctx.db, ctx.workspaceId, agentId, { now });
+  const backlog = await deliveryEngine.fetchQueuedWsBacklogEvents(
+    ctx.db,
+    ctx.workspaceId,
+    agentId,
+    { now, limit: wsBacklogLimit },
+  );
   if (backlog.length === 0) return;
 
   const backlogDeliveries = backlog.map((event) => event.delivery);
@@ -575,10 +553,14 @@ async function redriveWsBacklogForAgent(
  */
 export async function sweepDueNodeDeliveries(
   engine: EngineDeps,
-  opts: { workspaceId?: string; now?: Date; limit?: number } = {},
+  opts: { workspaceId?: string; now?: Date; limit?: number; wsBacklogLimit?: number } = {},
 ): Promise<number> {
   const now = opts.now ?? new Date();
-  const due = await deliveryEngine.fetchDueNodeDeliveryEvents(engine.db, { ...opts, now });
+  const due = await deliveryEngine.fetchDueNodeDeliveryEvents(engine.db, {
+    workspaceId: opts.workspaceId,
+    limit: opts.limit,
+    now,
+  });
 
   const httpPushEvents: typeof due = [];
   const wsAgents: { workspaceId: string; agentId: string }[] = [];
@@ -596,8 +578,8 @@ export async function sweepDueNodeDeliveries(
     wsAgents.push({ workspaceId: event.workspaceId, agentId: event.delivery.agentId });
   }
 
-  await Promise.allSettled([
-    ...httpPushEvents.map((event) => (
+  const tasks = [
+    ...httpPushEvents.map((event) => () => (
       routeDeliveryOutcomesForContext(
         { db: engine.db, workspaceId: event.workspaceId, engine },
         [event.delivery],
@@ -605,14 +587,18 @@ export async function sweepDueNodeDeliveries(
         event.eventData,
       )
     )),
-    ...wsAgents.map((agent) => (
+    ...wsAgents.map((agent) => () => (
       redriveWsBacklogForAgent(
         { db: engine.db, workspaceId: agent.workspaceId, engine },
         agent.agentId,
         now,
+        opts.wsBacklogLimit,
       )
     )),
-  ]);
+  ];
+  // A single cron must not fan out up to 50 simultaneous D1-heavy dispatch
+  // pipelines. Preserve independent failure handling and per-agent ordering.
+  await settlePool(tasks, 4);
   return due.length;
 }
 
@@ -623,12 +609,16 @@ export async function sweepDueNodeDeliveries(
  */
 export const sweepDueHttpPushDeliveries = sweepDueNodeDeliveries;
 
-async function notifyDeliveryFailuresForContext(
-  ctx: RoutingContext,
+/** Dispatch one `delivery.failed` event per undeliverable notice as a single bounded batch. */
+async function notifyDeliveryFailures(
+  engine: EngineDeps,
   notices: deliveryEngine.DeliveryFailureNotice[],
 ): Promise<void> {
-  for (const notice of notices) {
-    await fanoutToAgentsForContext(ctx, [notice.sender_agent_id], 'delivery.failed', {
+  if (notices.length === 0) return;
+  const notifications = notices.map((notice) => ({
+    workspaceId: notice.workspace_id,
+    agentId: notice.sender_agent_id,
+    data: {
       delivery_id: notice.delivery_id,
       message_id: notice.message_id,
       target_agent_id: notice.target_agent_id,
@@ -637,40 +627,51 @@ async function notifyDeliveryFailuresForContext(
       reason: notice.reason,
       error: notice.error,
       retryable: notice.retryable,
-    });
-  }
+    },
+  }));
+  await publishEventsToAgents(
+    { db: engine.db, engine },
+    notifications.map((notification) => ({
+      workspaceId: notification.workspaceId,
+      agentId: notification.agentId,
+      type: 'delivery.failed',
+      data: notification.data,
+    })),
+  );
 }
 
 /**
- * Scheduled TTL expiry maintenance. Each workspace advances by at most one
- * D1-safe delivery batch per invocation; adapters call this on a cadence rather
- * than coupling mailbox reads to cleanup work.
+ * Scheduled TTL expiry maintenance. One invocation advances through a bounded
+ * number of small D1-safe statements, then batches the best-effort failure
+ * fanout so increasing the drain rate does not multiply D1 reads per notice.
  */
 export async function sweepExpiredDeliveries(
   engine: EngineDeps,
-  opts: { workspaceId?: string; now?: Date } = {},
+  opts: { workspaceId?: string; now?: Date; maxBatches?: number } = {},
 ): Promise<number> {
   const now = opts.now ?? new Date();
-  const notices = await deliveryEngine.expireDueDeliveries(engine.db, opts.workspaceId, now);
-  const byWorkspace = new Map<string, deliveryEngine.DeliveryFailureNotice[]>();
-  for (const notice of notices) {
-    const workspaceNotices = byWorkspace.get(notice.workspace_id) ?? [];
-    workspaceNotices.push(notice);
-    byWorkspace.set(notice.workspace_id, workspaceNotices);
+  const requestedMaxBatches = opts.maxBatches ?? DELIVERY_EXPIRY_MAX_BATCHES;
+  const maxBatches = Number.isFinite(requestedMaxBatches)
+    ? Math.min(Math.max(Math.floor(requestedMaxBatches), 1), DELIVERY_EXPIRY_MAX_BATCHES)
+    : DELIVERY_EXPIRY_MAX_BATCHES;
+  let expiredCount = 0;
+  for (let batchNumber = 0; batchNumber < maxBatches; batchNumber++) {
+    const batch = await deliveryEngine.expireDueDeliveryBatch(engine.db, opts.workspaceId, now);
+    expiredCount += batch.expiredCount;
+    // Flush every committed batch before another state transition can fail.
+    // Otherwise a later D1 error would strand already-dead-lettered rows with
+    // notices held only in this invocation's memory.
+    await notifyDeliveryFailures(engine, batch.notices);
+    if (batch.expiredCount < deliveryEngine.DELIVERY_EXPIRY_BATCH_SIZE) break;
   }
-  for (const [workspaceId, workspaceNotices] of byWorkspace) {
-    await notifyDeliveryFailuresForContext(
-      { db: engine.db, workspaceId, engine },
-      workspaceNotices,
-    );
-  }
-  return notices.length;
+  return expiredCount;
 }
 
 export async function notifyDeliveryRejections(
   c: HonoContext,
   senderAgentId: string,
   rejections: DeliveryRejectionRecord[],
+  workspaceIdOverride?: string,
 ): Promise<void> {
   if (rejections.length === 0) return;
   for (const rejection of rejections) {
@@ -682,6 +683,6 @@ export async function notifyDeliveryRejections(
       reason: rejection.reason,
       error: rejection.error,
       retryable: rejection.retryable,
-    });
+    }, workspaceIdOverride);
   }
 }

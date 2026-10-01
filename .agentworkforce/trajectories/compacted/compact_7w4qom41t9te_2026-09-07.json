@@ -1,0 +1,42 @@
+{
+  "id": "compact_7w4qom41t9te",
+  "version": 1,
+  "type": "compacted",
+  "compactedAt": "2026-09-07T10:52:35.692Z",
+  "sourceTrajectories": [
+    "traj_idpcbmpk3vkl"
+  ],
+  "dateRange": {
+    "start": "2026-09-07T10:48:36.669Z",
+    "end": "2026-09-07T10:51:40.189Z"
+  },
+  "summary": {
+    "totalDecisions": 1,
+    "totalEvents": 1,
+    "uniqueAgents": [
+      "default"
+    ]
+  },
+  "decisionGroups": [
+    {
+      "category": "api",
+      "decisions": [
+        {
+          "question": "Keep derived presence and restore SQL filtering",
+          "chosen": "Keep derived presence and restore SQL filtering",
+          "reasoning": "86ef7e5 already removed the read-path sweep; background maintenance is separate. SQL must match active/online aliases and stale-to-offline derivation, including fractional-second TTL boundaries.",
+          "fromTrajectory": "traj_idpcbmpk3vkl"
+        }
+      ]
+    }
+  ],
+  "keyLearnings": [],
+  "keyFindings": [
+    "Commit 86ef7e5 already removed both read-path sweeps; issue #315 still needed SQL status pushdown.",
+    "Regression red: 24 failed, 10 passed; filtered requests materialized all 16 roster rows.",
+    "Final validation: all 827 engine tests across 71 files passed; engine typecheck, lint, OpenAPI YAML parsing and git diff --check passed.",
+    "Read-only SQLite requests preserve stale-to-offline derivation and durable rows. SQL matches aliases and exact/fractional TTL boundaries using one request timestamp."
+  ],
+  "filesAffected": [],
+  "commits": []
+}

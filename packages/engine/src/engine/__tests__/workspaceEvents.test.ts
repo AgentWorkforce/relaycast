@@ -4,6 +4,8 @@ import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/
 import { workspaceEvents, workspaces } from '../../db/schema.js';
 import {
   appendAndPublishWorkspaceEvent,
+  appendWorkspaceEventBatch,
+  appendWorkspaceEvents,
   appendWorkspaceEvent,
   listWorkspaceEvents,
 } from '../workspaceEvents.js';
@@ -60,6 +62,85 @@ describe('appendWorkspaceEvent', () => {
       appendWorkspaceEvent(handle.db, 'ws_a', { type: 'message.created', payload: { type: 'message.created' } }),
     ).resolves.toBeNull();
     expect(warn).toHaveBeenCalled();
+  });
+
+  it('appends large event sets in D1-safe chunks with contiguous sequence numbers', async () => {
+    const { db } = track(openDb());
+    await appendWorkspaceEvent(db, 'ws_a', { type: 'seed', payload: { n: 0 } });
+
+    const seqs = await appendWorkspaceEvents(
+      db,
+      'ws_a',
+      Array.from({ length: 65 }, (_, index) => ({
+        type: 'delivery.failed',
+        payload: { type: 'delivery.failed', n: index + 1 },
+      })),
+    );
+
+    expect(seqs).toEqual(Array.from({ length: 65 }, (_, index) => index + 2));
+    const rows = await db
+      .select()
+      .from(workspaceEvents)
+      .where(eq(workspaceEvents.workspaceId, 'ws_a'));
+    expect(rows).toHaveLength(66);
+    expect(new Set(rows.map((row) => row.seq)).size).toBe(66);
+  });
+
+  it('assigns independent sequences when one batch spans workspaces', async () => {
+    const { db } = track(openDb());
+    await appendWorkspaceEvent(db, 'ws_a', { type: 'seed', payload: { n: 0 } });
+
+    const seqs = await appendWorkspaceEventBatch(db, [
+      { workspaceId: 'ws_a', input: { type: 't', payload: { n: 1 } } },
+      { workspaceId: 'ws_b', input: { type: 't', payload: { n: 2 } } },
+      { workspaceId: 'ws_a', input: { type: 't', payload: { n: 3 } } },
+      { workspaceId: 'ws_b', input: { type: 't', payload: { n: 4 } } },
+    ]);
+
+    expect(seqs).toEqual([2, 1, 3, 2]);
+  });
+
+  it('reads only the high-water row per workspace regardless of retained history', async () => {
+    const { db, sqlite } = track(openDb());
+    sqlite.exec(`
+      WITH RECURSIVE seqs(n) AS (
+        VALUES (1) UNION ALL SELECT n + 1 FROM seqs WHERE n < 10000
+      )
+      INSERT INTO workspace_events (workspace_id, seq, type, payload)
+      SELECT 'ws_a', n * 2, 'seed', '{}' FROM seqs;
+      INSERT INTO workspace_events (workspace_id, seq, type, payload)
+      VALUES ('ws_b', 70, 'seed', '{}');
+    `);
+
+    // Instrument rows visited, not wall-clock time or a particular query plan.
+    // This view preserves the indexed columns and adds a non-deterministic
+    // predicate that SQLite evaluates for each historical row it considers.
+    let historyReads = 0;
+    sqlite.function('record_history_read', () => { historyReads++; return 1; });
+    sqlite.exec(`
+      ALTER TABLE workspace_events RENAME TO retained_workspace_events;
+      CREATE VIEW workspace_events AS
+        SELECT * FROM retained_workspace_events WHERE record_history_read() = 1;
+      CREATE TRIGGER append_instrumented_workspace_event
+        INSTEAD OF INSERT ON workspace_events BEGIN
+          INSERT INTO retained_workspace_events (workspace_id, seq, type, channel_id, payload)
+          VALUES (NEW.workspace_id, NEW.seq, NEW.type, NEW.channel_id, NEW.payload);
+        END;
+    `);
+
+    const seqs = await appendWorkspaceEventBatch(db, [
+      { workspaceId: 'ws_a', input: { type: 't', payload: {} } },
+      { workspaceId: 'ws_b', input: { type: 't', payload: {} } },
+      { workspaceId: 'ws_a', input: { type: 't', payload: {} } },
+      { workspaceId: 'ws_new', input: { type: 't', payload: {} } },
+      { workspaceId: 'ws_b', input: { type: 't', payload: {} } },
+      { workspaceId: 'ws_new', input: { type: 't', payload: {} } },
+    ]);
+
+    expect(seqs).toEqual([20001, 71, 20002, 1, 72, 2]);
+    // Two existing workspaces need one index-end row each; the empty workspace
+    // needs none. The previous grouped join visits all 10,001 retained rows.
+    expect(historyReads).toBe(2);
   });
 });
 

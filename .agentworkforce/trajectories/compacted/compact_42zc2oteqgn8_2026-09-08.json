@@ -1,0 +1,37 @@
+{
+  "id": "compact_42zc2oteqgn8",
+  "version": 1,
+  "type": "compacted",
+  "compactedAt": "2026-09-08T20:37:58.381Z",
+  "sourceTrajectories": [
+    "traj_7ufducm45wp6"
+  ],
+  "dateRange": {
+    "start": "2026-09-08T20:33:10.127Z",
+    "end": "2026-09-08T20:37:48.915Z"
+  },
+  "summary": {
+    "totalDecisions": 1,
+    "totalEvents": 2,
+    "uniqueAgents": [
+      "default"
+    ]
+  },
+  "decisionGroups": [
+    {
+      "category": "security",
+      "decisions": [
+        {
+          "question": "Reject anonymous bootstrap secrets without an explicit non-hosted base URL",
+          "chosen": "Reject anonymous bootstrap secrets without an explicit non-hosted base URL",
+          "reasoning": "A self-host deployment secret must never default to or be sent to cast.agentrelay.com; authenticated and unkeyed creates do not transmit this header and remain compatible.",
+          "fromTrajectory": "traj_7ufducm45wp6"
+        }
+      ]
+    }
+  ],
+  "keyLearnings": [],
+  "keyFindings": [],
+  "filesAffected": [],
+  "commits": []
+}

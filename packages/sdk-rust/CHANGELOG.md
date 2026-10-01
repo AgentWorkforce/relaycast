@@ -8,9 +8,31 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased - Major]
 
+### Fixed
+
+- Anonymous keyed workspace bootstrap rejects remote HTTP and redirects, preventing its recovery capability from reaching another origin.
+- `RelayError::retry_after_ms()` exposes the authoritative server delay for exact-release overload handling.
+- Retryable HTTP failures retain the final status, API error, request metadata, and attempt count after retries are exhausted.
+- Retried 5xx responses honor a bounded `Retry-After` delay.
+- Agent registration now honors bounded server `Retry-After` cooldowns and waits for that same cooldown before retrying.
+- Workspace write-admission denials (`workspace_busy`, `workspace_admission_unavailable`) are retried on the server's own `Retry-After` pacing, including for unkeyed mutations. Admission rejects before the handler runs, so nothing was applied; previously a momentary denial was terminal and left calls such as agent/node binding permanently unapplied.
+
 ### Changed
 
+- Automatic 5xx retries require an idempotent request or an idempotency key.
+- **BREAKING:** `RelayCast::rotate_agent_token` now requires the current agent token; use `take_over_agent` or `recover_agent` to replace an identity you cannot authenticate as.
+- **BREAKING:** `AgentRegistrationClient::register_agent_token` is create-only and returns `AgentRegistrationError::AlreadyExists` on conflicts; use a unique name or persist the token for self-rollover.
+- **BREAKING:** `RelayError::Api` gained `request_id: Option<String>` and `attempts: u32` fields (also exposed via new `RelayError::request_id()`/`RelayError::attempts()` accessors); match arms that destructure it exhaustively need a trailing `..`.
 - `NodeRosterEntry.load` is now `Option<f64>`, matching the API's explicit unreported state; direct-agent heartbeats no longer label a constant utilization as measured.
+
+### Added
+
+- `RelayCast::emit_agent_event_with_idempotency_key` preserves a stable event key across retries.
+
+- `RelayCast::create_workspace` now requires explicit provenance, preventing CLI bootstrap workspaces from being mislabeled as SDK-created.
+- `WorkspaceBootstrapOptions` and `RelayCast::create_workspace_with_options()` support crash-safe anonymous keyed workspace creation without a deployment-wide secret, plus opt-in self-host proof via `with_bootstrap_secret(...)`; the SDK never sends that proof to hosted Relaycast.
+- `RelayCast::release_agent_if_token_hash` performs generation-safe cleanup without changing the existing `ReleaseAgentRequest` struct.
+- `RelayCast::release_agent_exact()` performs immutable-id, idempotent agent-release reconciliation.
 
 ## [4.2.0] - 2026-06-24
 

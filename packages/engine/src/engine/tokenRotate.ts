@@ -9,10 +9,9 @@ type Db = ReturnType<typeof getDb>;
 /**
  * How long a superseded agent token stays authenticatable after a rotation.
  *
- * Sized to cover the concurrency envelope reported in relay#1542: the broker
- * and the MCP layer both fire `registerOrRotate` at agent spawn, and the loser
- * of that race must have long enough to make the follow-up request that gets
- * it a persistent WebSocket session (which then carries its own auth state).
+ * Sized to cover concurrent authenticated self-rollover: the loser of that
+ * race must have long enough to make the follow-up request that gets it a
+ * persistent WebSocket session (which then carries its own auth state).
  * Sixty seconds is well past the observed request latencies for that path and
  * well short of a duration that would functionally weaken a rotate-to-revoke.
  */
@@ -38,7 +37,7 @@ export async function rotateAgentToken(db: Db, workspaceId: string, agentName: s
   // each captures its predecessor into `previous_token_hash`, and the loser of
   // the race authenticates against the previous slot instead of being handed a
   // silently-dead credential. Chained rotations retire the older previous slot
-  // — see the "chained rotations" case in registerOrRotateRace.test.ts.
+  // — see the "chained rotations" conformance case.
   await db
     .update(agents)
     .set({

@@ -1,3 +1,4 @@
+import { WorkspaceDeliveryCapacityError } from '../engine/workspaceDeliveryPolicy.js';
 import type { BatchItem } from 'drizzle-orm/batch';
 import type { BaseSQLiteDatabase } from 'drizzle-orm/sqlite-core';
 import type * as schema from '../db/schema.js';
@@ -81,6 +82,11 @@ export type AtomicWrite = BatchItem<'sqlite'> & PromiseLike<unknown>;
 export type AtomicWriteBuilder = (db: EngineDb) => readonly AtomicWrite[];
 export type AtomicWriteInput = readonly AtomicWrite[] | AtomicWriteBuilder;
 
+export interface RunAtomicWritesOptions {
+  /** Reject before building statements when the handle cannot guarantee rollback. */
+  requireAtomic?: boolean;
+}
+
 /**
  * D1-style atomic batch: every statement applies, or none does.
  *
@@ -126,18 +132,29 @@ export function runAtomic<T>(db: EngineDb, fn: (tx: EngineDb) => Promise<T>): Pr
  *     statements are built from the original handle and run as one atomic
  *     batch.
  *  3. Neither — statements run sequentially with no rollback, the engine's
- *     historical behavior for bare handles.
+ *     historical behavior for bare handles, unless `requireAtomic` is set.
  *
  * Returns the per-statement results in order, so callers can recover
  * `.returning()` rows by index. Statements must not depend on each other's
  * DB-returned values (IDs are app-generated snowflakes), because under a batch
  * nothing is visible until every statement has executed.
  */
-export async function runAtomicWrites(
+async function executeAtomicWrites(
   db: EngineDb,
   input: AtomicWriteInput,
+  options: RunAtomicWritesOptions = {},
 ): Promise<unknown[]> {
   const handle = db as EngineDb & Partial<TransactionCapability> & Partial<BatchCapability>;
+  if (
+    options.requireAtomic &&
+    typeof handle.withTransaction !== 'function' &&
+    typeof handle.batch !== 'function'
+  ) {
+    throw new Error(
+      'Atomic write capability required: database handle exposes neither withTransaction nor batch',
+    );
+  }
+
   if (handle.withTransaction) {
     return handle.withTransaction(async (tx) => {
       const statements = buildStatements(input, tx);
@@ -152,4 +169,44 @@ export async function runAtomicWrites(
     return handle.batch(statements as [AtomicWrite, ...AtomicWrite[]]);
   }
   return runSequentially(statements);
+}
+
+/** Translate a workspace guard failure after the atomic adapter rolls back. */
+export async function runAtomicWrites(
+  db: EngineDb, input: AtomicWriteInput, options: RunAtomicWritesOptions = {},
+): Promise<unknown[]> {
+  try { return await executeAtomicWrites(db, input, options); }
+  catch (error) {
+    if (databaseConstraintKind(error) === 'workspace_delivery_capacity') {
+      throw new WorkspaceDeliveryCapacityError('Workspace delivery backlog is full; retry after it drains');
+    }
+    throw error;
+  }
+}
+
+/** Normalize atomic admission sentinels across SQLite adapters (D1 wraps the message).
+ * Keep driver-specific error decoding at this port boundary; engine callers use a stable kind.
+ */
+export type DatabaseConstraintKind = 'mailbox_capacity' | 'workspace_delivery_capacity' | 'a2a_registration_changed' | 'address_changed';
+
+export function databaseConstraintKind(error: unknown): DatabaseConstraintKind | undefined {
+  const seen = new Set<unknown>();
+  let cause = error;
+  while (cause !== null && typeof cause === 'object' && !seen.has(cause)) {
+    seen.add(cause);
+    const record = cause as { message?: unknown; cause?: unknown };
+    const message = typeof record.message === 'string' ? record.message : '';
+    // Registration guards use messages.agent_id for admission and
+    // a2a_inbound.workspace_id for legacy identity promotion (both non-null).
+    if (/NOT NULL constraint failed: (messages\.agent_id|a2a_inbound\.workspace_id)/i.test(message)) return 'a2a_registration_changed';
+    // Per-recipient/required-mailbox sentinel (workspace_id NULL), and the
+    // distinct workspace-scoped growth sentinel (status NULL). Order matters
+    // only for a row that trips both; either is a capacity refusal.
+    if (/NOT NULL constraint failed: deliveries\.workspace_id/i.test(message)) return 'mailbox_capacity';
+    if (/NOT NULL constraint failed: deliveries\.status/i.test(message)) return 'workspace_delivery_capacity';
+    // Addressed DM admission: the recipient left the addressed node before commit.
+    if (/NOT NULL constraint failed: messages\.body/i.test(message)) return 'address_changed';
+    cause = record.cause;
+  }
+  return undefined;
 }

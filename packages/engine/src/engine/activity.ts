@@ -28,9 +28,11 @@ export async function getActivityFeed(
     .innerJoin(agents, eq(messages.agentId, agents.id))
     .leftJoin(dmConversations, eq(dmConversations.channelId, channels.id))
     .where(eq(messages.workspaceId, workspaceId))
-    // id is a monotonic snowflake — use it as a stable tiebreaker so same-second
-    // messages don't shuffle between calls.
-    .orderBy(desc(messages.createdAt), desc(messages.id))
+    // Message ids are fixed-width monotonic snowflakes. Ordering directly by
+    // id preserves newest-first activity while letting SQLite satisfy both the
+    // workspace filter and ordering from idx_messages_workspace. Ordering by
+    // created_at first forces D1 to scan and sort the entire workspace history.
+    .orderBy(desc(messages.id))
     .limit(effectiveLimit);
 
   return rows.map((r) => {

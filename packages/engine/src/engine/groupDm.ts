@@ -9,8 +9,11 @@ import {
   type DeliveryOutcomeRecords,
 } from './deliveryWrites.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
+import type { WorkspaceDeliveryPolicy } from './workspaceDeliveryPolicy.js';
 import { codedError } from '../lib/httpError.js';
 import { resolveSendAttachments } from './attachments.js';
+import { publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
+import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -83,8 +86,13 @@ export async function postGroupMessage(
   workspaceId: string,
   conversationId: string,
   agentId: string,
-  data: { text: string; attachments?: string[]; mode?: 'wait' | 'steer' },
-  options: { mailbox?: MailboxConfig } = {},
+  data: {
+    text: string;
+    attachments?: string[];
+    mode?: 'wait' | 'steer';
+    data?: Record<string, unknown> | null;
+  },
+  options: { mailbox?: MailboxConfig; workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy } = {},
 ) {
   // Verify sender is a participant (and hasn't left)
   const [participant] = await db
@@ -129,6 +137,12 @@ export async function postGroupMessage(
   const attachments = await resolveSendAttachments(db, workspaceId, data.attachments);
   const messageId = generateId();
   const hasAttachments = attachments.length > 0;
+  const metadata = {
+    ...sanitizeUserMessageMetadata(data.data),
+    injection_mode: data.mode ?? 'wait',
+  };
+  const sessionRef = requireSessionRefFromMetadata(metadata);
+  const createdAt = new Date();
   const mailbox = options.mailbox ?? {
     ttlMs: DEFAULT_MAILBOX_TTL_MS,
     depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
@@ -148,10 +162,20 @@ export async function postGroupMessage(
           agentId,
           body: data.text,
           hasAttachments,
-          metadata: { injection_mode: data.mode ?? 'wait' },
+          metadata,
+          sessionRef,
+          createdAt,
         })
         .returning(),
     ];
+
+    const sessionWrite = buildMessageSessionWrite(
+      writeDb,
+      workspaceId,
+      sessionRef,
+      createdAt,
+    );
+    if (sessionWrite) writes.push(sessionWrite);
 
     if (attachments.length > 0) {
       const attachmentValues = attachments.map((attachment, idx) => ({
@@ -171,11 +195,12 @@ export async function postGroupMessage(
         mode: data.mode === 'steer' ? 'next-tool-call' : 'immediate',
         ttlMs: mailbox.ttlMs,
         depthCap: mailbox.depthCap,
+        workspacePolicy: options.workspaceDeliveryPolicy,
       }),
     );
 
     return writes;
-  });
+  }, { requireAtomic: Boolean(options.workspaceDeliveryPolicy) });
   const [message] = results[0] as (typeof messages.$inferSelect)[];
   const deliveryOutcomes: DeliveryOutcomeRecords = await fetchGroupDeliveryOutcomes(db, {
     messageId,
@@ -194,6 +219,7 @@ export async function postGroupMessage(
       text: message.body,
       injection_mode: injectionMode,
       attachments,
+      metadata: publicMessageMetadata(message.metadata),
     },
     created_at: message.createdAt.toISOString(),
 
@@ -203,6 +229,7 @@ export async function postGroupMessage(
     text: message.body,
     injection_mode: injectionMode,
     attachments,
+    metadata: publicMessageMetadata(message.metadata),
 
     // Internal: delivery records for recipients — stripped by route before response
     _deliveries: deliveryOutcomes.deliveries,

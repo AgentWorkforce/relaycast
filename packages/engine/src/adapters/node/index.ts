@@ -18,6 +18,8 @@ import { sweepStaleAgents } from '../../engine/agent.js';
 import { sweepTimedOutInvocations } from '../../engine/action.js';
 import { sendNodePresenceContext } from '../../engine/nodeContext.js';
 import { createDeliveryMaintenanceRunner } from './delivery-maintenance.js';
+import { sweepPendingA2aEgress } from '../../engine/a2aEgress.js';
+import { reapExpiredWorkspaces } from '../../engine/workspace.js';
 
 export {
   InProcessRealtime,
@@ -54,7 +56,7 @@ export interface NodeRuntimeOptions {
   entitlements?: EntitlementsProvider;
   /** Override the telemetry sink (default: no-op). */
   telemetry?: TelemetrySink;
-  /** Engine config (environment, version, workspace-stream default, etc.). */
+  /** Engine config (environment, version, workspace-stream default, etc.). Persist `workspaceBootstrapSecret` for replay across restarts. */
   config?: EngineConfig;
   /** Presence TTL / sweep tuning (tests use short windows). */
   presence?: InProcessPresenceOptions;
@@ -144,6 +146,18 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
   const auth = options.auth ?? new SqliteApiKeyAuthProvider();
   const entitlements = options.entitlements ?? new StaticEntitlementsProvider(kv);
 
+  // An explicit host-provided boundary is authoritative (the host may prune
+  // outside this process). Otherwise report the same fallback the local Node
+  // pruner uses; omitted/disabled message TTL is explicitly never-prune.
+  const retentionOptions = options.eventQueue?.retention;
+  const messageTtlDays = retentionOptions === false
+    ? null
+    : retentionOptions?.defaults?.messageTtlDays ?? null;
+  const config: EngineConfig = {
+    ...options.config,
+    retention: options.config?.retention ?? { messageTtlDays },
+  };
+
   const deps: EngineDeps = {
     db,
     realtime,
@@ -157,18 +171,24 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
     auth,
     entitlements,
     telemetry,
-    config: options.config ?? {},
+    config,
   };
 
   realtime.setNodeCompletionDeps(deps);
 
   const runDeliveryMaintenance = createDeliveryMaintenanceRunner(deps);
 
+  let a2aRecoveryRunning = false;
   const sweepTimer = setInterval(() => {
     void sweepStaleAgents(db).catch(() => {});
     void sweepOfflineNodes(db, realtime, deps).catch(() => {});
     void sweepTimedOutInvocations(db, realtime, { completionDeps: deps }).catch(() => {});
+    void reapExpiredWorkspaces(db, fileStorage).catch(() => {});
     void runDeliveryMaintenance();
+    if (!a2aRecoveryRunning) {
+      a2aRecoveryRunning = true;
+      void sweepPendingA2aEgress(db).catch(() => {}).finally(() => { a2aRecoveryRunning = false; });
+    }
   }, 15_000);
   (sweepTimer as { unref?: () => void }).unref?.();
 

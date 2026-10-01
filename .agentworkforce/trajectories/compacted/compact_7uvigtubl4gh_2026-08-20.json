@@ -1,0 +1,37 @@
+{
+  "id": "compact_7uvigtubl4gh",
+  "version": 1,
+  "type": "compacted",
+  "compactedAt": "2026-08-20T13:05:37.722Z",
+  "sourceTrajectories": [
+    "traj_g288y2oufpry"
+  ],
+  "dateRange": {
+    "start": "2026-08-20T12:46:08.869Z",
+    "end": "2026-08-20T13:05:36.436Z"
+  },
+  "summary": {
+    "totalDecisions": 1,
+    "totalEvents": 2,
+    "uniqueAgents": [
+      "default"
+    ]
+  },
+  "decisionGroups": [
+    {
+      "category": "database",
+      "decisions": [
+        {
+          "question": "Resolved every bot-last review finding in one security-hardening batch",
+          "chosen": "Resolved every bot-last review finding in one security-hardening batch",
+          "reasoning": "The findings interact at the identity boundary: auth scoping, D1 mutation ordering, database ownership constraints, SDK parity, and recovery audit correctness need one carrying SHA so thread replies and CI point to the same verified state.",
+          "fromTrajectory": "traj_g288y2oufpry"
+        }
+      ]
+    }
+  ],
+  "keyLearnings": [],
+  "keyFindings": [],
+  "filesAffected": [],
+  "commits": []
+}

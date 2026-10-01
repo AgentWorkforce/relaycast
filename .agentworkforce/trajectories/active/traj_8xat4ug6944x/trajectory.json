@@ -1,0 +1,62 @@
+{
+  "id": "traj_8xat4ug6944x",
+  "version": 1,
+  "task": {
+    "title": "Desktop direct-node machine addresses",
+    "source": {
+      "system": "plain",
+      "id": "relay-desktop#119"
+    }
+  },
+  "status": "active",
+  "startedAt": "2026-09-29T21:01:44.449Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-09-29T21:01:47.106Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_f3bgv1i6bq3e",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-09-29T21:01:47.106Z",
+      "events": [
+        {
+          "ts": 1790715707110,
+          "type": "decision",
+          "content": "Use normalized hostname plus the full agent id as the direct machine_id: Use normalized hostname plus the full agent id as the direct machine_id",
+          "raw": {
+            "question": "Use normalized hostname plus the full agent id as the direct machine_id",
+            "chosen": "Use normalized hostname plus the full agent id as the direct machine_id",
+            "alternatives": [],
+            "reasoning": "Each desktop session owns its own direct node; the full server-issued id makes its address component unique while preserving a readable host prefix."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1790715713697,
+          "type": "reflection",
+          "content": "Registration, roster, direct socket delivery, and legacy alias pass on a throwaway local Relaycast server",
+          "raw": {
+            "confidence": 0.9
+          },
+          "significance": "high",
+          "tags": [
+            "confidence:0.9"
+          ]
+        }
+      ]
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "130c8204886acdb111ee2fd67774dacf5b4e4637",
+    "endRef": "130c8204886acdb111ee2fd67774dacf5b4e4637"
+  }
+}

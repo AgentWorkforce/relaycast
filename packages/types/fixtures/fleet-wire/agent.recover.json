@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "type": "agent.recover",
+  "id": "req_agent_recover_001",
+  "name": "codex-builder-1",
+  "expected_agent_id": "agt_01J7FLEET000000000000101",
+  "invocation_id": "inv_spawn_codex_001",
+  "session_ref": "pty://builder-1/sessions/codex-builder-1",
+  "resumable": true
+}

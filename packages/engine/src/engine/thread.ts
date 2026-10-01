@@ -12,7 +12,9 @@ import {
 } from './deliveryWrites.js';
 import { displayAgentName, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
+import type { WorkspaceDeliveryPolicy } from './workspaceDeliveryPolicy.js';
 import { codedError } from '../lib/httpError.js';
+import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -22,7 +24,7 @@ export async function postReply(
   parentId: string,
   agentId: string,
   data: { text: string; blocks?: unknown[] | null; data?: Record<string, unknown> | null },
-  options: { mailbox?: MailboxConfig } = {},
+  options: { mailbox?: MailboxConfig; workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy } = {},
 ) {
   // Get the parent message
   const [parent] = await db
@@ -45,7 +47,9 @@ export async function postReply(
 
   const replyId = generateId();
   const metadata = sanitizeUserMessageMetadata(data.data);
-  const mentionPattern = /(?:^|\s)@(\w+)/g;
+  const sessionRef = requireSessionRefFromMetadata(metadata);
+  const createdAt = new Date();
+  const mentionPattern = /(?:^|\s)@([\w-]+)/g;
   const mentionedHandles = new Set<string>();
   for (let match = mentionPattern.exec(data.text); match !== null; match = mentionPattern.exec(data.text)) {
     mentionedHandles.add(match[1]);
@@ -73,10 +77,20 @@ export async function postReply(
           body: data.text,
           blocks: data.blocks || null,
           metadata,
+          sessionRef,
           hasAttachments: false,
+          createdAt,
         })
         .returning(),
     ];
+
+    const sessionWrite = buildMessageSessionWrite(
+      writeDb,
+      workspaceId,
+      sessionRef,
+      createdAt,
+    );
+    if (sessionWrite) writes.push(sessionWrite);
 
     writes.push(
       dmConversation
@@ -88,6 +102,7 @@ export async function postReply(
           mode: 'immediate',
           ttlMs: mailbox.ttlMs,
           depthCap: mailbox.depthCap,
+          workspacePolicy: options.workspaceDeliveryPolicy,
         })
         : buildChannelDeliveryWrite(writeDb, {
           workspaceId,
@@ -99,11 +114,12 @@ export async function postReply(
           depthCap: mailbox.depthCap,
           reason: 'thread-reply',
           mentionHandles: Array.from(mentionedHandles),
+          workspacePolicy: options.workspaceDeliveryPolicy,
         }),
     );
 
     return writes;
-  });
+  }, { requireAtomic: Boolean(options.workspaceDeliveryPolicy) });
   const [reply] = results[0] as (typeof messages.$inferSelect)[];
   const deliveryOutcomes: DeliveryOutcomeRecords = dmConversation
     ? await fetchGroupDeliveryOutcomes(db, {

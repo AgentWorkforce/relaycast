@@ -1,11 +1,17 @@
-import { eq, and, gt, lt, ne, inArray, sql } from 'drizzle-orm';
+import { eq, and, gt, lt, ne, sql, inArray, type SQL } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { agents, agentNodeBindings, channels, channelMembers, dmParticipants, actions, deliveries, nodes } from '../db/schema.js';
+import { agents, agentNodeBindings, agentRecoveryCredentials, channels, channelMembers, dmParticipants, actions, deliveries, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
+import { invalidateChannelCache } from './cache.js';
+import { queryInChunks } from '../lib/queryChunks.js';
 import { codedError } from '../lib/httpError.js';
 import { directNodeIdForAgent } from './node.js';
+import { addressNodeSelection, formatAgentAddress } from './address.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
+import { AGENT_RECOVERY_PROOF_HASH_PATTERN } from '@relaycast/types';
+
+export { AGENT_RECOVERY_PROOF_HASH_PATTERN } from '@relaycast/types';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -61,6 +67,50 @@ type AgentPresenceRow = Pick<typeof agents.$inferSelect, 'status' | 'lastSeen'>;
  * delivery target.
  */
 export const RELEASED_AGENT_STATUS = 'released';
+
+/** Terminal reason applied to deliveries whose recipient is permanently released. */
+export const RELEASED_AGENT_DELIVERY_ERROR = 'recipient agent released';
+
+/**
+ * Build the terminal delivery transition that accompanies an irreversible
+ * agent release.
+ *
+ * Removing channel/DM membership prevents future fan-out, but it does not
+ * touch already queued rows. Those rows count against the workspace delivery
+ * cap until they are acknowledged, failed, dead-lettered, or expire. A
+ * tombstoned agent can never acknowledge them, so leaving them active turns a
+ * clean fleet teardown into a workspace-wide messaging outage until TTL.
+ *
+ * Callers include this statement in the same required atomic release unit.
+ * `releaseGuard` binds the transition to the caller's own CAS (for
+ * example a successfully completed release invocation), so a losing release
+ * race cannot discard deliveries owned by the surviving generation.
+ */
+export function buildDeadLetterReleasedAgentDeliveriesWrite(
+  db: Db,
+  workspaceId: string,
+  agentId: string,
+  releasedAt: Date,
+  releaseGuard?: SQL,
+): AtomicWrite {
+  return db
+    .update(deliveries)
+    .set({
+      status: 'dead_lettered',
+      error: RELEASED_AGENT_DELIVERY_ERROR,
+      retryable: false,
+      nextAttemptAt: null,
+      deadLetteredAt: releasedAt,
+      updatedAt: releasedAt,
+    })
+    .where(and(
+      eq(deliveries.workspaceId, workspaceId),
+      eq(deliveries.agentId, agentId),
+      // Keep the active predicate literal so SQLite can use the partial index.
+      sql`${deliveries.status} IN ('queued', 'delivered')`,
+      releaseGuard,
+    ));
+}
 
 /**
  * Marker separating a released agent's original name from its tombstone
@@ -137,15 +187,35 @@ function isUniqueConstraintError(err: unknown): boolean {
   return false;
 }
 
+/** Distinguish verifier reuse from the workspace/name collision contract. */
+function isRecoveryVerifierConstraintError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { message?: string; cause?: unknown };
+  if (typeof e.message === 'string') {
+    const message = e.message.toLowerCase();
+    if (
+      message.includes('agent_recovery_credentials.verifier_hash')
+      || message.includes('agent_recovery_credentials_verifier_unique')
+    ) {
+      return true;
+    }
+  }
+  return e.cause ? isRecoveryVerifierConstraintError(e.cause) : false;
+}
+
 export async function registerAgent(
   db: Db,
   workspaceId: string,
   data: {
     name: string;
+    directMachinePrefix?: string;
     type?: string;
     persona?: string;
     metadata?: Record<string, unknown>;
     capabilities?: Record<string, unknown>;
+    autoJoinGeneral?: boolean;
+    recoveryProofHash?: string;
+    workUnitId?: string;
   },
 ) {
   assertRegistrableAgentName(data.name);
@@ -156,7 +226,18 @@ export async function registerAgent(
       400,
     );
   }
+  if (
+    data.recoveryProofHash !== undefined
+    && !AGENT_RECOVERY_PROOF_HASH_PATTERN.test(data.recoveryProofHash)
+  ) {
+    throw codedError(
+      'Agent recovery_proof_hash must be a lowercase SHA-256 verifier',
+      'invalid_agent_recovery_proof_hash',
+      400,
+    );
+  }
   const agentId = generateId();
+  const directMachineId = data.directMachinePrefix ? `${data.directMachinePrefix}-${agentId}` : null;
   const token = `at_live_${randomHex(16)}`;
   const tokenHash = await sha256Hex(token);
   const directNodeId = directNodeIdForAgent(agentId);
@@ -178,6 +259,7 @@ export async function registerAgent(
         id: directNodeId,
         workspaceId,
         name: `direct-${agentId}`,
+        machineId: directMachineId,
         tokenHash: directNodeTokenHash,
         kind: 'ws',
         role: 'direct',
@@ -210,14 +292,28 @@ export async function registerAgent(
           capabilities: data.capabilities ?? null,
           locationType: 'via_node',
           locationNodeId: directNodeId,
+          originNodeId: directNodeId,
         })
         .returning()];
 
-      if (generalChannel) {
+      if (generalChannel && data.autoJoinGeneral !== false) {
         writes.push(writeDb.insert(channelMembers).values({
           channelId: generalChannel.id,
           agentId,
           role: 'member',
+        }));
+      }
+
+      if (data.recoveryProofHash) {
+        writes.push(writeDb.insert(agentRecoveryCredentials).values({
+          id: `arc_${generateId()}`,
+          workspaceId,
+          agentId,
+          proofKind: 'work_unit',
+          verifierHash: data.recoveryProofHash,
+          workUnitId: data.workUnitId ?? null,
+          createdAt: now,
+          updatedAt: now,
         }));
       }
 
@@ -236,6 +332,13 @@ export async function registerAgent(
     });
     [agent] = results[1] as (typeof agents.$inferSelect)[];
   } catch (insertErr: unknown) {
+    if (isRecoveryVerifierConstraintError(insertErr)) {
+      throw codedError(
+        'Agent recovery proof verifier is already enrolled to another identity',
+        'agent_recovery_proof_conflict',
+        409,
+      );
+    }
     // Unique constraint violation on (workspace_id, name) → agent already exists
     // D1 uses .code = 'SQLITE_CONSTRAINT_UNIQUE', drizzle may wrap in its own error,
     // and the message may contain 'UNIQUE constraint failed' or 'D1_ERROR: UNIQUE'
@@ -245,6 +348,10 @@ export async function registerAgent(
     throw insertErr;
   }
 
+  if (generalChannel && data.autoJoinGeneral !== false) {
+    await invalidateChannelCache(workspaceId, 'general');
+  }
+
   return {
     id: agentId,
     // Return the workspace id so a client that joined by workspace key (and
@@ -252,6 +359,7 @@ export async function registerAgent(
     // instead of falling back to an "unknown workspace" placeholder.
     workspace_id: workspaceId,
     name: agent.name,
+    address: `${agent.name}@${directMachineId ?? 'direct'}`,
     handle: agent.handle ?? `@${agent.name}`,
     token,
     status: agent.status,
@@ -261,41 +369,59 @@ export async function registerAgent(
 }
 
 export async function listAgents(db: Db, workspaceId: string, status?: string) {
-  // Keep the durable state aligned as a cleanup side effect, while still
-  // deriving below so correctness never depends on a cron/sweep having run.
-  await sweepStaleAgents(db, workspaceId);
+  // Filtering and serialization must use the same instant even if the SELECT
+  // crosses a TTL boundary. Presence is derived; roster reads never sweep.
+  const now = Date.now();
+  const requestedStatus = status === 'online' ? 'active' : status;
+  // Keep the tombstone predicate literal so SQLite can prove this query
+  // qualifies for the partial roster index, including prepared D1 statements.
+  const conditions = [eq(agents.workspaceId, workspaceId), sql`${agents.status} <> 'released'`];
+  // Compare numeric seconds directly: Drizzle's Date encoder truncates to
+  // whole seconds, which would keep a boundary row active for up to 999ms
+  // after effectiveAgentStatus has marked it offline.
+  const cutoff = (now - AGENT_LIVENESS_TTL_MS) / 1_000;
+  if (requestedStatus === 'active') {
+    conditions.push(sql`${agents.status} IN ('active', 'online') AND ${agents.lastSeen} >= ${cutoff}`);
+  } else if (requestedStatus === 'offline') {
+    conditions.push(sql`(${agents.status} = 'offline' OR (
+      ${agents.status} IN ('active', 'online') AND ${agents.lastSeen} < ${cutoff}
+    ))`);
+  } else if (requestedStatus && requestedStatus !== 'all') {
+    conditions.push(eq(agents.status, requestedStatus));
+  }
+
   const rows = await db
-    .select()
+    .select({ agent: agents, node: addressNodeSelection })
     .from(agents)
+    .leftJoin(nodes, eq(nodes.id, agents.locationNodeId))
     // Released rows are tombstones retained only to keep history attributable;
     // they are not roster members, so `agent list` must not fill with them.
-    .where(and(eq(agents.workspaceId, workspaceId), ne(agents.status, RELEASED_AGENT_STATUS)));
-  const requestedStatus = status === 'online' ? 'active' : status;
+    .where(and(...conditions));
 
-  return rows.map((a) => ({
+  return rows.map(({ agent: a, node }) => ({
     id: a.id,
     name: a.name,
     handle: `@${a.name}`,
+    address: formatAgentAddress(a.name, node),
     type: a.type,
-    status: effectiveAgentStatus(a),
+    status: effectiveAgentStatus(a, now),
     persona: a.persona,
     capabilities: a.capabilities ?? null,
     created_at: a.createdAt.toISOString(),
     last_seen: a.lastSeen.toISOString(),
     metadata: a.metadata,
-  })).filter((agent) => !requestedStatus || requestedStatus === 'all' || agent.status === requestedStatus);
+  }));
 }
 
 export async function getAgentByName(db: Db, workspaceId: string, name: string) {
-  // Match roster reads: detail consumers should observe both derived and
-  // durable presence consistently within this workspace.
-  await sweepStaleAgents(db, workspaceId);
-  const [agent] = await db
-    .select()
+  const [row] = await db
+    .select({ agent: agents, node: addressNodeSelection })
     .from(agents)
+    .leftJoin(nodes, eq(nodes.id, agents.locationNodeId))
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, name)));
 
-  if (!agent) return null;
+  if (!row) return null;
+  const { agent, node } = row;
 
   // Get channels, actions, and pending deliveries in parallel
   const [memberships, allActions, pendingDeliveryRows] = await Promise.all([
@@ -331,10 +457,17 @@ export async function getAgentByName(db: Db, workspaceId: string, name: string) 
         createdAt: deliveries.createdAt,
       })
       .from(deliveries)
-      // Mirror the GET /v1/deliveries replay queue: queued + delivered are the
-      // non-terminal, still-pending states.
-      .where(and(eq(deliveries.agentId, agent.id), inArray(deliveries.status, ['queued', 'delivered'])))
-      .orderBy(deliveries.createdAt)
+      // Keep this detail projection aligned with GET /v1/deliveries: an
+      // expired row is no longer pending even if scheduled maintenance has not
+      // transitioned its durable status yet. Keep the active predicate literal
+      // so SQLite can use idx_deliveries_agent_active_created.
+      .where(and(
+        eq(deliveries.workspaceId, workspaceId),
+        eq(deliveries.agentId, agent.id),
+        sql`${deliveries.status} IN ('queued', 'delivered')`,
+        sql`(${deliveries.expiresAt} IS NULL OR ${deliveries.expiresAt} > unixepoch())`,
+      ))
+      .orderBy(deliveries.createdAt, deliveries.id)
       .limit(50),
   ]);
 
@@ -354,6 +487,7 @@ export async function getAgentByName(db: Db, workspaceId: string, name: string) 
     workspace_id: workspaceId,
     name: agent.name,
     handle: agent.handle ?? `@${agent.name}`,
+    address: formatAgentAddress(agent.name, node),
     type: agent.type,
     status: effectiveAgentStatus(agent),
     persona: agent.persona,
@@ -463,11 +597,15 @@ export async function updateAgentById(
     .returning();
 
   if (!updated) return null;
+  const [node] = updated.locationNodeId
+    ? await db.select(addressNodeSelection).from(nodes).where(eq(nodes.id, updated.locationNodeId))
+    : [];
 
   return {
     id: updated.id,
     name: updated.name,
     handle: `@${updated.name}`,
+    address: formatAgentAddress(updated.name, node ?? null),
     type: updated.type,
     status: effectiveAgentStatus(updated),
     persona: updated.persona,
@@ -512,11 +650,15 @@ export async function claimLegacyAgentIdentity(
     .returning();
 
   if (!updated) return null;
+  const [node] = updated.locationNodeId
+    ? await db.select(addressNodeSelection).from(nodes).where(eq(nodes.id, updated.locationNodeId))
+    : [];
 
   return {
     id: updated.id,
     name: updated.name,
     handle: `@${updated.name}`,
+    address: formatAgentAddress(updated.name, node ?? null),
     type: updated.type,
     status: updated.status,
     persona: updated.persona,
@@ -536,7 +678,7 @@ export async function deleteAgent(db: Db, workspaceId: string, name: string) {
   if (!agent) return false;
 
   // Tombstone rather than DELETE, matching both release paths
-  // (`dispatchRelease` -> `completeLocally`, and `applyReleaseCompletionEffect`).
+  // (`dispatchRelease` -> `completeLocally`, and `completeReleaseNodeInvocation`).
   // Four FKs reference `agents.id` with no ON DELETE action —
   // `messages.agent_id`, `channels.created_by`, `files.uploaded_by`,
   // `webhooks.created_by` — so a bare DELETE is refused for any agent that has
@@ -551,7 +693,7 @@ export async function deleteAgent(db: Db, workspaceId: string, name: string) {
   // One atomic unit: a partial apply would leave the agent renamed and
   // credential-rotated while still a channel member — reachable by delivery
   // under a name its owner no longer knows.
-  await runAtomicWrites(db, (writeDb) => {
+  const releaseResults = await runAtomicWrites(db, (writeDb) => {
     const writes: AtomicWrite[] = [];
     writes.push(writeDb
       .update(agents)
@@ -582,14 +724,26 @@ export async function deleteAgent(db: Db, workspaceId: string, name: string) {
       .where(eq(agents.id, agent.id)));
     // `channel_members` and `dm_participants` cascade on DELETE; an UPDATE does
     // not fire that cascade, so a released agent would stay a delivery target.
-    writes.push(writeDb.delete(channelMembers).where(eq(channelMembers.agentId, agent.id)));
+    writes.push(writeDb.delete(channelMembers).where(eq(channelMembers.agentId, agent.id)).returning({ channelId: channelMembers.channelId }));
     writes.push(writeDb.delete(dmParticipants).where(eq(dmParticipants.agentId, agent.id)));
     // Release the node binding so the host's active-agent count is not held by
     // a tombstone, matching the release paths.
     writes.push(writeDb.delete(agentNodeBindings).where(eq(agentNodeBindings.agentId, agent.id)));
     writes.push(writeDb.delete(nodes).where(eq(nodes.id, directNodeIdForAgent(agent.id))));
+    writes.push(buildDeadLetterReleasedAgentDeliveriesWrite(
+      writeDb,
+      workspaceId,
+      agent.id,
+      releasedAt,
+    ));
     return writes;
-  });
+  }, { requireAtomic: true });
+  // Capture memberships at deletion, not a preflight read that can race joins.
+  const removed = releaseResults[1] as Array<{ channelId: string }>;
+  const joinedChannels = await queryInChunks(removed.map(row => row.channelId), ids => db
+    .select({ name: channels.name }).from(channels)
+    .where(and(eq(channels.workspaceId, workspaceId), inArray(channels.id, ids))));
+  await Promise.all(joinedChannels.map(channel => invalidateChannelCache(workspaceId, channel.name)));
   return true;
 }
 
@@ -607,7 +761,9 @@ export async function sweepStaleAgents(db: Db, workspaceId?: string): Promise<nu
   const now = new Date();
   const cutoff = new Date(now.getTime() - AGENT_LIVENESS_TTL_MS);
   const future = and(
-    inArray(agents.status, ['active', 'online']),
+    // Keep this literal aligned with idx_agents_active_last_seen. SQLite cannot
+    // prove a parameterized IN predicate implies a partial-index predicate.
+    sql`${agents.status} IN ('active', 'online')`,
     gt(agents.lastSeen, now),
     ...(workspaceId ? [eq(agents.workspaceId, workspaceId)] : []),
   );
@@ -617,7 +773,7 @@ export async function sweepStaleAgents(db: Db, workspaceId?: string): Promise<nu
     .where(future)
     .returning({ id: agents.id });
   const stale = and(
-    inArray(agents.status, ['active', 'online']),
+    sql`${agents.status} IN ('active', 'online')`,
     lt(agents.lastSeen, cutoff),
     ...(workspaceId ? [eq(agents.workspaceId, workspaceId)] : []),
   );

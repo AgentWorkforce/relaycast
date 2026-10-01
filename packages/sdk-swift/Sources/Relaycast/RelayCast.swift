@@ -217,22 +217,7 @@ public final class RelayCast: @unchecked Sendable {
     }
 
     public func registerOrRotate(_ data: RegisterAgentRequest) async throws -> CreateAgentResponse {
-        do {
-            return try await agents.register(data.createRequest)
-        } catch let error as RelayError {
-            let isConflict = error.statusCode == 409 || error.code == "agent_already_exists"
-            guard isConflict else { throw error }
-            let existing = try await agents.get(data.name)
-            let rotated = try await agents.rotateToken(existing.name)
-            rememberIdentity(agentID: existing.id, name: existing.name)
-            return CreateAgentResponse(
-                id: existing.id,
-                name: existing.name,
-                token: rotated.token,
-                status: existing.status,
-                createdAt: existing.createdAt ?? existing.lastSeen ?? ""
-            )
-        }
+        try await agents.register(data.createRequest)
     }
 
     public func resolveIdentity() async throws -> ResolvedIdentity {
@@ -521,6 +506,22 @@ public final class RelayAgentsService: @unchecked Sendable {
 
     public func rotateToken(_ name: String) async throws -> TokenRotateResponse {
         try await relay.client.post("/v1/agents/\(percentEncodePathComponent(name))/rotate-token", body: EmptyRequest())
+    }
+
+    public func recover(_ name: String, data: RecoverAgentRequest) async throws -> AgentIdentityRecoveryResponse {
+        try await relay.client.post("/v1/agents/\(percentEncodePathComponent(name))/recover", body: data)
+    }
+
+    public func takeOver(_ name: String, data: TakeOverAgentRequest) async throws -> AgentIdentityRecoveryResponse {
+        try await relay.client.post("/v1/agents/\(percentEncodePathComponent(name))/takeover", body: data)
+    }
+
+    public func revokeToken(_ name: String, data: RevokeAgentTokenRequest) async throws -> AgentIdentityRevocationResponse {
+        try await relay.client.post("/v1/agents/\(percentEncodePathComponent(name))/revoke-token", body: data)
+    }
+
+    public func enrollRecoveryCredential(_ data: EnrollRecoveryCredentialRequest) async throws -> [String: JSONValue] {
+        try await relay.client.post("/v1/agent/recovery-credential", body: data)
     }
 
     public func update(_ name: String, data: UpdateAgentRequest) async throws -> Agent {

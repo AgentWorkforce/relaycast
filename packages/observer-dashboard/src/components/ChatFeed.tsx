@@ -4,6 +4,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObje
 import { Hash, MessageSquare, UserRound } from 'lucide-react';
 import { useMessages, useRelay, sortMessagesChronologically } from '@relaycast/react';
 import { MessageCard } from './MessageCard';
+import { RunPanel } from './RunPanel';
+import { latestRelayflowRun } from '../lib/relayflow-run';
 import { cn } from '../lib/utils';
 import type { DmMessage, MessageWithMeta } from '@relaycast/sdk';
 
@@ -188,15 +190,23 @@ function FeedList({
   );
 }
 
+/** Render one channel's live feed and its newest valid relayflow snapshot. */
 function ChannelMessages({ channel, scrollRef, onOpenThread, mentionNames, onOpenAgent }: { channel: string; scrollRef: RefObject<HTMLDivElement>; onOpenThread?: (messageId: string) => void; mentionNames?: string[]; onOpenAgent?: (agentName: string | null) => void; }) {
   const { messages, loading, fetchMore } = useMessages(channel);
   const sorted = sortMessagesChronologically(messages);
   const feed = usePaginatedFeed(scrollRef, sorted, fetchMore);
 
+  const run = latestRelayflowRun(sorted);
+
   if (loading && sorted.length === 0) return <LoadingState label="Loading messages…" />;
   if (sorted.length === 0) return <EmptyState label="No messages yet" />;
 
-  return <FeedList sorted={sorted} feed={feed} onOpenThread={onOpenThread} mentionNames={mentionNames} onOpenAgent={onOpenAgent} />;
+  return (
+    <>
+      {run && <RunPanel run={run} />}
+      <FeedList sorted={sorted} feed={feed} onOpenThread={onOpenThread} mentionNames={mentionNames} onOpenAgent={onOpenAgent} />
+    </>
+  );
 }
 
 function toMessageWithMeta(m: DmMessage): MessageWithMeta {

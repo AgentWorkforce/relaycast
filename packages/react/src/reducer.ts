@@ -61,6 +61,7 @@ export function handleServerEvent(store: RelayStore, event: WsClientEvent): void
   }
 }
 
+/** Append one validated realtime channel message without duplicating replays. */
 function handleMessageCreated(store: RelayStore, event: MessageCreatedEvent): void {
   store.updateChannelMessages(event.channel, (prev) => {
     if (prev.messages.some((m) => m.id === event.message.id)) return prev;
@@ -74,7 +75,10 @@ function handleMessageCreated(store: RelayStore, event: MessageCreatedEvent): vo
       hasAttachments: (event.message.attachments?.length ?? 0) > 0,
       threadId: null,
       attachments: event.message.attachments ?? [],
-      createdAt: new Date().toISOString(),
+      ...(event.message.metadata ? { metadata: event.message.metadata } : {}),
+      // New servers provide their persisted timestamp. The fallback keeps the
+      // reducer compatible with older/self-hosted servers during an upgrade.
+      createdAt: event.createdAt ?? new Date().toISOString(),
       replyCount: 0,
       reactions: [],
       readByCount: 0,

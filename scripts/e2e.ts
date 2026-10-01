@@ -361,7 +361,17 @@ ${B}${CYAN}╔══════════════════════
   step('Create workspace');
   await run('Create workspace', async () => {
     const wsName = `e2e-${Date.now()}`;
-    const res = await RelayCast.createWorkspace(wsName, BASE_URL);
+    const res = await RelayCast.createWorkspace(wsName, {
+      baseUrl: BASE_URL,
+      expiresInSeconds: 24 * 60 * 60,
+      provenance: {
+        source: 'ci',
+        originId: process.env.GITHUB_RUN_ID
+          ? `github:AgentWorkforce/relaycast/actions/runs/${process.env.GITHUB_RUN_ID}`
+          : 'relaycast:e2e:local',
+        classification: 'internal',
+      },
+    });
     workspaceKey = res.apiKey;
     relay = new RelayCast({ apiKey: workspaceKey, baseUrl: BASE_URL });
     log('🔑', `Workspace ${B}${wsName}${R} — key: ${DIM}${workspaceKey.slice(0, 16)}…${R}`);
@@ -385,19 +395,9 @@ ${B}${CYAN}╔══════════════════════
   // ── 2. Register agents ───────────────────────────────────────────────
   step('Register agents');
 
-  /** Register agent, using registerOrRotate to handle stale agents from prior runs. */
+  /** Registration is create-only; a stale identity is a failed cleanup, not authority. */
   async function registerAgent(opts: Parameters<typeof relay.agents.register>[0]): Promise<{ token: string }> {
-    try {
-      return await relay.agents.register(opts);
-    } catch (err) {
-      if (err instanceof RelayError && /already exists/i.test(err.message)) {
-        // Agent left over from a prior E2E run (D1 read replica lag after delete).
-        // Use registerOrRotate which is the idempotent server-side path.
-        log('ℹ️ ', `${opts.name} already exists; rotating token via registerOrRotate...`);
-        return await relay.registerOrRotate(opts);
-      }
-      throw err;
-    }
+    return relay.agents.register(opts);
   }
 
   await run(`Register ${LEAD}`, async () => {
@@ -457,25 +457,26 @@ ${B}${CYAN}╔══════════════════════
     }
   });
 
-  await run('registerAgent non-strict appends suffix', async () => {
-    const res = await relay.registerAgent({ name: LEAD, strict: false });
-    if (res.name === LEAD) throw new Error(`Expected suffixed name, got exact '${LEAD}'`);
-    if (!res.name.startsWith(LEAD)) throw new Error(`Expected name starting with '${LEAD}', got '${res.name}'`);
-    log('🛡️ ', `Non-strict duplicate registered as ${B}${res.name}${R} (suffix appended)`);
+  await run('registerAgent non-strict still fails closed', async () => {
+    await relay.registerAgent({ name: LEAD, strict: false })
+      .then(() => { throw new Error('Expected duplicate registration to fail'); })
+      .catch((err) => {
+        if (!(err instanceof RelayError) || err.code !== 'name_conflict') throw err;
+      });
+    log('🛡️ ', 'Non-strict compatibility input did not suffix or reclaim the identity');
   });
 
-  // ── 2b. registerOrRotate + resolveIdentity ─────────────────────────
-  step('registerOrRotate + resolveIdentity');
+  // ── 2b. fail-closed compatibility aliases + resolveIdentity ────────
+  step('fail-closed identity aliases + resolveIdentity');
 
-  await run('registerOrRotate returns valid token', async () => {
-    const res = await relay.registerOrRotate({ name: LEAD, type: 'agent' });
-    if (!res.token) throw new Error('Expected token from registerOrRotate');
-    // Update lead client with rotated token (old token is now invalid)
-    lead = relay.as(res.token);
-    leadToken = res.token;
-    agentMap[LEAD] = lead;
+  await run('registerOrRotate does not take over a collision', async () => {
+    await relay.registerOrRotate({ name: LEAD, type: 'agent' })
+      .then(() => { throw new Error('Expected registerOrRotate collision to fail'); })
+      .catch((err) => {
+        if (!(err instanceof RelayError) || err.code !== 'name_conflict') throw err;
+      });
     const channels = await lead.channels.list();
-    log('🔑', `registerOrRotate returned token, verified with list channels (${channels.length} channels)`);
+    log('🔑', `Original token remains valid after refused collision (${channels.length} channels)`);
   });
 
   await run('resolveIdentity returns identity fields', async () => {

@@ -1,6 +1,7 @@
 import { createMiddleware } from 'hono/factory';
 import type { AppEnv } from '../env.js';
 import { jsonError } from '../lib/httpResponse.js';
+import { RATE_LIMIT_WINDOW_MS, rateLimitWindow, rateLimitWindowResetAt, setRetryContract } from '../lib/throttle.js';
 import { checkPlanLimit } from './planLimits.js';
 import { presenceRefresh } from './presenceRefresh.js';
 import { usageTracker } from './usageTracker.js';
@@ -19,6 +20,14 @@ const ROUTE_MULTIPLIERS: Record<string, number> = {
   'POST:/messages/*/reactions': 0.4,
   'GET:/channels/*/messages': 1.0,
   'GET:/agents/presence': 0.3,
+  // Workspace identity is the control-plane read a client makes before it can
+  // do anything else — credential probes, launch preflight, and the lookup a
+  // caller uses to find out *why* it is being throttled. In the shared `global`
+  // bucket that one request competes with all of the workspace's data-plane
+  // traffic, so a busy workspace starves it and no client-side retry helps:
+  // every attempt lands in the same saturated bucket. Its own bucket keeps
+  // identity reachable while the data plane is at its ceiling.
+  'GET:/workspace': 1.0,
 };
 
 function getRouteKey(method: string, path: string): string | null {
@@ -53,8 +62,8 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
   const routeKey = getRouteKey(c.req.method, c.req.path);
   // The rate limiter port is not workspace-scoped, so the workspace id is part
   // of the bucket key (the Cloudflare adapter previously scoped via the DO id).
-  const window = Math.floor(Date.now() / 60000);
-  const bucketKey = `${workspace.id}:${routeKey ?? 'global'}:${window}`;
+  const now = Date.now();
+  const bucketKey = `${workspace.id}:${routeKey ?? 'global'}:${rateLimitWindow(now)}`;
 
   // Resolve the per-minute limit. If entitlements are unavailable, fall back to
   // a conservative default and still enforce it — an entitlements outage must
@@ -68,11 +77,16 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
   const limit = routeKey ? Math.ceil(globalLimit * ROUTE_MULTIPLIERS[routeKey]) : globalLimit;
 
   try {
-    const { allowed, count, remaining } = await rateLimiter.check({ bucketKey, limit, windowMs: 60_000 });
+    const { allowed, count, remaining } = await rateLimiter.check({ bucketKey, limit, windowMs: RATE_LIMIT_WINDOW_MS });
+    const resetAt = rateLimitWindowResetAt(now);
     c.header('X-RateLimit-Limit', String(limit));
     c.header('X-RateLimit-Remaining', String(remaining ?? Math.max(0, limit - count)));
+    c.header('X-RateLimit-Reset', String(Math.ceil(resetAt / 1000)));
 
     if (!allowed) {
+      // Transient by construction: the bucket is keyed to this minute, so the
+      // advertised wait is the real one.
+      setRetryContract(c, resetAt, now);
       return jsonError(c, 'rate_limit_exceeded', `Rate limit exceeded. ${limit} requests per minute allowed for ${workspace.plan} plan.`, 429);
     }
   } catch {

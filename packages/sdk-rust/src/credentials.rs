@@ -33,7 +33,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{RelayError, Result};
-use crate::{CreateAgentRequest, RelayCast, RelayCastOptions};
+use crate::{
+    CreateAgentRequest, RelayCast, RelayCastOptions, WorkspaceCreationSource, WorkspaceProvenance,
+};
 
 /// Cached agent credentials persisted to disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -215,7 +217,22 @@ pub async fn bootstrap_session(
             let preferred = config.preferred_name.as_deref().unwrap_or(cached_name);
             if cached_name == preferred {
                 let relay = build_relay(&creds.api_key, base_url)?;
-                match relay.rotate_agent_token(cached_name).await {
+                // Self-rollover: rotate is authenticated as the agent itself
+                // (engine 8.2.0, #349), so it needs the cached agent token, not
+                // the workspace key. Without one there is nothing to roll over
+                // and we fall through to registration below.
+                let cached_agent_token = creds.agent_token.clone();
+                match match cached_agent_token {
+                    Some(agent_token) => relay.rotate_agent_token(cached_name, agent_token).await,
+                    None => Err(RelayError::Api {
+                        status: 401,
+                        message: "no cached agent token for self-rollover".to_string(),
+                        code: "agent_token_required".to_string(),
+                        request_id: None,
+                        attempts: 1,
+                        retry_after_ms: None,
+                    }),
+                } {
                     Ok(result) => {
                         let session = finish_session(
                             store,
@@ -297,7 +314,32 @@ pub async fn bootstrap_session(
         }
         Err(e) if e.is_conflict() => match conflict_strategy {
             NameConflictStrategy::RotateExisting => {
-                let rotate_result = relay.rotate_agent_token(&name).await?;
+                // Only legitimate when we hold the existing agent's own token:
+                // rotate is self-rollover only since engine 8.2.0 (#349), and
+                // taking over an identity we cannot authenticate as is the
+                // explicit, audited `takeover` operation, never a silent
+                // fallback inside registration.
+                let existing_agent_token = cached
+                    .as_ref()
+                    .and_then(|c| c.agent_token.clone())
+                    .filter(|_| {
+                        cached.as_ref().and_then(|c| c.agent_name.as_deref()) == Some(name.as_str())
+                    })
+                    .ok_or_else(|| RelayError::Api {
+                        status: 409,
+                        message: format!(
+                            "agent '{name}' already exists and registration is create-only; \
+                             rotate requires that agent's own token. Use takeover (workspace \
+                             owner, audited) or register under a unique name"
+                        ),
+                        code: "agent_already_exists".to_string(),
+                        request_id: None,
+                        attempts: 1,
+                        retry_after_ms: None,
+                    })?;
+                let rotate_result = relay
+                    .rotate_agent_token(&name, existing_agent_token)
+                    .await?;
                 let ws_id = workspace_id.unwrap_or_default();
                 finish_session(
                     store,
@@ -373,7 +415,16 @@ pub async fn bootstrap_session(
 
 async fn create_fresh_workspace(base_url: Option<&str>) -> Result<(String, Option<String>)> {
     let ws_name = format!("relay-{}", uuid_v4_short());
-    let result = RelayCast::create_workspace(&ws_name, base_url).await?;
+    let result = RelayCast::create_workspace(
+        &ws_name,
+        base_url,
+        WorkspaceProvenance {
+            source: WorkspaceCreationSource::Cli,
+            origin_id: None,
+            classification: None,
+        },
+    )
+    .await?;
     Ok((result.api_key, Some(result.workspace_id)))
 }
 
@@ -541,6 +592,31 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.is_conflict());
+    }
+
+    #[tokio::test]
+    async fn fresh_workspace_declares_cli_provenance() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/workspaces"))
+            .and(body_string_contains("\"source\":\"cli\""))
+            .respond_with(ok(json!({
+                "workspace_id": "ws_cli",
+                "api_key": "rk_live_cli",
+                "created_at": "2026-01-01T00:00:00.000Z"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let result = create_fresh_workspace(Some(&server.uri()))
+            .await
+            .expect("fresh workspace creation should succeed");
+
+        assert_eq!(
+            result,
+            ("rk_live_cli".to_string(), Some("ws_cli".to_string()))
+        );
     }
 
     #[tokio::test]

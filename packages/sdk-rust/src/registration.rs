@@ -3,14 +3,31 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use thiserror::Error;
+use tokio::time::Instant;
 
 use crate::error::RelayError;
 use crate::{AgentClient, CreateAgentRequest, RelayCast};
 
 const DEFAULT_REGISTRATION_COOLDOWN_SECS: u64 = 60;
+// A valid Retry-After is the server's scheduling instruction, but retaining a
+// cooldown indefinitely would let a broken or hostile intermediary pin an
+// agent locally. Keep the same bounded-wait principle as the HTTP client.
+const MAX_REGISTRATION_COOLDOWN_SECS: u64 = 300;
+const DEFAULT_REGISTRATION_RETRY_BACKOFF: Duration = Duration::from_secs(2);
+
+/// Resolve a local registration cooldown from the server's parsed `Retry-After` delay.
+///
+/// Valid delays are capped to avoid an unbounded local block; absent or
+/// malformed headers retain the fail-closed default cooldown.
+fn registration_cooldown_duration(retry_after_ms: Option<u64>) -> Duration {
+    retry_after_ms
+        .map(Duration::from_millis)
+        .map(|delay| delay.min(Duration::from_secs(MAX_REGISTRATION_COOLDOWN_SECS)))
+        .unwrap_or(Duration::from_secs(DEFAULT_REGISTRATION_COOLDOWN_SECS))
+}
 
 fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     match mutex.lock() {
@@ -62,6 +79,21 @@ fn registration_cli_from_hint(cli_hint: Option<&str>, default_cli: &str) -> Stri
         .unwrap_or_else(|| "claude".to_string())
 }
 
+fn api_error_detail(
+    message: String,
+    code: String,
+    request_id: Option<String>,
+    attempts: u32,
+) -> String {
+    let mut detail = format!("{message} (code: {code}");
+    detail.push_str(&format!("; attempts: {attempts}"));
+    if let Some(request_id) = request_id {
+        detail.push_str(&format!("; request_id: {request_id}"));
+    }
+    detail.push(')');
+    detail
+}
+
 /// Errors emitted by [`AgentRegistrationClient`].
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum AgentRegistrationError {
@@ -90,8 +122,44 @@ pub enum AgentRegistrationError {
     },
     #[error("registration transport error for '{agent_name}': {detail}")]
     Transport { agent_name: String, detail: String },
+    /// The server answered, and the answer could not be understood.
+    ///
+    /// Distinct from `Transport`, which means the exchange did not complete.
+    /// Here it did: a body arrived on a success status and was not valid JSON,
+    /// or the client already knew the response was malformed. Retrying cannot
+    /// help, and the registration it answered may already have committed.
+    ///
+    /// Note what is NOT this: a reqwest error whose kind is `decode`. In this
+    /// client that arises from `bytes()` failing to read the body — a reset or
+    /// timeout after headers — which is a transport fault and stays retryable.
+    #[error(
+        "registration for '{agent_name}' got a response it could not understand{}{}: {detail}",
+        status.map(|code| format!(" ({code})")).unwrap_or_default(),
+        url.as_ref().map(|url| format!(" from {url}")).unwrap_or_default()
+    )]
+    InvalidResponse {
+        agent_name: String,
+        /// HTTP status, when the failure happened after one was read.
+        status: Option<u16>,
+        /// Endpoint that produced it, for correlating with server logs.
+        url: Option<String>,
+        /// The decode failure and its source chain.
+        detail: String,
+    },
     #[error("registration response missing token for '{agent_name}'")]
     MissingToken { agent_name: String },
+    /// The name is taken and registration is create-only.
+    ///
+    /// Since engine 8.2.0 (#349) registration never replaces an existing
+    /// identity. Replacing one is an explicit, audited operation: `recover`
+    /// with a recovery proof, or `takeover` as the workspace owner. Callers
+    /// that just need their own agent should use a name unique to the run.
+    #[error(
+        "agent '{agent_name}' already exists and registration is create-only; \
+         use recover (with a recovery proof) or takeover (workspace owner, audited) \
+         to replace an existing identity, or register under a unique name"
+    )]
+    AlreadyExists { agent_name: String },
 }
 
 /// Retries exhausted or fatal outcome for [`retry_agent_registration`].
@@ -160,7 +228,43 @@ impl AgentRegistrationClient {
         lock_unpoisoned(&self.registration_cooldowns).remove(trimmed);
     }
 
-    /// Register (or rotate) an agent token via `/v1/agents` and token rotation.
+    /// Select the next retry delay, preferring the active cached cooldown.
+    ///
+    /// The cached deadline prevents a retry from reaching the server before a
+    /// known rate-limit window expires. Error metadata is only a fallback when
+    /// concurrent invalidation has removed that deadline.
+    fn registration_retry_delay(
+        &self,
+        agent_name: &str,
+        error: &AgentRegistrationError,
+    ) -> Duration {
+        // Rate-limit retries must consume the cache entry made by the failed
+        // registration. Falling back to the error's rounded display value is
+        // only for concurrent invalidation; it must not permit a premature
+        // request while a known cooldown is still active.
+        self.registration_block_remaining(agent_name)
+            .or_else(|| registration_retry_after_secs(error).map(Duration::from_secs))
+            .unwrap_or(DEFAULT_REGISTRATION_RETRY_BACKOFF)
+    }
+
+    /// Register a **new** agent and return its token.
+    ///
+    /// Registration is create-only as of engine 8.2.0 (#349): a name already
+    /// held by another identity yields
+    /// [`AgentRegistrationError::AlreadyExists`], and this method will not
+    /// silently replace it. Note the cache is per-client and in memory, so a
+    /// restarted process registering the same stable name hits that error
+    /// rather than reusing the previous token.
+    ///
+    /// Pick one of:
+    ///
+    /// - **a name unique per run** (simplest, and the intended model for
+    ///   ephemeral agents),
+    /// - **persist the agent token** and roll it over yourself with
+    ///   [`RelayCast::rotate_agent_token`],
+    /// - **take the identity over explicitly** with
+    ///   [`RelayCast::take_over_agent`] or [`RelayCast::recover_agent`], which
+    ///   are audited operations requiring an expected agent id and a reason.
     pub async fn register_agent_token(
         &self,
         agent_name: &str,
@@ -206,77 +310,54 @@ impl AgentRegistrationClient {
                 lock_unpoisoned(&self.registration_cooldowns).remove(trimmed_name);
                 Ok(result.token)
             }
+            // Registration is create-only as of engine 8.2.0 (#349): a 409 means
+            // the name is held by an existing identity, and replacing it is a
+            // deliberate, audited act (`recover` with a proof, or `takeover` as
+            // the workspace owner) rather than something a registration call
+            // should do silently.
+            //
+            // This branch used to fall back to `rotate_agent_token` with the
+            // workspace key. That route became `requireAgentToken` in the same
+            // release, so the fallback could only ever return
+            // `401 Agent token required (at_live_...)` — a misleading auth error
+            // for what is really "this name is taken". Report the real condition.
             Err(RelayError::Api { status: 409, .. }) => {
-                match self.relay.rotate_agent_token(trimmed_name).await {
-                    Ok(result) => {
-                        if result.token.trim().is_empty() {
-                            return Err(AgentRegistrationError::MissingToken {
-                                agent_name: trimmed_name.to_string(),
-                            });
-                        }
-                        lock_unpoisoned(&self.agent_tokens)
-                            .insert(trimmed_name.to_string(), result.token.clone());
-                        lock_unpoisoned(&self.registration_cooldowns).remove(trimmed_name);
-                        Ok(result.token)
-                    }
-                    Err(RelayError::Api {
-                        status: 429,
-                        message,
-                        code,
-                    }) => {
-                        let retry_after_secs = DEFAULT_REGISTRATION_COOLDOWN_SECS;
-                        let blocked_until = Instant::now() + Duration::from_secs(retry_after_secs);
-                        lock_unpoisoned(&self.registration_cooldowns)
-                            .insert(trimmed_name.to_string(), blocked_until);
-                        Err(AgentRegistrationError::RateLimited {
-                            agent_name: trimmed_name.to_string(),
-                            retry_after_secs,
-                            detail: format!("{message} (code: {code})"),
-                        })
-                    }
-                    Err(RelayError::Api {
-                        status,
-                        message,
-                        code,
-                    }) => Err(AgentRegistrationError::Api {
-                        agent_name: trimmed_name.to_string(),
-                        status,
-                        detail: format!("{message} (code: {code})"),
-                    }),
-                    Err(error) => Err(AgentRegistrationError::Transport {
-                        agent_name: trimmed_name.to_string(),
-                        detail: error.to_string(),
-                    }),
-                }
+                Err(AgentRegistrationError::AlreadyExists {
+                    agent_name: trimmed_name.to_string(),
+                })
             }
             Err(RelayError::Api {
                 status: 429,
                 message,
                 code,
+                request_id,
+                attempts,
+                retry_after_ms,
             }) => {
-                let retry_after_secs = DEFAULT_REGISTRATION_COOLDOWN_SECS;
-                let blocked_until = Instant::now() + Duration::from_secs(retry_after_secs);
+                let cooldown = registration_cooldown_duration(retry_after_ms);
+                let retry_after_secs = cooldown.as_secs();
+                let blocked_until = Instant::now() + cooldown;
                 lock_unpoisoned(&self.registration_cooldowns)
                     .insert(trimmed_name.to_string(), blocked_until);
                 Err(AgentRegistrationError::RateLimited {
                     agent_name: trimmed_name.to_string(),
                     retry_after_secs,
-                    detail: format!("{message} (code: {code})"),
+                    detail: api_error_detail(message, code, request_id, attempts),
                 })
             }
             Err(RelayError::Api {
                 status,
                 message,
                 code,
+                request_id,
+                attempts,
+                ..
             }) => Err(AgentRegistrationError::Api {
                 agent_name: trimmed_name.to_string(),
                 status,
-                detail: format!("{message} (code: {code})"),
+                detail: api_error_detail(message, code, request_id, attempts),
             }),
-            Err(error) => Err(AgentRegistrationError::Transport {
-                agent_name: trimmed_name.to_string(),
-                detail: error.to_string(),
-            }),
+            Err(error) => Err(classify_registration_failure(trimmed_name, error)),
         }
     }
 
@@ -320,6 +401,73 @@ pub fn registration_is_retryable(error: &AgentRegistrationError) -> bool {
     )
 }
 
+/// Describe a `reqwest` failure with its source chain.
+///
+/// `to_string()` on a reqwest error yields only the outermost layer — "error
+/// decoding response body" — while the cause that names the offending byte or
+/// field sits underneath it. Whoever reads the log needs the chain.
+fn describe_with_sources(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut description = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        description.push_str(&format!(": {cause}"));
+        source = cause.source();
+    }
+    description
+}
+
+/// Separate "the exchange failed" from "the answer was unusable".
+///
+/// A decode failure means the server replied and the reply could not be
+/// understood. Retrying cannot fix that, and worse, the registration it
+/// belonged to may already have committed server-side — so a retry risks a
+/// second registration rather than recovering from a blip.
+fn classify_registration_failure(agent_name: &str, error: RelayError) -> AgentRegistrationError {
+    match error {
+        // A reqwest error — decode kind included — is the exchange failing, not
+        // the answer being wrong. In this client every body is read with
+        // `bytes()`, which routes a read failure (connection reset mid-body,
+        // timeout after headers) through reqwest's `decode` kind, so
+        // `is_decode()` here means "the body never fully arrived". Parsing
+        // happens afterwards with serde_json and fails as `RelayError::Json`.
+        // Treating a decode-kind reqwest error as InvalidResponse would make
+        // every mid-body reset permanent. Keep it Transport, keep it retryable,
+        // but carry the URL, status, and cause chain so the log is diagnosable.
+        RelayError::Http(http_error) => {
+            let mut detail = describe_with_sources(&http_error);
+            if let Some(status) = http_error.status() {
+                detail = format!("{detail} (status {})", status.as_u16());
+            }
+            if let Some(url) = http_error.url() {
+                detail = format!("{detail} [{url}]");
+            }
+            AgentRegistrationError::Transport {
+                agent_name: agent_name.to_string(),
+                detail,
+            }
+        }
+        // The body arrived on a success status and was not valid JSON. The
+        // server answered; the answer is unusable. Registration may already
+        // have committed, so this must not be retried.
+        RelayError::Json(json_error) => AgentRegistrationError::InvalidResponse {
+            agent_name: agent_name.to_string(),
+            status: None,
+            url: None,
+            detail: describe_with_sources(&json_error),
+        },
+        RelayError::InvalidResponse(detail) => AgentRegistrationError::InvalidResponse {
+            agent_name: agent_name.to_string(),
+            status: None,
+            url: None,
+            detail,
+        },
+        other => AgentRegistrationError::Transport {
+            agent_name: agent_name.to_string(),
+            detail: describe_with_sources(&other),
+        },
+    }
+}
+
 /// Format a human-readable registration error message.
 pub fn format_registration_error(agent_name: &str, error: &AgentRegistrationError) -> String {
     let mut message = format!("failed to register agent '{}': {}", agent_name, error);
@@ -342,7 +490,7 @@ pub async fn retry_agent_registration(
         match client.register_agent_token(agent_name, cli_hint).await {
             Ok(token) => return Ok(token),
             Err(error) if registration_is_retryable(&error) && attempt < MAX_ATTEMPTS - 1 => {
-                tokio::time::sleep(Duration::from_secs(2)).await;
+                tokio::time::sleep(client.registration_retry_delay(agent_name, &error)).await;
             }
             Err(error) if registration_is_retryable(&error) => {
                 return Err(AgentRegistrationRetryOutcome::RetryableExhausted(error));
@@ -357,12 +505,15 @@ pub async fn retry_agent_registration(
 mod tests {
     use super::{
         format_registration_error, normalize_cli, registration_cli_from_hint,
-        registration_is_retryable, registration_retry_after_secs, AgentRegistrationClient,
-        AgentRegistrationError,
+        registration_cooldown_duration, registration_is_retryable, registration_retry_after_secs,
+        retry_agent_registration, AgentRegistrationClient, AgentRegistrationError,
+        DEFAULT_REGISTRATION_COOLDOWN_SECS, MAX_REGISTRATION_COOLDOWN_SECS,
     };
     use crate::{RelayCast, RelayCastOptions};
     use serde_json::json;
-    use wiremock::matchers::{body_string_contains, method, path};
+    use std::time::Duration;
+    use tokio::time::{advance, Instant};
+    use wiremock::matchers::{body_string_contains, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn ok(data: serde_json::Value) -> ResponseTemplate {
@@ -453,20 +604,161 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn register_agent_token_sets_cooldown_on_rate_limit() {
+    async fn register_agent_token_reports_conflict_as_already_exists() {
+        // Registration is create-only since engine 8.2.0 (#349). A 409 must be
+        // reported as the conflict it is, not laundered through a rotate call
+        // that can no longer authenticate.
         let server = MockServer::start().await;
         let relay =
             RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
                 .expect("relay init");
         let client = AgentRegistrationClient::new(relay, "claude");
 
-        let rate_limited = ResponseTemplate::new(429).set_body_json(json!({
-            "ok": false,
-            "error": {
-                "code": "rate_limited",
-                "message": "too many requests"
+        Mock::given(method("POST"))
+            .and(path("/v1/agents"))
+            .respond_with(ResponseTemplate::new(409).set_body_json(json!({
+                "ok": false,
+                "error": {
+                    "code": "agent_already_exists",
+                    "message": "Agent \"worker-dupe\" already exists in this workspace"
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // No rotate-token mock is registered on purpose: reaching that route
+        // at all is the regression this test exists to catch.
+        let error = client
+            .register_agent_token("worker-dupe", Some("claude"))
+            .await
+            .expect_err("expected a conflict error");
+
+        match error {
+            AgentRegistrationError::AlreadyExists { agent_name } => {
+                assert_eq!(agent_name, "worker-dupe");
             }
-        }));
+            other => panic!("expected AlreadyExists, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn register_agent_token_keeps_terminal_retry_diagnostics_for_callers() {
+        let server = MockServer::start().await;
+        let relay =
+            RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+                .expect("relay init");
+        let client = AgentRegistrationClient::new(relay, "claude");
+
+        Mock::given(method("POST"))
+            .and(path("/v1/agents"))
+            .respond_with(
+                ResponseTemplate::new(503)
+                    .insert_header("retry-after", "0")
+                    .insert_header("x-request-id", "request-374")
+                    .set_body_json(json!({
+                        "ok": false,
+                        "error": {
+                            "code": "database_overloaded",
+                            "message": "registration backend is overloaded"
+                        }
+                    })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let error = client
+            .register_agent_token("worker-374", Some("codex"))
+            .await
+            .expect_err("unkeyed registration must return its first ambiguous 503");
+
+        match error {
+            AgentRegistrationError::Api { status, detail, .. } => {
+                assert_eq!(status, 503);
+                assert!(detail.contains("database_overloaded"));
+                assert!(detail.contains("registration backend is overloaded"));
+                assert!(detail.contains("attempts: 1"));
+                assert!(detail.contains("request_id: request-374"));
+            }
+            other => panic!("expected API diagnostic, got {other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn already_exists_error_explains_the_supported_paths() {
+        // The message is the whole point: the previous behaviour surfaced
+        // "401 Agent token required (at_live_...)" for a name collision, which
+        // sent three separate investigations after an auth bug that did not
+        // exist.
+        let message = AgentRegistrationError::AlreadyExists {
+            agent_name: "writer".to_string(),
+        }
+        .to_string();
+
+        assert!(message.contains("writer"), "names the agent: {message}");
+        assert!(
+            message.contains("create-only"),
+            "states the policy: {message}"
+        );
+        assert!(message.contains("recover"), "points at recover: {message}");
+        assert!(
+            message.contains("takeover"),
+            "points at takeover: {message}"
+        );
+        assert!(
+            message.contains("unique name"),
+            "offers the simple fix: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rotate_agent_token_authenticates_as_the_agent() {
+        // Self-rollover: the route is `requireAgentToken` as of engine 8.2.0,
+        // so the agent's own token must be sent, never the workspace key.
+        let server = MockServer::start().await;
+        let relay =
+            RelayCast::new(RelayCastOptions::new("rk_live_workspace").with_base_url(server.uri()))
+                .expect("relay init");
+
+        Mock::given(method("POST"))
+            // Built with `format!` so the SDK/OpenAPI route-sync test normalizes
+            // this to `/v1/agents/{param}/rotate-token` rather than treating
+            // `worker-self` as a literal route missing from openapi.yaml.
+            .and(path(format!("/v1/agents/{}/rotate-token", "worker-self")))
+            .and(header("authorization", "Bearer at_live_current"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "ok": true,
+                "data": { "name": "worker-self", "token": "at_live_rolled" }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let rotated = relay
+            .rotate_agent_token("worker-self", "at_live_current")
+            .await
+            .expect("self-rollover should succeed");
+        assert_eq!(rotated.token, "at_live_rolled");
+    }
+
+    #[tokio::test]
+    async fn register_agent_token_uses_server_retry_after_for_rate_limit_cooldown() {
+        let server = MockServer::start().await;
+        let relay =
+            RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+                .expect("relay init");
+        let client = AgentRegistrationClient::new(relay, "claude");
+
+        let rate_limited = ResponseTemplate::new(429)
+            .insert_header("retry-after", "2")
+            .set_body_json(json!({
+                "ok": false,
+                "error": {
+                    "code": "rate_limit_exceeded",
+                    "message": "too many registrations"
+                }
+            }));
 
         Mock::given(method("POST"))
             .and(path("/v1/agents"))
@@ -482,11 +774,143 @@ mod tests {
         match error {
             AgentRegistrationError::RateLimited {
                 retry_after_secs, ..
-            } => assert_eq!(retry_after_secs, 60),
+            } => assert_eq!(retry_after_secs, 2),
             other => panic!("unexpected error variant: {other:?}"),
         }
 
         assert!(client.registration_block_remaining("worker-c").is_some());
+    }
+
+    #[tokio::test]
+    async fn register_agent_token_uses_safe_fallback_for_malformed_retry_after() {
+        let server = MockServer::start().await;
+        let relay =
+            RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+                .expect("relay init");
+        let client = AgentRegistrationClient::new(relay, "claude");
+
+        Mock::given(method("POST"))
+            .and(path("/v1/agents"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("retry-after", "not-a-delay")
+                    .set_body_json(json!({
+                        "ok": false,
+                        "error": {
+                            "code": "rate_limit_exceeded",
+                            "message": "too many registrations"
+                        }
+                    })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let error = client
+            .register_agent_token("worker-malformed", None)
+            .await
+            .expect_err("expected rate-limited error");
+        match error {
+            AgentRegistrationError::RateLimited {
+                retry_after_secs, ..
+            } => assert_eq!(retry_after_secs, DEFAULT_REGISTRATION_COOLDOWN_SECS),
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+        assert!(client
+            .registration_block_remaining("worker-malformed")
+            .is_some());
+    }
+
+    #[test]
+    fn registration_cooldown_preserves_valid_delay_and_bounds_it() {
+        assert_eq!(
+            registration_cooldown_duration(Some(2_000)),
+            Duration::from_secs(2)
+        );
+        assert_eq!(
+            registration_cooldown_duration(None),
+            Duration::from_secs(DEFAULT_REGISTRATION_COOLDOWN_SECS)
+        );
+        assert_eq!(
+            registration_cooldown_duration(Some((MAX_REGISTRATION_COOLDOWN_SECS + 1) * 1_000)),
+            Duration::from_secs(MAX_REGISTRATION_COOLDOWN_SECS)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn registration_retry_timer_uses_cached_cooldown_without_premature_retry() {
+        let relay = RelayCast::new(RelayCastOptions::new("rk_live_test")).expect("relay init");
+        let client = AgentRegistrationClient::new(relay, "claude");
+        let agent_name = "worker-timer";
+        super::lock_unpoisoned(&client.registration_cooldowns).insert(
+            agent_name.to_string(),
+            Instant::now() + Duration::from_secs(2),
+        );
+        let error = AgentRegistrationError::RateLimited {
+            agent_name: agent_name.to_string(),
+            retry_after_secs: 1,
+            detail: "429".to_string(),
+        };
+
+        // The active cache wins over a stale error display value, so a retry
+        // cannot escape a known cooldown early.
+        let delay = client.registration_retry_delay(agent_name, &error);
+        assert_eq!(delay, Duration::from_secs(2));
+        let sleep = tokio::time::sleep(delay);
+        tokio::pin!(sleep);
+        assert!(!sleep.as_mut().is_elapsed());
+
+        advance(Duration::from_secs(1)).await;
+        assert!(!sleep.as_mut().is_elapsed());
+        advance(Duration::from_secs(1)).await;
+        sleep.as_mut().await;
+    }
+
+    #[tokio::test]
+    async fn retry_registration_retries_immediately_when_server_authorizes_zero_delay() {
+        let server = MockServer::start().await;
+        let relay =
+            RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+                .expect("relay init");
+        let client = AgentRegistrationClient::new(relay, "claude");
+
+        Mock::given(method("POST"))
+            .and(path("/v1/agents"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("retry-after", "0")
+                    .set_body_json(json!({
+                        "ok": false,
+                        "error": {
+                            "code": "rate_limit_exceeded",
+                            "message": "too many registrations"
+                        }
+                    })),
+            )
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/agents"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "ok": true,
+                "data": {
+                    "id": "a_worker_retry",
+                    "name": "worker-retry",
+                    "token": "at_live_retry",
+                    "status": "online",
+                    "created_at": "2026-09-10T00:00:00.000Z"
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let token = retry_agent_registration(&client, "worker-retry", None)
+            .await
+            .expect("server-authorized immediate retry should reach the server");
+        assert_eq!(token, "at_live_retry");
     }
 
     #[test]
@@ -501,5 +925,108 @@ mod tests {
         let message = format_registration_error("worker-d", &error);
         assert!(message.contains("worker-d"));
         assert!(message.contains("retry after"));
+    }
+}
+
+#[cfg(test)]
+mod invalid_response_classification {
+    use super::*;
+
+    /// A body that arrived on a success status and was not JSON is the server
+    /// answering unusably, not the exchange failing. That is `RelayError::Json`
+    /// in this client, and it must not be retried: the registration it
+    /// answered may already have committed.
+    #[test]
+    fn an_unparseable_success_body_is_invalid_response() {
+        let json_error = serde_json::from_str::<serde_json::Value>("<html>").unwrap_err();
+        let error = classify_registration_failure("probe", RelayError::Json(json_error));
+        assert!(
+            matches!(error, AgentRegistrationError::InvalidResponse { .. }),
+            "expected InvalidResponse, got {error:?}"
+        );
+        assert!(!registration_is_retryable(&error));
+    }
+
+    /// The client already knew the response was malformed.
+    #[test]
+    fn a_known_malformed_response_is_invalid_response() {
+        let error = classify_registration_failure("probe", RelayError::InvalidResponse("body was not JSON".into()));
+        assert!(matches!(error, AgentRegistrationError::InvalidResponse { .. }));
+    }
+
+    /// A reqwest error stays Transport — the decode kind included. In this
+    /// client `is_decode()` arises from `bytes()` failing to read the body (a
+    /// reset or timeout after headers), which is the exchange failing, not the
+    /// answer being wrong. An earlier revision of this change routed it to
+    /// InvalidResponse and would have made every mid-body reset permanent.
+    #[test]
+    fn a_reqwest_error_stays_transport_and_retryable() {
+        // A reqwest error is not constructible directly; a failed request to an
+        // unroutable address yields a real one.
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let http_error = rt
+            .block_on(reqwest::Client::new().get("http://127.0.0.1:1/").send())
+            .expect_err("connecting to port 1 must fail");
+        let error = classify_registration_failure("probe", RelayError::Http(http_error));
+        assert!(
+            matches!(error, AgentRegistrationError::Transport { .. }),
+            "expected Transport, got {error:?}"
+        );
+        assert!(registration_is_retryable(&error));
+    }
+
+    /// Transport detail now carries the URL, so a transport failure in a log
+    /// names the endpoint it was talking to.
+    #[test]
+    fn transport_detail_names_the_endpoint() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let http_error = rt
+            .block_on(reqwest::Client::new().get("http://127.0.0.1:1/v1/agents").send())
+            .expect_err("connecting to port 1 must fail");
+        let error = classify_registration_failure("probe", RelayError::Http(http_error));
+        let rendered = error.to_string();
+        assert!(rendered.contains("127.0.0.1:1/v1/agents"), "url missing from {rendered}");
+    }
+
+    /// Retrying cannot fix an unusable answer, and registration may already
+    /// have committed server-side — so a retry risks a second registration
+    /// rather than recovering from a blip.
+    #[test]
+    fn an_unusable_answer_is_not_retried() {
+        let error = AgentRegistrationError::InvalidResponse {
+            agent_name: "probe".into(),
+            status: Some(200),
+            url: Some("https://cast.agentrelay.com/v1/agents".into()),
+            detail: "error decoding response body".into(),
+        };
+        assert!(!registration_is_retryable(&error));
+    }
+
+    /// A genuine transport failure keeps its old classification and stays
+    /// retryable: this change narrows what counts as transport, it does not
+    /// stop retrying real network faults.
+    #[test]
+    fn a_real_transport_failure_is_still_retried() {
+        let error = AgentRegistrationError::Transport {
+            agent_name: "probe".into(),
+            detail: "connection reset".into(),
+        };
+        assert!(registration_is_retryable(&error));
+    }
+
+    /// The message has to name what the old one omitted, or the next failure
+    /// is as undiagnosable as this one was.
+    #[test]
+    fn the_message_names_status_and_cause() {
+        let rendered = AgentRegistrationError::InvalidResponse {
+            agent_name: "probe".into(),
+            status: Some(503),
+            url: Some("https://cast.agentrelay.com/v1/agents".into()),
+            detail: "error decoding response body: expected value at line 1 column 1".into(),
+        }
+        .to_string();
+        assert!(rendered.contains("503"), "status missing from {rendered}");
+        assert!(rendered.contains("cast.agentrelay.com/v1/agents"), "url missing from {rendered}");
+        assert!(rendered.contains("expected value"), "cause missing from {rendered}");
     }
 }

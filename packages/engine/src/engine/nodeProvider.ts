@@ -215,6 +215,9 @@ export async function materializeProviderActions(
   capabilities: FleetCapability[],
 ): Promise<void> {
   const actionCaps = capabilities.filter((cap) => capabilityKind(cap) === 'action');
+  if (capabilities.some((cap) => cap.execution_mode === 'task' && capabilityKind(cap) !== 'action')) {
+    throw codedError('Task execution mode requires an action capability', 'invalid_task_capability', 400);
+  }
   const keepNames = actionCaps.map((cap) => cap.name);
 
   // Prune actions this provider previously materialized that it no longer offers.
@@ -231,16 +234,20 @@ export async function materializeProviderActions(
   const isDefault = providerName === DEFAULT_PROVIDER_NAME;
   for (const cap of actionCaps) {
     const name = cap.name;
+    let defaultMayClaimGlobal = isDefault;
     if (isDefault) {
-      // Never clobber an agent-hosted action of the same name (legacy behavior).
+      // Keep an exact node-scoped identity even when an agent-hosted action
+      // owns the workspace name. The node row stays non-global, so lookup by
+      // workspace still resolves the agent while retries can authorize this
+      // provider generation without falling back to a name-only frame.
       const [agentHosted] = await db
         .select({ id: actions.id })
         .from(actions)
         .where(and(eq(actions.workspaceId, workspaceId), eq(actions.name, name), sql`${actions.handlerNodeId} IS NULL`));
-      if (agentHosted) continue;
+      if (agentHosted) defaultMayClaimGlobal = false;
     }
 
-    const wantGlobal = isDefault || cap.global === true;
+    let wantGlobal = isDefault ? defaultMayClaimGlobal : cap.global === true;
     if (wantGlobal) {
       const [existingGlobal] = await db
         .select({ id: actions.id, handlerNodeId: actions.handlerNodeId })
@@ -248,10 +255,13 @@ export async function materializeProviderActions(
         .where(and(eq(actions.workspaceId, workspaceId), eq(actions.name, name), eq(actions.isGlobal, true)));
       if (existingGlobal && existingGlobal.handlerNodeId !== nodeId) {
         // The default provider does not steal a workspace name another node
-        // already owns (first-writer-wins, matching legacy broker behavior);
-        // an explicit `global: true` collides loudly.
-        if (isDefault) continue;
-        throw codedError(`Action "${name}" already claims the workspace-global alias`, 'action_name_conflict', 409);
+        // already owns (first-writer-wins), but it still materializes a local
+        // non-global identity for exact retry authorization.
+        if (isDefault) {
+          wantGlobal = false;
+        } else {
+          throw codedError(`Action "${name}" already claims the workspace-global alias`, 'action_name_conflict', 409);
+        }
       }
       // An explicit global alias must not shadow an agent-hosted action of the
       // same name — the agent-hosted row wins workspace-invoke resolution, so the
@@ -279,7 +289,7 @@ export async function materializeProviderActions(
     if (existing) {
       await db
         .update(actions)
-        .set({ handlerProvider: providerName, handlerAgentId: null, isGlobal: wantGlobal, queue: wantQueue, isActive: true })
+        .set({ handlerProvider: providerName, handlerAgentId: null, isGlobal: wantGlobal, queue: wantQueue, executionMode: cap.execution_mode ?? 'short', isActive: true })
         .where(eq(actions.id, existing.id));
     } else {
       await db.insert(actions).values({
@@ -292,6 +302,7 @@ export async function materializeProviderActions(
         handlerProvider: providerName,
         isGlobal: wantGlobal,
         queue: wantQueue,
+        executionMode: cap.execution_mode ?? 'short',
         inputSchema: {},
         outputSchema: {},
         availableTo: null,

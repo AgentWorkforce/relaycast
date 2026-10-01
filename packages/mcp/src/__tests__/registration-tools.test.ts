@@ -16,7 +16,6 @@ describe('registration tools', () => {
   const mockRelay = {
     agents: {
       register: vi.fn(),
-      registerOrRotate: vi.fn(),
       list: vi.fn(),
     },
   };
@@ -172,7 +171,7 @@ describe('registration tools', () => {
 
   it('register tool calls relay.agents.register and stores token', async () => {
     session.workspaceKey = 'rk_live_test';
-    mockRelay.agents.registerOrRotate.mockResolvedValue({
+    mockRelay.agents.register.mockResolvedValue({
       agent: { name: 'bot1' },
       token: 'tok_abc',
     });
@@ -182,7 +181,7 @@ describe('registration tools', () => {
       arguments: { name: 'bot1' },
     });
 
-    expect(mockRelay.agents.registerOrRotate).toHaveBeenCalledWith({
+    expect(mockRelay.agents.register).toHaveBeenCalledWith({
       name: 'bot1',
       type: undefined,
       persona: undefined,
@@ -226,7 +225,7 @@ describe('registration tools', () => {
     });
 
     expect(result.isError).toBeFalsy();
-    expect(mockRelay.agents.registerOrRotate).not.toHaveBeenCalled();
+    expect(mockRelay.agents.register).not.toHaveBeenCalled();
     expect(strictSession.agentToken).toBe('tok_lead');
     expect(strictSession.agentName).toBe('Lead');
     expect(strictSession.agents.get('Lead')).toEqual({ agentName: 'Lead', agentToken: 'tok_lead' });
@@ -301,7 +300,7 @@ describe('registration tools', () => {
     session.agentToken = 'at_live_ws1';
     session.agentName = 'bot1';
 
-    mockRelay.agents.registerOrRotate.mockResolvedValue({
+    mockRelay.agents.register.mockResolvedValue({
       agent: { name: 'bot2' },
       token: 'at_live_ws2',
     });
@@ -341,7 +340,7 @@ describe('registration tools', () => {
     });
 
     expect(result.isError).toBeFalsy();
-    expect(mockRelay.agents.registerOrRotate).not.toHaveBeenCalled();
+    expect(mockRelay.agents.register).not.toHaveBeenCalled();
     expect(session.workspaceKey).toBe('rk_live_ws2');
     expect(session.agentToken).toBe('at_live_ws2');
     expect(session.agentName).toBe('bot2');
@@ -351,7 +350,7 @@ describe('registration tools', () => {
     session.workspaceKey = 'rk_live_ws1';
     session.agentToken = 'at_live_ws1';
     session.agentName = 'bot1';
-    mockRelay.agents.registerOrRotate.mockResolvedValue({
+    mockRelay.agents.register.mockResolvedValue({
       agent: { name: 'bot2' },
       token: 'at_live_ws2',
     });
@@ -486,7 +485,7 @@ describe('registration tools', () => {
 
   it('register saves context to workspaces map', async () => {
     session.workspaceKey = 'rk_live_test';
-    mockRelay.agents.registerOrRotate.mockResolvedValue({
+    mockRelay.agents.register.mockResolvedValue({
       agent: { name: 'bot1' },
       token: 'tok_abc',
     });
@@ -505,7 +504,7 @@ describe('registration tools', () => {
 
   it('register preserves prior agent identities in the workspace registry', async () => {
     session.workspaceKey = 'rk_live_test';
-    mockRelay.agents.registerOrRotate
+    mockRelay.agents.register
       .mockResolvedValueOnce({
         agent: { name: 'bot1' },
         token: 'tok_abc',

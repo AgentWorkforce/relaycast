@@ -302,7 +302,7 @@ describe('MCP → SDK → HTTP integration', () => {
     await client.callTool({ name: 'workspace.create', arguments: { name: 'project-alpha' } });
     const req = findReq((r) => r.url.endsWith('/v1/workspaces') && r.method === 'POST');
     expect(req).toBeDefined();
-    expect(req!.body).toEqual({ name: 'project-alpha' });
+    expect(req!.body).toEqual({ name: 'project-alpha', provenance: { source: 'mcp' } });
   });
 
   it('workspace.set_key switches workspace-level auth for agent.list', async () => {

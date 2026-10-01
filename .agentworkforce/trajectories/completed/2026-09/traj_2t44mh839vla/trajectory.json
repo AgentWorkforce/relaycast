@@ -1,0 +1,73 @@
+{
+  "id": "traj_2t44mh839vla",
+  "version": 1,
+  "task": {
+    "title": "Drain workspace delivery capacity when agents are released"
+  },
+  "status": "completed",
+  "startedAt": "2026-09-20T16:53:13.768Z",
+  "completedAt": "2026-09-20T17:00:33.145Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-09-20T16:54:06.278Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_xydn9gw6mt5u",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-09-20T16:54:06.278Z",
+      "endedAt": "2026-09-20T17:00:33.145Z",
+      "events": [
+        {
+          "ts": 1789923246278,
+          "type": "decision",
+          "content": "Fix capacity recovery in the Relaycast engine release lifecycle: Fix capacity recovery in the Relaycast engine release lifecycle",
+          "raw": {
+            "question": "Fix capacity recovery in the Relaycast engine release lifecycle",
+            "chosen": "Fix capacity recovery in the Relaycast engine release lifecycle",
+            "alternatives": [],
+            "reasoning": "Release stops future fan-out but queued/delivered rows for the tombstoned recipient remain active and continue consuming the workspace cap until TTL. The engine owns both the lifecycle mutation and active-depth accounting, so it can atomically dead-letter those rows on irreversible delete_agent releases across every path."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1789923595490,
+          "type": "reflection",
+          "content": "Release-time settlement now covers direct deletion, local reaping, guarded node completion, and legacy node completion. Full engine suite passed (1,154 tests), and a workspace-cap regression proves expired unswept rows are already excluded from admission.",
+          "raw": {
+            "focalPoints": [
+              "release atomicity",
+              "capacity accounting",
+              "regression coverage"
+            ],
+            "confidence": 0.9
+          },
+          "significance": "high",
+          "tags": [
+            "focal:release atomicity",
+            "focal:capacity accounting",
+            "focal:regression coverage",
+            "confidence:0.9"
+          ]
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Dead-lettered active delivery rows during irreversible agent release across direct, local, guarded node, and legacy node lifecycle paths; added release-path and expired-unswept workspace-cap regressions; full engine suite, typecheck, and lint pass.",
+    "approach": "Standard approach",
+    "confidence": 0.93
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "6414a59e619459fa64640937f4c4634c207191f2",
+    "endRef": "6414a59e619459fa64640937f4c4634c207191f2"
+  }
+}

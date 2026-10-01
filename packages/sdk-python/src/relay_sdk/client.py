@@ -134,6 +134,16 @@ class HttpClient:
     def close(self) -> None:
         self._client.close()
 
+    def with_api_key(self, api_key: str) -> HttpClient:
+        """Clone this client with another credential while preserving origin metadata."""
+        return HttpClient(
+            api_key,
+            self.base_url,
+            origin_client=self.origin_client,
+            origin_version=self.origin_version,
+            agent_relay_distinct_id=self.agent_relay_distinct_id,
+        )
+
     def __enter__(self) -> HttpClient:
         return self
 
@@ -240,6 +250,16 @@ class AsyncHttpClient:
 
     async def close(self) -> None:
         await self._client.aclose()
+
+    def with_api_key(self, api_key: str) -> AsyncHttpClient:
+        """Clone this client with another credential while preserving origin metadata."""
+        return AsyncHttpClient(
+            api_key,
+            self.base_url,
+            origin_client=self.origin_client,
+            origin_version=self.origin_version,
+            agent_relay_distinct_id=self.agent_relay_distinct_id,
+        )
 
     async def __aenter__(self) -> AsyncHttpClient:
         return self

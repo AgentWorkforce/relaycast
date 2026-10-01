@@ -1,0 +1,65 @@
+{
+  "id": "traj_fn1qd11avbv8",
+  "version": 1,
+  "task": {
+    "title": "Fix Rust registration Retry-After cooldown handling"
+  },
+  "status": "completed",
+  "startedAt": "2026-09-10T14:43:14.126Z",
+  "completedAt": "2026-09-10T14:43:54.175Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-09-10T14:43:16.330Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_x96iv6q8a5az",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-09-10T14:43:16.330Z",
+      "endedAt": "2026-09-10T14:43:54.175Z",
+      "events": [
+        {
+          "ts": 1789051396331,
+          "type": "decision",
+          "content": "Registration cooldowns use the parsed Retry-After value, capped at five minutes: Registration cooldowns use the parsed Retry-After value, capped at five minutes",
+          "raw": {
+            "question": "Registration cooldowns use the parsed Retry-After value, capped at five minutes",
+            "chosen": "Registration cooldowns use the parsed Retry-After value, capped at five minutes",
+            "alternatives": [],
+            "reasoning": "The hosted gateway sends a short authoritative delay; keeping a cap prevents malformed or hostile headers from blocking an agent indefinitely, while absent or malformed values retain the fail-closed 60-second fallback."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1789051398486,
+          "type": "decision",
+          "content": "Retry scheduling consumes the active cached cooldown: Retry scheduling consumes the active cached cooldown",
+          "raw": {
+            "question": "Retry scheduling consumes the active cached cooldown",
+            "chosen": "Retry scheduling consumes the active cached cooldown",
+            "alternatives": [],
+            "reasoning": "Using the cache as the source of truth prevents the fixed two-second retry sleep from producing local Blocked attempts before the server-directed cooldown expires."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Rust registration now honors bounded server Retry-After cooldowns, preserves the 60-second malformed-header fallback, and schedules retries from the same cached cooldown.",
+    "approach": "Standard approach",
+    "confidence": 0.92
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "6416a5aaceef9d82e521e86a5fea5eb27750e748",
+    "endRef": "6416a5aaceef9d82e521e86a5fea5eb27750e748"
+  }
+}

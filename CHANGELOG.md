@@ -16,11 +16,352 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
+
+### Added
+
+- Server telemetry attributes each event to the cloud user behind the acting agent (`metadata.cloud_user_id`) and groups it by the workspace's cloud org and workspace; events with no known person use `relaycast-ws:<workspace_id>` without a person profile.
 
 ### Fixed
 
 - Node delivery replay now stops an affected agent's sequence stream after a failed send, preventing a higher-sequence message from arriving first while other agents continue receiving.
+
+## [8.14.0] - 2026-09-30
+
+### Added
+
+- Opted-in node-provider action handlers receive the authenticated invoking agent identity in their handler context, with legacy strict providers retaining the prior wire shape.
+
+## [8.13.1] - 2026-09-30
+
+### Fixed
+
+- Direct-node agents can publish a readable machine address from registration onward while legacy `@direct` addresses continue to deliver.
+
+## [8.13.0] - 2026-09-25
+
+### Added
+
+- `POST /v1/dm` accepts `address` (`agent@machine`) in place of `to`, delivering to the agent only while it is hosted on that machine.
+- Agents report their `address`, and received DMs carry the sender's as `message.agent_address`, so agents can reply by address.
+
+## [8.12.0] - 2026-09-24
+
+### Added
+
+- The observer dashboard draws a relayflow run: a channel whose messages carry `metadata.relayflow` run snapshots shows the run's step graph, with each step's state and timing, pinned above the feed.
+
+### Fixed
+
+- Realtime `message.created` events carry the message's `metadata` on workspace and direct-node transports and preserve the server creation time, so structured messages render live without replayed events appearing newer than persisted messages.
+- Relayflow observer panels order snapshots by their server-assigned snowflake IDs, render cyclic dependencies without inventing an execution sequence, and expose each step state as text instead of color alone.
+
+## [8.11.7] - 2026-09-22
+
+### Fixed
+
+- Reconnecting brokers recover same-node legacy `default` workers without letting another provider or node claim their identities; adoption rechecks provider liveness and ignores future-dated default heartbeats.
+
+## [8.11.6] - 2026-09-20
+
+### Fixed
+
+- Permanently releasing an agent now dead-letters its active `queued` and `delivered` deliveries immediately, restoring workspace messaging capacity instead of waiting for delivery TTL expiry.
+
+## [8.11.5] - 2026-09-20
+
+### Fixed
+
+- GitHub PR inbound subscriptions follow title changes and receive associated comments and reviews without widening repository or PR scope.
+
+## [8.11.4] - 2026-09-19
+
+### Fixed
+
+- A node that reconnects after its delivery socket dropped now receives every message queued during the outage. Reconnect replay for cursor-aware brokers was scoped to the sessions whose delivery readiness or node routing changed while re-announcing their inventory, so a host that already reported those sessions as delivery-ready replayed nothing: the queued messages stayed in the mailbox until their TTL and the agents were never woken. A heartbeat that refreshes the broker's capability roster between reconnect and re-announcement no longer changes how that reconnect replays.
+
+## [8.11.3] - 2026-09-19
+
+### Fixed
+
+- Binding an agent to a node now adopts one of that node's live providers, marks the agent delivery-ready on cursor-aware providers, and guards against stealing an agent that is active on another live node. A broker-spawned agent that was HTTP-registered first (provider `default`) and then bound through the node-agents fallback kept a provider its node did not serve, so its deliveries were routed to the node but never pushed — the spawned agent was never woken. The bind's binding row, location move and node capacity counters now commit as one atomic unit, so a failure part-way through can no longer leave a node charged for a binding it retired, or holding an active binding it never reserved capacity for. The bind response also returns the agent's `delivery_ack_seq` so cursor-aware providers learn the adopted identity's authoritative delivery cursor.
+
+## [8.11.2] - 2026-09-19
+
+### Fixed
+
+- Preserve server-owned cloud:* tags when a node re-registers
+
+## [8.11.1] - 2026-09-17
+
+- Agent realtime clients reuse their direct node token across reconnect attempts instead of minting a new one per attempt. Minting rotates the token through the workspace's shared write capacity, so a client that could not connect would generate write load with every retry and crowd out ordinary writes — including binding a newly spawned agent to its node.
+
+## [8.11.0] - 2026-09-17
+
+- Fix authenticated requests returning HTTP 429 `plan_limit_exceeded` permanently once a workspace passed its plan's API-call limit: the counter accumulated for the workspace's lifetime instead of resetting each billing period.
+- Rate limit `GET /v1/workspace` in its own bucket so credential validation and launch preflight stay reachable while the workspace's other traffic is at its ceiling.
+- Put a retry contract on every 429: `Retry-After` and `X-RateLimit-Reset` now distinguish a per-minute throttle that clears in seconds from a plan quota that only clears at the period boundary.
+- Add opt-in durable task actions with execution fencing, final-result receipts, and restart reconciliation.
+- Keep a node's enrollment-time `cloud:*` tags when its broker re-registers, and stop brokers from adding or removing them. `cloud:` is now a reserved node-tag namespace: `cloud:*` tags in `node.register` are ignored with a server-side warning, and re-enrolling is how to change or clear them.
+- `GET /v1/inbox`: unread counts no longer include archived channels, and mentions are matched with the exact `@handle` token contract (escaped `\@x`, email addresses, and prefix/superstring text are not mentions); mention results are limited to live channels the agent has joined or DMs the agent participates in.
+
+## [8.10.1] - 2026-09-13
+
+- Fix deletion getting stuck for agents that never connected, while preserving protection for active agents.
+
+## [8.10.0] - 2026-09-13
+
+- Reject malformed or unsupported inbound webhook requests before admission; `message/send` and `message/stream` require a valid message.
+
+- Enforce workspace delivery capacity across HTTP producers with retryable 429 responses.
+- Expose the async workspace capacity resolver through public engine configuration.
+- Admit outbound A2A messages durably before transport and recover accepted sends without losing local notifications.
+- Send a stable HTTP Idempotency-Key on outbound retries and recovery.
+- Bound outbound transport retries and refuse credentialed HTTP, redirects, and invalid JSON/protocol responses.
+- Stop A2A recovery after source deletion or target registration/endpoint changes; clear terminal payloads.
+- Deduplicate inbound A2A messages, counters, and local effects through concurrent retries and KV failures.
+- Refuse new inbound A2A admission atomically when its authenticated registration or token changes.
+- Preserve completed inbound A2A retries from published 8.9.1 without duplicate admission.
+- Preserve numeric webhook IDs and the request message/response message-or-task fallback when an ID is omitted.
+- Preserve authenticated sender rejection notices without duplicating them on replay.
+- Keep completed DM/group-DM retries available during policy outages.
+- Bound accepted A2A retries to 24 hours; source pruning returns 410 within the window without recreating history.
+- Allow fresh inbound key reuse after SQL identity expiry, including a different payload, even when a stale completion cache remains.
+
+## [8.9.1] - 2026-09-11
+
+- Keep channel member-count queries within D1 parameter limits for large workspaces.
+
+- Prevent recipient self-invitations from restoring a released subscription membership.
+
+### Fixed
+
+- Durable message replay preserves exact hyphenated mentions and webhook display names, and raw webhook deliveries use the same payload shape as live messages.
+- Subscription joins cannot recreate membership for an agent released during the request.
+
+## [8.9.0] - 2026-09-11
+
+### Added
+
+- Authenticated node registration replies identify the server admission contract so brokers can verify create-only provider binding, channel isolation, and guarded identity cleanup before spawning.
+
+### Fixed
+
+- Engine scheduled maintenance again supports host-owned retention cursors and bounded websocket backlog redrive, allowing hosted deployments to retain schema-free recovery behavior.
+- `GET /v1/nodes` no longer fetches a workspace's entire node history to serve a default listing: `name`, `capability`, and a new `status` liveness selector are now pushed into SQL, and `status=online` returns only fresh-heartbeat live nodes. An explicit `history=true` mode adds bounded, non-truncating cursor pagination for reading full history (e.g. `--all`). `active_agents` is now flagged with `active_agents_stale` once a node is offline, so a frozen historical count is never presented as current occupancy. (Fixes [#422](https://github.com/AgentWorkforce/relaycast/issues/422))
+- Keyed agent session events now survive lost responses without duplicate events, while conflicting key reuse returns a typed error. A `status.*` event's status mutation and durable completion marker are applied atomically so retries cannot leave a stale agent row behind a successful response.
+- Migration `0056_session_event_status_completion.sql` reconciles pre-existing keyed status events without fabricating completion, recovering only rows proven older than the event and conservatively preserving rows touched by later status or liveness writers.
+
+## [8.8.0] - 2026-09-10
+
+### Changed
+
+- Anonymous keyed workspace creation now treats a CSPRNG `Idempotency-Key` as the hosted-safe recovery capability; the deployment derivation secret remains server-only, while self-hosts can opt into shared-secret proof enforcement.
+
+### Added
+
+- Add workspace-admin bulk reclamation for stale, unowned agent identities, with default dry-run reports, resumable pages, a configurable CLI `--limit` of 1–100 rows, and protection for broker associations and retained authorship.
+
+- Rust SDK `WorkspaceBootstrapOptions` supports crash-safe anonymous keyed workspace creation without a deployment secret and opt-in self-host bootstrap proof without exposing it to hosted Relaycast.
+- `POST /v1/agents/release-exact` atomically pins broker cleanup to an immutable agent identity and durable idempotency key, so a same-name replacement cannot be released by a retry.
+
+### Fixed
+
+- NPM release reconciliation now waits for all package dist-tags within one bounded propagation window and preserves unrelated Docker lockfile resolutions.
+
+- Rust and TypeScript SDK anonymous keyed workspace bootstrap refuses remote HTTP and redirects, keeping its recovery capability on the intended origin.
+
+## [8.7.0] - 2026-09-09
+
+### Added
+
+- Node credentials can read their own dispatched spawn results, allowing served fleet actions to confirm broker readiness with node-scoped authority.
+
+- Agent registration accepts `auto_join_general: false` on HTTP and node control for isolated workers; recovery preserves existing memberships.
+
+- Node-control `agent.deregister` acknowledges requests with an ID after teardown, allowing brokers to confirm cleanup before deleting owned identities.
+- `POST /v1/agents/{name}/subscription-channel` provisions an exact identity-bound delivery channel without rotating recipient credentials.
+
+### Fixed
+
+- Thread replies resolve full hyphenated mentions; subscription setup rejects recipients released during membership creation.
+- Verified spawn checks the selected provider heartbeat, and inventory reconciliation honors only canonical `verify_ready` input. Empty explicit targets retain legacy spawn routing.
+
+- Relayfile messages expose provider payloads from Cloud sync envelopes, preserving titles, authors, and terminal PR state for subscribers.
+
+- Subscription routes reject conflicting legacy memberships; agent removal invalidates channels actually removed by the release transaction.
+
+- Agent deletion invalidates cached membership so subscription route checks reflect the released identity.
+- Relayfile ingress preserves authenticated provider event semantics and resource references.
+- Hyphenated mentions resolve the full handle without waking a prefix agent.
+- Raw inbound webhooks now create durable agent deliveries.
+- Relayfile ingress and raw inbound hooks reject full mailboxes atomically with retry guidance, preserving unique events without partial delivery.
+- Explicit spawn targets are honored when a legacy global node alias exists, preserving its caller allowlist.
+
+## [8.6.1] - 2026-09-09
+
+### Fixed
+
+- NPM releases now preserve every stable and prerelease engine migration byte-for-byte, including the canonical `0045_workspace_create_idempotency.sql` artifact.
+
+## [8.6.0] - 2026-09-09
+
+### Added
+
+- Anonymous bootstrap `POST /v1/workspaces` creates can use an `Idempotency-Key` to recover the same workspace and API key after retries or response loss; digest conflicts, owner-scope crossovers, and terminalized bindings fail closed. The caller must also present `X-Workspace-Bootstrap-Secret` matching the deployment's configured secret — the `Idempotency-Key` is a non-secret correlator, so proving the deployment secret is what authorizes recovering the binding and prevents an unrelated caller who guesses or observes the key from retrieving another caller's workspace credentials. Callers must generate anonymous keys with a CSPRNG; the server enforces only a 32-character structural minimum and rejects shorter keys with `400 workspace_create_idempotency_key_too_weak`.
+- Keyed anonymous bootstrap now rejects explicit invalid authorization and requires a stable deployment secret across restarts; unkeyed creates remain compatible.
+
+### Fixed
+
+- Self-hosted Docker and Compose deployments now pass `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` into the engine without logging it.
+
+## [8.5.5] - 2026-09-08
+
+### Fixed
+
+- Serialize overlapping reconnect replays and honor acknowledgements and provider handoffs before each send.
+- Agent roster reads skip released history and seek live status ranges through a workspace-scoped index.
+- Prevent node removal from scanning unrelated retained deliveries and agent records across workspaces.
+
+## [8.5.4] - 2026-09-08
+
+### Fixed
+
+- Maintenance migrations reuse obsolete index space before creating replacements, reducing upgrade storage pressure without deleting history or changing retention.
+
+## [8.5.3] - 2026-09-08
+
+### Fixed
+
+- Fleet delivery replay uses indexed mailbox pages; bounded, resumable retention and lower background dispatch concurrency reduce database pressure without shortening retention policies.
+- Replay completion cannot lose a trailing trigger; maintenance recovers corrupt cursors and advances past expired-only redrive windows without scanning unrelated routes.
+
+## [8.5.2] - 2026-09-07
+
+### Fixed
+
+- Batched workspace-event appends allocate sequences with bounded index lookups, avoiding scans of retained event history that can overload busy databases.
+
+## [8.5.1] - 2026-09-07
+
+### Added
+
+- Node operators can delete one workspace-scoped node through `DELETE /v1/nodes/:name` or `relay.nodes.delete()`, with safe online/action guards, an explicit force option, and no automatic replay of ambiguous SDK failures.
+
+### Fixed
+
+- Agent roster status filters now load only matching rows from the database while preserving read-only, TTL-derived presence.
+
+## [8.5.0] - 2026-09-06
+
+### Fixed
+
+- Guarded agent releases now compare the exact issued-token generation before dispatch and completion, so stale cleanup cannot release a same-name takeover.
+- Fleet registration now acquires capacity before durable agent writes while preserving `agent_already_exists` precedence, binds cancellation and reservation claims to the exact node/provider/name tuple, and requires invocation correlation when a stale canceled worker is otherwise indistinguishable from its replacement.
+- Native spawn rejects a missing or empty agent name before creating an invocation or reserving node capacity.
+- Registered agent- and node-action dispatch now atomically persists the exact action, route, and accepted attempt at the socket owner; retries cannot duplicate execution, stale send failures cannot clobber a newer winner, and pruning or timeout recovery cannot retarget or revoke accepted work across same-name replacements.
+
+## [8.4.0] - 2026-09-05
+
+### Added
+
+- Delegated `POST /v1/workspaces` creates now accept an owner-scoped `Idempotency-Key`, recover the same child key after response loss, reject request-digest conflicts, and terminalize bindings on deletion or expiry.
+
+### Fixed
+
+- Keyed (idempotent) agent-action invocations whose host cannot deliver to the handler now fail with 503 `handler_unavailable` instead of 503 `idempotency_unavailable`.
+- An agent-action invocation is no longer reported as `handler_unavailable` when its handler reconnected and received it mid-request; the caller sees the live dispatch instead.
+
+## [8.3.1] - 2026-09-03
+
+### Added
+
+- `POST /v1/nodes` accepts `machine_id` and uses it as the enrollment key of last resort, after `node_id` and `name`. A fleet host that persists no `node_id` renames itself on every boot, and each boot used to leave another roster row behind; it now rotates the machine's existing `broker` node instead. `direct` node-of-one delivery hosts are never matched this way, and reuse requires the matched broker to have proved it was alive — by an actual heartbeat frame, tracked in a new `proven_live_at` column, since `last_heartbeat_at` is also written by registration and disconnect cleanup. That proof is cleared whenever enrollment re-issues a row's token, so a row cannot be taken twice before its new holder proves itself. Rows that never heartbeated, rows still live, and rows with a future proof are all left alone, so hosts cold-booting from a shared baked `machine_id` keep separate identities and credentials. An explicit `node_id` still pins identity. Hosts that enroll or register but never heartbeat are not deduped; those rows are reclaimed by the roster reaper. Node roster entries now return `machine_id`.
+
+### Fixed
+
+- Unkeyed agent-action invocations now report `handler_unavailable` and fail their durable row when the owner-side provider send misses, while still acknowledging work that completes between provider acceptance and dispatch bookkeeping.
+
+## [8.3.0] - 2026-09-02
+
+### Added
+
+- `@relaycast/types` declares which node frame carries each event type (`NODE_DELIVER_FRAME_EVENT_TYPES`, `nodeFrameKindFor`), so hosts can tell `deliver`-frame events from `context.update` events without copying the engine's list.
+
+## [8.2.2] - 2026-09-02
+
+### Fixed
+
+- Fleet inventory reconciliation isolates stale or conflicting members, so one bad identity can no longer expire every healthy sibling on the same node and strand their inbound deliveries. A member whose own entry is rejected stays online: it is excluded from renewal and delivery readiness, but the missing-agent sweep no longer mistakes it for a departed agent and emits a false `agent.exited`.
+- Never-dispatched pending action invocations are now bounded by absolute age (default 72h), so stale spawn queues can no longer drain into live agents that evict an existing resident under the same name.
+- Retried action invocations reuse the original invocation instead of executing a provider action twice, wait for a durable dispatch outcome, and preserve locally completed release routing identity.
+
+## [8.2.1] - 2026-08-24
+
+### Fixed
+
+- Fleet heartbeats and agent reads no longer amplify into workspace-wide D1 maintenance scans; pending delivery views also exclude expired rows before cleanup runs.
+
+## [8.2.0] - 2026-08-21
+
+### Added
+
+- Workspace creation records provenance and explicit internal/external/unknown classification for hosted per-workspace usage reporting without adding message-path writes.
+
+### Security
+
+- Observer tokens receive workspace provenance without request actor, user, machine, or organization identity fields.
+
+## [8.1.3] - 2026-08-20
+
+### Fixed
+
+- Fleet reconnect drains and activity-feed reads no longer perform repeated full-table D1 scans as invocation and DM history grows.
+
+## [8.1.2] - 2026-08-19
+
+### Fixed
+
+- The activity feed now uses the indexed monotonic message order instead of scanning and sorting an entire workspace history.
+
+## [8.1.1] - 2026-08-19
+
+### Fixed
+
+- Scheduled delivery expiry now drains up to 2,500 rows per invocation in bounded D1-safe batches, preventing expired mailbox rows from accumulating faster than the sweep can clear them.
+
+## [8.1.0] - 2026-08-19
+
+### Added
+
+- Fleet nodes can advertise placement-safe `owner/name` repository keys without exposing local checkout paths.
+
+### Security
+
+- A node can no longer smuggle a repository advertisement through its `tags` list. When `node.register` carries `repo_keys` — including as an empty array — that field is the only source of the `repo:<owner/name>` tags placement matches on, and any `repo:` tag supplied in `tags` is dropped. Register messages that omit `repo_keys` stay on the pre-`repo_keys` tag-only path.
+
+## [8.0.7] - 2026-08-19
+
+### Added
+
+- Replay clients can resolve indexed `session_ref` message slices with a live per-workspace retention boundary and fail-closed retained, partial, aged-out, or unknown availability.
+
+### Fixed
+
+- Channel, thread, and group-DM clients now forward replay metadata, and group-DM redelivery preserves it across broker reconnects.
+
+## [8.0.6] - 2026-08-18
+
+### Added
+
+- Workspaces can opt into an explicit expiry at creation or be deleted immediately with their own key, including durable event rows and retryable post-commit cleanup of stored file bytes.
+
+## [8.0.5] - 2026-08-18
+
+### Fixed
+
+- Workspace creation now requires atomic storage for the workspace and default
+  channel, and exhausted storage failures no longer expose database internals.
 
 ## [8.0.4] - 2026-08-17
 
@@ -293,7 +634,27 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased - Patch]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.3...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v8.14.0...HEAD
+[8.14.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.13.1...v8.14.0
+[8.13.1]: https://github.com/AgentWorkforce/relaycast/compare/v8.13.0...v8.13.1
+[8.13.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.12.0...v8.13.0
+[8.12.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.11.7...v8.12.0
+[8.11.7]: https://github.com/AgentWorkforce/relaycast/compare/v8.11.6...v8.11.7
+[8.11.6]: https://github.com/AgentWorkforce/relaycast/compare/v8.11.5...v8.11.6
+[8.11.5]: https://github.com/AgentWorkforce/relaycast/compare/v8.11.4...v8.11.5
+[8.11.4]: https://github.com/AgentWorkforce/relaycast/compare/v8.11.3...v8.11.4
+[8.11.3]: https://github.com/AgentWorkforce/relaycast/compare/v8.11.2...v8.11.3
+[8.11.2]: https://github.com/AgentWorkforce/relaycast/compare/v8.11.1...v8.11.2
+[8.11.1]: https://github.com/AgentWorkforce/relaycast/compare/v8.11.0...v8.11.1
+[8.11.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.10.1...v8.11.0
+[8.10.1]: https://github.com/AgentWorkforce/relaycast/compare/v8.10.0...v8.10.1
+[8.10.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.9.1...v8.10.0
+[8.9.1]: https://github.com/AgentWorkforce/relaycast/compare/v8.9.0...v8.9.1
+[8.9.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.8.0...v8.9.0
+[8.8.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.7.0...v8.8.0
+[8.7.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.6.1...v8.7.0
+[8.6.1]: https://github.com/AgentWorkforce/relaycast/compare/v8.6.0...v8.6.1
+[8.6.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.5.5...v8.6.0
 [6.0.3]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.2...v6.0.3
 [6.0.2]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.1...v6.0.2
 [6.0.1]: https://github.com/AgentWorkforce/relaycast/compare/v6.0.0...v6.0.1

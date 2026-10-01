@@ -27,6 +27,7 @@ export {
   WorkspaceNotFoundError,
 } from './setup-errors.js';
 export type { RelaycastSetupErrorCode } from './setup-errors.js';
+export type { WorkspaceProvenanceOptions } from './workspace-provenance.js';
 export { AgentClient } from './agent.js';
 export type { AgentClientOptions } from './agent.js';
 export { HttpClient, RelayError } from './client.js';
@@ -44,11 +45,17 @@ export {
   relayErrorRetryable,
 } from './errors.js';
 export type { RelayErrorCode, RelayErrorOptions } from './errors.js';
-export {
-  appendLegacySuffix,
-  isNameConflictError,
+export type {
+  AgentIdentityRecoveryResponse,
+  AgentIdentityRevocationResponse,
+  EnrollRecoveryCredentialInput,
+  RecoverAgentInput,
+  RegisterAgentInput,
+  RegisterOrRotateInput,
+  ResolvedIdentity,
+  RevokeAgentTokenInput,
+  TakeOverAgentInput,
 } from './identity.js';
-export type { RegisterAgentInput, RegisterOrRotateInput, ResolvedIdentity } from './identity.js';
 export { WsClient } from './ws.js';
 export type { WsClientOptions, EventHandler } from './ws.js';
 export { NodeProviderClient, NodeRegistrationError } from './node-provider.js';

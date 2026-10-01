@@ -1,0 +1,81 @@
+{
+  "id": "traj_uxoudwx7qv7k",
+  "version": 1,
+  "task": {
+    "title": "Close second-round Relaycast workspace idempotency review findings",
+    "source": {
+      "system": "plain",
+      "id": "relaycast#372"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-09-05T20:31:43.781Z",
+  "completedAt": "2026-09-05T20:31:44.930Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-09-05T20:31:44.203Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_o33aeu9r0wg4",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-09-05T20:31:44.203Z",
+      "endedAt": "2026-09-05T20:31:44.930Z",
+      "events": [
+        {
+          "ts": 1788640304204,
+          "type": "decision",
+          "content": "Hash declared provenance in a fixed schema order: Hash declared provenance in a fixed schema order",
+          "raw": {
+            "question": "Hash declared provenance in a fixed schema order",
+            "chosen": "Hash declared provenance in a fixed schema order",
+            "alternatives": [],
+            "reasoning": "JSON object insertion order is not semantic; idempotency digests must treat equivalent request bodies as the same request."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1788640304570,
+          "type": "decision",
+          "content": "Remove the duplicate workspace binding index: Remove the duplicate workspace binding index",
+          "raw": {
+            "question": "Remove the duplicate workspace binding index",
+            "chosen": "Remove the duplicate workspace binding index",
+            "alternatives": [],
+            "reasoning": "The unique workspace_id index already supports equality lookup and avoids duplicate write amplification."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Canonicalized workspace-create request hashing, removed a redundant index, aligned release notes, corrected auth documentation, and added regression coverage.",
+    "approach": "Standard approach",
+    "confidence": 0.95
+  },
+  "commits": [
+    "3b060d02ef654177df3c2bee6eed3ac1931b78be"
+  ],
+  "filesChanged": [
+    ".agentworkforce/trajectories/completed/2026-09/traj_uxoudwx7qv7k/summary.md",
+    ".agentworkforce/trajectories/completed/2026-09/traj_uxoudwx7qv7k/trajectory.json",
+    "CHANGELOG.md",
+    "docs/sdk-setup-client.md",
+    "packages/engine/CHANGELOG.md",
+    "packages/engine/src/db/migrations/0045_workspace_create_idempotency.sql",
+    "packages/engine/src/db/schema.ts",
+    "packages/engine/src/engine/__tests__/workspace.test.ts",
+    "packages/engine/src/engine/workspace.ts"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "52dbe22e78c79cd069f6c5cbe2779c2eb7b568ff",
+    "endRef": "3b060d02ef654177df3c2bee6eed3ac1931b78be"
+  }
+}

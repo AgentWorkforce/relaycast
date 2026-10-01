@@ -1,16 +1,20 @@
+import { buildMessageCreatedEventData } from '../engine/deliveryWire.js';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
-import { errorResponse } from '../lib/httpError.js';
+import { asCodedError, errorResponse } from '../lib/httpError.js';
 import { requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
+import { resolveWorkspaceDeliveryPolicyById } from '../engine/workspaceDeliveryPolicy.js';
 import * as inboundWebhookEngine from '../engine/inboundWebhook.js';
 import * as triggerEngine from '../engine/trigger.js';
 import * as channelEngine from '../engine/channel.js';
 import { fanoutToChannel } from './fanout.js';
+import { routeDeliveryOutcomes } from './deliveryRouting.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
-import { emitServerEvent } from '../lib/serverTelemetry.js';
+import { emitServerEvent, loadTelemetryWorkspace } from '../lib/serverTelemetry.js';
 import {
   jsonCreated,
   jsonNoContent,
@@ -133,13 +137,19 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
         author: author ?? source,
         payload: (payload && typeof payload === 'object') ? payload as Record<string, unknown> : undefined,
       },
+      {
+        mailbox: (workspaceId) => resolveMailboxConfig(c.get('engine').config, workspaceId),
+        workspaceDeliveryPolicy: (workspaceId) => resolveWorkspaceDeliveryPolicyById(c.get('db'), c.get('engine').config, workspaceId),
+      },
     );
     if (!result) {
       return jsonNotFound(c, 'webhook_not_found', 'Webhook not found or inactive');
     }
-    const { workspace_id, channel_id, agent_id, ...responseData } = result;
+    const { workspace_id, channel_id, agent_id, _deliveries, _delivery_rejections, ...responseData } = result;
 
-    const eventData = { ...responseData, channel_id };
+    const eventData = { ...responseData, id: responseData.message_id, channel_id, agent_id };
+    const messageEventData = buildMessageCreatedEventData(eventData, { channelName: result.channel, fromName: result.author });
+    runInBackground(c, routeDeliveryOutcomes(c, _deliveries, 'message.created', messageEventData, { workspaceId: workspace_id }), 'route webhook deliveries');
     if (channel_id) {
       runInBackground(
         c,
@@ -195,16 +205,24 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
         },
       });
     }
-    emitServerEvent(c, workspace_id, 'relaycast_server_inbound_webhook_triggered', {
-      webhook_id: result.webhook_id,
-      message_id: result.message_id,
-      channel_id,
-      source: result.source ?? null,
-      author: result.author ?? null,
-    });
+    runInBackground(
+      c,
+      (async () => {
+        const workspace = await loadTelemetryWorkspace(db, workspace_id);
+        emitServerEvent(c, workspace_id, 'relaycast_server_inbound_webhook_triggered', {
+          webhook_id: result.webhook_id,
+          message_id: result.message_id,
+          channel_id,
+          source: result.source ?? null,
+          author: result.author ?? null,
+        }, { workspace });
+      })(),
+      'emit inbound webhook telemetry',
+    );
 
     return jsonCreated(c, responseData);
   } catch (err: unknown) {
+    if (asCodedError(err).code === 'mailbox_full') c.header('Retry-After', '30');
     return errorResponse(c, err);
   }
 });

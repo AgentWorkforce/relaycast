@@ -1,0 +1,59 @@
+{
+  "id": "compact_p3vncbjbhj8g",
+  "version": 1,
+  "type": "compacted",
+  "compactedAt": "2026-09-08T11:04:42.626Z",
+  "sourceTrajectories": [
+    "traj_8knm0tf1ogn1"
+  ],
+  "dateRange": {
+    "start": "2026-09-08T10:40:25.148Z",
+    "end": "2026-09-08T11:04:40.185Z"
+  },
+  "summary": {
+    "totalDecisions": 3,
+    "totalEvents": 3,
+    "uniqueAgents": [
+      "default"
+    ]
+  },
+  "decisionGroups": [
+    {
+      "category": "database",
+      "decisions": [
+        {
+          "question": "Use indexed per-agent replay pages and persisted round-robin retention cursors",
+          "chosen": "Use indexed per-agent replay pages and persisted round-robin retention cursors",
+          "reasoning": "D1 insights show millions of retained rows read per replay and empty retention pass; row deletion limits alone do not bound database work.",
+          "fromTrajectory": "traj_8knm0tf1ogn1"
+        }
+      ]
+    },
+    {
+      "category": "testing",
+      "decisions": [
+        {
+          "question": "Fence retention traversals and skip rows newer than every applicable TTL",
+          "chosen": "Fence retention traversals and skip rows newer than every applicable TTL",
+          "reasoning": "Bounded pages must still wrap under continuous arrivals; a shortest-policy cutoff avoids wasting cycles on millions of recent rows. Preserve the existing expiry capacity, which was sized for a 519k/day peak.",
+          "fromTrajectory": "traj_8knm0tf1ogn1"
+        }
+      ]
+    },
+    {
+      "category": "api",
+      "decisions": [
+        {
+          "question": "Require the engine release and staged D1 migration before the coordinated cloud rollout",
+          "chosen": "Require the engine release and staged D1 migration before the coordinated cloud rollout",
+          "reasoning": "Cloud currently pins 8.5.2; a merged coordinator PR cannot by itself deploy these new engine query plans. No production mutations or remote broker restarts authorized in this implementation.",
+          "fromTrajectory": "traj_8knm0tf1ogn1"
+        }
+      ]
+    }
+  ],
+  "keyLearnings": [],
+  "keyFindings": [],
+  "filesAffected": [],
+  "commits": []
+}

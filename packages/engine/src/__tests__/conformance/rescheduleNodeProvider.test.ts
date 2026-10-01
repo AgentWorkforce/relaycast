@@ -174,9 +174,7 @@ describe('reschedule targets the action-owning provider on the fallback node', (
     expect(invocation).toMatchObject({ status: 'pending', error: null, completedAt: null, dispatchedNodeId: 'node_b' });
 
     const reconnected = await attachProvider(ws.workspaceId, 'node_b', 'beta', 'fleet-b', [{ name: 'work', kind: 'action', queue: true }]);
-    for (let i = 0; i < 50 && reconnected.sock.ofType('action.invoke').length === 0; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    await stack.settle();
     expect(reconnected.sock.ofType('action.invoke').at(-1)).toMatchObject({ invocation_id: invocationId, action: 'work' });
     expect(bBroker.sock.ofType('action.invoke')).toHaveLength(0);
 
@@ -233,9 +231,7 @@ describe('reschedule targets the action-owning provider on the fallback node', (
       active_agents: 0,
       handlers_live: true,
     }));
-    for (let i = 0; i < 50 && bFleet.sock.ofType('action.invoke').length === 0; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    await stack.settle();
     expect(bFleet.sock.ofType('action.invoke').at(-1)).toMatchObject({ invocation_id: invocationId, action: 'work' });
   });
 

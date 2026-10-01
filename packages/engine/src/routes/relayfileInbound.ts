@@ -1,3 +1,5 @@
+import { errorResponse } from '../lib/httpError.js';
+import { WorkspaceDeliveryCapacityError } from '../engine/workspaceDeliveryPolicy.js';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
@@ -12,9 +14,10 @@ import * as inboundWebhookEngine from '../engine/inboundWebhook.js';
 import { fanoutToChannel } from './fanout.js';
 import { routeDeliveryOutcomes } from './deliveryRouting.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
+import { resolveWorkspaceDeliveryPolicyById } from '../engine/workspaceDeliveryPolicy.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
-import { emitServerEvent } from '../lib/serverTelemetry.js';
+import { emitServerEvent, loadTelemetryWorkspace } from '../lib/serverTelemetry.js';
 
 export const relayfileInboundRoutes = new Hono<AppEnv>();
 
@@ -27,6 +30,12 @@ const createTargetSchema = z.object({
   channel: z.string().min(1),
   provider: z.string().min(1),
   path_glob: z.string().trim().min(1),
+});
+
+const providerRecordEnvelopeSchema = z.object({
+  provider: z.string(), objectType: z.string(), objectId: z.string(),
+  deleted: z.boolean(), connectionId: z.string(),
+  payload: z.record(z.string(), z.unknown()),
 });
 
 const relayfileSnapshotSchema = z.object({
@@ -44,6 +53,8 @@ const relayfileEventSchema = z.object({
   revision: z.string().optional(),
   origin: z.string().optional(),
   provider: z.string().optional(),
+  providerEventType: z.string().optional(),
+  resourceRef: z.string().optional(),
   correlationId: z.string().optional(),
   timestamp: z.string().optional(),
   contentHash: z.string().optional(),
@@ -67,13 +78,21 @@ interface RelayfileEventPublic {
   revision?: string;
   origin?: string;
   provider?: string;
+  providerEventType?: string;
+  resourceRef?: string;
   correlationId?: string;
   timestamp?: string;
   contentHash?: string;
   snapshot?: RelayfileSnapshot;
 }
 
-relayfileInboundRoutes.post('/integrations/relayfile/inbound-target', requireWorkspaceKey, rateLimit, async (c) => {
+relayfileInboundRoutes.post('/integrations/relayfile/inbound-target', requireWorkspaceKey, rateLimit,
+/**
+ * Provision a channel callback using workspace-key authority.
+ * Numeric GitHub PR targets receive an HMAC-bound semantic opt-in; other targets
+ * retain literal matching. The response returns the callback and signing secret.
+ */
+async (c) => {
   const parsed = await parseJsonBody(c, createTargetSchema, 'invalid relayfile inbound target body');
   if (!parsed.ok) return parsed.response;
 
@@ -91,15 +110,20 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound-target', requireWor
 
   const provider = normalizeProvider(parsed.data.provider);
   const pathGlob = normalizePathGlob(parsed.data.path_glob);
+  // This route requires a workspace key. Seal its authorization into the
+  // callback URL/secret; legacy target secrets cannot opt themselves in.
+  const githubPrIdentityAuthorized = provider === 'github' && /^\/github\/repos\/([^/*]+)\/([^/*]+)\/pulls\/[1-9]\d*\/\*\*$/.test(pathGlob);
   const secret = await deriveRelayfileInboundSecret(master, {
     workspaceId: workspace.id,
     channelId: channel.id,
     provider,
     pathGlob,
+    githubPrIdentityAuthorized,
   });
   const url = new URL(`/v1/integrations/relayfile/inbound/${encodeURIComponent(workspace.id)}/${encodeURIComponent(channel.id)}`, c.req.url);
   url.searchParams.set('provider', provider);
   url.searchParams.set('path_glob', pathGlob);
+  if (githubPrIdentityAuthorized) url.searchParams.set('github_pr_identity', '1');
 
   return jsonCreated(c, {
     url: url.toString(),
@@ -112,7 +136,13 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound-target', requireWor
   });
 });
 
-relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:channelId', async (c) => {
+relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:channelId',
+/**
+ * Verify a Relayfile delivery before matching it against its authenticated target.
+ * Accepted events become channel messages and subscriber deliveries; replayed
+ * events are deduplicated and nonmatching events receive an explicit skip result.
+ */
+async (c) => {
   const logger = getRequestLogger(c, 'relayfile.inbound');
   const workspaceId = c.req.param('workspaceId');
   const channelId = c.req.param('channelId');
@@ -122,6 +152,7 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
     return jsonError(c, 'bad_request', 'missing relayfile inbound route parameters', 400);
   }
   const pathGlob = normalizePathGlob(rawPathGlob);
+  const githubPrIdentityAuthorized = c.req.query('github_pr_identity') === '1';
 
   const master = c.get('engine').config?.relayfileInboundSecret?.trim();
   if (!master) {
@@ -133,7 +164,7 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
     return jsonError(c, 'payload_too_large', 'relayfile event body exceeds maximum size', 413);
   }
   const rawBody = rawBodyResult.body;
-  const secret = await deriveRelayfileInboundSecret(master, { workspaceId, channelId, provider, pathGlob });
+  const secret = await deriveRelayfileInboundSecret(master, { workspaceId, channelId, provider, pathGlob, githubPrIdentityAuthorized });
   const verified = await verifyRelayfileSignature(c.req.raw.headers, rawBody, secret, Date.now());
   if (!verified.ok) {
     logger.warn('relayfile inbound signature rejected', { workspace_id: workspaceId, channel_id: channelId, reason: verified.reason });
@@ -168,7 +199,7 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
   if (event.provider && normalizeProvider(event.provider) !== provider) {
     return jsonOk(c, { skipped: 'provider_mismatch' });
   }
-  if (!eventMatchesGlob(event.path, pathGlob)) {
+  if (!eventMatchesSubscription(event, pathGlob, githubPrIdentityAuthorized, provider)) {
     return jsonOk(c, { skipped: 'path_mismatch' });
   }
   if (event.origin === 'agent_write') {
@@ -189,18 +220,17 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
   }
 
   const mailbox = resolveMailboxConfig(c.get('engine').config, workspaceId);
-
   try {
     const result = await runIdempotent({
       workspaceId,
       actorId: 'relayfile-inbound',
       scope: `relayfile-inbound:${channelId}`,
       key: deliveryEventId,
-      fingerprint: JSON.stringify({ path: event.path, revision: event.revision, contentHash: event.contentHash }),
+      fingerprint: JSON.stringify({ path: event.path, revision: event.revision, contentHash: event.contentHash, providerEventType: event.providerEventType, resourceRef: event.resourceRef }),
       kv: c.get('engine').kv,
       requireKv: true,
       ttlSeconds: IDEMPOTENCY_TTL_SECONDS,
-      operation: () => inboundWebhookEngine.triggerIntegrationMessage(c.get('db'), workspaceId, channelId, {
+      operation: async () => inboundWebhookEngine.triggerIntegrationMessage(c.get('db'), workspaceId, channelId, {
         text: message.text,
         source: `relayfile:${provider}`,
         author: message.author,
@@ -213,14 +243,18 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
             revision: event.revision,
             eventId: deliveryEventId,
             provider,
+            ...(event.providerEventType ? { provider_event_type: event.providerEventType } : {}),
+            ...(event.resourceRef ? { resource_ref: event.resourceRef } : {}),
             contentHash: event.contentHash,
           },
           provider,
           path: event.path,
           event: event.type,
+          ...(event.providerEventType ? { provider_event_type: event.providerEventType } : {}),
+          ...(event.resourceRef ? { resource_ref: event.resourceRef } : {}),
           record: message.record,
         },
-      }, { mailbox }),
+      }, { mailbox, workspaceDeliveryPolicy: await resolveWorkspaceDeliveryPolicyById(c.get('db'), c.get('engine').config, workspaceId) }),
     });
 
     if (!result.replayed) {
@@ -263,18 +297,31 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
           'relayfile inbound deliveries',
         );
       }
-      emitServerEvent(c, workspaceId, 'relaycast_server_relayfile_inbound_delivered', {
-        channel_id: channelId,
-        message_id: result.data.message_id,
-        provider,
-      });
+      runInBackground(
+        c,
+        (async () => {
+          const workspace = await loadTelemetryWorkspace(c.get('db'), workspaceId);
+          emitServerEvent(c, workspaceId, 'relaycast_server_relayfile_inbound_delivered', {
+            channel_id: channelId,
+            message_id: result.data.message_id,
+            provider,
+          }, { workspace });
+        })(),
+        'emit relayfile inbound telemetry',
+      );
     }
 
     return jsonCreated(c, { replayed: result.replayed, message_id: result.data.message_id });
   } catch (err) {
     const code = (err as Error & { code?: string }).code;
+    if (code === 'mailbox_full') {
+      c.header('Retry-After', '30');
+      return jsonError(c, 'mailbox_full', 'A recipient mailbox is full; retry this event', 503);
+    }
+    if (err instanceof WorkspaceDeliveryCapacityError) return errorResponse(c, err);
     if (code === 'idempotency_in_progress') {
-      return jsonOk(c, { skipped: 'duplicate_in_progress' });
+      c.header('Retry-After', '1');
+      return jsonError(c, code, 'Event is still processing; retry to confirm acceptance', 409);
     }
     if (code === 'idempotency_key_reused') {
       logger.warn('relayfile inbound event id reused with different payload', { workspace_id: workspaceId, event_id: deliveryEventId });
@@ -314,11 +361,20 @@ async function getChannelById(db: AppEnv['Variables']['db'], workspaceId: string
   return row ?? null;
 }
 
+/**
+ * Derive a target-specific HMAC secret binding workspace, channel, provider and glob.
+ * Authorized PR targets use a versioned JSON tuple so field boundaries and the
+ * semantic opt-in cannot collide with legacy literal-target labels.
+ */
 export async function deriveRelayfileInboundSecret(
   master: string,
-  input: { workspaceId: string; channelId: string; provider: string; pathGlob: string },
+  input: { workspaceId: string; channelId: string; provider: string; pathGlob: string; githubPrIdentityAuthorized?: boolean },
 ): Promise<string> {
-  const label = `${SECRET_LABEL}:${input.workspaceId}:${input.channelId}:${normalizeProvider(input.provider)}:${normalizePathGlob(input.pathGlob)}`;
+  // New targets use a disjoint, structured domain. Appending a marker to the
+  // legacy glob would collide with a literal glob ending in that same marker.
+  const label = input.githubPrIdentityAuthorized
+    ? JSON.stringify([`${SECRET_LABEL}:github-pr-identity-v1`, input.workspaceId, input.channelId, normalizeProvider(input.provider), normalizePathGlob(input.pathGlob)])
+    : `${SECRET_LABEL}:${input.workspaceId}:${input.channelId}:${normalizeProvider(input.provider)}:${normalizePathGlob(input.pathGlob)}`;
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(master), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   const signed = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(label));
   return bytesToHex(new Uint8Array(signed));
@@ -351,12 +407,17 @@ export async function verifyRelayfileSignature(
 }
 
 export function formatRelayfileEventMessage(event: RelayfileEventPublic, provider: string): { text: string; author: string; record: unknown } | null {
-  const record = parseSnapshotRecord(event.snapshot);
+  const stored = parseSnapshotRecord(event.snapshot);
+  const envelope = providerRecordEnvelopeSchema.safeParse(stored);
+  // Cloud's sync writer stores canonical records in a provider envelope.
+  // Unwrap only that complete shape; an ordinary record's payload property
+  // is data. Authenticated event semantics still come exclusively from event.
+  const record = envelope.success && envelope.data.provider === provider ? envelope.data.payload : stored;
   const author = recordAuthor(record) ?? provider;
   const title = recordTitle(record);
   const body = recordBody(record);
   const providerLabel = provider.charAt(0).toUpperCase() + provider.slice(1);
-  const lines = [`${providerLabel} update`];
+  const lines = [event.providerEventType ? `${providerLabel} ${event.providerEventType}` : `${providerLabel} update`];
   if (title) lines.push(title);
   if (body && body !== title) lines.push(body);
   lines.push(`Relayfile path: ${event.path}`);
@@ -441,6 +502,31 @@ function eventMatchesGlob(path: string, glob: string): boolean {
   }
   if (normalizedGlob.endsWith('*')) return normalizedPath.startsWith(normalizedGlob.slice(0, -1));
   return false;
+}
+
+/**
+ * Match literal paths first, then authorized GitHub PR identities within one repo.
+ * The provider comes from the authenticated target; only provider-sync events may
+ * use titled pull paths or stable PR references to match sibling event layouts.
+ */
+function eventMatchesSubscription(event: RelayfileEvent, glob: string, githubPrIdentityAuthorized: boolean, provider: string): boolean {
+  if (eventMatchesGlob(event.path ?? '', glob)) return true;
+  // The route provider is normalized and authenticated by the target HMAC;
+  // the caller already rejected any conflicting event provider above.
+  if (!githubPrIdentityAuthorized || provider !== 'github' || event.origin !== 'provider_sync') return false;
+
+  // Keep aligned with relayfile-cloud eventMatchesWebhookSubscription. Only
+  // whole numeric PR subtrees gain identity semantics; generic globs stay literal.
+  const match = /^\/github\/repos\/([^/*]+)\/([^/*]+)\/pulls\/([1-9]\d*)\/\*\*$/.exec(normalizePathGlob(glob));
+  if (!match) return false;
+  const [, owner, repo, number] = match;
+  const repoPath = `/github/repos/${owner}/${repo}`;
+  const eventPath = normalizePathGlob(event.path ?? '');
+  if (eventPath.split('/').some(segment => segment === '.' || segment === '..')) return false;
+  if (!eventPath.startsWith(`${repoPath}/`)) return false;
+  const pullSegment = eventPath.slice(`${repoPath}/pulls/`.length).split('/')[0];
+  if (eventPath.startsWith(`${repoPath}/pulls/`) && pullSegment.startsWith(`${number}__`) && pullSegment.length > `${number}__`.length) return true;
+  return event.resourceRef === `/github/repos/${owner}__${repo}/pulls/by-id/${number}.json`;
 }
 
 function eventWorkspaceId(event: RelayfileEvent): string | undefined {

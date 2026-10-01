@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { deliverEvent } from '../../engine/eventDelivery.js';
-import { webhooks } from '../../db/schema.js';
+import { actionInvocations, sessionEvents, webhooks } from '../../db/schema.js';
 import {
   makeNodeStack,
   createWorkspace,
@@ -50,6 +50,7 @@ describe('SDK v8 service contract', () => {
     const ws = await createWorkspace(stack.app, 'sdk-action-ws');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
     const handler = await registerAgent(stack.app, ws.workspaceKey, 'handler');
+    const replacement = await registerAgent(stack.app, ws.workspaceKey, 'replacement');
     const denied = await registerAgent(stack.app, ws.workspaceKey, 'denied');
 
     const register = await stack.app.request('/v1/actions', {
@@ -98,24 +99,133 @@ describe('SDK v8 service contract', () => {
     expect(workspaceGet.status).toBe(404);
 
     const handlerNode = await attachDirectNodeSocket(stack, ws.workspaceId, handler);
-    const invoke = await stack.app.request('/v1/actions/summarize/invoke', {
+    let kvPutAttempts = 0;
+    const originalKvPut = stack.runtime.deps.kv.put.bind(stack.runtime.deps.kv);
+    stack.runtime.deps.kv.put = async (key, value, options) => {
+      kvPutAttempts += 1;
+      // Model the exact rejected coordinator window: its pre-dispatch lock can
+      // commit, but the final result record written after provider dispatch
+      // cannot. The durable invocation claim must bypass both writes entirely.
+      if (key.endsWith(':lock')) {
+        return originalKvPut(key, value, options);
+      }
+      throw new Error('post-dispatch idempotency result storage is unavailable');
+    };
+    const idempotencyKey = 'sdk-action-invoke-1';
+    const invokeRequest = (input: Record<string, unknown> = { text: 'hello', mode: 'brief' }) => stack.app.request('/v1/actions/summarize/invoke', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
-      body: JSON.stringify({ input: { text: 'hello' } }),
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+        'Idempotency-Key': idempotencyKey,
+      },
+      body: JSON.stringify({ input }),
     });
-    expect(invoke.status).toBe(201);
-    const invokeBody = await invoke.json() as { data: { invocation_id: string } };
-    expect(invokeBody.data.invocation_id).toMatch(/^inv_/);
 
-    await new Promise((r) => setTimeout(r, 50));
+    // Two concurrent requests compete for the same durable claim. Exactly one
+    // owns provider dispatch; the other replays that invocation immediately.
+    const concurrent = await Promise.all([invokeRequest(), invokeRequest()]);
+    expect(concurrent.map((response) => response.status)).toEqual([201, 201]);
+    expect(concurrent.map((response) => response.headers.get('Idempotency-Replayed')).sort())
+      .toEqual([null, 'true']);
+    const concurrentBodies = await Promise.all(concurrent.map(
+      (response) => response.json() as Promise<{
+        data: {
+          invocation_id: string;
+          handler_agent_id: string | null;
+          handler_node_id: string | null;
+        };
+      }>,
+    ));
+    const freshIndex = concurrent.findIndex(
+      (response) => response.headers.get('Idempotency-Replayed') === null,
+    );
+    const invokeBody = concurrentBodies[freshIndex]!;
+    const concurrentReplayBody = concurrentBodies[1 - freshIndex]!;
+    expect(invokeBody.data.invocation_id).toMatch(/^inv_/);
+    expect(invokeBody.data.handler_agent_id).toBe(handler.agentId);
+    expect(invokeBody.data.handler_node_id).toBe(handlerNode.nodeId);
+    expect(concurrentReplayBody.data.invocation_id).toBe(invokeBody.data.invocation_id);
+
+    // Model a committed first attempt whose response the caller loses: retry the
+    // same logical request and require the original invocation, not another row
+    // or another provider execution.
+    const replay = await invokeRequest({ mode: 'brief', text: 'hello' });
+    expect(replay.status).toBe(201);
+    expect(replay.headers.get('Idempotency-Replayed')).toBe('true');
+    const replayBody = await replay.json() as {
+      data: { invocation_id: string; handler_agent_id: string | null };
+    };
+    expect(replayBody).toEqual(invokeBody);
+
+    const moveHandler = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${replacement.token}` },
+      body: JSON.stringify({
+        name: 'summarize',
+        description: 'Summarize text',
+        handler_agent: 'replacement',
+        available_to: ['caller'],
+      }),
+    });
+    expect(moveHandler.status).toBe(200);
+
+    // The action row is mutable, but an idempotent replay describes the
+    // invocation that was actually dispatched, not its replacement handler.
+    const replayAfterMove = await invokeRequest({ mode: 'brief', text: 'hello' });
+    expect(replayAfterMove.status).toBe(201);
+    expect(replayAfterMove.headers.get('Idempotency-Replayed')).toBe('true');
+    const replayAfterMoveBody = await replayAfterMove.json() as {
+      data: { invocation_id: string; handler_agent_id: string | null };
+    };
+    expect(replayAfterMoveBody.data).toMatchObject({
+      invocation_id: invokeBody.data.invocation_id,
+      handler_agent_id: handler.agentId,
+    });
+    expect(replayAfterMoveBody.data.handler_agent_id).not.toBe(replacement.agentId);
+
+    const conflict = await stack.app.request('/v1/actions/summarize/invoke', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+        'Idempotency-Key': idempotencyKey,
+      },
+      body: JSON.stringify({ input: { text: 'different', mode: 'brief' } }),
+    });
+    expect(conflict.status).toBe(409);
+    await expect(conflict.json()).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'idempotency_key_reused' },
+    });
+
+    await stack.settle();
     expect(handlerNode.sock.ofType('action.invoke')).toHaveLength(1);
     expect(handlerNode.sock.ofType('action.invoke')[0]).toMatchObject({
       invocation_id: invokeBody.data.invocation_id,
       action: 'summarize',
       agent_id: handler.agentId,
       agent_name: 'handler',
-      input: { text: 'hello' },
+      input: { text: 'hello', mode: 'brief' },
     });
+    const storedInvocations = await stack.runtime.deps.db
+      .select({
+        id: actionInvocations.id,
+        handlerAgentId: actionInvocations.handlerAgentId,
+        handlerNodeId: actionInvocations.handlerNodeId,
+      })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.callerId, caller.agentId),
+        eq(actionInvocations.actionName, 'summarize'),
+      ));
+    expect(storedInvocations).toEqual([{
+      id: invokeBody.data.invocation_id,
+      handlerAgentId: handler.agentId,
+      handlerNodeId: handlerNode.nodeId,
+    }]);
+    expect(kvPutAttempts).toBe(0);
 
     const deniedNode = await attachDirectNodeSocket(stack, ws.workspaceId, denied);
     const deniedInvoke = await stack.app.request('/v1/actions/summarize/invoke', {
@@ -124,8 +234,427 @@ describe('SDK v8 service contract', () => {
       body: JSON.stringify({ input: { text: 'blocked' } }),
     });
     expect(deniedInvoke.status).toBe(403);
-    await new Promise((r) => setTimeout(r, 50));
+    await stack.settle();
     expect(deliverFramesOfType(deniedNode.sock, 'action.denied')).toHaveLength(1);
+  });
+
+  it('snapshots the original handler node before a provider send can race replay', async () => {
+    const ws = await createWorkspace(stack.app, 'sdk-action-replay-node-ws');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    const handler = await registerAgent(stack.app, ws.workspaceKey, 'handler');
+    const replacement = await registerAgent(stack.app, ws.workspaceKey, 'replacement');
+
+    const register = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${handler.token}` },
+      body: JSON.stringify({
+        name: 'race-send',
+        description: 'Pin replay routing identity',
+        handler_agent: 'handler',
+        available_to: ['caller'],
+      }),
+    });
+    expect(register.status).toBe(201);
+
+    const handlerNode = await attachDirectNodeSocket(stack, ws.workspaceId, handler);
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    const originalSend = nodeConnections.sendAuthorizedActionToProvider!.bind(nodeConnections);
+    let frameSent!: () => void;
+    const frameSentPromise = new Promise<void>((resolve) => { frameSent = resolve; });
+    let resumeSend!: () => void;
+    const resumeSendPromise = new Promise<void>((resolve) => { resumeSend = resolve; });
+    vi.spyOn(nodeConnections, 'sendAuthorizedActionToProvider').mockImplementation(async (...args) => {
+      const sent = await originalSend(...args);
+      if (args[3].type !== 'action.invoke' || args[3].action !== 'race-send') return sent;
+      frameSent();
+      await resumeSendPromise;
+      return sent;
+    });
+
+    const invoke = () => stack.app.request('/v1/actions/race-send/invoke', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+        'Idempotency-Key': 'sdk-action-node-race-1',
+      },
+      body: JSON.stringify({ input: { text: 'hello' } }),
+    });
+
+    const freshPromise = invoke();
+    await frameSentPromise;
+
+    const moveHandler = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${replacement.token}` },
+      body: JSON.stringify({
+        name: 'race-send',
+        description: 'Pin replay routing identity',
+        handler_agent: 'replacement',
+        available_to: ['caller'],
+      }),
+    });
+    expect(moveHandler.status).toBe(200);
+
+    const replay = await invoke();
+    resumeSend();
+    const fresh = await freshPromise;
+    expect(replay.status).toBe(201);
+    expect(replay.headers.get('Idempotency-Replayed')).toBe('true');
+    const replayBody = await replay.json() as {
+      data: {
+        invocation_id: string;
+        handler_agent_id: string | null;
+        handler_node_id: string | null;
+      };
+    };
+    expect(replayBody.data).toMatchObject({
+      handler_agent_id: handler.agentId,
+      handler_node_id: handlerNode.nodeId,
+    });
+
+    expect(fresh.status).toBe(201);
+    const freshBody = await fresh.json() as { data: { invocation_id: string } };
+    expect(replayBody.data.invocation_id).toBe(freshBody.data.invocation_id);
+    expect(handlerNode.sock.ofType('action.invoke')).toHaveLength(1);
+  });
+
+  it('fails closed when a node adapter cannot enforce owner-side agent dispatch authorization', async () => {
+    const ws = await createWorkspace(stack.app, 'sdk-action-owner-gate-required-ws');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    const handler = await registerAgent(stack.app, ws.workspaceKey, 'handler');
+
+    const register = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${handler.token}` },
+      body: JSON.stringify({
+        name: 'owner-gate-required',
+        description: 'Require an owner-side dispatch gate',
+        handler_agent: 'handler',
+        available_to: ['caller'],
+      }),
+    });
+    expect(register.status).toBe(201);
+    const handlerNode = await attachDirectNodeSocket(stack, ws.workspaceId, handler);
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    const ownerAuthorizedSend = nodeConnections.sendAuthorizedActionToProvider;
+    nodeConnections.sendAuthorizedActionToProvider = undefined;
+    let response!: Response;
+    try {
+      response = await stack.app.request('/v1/actions/owner-gate-required/invoke', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${caller.token}`,
+          'Idempotency-Key': 'sdk-action-owner-gate-required-1',
+        },
+        body: JSON.stringify({ input: { text: 'hello' } }),
+      });
+    } finally {
+      nodeConnections.sendAuthorizedActionToProvider = ownerAuthorizedSend;
+    }
+
+    expect(response.status).toBe(503);
+    expect((await response.json() as { error: { code: string } }).error.code)
+      .toBe('node_dispatch_unavailable');
+    expect(handlerNode.sock.ofType('action.invoke')).toHaveLength(0);
+    const [stored] = await stack.runtime.handle.db
+      .select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'owner-gate-required'),
+      ));
+    expect(stored).toEqual({ status: 'failed', error: 'node_dispatch_unavailable' });
+  });
+
+  it('classifies an unkeyed owner-side send miss as handler unavailable', async () => {
+    const ws = await createWorkspace(stack.app, 'sdk-action-unkeyed-send-miss-ws');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    const handler = await registerAgent(stack.app, ws.workspaceKey, 'handler');
+
+    const register = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${handler.token}` },
+      body: JSON.stringify({
+        name: 'unkeyed-send-miss',
+        description: 'Reject an unkeyed invocation when the owner-side send misses',
+        handler_agent: 'handler',
+        available_to: ['caller'],
+      }),
+    });
+    expect(register.status).toBe(201);
+    const handlerNode = await attachDirectNodeSocket(stack, ws.workspaceId, handler);
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    vi.spyOn(nodeConnections, 'sendAuthorizedActionToProvider').mockResolvedValue(false);
+
+    const response = await stack.app.request('/v1/actions/unkeyed-send-miss/invoke', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+      },
+      body: JSON.stringify({ input: { text: 'hello' } }),
+    });
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'handler_unavailable' },
+    });
+    expect(handlerNode.sock.ofType('action.invoke')).toHaveLength(0);
+    const [stored] = await stack.runtime.handle.db
+      .select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'unkeyed-send-miss'),
+      ));
+    expect(stored).toEqual({ status: 'failed', error: 'handler_unavailable' });
+  });
+
+  it('acknowledges an unkeyed invocation when completion wins after provider send', async () => {
+    const ws = await createWorkspace(stack.app, 'sdk-action-unkeyed-completion-race-ws');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    const handler = await registerAgent(stack.app, ws.workspaceKey, 'handler');
+
+    const register = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${handler.token}` },
+      body: JSON.stringify({
+        name: 'unkeyed-completion-race',
+        description: 'Acknowledge provider work that completes before dispatch recording',
+        handler_agent: 'handler',
+        available_to: ['caller'],
+      }),
+    });
+    expect(register.status).toBe(201);
+    const handlerNode = await attachDirectNodeSocket(stack, ws.workspaceId, handler);
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    const originalSend = nodeConnections.sendAuthorizedActionToProvider!.bind(nodeConnections);
+    vi.spyOn(nodeConnections, 'sendAuthorizedActionToProvider').mockImplementation(async (...args) => {
+      const sent = await originalSend(...args);
+      if (args[3].type !== 'action.invoke' || args[3].action !== 'unkeyed-completion-race') {
+        return sent;
+      }
+      await stack.runtime.handle.db
+        .update(actionInvocations)
+        .set({
+          status: 'completed',
+          output: { result: 'done' },
+          completedAt: new Date(),
+        })
+        .where(and(
+          eq(actionInvocations.workspaceId, ws.workspaceId),
+          eq(actionInvocations.id, args[3].invocation_id),
+        ));
+      return sent;
+    });
+
+    const response = await stack.app.request('/v1/actions/unkeyed-completion-race/invoke', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+      },
+      body: JSON.stringify({ input: { text: 'hello' } }),
+    });
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        handler_agent_id: handler.agentId,
+        handler_node_id: handlerNode.nodeId,
+        status: 'completed',
+      },
+    });
+    expect(handlerNode.sock.ofType('action.invoke')).toHaveLength(1);
+    const [stored] = await stack.runtime.handle.db
+      .select({ status: actionInvocations.status, output: actionInvocations.output })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'unkeyed-completion-race'),
+      ));
+    expect(stored).toEqual({ status: 'completed', output: { result: 'done' } });
+  });
+
+  it('does not acknowledge an agent-hosted claim that takeover fails before provider dispatch starts', async () => {
+    const ws = await createWorkspace(stack.app, 'sdk-action-pre-send-takeover-ws');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    const handler = await registerAgent(stack.app, ws.workspaceKey, 'handler');
+    const replacement = await registerAgent(stack.app, ws.workspaceKey, 'replacement');
+
+    const register = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${handler.token}` },
+      body: JSON.stringify({
+        name: 'pre-send-race',
+        description: 'Reject a replay before provider dispatch',
+        handler_agent: 'handler',
+        available_to: ['caller'],
+      }),
+    });
+    expect(register.status).toBe(201);
+    const handlerNode = await attachDirectNodeSocket(stack, ws.workspaceId, handler);
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    const originalSend = nodeConnections.sendAuthorizedActionToProvider!.bind(nodeConnections);
+    let beforeProviderSend!: () => void;
+    const beforeProviderSendPromise = new Promise<void>((resolve) => { beforeProviderSend = resolve; });
+    let resumeProviderSend!: () => void;
+    const resumeProviderSendPromise = new Promise<void>((resolve) => { resumeProviderSend = resolve; });
+    vi.spyOn(nodeConnections, 'sendAuthorizedActionToProvider').mockImplementation(async (...args) => {
+      if (args[3].type !== 'action.invoke' || args[3].action !== 'pre-send-race') {
+        return originalSend(...args);
+      }
+      beforeProviderSend();
+      await resumeProviderSendPromise;
+      return originalSend(...args);
+    });
+
+    const idempotencyKey = 'sdk-action-pre-send-race-1';
+    const invoke = () => stack.app.request('/v1/actions/pre-send-race/invoke', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+        'Idempotency-Key': idempotencyKey,
+      },
+      body: JSON.stringify({ input: { text: 'hello' } }),
+    });
+
+    const freshPromise = invoke();
+    await beforeProviderSendPromise;
+
+    const moveHandler = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${replacement.token}` },
+      body: JSON.stringify({
+        name: 'pre-send-race',
+        description: 'Reject a replay before provider dispatch',
+        handler_agent: 'replacement',
+        available_to: ['caller'],
+      }),
+    });
+    expect(moveHandler.status).toBe(200);
+
+    const replay = await invoke();
+    resumeProviderSend();
+    const fresh = await freshPromise;
+    expect([fresh.status, replay.status]).toEqual([503, 503]);
+    const [freshError, replayError] = await Promise.all([
+      fresh.json() as Promise<{ error: { code: string } }>,
+      replay.json() as Promise<{ error: { code: string } }>,
+    ]);
+    expect([freshError.error.code, replayError.error.code]).toEqual([
+      'handler_unavailable',
+      'handler_unavailable',
+    ]);
+    const [stored] = await stack.runtime.handle.db
+      .select({
+        status: actionInvocations.status,
+        error: actionInvocations.error,
+        dispatchAttempts: actionInvocations.dispatchAttempts,
+        dispatchedNodeId: actionInvocations.dispatchedNodeId,
+      })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'pre-send-race'),
+      ));
+    expect(stored).toEqual({
+      status: 'failed',
+      error: 'handler_unavailable',
+      dispatchAttempts: 0,
+      dispatchedNodeId: null,
+    });
+    expect(handlerNode.sock.ofType('action.invoke')).toHaveLength(0);
+  });
+
+  it('fails a keyed agent-hosted invoke when a host adapter cannot deliver to the handler', async () => {
+    const ws = await createWorkspace(stack.app, 'sdk-action-undeliverable-ws');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    const handler = await registerAgent(stack.app, ws.workspaceKey, 'handler');
+
+    const register = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${handler.token}` },
+      body: JSON.stringify({
+        name: 'undeliverable',
+        description: 'Handler the host adapter cannot reach',
+        handler_agent: 'handler',
+        available_to: ['caller'],
+      }),
+    });
+    expect(register.status).toBe(201);
+
+    // Bind the handler to its direct node, then drop the socket: the handler is
+    // registered and node-bound but has nowhere to receive a frame.
+    const handlerNode = await attachDirectNodeSocket(stack, ws.workspaceId, handler);
+    await handlerNode.handle.handleClose();
+
+    // Simulate a hosted adapter (relaycast-cloud) that cannot observe socket
+    // state synchronously: it answers `isProviderConnected` optimistically and
+    // only learns the handler is gone when the send itself fails.
+    const nodeConnections = stack.runtime.deps.nodeConnections!;
+    const connectedSpy = vi.spyOn(nodeConnections, 'isProviderConnected').mockReturnValue(true);
+    const sendSpy = vi.spyOn(nodeConnections, 'sendAuthorizedActionToProvider')
+      .mockResolvedValue(false);
+    let response!: Response;
+    try {
+      // Keyed: 8.3.1 already fails an unkeyed send miss, but a keyed claim used
+      // to wait out the replay deadline and report `idempotency_unavailable`
+      // while its row stayed pending.
+      response = await stack.app.request('/v1/actions/undeliverable/invoke', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${caller.token}`,
+          'Idempotency-Key': 'undeliverable-key',
+        },
+        body: JSON.stringify({ input: { text: 'hello' } }),
+      });
+    } finally {
+      sendSpy.mockRestore();
+      connectedSpy.mockRestore();
+    }
+
+    expect(response.status).toBe(503);
+    expect((await response.json() as { error: { code: string } }).error.code)
+      .toBe('handler_unavailable');
+    const [stored] = await stack.runtime.deps.db
+      .select({
+        status: actionInvocations.status,
+        error: actionInvocations.error,
+        dispatchAttempts: actionInvocations.dispatchAttempts,
+        dispatchedNodeId: actionInvocations.dispatchedNodeId,
+      })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'undeliverable'),
+      ));
+    expect(stored).toEqual({
+      status: 'failed',
+      error: 'handler_unavailable',
+      dispatchAttempts: 0,
+      dispatchedNodeId: null,
+    });
+    expect(handlerNode.sock.ofType('action.invoke')).toHaveLength(0);
+
+    // A replay of the same key reports the claim's own failure, so the caller
+    // and its retry agree instead of the retry seeing an idempotency stall.
+    const replay = await stack.app.request('/v1/actions/undeliverable/invoke', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+        'Idempotency-Key': 'undeliverable-key',
+      },
+      body: JSON.stringify({ input: { text: 'hello' } }),
+    });
+    expect(replay.status).toBe(503);
+    expect((await replay.json() as { error: { code: string } }).error.code)
+      .toBe('handler_unavailable');
   });
 
   it('requires inbound webhook tokens and accepts SDK message/author payloads', async () => {
@@ -325,7 +854,7 @@ describe('SDK v8 service contract', () => {
     });
     expect(emit.status).toBe(201);
 
-    await new Promise((r) => setTimeout(r, 50));
+    await stack.settle();
     expect(workspaceSock.ofType('harness.tool.called')).toHaveLength(1);
     expect(workspaceSock.ofType('inner.tool')).toHaveLength(0);
     expect(workspaceSock.ofType('harness.tool.called')[0]).toMatchObject({
@@ -333,6 +862,247 @@ describe('SDK v8 service contract', () => {
       agent_name: 'runner',
       payload: { type: 'inner.tool', tool: 'build' },
     });
+  });
+
+  it('replays keyed harness events after a lost response and rejects payload changes', async () => {
+    const ws = await createWorkspace(stack.app, 'sdk-event-idempotency-ws');
+    const runner = await registerAgent(stack.app, ws.workspaceKey, 'runner');
+    const headers = {
+      'content-type': 'application/json',
+      authorization: `Bearer ${ws.workspaceKey}`,
+      'Idempotency-Key': 'worker-exit-generation-1',
+    };
+    const body = JSON.stringify({ type: 'error', payload: { code: 'worker_exit', generation: 1 } });
+
+    // Treat the first response as lost: the durable event is still the source
+    // of truth for the subsequent caller retry.
+    const first = await stack.app.request('/v1/agents/runner/events', {
+      method: 'POST', headers, body,
+    });
+    expect(first.status).toBe(201);
+    const firstBody = await first.json() as { data: { id: string; sequence: number } };
+
+    const replay = await stack.app.request('/v1/agents/runner/events', {
+      method: 'POST', headers, body,
+    });
+    expect(replay.status).toBe(201);
+    expect(replay.headers.get('Idempotency-Replayed')).toBe('true');
+    const replayBody = await replay.json() as { data: { id: string; sequence: number } };
+    expect(replayBody).toEqual(firstBody);
+
+    const conflict = await stack.app.request('/v1/agents/runner/events', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ type: 'error', payload: { code: 'different' } }),
+    });
+    expect(conflict.status).toBe(409);
+    await expect(conflict.json()).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'idempotency_key_reused' },
+    });
+
+    const unkeyedHeaders = {
+      'content-type': 'application/json',
+      authorization: `Bearer ${ws.workspaceKey}`,
+    };
+    const unkeyedBody = JSON.stringify({ type: 'log', payload: { message: 'legacy' } });
+    const unkeyed = await Promise.all([
+      stack.app.request('/v1/agents/runner/events', { method: 'POST', headers: unkeyedHeaders, body: unkeyedBody }),
+      stack.app.request('/v1/agents/runner/events', { method: 'POST', headers: unkeyedHeaders, body: unkeyedBody }),
+    ]);
+    expect(unkeyed.map((response) => response.status)).toEqual([201, 201]);
+
+    const runnerEvents = await stack.runtime.deps.db
+      .select({ id: sessionEvents.id, idempotencyKeyHash: sessionEvents.idempotencyKeyHash })
+      .from(sessionEvents)
+      .where(and(
+        eq(sessionEvents.workspaceId, ws.workspaceId),
+        eq(sessionEvents.agentId, runner.agentId),
+      ));
+    expect(runnerEvents).toHaveLength(3);
+    expect(runnerEvents.filter((event) => event.idempotencyKeyHash !== null)).toHaveLength(1);
+  });
+
+  it('resolves truly concurrent same-key same-payload event posts to one persisted row', async () => {
+    const ws = await createWorkspace(stack.app, 'sdk-event-idempotency-race-ws');
+    const runner = await registerAgent(stack.app, ws.workspaceKey, 'runner');
+    const idempotencyKey = 'worker-exit-race-1';
+    const headers = {
+      'content-type': 'application/json',
+      authorization: `Bearer ${ws.workspaceKey}`,
+      'Idempotency-Key': idempotencyKey,
+    };
+    const body = JSON.stringify({ type: 'error', payload: { code: 'worker_exit', generation: 1 } });
+    const postEvent = () => stack.app.request('/v1/agents/runner/events', {
+      method: 'POST', headers, body,
+    });
+
+    // Fire both requests without awaiting either first, so both reach the
+    // durable insert concurrently and genuinely race on the unique claim
+    // rather than serializing through a caller-side await.
+    const [first, second] = await Promise.all([postEvent(), postEvent()]);
+    expect([first.status, second.status]).toEqual([201, 201]);
+
+    const replayedFlags = [first, second]
+      .map((response) => response.headers.get('Idempotency-Replayed'))
+      .sort();
+    // Exactly one request wins the durable insert (fresh); the other reads
+    // back the winner's row and replays it.
+    expect(replayedFlags).toEqual([null, 'true']);
+
+    const [firstBody, secondBody] = await Promise.all([
+      first.json() as Promise<{ data: { id: string; sequence: number }; replayed: boolean }>,
+      second.json() as Promise<{ data: { id: string; sequence: number }; replayed: boolean }>,
+    ]);
+    // Both responses must describe the identical persisted event, regardless
+    // of which request happened to win the race.
+    expect(secondBody.data).toEqual(firstBody.data);
+
+    const runnerEvents = await stack.runtime.deps.db
+      .select({ id: sessionEvents.id, idempotencyKeyHash: sessionEvents.idempotencyKeyHash })
+      .from(sessionEvents)
+      .where(and(
+        eq(sessionEvents.workspaceId, ws.workspaceId),
+        eq(sessionEvents.agentId, runner.agentId),
+      ));
+    // Only one row was ever persisted for the shared key, no matter which
+    // request's insert physically won.
+    expect(runnerEvents).toHaveLength(1);
+    expect(runnerEvents[0]!.id).toBe(firstBody.data.id);
+  });
+
+  it('resolves truly concurrent same-key different-payload event posts deterministically', async () => {
+    const ws = await createWorkspace(stack.app, 'sdk-event-idempotency-conflict-race-ws');
+    const runner = await registerAgent(stack.app, ws.workspaceKey, 'runner');
+    const idempotencyKey = 'worker-exit-conflict-race-1';
+    const headers = {
+      'content-type': 'application/json',
+      authorization: `Bearer ${ws.workspaceKey}`,
+      'Idempotency-Key': idempotencyKey,
+    };
+    const postEvent = (code: string) => stack.app.request('/v1/agents/runner/events', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ type: 'error', payload: { code } }),
+    });
+
+    // Same key, deliberately different payloads, fired concurrently. The
+    // unique claim on (workspace, agent, key) guarantees exactly one insert
+    // wins regardless of scheduling order; the loser's payload never
+    // matches the persisted digest, so it must fail closed rather than
+    // silently returning the winner's data as if it were its own.
+    const [a, b] = await Promise.all([postEvent('worker_exit_a'), postEvent('worker_exit_b')]);
+    const statuses = [a.status, b.status].sort();
+    expect(statuses).toEqual([201, 409]);
+
+    const conflictResponse = a.status === 409 ? a : b;
+    await expect(conflictResponse.json()).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'idempotency_key_reused' },
+    });
+
+    const runnerEvents = await stack.runtime.deps.db
+      .select({ id: sessionEvents.id, idempotencyKeyHash: sessionEvents.idempotencyKeyHash })
+      .from(sessionEvents)
+      .where(and(
+        eq(sessionEvents.workspaceId, ws.workspaceId),
+        eq(sessionEvents.agentId, runner.agentId),
+      ));
+    // Exactly one payload variant is durably persisted; the conflicting
+    // concurrent write never allocates a second row.
+    expect(runnerEvents).toHaveLength(1);
+  });
+
+  it('relaycast#425: a replay finishes an agent status mutation interrupted after the event was durably claimed', async () => {
+    const ws = await createWorkspace(stack.app, 'sdk-event-status-crash-ws');
+    const runner = await registerAgent(stack.app, ws.workspaceKey, 'runner');
+    const headers = {
+      'content-type': 'application/json',
+      authorization: `Bearer ${ws.workspaceKey}`,
+      'Idempotency-Key': 'status-crash-replay-http-1',
+    };
+    const body = JSON.stringify({ type: 'status.blocked', payload: {} });
+
+    // Simulate a crash between the durable event/idempotency claim commit
+    // and the agent status write: inject a failure into the status mutation
+    // only, so the caller sees an error while the event row is already
+    // durable — exactly the interrupted window relaycast#425 is about.
+    const { agents } = await import('../../db/schema.js');
+
+    // Recursively proxy the builder chain (`.update(...).set(...).where(...)`)
+    // so the failure surfaces only when the final statement is executed
+    // (awaited), not when it is merely built — matching the real crash
+    // window (the process dies mid-statement, not before it starts).
+    function failOnExecute<T extends object>(target: T, message: string): T {
+      return new Proxy(target, {
+        get(obj, prop) {
+          if (prop === 'then') {
+            return (onFulfilled?: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown) =>
+              Promise.reject(new Error(message)).then(onFulfilled, onRejected);
+          }
+          const value = Reflect.get(obj, prop) as unknown;
+          if (typeof value === 'function') {
+            return (...args: unknown[]) => {
+              const result = (value as (...a: unknown[]) => unknown).apply(obj, args);
+              return result && typeof result === 'object' ? failOnExecute(result as object, message) : result;
+            };
+          }
+          return value;
+        },
+      });
+    }
+
+    const db = stack.runtime.deps.db as unknown as { update: (t: unknown) => object };
+    const realUpdate = db.update.bind(db);
+    let failNext = true;
+    db.update = (table: unknown) => {
+      const builder = realUpdate(table);
+      if (table !== agents || !failNext) return builder;
+      failNext = false;
+      return failOnExecute(builder, 'injected crash before status write');
+    };
+
+    const first = await stack.app.request('/v1/agents/runner/events', { method: 'POST', headers, body });
+    expect(first.status).toBe(500);
+    db.update = realUpdate;
+
+    // The event claim committed despite the crash; the agent row must not
+    // have moved yet, and the completion marker must still be NULL.
+    const [afterCrash] = await stack.runtime.deps.db
+      .select({ status: agents.status })
+      .from(agents)
+      .where(eq(agents.id, runner.agentId));
+    expect(afterCrash!.status).not.toBe('blocked');
+    const [eventAfterCrash] = await stack.runtime.deps.db
+      .select({ statusAppliedAt: sessionEvents.statusAppliedAt })
+      .from(sessionEvents)
+      .where(and(eq(sessionEvents.workspaceId, ws.workspaceId), eq(sessionEvents.agentId, runner.agentId)));
+    expect(eventAfterCrash!.statusAppliedAt).toBeNull();
+
+    // The retry with the same key replays the durable event, but must
+    // still finish the interrupted status mutation rather than returning
+    // 201 against a stale agent row.
+    const replay = await stack.app.request('/v1/agents/runner/events', { method: 'POST', headers, body });
+    expect(replay.status).toBe(201);
+    expect(replay.headers.get('Idempotency-Replayed')).toBe('true');
+
+    const [afterReplay] = await stack.runtime.deps.db
+      .select({ status: agents.status })
+      .from(agents)
+      .where(eq(agents.id, runner.agentId));
+    expect(afterReplay!.status).toBe('blocked');
+    const [eventAfterReplay] = await stack.runtime.deps.db
+      .select({ statusAppliedAt: sessionEvents.statusAppliedAt })
+      .from(sessionEvents)
+      .where(and(eq(sessionEvents.workspaceId, ws.workspaceId), eq(sessionEvents.agentId, runner.agentId)));
+    expect(eventAfterReplay!.statusAppliedAt).not.toBeNull();
+
+    // No orphan second event row was ever allocated for the shared key.
+    expect(await stack.runtime.deps.db
+      .select()
+      .from(sessionEvents)
+      .where(and(eq(sessionEvents.workspaceId, ws.workspaceId), eq(sessionEvents.agentId, runner.agentId))),
+    ).toHaveLength(1);
   });
 
   it('emits canonical message.reacted events for reactions', async () => {
@@ -356,7 +1126,7 @@ describe('SDK v8 service contract', () => {
     });
     expect(react.status).toBe(201);
 
-    await new Promise((r) => setTimeout(r, 50));
+    await stack.settle();
     const delivered = deliverFramesOfType(bobSock, 'message.reacted');
     expect(delivered.length).toBeGreaterThanOrEqual(1);
     expect(delivered[0]).toMatchObject({
@@ -397,7 +1167,7 @@ describe('SDK v8 service contract', () => {
     });
     expect(read.status).toBe(200);
 
-    await new Promise((r) => setTimeout(r, 50));
+    await stack.settle();
     const delivered = deliverFramesOfType(bobSock, 'message.read');
     expect(delivered.length).toBeGreaterThanOrEqual(1);
     expect(delivered[0]).toMatchObject({

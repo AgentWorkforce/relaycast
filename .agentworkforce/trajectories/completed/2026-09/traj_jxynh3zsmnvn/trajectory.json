@@ -1,0 +1,77 @@
+{
+  "id": "traj_jxynh3zsmnvn",
+  "version": 1,
+  "task": {
+    "title": "Repair NPM release workflow source-tree SHA regression",
+    "source": {
+      "system": "plain",
+      "id": "Fix truncated immutable source-tree SHA handling in repair workflow; canonical source tree is 3ea102dfb9622e3cc2819feb0cdf202cc029c8e6"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-09-10T08:34:49.713Z",
+  "completedAt": "2026-09-10T08:38:26.212Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-09-10T08:38:02.893Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_cbg2igjmrgcd",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-09-10T08:38:02.893Z",
+      "endedAt": "2026-09-10T08:38:26.212Z",
+      "events": [
+        {
+          "ts": 1789029482894,
+          "type": "decision",
+          "content": "Resolve sourceTree from the allow-listed source commit before repair validation: Resolve sourceTree from the allow-listed source commit before repair validation",
+          "raw": {
+            "question": "Resolve sourceTree from the allow-listed source commit before repair validation",
+            "chosen": "Resolve sourceTree from the allow-listed source commit before repair validation",
+            "alternatives": [],
+            "reasoning": "The failed run supplied a 39-character source-tree input even though the repository default and fixture were canonical; deriving the tree from the immutable source commit removes manual truncation risk while existing fixture and provenance checks remain authoritative."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1789029484368,
+          "type": "reflection",
+          "content": "The repair workflow now canonicalizes source-tree identity before both validation stages, and release regression coverage pins the exact 40-character SHA across workflow and fixture.",
+          "raw": {
+            "focalPoints": [
+              "source-tree provenance",
+              "workflow safety",
+              "regression coverage"
+            ],
+            "confidence": 0.92
+          },
+          "significance": "high",
+          "tags": [
+            "focal:source-tree provenance",
+            "focal:workflow safety",
+            "focal:regression coverage",
+            "confidence:0.92"
+          ]
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Canonicalized the NPM repair workflow's source tree from the allow-listed source commit and added exact-SHA regression coverage for the workflow default and fixture.",
+    "approach": "Standard approach",
+    "confidence": 0.93
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "231d63e44102424b2bff0f8f42aa838d728f10af",
+    "endRef": "231d63e44102424b2bff0f8f42aa838d728f10af"
+  }
+}

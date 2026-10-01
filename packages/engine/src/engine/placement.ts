@@ -78,6 +78,49 @@ export function isNodeLive(node: Pick<NodeRow, 'status' | 'lastHeartbeatAt'>, no
   );
 }
 
+/**
+ * Whether a row sharing a machine_id may be reused by a new enrollment.
+ *
+ * Reads `provenLiveAt`, NOT `lastHeartbeatAt`. That distinction is the whole
+ * point: `lastHeartbeatAt` is written by registration (`registerNode`,
+ * `upsertProvider`, `recomputeNodeAggregate`) and by disconnect cleanup
+ * (`markNodeOffline`, `markProviderOffline`, `markDirectNodeOfflineForAgent`)
+ * as well as by real heartbeats, so a node that registered and never sent one
+ * carries a timestamp indistinguishable from a node that did. Gating reuse on
+ * it would let a host that merely connected be treated as proven, and reuse
+ * rotates the row's token — a wrong answer silently revokes a credential
+ * another host is holding.
+ *
+ * `provenLiveAt` is written only by an arriving heartbeat frame, and cleared
+ * whenever enrollment re-issues the row's token, so a row that was just reused
+ * cannot be reused again until its new holder has proved itself.
+ *
+ * Reuse therefore needs all of: the node is not live; it has proved life at
+ * least once since its current credential was issued; and that proof is old
+ * enough that the host is gone. A proof timestamped in the future is rejected —
+ * it means the server clock moved backwards, and the node may still be running.
+ *
+ * Cost: a host that enrolls, or even registers, but never heartbeats is never
+ * deduped. Those rows have no proven holder to protect and are reclaimed by the
+ * roster reaper instead.
+ */
+export function isReusableForMachineMatch(
+  node: Pick<NodeRow, 'status' | 'lastHeartbeatAt' | 'provenLiveAt'>,
+  now = Date.now(),
+): boolean {
+  if (isNodeLive(node, now)) return false;
+  // A timestamp in the future on EITHER column means the server clock moved
+  // backwards. `isNodeLive` reports such a row as not live because it requires
+  // `age >= 0`, so without this a stale proof plus a future heartbeat would
+  // read as reusable while the broker is still running.
+  const heartbeat = node.lastHeartbeatAt?.getTime();
+  if (heartbeat !== undefined && heartbeat > now) return false;
+  const proven = node.provenLiveAt?.getTime();
+  if (proven === undefined) return false;
+  if (proven > now) return false;
+  return now - proven > NODE_LIVENESS_TTL_MS;
+}
+
 export function nodeHasCapability(node: Pick<NodeRow, 'capabilities'>, capability: string): boolean {
   return Array.isArray(node.capabilities)
     && node.capabilities.some((item) => {

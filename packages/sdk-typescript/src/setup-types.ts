@@ -1,4 +1,5 @@
 import type { CreateAgentRequest, CreateAgentResponse } from './types.js';
+import type { WorkspaceProvenanceOptions } from './workspace-provenance.js';
 
 export interface RelaycastSetupOptions {
   /**
@@ -35,6 +36,15 @@ export interface CreateWorkspaceOptions {
    * Human-readable name for the workspace.
    */
   name: string;
+  /**
+   * Explicitly expire this throwaway workspace after 60 seconds to 30 days.
+   * Omit for a persistent workspace.
+   */
+  expiresInSeconds?: number;
+  /** Creation context recorded once for hosted usage attribution. */
+  provenance?: WorkspaceProvenanceOptions;
+  /** Owner-scoped key for crash-safe delegated workspace-create retries. */
+  idempotencyKey?: string;
 }
 
 export type JoinWorkspaceOptions = Record<string, never>;
@@ -45,6 +55,8 @@ export interface WorkspaceInfo {
   baseUrl: string;
   /** ISO 8601 creation timestamp */
   createdAt?: string;
+  /** ISO 8601 expiry timestamp for an explicitly ephemeral workspace. */
+  expiresAt?: string | null;
   name?: string;
 }
 

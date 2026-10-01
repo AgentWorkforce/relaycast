@@ -9,6 +9,101 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [8.14.0] - 2026-09-30
+
+### Added
+
+- `NodeProviderClient` negotiates caller-provenance support per action, and `NodeHandlerContext` exposes the authenticated caller as `callerAgentId` and `callerAgentName` when present.
+
+## [8.13.0] - 2026-09-25
+
+### Added
+
+- `agent.sendTo(address, text)` sends a DM to an `agent@machine` address (`POST /v1/dm` with `address`).
+
+## [8.12.0] - 2026-09-24
+
+### Fixed
+
+- Direct-node `message.created` events preserve public message metadata and the server creation timestamp, matching workspace WebSocket delivery.
+
+## [8.11.1] - 2026-09-17
+
+### Fixed
+
+- `AgentClient.connect()` reuses its direct node token across reconnect attempts rather than calling `POST /v1/agent/node-token` on every attempt. The cached token is replaced after three consecutive attempts that never reach a usable connection, and the counter resets once one does, so a healthy client mints once per session while a client holding a rejected token still recovers.
+
+## [8.9.0] - 2026-09-11
+
+### Added
+
+- `nodes.list()` accepts `status: 'online' | 'offline'` to select on the engine's server-filtered liveness query instead of fetching the full roster. `NodeRosterEntry.activeAgentsStale` is `true` whenever `live` is `false`, so a frozen historical occupancy count is never treated as current.
+- `nodes.listHistory()` reads the bounded, paginated `history=true` contract (`{ nodes, nextCursor }`) for an explicit full-roster read without silent truncation, however many rows the workspace has retained.
+
+## [8.8.0] - 2026-09-10
+
+### Changed
+
+- `RelayCast.createWorkspace()` can replay anonymous hosted creation with a CSPRNG `idempotencyKey` without accepting or transmitting a deployment-wide secret.
+
+### Fixed
+
+- Anonymous keyed workspace bootstrap rejects remote HTTP and redirects, preventing its recovery capability from reaching another origin.
+- `agents.releaseExact()` preserves its caller-held idempotency key across retries, exposes server `Retry-After`, and legacy unkeyed release is no longer replayed automatically.
+
+## [8.6.0] - 2026-09-09
+
+### Changed
+
+- Workspace bootstrap `idempotencyKey` can now be used without an existing `apiKey` to recover an anonymous create safely.
+
+## [8.5.1] - 2026-09-07
+
+### Added
+
+- `relay.nodes.delete(name, { force? })` removes a node and returns its cascade details; the safe default refuses online nodes and nodes with hosted actions, and the SDK does not replay ambiguous failures.
+
+## [8.5.0] - 2026-09-06
+
+### Added
+
+- `agents.release()` accepts `expectedTokenHash` for generation-safe cleanup.
+
+## [8.4.0] - 2026-09-05
+
+### Added
+
+- `RelayCast.createWorkspace()` and `RelaycastSetup.createWorkspace()` accept `idempotencyKey` for crash-safe delegated workspace creation retries.
+
+## [8.2.2] - 2026-09-02
+
+### Fixed
+
+- `actions.invoke()` preserves one generated idempotency key across automatic HTTP retries.
+
+## [8.2.0] - 2026-08-21
+
+### Added
+
+- Workspace bootstrap options accept camelCase creation provenance and default SDK-created workspaces to `source: "sdk"`.
+
+## [8.0.7] - 2026-08-19
+
+### Added
+
+- `relay.messages.bySessionRef()` resolves bounded replay slices and converts lookup failures to explicit unknown availability.
+
+### Fixed
+
+- Channel posts, thread replies, and group-DM messages now forward structured `data` metadata consistently with direct DMs.
+
+## [8.0.6] - 2026-08-18
+
+### Added
+
+- Workspace creation accepts `expiresInSeconds` and returns the resulting expiry timestamp.
+- `workspace.delete(id)` uses the id-scoped deletion endpoint, while the no-argument form keeps using the legacy endpoint for compatibility with older engines.
+
 ## [8.0.1] - 2026-08-14
 
 ### Fixed

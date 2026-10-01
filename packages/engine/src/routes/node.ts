@@ -1,5 +1,6 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { z } from 'zod';
+import { FleetNodeTagSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { requireAuth, requireWorkspaceRead, requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -15,7 +16,7 @@ import {
   parseOptionalJsonBody,
 } from '../lib/httpResponse.js';
 import * as nodeEngine from '../engine/node.js';
-import { serializeNodeOp } from '../engine/nodeLock.js';
+import { serializeNodeOp, serializeMachineEnroll } from '../engine/nodeLock.js';
 import * as actionEngine from '../engine/action.js';
 import { sendNodeDeliveriesToAgents } from '../engine/nodeDeliver.js';
 import { fanoutToWorkspace } from './fanout.js';
@@ -63,13 +64,16 @@ const httpDeliverySchema = z.object({
 const createNodeSchema = z.object({
   node_id: z.string().min(1).optional(),
   name: z.string().min(1),
+  // Dedupe key for re-enrollment: a host that keeps no node_id gets a fresh
+  // name each boot, and without this every boot minted another roster row.
+  machine_id: z.string().min(1).optional(),
   kind: nodeKindSchema.optional(),
   role: nodeRoleSchema.optional(),
   delivery_adapter: z.string().min(1).optional(),
   delivery: z.record(z.string(), z.unknown()).nullable().optional(),
   capabilities: z.array(z.string().min(1)).optional(),
   max_agents: z.number().int().nonnegative().optional(),
-  tags: z.array(z.string()).optional(),
+  tags: z.array(FleetNodeTagSchema).optional(),
   version: z.string().optional(),
 });
 
@@ -97,7 +101,6 @@ function strictExternalUrl(c: Parameters<typeof jsonError>[0]): boolean {
   return environment !== 'test';
 }
 
-type NodeRosterEntry = Awaited<ReturnType<typeof nodeEngine.listNodes>>[number];
 type NodeAgentBinding = NonNullable<Awaited<ReturnType<typeof nodeEngine.listNodeAgents>>>[number];
 type ObserverContext = ReturnType<typeof getObserverTokenFromContext>;
 
@@ -109,22 +112,10 @@ function filterNodeAgentsForObserver(observer: ObserverContext, bindings: NodeAg
   return bindings.filter((binding) => observerAllowsAgent(observer, binding.agent_id));
 }
 
-async function filterNodesForObserver(
-  db: Parameters<typeof nodeEngine.listNodes>[0],
-  workspaceId: string,
-  observer: ObserverContext,
-  roster: NodeRosterEntry[],
-): Promise<NodeRosterEntry[]> {
-  if (!observerHasAgentFilter(observer)) return roster;
-  const visible: NodeRosterEntry[] = [];
-  for (const node of roster) {
-    const bindings = await nodeEngine.listNodeAgents(db, workspaceId, node.name);
-    const visibleBindings = bindings ? filterNodeAgentsForObserver(observer, bindings) : [];
-    if (visibleBindings.length > 0) {
-      visible.push({ ...node, active_agents: visibleBindings.length });
-    }
-  }
-  return visible;
+/** The observer's authorized agent ids, or `undefined` when unfiltered/absent. */
+function observerAgentIdsFilter(observer: ObserverContext): string[] | undefined {
+  if (!observer) return undefined;
+  return normalizeObserverFilters(observer.filters).agent_ids;
 }
 
 // POST /v1/nodes - enroll or rotate a node token (workspace-key only)
@@ -134,14 +125,31 @@ nodeRoutes.post('/nodes', requireWorkspaceKey, rateLimit, async (c) => {
     if (!parsed.ok) {
       return parsed.response;
     }
-    const existing = await nodeEngine.resolveNodeForEnroll(c.get('db'), c.get('workspace').id, parsed.data);
-    const kind = parsed.data.kind ?? (existing?.kind as z.infer<typeof nodeKindSchema> | undefined) ?? 'ws';
-    const role = parsed.data.role
+    // Machine-keyed enrollment resolves then writes, so concurrent first
+    // enrollments of one machine must not interleave between those steps. Only
+    // broker requests key on the machine, so only they need the queue: direct
+    // hosts stay independent rather than queueing behind each other on a box
+    // running many of them.
+    const machineId = parsed.data.machine_id;
+    const machineKeyed = machineId !== undefined && nodeEngine.requestedNodeRole(parsed.data) === 'broker';
+    return machineKeyed
+      ? serializeMachineEnroll(c.get('workspace').id, machineId, () => enrollNode(c, parsed.data))
+      : enrollNode(c, parsed.data);
+  } catch (err: unknown) {
+    return errorResponse(c, err);
+  }
+});
+
+async function enrollNode(c: Context<AppEnv>, data: z.infer<typeof createNodeSchema>): Promise<Response> {
+  try {
+    const existing = await nodeEngine.resolveNodeForEnroll(c.get('db'), c.get('workspace').id, data);
+    const kind = data.kind ?? (existing?.kind as z.infer<typeof nodeKindSchema> | undefined) ?? 'ws';
+    const role = data.role
       ?? (existing?.role as z.infer<typeof nodeRoleSchema> | undefined)
-      ?? (kind === 'ws' || (parsed.data.max_agents !== undefined && parsed.data.max_agents > 1) ? 'broker' : 'direct');
-    const deliveryInput = parsed.data.delivery === undefined
+      ?? (kind === 'ws' || (data.max_agents !== undefined && data.max_agents > 1) ? 'broker' : 'direct');
+    const deliveryInput = data.delivery === undefined
       ? existing?.deliveryConfig ?? null
-      : parsed.data.delivery;
+      : data.delivery;
     const delivery = normalizeDelivery(kind, deliveryInput);
     if (delivery && 'success' in delivery && !delivery.success) {
       return jsonError(c, 'invalid_node_delivery', 'invalid node delivery body', 400);
@@ -155,11 +163,11 @@ nodeRoutes.post('/nodes', requireWorkspaceKey, rateLimit, async (c) => {
         return jsonError(c, 'unsafe_node_delivery_url', 'delivery.url is not allowed', 400);
       }
     }
-    if (role === 'direct' && (parsed.data.max_agents ?? existing?.maxAgents ?? 1) !== 1) {
+    if (role === 'direct' && (data.max_agents ?? existing?.maxAgents ?? 1) !== 1) {
       return jsonError(c, 'direct_node_capacity_exceeded', 'direct nodes can bind at most one agent', 400);
     }
     const result = await nodeEngine.createNodeToken(c.get('db'), c.get('workspace').id, {
-      ...parsed.data,
+      ...data,
       kind,
       role,
       delivery: delivery && !('success' in delivery) ? delivery : null,
@@ -168,23 +176,50 @@ nodeRoutes.post('/nodes', requireWorkspaceKey, rateLimit, async (c) => {
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
-});
+}
 
-// GET /v1/nodes?capability=&name= - node roster
+const nodeStatusSchema = z.enum(['online', 'offline']);
+
+// GET /v1/nodes?capability=&name=&status=&history=&cursor=&limit= - node roster
+//
+// Default (no `history`): a bare array, matching every caller written before
+// this selector existed. `status=online` (or `offline`) now pushes a
+// liveness predicate into SQL instead of fetching the whole table and
+// filtering in JS — this is the server-filtered live-Fleet path a default
+// `fleet nodes` call should use so it never downloads history.
+//
+// `history=true`: switches to the bounded, paginated contract
+// (`{ nodes, next_cursor }`) for an explicit full-roster read (`--all`).
+// `cursor`/`limit` page through it without silent truncation, however many
+// historical rows the workspace has retained.
 nodeRoutes.get('/nodes', requireWorkspaceRead('nodes:read'), rateLimit, async (c) => {
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
-    const result = await nodeEngine.listNodes(db, workspace.id, {
+    const statusRaw = c.req.query('status');
+    if (statusRaw !== undefined && !nodeStatusSchema.safeParse(statusRaw).success) {
+      return jsonError(c, 'invalid_request', "status must be 'online' or 'offline'", 400);
+    }
+    const history = c.req.query('history') === 'true';
+    const limitRaw = c.req.query('limit');
+    const limit = limitRaw !== undefined ? Number(limitRaw) : undefined;
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+      return jsonError(c, 'invalid_request', 'limit must be a positive integer', 400);
+    }
+    const page = await nodeEngine.listNodes(db, workspace.id, {
       capability: c.req.query('capability'),
       name: c.req.query('name'),
+      status: statusRaw as 'online' | 'offline' | undefined,
+      history,
+      cursor: c.req.query('cursor') ?? null,
+      limit,
+      // Pushed into the same SQL query as every other filter, so hidden nodes
+      // are excluded from row selection before the page/cursor is computed —
+      // see `observerNodeVisibilityCondition` — instead of one
+      // `listNodeAgents` query per roster row followed by an app-side filter.
+      observerAgentIds: observerAgentIdsFilter(getObserverTokenFromContext(c)),
     });
-    return jsonOk(c, await filterNodesForObserver(
-      db,
-      workspace.id,
-      getObserverTokenFromContext(c),
-      result,
-    ));
+    return jsonOk(c, history ? { nodes: page.nodes, next_cursor: page.nextCursor } : page.nodes);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -221,7 +256,7 @@ nodeRoutes.post('/nodes/:name/agents', requireWorkspaceKey, rateLimit, async (c)
     if (!parsed.ok) {
       return parsed.response;
     }
-    const result = await nodeEngine.bindAgentToNode(
+    const { binding, move } = await nodeEngine.bindAgentToNode(
       c.get('db'),
       c.get('workspace').id,
       c.req.param('name'),
@@ -231,7 +266,23 @@ nodeRoutes.post('/nodes/:name/agents', requireWorkspaceKey, rateLimit, async (c)
         priority: parsed.data.priority,
       },
     );
-    return jsonCreated(c, result);
+    const response = jsonCreated(c, binding);
+    // The response — which carries delivery_ack_seq — must be on the wire
+    // before any deliver frame reaches the provider socket: agent.register and
+    // agent.recover order their cursor-bearing reply ahead of the ready mark
+    // and replay, and a bound agent's drain honors the same ordering.
+    runInBackground(
+      c,
+      Promise.resolve().then(() =>
+        nodeEngine.completeBoundAgentDelivery(
+          c.get('db'),
+          c.get('engine').nodeConnections,
+          c.get('workspace').id,
+          move,
+        )),
+      'bind delivery readiness+replay',
+    );
+    return response;
   } catch (err: unknown) {
     return errorResponse(c, err);
   }

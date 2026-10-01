@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   AgentRegisterReplyDataSchema,
+  NodeRegisterReplyDataSchema,
   FleetBrokerToRelaycastMessageSchema,
   FleetRelaycastToBrokerMessageSchema,
   parseFleetBrokerToRelaycastMessage,
@@ -16,11 +17,21 @@ const FIXTURE_DIR = path.resolve(
   '../../fixtures/fleet-wire',
 );
 
+it('validates server registration contracts while accepting legacy node replies', () => {
+  const legacy = { provider: { name: 'broker', instance_id: 'instance' }, accepted_capabilities: [] };
+  expect(NodeRegisterReplyDataSchema.safeParse(legacy).success).toBe(true);
+  expect(NodeRegisterReplyDataSchema.safeParse({ ...legacy, registration_contract: 'relay:node-registration-v1' }).success).toBe(true);
+  for (const contract of ['invented', 1, null, { version: 1 }]) {
+    expect(NodeRegisterReplyDataSchema.safeParse({ ...legacy, registration_contract: contract }).success).toBe(false);
+  }
+});
+
 const BROKER_TO_RELAYCAST_TYPES = new Set([
   'node.register',
   'node.heartbeat',
   'node.deregister',
   'agent.register',
+  'agent.recover',
   'agent.deregister',
   'delivery.ack',
   'action.result',
@@ -34,6 +45,7 @@ const EXPECTED_FIXTURES = [
   'action.result.error.json',
   'action.result.output.json',
   'agent.deregister.json',
+  'agent.recover.json',
   'agent.register.json',
   'context.update.json',
   'deliver.json',
@@ -307,6 +319,71 @@ describe('fleet wire fixtures', () => {
       tags: ['darwin'],
       version: 'relay-broker/0.7.0',
     });
+  });
+
+  it('accepts placement-safe repo_keys and repo tags on node.register', () => {
+    expect(
+      parseFleetBrokerToRelaycastMessage({
+        v: 1,
+        type: 'node.register',
+        name: 'builder-repos',
+        node_id: 'node_repos',
+        capabilities: [],
+        max_agents: 4,
+        tags: ['darwin', 'repo:relay', 'repo:AgentWorkforce/relaycast'],
+        repo_keys: ['AgentWorkforce/relay', 'acme/.github'],
+        version: 'relay-broker/0.7.0',
+      }),
+    ).toMatchObject({
+      tags: ['darwin', 'repo:relay', 'repo:AgentWorkforce/relaycast'],
+      repo_keys: ['AgentWorkforce/relay', 'acme/.github'],
+    });
+  });
+
+  it.each([
+    { repo_keys: [''] },
+    { repo_keys: ['relaycast'] },
+    { repo_keys: ['/Users/alice/relaycast'] },
+    { repo_keys: ['C:/work/relaycast'] },
+    { repo_keys: ['C:\\work\\relaycast'] },
+    { repo_keys: ['\\\\server\\share'] },
+    { repo_keys: ['AgentWorkforce\\relaycast'] },
+    { repo_keys: ['AgentWorkforce:relaycast'] },
+    { repo_keys: ['Agent Workforce/relaycast'] },
+    { repo_keys: ['AgentWorkforce/relay cast'] },
+    { repo_keys: ['./relaycast'] },
+    { repo_keys: ['../relaycast'] },
+    { repo_keys: ['AgentWorkforce/.'] },
+    { repo_keys: ['AgentWorkforce/..'] },
+    { repo_keys: ['AgentWorkforce//relaycast'] },
+    { repo_keys: ['AgentWorkforce/relaycast/packages/engine'] },
+    { repo_keys: ['https://github.com/AgentWorkforce/relaycast'] },
+    { tags: ['repo:'] },
+    { tags: ['repo:/srv/relaycast'] },
+    { tags: ['repo:C:/work/relaycast'] },
+    { tags: ['repo:C:\\work\\relaycast'] },
+    { tags: ['repo:\\\\server\\share'] },
+    { tags: ['repo:AgentWorkforce\\relaycast'] },
+    { tags: ['repo:AgentWorkforce:relaycast'] },
+    { tags: ['repo:Agent Workforce/relaycast'] },
+    { tags: ['repo:.'] },
+    { tags: ['repo:..'] },
+    { tags: ['repo:../relaycast'] },
+    { tags: ['repo:AgentWorkforce/relaycast/packages/engine'] },
+  ])('rejects path-shaped repository advertisements on node.register: %j', (unsafe) => {
+    expect(() =>
+      parseFleetBrokerToRelaycastMessage({
+        v: 1,
+        type: 'node.register',
+        name: 'builder-unsafe-repos',
+        node_id: 'node_unsafe_repos',
+        capabilities: [],
+        max_agents: 4,
+        tags: ['darwin'],
+        version: 'relay-broker/0.7.0',
+        ...unsafe,
+      }),
+    ).toThrow();
   });
 
   it('accepts broker requests with request ids', () => {

@@ -1,10 +1,14 @@
 import { Hono } from 'hono';
 import type { Context } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { createMiddleware } from 'hono/factory';
 import { z } from 'zod';
+import { WorkspaceProvenanceInputSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
-import { requireWorkspaceKey, requireWorkspaceRead } from '../middleware/auth.js';
+import { requireAgentToken, requireWorkspaceKey, requireWorkspaceRead } from '../middleware/auth.js';
+import { parseIdempotencyKey } from '../middleware/idempotency.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { RATE_LIMIT_WINDOW_MS, rateLimitWindow, rateLimitWindowResetAt, setRetryContract } from '../lib/throttle.js';
 import * as workspaceEngine from '../engine/workspace.js';
 import * as activityEngine from '../engine/activity.js';
 import * as dmAllEngine from '../engine/dmAll.js';
@@ -23,10 +27,12 @@ import {
   WORKSPACE_EVENT_LIST_MAX_LIMIT,
   type WorkspaceEventRecord,
 } from '../engine/workspaceEvents.js';
-import { channels } from '../db/schema.js';
+import { channels, type WorkspaceProvenanceRecord } from '../db/schema.js';
 import { and, eq, inArray } from 'drizzle-orm';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
-import { errorResponse } from '../lib/httpError.js';
+import { asCodedError, errorResponse, safeErrorDiagnostics } from '../lib/httpError.js';
+import { getRequestLogger } from '../lib/logger.js';
+import { buildWorkspaceProvenance } from '../lib/workspaceProvenance.js';
 import {
   jsonCreated,
   jsonError,
@@ -37,11 +43,14 @@ import {
   parseQueryParams,
 } from '../lib/httpResponse.js';
 import { parsePaginationQuery, positiveIntQueryParam } from '../lib/httpQuery.js';
+import { runInBackground } from './background.js';
 
 export const workspaceRoutes = new Hono<AppEnv>();
 
 const createWorkspaceSchema = z.object({
   name: z.string().min(1),
+  expires_in_seconds: z.number().int().min(60).max(30 * 24 * 60 * 60).optional(),
+  provenance: WorkspaceProvenanceInputSchema.optional(),
 });
 
 const updateWorkspaceSchema = z.object({
@@ -73,6 +82,35 @@ function workspaceNotFound(c: Context<AppEnv>) {
   return jsonNotFound(c, 'workspace_not_found', 'Workspace not found');
 }
 
+function redactProvenanceForObserver(
+  provenance: WorkspaceProvenanceRecord | null,
+): WorkspaceProvenanceRecord | null {
+  if (!provenance) return null;
+  return {
+    source: provenance.source,
+    ...(provenance.origin_id ? { origin_id: provenance.origin_id } : {}),
+    classification: provenance.classification,
+    source_basis: provenance.source_basis,
+  };
+}
+
+async function deleteAuthenticatedWorkspace(c: Context<AppEnv>, expectedId?: string) {
+  try {
+    const db = c.get('db');
+    const workspace = c.get('workspace');
+    if (expectedId !== undefined && expectedId !== workspace.id) {
+      return workspaceNotFound(c);
+    }
+    await workspaceEngine.deleteWorkspace(db, c.get('engine').files, workspace.id);
+    emitServerEvent(c, workspace.id, 'relaycast_server_workspace_deleted', {
+      deleted_via: 'api',
+    });
+    return jsonNoContent(c);
+  } catch (err: unknown) {
+    return errorResponse(c, err);
+  }
+}
+
 const PUBLIC_WORKSPACE_LOOKUP_LIMIT = 30;
 const publicWorkspaceLookupBuckets = new Map<string, { count: number; lastSeen: number }>();
 let lastPublicWorkspaceLookupCleanup = Date.now();
@@ -97,82 +135,168 @@ function inMemoryPublicLookupRateCheck(clientId: string, limit: number) {
     }
   }
 
-  const window = Math.floor(now / 60_000);
-  const bucketKey = `${clientId}:${window}`;
+  const bucketKey = `${clientId}:${rateLimitWindow(now)}`;
   const bucket = publicWorkspaceLookupBuckets.get(bucketKey) ?? { count: 0, lastSeen: now };
-  bucket.count += 1;
+  // Matches the limiter port: a rejected request does not consume the bucket.
+  const allowed = bucket.count < limit;
+  if (allowed) bucket.count += 1;
   bucket.lastSeen = now;
   publicWorkspaceLookupBuckets.set(bucketKey, bucket);
 
   return {
-    allowed: bucket.count <= limit,
+    allowed,
     remaining: Math.max(0, limit - bucket.count),
   };
 }
 
-function extractOwnerApiKey(authHeader: string | undefined) {
-  if (!authHeader?.startsWith('Bearer ')) return undefined;
+type OwnerAuthorization =
+  | { kind: 'absent' }
+  | { kind: 'invalid' }
+  | { kind: 'workspace'; token: string };
+
+function parseOwnerAuthorization(authHeader: string | undefined): OwnerAuthorization {
+  if (authHeader === undefined) return { kind: 'absent' };
+  if (!authHeader.startsWith('Bearer ')) return { kind: 'invalid' };
   const token = authHeader.slice(7);
-  return token.startsWith('rk_') ? token : undefined;
+  return token.startsWith('rk_')
+    ? { kind: 'workspace', token }
+    : { kind: 'invalid' };
 }
 
 const publicWorkspaceLookupRateLimit = createMiddleware<AppEnv>(async (c, next) => {
   const clientId = getPublicLookupClientId(c);
   const limit = PUBLIC_WORKSPACE_LOOKUP_LIMIT;
-  const window = Math.floor(Date.now() / 60_000);
-  const bucketKey = `public-workspace-lookup:${clientId}:${window}`;
+  const now = Date.now();
+  const resetAt = rateLimitWindowResetAt(now);
+  const bucketKey = `public-workspace-lookup:${clientId}:${rateLimitWindow(now)}`;
 
+  const throttled = (remaining: number) => {
+    c.header('X-RateLimit-Limit', String(limit));
+    c.header('X-RateLimit-Remaining', String(remaining));
+    c.header('X-RateLimit-Reset', String(Math.ceil(resetAt / 1000)));
+  };
+
+  let allowed: boolean;
   try {
-    const { count, allowed } = await c.get('engine').rateLimiter.check({
-      bucketKey,
-      limit,
-      windowMs: 60_000,
-    });
-    const remaining = Math.max(0, limit - count);
-
-    c.header('X-RateLimit-Limit', String(limit));
-    c.header('X-RateLimit-Remaining', String(remaining));
-
-    if (!allowed) {
-      return jsonError(c, 'rate_limit_exceeded', `Rate limit exceeded. ${limit} requests per minute allowed for public workspace lookups.`, 429);
-    }
+    const result = await c.get('engine').rateLimiter.check({ bucketKey, limit, windowMs: RATE_LIMIT_WINDOW_MS });
+    allowed = result.allowed;
+    throttled(Math.max(0, limit - result.count));
   } catch {
-    const { allowed, remaining } = inMemoryPublicLookupRateCheck(clientId, limit);
-    c.header('X-RateLimit-Limit', String(limit));
-    c.header('X-RateLimit-Remaining', String(remaining));
+    const fallback = inMemoryPublicLookupRateCheck(clientId, limit);
+    allowed = fallback.allowed;
+    throttled(fallback.remaining);
+  }
 
-    if (!allowed) {
-      return jsonError(c, 'rate_limit_exceeded', `Rate limit exceeded. ${limit} requests per minute allowed for public workspace lookups.`, 429);
-    }
+  if (!allowed) {
+    setRetryContract(c, resetAt, now);
+    return jsonError(c, 'rate_limit_exceeded', `Rate limit exceeded. ${limit} requests per minute allowed for public workspace lookups.`, 429);
   }
 
   await next();
 });
 
-// POST /workspaces - create workspace (no auth required, workspace key optional)
+// POST /workspaces - create workspace (no auth required, workspace key optional).
+// An anonymous create carrying a high-entropy Idempotency-Key uses that key as
+// its recovery capability. Self-hosts may additionally opt into requiring
+// X-Workspace-Bootstrap-Secret before any binding lookup or recovery runs.
 workspaceRoutes.post('/workspaces', async (c) => {
   try {
     const parsed = await parseJsonBody(c, createWorkspaceSchema, 'name is required');
     if (!parsed.ok) {
       return parsed.response;
     }
-    const { name } = parsed.data;
+    const {
+      name,
+      expires_in_seconds: expiresInSeconds,
+      provenance: declaredProvenance,
+    } = parsed.data;
+    const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
+    if (idempotencyError) {
+      return jsonError(c, 'invalid_idempotency_key', idempotencyError, 400);
+    }
     const db = c.get('db');
-    const ownerApiKey = extractOwnerApiKey(c.req.header('Authorization'));
+    const ownerAuthorization = parseOwnerAuthorization(c.req.header('Authorization'));
+    if (idempotencyKey && ownerAuthorization.kind === 'invalid') {
+      return jsonError(c, 'unauthorized', 'Missing or invalid Authorization header', 401);
+    }
+    const ownerApiKey = ownerAuthorization.kind === 'workspace'
+      ? ownerAuthorization.token
+      : undefined;
+    if (idempotencyKey && ownerApiKey) {
+      const ownerAuth = await c.get('engine').auth.authenticate({ token: ownerApiKey, require: 'workspace', db });
+      if (!ownerAuth.ok) {
+        return jsonError(c, ownerAuth.code, ownerAuth.message, ownerAuth.status as ContentfulStatusCode);
+      }
+    }
+    const requestDigest = idempotencyKey
+      ? await workspaceEngine.workspaceCreateRequestDigest({
+        name,
+        ...(expiresInSeconds === undefined ? {} : { expiresInSeconds }),
+        ...(declaredProvenance === undefined ? {} : { provenance: declaredProvenance }),
+      })
+      : undefined;
+    const attribution = buildWorkspaceProvenance(c.req.raw, declaredProvenance);
     const result = await workspaceEngine.createWorkspace(
       db,
       name,
-      ownerApiKey ? { ownerApiKey } : undefined,
+      {
+        ...(ownerApiKey ? { ownerApiKey } : {}),
+        ...(idempotencyKey && !ownerApiKey
+          ? {
+            bootstrapSecret: c.get('engine').config.workspaceBootstrapSecret,
+            bootstrapSecretProof: c.req.header('X-Workspace-Bootstrap-Secret'),
+            bootstrapProofRequired: c.get('engine').config.workspaceBootstrapProofRequired,
+          }
+          : {}),
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+        ...(requestDigest ? { requestDigest } : {}),
+        ...(expiresInSeconds
+          ? { expiresAt: new Date(Date.now() + expiresInSeconds * 1_000) }
+          : {}),
+        ...attribution,
+      },
     );
     if (result.created) {
       emitServerEvent(c, result.workspace.workspace_id, 'relaycast_server_workspace_created', {
         created_via: 'api',
       });
     }
+    if (result.created) {
+      runInBackground(
+        c,
+        workspaceEngine.reapExpiredWorkspaces(db, c.get('engine').files),
+        'workspace expiry reap',
+      );
+    }
     return result.created ? jsonCreated(c, result.workspace) : jsonOk(c, result.workspace);
   } catch (err: unknown) {
+    const error = asCodedError(err);
+    if ((error.status ?? 500) >= 500) {
+      const diagnostics = safeErrorDiagnostics(error);
+      getRequestLogger(c, 'workspace.create').error('Workspace creation failed', {
+        error_code: error.code ?? 'internal_error',
+        error_status: error.status ?? 500,
+        ...diagnostics,
+      });
+      c.get('engine').telemetry.captureException(
+        new Error(error.code ?? 'internal_error'),
+        {
+          path: c.req.path,
+          method: c.req.method,
+          status_code: error.status ?? 500,
+          error_code: error.code ?? 'internal_error',
+          request_id: c.get('requestId'),
+          ...diagnostics,
+        },
+      );
+    }
     return errorResponse(c, err);
   }
+});
+
+// DELETE /workspaces/:id - delete the authenticated workspace by explicit id
+workspaceRoutes.delete('/workspaces/:id', requireWorkspaceKey, rateLimit, async (c) => {
+  return deleteAuthenticatedWorkspace(c, c.req.param('id'));
 });
 
 // GET /workspaces/by-name/:name - lookup public workspace metadata by name
@@ -189,8 +313,8 @@ workspaceRoutes.get('/workspaces/by-name/:name', publicWorkspaceLookupRateLimit,
   }
 });
 
-// GET /workspace - get current workspace metadata (id/name/plan/system_prompt/
-// created_at/metadata only, nothing sensitive) — accepts an observer token
+// GET /workspace - get current workspace metadata plus the live effective
+// message-retention boundary (no payload or raw retention config) — accepts an observer token
 // (any scope; this endpoint predates per-scope enforcement and there's no
 // narrower scope that fits "read workspace metadata") in addition to a
 // workspace key, so `selectEngineForKey`-style credential probes succeed for
@@ -203,11 +327,18 @@ workspaceRoutes.get(
   async (c) => {
     try {
       const db = c.get('db');
-      const workspace = await workspaceEngine.getWorkspace(db, c.get('workspace').id);
+      const workspace = await workspaceEngine.getWorkspace(
+        db,
+        c.get('workspace').id,
+        c.get('engine').config.retention?.messageTtlDays,
+      );
       if (!workspace) {
         return workspaceNotFound(c);
       }
-      return jsonOk(c, workspace);
+      const observer = getObserverTokenFromContext(c);
+      return jsonOk(c, observer
+        ? { ...workspace, provenance: redactProvenanceForObserver(workspace.provenance) }
+        : workspace);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -312,7 +443,12 @@ workspaceRoutes.patch('/workspace', requireWorkspaceKey, rateLimit, async (c) =>
       return parsed.response;
     }
     const body = parsed.data;
-    const updated = await workspaceEngine.updateWorkspace(db, workspace.id, body);
+    const updated = await workspaceEngine.updateWorkspace(
+      db,
+      workspace.id,
+      body,
+      c.get('engine').config.retention?.messageTtlDays,
+    );
     if (!updated) {
       return workspaceNotFound(c);
     }
@@ -328,17 +464,7 @@ workspaceRoutes.patch('/workspace', requireWorkspaceKey, rateLimit, async (c) =>
 
 // DELETE /workspace - delete workspace
 workspaceRoutes.delete('/workspace', requireWorkspaceKey, rateLimit, async (c) => {
-  try {
-    const db = c.get('db');
-    const workspace = c.get('workspace');
-    await workspaceEngine.deleteWorkspace(db, workspace.id);
-    emitServerEvent(c, workspace.id, 'relaycast_server_workspace_deleted', {
-      deleted_via: 'api',
-    });
-    return jsonNoContent(c);
-  } catch (err: unknown) {
-    return errorResponse(c, err);
-  }
+  return deleteAuthenticatedWorkspace(c);
 });
 
 // GET /activity — recent activity feed
@@ -411,11 +537,21 @@ workspaceRoutes.get('/dm/conversations/:conversation_id/messages', requireWorksp
   }
 });
 
-// POST /agents/:name/rotate-token — token rotation
-workspaceRoutes.post('/agents/:name/rotate-token', requireWorkspaceKey, rateLimit, async (c) => {
+// POST /agents/:name/rotate-token — authenticated self-rollover only. Workspace
+// owners use the explicit, audited /takeover or /revoke-token operations.
+workspaceRoutes.post('/agents/:name/rotate-token', requireAgentToken, rateLimit, async (c) => {
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
+    const authAgent = c.get('agent')!;
+    if (authAgent.name !== c.req.param('name')) {
+      return jsonError(
+        c,
+        'agent_recovery_not_authorized',
+        'An agent token may rotate only its own identity',
+        403,
+      );
+    }
     const result = await tokenRotateEngine.rotateAgentToken(
       db,
       workspace.id,

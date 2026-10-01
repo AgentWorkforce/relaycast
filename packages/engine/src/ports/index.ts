@@ -95,11 +95,33 @@ export interface EngineConfig {
   appSemver?: string;
   sdkSemver?: string;
   /**
+   * Effective deployment-wide retention fallback. Adapters must provide an
+   * explicit value (`null` means never prune); omission is reported as unknown
+   * so a hosted deployment can never accidentally advertise replay coverage.
+   * Per-workspace `workspaces.retention` overrides this value.
+   */
+  retention?: {
+    messageTtlDays?: number | null;
+  };
+  /**
    * Master secret used to derive relayfile -> relaycast inbound HMAC secrets.
    * Hosted adapters wire this from their internal secret; self-host can omit it
    * to disable the relayfile inbound bridge.
    */
   relayfileInboundSecret?: string;
+  /**
+   * Deployment secret used to derive credentials for anonymous, keyed
+   * workspace bootstrap creates. Hosts should persist this value so a replay
+   * after a process restart recovers the same child credential.
+   */
+  workspaceBootstrapSecret?: string;
+  /**
+   * Require callers of anonymous keyed workspace creation to prove knowledge
+   * of `workspaceBootstrapSecret`. This optional self-host hardening mode is
+   * off for hosted deployments, where the high-entropy Idempotency-Key is the
+   * narrowly scoped recovery capability and the secret remains server-only.
+   */
+  workspaceBootstrapProofRequired?: boolean;
   /**
    * Optional egress proxy for http_push node delivery. When set, nodes that
    * register with `delivery.use_proxy: true` have their webhook POST routed
@@ -135,4 +157,14 @@ export interface EngineConfig {
       depthCap?: number;
     }>;
   };
+  /**
+   * Server-owned workspace delivery-growth policy. Bounds the aggregate active
+   * delivery backlog so a single large fanout cannot exceed the configured cap.
+   * Hosted adapters supply the *effective configured* cap (and an optional
+   * within-cap reserve); self-host leaves it unset and applies no workspace
+   * guard. Never derived from a client request.
+   */
+  workspaceDelivery?: import('./workspaceDelivery.js').WorkspaceDeliveryPolicyConfig;
 }
+
+export type { WorkspaceDeliveryPolicy, WorkspaceDeliveryPolicyConfig } from './workspaceDelivery.js';

@@ -2,14 +2,22 @@ import type {
   RealtimeBus,
   ConnectionRegistry,
   NodeConnectionRegistry,
+  ActionProviderAuthorization,
+  NodeDrainOptions,
   EngineEvent,
   UpgradeArgs,
   NodeUpgradeArgs,
 } from '../../ports/realtime.js';
 import type { ObserverToken } from '../../ports/auth.js';
-import { and, eq, gt, isNull, or } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { EngineDb } from '../../ports/database.js';
-import { observerTokens } from '../../db/schema.js';
+import {
+  actions,
+  actionInvocations,
+  agentNodeBindings,
+  agents,
+  observerTokens,
+} from '../../db/schema.js';
 import { handleNodeControlMessage, handleProviderDisconnect, markNodeOffline } from '../../engine/node.js';
 import { serializeNodeOp } from '../../engine/nodeLock.js';
 import { DEFAULT_PROVIDER_NAME } from '../../engine/nodeProvider.js';
@@ -51,6 +59,8 @@ interface NodeConn {
   instanceId?: string;
   /** Null means legacy/immediate; a set means cursor-gated ready identities. */
   deliveryReadyAgentIds?: Set<string> | null;
+  /** Exact actions that negotiated authenticated caller provenance on this socket. */
+  callerAwareActions?: ReadonlySet<string>;
   lastSeen: number;
 }
 
@@ -72,6 +82,11 @@ const OBSERVER_TOKEN_REVALIDATE_MS = 5_000;
 interface QueuedNodeMessage {
   key: string;
   message: Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }>;
+}
+
+interface ActionCallerSnapshot {
+  callerId: string | null;
+  callerName: string | null;
 }
 
 /**
@@ -241,6 +256,268 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     providerName: string,
     message: FleetRelaycastToBrokerMessage,
   ): Promise<boolean> {
+    return this.sendToProviderUnchecked(workspaceId, nodeId, providerName, message);
+  }
+
+  async sendAuthorizedActionToProvider(
+    workspaceId: string,
+    nodeId: string,
+    providerName: string,
+    message: Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }>,
+    authorization: ActionProviderAuthorization,
+  ): Promise<boolean> {
+    if (authorization.kind === 'release-generation-v1') {
+      const releaseInput = message.input;
+      const inputMatches = !!releaseInput
+        && typeof releaseInput === 'object'
+        && !Array.isArray(releaseInput)
+        && releaseInput.name === authorization.agentName
+        && (authorization.expectedTokenHash === undefined
+          || releaseInput.expected_token_hash === authorization.expectedTokenHash)
+        && (authorization.expectedAgentId === undefined
+          || releaseInput.expected_agent_id === authorization.expectedAgentId);
+      if (
+        message.invocation_id !== authorization.invocationId
+        || message.action !== 'release'
+        || !inputMatches
+      ) {
+        return false;
+      }
+      const [authorized] = await this.db
+        .select({
+          id: actionInvocations.id,
+          callerId: actionInvocations.callerId,
+          callerName: actionInvocations.callerName,
+        })
+        .from(actionInvocations)
+        .innerJoin(agents, and(
+          eq(agents.workspaceId, workspaceId),
+          eq(agents.name, authorization.agentName),
+          ...(authorization.expectedTokenHash ? [eq(agents.tokenHash, authorization.expectedTokenHash)] : []),
+          ...(authorization.expectedAgentId ? [eq(agents.id, authorization.expectedAgentId)] : []),
+          eq(agents.providerName, providerName),
+        ))
+        .innerJoin(agentNodeBindings, and(
+          eq(agentNodeBindings.workspaceId, workspaceId),
+          eq(agentNodeBindings.agentId, agents.id),
+          eq(agentNodeBindings.nodeId, nodeId),
+          eq(agentNodeBindings.status, 'active'),
+        ))
+        .where(and(
+          eq(actionInvocations.workspaceId, workspaceId),
+          eq(actionInvocations.id, authorization.invocationId),
+          eq(actionInvocations.actionName, 'release'),
+          eq(actionInvocations.invocationOrigin, 'builtin'),
+          inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked']),
+          or(
+            and(
+              isNull(actionInvocations.dispatchedNodeId),
+              eq(actionInvocations.handlerNodeId, nodeId),
+            ),
+            and(
+              eq(actionInvocations.dispatchedNodeId, nodeId),
+              eq(actionInvocations.dispatchedProvider, providerName),
+            ),
+          ),
+          ...(authorization.expectedTokenHash !== undefined
+            ? [sql`json_extract(${actionInvocations.input}, '$.expected_token_hash') = ${authorization.expectedTokenHash}`]
+            : []),
+          ...(authorization.expectedAgentId !== undefined
+            ? [sql`json_extract(${actionInvocations.input}, '$.expected_agent_id') = ${authorization.expectedAgentId}`]
+            : []),
+        ));
+      if (!authorized) {
+        await this.db
+          .update(actionInvocations)
+          .set({
+            status: 'failed',
+            error: authorization.expectedAgentId
+              ? 'agent_identity_mismatch'
+              : 'agent_release_generation_conflict',
+            completedAt: new Date(),
+          })
+          .where(and(
+            eq(actionInvocations.workspaceId, workspaceId),
+            eq(actionInvocations.id, authorization.invocationId),
+            inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked']),
+          ));
+        return false;
+      }
+
+      // The authorization query resumes in the same in-process socket owner
+      // that performs this synchronous send. With no await in between, a token
+      // rotation cannot interleave after acceptance but before the frame is
+      // handed to the provider. Remote owners implement this proof inside
+      // their own serialized send boundary.
+      return this.sendToProviderUnchecked(
+        workspaceId,
+        nodeId,
+        providerName,
+        this.actionInvokeWithCaller(workspaceId, nodeId, providerName, message, authorized),
+      );
+    }
+
+    // V1 carried no dispatch-attempt generation. Reject it explicitly so an
+    // engine upgraded ahead of a remote socket owner cannot mistake the old
+    // proof contract for generation-safe acceptance during a rolling deploy.
+    if (authorization.kind === 'registered-node-action-v1') return false;
+
+    if (authorization.kind === 'registered-node-action-v2') {
+      if (
+        message.invocation_id !== authorization.invocationId
+        || message.action !== authorization.actionName
+      ) {
+        return false;
+      }
+      const [accepted] = await this.db
+        .update(actionInvocations)
+        // Commit an immutable acceptance marker before the synchronous handoff
+        // below so a stale dispatcher cannot mistake a later FK-null prune for
+        // work that never reached the provider. Keep the public lifecycle state
+        // `dispatched` until the provider reports progress or completion.
+        .set({ providerAcceptedAttempt: authorization.dispatchAttempt })
+        .where(and(
+          eq(actionInvocations.workspaceId, workspaceId),
+          eq(actionInvocations.id, authorization.invocationId),
+          eq(actionInvocations.invocationOrigin, 'registered_action'),
+          eq(actionInvocations.actionId, authorization.actionId),
+          eq(actionInvocations.actionName, authorization.invocationActionName),
+          eq(actionInvocations.dispatchedNodeId, nodeId),
+          eq(actionInvocations.dispatchedProvider, providerName),
+          eq(actionInvocations.dispatchAttempts, authorization.dispatchAttempt),
+          or(
+            isNull(actionInvocations.providerAcceptedAttempt),
+            sql`${actionInvocations.providerAcceptedAttempt} <> ${authorization.dispatchAttempt}`,
+          ),
+          eq(actionInvocations.status, 'dispatched'),
+          sql`EXISTS (
+            SELECT 1 FROM ${actions}
+            WHERE ${actions.workspaceId} = ${workspaceId}
+              AND ${actions.id} = ${authorization.actionId}
+              AND ${actions.name} = ${authorization.actionName}
+              AND ${actions.handlerNodeId} = ${nodeId}
+              AND COALESCE(${actions.handlerProvider}, ${DEFAULT_PROVIDER_NAME}) = ${providerName}
+              AND ${actions.isActive} = 1
+          )`,
+        ))
+        .returning({
+          id: actionInvocations.id,
+          callerId: actionInvocations.callerId,
+          callerName: actionInvocations.callerName,
+        });
+      if (!accepted) return false;
+
+      // No await occurs after the exact identity update resumes and before the
+      // synchronous socket handoff. A prune/replacement must therefore win
+      // before authorization or after this frame has already been accepted.
+      return this.sendToProviderUnchecked(
+        workspaceId,
+        nodeId,
+        providerName,
+        this.actionInvokeWithCaller(workspaceId, nodeId, providerName, message, accepted),
+      );
+    }
+
+    if (
+      message.invocation_id !== authorization.invocationId
+      || message.agent_id !== authorization.handlerAgentId
+    ) {
+      return false;
+    }
+    // The socket owner commits the exact action generation, delivery route,
+    // and accepted attempt in one CAS before handing off the frame. Deleting
+    // the action immediately after this point may clear action_id via the FK,
+    // but cannot make cleanup fail or reroute work that the handler owns.
+    const acceptedAttempt = authorization.recordAttempt
+      ? sql`COALESCE(${actionInvocations.dispatchAttempts}, 0) + 1`
+      : actionInvocations.dispatchAttempts;
+    const [accepted] = await this.db
+      .update(actionInvocations)
+      .set({
+        status: 'dispatched',
+        handlerNodeId: sql`COALESCE(${actionInvocations.handlerNodeId}, ${nodeId})`,
+        dispatchedNodeId: nodeId,
+        dispatchedProvider: providerName,
+        dispatchedAt: new Date(),
+        retryAfterAt: null,
+        providerAcceptedAttempt: acceptedAttempt,
+        ...(authorization.recordAttempt ? {
+          attemptedNodeIds: sql`json_insert(COALESCE(${actionInvocations.attemptedNodeIds}, '[]'), '$[#]', ${nodeId})`,
+          dispatchAttempts: acceptedAttempt,
+        } : {}),
+      })
+      .where(and(
+        eq(actionInvocations.workspaceId, workspaceId),
+        eq(actionInvocations.id, authorization.invocationId),
+        eq(actionInvocations.invocationOrigin, 'registered_action'),
+        eq(actionInvocations.actionId, authorization.actionId),
+        eq(actionInvocations.actionName, message.action),
+        inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked']),
+        eq(actionInvocations.handlerAgentId, authorization.handlerAgentId),
+        eq(actionInvocations.handlerNodeId, nodeId),
+        sql`EXISTS (
+          SELECT 1 FROM ${actions}
+          INNER JOIN ${agents}
+            ON ${agents.workspaceId} = ${workspaceId}
+           AND ${agents.id} = ${authorization.handlerAgentId}
+           AND ${agents.status} = 'active'
+           AND ${agents.locationType} = 'via_node'
+           AND ${agents.locationNodeId} = ${nodeId}
+           AND ${agents.providerName} = ${providerName}
+          WHERE ${actions.workspaceId} = ${workspaceId}
+            AND ${actions.id} = ${authorization.actionId}
+            AND ${actions.name} = ${message.action}
+            AND ${actions.handlerAgentId} = ${authorization.handlerAgentId}
+            AND ${actions.handlerNodeId} IS NULL
+            AND ${actions.isActive} = 1
+        )`,
+      ))
+      .returning({
+        id: actionInvocations.id,
+        callerId: actionInvocations.callerId,
+        callerName: actionInvocations.callerName,
+      });
+    if (!accepted) return false;
+
+    // No await occurs between the acceptance CAS above resuming and
+    // this in-process socket owner accepting the frame. Remote owners
+    // implement the same serializable contract inside their own send boundary.
+    // `action.invoke` is never rejected by the send itself here (an
+    // unreachable provider queues it), so a recorded attempt always has a
+    // frame behind it.
+    return this.sendToProviderUnchecked(
+      workspaceId,
+      nodeId,
+      providerName,
+      this.actionInvokeWithCaller(workspaceId, nodeId, providerName, message, accepted),
+    );
+  }
+
+  private actionInvokeWithCaller(
+    workspaceId: string,
+    nodeId: string,
+    providerName: string,
+    message: Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }>,
+    snapshot: ActionCallerSnapshot,
+  ): Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }> {
+    // Discard fields supplied by earlier layers. Only the snapshot returned by
+    // the final authorization statement is allowed to authenticate a caller.
+    const { caller_id: _callerId, caller_name: _callerName, ...base } = message;
+    const connection = this.providerConnection(this.nodeKey(workspaceId, nodeId), providerName);
+    if (!connection?.callerAwareActions?.has(message.action) || !snapshot.callerId) return base;
+    return {
+      ...base,
+      caller_id: snapshot.callerId,
+      ...(snapshot.callerName ? { caller_name: snapshot.callerName } : {}),
+    };
+  }
+
+  private async sendToProviderUnchecked(
+    workspaceId: string,
+    nodeId: string,
+    providerName: string,
+    message: FleetRelaycastToBrokerMessage,
+  ): Promise<boolean> {
     const nodeKey = this.nodeKey(workspaceId, nodeId);
     if (
       message.type === 'deliver'
@@ -250,11 +527,16 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     }
     const socket = this.providerSocket(nodeKey, providerName);
     if (socket) {
+      let socketAccepted = false;
       try {
         socket.send(JSON.stringify(message));
-        return true;
+        socketAccepted = true;
       } catch {
         this.detachProvider(workspaceId, nodeId, providerName);
+        if (message.type !== 'action.invoke') return false;
+      }
+      if (socketAccepted) {
+        return true;
       }
     }
 
@@ -327,6 +609,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     providerName: string,
     instanceId: string,
     connectionId: string,
+    callerAwareActions: readonly string[] = [],
   ): void {
     const conn = this.nodeConnections.get(connectionId);
     if (!conn) return;
@@ -374,6 +657,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     }
     conn.providerName = providerName;
     conn.instanceId = instanceId;
+    conn.callerAwareActions = new Set(callerAwareActions);
     conn.lastSeen = Date.now();
     providers.set(providerName, connectionId);
   }
@@ -405,6 +689,26 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     if (!(conn.deliveryReadyAgentIds instanceof Set)) {
       conn.deliveryReadyAgentIds = new Set();
     }
+  }
+
+  providerDeliveryReadinessMode(
+    workspaceId: string,
+    nodeId: string,
+    providerName: string,
+    connectionId?: string | undefined,
+  ): 'immediate' | 'agent_scoped' | undefined {
+    const nodeKey = this.nodeKey(workspaceId, nodeId);
+    const currentConnectionId = this.providerConnId(nodeKey, providerName);
+    if (!currentConnectionId || (connectionId && currentConnectionId !== connectionId)) return undefined;
+    const conn = this.nodeConnections.get(currentConnectionId);
+    if (!conn || conn.workspaceId !== workspaceId || conn.nodeId !== nodeId || conn.providerName !== providerName) {
+      return undefined;
+    }
+    // `undefined` is "never configured on this connection" (no node.register
+    // yet), which is not a negotiated mode; null is immediate, a Set is
+    // agent-scoped — the same encoding isProviderAgentDeliveryReady reads.
+    if (conn.deliveryReadyAgentIds === undefined) return undefined;
+    return conn.deliveryReadyAgentIds === null ? 'immediate' : 'agent_scoped';
   }
 
   markProviderAgentsDeliveryReady(
@@ -446,6 +750,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       if (conn) {
         conn.providerName = undefined;
         conn.deliveryReadyAgentIds = undefined;
+        conn.callerAwareActions = undefined;
       }
     }
     this.nodeQueues.delete(this.providerQueueKey(nodeKey, providerName));
@@ -533,8 +838,8 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       handleClose: async () => this.onNodeConnectionClose(connectionId),
     };
     // Best-effort early flush (covers non-spawn frames that need no capacity);
-    // the authoritative drain fires post node.register/heartbeat once the node
-    // is marked online, so queued spawns can reserve capacity. See drainNode.
+    // the authoritative drain fires after node.register and after heartbeat
+    // liveness/capacity transitions once the node is dispatchable. See drainNode.
     void this.drainNode(workspaceId, nodeId);
     return handle;
   }
@@ -587,10 +892,14 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
    * chained so two drains never run at once (which could double-reserve spawn
    * capacity); each caller's promise resolves after its own drain pass runs.
    */
-  drainNode(workspaceId: string, nodeId: string): Promise<void> {
+  drainNode(
+    workspaceId: string,
+    nodeId: string,
+    options?: NodeDrainOptions,
+  ): Promise<void> {
     const key = this.nodeKey(workspaceId, nodeId);
     const prior = this.nodeDrainChains.get(key) ?? Promise.resolve();
-    const next = prior.catch(() => {}).then(() => this.drainNodeQueue(workspaceId, nodeId));
+    const next = prior.catch(() => {}).then(() => this.drainNodeQueue(workspaceId, nodeId, options));
     this.nodeDrainChains.set(key, next);
     void next.finally(() => {
       if (this.nodeDrainChains.get(key) === next) this.nodeDrainChains.delete(key);
@@ -598,9 +907,13 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     return next;
   }
 
-  private async drainNodeQueue(workspaceId: string, nodeId: string): Promise<void> {
+  private async drainNodeQueue(
+    workspaceId: string,
+    nodeId: string,
+    options?: NodeDrainOptions,
+  ): Promise<void> {
     if (!this.isNodeConnected(workspaceId, nodeId)) return;
-    await drainNodeInvocations(this.db, this, workspaceId, nodeId);
+    await drainNodeInvocations(this.db, this, workspaceId, nodeId, options);
     // The authoritative re-dispatch is DB-driven; clear the per-provider
     // in-memory buffers now that their frames have been re-sent.
     const nodeKey = this.nodeKey(workspaceId, nodeId);

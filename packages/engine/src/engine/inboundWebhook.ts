@@ -5,9 +5,11 @@ import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { generateId } from './snowflake.js';
 import { inboundWebhookMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
-import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
+import { runAtomicWrites, databaseConstraintKind, type AtomicWrite } from '../ports/database.js';
 import { buildChannelDeliveryWrite, fetchChannelDeliveryOutcomes } from './deliveryWrites.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
+import type { WorkspaceDeliveryPolicy } from './workspaceDeliveryPolicy.js';
+import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 
 type Db = ReturnType<typeof getDb>;
 const WEBHOOK_AGENT_NAME = '__relay_webhook__';
@@ -152,11 +154,23 @@ export async function deleteWebhook(db: Db, workspaceId: string, webhookId: stri
   return result.length > 0;
 }
 
+function rethrowMailboxError(error: unknown): never {
+  const kind = databaseConstraintKind(error);
+  if (kind === 'mailbox_capacity') {
+    throw codedError('A recipient mailbox is full; retry this event after capacity becomes available', 'mailbox_full', 503);
+  }
+  throw error;
+}
+
 export async function triggerWebhook(
   db: Db,
   webhookId: string,
   token: string | null,
   data: { text?: string; source?: string; author?: string; payload?: Record<string, unknown> },
+  options: {
+    mailbox?: MailboxConfig | ((workspaceId: string) => MailboxConfig);
+    workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy | ((workspaceId: string) => WorkspaceDeliveryPolicy | undefined | Promise<WorkspaceDeliveryPolicy | undefined>);
+  } = {},
 ) {
   // Look up webhook
   const [webhook] = await db
@@ -187,28 +201,62 @@ export async function triggerWebhook(
   if (!webhook.createdBy) {
     throw codedError('Webhook has no associated agent and cannot post messages', 'webhook_no_agent', 422);
   }
+  const postingAgentId = webhook.createdBy;
 
   // Create message in the bound channel using the webhook creator's identity
   const messageId = generateId();
-  const [message] = await db
-    .insert(messages)
-    .values({
-      id: messageId,
-      workspaceId: webhook.workspaceId,
-      channelId: webhook.channelId,
-      agentId: webhook.createdBy,
-      body: text,
-      metadata: {
-        ...inboundWebhookMessageMetadata({
-          webhookId: webhook.id,
-          webhookName: webhook.name,
-          source: data.source ?? null,
-          author,
-        }),
-        ...sanitizeUserMessageMetadata(data.payload),
-      },
-    })
-    .returning();
+  const metadata = {
+    ...inboundWebhookMessageMetadata({
+      webhookId: webhook.id,
+      webhookName: webhook.name,
+      source: data.source ?? null,
+      author,
+    }),
+    ...sanitizeUserMessageMetadata(data.payload),
+  };
+  // Legacy tokenless hooks accept arbitrary public payloads. Preserve their
+  // metadata, but do not let an unauthenticated session_ref allocate a durable
+  // replay-ledger row. Token-protected hooks may opt into replay correlation.
+  const sessionRef = webhook.tokenHash ? requireSessionRefFromMetadata(metadata) : null;
+  const createdAt = new Date();
+  const mailbox = typeof options.mailbox === 'function' ? options.mailbox(webhook.workspaceId) : options.mailbox ?? {
+    ttlMs: DEFAULT_MAILBOX_TTL_MS, depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
+  };
+  const workspacePolicy = typeof options.workspaceDeliveryPolicy === 'function'
+    ? await options.workspaceDeliveryPolicy(webhook.workspaceId)
+    : options.workspaceDeliveryPolicy;
+  const results = await runAtomicWrites(db, (writeDb) => {
+    const writes: AtomicWrite[] = [
+      writeDb
+        .insert(messages)
+        .values({
+          id: messageId,
+          workspaceId: webhook.workspaceId,
+          channelId: webhook.channelId,
+          agentId: postingAgentId,
+          body: text,
+          metadata,
+          sessionRef,
+          createdAt,
+        })
+        .returning(),
+    ];
+    const sessionWrite = buildMessageSessionWrite(
+      writeDb,
+      webhook.workspaceId,
+      sessionRef,
+      createdAt,
+    );
+    if (sessionWrite) writes.push(sessionWrite);
+    writes.push(buildChannelDeliveryWrite(writeDb, {
+      workspaceId: webhook.workspaceId, messageId, channelId: webhook.channelId,
+      senderAgentId: postingAgentId, mode: 'immediate',
+      ttlMs: mailbox.ttlMs, depthCap: mailbox.depthCap, rejectOnOverflow: true,
+      workspacePolicy,
+    }));
+    return writes;
+  }, { requireAtomic: true }).catch(rethrowMailboxError);
+  const [message] = results[0] as (typeof messages.$inferSelect)[];
 
   // Get channel name
   const [channel] = await db
@@ -216,7 +264,12 @@ export async function triggerWebhook(
     .from(channels)
     .where(eq(channels.id, webhook.channelId));
 
+  const outcomes = await fetchChannelDeliveryOutcomes(db, {
+    messageId, channelId: webhook.channelId, senderAgentId: postingAgentId,
+  });
   return {
+    _deliveries: outcomes.deliveries,
+    _delivery_rejections: outcomes.rejections,
     message_id: message.id,
     agent_id: message.agentId,
     webhook_id: webhook.id,
@@ -244,7 +297,7 @@ export async function triggerIntegrationMessage(
     webhookName?: string;
     mode?: 'wait' | 'steer';
   },
-  options: { mailbox?: MailboxConfig } = {},
+  options: { mailbox?: MailboxConfig; workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy } = {},
 ) {
   const postingAgentId = await ensureWebhookAgent(db, workspaceId);
   const messageId = generateId();
@@ -259,6 +312,8 @@ export async function triggerIntegrationMessage(
     }),
     ...sanitizeUserMessageMetadata(data.payload),
   };
+  const sessionRef = requireSessionRefFromMetadata(metadata);
+  const createdAt = new Date();
 
   const mailbox = options.mailbox ?? {
     ttlMs: DEFAULT_MAILBOX_TTL_MS,
@@ -280,9 +335,19 @@ export async function triggerIntegrationMessage(
           agentId: postingAgentId,
           body: data.text,
           metadata,
+          sessionRef,
+          createdAt,
         })
         .returning(),
     ];
+
+    const sessionWrite = buildMessageSessionWrite(
+      writeDb,
+      workspaceId,
+      sessionRef,
+      createdAt,
+    );
+    if (sessionWrite) writes.push(sessionWrite);
 
     writes.push(
       buildChannelDeliveryWrite(writeDb, {
@@ -293,11 +358,13 @@ export async function triggerIntegrationMessage(
         mode: data.mode === 'steer' ? 'next-tool-call' : 'immediate',
         ttlMs: mailbox.ttlMs,
         depthCap: mailbox.depthCap,
+        rejectOnOverflow: true,
+        workspacePolicy: options.workspaceDeliveryPolicy,
       }),
     );
 
     return writes;
-  });
+  }, { requireAtomic: true }).catch(rethrowMailboxError);
   const [message] = results[0] as (typeof messages.$inferSelect)[];
 
   const [channel] = await db

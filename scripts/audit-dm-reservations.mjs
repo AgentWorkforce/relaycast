@@ -17,7 +17,7 @@
  *                            path will never re-derive.
  *
  * IT ALSO EARNED ITS KEEP. Run against production it found 4 colliding pair
- * groups and 30 mismatched ids that would have aborted the deployment. All 30
+ * groups and 87 mismatched ids that would have aborted the deployment. All 87
  * were ORPHANED TWO-PARTY conversations, not self-DMs: `dm_participants.agent_id`
  * cascades on agent deletion, so an ordinary 1:1 collapses to a one-row roster
  * while its id still encodes the original pair. The backfill was reading those
@@ -30,17 +30,28 @@
  *
  * Git history says the derivation never changed — the only edit swapped node
  * crypto for web crypto with a byte-identical input string, and production
- * confirms it: 3425 two-party conversations, zero mismatches. This script exists
+ * confirms it: 2607 two-party conversations, zero mismatches. This script exists
  * because "stable in git history" and "zero rows in production disagree" are
  * different claims, and only the second one is evidence.
+ *
+ * WHICH DATABASE. Those figures are from `relaycast-cloud`, the D1 instance the
+ * production worker binds — resolve it through the SST resource
+ * `RelaycastDatabase`, never by the name that matches this repo. Two live
+ * instances carry DM data under confusingly close names and this script was
+ * first run against the wrong one; the finding replicated on both, so the
+ * conclusion held, but it held for the wrong reason until that was checked.
+ * The figures above were corrected on 2026-08-04 from the wrong-instance run
+ * (which reported 30 mismatches and 3425 two-party conversations).
  *
  * USAGE
  * ─────
  *   Self-hosted (SQLite file):
  *     node scripts/audit-dm-reservations.mjs --sqlite /path/to/relay.db
  *
- *   Hosted (Cloudflare D1) — feed it the rows, since D1 is not a local file:
- *     wrangler d1 execute <DB> --json --command \
+ *   Hosted (Cloudflare D1) — feed it the rows, since D1 is not a local file.
+ *   `--remote` is required: without it wrangler reads the LOCAL emulated
+ *   database and the audit silently reports on nothing.
+ *     wrangler d1 execute relaycast-cloud --remote --json --command \
  *       "SELECT dc.id, dc.workspace_id, dp.agent_id \
  *        FROM dm_conversations dc \
  *        JOIN dm_participants dp ON dp.conversation_id = dc.id \

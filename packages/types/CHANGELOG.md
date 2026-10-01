@@ -7,7 +7,94 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `internalTelemetryEventSchema` accepts optional `groups`, `set_once` and `process_person_profile`; `TelemetrySenderProperties`, `TelemetryGroups` and `TelemetryPersonSetOnce` describe them.
+
+
+## [8.14.0] - 2026-09-30
+
+### Added
+
+- Opted-in node-provider `action.invoke` frames may carry authenticated `caller_id` and `caller_name` provenance; exported metadata constants identify protocol version `v1`.
+
+## [8.13.0] - 2026-09-25
+
+### Added
+
+- `AgentSchema.address` and `CoreMessagePayloadSchema.agent_address` (optional) for `agent@machine` addressing.
+
+## [8.12.0] - 2026-09-24
+
+### Added
+
+- `MessageCreatedEvent` accepts the server-provided `created_at` timestamp used to keep replayed realtime messages in persisted creation order.
+
+## [8.11.0] - 2026-09-17
+
+- Add task action capability mode, correlated execution metadata, action.accept, and fenced final/interim result validation.
+
+## [8.9.0] - 2026-09-11
+
+### Added
+
+- Authenticated node registration replies identify the server admission contract so brokers can verify create-only provider binding, channel isolation, and guarded identity cleanup before spawning.
+
+## [8.7.0] - 2026-09-09
+
+### Added
+
+- `CreateAgentRequest.auto_join_general` allows explicit agent isolation from the default channel.
+
+## [8.6.0] - 2026-09-09
+
+### Changed
+
+- Workspace creation responses support the same API-key recovery contract for anonymous bootstrap idempotency replays.
+
+## [8.5.0] - 2026-09-06
+
+### Added
+
+- `ReleaseAgentRequest` accepts an optional lowercase SHA-256 `expected_token_hash` generation guard.
+
+## [8.4.0] - 2026-09-05
+
+### Changed
+
+- `CreateWorkspaceResponse` now requires the `api_key` returned by workspace creation and authenticated idempotent replays.
+
+## [8.3.0] - 2026-09-02
+
+### Added
+
+- `NODE_DELIVER_FRAME_EVENT_TYPES`, `NodeFrameKindSchema`, `isNodeDeliverFrameEventType`, and `nodeFrameKindFor` declare which event types nodes receive on the `deliver` frame (`message.created` and `thread.reply` durably; `message.read`, `message.reacted`, and the caller-addressed `action.completed`/`action.failed`/`action.denied`/`agent.exited`/`node.status.*` notifications best-effort); every other type travels as `context.update`.
+
+## [8.2.0] - 2026-08-21
+
+### Added
+
+- Workspace schemas define creation provenance and internal/external/unknown usage classification.
+
+## [8.1.0] - 2026-08-19
+
+### Added
+
+- `node.register` accepts placement-safe `repo_keys` and rejects path-shaped repository keys and tags. Keys are `owner/name` only; filesystem paths, UNC shares, clone URLs, and `.`/`..` segments are refused.
+
+## [8.0.7] - 2026-08-19
+
+### Added
+
+- Added effective message-retention and session replay result schemas, including retained, partial, aged-out, and unknown availability.
+
+## [8.0.6] - 2026-08-18
+
+### Added
+
+- Workspace creation and response schemas expose explicit expiry fields.
 
 ## [8.0.1] - 2026-08-14
 

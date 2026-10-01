@@ -120,6 +120,7 @@ describe('agent.exited + node.status durable events', () => {
       id: 'inv_release_c',
       workspaceId: ws.workspaceId,
       actionName: 'release',
+      invocationOrigin: 'builtin',
       input: { name: 'releasee' },
       status: 'dispatched',
       dispatchedNodeId: 'node_c',

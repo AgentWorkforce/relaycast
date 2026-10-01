@@ -8,8 +8,9 @@ import { camelizeKeys } from './casing.js';
 import { AgentClient } from './agent.js';
 import { HttpClient, type RetryPolicyInput } from './client.js';
 import { Relay } from './communicate/relay.js';
+import { RelayError } from './errors.js';
 import { SDK_ORIGIN } from './origin.js';
-import { RelayCast } from './relay.js';
+import { RelayCast, validateAnonymousKeyedBootstrapDestination } from './relay.js';
 import {
   AgentNotRegisteredError,
   MalformedApiResponseError,
@@ -25,6 +26,7 @@ import type {
   WorkspaceInfo,
 } from './setup-types.js';
 import type { WorkspaceLookup } from './types.js';
+import { toWorkspaceProvenanceInput } from './workspace-provenance.js';
 
 const DEFAULT_CLOUD_BASE_URL = 'https://cast.agentrelay.com';
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
@@ -58,6 +60,7 @@ interface CreateWorkspaceResult {
   workspaceId: string;
   apiKey: string;
   createdAt: string;
+  expiresAt?: string | null;
 }
 
 interface RequestConfig {
@@ -67,6 +70,7 @@ interface RequestConfig {
   body?: Record<string, unknown>;
   allowNotFound?: boolean;
   requireApiKey?: boolean;
+  headers?: Record<string, string>;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -263,7 +267,16 @@ export class RelaycastSetup {
       method: 'POST',
       path: '/v1/workspaces',
       schema: CreateWorkspaceResponseSchema,
-      body: { name: options.name },
+      body: {
+        name: options.name,
+        ...(options.expiresInSeconds !== undefined
+          ? { expires_in_seconds: options.expiresInSeconds }
+          : {}),
+        provenance: toWorkspaceProvenanceInput(options.provenance),
+      },
+      headers: options.idempotencyKey !== undefined
+        ? { 'Idempotency-Key': options.idempotencyKey }
+        : undefined,
       requireApiKey: true,
     });
 
@@ -277,6 +290,7 @@ export class RelaycastSetup {
         apiKey: workspace.apiKey,
         baseUrl: this.config.baseUrl,
         createdAt: workspace.createdAt,
+        ...(workspace.expiresAt !== undefined ? { expiresAt: workspace.expiresAt } : {}),
         name: options.name,
       },
       { retryPolicyInput: this.config.retryPolicyInput },
@@ -324,9 +338,15 @@ export class RelaycastSetup {
     method: 'GET' | 'POST',
     path: string,
     body?: Record<string, unknown>,
+    extraHeaders?: Record<string, string>,
   ): Promise<Response> {
     const url = new URL(path, this.config.baseUrl);
     const apiKey = await this.resolveApiKey();
+    const anonymousKeyedBootstrap =
+      !apiKey && extraHeaders?.['Idempotency-Key'] !== undefined;
+    if (anonymousKeyedBootstrap) {
+      validateAnonymousKeyedBootstrapDestination(this.config.baseUrl);
+    }
     const headers: Record<string, string> = {
       Accept: 'application/json',
       'X-SDK-Version': SDK_ORIGIN.version,
@@ -341,6 +361,7 @@ export class RelaycastSetup {
     if (method === 'POST') {
       headers['Content-Type'] = 'application/json';
     }
+    Object.assign(headers, extraHeaders ?? {});
 
     let attempt = 0;
 
@@ -348,10 +369,22 @@ export class RelaycastSetup {
       try {
         const response = await fetch(url.toString(), {
           method,
+          ...(anonymousKeyedBootstrap ? { redirect: 'manual' as const } : {}),
           headers,
           body: method === 'POST' ? JSON.stringify(body ?? {}) : undefined,
           signal: AbortSignal.timeout(this.config.requestTimeoutMs),
         });
+
+        if (
+          anonymousKeyedBootstrap &&
+          (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400))
+        ) {
+          throw new RelayError(
+            'transport_error',
+            'Refusing to follow an anonymous bootstrap redirect',
+            { statusCode: response.status, retryable: false },
+          );
+        }
 
         if (RETRY_STATUS_CODES.has(response.status) && attempt < this.config.retryPolicy.maxRetries) {
           const waitMs = response.status === 429
@@ -364,6 +397,9 @@ export class RelaycastSetup {
 
         return response;
       } catch (error) {
+        if (error instanceof RelayError) {
+          throw error;
+        }
         if (attempt >= this.config.retryPolicy.maxRetries) {
           throw error;
         }
@@ -379,10 +415,11 @@ export class RelaycastSetup {
     path,
     schema,
     body,
+    headers: extraHeaders,
     allowNotFound = false,
     requireApiKey = false,
   }: RequestConfig): Promise<TOutput | null> {
-    const response = await this.fetchWithRetry(method, path, body);
+    const response = await this.fetchWithRetry(method, path, body, extraHeaders);
 
     if (allowNotFound && response.status === 404) {
       return null;

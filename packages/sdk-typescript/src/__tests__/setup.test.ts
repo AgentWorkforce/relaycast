@@ -74,7 +74,130 @@ describe('RelaycastSetup', () => {
     expect(init.headers['X-Relaycast-Origin-Client']).toBe('@relaycast/sdk');
     expect(init.headers['X-Relaycast-Origin-Version']).toBeDefined();
     expect(init.headers.Authorization).toBeUndefined();
-    expect(JSON.parse(init.body)).toEqual({ name: 'Acme Ops' });
+    expect(init.redirect).toBeUndefined();
+    expect(JSON.parse(init.body)).toEqual({ name: 'Acme Ops', provenance: { source: 'sdk' } });
+  });
+
+  it('createWorkspace() forwards explicit provenance', async () => {
+    const { RelaycastSetup } = await import('../setup.js');
+    mockFetch.mockImplementation(() =>
+      jsonResponse({
+        ok: true,
+        data: { workspace_id: 'ws_ci', api_key: 'rk_live_ci', created_at: '2026-04-30T12:00:00.000Z' },
+      }, 201),
+    );
+
+    const setup = new RelaycastSetup();
+    await setup.createWorkspace({
+      name: 'CI',
+      provenance: { source: 'ci', originId: 'github:AgentWorkforce/relay/actions/runs/123', classification: 'internal' },
+    });
+
+    const [, init] = mockFetch.mock.calls[0]!;
+    expect(JSON.parse(init.body)).toEqual({
+      name: 'CI',
+      provenance: { source: 'ci', origin_id: 'github:AgentWorkforce/relay/actions/runs/123', classification: 'internal' },
+    });
+  });
+
+  it('createWorkspace() forwards the delegated idempotency key header', async () => {
+    const { RelaycastSetup } = await import('../setup.js');
+    mockFetch.mockImplementation(() =>
+      jsonResponse({
+        ok: true,
+        data: { workspace_id: 'ws_child', api_key: 'rk_live_child', created_at: '2026-04-30T12:00:00.000Z' },
+      }, 201),
+    );
+
+    const setup = new RelaycastSetup({ apiKey: 'rk_live_parent' });
+    await setup.createWorkspace({ name: 'child', idempotencyKey: 'cloud-job-371' });
+
+    const [, init] = mockFetch.mock.calls[0]!;
+    expect(init.headers.Authorization).toBe('Bearer rk_live_parent');
+    expect(init.headers['Idempotency-Key']).toBe('cloud-job-371');
+    expect(init.redirect).toBeUndefined();
+  });
+
+  it.each([
+    ['cross-origin', 'https://attacker.invalid/v1/workspaces'],
+    ['same-origin', 'https://cast.agentrelay.com/v1/workspaces'],
+  ])('createWorkspace() rejects a %s anonymous keyed redirect', async (_kind, location) => {
+    const { RelaycastSetup } = await import('../setup.js');
+    mockFetch.mockImplementation(() =>
+      Promise.resolve({
+        ok: false,
+        status: 307,
+        type: 'opaqueredirect',
+        headers: new Headers({ Location: location }),
+        text: () => Promise.resolve(''),
+      } as Response),
+    );
+
+    await expect(new RelaycastSetup().createWorkspace({
+      name: 'redirected',
+      idempotencyKey: 'setup-run-408-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e',
+    })).rejects.toMatchObject({
+      code: 'transport_error',
+      statusCode: 307,
+    });
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [, init] = mockFetch.mock.calls[0]!;
+    expect(init.redirect).toBe('manual');
+  });
+
+  it('createWorkspace() rejects anonymous keyed remote plaintext HTTP before dispatch', async () => {
+    const { RelaycastSetup } = await import('../setup.js');
+
+    await expect(new RelaycastSetup({
+      baseUrl: 'http://self-host.example',
+    }).createWorkspace({
+      name: 'insecure',
+      idempotencyKey: 'setup-run-408-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e',
+    })).rejects.toMatchObject({
+      code: 'transport_error',
+      statusCode: 400,
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('createWorkspace() permits anonymous keyed loopback HTTP with manual redirects', async () => {
+    const { RelaycastSetup } = await import('../setup.js');
+    mockFetch.mockImplementation(() =>
+      jsonResponse({
+        ok: true,
+        data: { workspace_id: 'ws_local', api_key: 'rk_live_local', created_at: '2026-09-10' },
+      }, 201),
+    );
+
+    await new RelaycastSetup({
+      baseUrl: 'http://127.0.0.1:8787',
+    }).createWorkspace({
+      name: 'local',
+      idempotencyKey: 'setup-run-408-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e',
+    });
+
+    const [url, init] = mockFetch.mock.calls[0]!;
+    expect(url).toBe('http://127.0.0.1:8787/v1/workspaces');
+    expect(init.headers['Idempotency-Key']).toBe('setup-run-408-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e');
+    expect(init.redirect).toBe('manual');
+  });
+
+  it('does not silently downgrade an explicitly empty idempotency key', async () => {
+    const { RelaycastSetup } = await import('../setup.js');
+    mockFetch.mockImplementation(() =>
+      jsonResponse({
+        ok: false,
+        error: { code: 'invalid_idempotency_key', message: 'Idempotency-Key must not be empty' },
+      }, 400),
+    );
+
+    const setup = new RelaycastSetup({ apiKey: 'rk_live_parent' });
+    await expect(setup.createWorkspace({ name: 'child', idempotencyKey: '' }))
+      .rejects.toMatchObject({ httpStatus: 400 });
+
+    const [, init] = mockFetch.mock.calls[0]!;
+    expect(init.headers['Idempotency-Key']).toBe('');
   });
 
   it('createWorkspace() uses a custom baseUrl and resolves apiKey functions per request', async () => {
@@ -125,6 +248,34 @@ describe('RelaycastSetup', () => {
     expect(lookupUrl).toBe('https://relay.example.test/v1/workspaces/by-name/Acme%20Ops');
     expect(lookupInit.method).toBe('GET');
     expect(lookupInit.headers.Authorization).toBe('Bearer rk_live_setup_2');
+  });
+
+  it('createWorkspace() forwards an explicit expiry and exposes the deadline', async () => {
+    const { RelaycastSetup } = await import('../setup.js');
+    mockFetch.mockImplementation(() =>
+      jsonResponse({
+        ok: true,
+        data: {
+          workspace_id: 'ws_ephemeral',
+          api_key: 'rk_live_ephemeral',
+          created_at: '2026-04-30T12:00:00.000Z',
+          expires_at: '2026-04-30T13:00:00.000Z',
+        },
+      }, 201),
+    );
+
+    const workspace = await new RelaycastSetup().createWorkspace({
+      name: 'CI Run',
+      expiresInSeconds: 3_600,
+    });
+
+    const [, init] = mockFetch.mock.calls[0]!;
+    expect(JSON.parse(init.body)).toEqual({
+      name: 'CI Run',
+      expires_in_seconds: 3_600,
+      provenance: { source: 'sdk' },
+    });
+    expect(workspace.info.expiresAt).toBe('2026-04-30T13:00:00.000Z');
   });
 
   it('createWorkspace() surfaces API errors with status and body', async () => {

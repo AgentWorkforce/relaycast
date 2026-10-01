@@ -6,6 +6,13 @@ Relaycast gives your agents shared channels, threads, DMs, reactions, files, sea
 
 See the [changelog](CHANGELOG.md) for release highlights and upgrade notes.
 
+Relayfile inbound targets scoped to `/github/repos/<owner>/<repo>/pulls/<number>/**`
+follow GitHub PR title changes and associated comments/reviews with the exact stable
+PR reference. New targets carry a server-issued, HMAC-bound opt-in; legacy targets
+retain literal matching. Deploy the Relaycast receiver and Relayfile cloud
+companion, then reprovision the binding with full repository read permission.
+Other globs retain literal path matching.
+
 ## Quick Start
 
 Install:
@@ -86,6 +93,19 @@ npx tsx quickstart.ts
 
 That is the canonical onboarding loop: create workspace, register agents, connect realtime streams, and watch messages flow live.
 
+`GET /v1/agents` and `GET /v1/agents/:name` derive presence without writing to
+the database: persisted `active` or legacy `online` agents silent for more than
+five minutes appear `offline`. Roster status filters run in SQL against that
+derived presence; `status=online` aliases `active`. Durable stale-status cleanup
+runs separately from reads.
+
+Workspace administrators can preview bounded registry reclamation with
+`POST /v1/agents/retention` (`retention_days: 30` by default). Physical deletion
+requires explicit `delete: true`; live/recent agents, every node association,
+and identities referenced by retained authorship are protected. See the
+[retention operator guide](docs/agent-retention.md) for eligibility limits,
+resumable bulk operation, migration requirements, and the dry-run CLI.
+
 Operator recovery for an offline agent registered before identity verifiers
 were stored uses `PATCH /v1/agents/:name/legacy-identity`. The endpoint accepts
 only a SHA-256 verifier (`identity_key_hash`) and atomically succeeds when the
@@ -95,7 +115,53 @@ valid lowercase SHA-256 verifier, but malformed registration values and claims
 return 400; already-claimed, non-offline, or concurrently changed records return
 409.
 
-Workspace names are not globally unique. Workspace creation is idempotent for the same workspace name and API key: repeating that combination returns the existing workspace instead of creating another one.
+Workspace names are not globally unique. Workspace creation is idempotent for the same workspace name and API key: repeating that combination returns the existing workspace instead of creating another one. For crash-retryable creates, send an `Idempotency-Key`; authenticated requests scope it to the owner, while anonymous bootstrap requests scope it to the deployment. The same key and request digest recover the exact workspace and usable API key, while a changed request is rejected with `409`.
+
+```ts
+const child = await RelayCast.createWorkspace('job-child', {
+  apiKey: parentWorkspaceKey,
+  expiresInSeconds: 60 * 60,
+  idempotencyKey: `job:${jobId}`,
+});
+```
+
+Fresh bootstrap callers use the same contract without an API key. Their
+`Idempotency-Key` is a narrowly scoped, reveal-once recovery capability, so it
+must be generated with a CSPRNG (for example, a v4 UUID or 16 random bytes
+hex-encoded — never a job id, timestamp, or counter) and persisted alongside
+the work so a genuine retry reuses the exact same value. The server only
+enforces a 32-character structural minimum; it cannot verify randomness:
+
+```ts
+const idempotencyKey = crypto.randomUUID(); // persist with the work; reuse it on retry
+const workspace = await RelayCast.createWorkspace('my-project', {
+  idempotencyKey,
+});
+```
+
+The child key is derived from the owner key (or the deployment bootstrap secret)
+and idempotency binding rather than stored in plaintext. Deleting or expiring
+the workspace terminalizes its binding; replaying the key cannot accidentally
+create a replacement. Unauthenticated by-name lookup never returns workspace
+credentials.
+
+Keyed anonymous bootstrap requires a stable server-side derivation secret.
+Self-hosted deployments must persist `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` (or
+provide `workspaceBootstrapSecret` in engine config); deployments without it
+return `503 workspace_create_idempotency_unavailable`. Never distribute that
+deployment-wide secret to hosted clients. Self-hosted operators that need the
+previous shared-secret proof can opt in with
+`RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED=true`; only then must callers
+also send `X-Workspace-Bootstrap-Secret`, and missing or invalid proof returns
+`401 workspace_create_bootstrap_secret_invalid` before a binding lookup.
+Unkeyed creates remain available and continue to generate a fresh API key.
+
+If workspace storage remains unavailable after its transient retries and the
+server cannot confirm the committed workspace/channel pair, creation returns
+`503 workspace_storage_unavailable`. The outcome is indeterminate: callers
+must not assume that no workspace committed, especially when retrying without
+a known workspace key. Database statements and bound parameters are never
+included in this or other uncoded infrastructure error responses.
 
 If you want an explicit SDK helper that tells you whether setup returned an existing workspace or created a new one, use `ensureWorkspace()`:
 
@@ -114,6 +180,44 @@ if (ensured.existed) {
 }
 ```
 
+### Workspace lifecycle
+
+Persistent workspaces are the default. For CI, previews, and other throwaway
+uses, opt into a lifetime of 60 seconds to 30 days when creating the workspace:
+
+```ts
+const temporary = await RelayCast.createWorkspace('ci-run', {
+  expiresInSeconds: 60 * 60,
+});
+
+console.log(temporary.workspaceId, temporary.expiresAt);
+```
+
+The server stores the resulting `expires_at` deadline and reaps expired rows in
+bounded batches. That explicit, non-null deadline is the entire safety
+predicate: a workspace is never selected for automatic deletion because of its
+name, age, lack of agents, or lack of messages. Callers that set a TTL consent
+to deletion of the workspace and all of its data at that deadline.
+
+A creator can also delete its workspace immediately. The exact workspace key
+must authenticate the id in the path:
+
+```bash
+curl -X DELETE "https://cast.agentrelay.com/v1/workspaces/$WORKSPACE_ID" \
+  -H "Authorization: Bearer $RELAY_API_KEY"
+```
+
+Success returns `204`. A missing or invalid key returns `401`; a valid key for a
+different workspace id returns `404`. The legacy authenticated
+`DELETE /v1/workspace` form remains available.
+
+Relaycast relies on `ON DELETE CASCADE`. Cloudflare D1 enforces foreign keys by
+default, equivalently to SQLite `PRAGMA foreign_keys = ON`; the Node adapter
+also enables that pragma explicitly. Deleting rows reduces the row count and
+associated insert/index work. Cloudflare does not document `VACUUM` as a
+supported D1 operation, so deletion must not be presented as shrinking the D1
+file itself.
+
 ## Why Relaycast
 
 Most multi-agent stacks need a communication layer but don’t want to build one.
@@ -128,9 +232,66 @@ Relaycast is the messaging backbone:
 - Search across history
 - Realtime events over WebSocket
 
+## Agent identity recovery
+
+Registration is create-only. A duplicate name returns `409 agent_already_exists`;
+the server never reclaims the row, rotates its token, or invents a suffixed
+name. The deprecated SDK helpers `registerOrRotate`, `registerOrGet`,
+`register_or_rotate`, and `register_or_get_agent` now preserve that fail-closed
+behavior.
+
+For durable workloads, generate a high-entropy proof, retain it with the work
+unit, and send only its lowercase SHA-256 verifier during registration. Recover
+by presenting the raw proof together with the immutable agent id:
+
+```ts
+const created = await relay.agents.register({
+  name: 'worker',
+  recoveryProofHash,
+  workUnitId: 'job-42',
+});
+
+const recovered = await relay.agents.recover({
+  name: created.name,
+  expectedAgentId: created.id,
+  recoveryProof,
+  reason: 'work-unit restart',
+});
+```
+
+The current agent token and the server-owned origin-node credential are also
+valid self-service recovery proofs. Workspace owners have an explicit
+`POST /v1/agents/{name}/takeover` escape hatch that requires the expected id,
+actor, reason, session reference, and node id; it appends an audit record and
+notifies a connected incumbent. `POST /v1/agents/{name}/revoke-token` is the
+separate immediate compromise path and clears both current and grace-period
+token slots. Ordinary recovery and self-rollover retain the prior token for the
+short rollover grace period.
+
 ## Error Handling
 
-API errors use `{ ok: false, error: { code, message } }`. Invalid or expired agent tokens return `agent_token_invalid` with HTTP 401; clients should recover by re-registering or rotating the agent identity, then retrying the failed operation.
+API errors use `{ ok: false, error: { code, message } }`. Invalid or expired
+agent tokens return `agent_token_invalid` with HTTP 401. Recover only with an
+explicit current-token, origin-node, or enrolled work-unit proof; use the
+audited owner takeover when those proofs are unavailable.
+
+### Throttling
+
+Two different conditions return HTTP 429, and the error code tells you which:
+
+| Code | What it is | Retry |
+| --- | --- | --- |
+| `rate_limit_exceeded` | Per-minute request ceiling | Always clears inside the window; `Retry-After` is at most 60 |
+| `plan_limit_exceeded` | Plan API-call quota for the current billing period | Clears only at the period boundary; `Retry-After` reports it |
+
+Both carry `Retry-After` and `X-RateLimit-Reset`; successful responses carry
+`X-RateLimit-Limit` and `X-RateLimit-Remaining`. `Retry-After` is authoritative
+— a value beyond your retry budget means retrying cannot help, so fail fast
+rather than spending the budget on it.
+
+`GET /v1/workspace` is limited in its own bucket, so the identity read used for
+credential validation and launch preflight stays reachable while the workspace's
+data-plane traffic sits at its ceiling.
 
 ## Telemetry Attribution
 
@@ -162,11 +323,11 @@ const relay = new RelayCast({
 `agent-relay-cli/agent/claude-code` or `pear/user/send-message-box`. (It
 replaced the older `harness` option and its `X-Relaycast-Harness` header.)
 
-Relaycast has no user table of its own — a workspace is an API-key row — so
-these identity fields are the only way hosted usage can be reported per person
-or per organization rather than only per workspace. `agentRelayUserId` doubles
-as the analytics person key when `agentRelayDistinctId` is unset, so a host that
-knows the user only has to set one field. `agentRelayMachineId` is sent
+An acting agent whose `metadata.cloud_user_id` is set attributes events to that
+user, ahead of these fields. Otherwise `agentRelayUserId`, then
+`agentRelayDistinctId`, is the analytics person key, so a host that knows the
+user only has to set one field. Without any of them an event belongs to the
+workspace and creates no person. `agentRelayMachineId` is sent
 *alongside* the person key rather than instead of it, which is what makes
 "how many machines share this workspace" and "are they one account or several"
 answerable.
@@ -179,6 +340,34 @@ Values must match `[A-Za-z0-9._:-]+` and stay within 120 characters for the org
 slug, 128 for the rest. Anything else is dropped — identity values are never
 truncated to fit, since a shortened id would be a different id and could
 attribute usage to the wrong person or organization.
+
+### Workspace usage attribution
+
+Workspace creation can also record immutable provenance. TypeScript SDK calls
+default to `source: "sdk"`; Rust callers pass provenance explicitly. Infrastructure
+that knows more should say so explicitly:
+
+```ts
+await RelayCast.createWorkspace('package-validation', {
+  provenance: {
+    source: 'ci',
+    originId: 'github:AgentWorkforce/relay/actions/runs/123456',
+    classification: 'internal',
+  },
+});
+```
+
+Sources are `api`, `sdk`, `cli`, `mcp`, `ci`, `relayflow`, `dashboard`, or
+`other`. Classification is `internal`, `external`, or `unknown`. These values
+are observability dimensions, not authentication or billing claims. Relaycast
+records the request's sanitized user, machine, organization, and origin-actor
+identity in the same workspace row; this adds no write to the message path.
+
+Existing workspaces remain `unknown` with `provenance: null`. Name and agent-name
+patterns can be useful investigation hints, but they cannot prove who created a
+historical workspace and are never promoted into recorded provenance. See
+[workspace usage attribution](docs/workspace-usage-attribution.md) for the
+hosted usage view, backfill boundary, and cost model.
 
 ## Core Concepts
 
@@ -212,7 +401,9 @@ await me.send('#general', 'Hello from Relaycast');
 const observer = new RelayCast({ apiKey: 'ot_live_...' });
 observer.connect();
 observer.on.messageCreated((event) => {
-  console.log(`[workspace] ${event.channel}: ${event.message.text}`);
+  // createdAt is the persisted server time; structured message data is
+  // delivered as message.metadata on both observer and direct-node streams.
+  console.log(`[workspace] ${event.createdAt} ${event.channel}: ${event.message.text}`, event.message.metadata);
 });
 observer.on.actionCompleted((event) => {
   console.log(`[workspace] ${event.actionName} ${event.status}`);
@@ -375,6 +566,11 @@ curl -X POST https://cast.agentrelay.com/v1/workspaces \
   -H "Content-Type: application/json" \
   -d '{"name": "my-project"}'
 
+# Create an explicitly ephemeral workspace that expires after one hour
+curl -X POST https://cast.agentrelay.com/v1/workspaces \
+  -H "Content-Type: application/json" \
+  -d '{"name": "ci-run", "expires_in_seconds": 3600}'
+
 # Register agent
 curl -X POST https://cast.agentrelay.com/v1/agents \
   -H "Authorization: Bearer rk_live_YOUR_KEY" \
@@ -400,15 +596,17 @@ Realtime transport:
 - Workspace keys create, rotate, list, and revoke observer tokens at `/v1/observer-tokens`; observer tokens are read-only and cannot mutate workspace state. Observer scopes grant read capabilities, while filters narrow resources. DM content requires both `dms:read` and `filters.include_dms: true`. Channel filters apply only to channel-scoped events; workspace-wide presence/status events require matching `agent_ids` or no agent filter.
 - `file.uploaded` stream events are emitted when the upload completes, before any message attachment exists, so observer filtering for that event is limited to `files:read`, `agent_ids`, `event_types`, and `created_after`. Channel and DM visibility are enforced when files are read through REST or as message attachments.
 
-Core endpoints:
+Core endpoints (relative to `/v1`):
 
 ```text
 POST   /workspaces
+DELETE /workspaces/:id             Delete the authenticated workspace (204; 401/404 on auth/id mismatch)
 GET    /agent                       Resolve the authenticated agent token
 POST   /agents
 POST   /channels
 POST   /channels/:name/messages
 GET    /channels/:name/messages
+GET    /sessions/:session_ref/messages?limit=<1-500>&after=<message-id>
 POST   /messages/:id/replies
 POST   /dm
 GET    /dm/conversations?limit=<1-100>  List the agent's newest DM conversations (limit optional)
@@ -418,8 +616,28 @@ GET    /activity
 GET    /workspace/events
 ```
 
+`GET /inbox` excludes archived channels from unread counts, and classifies mentions with the same
+exact `@handle` token contract used for delivery: escaped (`\@x`), email-address (`user@x`), prefix,
+and superstring text are not mentions. Mention results are limited to live channels the agent has
+joined or DMs the agent participates in.
+
 Activity feed channel-message items include `channel_id` and `channel_name`; DM items include
 `conversation_id`.
+
+`POST /dm` accepts `address` (`agent@machine`) in place of `to`. It resolves to the agent only
+while it is hosted on that machine (its broker node's name or `machine_id`, or a
+self-connected direct node's `machine_id`; legacy `@direct` stays valid). The published address
+uses the broker's `machine_id` when its name contains `@` or is `direct`.
+`POST /v1/agents` can take a normalized `direct_machine_prefix`; Relaycast appends the agent id
+and returns the resulting address at registration. A cloud sandbox is a broker node, so a sandboxed
+agent's address uses the sandbox's node name; once the sandbox is torn down the agent has no address
+(`address: null`) until it is hosted again. Agents expose their address as `address` on agent
+resources, and each DM carries the sender's as `message.agent_address`, so a recipient can reply on
+it. A stale address returns `404 address_not_found`, including when the agent moves while the send
+is in flight; a malformed one returns `400 invalid_address`. Names may contain `@`: each `@` is
+tried as the separator, and an address that reads as two different agents returns
+`400 ambiguous_address`. An idempotent retry replays even if the agent has moved; reusing the key
+for another address, or for a send by name, is a `409`.
 
 `POST /dm` can return **`409 dm_conversation_id_collision`**. A 1:1 conversation id is derived
 deterministically from `(workspace, sorted agent pair)`, and that binding is reserved
@@ -455,6 +673,26 @@ Messages are retained indefinitely by default; a workspace's `retention.message_
 setting (or a deployment-wide default — the hosted service uses 30 days; self-host:
 `RELAYCAST_MESSAGE_TTL_DAYS`) enables pruning of older messages.
 
+For replay correlation, stamp message metadata with the opaque `session_ref` and resolve it
+with a workspace key through `GET /sessions/:session_ref/messages` or
+`relay.messages.bySessionRef(sessionRef)`. The lookup is bounded, cursor-paginated, and backed
+by a numeric-message-order index scoped to `(workspace_id, session_ref)`; it never scans JSON
+message history. A trusted writer's opaque key is limited to 1–255 Unicode code points and an
+invalid `session_ref` is rejected instead of silently omitted from the index. Its live
+`availability` is `retained`, `partial`, `aged_out`, or `unknown`. `partial` means the session
+crosses the current retention boundary or its true start cannot be proven, while `unknown` means
+the boundary or lookup could not be established and must never be presented as replayable. A
+payload-free session ledger
+survives message pruning so an aged-out session remains distinguishable from an unknown or
+never-observed reference. `GET /workspace` reports the same effective message-retention policy,
+including the calculated `retained_since` boundary or `never_prune` cold storage.
+Sessions first discovered by migration report `partial` with
+`reason: pre_migration_history_unknown`, because surviving rows cannot prove when the session
+actually began.
+Legacy tokenless inbound webhooks preserve payload metadata but do not treat an arbitrary
+`payload.session_ref` as trusted replay evidence; agent sends, internal integrations, and
+token-protected webhooks do.
+
 Canonical realtime/subscription event names are dotted and shared across WebSocket
 and outbound subscriptions: `message.created`, `message.reacted`, `message.read`,
 `delivery.accepted`, `delivery.delivered`, `delivery.deferred`, `delivery.failed`,
@@ -479,18 +717,63 @@ authenticated activity renews the lease. Releasing an agent dispatches to its
 live host when one exists. If the host is absent or offline, a normal release
 fails explicitly with `agent_host_unavailable` instead of creating an ownerless
 pending invocation. A `delete_agent` request can be completed locally in that
-case: Relaycast deactivates bindings and deletes the record and its implicit
-direct node.
+case: Relaycast deactivates bindings, frees the live name, and removes its
+implicit direct node. Irreversible releases and agent deletion require a database
+transaction or atomic batch; adapters without either capability are refused
+before identity, membership, or queued deliveries change. Successful cleanup
+dead-letters the released agent's active deliveries in the same atomic write.
+Cleanup callers that retain the issued agent token can
+send its SHA-256 hash as `expected_token_hash`; Relaycast then rejects a stale
+release with `agent_release_generation_conflict` before dispatch or completion,
+so a same-name takeover is left untouched.
+
+`GET /nodes` pushes `capability`, `name`, and a liveness `status` selector
+into its SQL query instead of fetching the full roster and filtering in JS.
+Without `history`, the response stays the legacy bare array every existing
+caller already handles; `status=online` is the server-filtered live-Fleet
+path a default listing should use, since it never reads or returns
+history no matter how many dead rows a workspace has accumulated.
+`history=true` switches to a bounded, paginated contract
+(`{ nodes, next_cursor }`, paged with `cursor`/`limit`) for an explicit full
+read (e.g. `--all`): it visits and returns every matching row exactly once,
+with no silent truncation, however large the retained history is. Each
+entry's `active_agents` is authoritative live occupancy only while `live` is
+`true`; once a node goes offline, `active_agents` is a frozen historical
+value and `active_agents_stale` is `true` — callers must not present it as
+current capacity.
 
 Fleet node presence is also published to workspace-key observer streams as the
 ephemeral `node.online`, `node.heartbeat`, and `node.offline` events. Each
 carries a `node` payload matching the `GET /nodes` roster entry (capabilities,
-tags, `load`, `active_agents`/`max_agents`, `handlers_live`,
+tags, `load`, `active_agents`/`active_agents_stale`/`max_agents`, `handlers_live`,
 `last_heartbeat_at`), so a single event fully refreshes a node's row.
 `load` is normalized managed-agent capacity utilization and remains `null`
 unless a direct node, or every constituent provider of a broker node,
 explicitly reports a genuine measurement;
 `max_agents: 0` means unlimited capacity, not zero capacity.
+
+A node can advertise which repositories it has a checkout of by sending
+`repo_keys` on `node.register`: a list of public `owner/name` keys. Relaycast
+persists each as a `repo:<owner/name>` node tag so placement and the existing
+roster readers consume one shape. Keys are `owner/name` only — filesystem paths,
+Windows paths, UNC shares, clone URLs, `.`/`..` segments, and deeper paths are
+rejected with `invalid_message`, so a checkout's location on disk never reaches
+the roster. Because placement matches a node to an assignment by its `repo:` tag,
+`repo_keys` is the *only* source of those tags: when a registration carries the
+field at all — including as an empty list, meaning "I serve no repository" —
+every caller-supplied `repo:` tag in `tags` is dropped rather than merged, so a
+node cannot claim work for a repository it did not vouch for. Non-`repo:` tags
+always round-trip untouched. Registrations that omit `repo_keys` entirely are
+pre-`repo_keys` clients and keep their legacy `repo:` tags, so brokers that
+support the field should always send it — `[]` included — rather than omitting it.
+
+The `cloud:` tag namespace is reserved for the control plane's lifecycle
+identity (sandbox provider, node type, sandbox id, route). Only enrollment
+(`POST /v1/nodes`) sets or clears `cloud:*` tags. A broker `node.register`
+keeps the node's current `cloud:*` tags, and any `cloud:*` entry in the frame's
+own `tags` is ignored and logged server-side rather than stored; the
+registration itself still succeeds. To change or remove a `cloud:*` tag,
+re-enroll the node.
 
 Nodes are first-class delivery hosts and every agent has a node route. `kind`
 describes transport (`ws`, `http_push`, or `poll`), `role` describes ownership
@@ -499,9 +782,48 @@ describes the wire contract. Directly connected agents are implicit
 `kind: "ws", role: "direct"` nodes, broker-controlled agents bind to
 `kind: "ws", role: "broker"` nodes over `/v1/node/ws`, and both use the same
 `ws.node.v1` `deliver` frame. Agent-targeted receipt/failure notifications are
-best-effort `context.update` frames on the same node stream. HTTP push nodes default to one bound agent, which
+best-effort `context.update` frames on the same node stream. Which event types ride the
+`deliver` frame at all is declared once in `@relaycast/types`
+(`NODE_DELIVER_FRAME_EVENT_TYPES` / `nodeFrameKindFor`) — durably for `message.created`
+and `thread.reply`, best-effort with no delivery row for `message.read`, `message.reacted`,
+and the caller-addressed `action.completed`/`action.failed`/`action.denied`/`agent.exited`/
+`node.status.*` notifications; every other type is a best-effort `context.update`. HTTP push nodes default to one bound agent, which
 makes the common "one remote agent, one endpoint" shape explicit while still
 allowing larger broker-style endpoints with `max_agents`.
+
+Enrollment resolves an existing node by `node_id`, then `name`, then
+`machine_id`. That last step keeps the roster bounded: a fleet host that
+persists no `node_id` enrolls under a fresh name on every boot, and matching on
+name alone left each boot's row behind forever. Passing `machine_id` rotates
+the machine's existing `broker` node instead. Only `broker` nodes are matched
+this way — a machine legitimately runs many `direct` node-of-one delivery hosts
+— and passing an explicit `node_id` pins identity, which is how you run two
+brokers on one machine. The value is recorded on the node and returned on
+roster entries.
+
+Reuse requires the matched row to have proved it was alive — an actual heartbeat
+frame, recorded in `proven_live_at` — and for that proof to have gone stale.
+`last_heartbeat_at` cannot serve here: registration and disconnect cleanup write
+it too, so it does not distinguish a node that connected from one that proved
+it was running. The proof is cleared whenever enrollment re-issues a row's
+token, so a row cannot be taken twice before its new holder proves itself.
+
+That last guarantee holds within one server process: enrollments keyed on a
+machine are serialized in-process, the same mechanism node-control operations
+use. It is not cross-isolate atomic, so on a multi-isolate deployment two
+enrollments resolving the same stale row concurrently can still both rotate it.
+The window is narrow and self-correcting — matching resolves oldest-first — but
+it is a serialization boundary, not a distributed lock. A row that has never connected is
+never reused, because that case cannot be told apart from two hosts cold-booting
+from one snapshot or baked image: they enroll moments apart, neither has
+heartbeated, and adopting the first row would overwrite its token so the first
+host is handed a working-looking credential that silently stops authenticating.
+A live broker is likewise never adopted, nor one whose heartbeat is in the
+future (a server clock rollback, where the node may still be running).
+
+The trade is deliberate: a host that enrolls and never connects is not deduped,
+so this bounds the roster for hosts that actually join the fleet. Rows that
+never connect are reclaimed by the roster reaper instead.
 
 ```ts
 const node = await relay.nodes.create({
@@ -522,7 +844,16 @@ const node = await relay.nodes.create({
 });
 
 await relay.nodes.bindAgent(node.name, { agentName: 'billing-agent' });
+
+// Safe by default: refuses online nodes and nodes with hosted actions.
+await relay.nodes.delete(node.id);
+
+// Use only after deliberately choosing to detach a live node and remove its actions.
+await relay.nodes.delete(node.id, { force: true });
 ```
+
+Node deletion is not retried automatically. If a transport failure makes the
+result ambiguous, check the immutable node id before choosing whether to retry.
 
 The node delivery contract controls how Relaycast sends future deliveries for bound
 agents. Built-in HTTP push auth modes are `none`, `bearer`, `static_headers`, and
@@ -556,6 +887,10 @@ remains exported as a deprecated alias for the old, http-push-only name.)
 They must also call `sweepExpiredDeliveries` to transition expired mailbox rows in
 bounded D1-safe batches and emit sender failure notices. Inbox and delivery reads do
 not run maintenance; they remain available if a scheduled cleanup attempt fails.
+Workspace-lifecycle hosts should schedule `reapExpiredWorkspaces`; every call also
+drains the durable post-commit file-cleanup outbox. Hosts that do not run workspace
+expiry can schedule the exported `drainFileCleanup` helper directly. The Node
+self-host adapter runs this maintenance on its local timer.
 Adapters that terminate `/v1/node/ws` outside the engine request handler should delegate
 node control frames to `handleNodeControlMessage` from `@relaycast/engine/node-control`:
 the handler only needs `{ db, registry, workspaceId, nodeId, socket, raw }`, where
@@ -575,6 +910,17 @@ presence-only for node-hosted agents (the node binding is left intact so the
 still-running session keeps its deliveries); pass `{ deregister: true }` to follow the
 full `agent.deregister` teardown path that re-homes the agent to its direct node.
 
+The authenticated `node.register` acknowledgement may include
+`registration_contract: "relay:node-registration-v1"`. This is authored by the
+server, independently of `accepted_capabilities`, and is emitted only when the
+adapter confirms the connection's provider binding. It guarantees create-only
+`agent.register`, exact request-ID echo, authenticated provider and origin-node
+assignment, `auto_join_general: false`, and `expected_token_hash` enforcement on
+`POST /v1/agents/release`. Missing or unknown contracts do not establish support.
+Clients must correlate the acknowledgement to this connection and its expected
+provider before admitting fresh identities. Registration is not idempotent: a
+lost reply still requires retained ownership or name quarantine, not a retry.
+
 Broker nodes can negotiate restart-safe delivery cursor recovery by including
 `{ "name": "relay:delivery-cursor-v1", "kind": "capacity" }` in every
 `node.register`. Relaycast then adds the authoritative `delivery_ack_seq` for the
@@ -589,6 +935,22 @@ adapters accept this capability only when their `NodeConnectionRegistry` impleme
 the provider delivery-readiness hooks; adapters without those hooks remain on legacy
 immediate delivery and receive a rejected capability result.
 
+Node action providers negotiate authenticated caller provenance per capability.
+An action capability that includes metadata
+`{ "relay.action-caller": "v1" }` may receive optional `caller_id` and
+`caller_name` fields on its `action.invoke` frames. Relaycast derives those
+fields from the authenticated invocation record at the final socket-send
+boundary; provider input can neither set nor override them. If the caller has
+been deleted, both fields are omitted. Providers that do not advertise the
+exact metadata value receive the legacy frame shape, which preserves rolling
+upgrade compatibility with strict older parsers. The current TypeScript
+`NodeProviderClient` adds this metadata to each registered handler and exposes
+the values as `ctx.callerAgentId` and `ctx.callerAgentName`. Authorization-sensitive
+handlers must fail closed when `callerAgentId` is absent; a name alone is never
+an authenticated identity. Realtime adapters that terminate the provider socket
+outside the engine must apply the same durable re-read and negotiation inside
+their final serialized send boundary, including redispatch after reconnect.
+
 Queue/cron-backed adapters that own node dispatch outside the Node adapter should call
 `drainNodeInvocations` after node reconnect/register/heartbeat and
 `sweepTimedOutInvocations` from cron via `@relaycast/engine/node-invocations`.
@@ -602,6 +964,78 @@ input. Completion emits `action.completed` or `action.failed` to the caller's no
 workspace observers, and subscriptions. Action discovery is filtered by `available_to`
 for agent-token callers, workspace-key callers do not see restricted actions without
 an agent identity, and invoke enforces the same rule.
+
+For opted-in node providers, `action.invoke` also carries the live authenticated
+caller identity as optional `caller_id` and `caller_name`; see the node-provider
+negotiation above. These fields are transport authority, not action input.
+
+Action invocation retries are idempotent. `POST /v1/actions/:name/invoke` accepts an
+`Idempotency-Key` scoped to the authenticated workspace, agent, and action; replaying
+the same key and input returns the original `invocation_id` with
+`Idempotency-Replayed: true`. The engine stores an atomic durable invocation claim
+before provider dispatch, so a concurrent request or failed post-dispatch cache write
+cannot execute the provider twice. The TypeScript SDK generates one key per
+`actions.invoke()` call and preserves it across its automatic retries. The server
+trims leading and trailing whitespace from a supplied key, then requires the
+normalized value to contain 1-255 visible ASCII characters. A keyed invocation
+replay that reaches the narrow interval before its placement/dispatch outcome is
+durable returns retryable `idempotency_unavailable`; clients must retry the same
+logical request with the same key rather than minting a replacement.
+
+Long-running providers can register an action capability with
+`execution_mode: "task"` (for example `{name: "task.run", kind: "action", global:
+true, execution_mode: "task"}`). Task invocations use the existing authenticated
+agent `POST /v1/actions/:name/invoke` route and **require** `Idempotency-Key` plus
+`input.task_context`: `{run_id, step_id, dispatch_id, timeout_ms}`. Correlation
+identifiers are nonempty, at most 512 characters, and have no surrounding
+whitespace; the timeout is an integer from 1 through 86400000 milliseconds. Keep
+both the key and input stable across caller retries. Node-addressed invokes and
+unkeyed triggers cannot invoke task actions.
+
+The fleet `action.invoke` adds `task_execution` containing the correlation IDs,
+an engine-issued `execution_id`, and an absolute `deadline`. Providers must
+persist the invocation, execution ID, and their immutable `worker_generation`
+before sending `{v: 1, id, type: "action.accept", invocation_id, execution_id,
+worker_generation}`. The correlated `reply` commits ownership as `running` and
+returns `newly_accepted: true` only for the winning transition. Replaying acceptance
+reconciles that generation and returns `newly_accepted: false` with the current
+state and result. A provider must reconcile its durable launch record on replay;
+it must never launch another worker just because the acceptance reply was lost.
+An ambiguous crash between acceptance and launch may end at the deadline rather
+than repeat an execution. Accepted tasks are not redispatched on the short action
+timeout, node loss, or reconnect. Before acceptance, redelivery may change the
+execution ID; stale IDs and mismatched worker generations are rejected.
+
+Task `action.result` frames require `id`, `execution_id`, `worker_generation`, and
+an explicit `final` flag, plus either JSON `output` or a nonempty `error`.
+`final: false` acknowledges observation without storing terminal output.
+`final: true` commits immutable output/failure and optional `accounting` (a map of
+nonnegative finite numeric counters) **before** the correlated positive `reply`.
+Identical final retries return the persisted receipt; conflicting finals fail
+with `task_result_conflict`. The provider should acknowledge its worker callback
+only after that receipt. Readiness, idle state, and process exit are not final
+results; a provider that loses its worker should submit an explicit final failure.
+
+The existing `GET /v1/actions/:name/invocations/:id` is authoritative after a caller
+restart or missed completion event. It includes `task_execution`, `running` or
+terminal status, output, error, and completion time. Provider reconciliation uses
+`action.accept` with the original fence; this does not broaden node-token HTTP
+access or permit node-owned HTTP completion. An elapsed deadline settles an
+unfinished task as `failed` with `task_deadline_exceeded` on read or sweep, never
+as successful readiness. Terminal event delivery is best effort; always reconcile
+with durable readback. Existing short actions and spawn readiness retain their
+current behavior. Deploy the engine contract before enabling task providers;
+providers must implement durable launch/result recovery before callers use them.
+
+For crash-safe agent cleanup, `POST /v1/agents/release-exact` requires the
+immutable `expected_agent_id` and a caller-persisted `Idempotency-Key`. The key
+is scoped to the workspace, authenticated caller principal, and `release` action;
+workspace-key callers share one workspace-key scope, so every logical operation
+must use its own unique key and independent callers must not reuse one another's
+keys. A replay returns the original terminal invocation with
+`Idempotency-Replayed: true` and does not enqueue another `action.invoked`
+webhook. A same-name replacement is never mutated, and reusing a key with a
+different payload returns `409 idempotency_key_reused`.
 
 Action registration is an idempotent assertion: re-registering an existing name
 (`POST /actions`) refreshes its description, handler, schemas, `available_to`, and
@@ -677,7 +1111,7 @@ POST   /v1/actions                   Register an action (agent-to-agent RPC)
 POST   /v1/actions/:name/invoke      Invoke an action (workspace-scoped / global alias)
 POST   /v1/nodes/:node/actions/:name/invoke  Invoke a node-addressed action
 DELETE /v1/nodes/:node/providers/:name       Remove a node provider
-POST   /v1/agents/:name/events       Emit an agent session event
+POST   /v1/agents/:name/events       Emit an agent session event (optional Idempotency-Key replays identical retries; status.changed requires payload.status)
 POST   /v1/directory/agents          Publish an agent to the directory
 GET    /v1/directory/search          Search the agent directory
 POST   /v1/route                     Skill-based agent routing
@@ -762,3 +1196,103 @@ Relaycast includes anonymous telemetry.
 ## License
 
 Apache-2.0
+
+
+### Agent subscription delivery
+
+Workspace owners can `POST /v1/agents/{name}/subscription-channel` to obtain an
+idempotent channel whose only permitted member is that exact agent identity.
+The response is a normal channel with its verified `members` list; setup returns 404 if the recipient is released before membership can be established. This operation
+does not rotate the agent token. The `agent-events-` channel prefix is reserved;
+routing metadata cannot be changed and other agents cannot join or be invited.
+An agent recreated under the same name gets a different channel, so old webhook
+subscriptions never transfer to its replacement. Removing the subscription deletes
+its webhook resources; a shared per-agent channel can remain for other resources.
+This is a delivery audience restriction, not a private-channel history API.
+
+Channel messages and thread replies resolve mention handles using ASCII letters, digits, underscores and hyphens. For example,
+`@build-reviewer_2` resolves the full handle, never `build`. Duplicate mentions
+produce one mention delivery. A backslash immediately before `@` escapes it;
+email addresses are not mentions. Mention delivery still requires membership in
+the channel and workspace authorization.
+
+Relayfile events and raw inbound hooks preserve distinct events in FIFO order for members present when
+accepted. Joining later does not backfill old delivery rows. A full recipient
+mailbox causes the entire inbound event to return **503 `mailbox_full`** with
+`Retry-After: 30`; neither a partial message nor partial deliveries are committed.
+The Relayfile producer must retry the same event ID and retain exhausted attempts in its
+DLQ. Raw hooks must retry rejected payloads; they do not claim Relayfile event-ID deduplication. No newest-only coalescing is applied. The normal mailbox TTL still applies:
+expired deliveries become inspectable dead letters, not acted-on receipts.
+Operators must drain/retry the DLQ before declaring an event matrix complete.
+
+Explicit `target_node` on built-in spawn honors fleet placement even when a
+legacy workspace-global node action named `spawn` exists; its caller allowlist
+continues to apply. A dispatch acknowledgement does not establish harness readiness.
+
+Verified spawn (`verify_ready: true`) fails with `spawn_target_unavailable` when the selected provider lacks a live handler heartbeat or connected socket. Unverified legacy requests retain queue behavior. Relayfile ingress preserves authenticated `providerEventType` and `resourceRef` as `provider_event_type` and `resource_ref` in message metadata, alongside the provider record. Generic file events do not imply PR, CI, or review semantics. Cloud sync envelopes are unwrapped to expose their provider payload in message metadata and formatting; this does not promote payload fields into authenticated event semantics.
+
+Readiness requests do not reroute registered global spawn handlers. Only a nonempty explicit `target_node` selects fleet placement around a legacy node alias; handlers that receive `verify_ready` must honor its completion contract. A deleted recipient leaves its old route memberless so a replacement cannot inherit delivery. Retire or replace the inventoried producer binding and webhook when deleting a subscriber; channel history remains for audit.
+
+Node-control `agent.deregister` requests with an `id` receive a correlated `reply`
+only after the binding has been removed and the agent moved offline. Requests
+without an `id` retain fire-and-forget behavior. Brokers performing owned identity
+cleanup must await that acknowledgement before requesting deletion.
+
+The signed Relayfile webhook request follows Relayfile's existing external event contract (`eventId`, `providerEventType`, `resourceRef`). These are verified vendor payload fields, not alternate spellings of Relaycast HTTP fields; Relaycast message metadata remains snake_case.
+
+### Workspace delivery capacity
+
+Hosts can supply `EngineConfig.workspaceDelivery.resolve` to resolve a workspace's
+current capacity asynchronously. All local message producers use this policy.
+Workspace overflow returns HTTP 429 with code `workspace_delivery_depth_exceeded`
+and `Retry-After: 30`; a required recipient's full mailbox remains `mailbox_full`
+(503). Reserves are carved out of the configured cap. Completed idempotent replays
+and operations that create no active delivery rows remain available at capacity.
+
+Outbound A2A DMs commit accepted egress with their guarded message before transport.
+Keep the same `Idempotency-Key` when retrying a transport failure: the admitted
+message can resume even when capacity is full. Engine adapters must apply migration
+`0057_a2a_egress.sql`; hosted adapters must schedule `sweepPendingA2aEgress(db)`.
+Recovery retains the remote message ID and sends the same egress identity in the
+HTTP `Idempotency-Key` header on every attempt. Delivery is at least once; receivers
+must deduplicate to prevent repeated effects.
+Webhook requests support `message/send` and `message/stream` and require a valid
+`params.message`; malformed or unsupported requests
+return HTTP 400 before admission, preserving a valid explicit JSON-RPC ID.
+Payloads carrying `method` are validated only as requests; callbacks without it
+retain response-schema validation and message/task correlation.
+A2A webhooks preserve explicit string or numeric JSON-RPC IDs. Missing IDs fall
+back to the request message ID or response message/task ID, including errors.
+RPC requests and webhooks with no correlation ID continue to omit the response ID.
+
+Inbound A2A message IDs are admitted once per workspace, authenticated actor and
+route scope for up to 24 hours, including concurrent requests and failed KV completion.
+The window is an upper bound: source pruning removes response content sooner and
+returns 410 while the identity is retained. After identity expiry/cleanup, the same
+key is fresh and may admit a new message. Stop automatic retries at that boundary.
+Completed inbound RPC KV records from published 8.9.1 are promoted against the
+retained source without repeating admission. Their SQL deadline starts at the
+original source time, conservatively preserving the old KV window. Malformed or
+unverifiable legacy records fail closed; an unreadable KV before SQL promotion
+returns 503. Promoted identities remain replayable during later KV outages.
+New admission checks the authenticated registration and token in the same SQL
+transaction as the message and counter; a concurrent change returns
+`401 a2a_registration_changed` without committing message effects.
+Migration `0059_a2a_inbound_admission.sql` adds the indexed inbound identity and
+workspace lookup indexes. The existing recovery sweep cleans expired identities.
+Source pruning scrubs the public response but preserves an identity/fingerprint
+tombstone until expiry: retry returns `410 a2a_message_not_retained` without
+recreating history. Workspace deletion removes the tombstone. Inbound KV caches
+retain only a message ID and digest; replay checks the SQL source state. A delayed
+completion cache write cannot extend the SQL window or block fresh-key reuse
+after identity expiry/cleanup, including reuse with a different payload.
+Credentialed A2A targets require HTTPS; unauthenticated public HTTP remains supported.
+Outbound A2A transport refuses redirects as terminal `502 a2a_redirect_forbidden`;
+credentials and message bodies are never forwarded automatically to a new URL.
+Transport retries use three 15-second attempts and at most two 30-second waits;
+429 honors bounded `Retry-After`. Invalid JSON/protocol responses are terminal.
+Accepted A2A retries are bounded to 24 hours. Deleted source messages or changed/deleted
+targets fail closed with typed 410 responses; terminal intents clear their payload.
+The existing recovery sweep also cleans expired intents. After cleanup, a reused
+key is a fresh request, so stop automatic retries after the 24-hour window.
+See [capacity regression and composition](packages/engine/scripts/CAPACITY-REGRESSION.md).

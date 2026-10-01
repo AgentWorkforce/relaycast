@@ -459,7 +459,7 @@ describe('relayfile invite consumption', () => {
     stopReview();
   });
 
-  it('can assume an existing invite identity via registerOrRotate without a name collision leak', async () => {
+  it('does not treat an invite name collision as authority to assume the identity', async () => {
     const server = new MockRelaycastServer();
     mockFetch.mockImplementation(server.handleFetch);
 
@@ -475,14 +475,13 @@ describe('relayfile invite consumption', () => {
     const secondJoin = await new RelaycastSetup({
       baseUrl: invite.relaycastBaseUrl,
     }).joinWorkspace(invite.workspaceId, invite.relaycastApiKey);
-    const secondIdentity = await secondJoin.relayCast().agents.registerOrRotate({
+    await expect(secondJoin.relayCast().agents.registerOrRotate({
       name: invite.agentName,
       type: 'agent',
-    });
+    })).rejects.toMatchObject({ code: 'name_conflict', statusCode: 409 });
 
-    expect(secondIdentity.name).toBe(invite.agentName);
-    expect(secondIdentity.id).toBe(firstIdentity.id);
-    expect(secondIdentity.token).not.toBe(firstIdentity.token);
+    expect(firstIdentity.name).toBe(invite.agentName);
+    expect(firstIdentity.token).toMatch(/^at_live_/);
   });
 
   it('falls back to the default Relaycast base URL when an invite omits relaycastBaseUrl', async () => {

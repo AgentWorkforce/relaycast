@@ -82,11 +82,12 @@ describe('Relay workspace methods', () => {
     mockFetch.mockImplementation(() =>
       mockResponse({ token: 'at_live_newtoken' }),
     );
-    const result = await relay.agents.rotateToken('TestBot');
+    const result = await relay.agents.rotateToken('TestBot', 'at_live_current');
 
     const [url, init] = mockFetch.mock.calls[0]!;
     expect(url).toBe('https://cast.agentrelay.com/v1/agents/TestBot/rotate-token');
     expect(init.method).toBe('POST');
+    expect(init.headers.Authorization).toBe('Bearer at_live_current');
     expect(result).toEqual({ token: 'at_live_newtoken' });
   });
 
@@ -97,7 +98,7 @@ describe('Relay workspace methods', () => {
     mockFetch.mockImplementation(() =>
       mockResponse({ token: 'at_live_tok' }),
     );
-    await relay.agents.rotateToken('a/b');
+    await relay.agents.rotateToken('a/b', 'at_live_current');
 
     const [url] = mockFetch.mock.calls[0]!;
     expect(url).toBe('https://cast.agentrelay.com/v1/agents/a%2Fb/rotate-token');

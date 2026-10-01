@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
-import { requireAuth, requireAgentToken, requireWorkspaceRead } from '../middleware/auth.js';
+import { requireAuth, requireAgentToken, requireWorkspaceRead, requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as channelEngine from '../engine/channel.js';
 import { fanoutToChannel, fanoutToWorkspace } from './fanout.js';
@@ -556,3 +556,12 @@ channelRoutes.post(
     }
   },
 );
+
+// Workspace owners provision routing without rotating or borrowing the recipient's token.
+channelRoutes.post('/agents/:name/subscription-channel', requireWorkspaceKey, rateLimit, async (c) => {
+  try {
+    return jsonOk(c, await channelEngine.ensureAgentSubscriptionChannel(c.get('db'), c.get('workspace').id, c.req.param('name')));
+  } catch (err: unknown) {
+    return errorResponse(c, err);
+  }
+});

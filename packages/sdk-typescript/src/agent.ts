@@ -30,6 +30,7 @@ import type {
   CompleteUploadResponse,
   FileInfo,
   Agent,
+  TokenRotateResponse,
   InvokeActionResult,
   CompleteInvocationRequest,
   ActionInvocation,
@@ -76,6 +77,7 @@ import { WsClient, type WsClientOptions, withInternalWsOrigin } from './ws.js';
 import type { Subscription } from './subscription.js';
 import { stableRelaycastEventId } from './event-id.js';
 import { SDK_VERSION } from './version.js';
+import type { EnrollRecoveryCredentialInput } from './identity.js';
 
 function stripHash(channel: string): string {
   return channel.startsWith('#') ? channel.slice(1) : channel;
@@ -138,6 +140,11 @@ type DirectNodeToken = {
   token: string;
 };
 
+// Consecutive connect attempts a cached node token may serve before it is re-minted.
+// The counter resets whenever a connection actually opens, so a healthy client mints
+// once per session while a client that can never connect still recovers a stale token.
+const DIRECT_NODE_TOKEN_MAX_USES = 3;
+
 function normalizeSubscriptionChannel(channel: string): string {
   const trimmed = channel.trim();
   if (trimmed === '@self') return trimmed;
@@ -162,6 +169,7 @@ export class AgentClient {
   private pendingHeartbeat: Promise<void> | null = null;
   private wsOptions: Omit<WsClientOptions, 'token' | 'baseUrl' | 'path' | 'nodeRegistration' | 'autoAckDeliveries'>;
   private directNodeToken: DirectNodeToken | null = null;
+  private directNodeTokenUses = 0;
   private manualSubscriptions = new Set<string>();
   private managedSubscriptions = new Map<symbol, ManagedSubscription>();
   private activeWsChannels = new Set<string>();
@@ -228,8 +236,18 @@ export class AgentClient {
   }
 
   private async fetchDirectNodeToken(): Promise<string> {
+    // A node token is a long-lived credential, so reuse it across reconnects rather
+    // than minting one per attempt. Minting rotates the node's token through the
+    // workspace's shared write lane, so a reconnect loop that mints every attempt
+    // turns write backpressure into more write load. Reuse is bounded so a token the
+    // server no longer accepts still gets replaced instead of wedging the client.
+    if (this.directNodeToken && this.directNodeTokenUses < DIRECT_NODE_TOKEN_MAX_USES) {
+      this.directNodeTokenUses += 1;
+      return this.directNodeToken.token;
+    }
     const token = await this.client.post<DirectNodeToken>('/v1/agent/node-token', {});
     this.directNodeToken = token;
+    this.directNodeTokenUses = 1;
     return token.token;
   }
 
@@ -266,6 +284,7 @@ export class AgentClient {
       this.client.internalOrigin,
     ));
     this.ws.on('open', () => {
+      this.directNodeTokenUses = 0;
       void this.presence.markOnline().catch(() => {});
       this.startAutoHeartbeat();
       this.syncDesiredSubscriptions({ resetRemoteState: true });
@@ -284,6 +303,18 @@ export class AgentClient {
   /** Send a REST heartbeat to keep this agent online in PresenceDO without a WebSocket. */
   async heartbeat(): Promise<void> {
     await this.presence.heartbeat();
+  }
+
+  /** Authenticated self-rollover for this agent identity. */
+  async rotateToken(name: string): Promise<TokenRotateResponse> {
+    return this.client.post(`/v1/agents/${encodeURIComponent(name)}/rotate-token`, {});
+  }
+
+  /** Enroll or rotate this agent's server-owned recovery verifier. */
+  async enrollRecoveryCredential(
+    data: EnrollRecoveryCredentialInput,
+  ): Promise<{ agentId: string; enrolled: boolean }> {
+    return this.client.post('/v1/agent/recovery-credential', data);
   }
 
   /**
@@ -476,6 +507,7 @@ export class AgentClient {
     opts?: {
       attachments?: string[];
       blocks?: MessageBlock[];
+      data?: Record<string, unknown> | null;
       mode?: 'wait' | 'steer';
       idempotencyKey?: string;
     },
@@ -485,6 +517,7 @@ export class AgentClient {
       text,
       ...(opts?.attachments ? { attachments: opts.attachments } : {}),
       ...(opts?.blocks ? { blocks: opts.blocks } : {}),
+      ...(opts?.data !== undefined ? { data: opts.data } : {}),
       mode: opts?.mode ?? 'wait',
     };
     return this.client.post(
@@ -500,6 +533,7 @@ export class AgentClient {
     opts?: {
       attachments?: string[];
       blocks?: MessageBlock[];
+      data?: Record<string, unknown> | null;
       mode?: 'wait' | 'steer';
       idempotencyKey?: string;
     },
@@ -529,11 +563,16 @@ export class AgentClient {
   async reply(
     id: string,
     text: string,
-    opts?: { blocks?: MessageBlock[]; idempotencyKey?: string },
+    opts?: {
+      blocks?: MessageBlock[];
+      data?: Record<string, unknown> | null;
+      idempotencyKey?: string;
+    },
   ): Promise<MessageWithMeta> {
     const body: ThreadReplyRequest = {
       text,
       ...(opts?.blocks ? { blocks: opts.blocks } : {}),
+      ...(opts?.data !== undefined ? { data: opts.data } : {}),
     };
     return this.client.post(
       `/v1/messages/${encodeURIComponent(id)}/replies`,
@@ -577,6 +616,26 @@ export class AgentClient {
     return this.client.post('/v1/dm', body, idempotencyHeaders(opts));
   }
 
+  /** DM an `agent@machine` address; fails if the agent is no longer on that machine. */
+  async sendTo(
+    address: string,
+    text: string,
+    opts?: (IdempotencyOption & {
+      mode?: 'wait' | 'steer';
+      attachments?: string[];
+      data?: Record<string, unknown> | null;
+    }),
+  ): Promise<SendDmResponse> {
+    const body: SendDmRequest = {
+      address,
+      text,
+      ...(opts?.attachments ? { attachments: opts.attachments } : {}),
+      ...(opts?.data !== undefined ? { data: opts.data } : {}),
+      mode: opts?.mode ?? 'wait',
+    };
+    return this.client.post('/v1/dm', body, idempotencyHeaders(opts));
+  }
+
   dms = {
     conversations: (opts?: Pick<MessageListQuery, 'limit'>): Promise<DmConversationSummary[]> => {
       const query: Record<string, string> = {};
@@ -607,13 +666,18 @@ export class AgentClient {
     sendMessage: (
       conversationId: string,
       text: string,
-      opts?: (IdempotencyOption & { attachments?: string[]; mode?: 'wait' | 'steer' }),
+      opts?: (IdempotencyOption & {
+        attachments?: string[];
+        data?: Record<string, unknown> | null;
+        mode?: 'wait' | 'steer';
+      }),
     ): Promise<GroupDmMessageResponse> =>
       this.client.post(
         `/v1/dm/${encodeURIComponent(conversationId)}/messages`,
         {
           text,
           ...(opts?.attachments ? { attachments: opts.attachments } : {}),
+          ...(opts?.data !== undefined ? { data: opts.data } : {}),
           mode: opts?.mode ?? 'wait',
         },
         idempotencyHeaders(opts),
@@ -860,8 +924,13 @@ export class AgentClient {
     invoke: (
       name: string,
       input?: Record<string, unknown>,
+      opts?: IdempotencyOption,
     ): Promise<InvokeActionResult> =>
-      this.client.post(`/v1/actions/${encodeURIComponent(name)}/invoke`, { input }),
+      this.client.post(
+        `/v1/actions/${encodeURIComponent(name)}/invoke`,
+        { input },
+        idempotencyHeaders(opts),
+      ),
 
     completeInvocation: (
       name: string,
