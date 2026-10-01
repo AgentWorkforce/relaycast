@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased - Major]
+
+### Added
+
+- Rust workspace and agent clients accept product origin metadata across HTTP, WebSocket, token replacement, and anonymous workspace bootstrap.
 
 ### Fixed
 
@@ -30,6 +34,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
+- Observer chat and activity now scroll independently within the viewport, display oldest to newest, and preserve reading position when new entries arrive. Clearing activity resumes following new events.
 - Python and Rust workspace reads accept public responses without private API-key hashes; Python workspace creation retries safely only when an idempotency key is supplied.
 
 ## [8.15.0] - 2026-10-01
@@ -646,7 +651,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased - Patch]: https://github.com/AgentWorkforce/relaycast/compare/v8.16.0...HEAD
+[Unreleased - Major]: https://github.com/AgentWorkforce/relaycast/compare/v8.16.0...HEAD
 [8.16.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.15.0...v8.16.0
 [8.15.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.14.0...v8.15.0
 [8.14.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.13.1...v8.14.0

@@ -210,14 +210,14 @@ function bumpFixtureVersion(root, version, dockerIntegrities) {
 function seedFixtureChangelogs(root) {
   const contents =
     "# Changelog\n\n## [Unreleased - Patch]\n\n### Fixed\n\n- Release fixture.\n\n## [8.5.4] - 2026-09-08\n\n### Fixed\n\n- Previous release.\n";
-  // The release contract also checks non-npm SDK changelogs. Seed every
-  // package changelog so fixtures do not inherit the real repository's version.
-  const packageChangelogs = readdirSync(path.join(root, "packages"), {
-    withFileTypes: true,
-  })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => `packages/${entry.name}/CHANGELOG.md`);
-  for (const relativePath of ["CHANGELOG.md", ...packageChangelogs]) {
+  for (const relativePath of [
+    "CHANGELOG.md",
+    // All package changelogs except Rust ship on the shared release line,
+    // including Swift, which is absent from the npm publication matrix.
+    ...readdirSync(path.join(root, "packages"), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name !== "sdk-rust")
+      .map((entry) => `packages/${entry.name}/CHANGELOG.md`),
+  ]) {
     const changelogPath = path.join(root, relativePath);
     if (existsSync(changelogPath)) writeFileSync(changelogPath, contents);
   }

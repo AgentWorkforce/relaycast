@@ -1,7 +1,8 @@
 'use client';
 
 import { Activity, MessageSquare, Radio, Trash2, UserRound, Wifi, Zap } from 'lucide-react';
-import type { ComponentType } from 'react';
+import { useMemo, useRef, type ComponentType } from 'react';
+import { useFollowLatest } from '../hooks/use-follow-latest';
 import { useWebSocketFeed } from '../hooks/use-websocket-feed';
 import type { WebSocketFeedCategory, WebSocketFeedEvent } from '../types/dashboard';
 import { cn } from '../lib/utils';
@@ -42,8 +43,13 @@ interface ActivityLogProps {
   className?: string;
 }
 
+/** Show live activity chronologically in a pane that follows incoming events. */
 export function ActivityLog({ className }: ActivityLogProps) {
   const { status, events: wsEvents, latestEventAt, clearEvents } = useWebSocketFeed();
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const chronologicalEvents = useMemo(() => [...wsEvents].reverse(), [wsEvents]);
+  useFollowLatest(scrollRef, chronologicalEvents[chronologicalEvents.length - 1]?.id);
 
   const statusClasses = {
     connected: 'bg-emerald-500/12 text-emerald-300 border-emerald-500/25',
@@ -53,8 +59,8 @@ export function ActivityLog({ className }: ActivityLogProps) {
   } as const;
 
   return (
-    <div className={cn('console-subtle flex h-full min-h-[420px] flex-col overflow-hidden', className)}>
-      <div className="space-y-2 border-b border-[color-mix(in_srgb,var(--console-accent)_14%,transparent)] px-4 py-3">
+    <div className={cn('console-subtle flex h-full min-h-0 flex-col overflow-hidden', className)}>
+      <div className="shrink-0 space-y-2 border-b border-[color-mix(in_srgb,var(--console-accent)_14%,transparent)] px-4 py-3">
         <div className="flex items-center justify-between gap-2">
           <h2 className="text-sm font-semibold text-[var(--console-fg)]">Activity</h2>
           <div className="flex items-center gap-2">
@@ -78,7 +84,7 @@ export function ActivityLog({ className }: ActivityLogProps) {
           {latestEventAt ? `Last WS event ${relativeTime(latestEventAt)}` : 'No WS events yet'}
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto">{wsEvents.length === 0 ? <Empty /> : <WebSocketFeed events={wsEvents} />}</div>
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">{wsEvents.length === 0 ? <Empty /> : <WebSocketFeed events={chronologicalEvents} />}</div>
     </div>
   );
 }
