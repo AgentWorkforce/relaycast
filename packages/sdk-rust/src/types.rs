@@ -30,10 +30,13 @@ pub struct Cursor {
 pub struct Workspace {
     pub id: String,
     pub name: String,
+    /// Legacy field; current engines omit this private value from responses.
+    #[serde(default)]
     pub api_key_hash: String,
     pub system_prompt: Option<String>,
     pub plan: String,
     pub created_at: String,
+    #[serde(default)]
     pub metadata: serde_json::Map<String, serde_json::Value>,
 }
 
@@ -53,6 +56,8 @@ pub struct CreateWorkspaceResponse {
 pub struct WorkspaceBootstrapOptions {
     pub base_url: Option<String>,
     pub provenance: WorkspaceProvenance,
+    /// Optional application metadata with arbitrary JSON values.
+    pub metadata: Option<serde_json::Map<String, serde_json::Value>>,
     pub idempotency_key: Option<String>,
     /// Optional shared-secret proof for a self-host that explicitly requires
     /// `X-Workspace-Bootstrap-Secret`.
@@ -70,6 +75,10 @@ impl std::fmt::Debug for WorkspaceBootstrapOptions {
             .field("base_url", &self.base_url)
             .field("provenance", &self.provenance)
             .field(
+                "metadata",
+                &self.metadata.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
                 "idempotency_key",
                 &self.idempotency_key.as_ref().map(|_| "<redacted>"),
             )
@@ -86,6 +95,7 @@ impl WorkspaceBootstrapOptions {
         Self {
             base_url: None,
             provenance,
+            metadata: None,
             idempotency_key: None,
             bootstrap_secret: None,
         }
@@ -93,6 +103,11 @@ impl WorkspaceBootstrapOptions {
 
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = Some(base_url.into());
+        self
+    }
+
+    pub fn with_metadata(mut self, metadata: serde_json::Map<String, serde_json::Value>) -> Self {
+        self.metadata = Some(metadata);
         self
     }
 
@@ -159,6 +174,9 @@ pub struct UpdateWorkspaceRequest {
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
+    /// Shallow merge into workspace metadata; top-level null values delete keys.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

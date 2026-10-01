@@ -74,7 +74,7 @@ describe('useFollowLatest', () => {
     const pane = makePane();
     const ref = { current: pane };
     const { rerender } = renderHook(({ id }: { id?: string }) => useFollowLatest(ref, id), {
-      initialProps: { id: 'first' },
+      initialProps: { id: 'first' } as { id?: string },
     });
     scroll(pane, 0);
     Object.defineProperty(pane, 'scrollHeight', { value: 200 });
