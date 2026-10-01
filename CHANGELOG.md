@@ -16,7 +16,12 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Server telemetry attributes each event to the cloud user behind the acting agent (`metadata.cloud_user_id`) and groups it by the workspace's cloud org and workspace; events with no known person use `relaycast-ws:<workspace_id>` without a person profile.
+
 
 ## [8.14.0] - 2026-09-30
 

@@ -323,11 +323,11 @@ const relay = new RelayCast({
 `agent-relay-cli/agent/claude-code` or `pear/user/send-message-box`. (It
 replaced the older `harness` option and its `X-Relaycast-Harness` header.)
 
-Relaycast has no user table of its own — a workspace is an API-key row — so
-these identity fields are the only way hosted usage can be reported per person
-or per organization rather than only per workspace. `agentRelayUserId` doubles
-as the analytics person key when `agentRelayDistinctId` is unset, so a host that
-knows the user only has to set one field. `agentRelayMachineId` is sent
+An acting agent whose `metadata.cloud_user_id` is set attributes events to that
+user, ahead of these fields. Otherwise `agentRelayUserId`, then
+`agentRelayDistinctId`, is the analytics person key, so a host that knows the
+user only has to set one field. Without any of them an event belongs to the
+workspace and creates no person. `agentRelayMachineId` is sent
 *alongside* the person key rather than instead of it, which is what makes
 "how many machines share this workspace" and "are they one account or several"
 answerable.

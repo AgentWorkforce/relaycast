@@ -7,7 +7,12 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `TelemetryEvent` carries optional `groups`, `setOnce` and `processPersonProfile`. Server events resolve `distinctId` from the acting agent's `metadata.cloud_user_id`, then `X-Agent-Relay-User-Id` / `X-Agent-Relay-Distinct-Id`, then `relaycast-ws:<workspace_id>` with `processPersonProfile: false`; they add `sender_type`, `agent_id`, `agent_name`, `agent_owner_user_id`, groups from `workspaces.metadata.cloud_org_id` / `cloud_workspace_id`, and `first_human_message_at` / `first_agent_message_at` on sends.
+
 
 ## [8.14.0] - 2026-09-30
 
