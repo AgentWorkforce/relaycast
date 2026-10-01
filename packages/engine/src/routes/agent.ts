@@ -4,6 +4,7 @@ import { and, eq } from 'drizzle-orm';
 import { AGENT_TOKEN_HASH_PATTERN, AgentTypeSchema, CliTypeSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { requireWorkspaceKey, requireAuth, requireAgentToken, requireSender, requireWorkspaceRead } from '../middleware/auth.js';
+import { authenticateUnexpired } from '../auth/workspaceExpiry.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as agentEngine from '../engine/agent.js';
 import { agentRetentionSchema, retainAgents } from '../engine/agentRetention.js';
@@ -393,7 +394,7 @@ agentRoutes.post(
         // alongside agent/workspace credentials. Workspace credentials still
         // fail below because they establish neither agent nor origin-node
         // authority; this only makes the explicit origin-node branch reachable.
-        const auth = await c.get('engine').auth.authenticate({ token, require: 'sender', db });
+        const auth = await authenticateUnexpired(c.get('engine').auth, { token, require: 'sender', db });
         if (!auth.ok) {
           return jsonError(c, 'agent_recovery_not_authorized', 'Recovery credential was not accepted', 403);
         }

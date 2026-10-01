@@ -7,7 +7,15 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Authentication rejects an expired workspace for every credential kind with `401 workspace_expired`, rather than admitting it until `reapExpiredWorkspaces` deletes the row. The built-in provider enforces it, and the engine re-checks every `AuthProvider` result so an injected hosting provider cannot admit an expired workspace; the node WebSocket upgrade, which resolves its principal directly, gained its own gate.
+
+### Added
+
+- `isWorkspaceExpired`, `authenticateUnexpired`, and `WORKSPACE_EXPIRED_CODE` for hosts composing their own auth paths, plus `getWorkspaceExpiry` for a minimal expiry read.
 
 ## [8.14.0] - 2026-09-30
 

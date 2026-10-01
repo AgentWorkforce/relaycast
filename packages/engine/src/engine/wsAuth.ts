@@ -3,8 +3,15 @@ import type { EngineDb } from '../ports/database.js';
 import { getAuthTokenKind } from '../auth/tokenKind.js';
 import { getNodeByTokenHash } from './node.js';
 import { hasObserverScope } from './observerToken.js';
+import { getWorkspaceExpiry } from './workspace.js';
+import {
+  WORKSPACE_EXPIRED_CODE,
+  WORKSPACE_EXPIRED_MESSAGE,
+  authenticateUnexpired,
+  isWorkspaceExpired,
+} from '../auth/workspaceExpiry.js';
 
-type WsAuthErrorCode = 'unauthorized' | 'invalid_token';
+type WsAuthErrorCode = 'unauthorized' | 'invalid_token' | typeof WORKSPACE_EXPIRED_CODE;
 
 export interface WsAuthError {
   ok: false;
@@ -61,6 +68,16 @@ function invalidWsToken(message: string): WsAuthError {
   };
 }
 
+function expiredWorkspaceWs(): WsAuthError {
+  return {
+    ok: false,
+    status: 401,
+    code: WORKSPACE_EXPIRED_CODE,
+    message: WORKSPACE_EXPIRED_MESSAGE,
+    upgradeMessage: 'Unauthorized',
+  };
+}
+
 export async function authenticateRealtimeWs(deps: WsAuthDeps, token: string): Promise<RealtimeWsAuthResult> {
   const tokenKind = getAuthTokenKind(token);
 
@@ -77,8 +94,13 @@ export async function authenticateRealtimeWs(deps: WsAuthDeps, token: string): P
   }
 
   if (tokenKind === 'observer') {
-    const result = await deps.auth.authenticate({ token, require: 'observer', db: deps.db });
-    if (!result.ok || !result.observerToken) {
+    const result = await authenticateUnexpired(deps.auth, { token, require: 'observer', db: deps.db });
+    if (!result.ok) {
+      return result.code === WORKSPACE_EXPIRED_CODE
+        ? expiredWorkspaceWs()
+        : invalidWsToken('Invalid observer token');
+    }
+    if (!result.observerToken) {
       return invalidWsToken('Invalid observer token');
     }
     if (!hasObserverScope(result.observerToken, 'stream:read')) {
@@ -99,6 +121,16 @@ export async function authenticateNodeWs(deps: WsAuthDeps, token: string): Promi
   const node = await getNodeByTokenHash(deps.db, hash);
   if (!node) {
     return invalidWsToken('Invalid node token');
+  }
+
+  // The node upgrade resolves its principal directly rather than through the
+  // auth provider, so it needs its own expiry gate (relaycast#464).
+  const workspace = await getWorkspaceExpiry(deps.db, node.workspaceId);
+  if (!workspace) {
+    return invalidWsToken('Invalid node token');
+  }
+  if (isWorkspaceExpired(workspace)) {
+    return expiredWorkspaceWs();
   }
 
   return { ok: true, node };
