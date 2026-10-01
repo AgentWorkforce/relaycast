@@ -1,4 +1,8 @@
 import type { Context } from "hono";
+import type {
+  ServerTelemetryEventName,
+  ServerTelemetryRequiredProperty,
+} from "@relaycast/types";
 import type { AppEnv } from "../env.js";
 import {
   extractActorIdentity,
@@ -8,7 +12,24 @@ import {
   UNKNOWN_ORIGIN_ACTOR,
 } from "./origin.js";
 
-type ServerEvent = `relaycast_server_${string}`;
+/**
+ * Properties for a server event. The hosted sink validates events with
+ * `parseInternalTelemetryEvent`, which drops any event missing a required
+ * property (or whose name is not in `SERVER_TELEMETRY_EVENTS`), so both are
+ * enforced here at compile time. `workspace_id` is always added by
+ * {@link emitServerEvent}. Required values must not be `undefined`, which the
+ * sanitizer strips.
+ */
+type ServerEventProperties<E extends ServerTelemetryEventName> = Record<
+  string,
+  unknown
+> & {
+  [K in Exclude<ServerTelemetryRequiredProperty<E>, "workspace_id">]:
+    | string
+    | number
+    | boolean
+    | null;
+};
 
 export function normalizeRoutePathForTelemetry(value: string): string {
   const withoutQuery = value.split(/[?#]/)[0] ?? value;
@@ -37,13 +58,13 @@ export function normalizeRoutePathForTelemetry(value: string): string {
  * {@link TelemetrySink}. Self-host's default sink is a no-op; cloud injects
  * PostHog. The sink owns batching/background-flush, so this returns immediately.
  */
-export function emitServerEvent(
+export function emitServerEvent<E extends ServerTelemetryEventName>(
   c: Context<AppEnv>,
   workspaceId: string,
-  event: ServerEvent,
-  properties: Record<string, unknown>,
+  event: E,
+  properties: ServerEventProperties<E>,
 ): void {
-  const normalizedProperties = { ...properties };
+  const normalizedProperties: Record<string, unknown> = { ...properties };
   if (typeof normalizedProperties.route_path === "string") {
     normalizedProperties.route_path = normalizeRoutePathForTelemetry(
       normalizedProperties.route_path,

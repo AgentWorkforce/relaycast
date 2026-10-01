@@ -141,7 +141,7 @@ export const internalTelemetryEventSchema = telemetryEnvelopeBaseSchema.extend({
 
 export type InternalTelemetryEvent = z.infer<typeof internalTelemetryEventSchema>;
 
-const REQUIRED_SERVER_EVENT_PROPS: Record<ServerTelemetryEventName, readonly string[]> = {
+const REQUIRED_SERVER_EVENT_PROPS = {
   relaycast_server_workspace_created: ['workspace_id'],
   relaycast_server_workspace_updated: ['workspace_id'],
   relaycast_server_workspace_deleted: ['workspace_id'],
@@ -200,7 +200,11 @@ const REQUIRED_SERVER_EVENT_PROPS: Record<ServerTelemetryEventName, readonly str
   relaycast_server_route_feedback_recorded: ['workspace_id', 'agent_name', 'success'],
   relaycast_server_routing_config_updated: ['workspace_id'],
   relaycast_server_relayfile_inbound_delivered: ['workspace_id', 'provider'],
-};
+} as const satisfies Record<ServerTelemetryEventName, readonly string[]>;
+
+/** Properties `parseInternalTelemetryEvent` requires for a server event. */
+export type ServerTelemetryRequiredProperty<E extends ServerTelemetryEventName> =
+  (typeof REQUIRED_SERVER_EVENT_PROPS)[E][number];
 
 const BLOCKED_PROPERTY_PATTERNS = [
   /token/i,
@@ -266,7 +270,7 @@ export function normalizeTelemetryOrigin(origin: Partial<TelemetryOrigin> | unde
 }
 
 function ensureRequiredServerProperties(event: ServerTelemetryEventName, properties: Record<string, TelemetryPropertyValue>): void {
-  const required = REQUIRED_SERVER_EVENT_PROPS[event];
+  const required: readonly string[] = REQUIRED_SERVER_EVENT_PROPS[event];
   const missing = required.filter((key) => !(key in properties));
   if (missing.length > 0) {
     throw new Error(`Missing required properties for ${event}: ${missing.join(', ')}`);
