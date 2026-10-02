@@ -487,6 +487,17 @@ async function promoteLegacyInbound(
   return { ...retained.response, _delivery: null, _delivery_rejections: [], _notifications_durable: true };
 }
 
+async function replayAcceptedA2aEgress(db: Db, id: string): Promise<void> {
+  try {
+    await dispatchA2aEgress(db, id);
+  } catch (error) {
+    // The durable receipt is stable only while another sender or retry lease
+    // owns transport. Retention, target, expiry, and upstream errors still
+    // preserve their original typed replay contract.
+    if ((error as { code?: string }).code !== 'a2a_egress_in_progress') throw error;
+  }
+}
+
 export async function sendDm(
   db: Db,
   workspaceId: string,
@@ -543,19 +554,7 @@ export async function sendDm(
     const [acceptedEgress] = requestEgressId
       ? await db.select().from(a2aEgress).where(eq(a2aEgress.id, requestEgressId))
       : [];
-    if (acceptedEgress?.status === 'failed' || acceptedEgress?.status === 'sent') {
-      // Settled transport keeps its original replay contract: failures retain
-      // their typed error, and success still validates retention and horizon.
-      await dispatchA2aEgress(db, acceptedEgress.id);
-    }
-    if (acceptedEgress?.status === 'pending') {
-      try {
-        await dispatchA2aEgress(db, acceptedEgress.id);
-      } catch {
-        // Admission already committed. Replays return the stored receipt while
-        // the durable maintenance sweep owns transport recovery.
-      }
-    }
+    if (acceptedEgress) await replayAcceptedA2aEgress(db, acceptedEgress.id);
     return {
       ...(acceptedDirect.response as Omit<SendDmResult, '_delivery' | '_delivery_rejections'>),
       _delivery: null,
@@ -576,14 +575,7 @@ export async function sendDm(
     ) {
       throw codedError('Idempotency-Key was reused with a different request payload', 'idempotency_key_reused', 409);
     }
-    if (accepted.status === 'pending') {
-      try {
-        await dispatchA2aEgress(db, accepted.id);
-      } catch {
-        // Admission already committed. Replays return the stored receipt while
-        // the durable maintenance sweep owns transport recovery.
-      }
-    }
+    await replayAcceptedA2aEgress(db, accepted.id);
     let [context] = await db.select().from(a2aEgressContext).where(eq(a2aEgressContext.id, accepted.id));
     if (!context) {
       // Upgrade compatibility for admissions predating 0058: recover only from
