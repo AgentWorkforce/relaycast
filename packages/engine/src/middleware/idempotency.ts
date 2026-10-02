@@ -188,14 +188,21 @@ export async function runIdempotent<T>(
       // The record and the lock are independent keys, so read them in one round
       // trip instead of two. KV has no atomic NX-style set, so the lock stays
       // best-effort: in rare races duplicate operations may still run.
-      const [existingRaw, existingLock] = await Promise.all([
+      // `allSettled` keeps the reads independent in failure too: a stored record
+      // answers the request on its own, so a failed lock read must not void a
+      // replay the record read already proved. Otherwise either read failing is
+      // a read failure, exactly as the serialized record-then-lock reads were.
+      const [recordRead, lockRead] = await Promise.allSettled([
         kvStore.get(kvKey),
         kvStore.get(lockKey),
       ]);
 
-      if (existingRaw) {
-        return replayOf(existingRaw);
+      if (recordRead.status === 'fulfilled' && recordRead.value) {
+        return replayOf(recordRead.value);
       }
+      if (recordRead.status === 'rejected') throw recordRead.reason;
+      if (lockRead.status === 'rejected') throw lockRead.reason;
+      const existingLock = lockRead.value;
 
       if (existingLock) {
         // Another request may be processing, or may have committed between the

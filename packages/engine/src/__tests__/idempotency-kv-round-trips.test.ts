@@ -176,6 +176,38 @@ describe('idempotency KV round trips', () => {
     }
   });
 
+  it.each([{}, { requireKvRead: true }, { requireKv: true }])(
+    'replays a stored record when only the lock read fails, with %j', async (requirement) => {
+      const kv = tracingKv(await storageKey());
+      kv.seed('record', JSON.stringify({ status: 201, data: { id: 'msg_1' }, fingerprint: 'fp-a' }));
+      kv.failOn('get:lock', new Error('lock read outage'));
+      const operation = vi.fn(async () => ({ id: 'msg_2' }));
+
+      // The record read alone proves the replay, so pairing it with the lock
+      // read must not let a lock-read failure re-run a committed operation.
+      await expect(runIdempotent({ ...identity, ...requirement, kv, fingerprint: 'fp-a', operation }))
+        .resolves.toEqual({ status: 201, replayed: true, data: { id: 'msg_1' } });
+      expect(operation).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([{}, { requireKvRead: true }])(
+    'treats a failed record read as a read failure, with %j', async (requirement) => {
+      const kv = tracingKv(await storageKey());
+      kv.failOn('get:record', new Error('record read outage'));
+      const operation = vi.fn(async () => ({ id: 'msg_1' }));
+      const run = runIdempotent({ ...identity, ...requirement, kv, operation });
+
+      if (requirement.requireKvRead) {
+        await expect(run).rejects.toMatchObject({ status: 503, code: 'idempotency_unavailable' });
+        expect(operation).not.toHaveBeenCalled();
+      } else {
+        // Optional storage degrades to running the operation unprotected.
+        await expect(run).resolves.toMatchObject({ replayed: false, data: { id: 'msg_1' } });
+      }
+    },
+  );
+
   it('bounds retention for both the lock and the stored record', async () => {
     const kv = tracingKv(await storageKey());
     await runIdempotent({ ...identity, kv, ttlSeconds: 600, operation: async () => ({ id: 'msg_1' }) });
