@@ -223,7 +223,18 @@ export async function runIdempotent<T>(
       await kvStore.put(lockKey, '1', { expirationTtl: IDEMPOTENCY_LOCK_TTL_SECONDS });
       lockAcquired = true;
 
-      const recheckRaw = await kvStore.get(kvKey);
+      let recheckRaw: string | null;
+      try {
+        recheckRaw = await kvStore.get(kvKey);
+      } catch (err) {
+        // This caller wrote the lock but could not establish whether a result
+        // landed while that write was pending. Release the lock before the
+        // outer policy either fails closed or degrades to an unprotected
+        // operation; otherwise every immediate retry sees a stale 409.
+        try { await kvStore.delete(lockKey); } catch { /* bounded by the lock TTL */ }
+        lockAcquired = false;
+        throw err;
+      }
       if (recheckRaw) {
         return replayOf(recheckRaw);
       }

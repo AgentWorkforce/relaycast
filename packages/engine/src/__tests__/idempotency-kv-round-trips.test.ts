@@ -161,6 +161,28 @@ describe('idempotency KV round trips', () => {
     expect(flat(kv)).not.toContain('delete:lock');
   });
 
+  it.each([{}, { requireKvRead: true }, { requireKv: true }])(
+    'releases its lock when the post-lock record recheck fails, with %j', async (requirement) => {
+      const kv = tracingKv(await storageKey());
+      let recordReads = 0;
+      kv.onSettled = (label) => {
+        if (label !== 'get:record' || ++recordReads !== 2) return;
+        kv.failOn('get:record', new Error('recheck outage'));
+      };
+      const operation = vi.fn(async () => ({ id: 'msg_1' }));
+      const run = runIdempotent({ ...identity, ...requirement, kv, operation });
+
+      if (requirement.requireKvRead || requirement.requireKv) {
+        await expect(run).rejects.toMatchObject({ status: 503, code: 'idempotency_unavailable' });
+        expect(operation).not.toHaveBeenCalled();
+      } else {
+        await expect(run).resolves.toMatchObject({ replayed: false, data: { id: 'msg_1' } });
+        expect(operation).toHaveBeenCalledTimes(1);
+      }
+      expect(flat(kv)).toContain('delete:lock');
+    },
+  );
+
   it('leaves no lock behind when the operation fails, so a retry runs fresh', async () => {
     const kv = tracingKv(await storageKey());
     const failing = vi.fn(async () => { throw new Error('d1 write failed'); });
