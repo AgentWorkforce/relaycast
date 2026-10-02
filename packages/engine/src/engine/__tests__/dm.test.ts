@@ -246,6 +246,30 @@ describe('1:1 DM conversation identity', () => {
     expect(db.select().from(a2aEgress).all()).toHaveLength(1);
   });
 
+  it('replays a terminal A2A outcome after the request claim commits', async () => {
+    const { db, ws, alice } = seed();
+    const key = 'a2a-terminal-replay';
+    const request = { to: 'bob', text: 'accepted then rejected' };
+    const first = await sendDm(db, ws, alice, request, { idempotencyKey: key });
+    const egressId = `a2ae_${await sha256Hex(JSON.stringify([ws, alice, key]))}`;
+    await db.insert(a2aEgress).values({
+      id: egressId,
+      workspaceId: ws,
+      messageId: first.id,
+      targetId: 'a2a-target',
+      externalUrl: 'https://example.com/a2a/rpc',
+      fingerprint: await sha256Hex(JSON.stringify(request)),
+      status: 'failed',
+      lastError: 'upstream refused',
+      errorStatus: 403,
+      errorCode: 'a2a_upstream_rejected',
+    });
+
+    await expect(sendDm(db, ws, alice, request, { idempotencyKey: key }))
+      .rejects.toMatchObject({ status: 403, code: 'a2a_upstream_rejected' });
+    expect(db.select().from(messages).all()).toHaveLength(1);
+  });
+
   it('expires a retained A2A identity before reusing an expired request key', async () => {
     const { db, ws, alice } = seed();
     const key = 'expired-a2a-identity';

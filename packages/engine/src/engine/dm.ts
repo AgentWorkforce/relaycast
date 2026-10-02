@@ -543,6 +543,11 @@ export async function sendDm(
     const [acceptedEgress] = requestEgressId
       ? await db.select().from(a2aEgress).where(eq(a2aEgress.id, requestEgressId))
       : [];
+    if (acceptedEgress?.status === 'failed') {
+      // A committed receipt is stable while transport is pending or leased,
+      // but a terminal upstream outcome must keep replaying its typed error.
+      await dispatchA2aEgress(db, acceptedEgress.id);
+    }
     if (acceptedEgress?.status === 'pending') {
       try {
         await dispatchA2aEgress(db, acceptedEgress.id);
