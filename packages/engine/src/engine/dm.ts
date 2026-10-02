@@ -59,6 +59,8 @@ interface SendDmOptions {
   skipA2aIntercept?: boolean;
   /** Stable request identity for resuming already admitted outbound A2A. */
   idempotencyKey?: string;
+  /** Test seam: pause after the durable request lookup, before admission. */
+  afterIdempotencyLookup?: () => Promise<void>;
   /** Count an authenticated inbound peer in the same transaction as its DM. */
   receivedA2aAgentId?: string;
   /** Token hash authenticated by the route; checked with registration at SQL admission. */
@@ -505,9 +507,15 @@ export async function sendDm(
   const directFingerprint = directRequestId
     ? await sha256Hex(JSON.stringify({ data, address: options.address ?? null }))
     : '';
+  // The request claim is transport-independent. If the recipient changes
+  // between direct and A2A routing, both attempts still contend on one ID.
+  const requestEgressId = !options.skipA2aIntercept && options.idempotencyKey
+    ? `a2ae_${await sha256Hex(JSON.stringify([workspaceId, fromAgentId, options.idempotencyKey]))}`
+    : null;
   let [acceptedDirect] = directRequestId
     ? await db.select().from(directDmIdempotency).where(eq(directDmIdempotency.id, directRequestId))
     : [];
+  await options.afterIdempotencyLookup?.();
   if (
     acceptedDirect
     && acceptedDirect.createdAt.getTime() + DIRECT_DM_IDEMPOTENCY_TTL_MS <= Date.now()
@@ -525,6 +533,10 @@ export async function sendDm(
     if (acceptedDirect.fingerprint !== directFingerprint) {
       throw codedError('Idempotency-Key was reused with a different request payload', 'idempotency_key_reused', 409);
     }
+    const [acceptedEgress] = requestEgressId
+      ? await db.select().from(a2aEgress).where(eq(a2aEgress.id, requestEgressId))
+      : [];
+    if (acceptedEgress) await dispatchA2aEgress(db, acceptedEgress.id);
     return {
       ...(acceptedDirect.response as Omit<SendDmResult, '_delivery' | '_delivery_rejections'>),
       _delivery: null,
@@ -534,9 +546,6 @@ export async function sendDm(
   }
   // Resolve durable request identity before mutable recipient/attachment metadata.
   // A removed/recreated target must never turn an accepted retry into a new send.
-  const requestEgressId = !options.skipA2aIntercept && options.idempotencyKey
-    ? `a2ae_${await sha256Hex(JSON.stringify([workspaceId, fromAgentId, options.idempotencyKey]))}`
-    : null;
   const [accepted] = requestEgressId ? await db.select().from(a2aEgress).where(eq(a2aEgress.id, requestEgressId)) : [];
   if (accepted) {
     if (accepted.fingerprint !== await sha256Hex(JSON.stringify(data))) {
@@ -678,7 +687,7 @@ export async function sendDm(
   const workspacePayload = transformForClient({
     type: 'dm.received', workspace_id: workspaceId, data: eventData, timestamp: createdAt.toISOString(),
   });
-  const directClaimId = !a2aTarget ? directRequestId : null;
+  const directClaimId = directRequestId;
   // The outbox, observer cursor log, response context and delivery share admission.
   // None can escape a capacity rollback, or depend on external transport success.
   const persist = () => runAtomicWrites(db, (writeDb) => {
@@ -750,7 +759,7 @@ export async function sendDm(
 
     if (inboundId) writes.push(writeDb.insert(a2aInbound).values({ id: inboundId, workspaceId, messageId, fingerprint: inboundFingerprint, response: publicResult }));
     if (egressId) writes.push(writeDb.insert(a2aEgressContext).values({ id: egressId, messageId, response: publicResult }));
-    if (egressId || options.receivedA2aAgentId || inboundId) {
+    if (egressId || options.receivedA2aAgentId || inboundId || directClaimId) {
       writes.push(
         writeDb.insert(pendingEvents).values({ id: messageId, workspaceId, eventType: 'dm.received', payload: eventData }),
         buildWorkspaceEventWrite(writeDb, workspaceId, { type: 'dm.received', payload: workspacePayload }),
@@ -761,7 +770,7 @@ export async function sendDm(
   let admittedEventSeq: number | undefined;
   try {
     const results = await persist();
-    if (egressId || options.receivedA2aAgentId || inboundId) admittedEventSeq = (results[results.length - 1] as { seq: number }[])[0].seq;
+    if (egressId || options.receivedA2aAgentId || inboundId || directClaimId) admittedEventSeq = (results[results.length - 1] as { seq: number }[])[0].seq;
   } catch (error) {
     if (options.address !== undefined && databaseConstraintKind(error) === 'address_changed') {
       throw addressNotFound(options.address);
@@ -782,12 +791,7 @@ export async function sendDm(
         if (winner.fingerprint !== directFingerprint) {
           throw codedError('Idempotency-Key was reused with a different request payload', 'idempotency_key_reused', 409);
         }
-        return {
-          ...(winner.response as Omit<SendDmResult, '_delivery' | '_delivery_rejections'>),
-          _delivery: null,
-          _delivery_rejections: [],
-          _notifications_durable: true,
-        };
+        return sendDm(db, workspaceId, fromAgentId, data, options);
       }
     }
     // Inspect the actual committed winner after the losing atomic batch rolls back.
@@ -807,9 +811,9 @@ export async function sendDm(
     ...publicResult,
     _delivery: dmDelivery,
     _delivery_rejections: deliveryOutcomes.rejections,
-    ...((egressId || options.receivedA2aAgentId || inboundId) ? { _notifications_durable: true } : {}),
+    ...((egressId || options.receivedA2aAgentId || inboundId || directClaimId) ? { _notifications_durable: true } : {}),
   };
-  if (egressId || options.receivedA2aAgentId || inboundId) {
+  if (egressId || options.receivedA2aAgentId || inboundId || directClaimId) {
     // Local fast paths run independently of transport. A crash here still leaves
     // the webhook outbox, workspace cursor log and queued delivery recoverable.
     options.afterAdmission?.(result, { seq: admittedEventSeq!, payload: workspacePayload, data: eventData, outboxId: messageId });

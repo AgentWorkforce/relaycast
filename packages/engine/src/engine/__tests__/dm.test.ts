@@ -14,15 +14,20 @@ import { and, eq, isNotNull } from 'drizzle-orm';
 
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
 import {
+  a2aAgents,
+  a2aEgress,
   agents,
   directDmIdempotency,
   dmConversationReservations,
   dmConversations,
   dmParticipants,
   messages,
+  pendingEvents,
+  workspaceEvents,
   workspaces,
 } from '../../db/schema.js';
 import { isPairReservationConflict, sendDm } from '../dm.js';
+import { sweepPendingA2aEgress } from '../a2aEgress.js';
 
 type Db = SqliteDbHandle['db'];
 
@@ -116,14 +121,75 @@ describe('1:1 DM conversation identity', () => {
   it('admits two concurrent dispatch attempts with one idempotency key as one stored message', async () => {
     const { db, ws, alice } = seed();
     const request = { to: 'bob', text: 'only once' };
+    let lookups = 0;
+    let releaseLookups!: () => void;
+    let resumeAdmissions!: () => void;
+    const bothLookups = new Promise<void>((resolve) => { releaseLookups = resolve; });
+    const admissionGate = new Promise<void>((resolve) => { resumeAdmissions = resolve; });
+    const afterIdempotencyLookup = async () => {
+      lookups += 1;
+      if (lookups === 2) releaseLookups();
+      await admissionGate;
+    };
     const [first, second] = await Promise.all([
-      sendDm(db, ws, alice, request, { idempotencyKey: 'logical-dm-1' }),
-      sendDm(db, ws, alice, request, { idempotencyKey: 'logical-dm-1' }),
+      (async () => {
+        const result = sendDm(db, ws, alice, request, {
+          idempotencyKey: 'logical-dm-1',
+          afterIdempotencyLookup,
+        });
+        await bothLookups;
+        resumeAdmissions();
+        return result;
+      })(),
+      sendDm(db, ws, alice, request, {
+        idempotencyKey: 'logical-dm-1',
+        afterIdempotencyLookup,
+      }),
     ]);
 
     expect(second.id).toBe(first.id);
     expect(db.select().from(messages).all()).toHaveLength(1);
     expect(db.select().from(directDmIdempotency).all()).toHaveLength(1);
+    expect(db.select().from(pendingEvents).all()).toHaveLength(1);
+    expect(db.select().from(workspaceEvents).all()).toHaveLength(1);
+  });
+
+  it('keeps one keyed request claim when a recipient changes to A2A routing', async () => {
+    const { db, ws, alice, bob } = seed();
+    const request = { to: 'bob', text: 'same request' };
+    const first = await sendDm(db, ws, alice, request, { idempotencyKey: 'transport-change' });
+
+    await db.insert(a2aAgents).values({
+      id: 'a2a_transport_change',
+      workspaceId: ws,
+      relayAgentId: bob,
+      agentCard: {
+        name: 'bob',
+        url: 'https://example.com/a2a/rpc',
+        version: '1.0.0',
+        skills: [{ id: 'echo', name: 'echo' }],
+      },
+      externalUrl: 'https://example.com/a2a/rpc',
+    });
+
+    const replay = await sendDm(db, ws, alice, request, { idempotencyKey: 'transport-change' });
+    expect(replay.id).toBe(first.id);
+    expect(db.select().from(messages).all()).toHaveLength(1);
+    expect(db.select().from(directDmIdempotency).all()).toHaveLength(1);
+    expect(db.select().from(a2aEgress).all()).toHaveLength(0);
+  });
+
+  it('prunes expired keyed request claims without deleting their messages', async () => {
+    const { db, ws, alice } = seed();
+    await sendDm(db, ws, alice, { to: 'bob', text: 'retained' }, {
+      idempotencyKey: 'expired-claim',
+    });
+    await db.update(directDmIdempotency)
+      .set({ createdAt: new Date(Date.now() - 25 * 60 * 60 * 1000) });
+
+    expect(await sweepPendingA2aEgress(db, 20)).toEqual({ attempted: 0, failed: 0 });
+    expect(db.select().from(directDmIdempotency).all()).toHaveLength(0);
+    expect(db.select().from(messages).all()).toHaveLength(1);
   });
 
   it('rejects reuse of a direct-DM idempotency key for a different payload', async () => {

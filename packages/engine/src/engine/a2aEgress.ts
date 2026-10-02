@@ -1,5 +1,5 @@
 import { and, eq, or, sql, lte, inArray, asc } from 'drizzle-orm';
-import { a2aAgents, a2aEgress, a2aInbound, messages, agents } from '../db/schema.js';
+import { a2aAgents, a2aEgress, a2aInbound, directDmIdempotency, messages, agents } from '../db/schema.js';
 import { runAtomicWrites, type EngineDb } from '../ports/database.js';
 import { randomUuid } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
@@ -104,6 +104,25 @@ export async function cleanupA2aEgress(db: EngineDb, limit = 20): Promise<number
   return deleted.length;
 }
 
+/** Bounded cleanup for transport-independent DM request claims. Once the
+ * 24-hour replay window ends, the same caller key is intentionally fresh.
+ */
+export async function cleanupDirectDmIdempotency(
+  db: EngineDb,
+  limit = 20,
+  now = new Date(),
+): Promise<number> {
+  const expired = db.select({ id: directDmIdempotency.id })
+    .from(directDmIdempotency)
+    .where(lte(directDmIdempotency.createdAt, new Date(now.getTime() - A2A_EGRESS_RETRY_WINDOW_MS)))
+    .orderBy(asc(directDmIdempotency.createdAt), asc(directDmIdempotency.id))
+    .limit(batchLimit(limit));
+  const deleted = await db.delete(directDmIdempotency)
+    .where(inArray(directDmIdempotency.id, expired))
+    .returning({ id: directDmIdempotency.id });
+  return deleted.length;
+}
+
 /** Existing Node/HOST maintenance entrypoint includes bounded retention cleanup. */
 export async function sweepPendingA2aEgress(db: EngineDb, limit = 20): Promise<{ attempted: number; failed: number }> {
   const due = await db.select({ id: a2aEgress.id }).from(a2aEgress).where(and(
@@ -115,6 +134,7 @@ export async function sweepPendingA2aEgress(db: EngineDb, limit = 20): Promise<{
     try { await dispatchA2aEgress(db, intent.id); } catch { failed++; }
   }
   await cleanupA2aEgress(db, limit);
+  await cleanupDirectDmIdempotency(db, limit);
   const inboundExpired = db.select({ id: a2aInbound.id }).from(a2aInbound)
     .where(lte(a2aInbound.createdAt, new Date(Date.now() - A2A_EGRESS_RETRY_WINDOW_MS)))
     .orderBy(asc(a2aInbound.createdAt), asc(a2aInbound.id)).limit(batchLimit(limit));
