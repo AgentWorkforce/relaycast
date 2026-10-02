@@ -79,7 +79,7 @@ function constraints(handle: SqliteDbHandle) {
 function expectConstraintsPreserved(before: ReturnType<typeof constraints>, after: ReturnType<typeof constraints>) {
   // 0050 may add these redundant named lookup indexes, but must not alter any
   // original constraint (including a lookup that already existed via 0049).
-  expect(after.filter(table => !['maintenance_cursors', 'a2a_egress', 'a2a_egress_context', 'a2a_inbound'].includes(table.name) || before.some(original => original.name === table.name))
+  expect(after.filter(table => !['maintenance_cursors', 'a2a_egress', 'a2a_egress_context', 'a2a_inbound', 'direct_dm_idempotency'].includes(table.name) || before.some(original => original.name === table.name))
     .map(table => {
       const original = before.find(candidate => candidate.name === table.name);
       // 0055 adds optional event identity columns and their index after the
@@ -135,8 +135,9 @@ describe('compact maintenance migration path', () => {
     const beforeConstraints = constraints(handle);
     expect(runMigrations(handle).applied).toEqual(files.filter(name => name >= replacement));
     const after = snapshot(handle);
-    // 0057/0058 add empty tables; every pre-existing row and table must remain.
-    expect(after.filter(([name]) => !['a2a_egress', 'a2a_egress_context', 'a2a_inbound'].includes(String(name)))).toEqual(before);
+    // Remote-DM and direct-idempotency migrations add empty tables; every
+    // pre-existing row and table must remain.
+    expect(after.filter(([name]) => !['a2a_egress', 'a2a_egress_context', 'a2a_inbound', 'direct_dm_idempotency'].includes(String(name)))).toEqual(before);
     expect(after.find(([name]) => name === 'a2a_egress')).toEqual([
       'a2a_egress', 0, createHash('sha256').update('[]').digest('hex'),
     ]);
@@ -146,6 +147,9 @@ describe('compact maintenance migration path', () => {
     expect(after.find(([name]) => name === 'a2a_inbound')).toEqual([
       'a2a_inbound', 0, createHash('sha256').update('[]').digest('hex'),
     ]);
+    expect(after.find(([name]) => name === 'direct_dm_idempotency')).toEqual([
+      'direct_dm_idempotency', 0, createHash('sha256').update('[]').digest('hex'),
+    ]);
     expect(handle.sqlite.pragma('foreign_key_list(a2a_inbound)')).toEqual(expect.arrayContaining([
       expect.objectContaining({ table: 'workspaces', from: 'workspace_id', on_delete: 'CASCADE' }),
       expect.objectContaining({ table: 'messages', from: 'message_id', on_delete: 'SET NULL' }),
@@ -154,6 +158,9 @@ describe('compact maintenance migration path', () => {
       expect.objectContaining({ table: 'a2a_egress', from: 'id', on_delete: 'CASCADE' }),
     );
     expect(handle.sqlite.pragma('foreign_key_list(a2a_egress)')).toContainEqual(
+      expect.objectContaining({ table: 'workspaces', from: 'workspace_id', on_delete: 'CASCADE' }),
+    );
+    expect(handle.sqlite.pragma('foreign_key_list(direct_dm_idempotency)')).toContainEqual(
       expect.objectContaining({ table: 'workspaces', from: 'workspace_id', on_delete: 'CASCADE' }),
     );
     expectConstraintsPreserved(beforeConstraints, constraints(handle));
