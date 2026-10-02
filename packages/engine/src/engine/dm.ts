@@ -826,7 +826,10 @@ export async function sendDm(
     // Inspect the actual committed winner after the losing atomic batch rolls back.
     const [winner] = egressId ? await db.select().from(a2aEgress).where(eq(a2aEgress.id, egressId)) : [];
     if (!winner) throw error;
-    if (winner.fingerprint !== fingerprint) {
+    if (
+      winner.fingerprint !== fingerprint
+      && winner.fingerprint !== legacyRequestEgressFingerprint
+    ) {
       throw codedError('Idempotency-Key was reused with a different request payload', 'idempotency_key_reused', 409);
     }
     return sendDm(db, workspaceId, fromAgentId, data, options);

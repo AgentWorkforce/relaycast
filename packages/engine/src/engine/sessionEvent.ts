@@ -6,6 +6,7 @@ import { sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { runAtomicWrites } from '../ports/database.js';
 import { RELEASED_AGENT_STATUS } from './agent.js';
+import { canonicalJson } from './messageMetadata.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -317,17 +318,6 @@ export async function applyStatusEventEffect(
   // with `mutated === false` when a newer event superseded this one or the
   // agent was released between route validation and this atomic write.
   return { claimed, mutated: claimed && mutated };
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  if (value && typeof value === 'object') {
-    return `{${Object.keys(value as Record<string, unknown>)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`)
-      .join(',')}}`;
-  }
-  return JSON.stringify(value);
 }
 
 function toPublicEvent(event: typeof sessionEvents.$inferSelect, agentId: string) {
