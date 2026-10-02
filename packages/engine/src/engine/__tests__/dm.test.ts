@@ -185,8 +185,10 @@ describe('1:1 DM conversation identity', () => {
     await sendDm(db, ws, alice, { to: 'bob', text: 'retained' }, {
       idempotencyKey: 'expired-claim',
     });
+    const [claim] = db.select({ id: directDmIdempotency.id }).from(directDmIdempotency).all();
     await db.update(directDmIdempotency)
-      .set({ createdAt: new Date(Date.now() - 25 * 60 * 60 * 1000) });
+      .set({ createdAt: new Date(Date.now() - 25 * 60 * 60 * 1000) })
+      .where(eq(directDmIdempotency.id, claim!.id));
 
     expect(await sweepPendingA2aEgress(db, 20)).toEqual({ attempted: 0, failed: 0 });
     expect(db.select().from(directDmIdempotency).all()).toHaveLength(0);
@@ -220,6 +222,30 @@ describe('1:1 DM conversation identity', () => {
     expect(db.select().from(messages).all()).toHaveLength(1);
   });
 
+  it('returns the stored receipt while an accepted A2A egress has a live lease', async () => {
+    const { db, ws, alice } = seed();
+    const key = 'a2a-live-replay';
+    const request = { to: 'bob', text: 'accepted' };
+    const first = await sendDm(db, ws, alice, request, { idempotencyKey: key });
+    const egressId = `a2ae_${await sha256Hex(JSON.stringify([ws, alice, key]))}`;
+    await db.insert(a2aEgress).values({
+      id: egressId,
+      workspaceId: ws,
+      messageId: first.id,
+      targetId: 'a2a-target',
+      externalUrl: 'https://example.com/a2a/rpc',
+      fingerprint: await sha256Hex(JSON.stringify(request)),
+      status: 'sending',
+      claimToken: 'live-owner',
+      leaseUntil: new Date(Date.now() + 60_000),
+    });
+
+    const replay = await sendDm(db, ws, alice, request, { idempotencyKey: key });
+    expect(replay.id).toBe(first.id);
+    expect(db.select().from(messages).all()).toHaveLength(1);
+    expect(db.select().from(a2aEgress).all()).toHaveLength(1);
+  });
+
   it('expires a retained A2A identity before reusing an expired request key', async () => {
     const { db, ws, alice } = seed();
     const key = 'expired-a2a-identity';
@@ -227,7 +253,9 @@ describe('1:1 DM conversation identity', () => {
       idempotencyKey: key,
     });
     const old = new Date(Date.now() - 25 * 60 * 60 * 1000);
-    await db.update(directDmIdempotency).set({ createdAt: old });
+    const [claim] = db.select({ id: directDmIdempotency.id }).from(directDmIdempotency).all();
+    await db.update(directDmIdempotency).set({ createdAt: old })
+      .where(eq(directDmIdempotency.id, claim!.id));
     const egressId = `a2ae_${await sha256Hex(JSON.stringify([ws, alice, key]))}`;
     await db.insert(a2aEgress).values({
       id: egressId,

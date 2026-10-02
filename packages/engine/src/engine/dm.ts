@@ -543,7 +543,14 @@ export async function sendDm(
     const [acceptedEgress] = requestEgressId
       ? await db.select().from(a2aEgress).where(eq(a2aEgress.id, requestEgressId))
       : [];
-    if (acceptedEgress) await dispatchA2aEgress(db, acceptedEgress.id);
+    if (acceptedEgress?.status === 'pending') {
+      try {
+        await dispatchA2aEgress(db, acceptedEgress.id);
+      } catch {
+        // Admission already committed. Replays return the stored receipt while
+        // the durable maintenance sweep owns transport recovery.
+      }
+    }
     return {
       ...(acceptedDirect.response as Omit<SendDmResult, '_delivery' | '_delivery_rejections'>),
       _delivery: null,
@@ -564,7 +571,14 @@ export async function sendDm(
     ) {
       throw codedError('Idempotency-Key was reused with a different request payload', 'idempotency_key_reused', 409);
     }
-    await dispatchA2aEgress(db, accepted.id);
+    if (accepted.status === 'pending') {
+      try {
+        await dispatchA2aEgress(db, accepted.id);
+      } catch {
+        // Admission already committed. Replays return the stored receipt while
+        // the durable maintenance sweep owns transport recovery.
+      }
+    }
     let [context] = await db.select().from(a2aEgressContext).where(eq(a2aEgressContext.id, accepted.id));
     if (!context) {
       // Upgrade compatibility for admissions predating 0058: recover only from
