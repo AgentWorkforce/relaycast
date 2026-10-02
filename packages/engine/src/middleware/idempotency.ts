@@ -167,10 +167,6 @@ export async function runIdempotent<T>(
   let kvKey: string | null = null;
   let lockKey: string | null = null;
   let lockAcquired = false;
-  // Settles the lock write that overlaps `operation`. The failure paths must
-  // await it before deleting the lock, or the delete can race ahead of the put
-  // and leave the key held until its TTL expires.
-  let lockWrite: Promise<void> | null = null;
 
   if (!kvStore && (requireKv || requireKvRead)) {
     throw idempotencyUnavailableError();
@@ -218,19 +214,19 @@ export async function runIdempotent<T>(
         throw err;
       }
 
-      // Acquire the lock. Nothing reads it before the next request with this
-      // key, and the success record below supersedes it, so on the fast path it
-      // overlaps `operation` instead of adding a serialized round trip.
-      const lockPut = kvStore.put(lockKey, '1', { expirationTtl: IDEMPOTENCY_LOCK_TTL_SECONDS });
-      if (failClosed) {
-        await lockPut;
-        lockWrite = Promise.resolve();
-      } else {
-        // A lost lock write means the lock is not held: skip the record, exactly
-        // as a synchronous lock-write failure did.
-        lockWrite = lockPut.catch(() => { lockAcquired = false; });
-      }
+      // Acquire the best-effort lock before mutating. KV has no compare-and-set,
+      // so two callers can both have observed empty keys above. Re-reading the
+      // record after this write preserves the old fence: if the other caller
+      // completed while this lock write was pending, replay its result instead
+      // of running the operation a second time. Do not delete the lock on this
+      // replay path because it may still belong to the other caller.
+      await kvStore.put(lockKey, '1', { expirationTtl: IDEMPOTENCY_LOCK_TTL_SECONDS });
       lockAcquired = true;
+
+      const recheckRaw = await kvStore.get(kvKey);
+      if (recheckRaw) {
+        return replayOf(recheckRaw);
+      }
     } catch (err) {
       if (err instanceof Error && ['idempotency_key_reused', 'idempotency_in_progress'].includes((err as Error & { code?: string }).code ?? '')) {
         throw err;
@@ -243,14 +239,12 @@ export async function runIdempotent<T>(
       kvKey = null;
       lockKey = null;
       lockAcquired = false;
-      lockWrite = null;
     }
   }
 
   try {
     const data = await operation();
     if (afterOperation) await afterOperation(data);
-    if (lockWrite) await lockWrite;
 
     if (kvStore && kvKey && lockAcquired) {
       const record: StoredIdempotencyRecord<T> = {
@@ -278,7 +272,6 @@ export async function runIdempotent<T>(
 
     return { status, data, replayed: false };
   } catch (err) {
-    if (lockWrite) await lockWrite.catch(() => {});
     if (kvStore && lockKey && lockAcquired) {
       try { await kvStore.delete(lockKey); } catch { /* ignore */ }
     }

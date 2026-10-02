@@ -69,7 +69,7 @@ const storageKey = () => buildIdempotencyStorageKey(identity.workspaceId, identi
 const flat = (kv: TracingKv) => kv.roundTrips.flat();
 
 describe('idempotency KV round trips', () => {
-  it('spends one read round trip and one write round trip on a fresh key', async () => {
+  it('spends four serialized KV round trips on a fresh key', async () => {
     const kv = tracingKv(await storageKey());
     let inFlightAtOperation = -1;
     const operation = vi.fn(async () => {
@@ -81,11 +81,16 @@ describe('idempotency KV round trips', () => {
     await expect(runIdempotent({ ...identity, kv, operation }))
       .resolves.toMatchObject({ status: 201, replayed: false, data: { id: 'msg_1' } });
 
-    // The record and lock reads share one round trip; the lock write is the only
-    // KV call still outstanding when the operation starts, so the operation is
-    // preceded by a single serialized read and followed by a single write.
-    expect(kv.roundTrips).toEqual([['get:record', 'get:lock'], ['put:lock'], ['put:record']]);
-    expect(inFlightAtOperation).toBe(1);
+    // The record and lock reads share one round trip. The lock write and the
+    // post-lock record fence remain serialized before the operation, and the
+    // result write follows it.
+    expect(kv.roundTrips).toEqual([
+      ['get:record', 'get:lock'],
+      ['put:lock'],
+      ['get:record'],
+      ['put:record'],
+    ]);
+    expect(inFlightAtOperation).toBe(0);
   });
 
   it('replays a completed record from the first read round trip', async () => {
@@ -134,6 +139,26 @@ describe('idempotency KV round trips', () => {
     await expect(runIdempotent({ ...identity, kv, fingerprint: 'fp-a', operation }))
       .resolves.toEqual({ status: 201, replayed: true, data: { id: 'msg_1' } });
     expect(operation).not.toHaveBeenCalled();
+  });
+
+  it('replays a concurrent result that lands while this caller writes its lock', async () => {
+    const kv = tracingKv(await storageKey());
+    kv.onSettled = (label) => {
+      if (label !== 'put:lock') return;
+      kv.onSettled = undefined;
+      kv.seed('record', JSON.stringify({ status: 201, data: { id: 'msg_1' }, fingerprint: 'fp-a' }));
+    };
+    const operation = vi.fn(async () => ({ id: 'msg_2' }));
+
+    await expect(runIdempotent({ ...identity, kv, fingerprint: 'fp-a', operation }))
+      .resolves.toEqual({ status: 201, replayed: true, data: { id: 'msg_1' } });
+    expect(operation).not.toHaveBeenCalled();
+    expect(kv.roundTrips).toEqual([
+      ['get:record', 'get:lock'],
+      ['put:lock'],
+      ['get:record'],
+    ]);
+    expect(flat(kv)).not.toContain('delete:lock');
   });
 
   it('leaves no lock behind when the operation fails, so a retry runs fresh', async () => {

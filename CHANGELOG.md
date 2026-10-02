@@ -24,7 +24,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Changed
 
-- Idempotent writes (`Idempotency-Key`) complete in two serialized key/value round trips instead of six, cutting roughly 0.8s from a warm idempotent DM send.
+- Idempotent writes (`Idempotency-Key`) complete in four serialized key/value round trips instead of six, cutting roughly 0.4s from a warm idempotent DM send without widening the concurrent-retry window.
 
 ### Fixed
 
