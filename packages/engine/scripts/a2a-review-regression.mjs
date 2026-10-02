@@ -681,6 +681,7 @@ try {
     });
     for(const failure of ['pending_events','workspace_events','a2a_egress_context','capacity']){
       const ws=await seed('rollback-'+failure,1,{cap:1});
+      if(failure==='pending_events')await run("INSERT INTO event_subscriptions(id,workspace_id,events,url) VALUES(?,?,?,?)",ws+'subscription',ws,JSON.stringify(['dm.received']),'https://example.com/hook');
       if(failure==='capacity')expectStatus(await request(ws,'/v1/dm',{to:'recipient-1',text:'fill'}),201);
       await Promise.allSettled(background.splice(0));
       await run('INSERT INTO a2a_agents(id,workspace_id,relay_agent_id,external_url,agent_card) VALUES(?,?,?,?,?)',ws+'peer',ws,ws+'r1',targetUrl,JSON.stringify({name:'fixture',url:targetUrl,version:'1',skills:[{name:'message'}]}));

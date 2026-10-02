@@ -17,6 +17,7 @@ import {
   pendingEvents,
   messageLogs,
   nodes,
+  directDmIdempotency,
 } from '../db/schema.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { runAtomicWrites, databaseConstraintKind, type AtomicWrite } from '../ports/database.js';
@@ -32,7 +33,7 @@ import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig }
 import {
   type WorkspaceDeliveryPolicy,
 } from './workspaceDeliveryPolicy.js';
-import { dispatchA2aEgress } from './a2aEgress.js';
+import { A2A_EGRESS_RETRY_WINDOW_MS, dispatchA2aEgress, expireA2aEgressForReuse } from './a2aEgress.js';
 import { buildDmReceivedEventData } from './deliveryWire.js';
 import { buildWorkspaceEventWrite } from './workspaceEvents.js';
 import { transformForClient } from './wsTransform.js';
@@ -48,15 +49,18 @@ import {
 } from './address.js';
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 import { fetchAttachmentsBatch, resolveSendAttachments, type AttachmentRow } from './attachments.js';
-import { canonicalUserMessageMetadata, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
+import { canonicalJson, canonicalUserMessageMetadata, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
 import { queryInChunks } from '../lib/queryChunks.js';
 
 type Db = ReturnType<typeof getDb>;
+const DIRECT_DM_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 
 interface SendDmOptions {
   skipA2aIntercept?: boolean;
   /** Stable request identity for resuming already admitted outbound A2A. */
   idempotencyKey?: string;
+  /** Whether durable webhook fanout has any subscriber to receive it. */
+  hasWebhookSubscriptions?: boolean;
   /** Count an authenticated inbound peer in the same transaction as its DM. */
   receivedA2aAgentId?: string;
   /** Token hash authenticated by the route; checked with registration at SQL admission. */
@@ -68,7 +72,7 @@ interface SendDmOptions {
   /** Resolve only after durable accepted lookup (cached HTTP replay never calls sendDm). */
   resolveWorkspaceDeliveryPolicy?: () => Promise<WorkspaceDeliveryPolicy | undefined>;
   /** Fast paths only; durable events and delivery already committed before this hook. */
-  afterAdmission?: (data: SendDmResult, event: { seq: number; payload: Record<string, unknown>; data: Record<string, unknown>; outboxId: string }) => void;
+  afterAdmission?: (data: SendDmResult, event: { seq: number; payload: Record<string, unknown>; data: Record<string, unknown>; outboxId?: string }) => void;
   mailbox?: MailboxConfig;
   /** Server-resolved workspace growth policy; absent => no workspace guard. */
   workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy;
@@ -424,6 +428,8 @@ export type SendDmResult = AcceptedDmResult & {
   _delivery: DeliveryOutcomeRecords['deliveries'][number] | null;
   _delivery_rejections: DeliveryOutcomeRecords['rejections'];
   _notifications_durable?: boolean;
+  _idempotency_replayed?: boolean;
+  _idempotency_ttl_seconds?: number;
 };
 
 const legacyPublicFields = {
@@ -483,6 +489,17 @@ async function promoteLegacyInbound(
   return { ...retained.response, _delivery: null, _delivery_rejections: [], _notifications_durable: true };
 }
 
+async function replayAcceptedA2aEgress(db: Db, id: string): Promise<void> {
+  try {
+    await dispatchA2aEgress(db, id);
+  } catch (error) {
+    // The durable receipt is stable only while another sender or retry lease
+    // owns transport. Retention, target, expiry, and upstream errors still
+    // preserve their original typed replay contract.
+    if ((error as { code?: string }).code !== 'a2a_egress_in_progress') throw error;
+  }
+}
+
 export async function sendDm(
   db: Db,
   workspaceId: string,
@@ -497,17 +514,85 @@ export async function sendDm(
   options: SendDmOptions = {},
 ): Promise<SendDmResult> {
   const startedAtMs = Date.now();
-  // Resolve durable request identity before mutable recipient/attachment metadata.
-  // A removed/recreated target must never turn an accepted retry into a new send.
+  const directRequestId = options.idempotencyKey
+    ? `dmid_${await sha256Hex(JSON.stringify([workspaceId, fromAgentId, options.idempotencyKey]))}`
+    : null;
+  const directFingerprint = directRequestId
+    ? await sha256Hex(canonicalJson({ data, address: options.address ?? null }))
+    : '';
+  // The request claim is transport-independent. If the recipient changes
+  // between direct and A2A routing, both attempts still contend on one ID.
   const requestEgressId = !options.skipA2aIntercept && options.idempotencyKey
     ? `a2ae_${await sha256Hex(JSON.stringify([workspaceId, fromAgentId, options.idempotencyKey]))}`
     : null;
-  const [accepted] = requestEgressId ? await db.select().from(a2aEgress).where(eq(a2aEgress.id, requestEgressId)) : [];
-  if (accepted) {
-    if (accepted.fingerprint !== await sha256Hex(JSON.stringify(data))) {
+  const requestEgressFingerprint = requestEgressId
+    ? await sha256Hex(canonicalJson(data))
+    : '';
+  const legacyRequestEgressFingerprint = requestEgressId
+    ? await sha256Hex(JSON.stringify(data))
+    : '';
+  const idempotencyNow = new Date();
+  let [acceptedDirect] = directRequestId
+    ? await db.select().from(directDmIdempotency).where(eq(directDmIdempotency.id, directRequestId))
+    : [];
+  if (
+    acceptedDirect
+    && acceptedDirect.createdAt.getTime() + DIRECT_DM_IDEMPOTENCY_TTL_MS <= idempotencyNow.getTime()
+  ) {
+    await db.delete(directDmIdempotency).where(and(
+      eq(directDmIdempotency.id, acceptedDirect.id),
+      lte(directDmIdempotency.createdAt, new Date(idempotencyNow.getTime() - DIRECT_DM_IDEMPOTENCY_TTL_MS)),
+    ));
+    [acceptedDirect] = await db
+      .select()
+      .from(directDmIdempotency)
+      .where(eq(directDmIdempotency.id, directRequestId!));
+  }
+  if (acceptedDirect) {
+    if (acceptedDirect.fingerprint !== directFingerprint) {
       throw codedError('Idempotency-Key was reused with a different request payload', 'idempotency_key_reused', 409);
     }
-    await dispatchA2aEgress(db, accepted.id);
+    const [acceptedEgress] = requestEgressId
+      ? await db.select().from(a2aEgress).where(eq(a2aEgress.id, requestEgressId))
+      : [];
+    if (acceptedEgress) await replayAcceptedA2aEgress(db, acceptedEgress.id);
+    return {
+      ...(acceptedDirect.response as Omit<SendDmResult, '_delivery' | '_delivery_rejections'>),
+      _delivery: null,
+      _delivery_rejections: [],
+      _notifications_durable: true,
+      _idempotency_replayed: true,
+      _idempotency_ttl_seconds: Math.max(0, Math.floor(
+        (acceptedDirect.createdAt.getTime() + DIRECT_DM_IDEMPOTENCY_TTL_MS - Date.now()) / 1000,
+      )),
+    };
+  }
+  // Resolve durable request identity before mutable recipient/attachment metadata.
+  // A removed/recreated target must never turn an accepted retry into a new send.
+  let accepted: typeof a2aEgress.$inferSelect | undefined = requestEgressId
+    ? (await db.select().from(a2aEgress).where(eq(a2aEgress.id, requestEgressId)))[0]
+    : undefined;
+  if (
+    accepted
+    && accepted.createdAt.getTime() + A2A_EGRESS_RETRY_WINDOW_MS <= idempotencyNow.getTime()
+  ) {
+    const deleted = await expireA2aEgressForReuse(db, accepted.id, idempotencyNow);
+    if (deleted) {
+      accepted = undefined;
+    } else {
+      // A live transport lease may have won between the read and conditional
+      // delete. Re-read the row rather than admitting a competing identity.
+      [accepted] = await db.select().from(a2aEgress).where(eq(a2aEgress.id, requestEgressId!));
+    }
+  }
+  if (accepted) {
+    if (
+      accepted.fingerprint !== requestEgressFingerprint
+      && accepted.fingerprint !== legacyRequestEgressFingerprint
+    ) {
+      throw codedError('Idempotency-Key was reused with a different request payload', 'idempotency_key_reused', 409);
+    }
+    await replayAcceptedA2aEgress(db, accepted.id);
     let [context] = await db.select().from(a2aEgressContext).where(eq(a2aEgressContext.id, accepted.id));
     if (!context) {
       // Upgrade compatibility for admissions predating 0058: recover only from
@@ -596,7 +681,9 @@ export async function sendDm(
   const egressId = a2aTarget
     ? `a2ae_${await sha256Hex(JSON.stringify([workspaceId, fromAgentId, options.idempotencyKey ?? generateId()]))}`
     : null;
-  const fingerprint = egressId ? await sha256Hex(JSON.stringify(data)) : '';
+  const fingerprint = egressId
+    ? requestEgressFingerprint || await sha256Hex(canonicalJson(data))
+    : '';
   const messageId = generateId();
   // Match SQLite timestamp precision so live, retained response and delivery replay agree.
   const createdAt = new Date(Math.floor(Date.now() / 1000) * 1000);
@@ -643,12 +730,29 @@ export async function sendDm(
   const workspacePayload = transformForClient({
     type: 'dm.received', workspace_id: workspaceId, data: eventData, timestamp: createdAt.toISOString(),
   });
-  // The outbox, observer cursor log, response context and delivery share admission.
-  // None can escape a capacity rollback, or depend on external transport success.
+  const directClaimId = directRequestId;
+  const notificationsDurable = Boolean(egressId || options.receivedA2aAgentId || inboundId || directClaimId);
+  const persistWebhookOutbox = notificationsDurable && options.hasWebhookSubscriptions !== false;
+  // The optional webhook outbox, observer cursor log, response context and
+  // delivery share admission. None can escape a capacity rollback, or depend
+  // on external transport success.
   const persist = () => runAtomicWrites(db, (writeDb) => {
     const writes = buildDmMessageWrites(writeDb, workspaceId, fromAgentId, conv.channelId, data, attachments, messageId, createdAt,
       options.receivedA2aAgentId ? { id: options.receivedA2aAgentId, tokenHash: options.receivedA2aTokenHash } : undefined,
       senderAddress, addressedRecipient);
+
+    if (directClaimId) {
+      // The unique claim is the first statement in the atomic admission. A
+      // concurrent loser rolls back before any message or delivery can escape.
+      writes.unshift(writeDb.insert(directDmIdempotency).values({
+        id: directClaimId,
+        workspaceId,
+        messageId,
+        fingerprint: directFingerprint,
+        response: publicResult,
+        createdAt,
+      }));
+    }
 
     if (egressId && a2aTarget && egressPayload) {
       // First statement owns the request identity; a competing attempt rolls
@@ -701,18 +805,18 @@ export async function sendDm(
 
     if (inboundId) writes.push(writeDb.insert(a2aInbound).values({ id: inboundId, workspaceId, messageId, fingerprint: inboundFingerprint, response: publicResult }));
     if (egressId) writes.push(writeDb.insert(a2aEgressContext).values({ id: egressId, messageId, response: publicResult }));
-    if (egressId || options.receivedA2aAgentId || inboundId) {
-      writes.push(
-        writeDb.insert(pendingEvents).values({ id: messageId, workspaceId, eventType: 'dm.received', payload: eventData }),
-        buildWorkspaceEventWrite(writeDb, workspaceId, { type: 'dm.received', payload: workspacePayload }),
-      );
+    if (persistWebhookOutbox) {
+      writes.push(writeDb.insert(pendingEvents).values({ id: messageId, workspaceId, eventType: 'dm.received', payload: eventData }));
+    }
+    if (notificationsDurable) {
+      writes.push(buildWorkspaceEventWrite(writeDb, workspaceId, { type: 'dm.received', payload: workspacePayload }));
     }
     return writes;
-  }, { requireAtomic: Boolean(workspacePolicy || a2aTarget || options.receivedA2aAgentId || inboundId) });
+  }, { requireAtomic: Boolean(workspacePolicy || a2aTarget || options.receivedA2aAgentId || inboundId || directClaimId) });
   let admittedEventSeq: number | undefined;
   try {
     const results = await persist();
-    if (egressId || options.receivedA2aAgentId || inboundId) admittedEventSeq = (results[results.length - 1] as { seq: number }[])[0].seq;
+    if (notificationsDurable) admittedEventSeq = (results[results.length - 1] as { seq: number }[])[0].seq;
   } catch (error) {
     if (options.address !== undefined && databaseConstraintKind(error) === 'address_changed') {
       throw addressNotFound(options.address);
@@ -727,10 +831,22 @@ export async function sendDm(
         return sendDm(db, workspaceId, fromAgentId, data, options);
       }
     }
+    if (directClaimId) {
+      const [winner] = await db.select().from(directDmIdempotency).where(eq(directDmIdempotency.id, directClaimId));
+      if (winner) {
+        if (winner.fingerprint !== directFingerprint) {
+          throw codedError('Idempotency-Key was reused with a different request payload', 'idempotency_key_reused', 409);
+        }
+        return sendDm(db, workspaceId, fromAgentId, data, options);
+      }
+    }
     // Inspect the actual committed winner after the losing atomic batch rolls back.
     const [winner] = egressId ? await db.select().from(a2aEgress).where(eq(a2aEgress.id, egressId)) : [];
     if (!winner) throw error;
-    if (winner.fingerprint !== fingerprint) {
+    if (
+      winner.fingerprint !== fingerprint
+      && winner.fingerprint !== legacyRequestEgressFingerprint
+    ) {
       throw codedError('Idempotency-Key was reused with a different request payload', 'idempotency_key_reused', 409);
     }
     return sendDm(db, workspaceId, fromAgentId, data, options);
@@ -744,14 +860,24 @@ export async function sendDm(
     ...publicResult,
     _delivery: dmDelivery,
     _delivery_rejections: deliveryOutcomes.rejections,
-    ...((egressId || options.receivedA2aAgentId || inboundId) ? { _notifications_durable: true } : {}),
+    ...(notificationsDurable ? { _notifications_durable: true } : {}),
   };
-  if (egressId || options.receivedA2aAgentId || inboundId) {
+  if (notificationsDurable) {
     // Local fast paths run independently of transport. A crash here still leaves
-    // the webhook outbox, workspace cursor log and queued delivery recoverable.
-    options.afterAdmission?.(result, { seq: admittedEventSeq!, payload: workspacePayload, data: eventData, outboxId: messageId });
+    // any needed webhook outbox, workspace cursor log and queued delivery recoverable.
+    options.afterAdmission?.(result, {
+      seq: admittedEventSeq!, payload: workspacePayload, data: eventData,
+      ...(persistWebhookOutbox ? { outboxId: messageId } : {}),
+    });
   }
   if (egressId) await dispatchA2aEgress(db, egressId);
+  if (directClaimId) {
+    // Compute this after transport work so a slow A2A dispatch cannot refill KV
+    // beyond the authoritative claim's absolute 24-hour lifetime.
+    result._idempotency_ttl_seconds = Math.max(0, Math.floor(
+      (createdAt.getTime() + DIRECT_DM_IDEMPOTENCY_TTL_MS - Date.now()) / 1000,
+    ));
+  }
   return result;
 }
 

@@ -39,7 +39,7 @@ const sqlInboundCompletionSchema = z.object({
 
 // KV is only an advisory completion cache. Public content and the replay
 // decision belong to SQL, where source pruning can scrub them atomically.
-async function receiveIdempotently(c: Context<AppEnv>, options: Omit<Parameters<typeof runIdempotent<dmEngine.SendDmResult>>[0], 'operation'> & {
+async function receiveIdempotently(c: Context<AppEnv>, options: Omit<Parameters<typeof runIdempotent<dmEngine.SendDmResult>>[0], 'operation' | 'ttlSecondsForResult'> & {
   operation: (legacyInbound?: unknown) => Promise<dmEngine.SendDmResult>;
 }) {
   const inboundId = options.key

@@ -14,19 +14,32 @@ import { and, eq, isNotNull } from 'drizzle-orm';
 
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
 import {
+  a2aAgents,
+  a2aEgress,
   agents,
+  directDmIdempotency,
   dmConversationReservations,
   dmConversations,
   dmParticipants,
+  messages,
+  pendingEvents,
+  workspaceEvents,
   workspaces,
 } from '../../db/schema.js';
 import { isPairReservationConflict, sendDm } from '../dm.js';
+import {
+  DIRECT_DM_IDEMPOTENCY_CLEANUP_BATCH_SIZE,
+  expireA2aEgressForReuse,
+  sweepPendingA2aEgress,
+} from '../a2aEgress.js';
+import { sha256Hex } from '../../lib/crypto.js';
 
 type Db = SqliteDbHandle['db'];
 
 const handles: SqliteDbHandle[] = [];
 
 afterEach(() => {
+  vi.useRealTimers();
   for (const handle of handles.splice(0)) {
     try {
       handle.sqlite.close();
@@ -109,6 +122,262 @@ describe('1:1 DM conversation identity', () => {
       .from(dmParticipants)
       .where(eq(dmParticipants.conversationId, first.conversation_id));
     expect(participants).toHaveLength(2);
+  });
+
+  it('admits two concurrent dispatch attempts with one idempotency key as one stored message', async () => {
+    const { db, ws, alice } = seed();
+    const request = { to: 'bob', text: 'only once' };
+    let transactionArrivals = 0;
+    let releaseAdmissions!: () => void;
+    const admissionGate = new Promise<void>((resolve) => { releaseAdmissions = resolve; });
+    const racingDb = new Proxy(db, {
+      get(target, prop) {
+        if (prop === 'withTransaction') {
+          return async <T>(fn: Parameters<NonNullable<Db['withTransaction']>>[0]): Promise<T> => {
+            transactionArrivals += 1;
+            if (transactionArrivals === 2) releaseAdmissions();
+            await admissionGate;
+            return target.withTransaction(fn) as Promise<T>;
+          };
+        }
+        const value = Reflect.get(target, prop, target) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const [first, second] = await Promise.all([
+      sendDm(racingDb, ws, alice, request, { idempotencyKey: 'logical-dm-1' }),
+      sendDm(racingDb, ws, alice, request, { idempotencyKey: 'logical-dm-1' }),
+    ]);
+
+    expect(second.id).toBe(first.id);
+    expect(db.select().from(messages).all()).toHaveLength(1);
+    expect(db.select().from(directDmIdempotency).all()).toHaveLength(1);
+    expect(db.select().from(pendingEvents).all()).toHaveLength(1);
+    expect(db.select().from(workspaceEvents).all()).toHaveLength(1);
+  });
+
+  it('keeps one keyed request claim when a recipient changes to A2A routing', async () => {
+    const { db, ws, alice, bob } = seed();
+    const request = { to: 'bob', text: 'same request' };
+    const first = await sendDm(db, ws, alice, request, { idempotencyKey: 'transport-change' });
+
+    await db.insert(a2aAgents).values({
+      id: 'a2a_transport_change',
+      workspaceId: ws,
+      relayAgentId: bob,
+      agentCard: {
+        name: 'bob',
+        url: 'https://example.com/a2a/rpc',
+        version: '1.0.0',
+        skills: [{ id: 'echo', name: 'echo' }],
+      },
+      externalUrl: 'https://example.com/a2a/rpc',
+    });
+
+    const replay = await sendDm(db, ws, alice, request, { idempotencyKey: 'transport-change' });
+    expect(replay.id).toBe(first.id);
+    expect(db.select().from(messages).all()).toHaveLength(1);
+    expect(db.select().from(directDmIdempotency).all()).toHaveLength(1);
+    expect(db.select().from(a2aEgress).all()).toHaveLength(0);
+  });
+
+  it('reports a fresh claim TTL after post-admission work completes', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const acceptedAt = new Date('2026-10-02T00:00:00.000Z');
+    vi.setSystemTime(acceptedAt);
+    const { db, ws, alice } = seed();
+
+    const sent = await sendDm(db, ws, alice, { to: 'bob', text: 'slow completion' }, {
+      idempotencyKey: 'fresh-claim-ttl',
+      afterAdmission: () => vi.setSystemTime(acceptedAt.getTime() + 5_000),
+    });
+
+    expect(sent._idempotency_ttl_seconds).toBe(24 * 60 * 60 - 5);
+  });
+
+  it('prunes expired keyed request claims without deleting their messages', async () => {
+    const { db, ws, alice } = seed();
+    await sendDm(db, ws, alice, { to: 'bob', text: 'retained' }, {
+      idempotencyKey: 'expired-claim',
+    });
+    const [claim] = db.select({ id: directDmIdempotency.id }).from(directDmIdempotency).all();
+    await db.update(directDmIdempotency)
+      .set({ createdAt: new Date(Date.now() - 25 * 60 * 60 * 1000) })
+      .where(eq(directDmIdempotency.id, claim!.id));
+
+    expect(await sweepPendingA2aEgress(db, 20)).toEqual({ attempted: 0, failed: 0 });
+    expect(db.select().from(directDmIdempotency).all()).toHaveLength(0);
+    expect(db.select().from(messages).all()).toHaveLength(1);
+  });
+
+  it('prunes direct request claims with its own bounded budget across sweeps', async () => {
+    const { db, ws } = seed();
+    const old = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    const count = DIRECT_DM_IDEMPOTENCY_CLEANUP_BATCH_SIZE + 1;
+    for (let i = 0; i < count; i += 1) {
+      db.insert(directDmIdempotency).values({
+        id: `dmid_expired_${i}`,
+        workspaceId: ws,
+        messageId: `msg_expired_${i}`,
+        fingerprint: `fingerprint_${i}`,
+        response: { id: `msg_expired_${i}` },
+        createdAt: old,
+      }).run();
+    }
+
+    // The A2A work budget is deliberately tiny; direct claims still consume
+    // their independent 500-row batch and never turn this into an unbounded delete.
+    expect(await sweepPendingA2aEgress(db, 2)).toEqual({ attempted: 0, failed: 0 });
+    expect(db.select().from(directDmIdempotency).all()).toHaveLength(1);
+    expect(await sweepPendingA2aEgress(db, 2)).toEqual({ attempted: 0, failed: 0 });
+    expect(db.select().from(directDmIdempotency).all()).toHaveLength(0);
+  });
+
+  it('rejects reuse of a direct-DM idempotency key for a different payload', async () => {
+    const { db, ws, alice } = seed();
+    await sendDm(db, ws, alice, { to: 'bob', text: 'first' }, { idempotencyKey: 'logical-dm-2' });
+
+    await expect(
+      sendDm(db, ws, alice, { to: 'bob', text: 'changed' }, { idempotencyKey: 'logical-dm-2' }),
+    ).rejects.toMatchObject({ code: 'idempotency_key_reused', status: 409 });
+    expect(db.select().from(messages).all()).toHaveLength(1);
+  });
+
+  it('replays reordered nested metadata as the same keyed request', async () => {
+    const { db, ws, alice } = seed();
+    const first = await sendDm(db, ws, alice, {
+      to: 'bob',
+      text: 'metadata',
+      data: { outer: { beta: 2, alpha: 1 }, tail: true },
+    }, { idempotencyKey: 'canonical-metadata' });
+    const replay = await sendDm(db, ws, alice, {
+      to: 'bob',
+      text: 'metadata',
+      data: { tail: true, outer: { alpha: 1, beta: 2 } },
+    }, { idempotencyKey: 'canonical-metadata' });
+
+    expect(replay.id).toBe(first.id);
+    expect(db.select().from(messages).all()).toHaveLength(1);
+  });
+
+  it('returns the stored receipt while an accepted A2A egress has a live lease', async () => {
+    const { db, ws, alice } = seed();
+    const key = 'a2a-live-replay';
+    const request = { to: 'bob', text: 'accepted' };
+    const first = await sendDm(db, ws, alice, request, { idempotencyKey: key });
+    const egressId = `a2ae_${await sha256Hex(JSON.stringify([ws, alice, key]))}`;
+    await db.insert(a2aEgress).values({
+      id: egressId,
+      workspaceId: ws,
+      messageId: first.id,
+      targetId: 'a2a-target',
+      externalUrl: 'https://example.com/a2a/rpc',
+      fingerprint: await sha256Hex(JSON.stringify(request)),
+      status: 'sending',
+      claimToken: 'live-owner',
+      leaseUntil: new Date(Date.now() + 60_000),
+    });
+
+    const replay = await sendDm(db, ws, alice, request, { idempotencyKey: key });
+    expect(replay.id).toBe(first.id);
+    expect(db.select().from(messages).all()).toHaveLength(1);
+    expect(db.select().from(a2aEgress).all()).toHaveLength(1);
+  });
+
+  it('replays a terminal A2A outcome after the request claim commits', async () => {
+    const { db, ws, alice } = seed();
+    const key = 'a2a-terminal-replay';
+    const request = { to: 'bob', text: 'accepted then rejected' };
+    const first = await sendDm(db, ws, alice, request, { idempotencyKey: key });
+    const egressId = `a2ae_${await sha256Hex(JSON.stringify([ws, alice, key]))}`;
+    await db.insert(a2aEgress).values({
+      id: egressId,
+      workspaceId: ws,
+      messageId: first.id,
+      targetId: 'a2a-target',
+      externalUrl: 'https://example.com/a2a/rpc',
+      fingerprint: await sha256Hex(JSON.stringify(request)),
+      status: 'failed',
+      lastError: 'upstream refused',
+      errorStatus: 403,
+      errorCode: 'a2a_upstream_rejected',
+    });
+
+    await expect(sendDm(db, ws, alice, request, { idempotencyKey: key }))
+      .rejects.toMatchObject({ status: 403, code: 'a2a_upstream_rejected' });
+    expect(db.select().from(messages).all()).toHaveLength(1);
+  });
+
+  it('validates source retention before replaying a settled A2A receipt', async () => {
+    const { db, ws, alice } = seed();
+    const key = 'a2a-retention-replay';
+    const request = { to: 'bob', text: 'retained only with source' };
+    const first = await sendDm(db, ws, alice, request, { idempotencyKey: key });
+    const egressId = `a2ae_${await sha256Hex(JSON.stringify([ws, alice, key]))}`;
+    await db.insert(a2aEgress).values({
+      id: egressId,
+      workspaceId: ws,
+      messageId: first.id,
+      targetId: 'a2a-target',
+      externalUrl: 'https://example.com/a2a/rpc',
+      fingerprint: await sha256Hex(JSON.stringify(request)),
+      status: 'sent',
+    });
+    await db.delete(messages).where(eq(messages.id, first.id));
+
+    await expect(sendDm(db, ws, alice, request, { idempotencyKey: key }))
+      .rejects.toMatchObject({ status: 410, code: 'a2a_message_not_retained' });
+  });
+
+  it('expires a retained A2A identity before reusing an expired request key', async () => {
+    const { db, ws, alice } = seed();
+    const key = 'expired-a2a-identity';
+    const first = await sendDm(db, ws, alice, { to: 'bob', text: 'old' }, {
+      idempotencyKey: key,
+    });
+    const old = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    const [claim] = db.select({ id: directDmIdempotency.id }).from(directDmIdempotency).all();
+    await db.update(directDmIdempotency).set({ createdAt: old })
+      .where(eq(directDmIdempotency.id, claim!.id));
+    const egressId = `a2ae_${await sha256Hex(JSON.stringify([ws, alice, key]))}`;
+    await db.insert(a2aEgress).values({
+      id: egressId,
+      workspaceId: ws,
+      messageId: first.id,
+      targetId: 'retired-a2a-target',
+      externalUrl: 'https://example.com/a2a/rpc',
+      fingerprint: 'expired',
+      status: 'sent',
+      createdAt: old,
+    });
+
+    const fresh = await sendDm(db, ws, alice, { to: 'bob', text: 'fresh' }, {
+      idempotencyKey: key,
+    });
+    expect(fresh.id).not.toBe(first.id);
+    expect(db.select().from(messages).all()).toHaveLength(2);
+    expect(db.select().from(a2aEgress).all()).toHaveLength(0);
+    expect(db.select().from(directDmIdempotency).all()).toHaveLength(1);
+  });
+
+  it('preserves an expired A2A identity while its transport lease is live', async () => {
+    const { db, ws, alice } = seed();
+    const old = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    const id = 'a2ae_live_lease';
+    await db.insert(a2aEgress).values({
+      id,
+      workspaceId: ws,
+      messageId: 'msg_live_lease',
+      targetId: 'a2a-target',
+      externalUrl: 'https://example.com/a2a/rpc',
+      fingerprint: 'fingerprint',
+      status: 'sending',
+      leaseUntil: new Date(Date.now() + 60_000),
+      createdAt: old,
+    });
+
+    expect(await expireA2aEgressForReuse(db, id)).toBe(false);
+    expect(db.select().from(a2aEgress).all()).toHaveLength(1);
   });
 
   /**

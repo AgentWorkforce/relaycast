@@ -28,6 +28,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
+- Direct-message idempotency is now enforced atomically across direct and A2A routing, so concurrent retries reaching different server isolates cannot create duplicate rows or lose post-commit notification recovery.
 - Server telemetry events can no longer be emitted with an unlisted name, a missing required property, or an overridden `workspace_id`, any of which made hosted ingestion silently drop them.
 - Fix webhook listing responses so published SDKs can deserialize them, restoring webhook cleanup for integrations.
 

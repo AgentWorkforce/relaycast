@@ -3,6 +3,9 @@ import { eq } from 'drizzle-orm';
 import { attachFakeBatch, makeNodeStack, createWorkspace, registerAgent, FakeSocket, type TestStack } from './harness.js';
 import { agents, messages, nodes } from '../../db/schema.js';
 import { addressSplits, SENDER_ADDRESS_METADATA_KEY } from '../../engine/address.js';
+import { canonicalJson } from '../../engine/messageMetadata.js';
+import { sha256Hex } from '../../lib/crypto.js';
+import { buildIdempotencyStorageKey } from '../../middleware/idempotency.js';
 
 type Json = Record<string, unknown>;
 
@@ -434,6 +437,44 @@ describe('addressed send', () => {
       expect((await send(alice.token, 'bob@desktop', { text: 'x' }, key)).status).toBe(404);
       // Nothing was accepted under the key yet, so a valid address is not a reuse conflict.
       expect((await send(alice.token, 'bob@laptop', { text: 'x' }, key)).status).toBe(201);
+    });
+
+    it('replays equivalent nested metadata regardless of object key order', async () => {
+      const { ws, alice } = await seed();
+      const idempotencyKey = 'retry-canonical-data';
+      const key = { 'Idempotency-Key': idempotencyKey };
+      const originalData = { outer: { beta: 2, alpha: 1 }, tail: true };
+      const first = await send(alice.token, 'bob@laptop', {
+        text: 'same metadata',
+        data: originalData,
+      }, key);
+      expect(first.status).toBe(201);
+      const firstId = ((await first.json()) as { data: { id: string } }).data.id;
+
+      const storageKey = await buildIdempotencyStorageKey(
+        ws.workspaceId, alice.agentId, 'dm:direct', idempotencyKey,
+      );
+      const storedRaw = await stack.runtime.deps.kv.get(storageKey);
+      const stored = JSON.parse(storedRaw!) as { fingerprint: string; fingerprints: string[] };
+      const legacyFingerprint = JSON.stringify({
+        to: 'bob@laptop', address: 'bob@laptop', text: 'same metadata',
+        data_sha256: await sha256Hex(JSON.stringify(originalData)),
+      });
+      const canonicalFingerprint = JSON.stringify({
+        to: 'bob@laptop', address: 'bob@laptop', text: 'same metadata',
+        data_sha256: await sha256Hex(canonicalJson(originalData)),
+      });
+      // This is the exact comparison the prior engine performs after rollback.
+      expect(stored.fingerprint).toBe(legacyFingerprint);
+      expect(stored.fingerprints).toEqual([canonicalFingerprint]);
+
+      const replay = await send(alice.token, 'bob@laptop', {
+        text: 'same metadata',
+        data: { tail: true, outer: { alpha: 1, beta: 2 } },
+      }, key);
+      expect(replay.status).toBe(201);
+      expect(((await replay.json()) as { data: { id: string } }).data.id).toBe(firstId);
+      expect(await stack.runtime.deps.db.select().from(messages)).toHaveLength(1);
     });
   });
 
