@@ -198,10 +198,12 @@ try {
     const f=await setup('expiry-before-dispatch');const before=f.calls();f.healthy();
     await run('UPDATE a2a_egress SET created_at=unixepoch()-86401 WHERE workspace_id=?',f.ws);
     const replay=await f.retry();expectStatus(replay,410);assert.equal(replay.body.error.code,'a2a_egress_expired');assert.equal(f.calls(),before);assert.equal((await f.intent()).payload,null);
-    await cleanupA2aEgress(db,100);assert.equal(await f.intent(),undefined);
-    // After the documented window and cleanup, the old key is fresh.
+    // The transport row alone is not the request boundary anymore. Once the
+    // authoritative request claim also expires, admission retires the old A2A
+    // identity before reusing the key.
+    await run('UPDATE direct_dm_idempotency SET created_at=unixepoch()-86401 WHERE workspace_id=?',f.ws);
     expectStatus(await f.retry(),201);assert.equal(f.calls(),before+1);
-    record('expired pending intent never sends; typed 410 until cleanup, then key is fresh');
+    record('expired pending intent never sends; typed 410 until request claim expiry, then key is fresh');
   }
   {
     // Isolate cleanup counts from previous expired fixtures.
