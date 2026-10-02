@@ -224,9 +224,9 @@ try {
     const sending=f.retry();await started;
     await run('UPDATE a2a_egress SET created_at=unixepoch()-86401 WHERE workspace_id=?',f.ws);
     assert.equal(await cleanupA2aEgress(db,100),0);assert.equal((await f.intent()).status,'sending');
-    expectStatus(await f.retry(),409);assert.equal(calls,1);release();expectStatus(await sending,201);
+    const replay=await f.retry();expectStatus(replay,201);assert.equal(calls,1);release();const admitted=await sending;expectStatus(admitted,201);assert.equal(replay.body.data.id,admitted.body.data.id);
     assert.equal((await f.intent()).status,'sent');assert.equal((await f.intent()).payload,null);assert.equal(await cleanupA2aEgress(db,100),1);
-    record('cleanup preserves active lease; concurrent retry excluded; cleanup after settlement',{calls});
+    record('cleanup preserves active lease; concurrent retry returns stable receipt; cleanup after settlement',{calls});
   }
   {
     const f=await setup('expired-crash-lease');f.healthy();const before=f.calls();
