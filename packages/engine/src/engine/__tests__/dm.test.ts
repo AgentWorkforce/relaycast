@@ -270,6 +270,27 @@ describe('1:1 DM conversation identity', () => {
     expect(db.select().from(messages).all()).toHaveLength(1);
   });
 
+  it('validates source retention before replaying a settled A2A receipt', async () => {
+    const { db, ws, alice } = seed();
+    const key = 'a2a-retention-replay';
+    const request = { to: 'bob', text: 'retained only with source' };
+    const first = await sendDm(db, ws, alice, request, { idempotencyKey: key });
+    const egressId = `a2ae_${await sha256Hex(JSON.stringify([ws, alice, key]))}`;
+    await db.insert(a2aEgress).values({
+      id: egressId,
+      workspaceId: ws,
+      messageId: first.id,
+      targetId: 'a2a-target',
+      externalUrl: 'https://example.com/a2a/rpc',
+      fingerprint: await sha256Hex(JSON.stringify(request)),
+      status: 'sent',
+    });
+    await db.delete(messages).where(eq(messages.id, first.id));
+
+    await expect(sendDm(db, ws, alice, request, { idempotencyKey: key }))
+      .rejects.toMatchObject({ status: 410, code: 'a2a_message_not_retained' });
+  });
+
   it('expires a retained A2A identity before reusing an expired request key', async () => {
     const { db, ws, alice } = seed();
     const key = 'expired-a2a-identity';
