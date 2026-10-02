@@ -152,6 +152,17 @@ export async function runIdempotent<T>(
     return { status, data, replayed: false };
   }
 
+  /** Replay a stored record, rejecting a key reused with a different payload. */
+  const replayOf = (raw: string): IdempotentResult<T> => {
+    const parsed = JSON.parse(raw) as StoredIdempotencyRecord<T>;
+    if ((requireFingerprint && !parsed.fingerprint) || !fingerprintMatches(parsed.fingerprint, fingerprint, compatibleFingerprints)) {
+      const err = new Error('Idempotency-Key was reused with a different request payload');
+      Object.assign(err, { code: 'idempotency_key_reused', status: 409 });
+      throw err;
+    }
+    return { status: parsed.status || status, data: parsed.data, replayed: true };
+  };
+
   let kvStore: KeyValueStore | null = kv ?? null;
   let kvKey: string | null = null;
   let lockKey: string | null = null;
@@ -161,46 +172,41 @@ export async function runIdempotent<T>(
     throw idempotencyUnavailableError();
   }
 
+  // Storage the caller declared mandatory must fail closed before the operation
+  // commits, so those paths keep the lock write on the critical path.
+  const failClosed = requireKv || requireKvRead;
+
   if (kvStore) {
     kvKey = await buildIdempotencyStorageKey(workspaceId, actorId, scope, key);
     lockKey = `${kvKey}:lock`;
 
     try {
-      const existingRaw = await kvStore.get(kvKey);
-      if (existingRaw) {
-        const parsed = JSON.parse(existingRaw) as StoredIdempotencyRecord<T>;
-        if ((requireFingerprint && !parsed.fingerprint) || !fingerprintMatches(parsed.fingerprint, fingerprint, compatibleFingerprints)) {
-          const err = new Error('Idempotency-Key was reused with a different request payload');
-          Object.assign(err, { code: 'idempotency_key_reused', status: 409 });
-          throw err;
-        }
+      // The record and the lock are independent keys, so read them in one round
+      // trip instead of two. KV has no atomic NX-style set, so the lock stays
+      // best-effort: in rare races duplicate operations may still run.
+      // `allSettled` keeps the reads independent in failure too: a stored record
+      // answers the request on its own, so a failed lock read must not void a
+      // replay the record read already proved. Otherwise either read failing is
+      // a read failure, exactly as the serialized record-then-lock reads were.
+      const [recordRead, lockRead] = await Promise.allSettled([
+        kvStore.get(kvKey),
+        kvStore.get(lockKey),
+      ]);
 
-        return {
-          status: parsed.status || status,
-          data: parsed.data,
-          replayed: true,
-        };
+      if (recordRead.status === 'fulfilled' && recordRead.value) {
+        return replayOf(recordRead.value);
       }
+      if (recordRead.status === 'rejected') throw recordRead.reason;
+      if (lockRead.status === 'rejected') throw lockRead.reason;
+      const existingLock = lockRead.value;
 
-      // KV doesn't support atomic NX-style set, so we do a read-then-write for the lock.
-      // This is best-effort; in rare race conditions, duplicate operations may run.
-      const existingLock = await kvStore.get(lockKey);
       if (existingLock) {
-        // Another request may be processing. Check if result is now available.
+        // Another request may be processing, or may have committed between the
+        // paired reads above and now. One extra read — on the contended path
+        // only — keeps that case a replay instead of a spurious conflict.
         const concurrentRaw = await kvStore.get(kvKey);
         if (concurrentRaw) {
-          const parsed = JSON.parse(concurrentRaw) as StoredIdempotencyRecord<T>;
-          if ((requireFingerprint && !parsed.fingerprint) || !fingerprintMatches(parsed.fingerprint, fingerprint, compatibleFingerprints)) {
-            const err = new Error('Idempotency-Key was reused with a different request payload');
-            Object.assign(err, { code: 'idempotency_key_reused', status: 409 });
-            throw err;
-          }
-
-          return {
-            status: parsed.status || status,
-            data: parsed.data,
-            replayed: true,
-          };
+          return replayOf(concurrentRaw);
         }
 
         const err = new Error('Another request with this Idempotency-Key is still processing');
@@ -208,31 +214,35 @@ export async function runIdempotent<T>(
         throw err;
       }
 
-      // Acquire lock
+      // Acquire the best-effort lock before mutating. KV has no compare-and-set,
+      // so two callers can both have observed empty keys above. Re-reading the
+      // record after this write preserves the old fence: if the other caller
+      // completed while this lock write was pending, replay its result instead
+      // of running the operation a second time. Do not delete the lock on this
+      // replay path because it may still belong to the other caller.
       await kvStore.put(lockKey, '1', { expirationTtl: IDEMPOTENCY_LOCK_TTL_SECONDS });
       lockAcquired = true;
 
-      // Re-check record after acquiring lock to handle race with completed request
-      const recheckRaw = await kvStore.get(kvKey);
+      let recheckRaw: string | null;
+      try {
+        recheckRaw = await kvStore.get(kvKey);
+      } catch (err) {
+        // This caller wrote the lock but could not establish whether a result
+        // landed while that write was pending. Release the lock before the
+        // outer policy either fails closed or degrades to an unprotected
+        // operation; otherwise every immediate retry sees a stale 409.
+        try { await kvStore.delete(lockKey); } catch { /* bounded by the lock TTL */ }
+        lockAcquired = false;
+        throw err;
+      }
       if (recheckRaw) {
-        await kvStore.delete(lockKey);
-        const parsed = JSON.parse(recheckRaw) as StoredIdempotencyRecord<T>;
-        if ((requireFingerprint && !parsed.fingerprint) || !fingerprintMatches(parsed.fingerprint, fingerprint, compatibleFingerprints)) {
-          const err = new Error('Idempotency-Key was reused with a different request payload');
-          Object.assign(err, { code: 'idempotency_key_reused', status: 409 });
-          throw err;
-        }
-        return {
-          status: parsed.status || status,
-          data: parsed.data,
-          replayed: true,
-        };
+        return replayOf(recheckRaw);
       }
     } catch (err) {
       if (err instanceof Error && ['idempotency_key_reused', 'idempotency_in_progress'].includes((err as Error & { code?: string }).code ?? '')) {
         throw err;
       }
-      if (requireKv || requireKvRead) {
+      if (failClosed) {
         throw idempotencyUnavailableError(err);
       }
       // KV unavailable or decode failure: proceed without idempotency.
@@ -255,15 +265,19 @@ export async function runIdempotent<T>(
       };
       try {
         await kvStore.put(kvKey, JSON.stringify(record), { expirationTtl: ttlSeconds });
+        // The stored record answers every later request for this key, so the
+        // lock needs no explicit delete — it simply expires.
       } catch (err) {
+        // The record is missing, so the lock must go now: otherwise a retry
+        // inside the lock TTL sees neither and is rejected as in-progress.
+        if (lockKey) {
+          try { await kvStore.delete(lockKey); } catch { /* bounded by the lock TTL */ }
+          lockAcquired = false;
+        }
         if (requireKv) {
           throw idempotencyUnavailableError(err);
         }
         // KV failure during record storage — proceed without idempotency record.
-      } finally {
-        if (lockKey) {
-          try { await kvStore.delete(lockKey); } catch { /* ignore */ }
-        }
       }
     }
 
