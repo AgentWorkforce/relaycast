@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased - Patch]
 
+### Changed
+
+- `runIdempotent` reads the stored record and the in-flight lock in one round trip, overlaps the lock write with the operation, and lets the lock expire instead of deleting it after a stored success: a fresh key now costs two serialized KV round trips instead of six. Replay, conflicting-key rejection, in-progress rejection, interruption recovery, and retention bounds are unchanged; paths that set `requireKv`/`requireKvRead` still write the lock before the operation so they fail closed before committing.
+
 ### Fixed
 
 - `emitServerEvent` only accepts `SERVER_TELEMETRY_EVENTS` names and requires each event's required properties at compile time; `workspace_id` always comes from the `workspaceId` argument.

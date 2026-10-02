@@ -22,6 +22,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Rust workspace and agent clients accept product origin metadata across HTTP, WebSocket, token replacement, and anonymous workspace bootstrap.
 
+### Changed
+
+- Idempotent writes (`Idempotency-Key`) complete in two serialized key/value round trips instead of six, cutting roughly 0.8s from a warm idempotent DM send.
+
 ### Fixed
 
 - Server telemetry events can no longer be emitted with an unlisted name, a missing required property, or an overridden `workspace_id`, any of which made hosted ingestion silently drop them.
