@@ -33,7 +33,7 @@ import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig }
 import {
   type WorkspaceDeliveryPolicy,
 } from './workspaceDeliveryPolicy.js';
-import { dispatchA2aEgress } from './a2aEgress.js';
+import { dispatchA2aEgress, expireA2aEgressForReuse } from './a2aEgress.js';
 import { buildDmReceivedEventData } from './deliveryWire.js';
 import { buildWorkspaceEventWrite } from './workspaceEvents.js';
 import { transformForClient } from './wsTransform.js';
@@ -49,7 +49,7 @@ import {
 } from './address.js';
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 import { fetchAttachmentsBatch, resolveSendAttachments, type AttachmentRow } from './attachments.js';
-import { canonicalUserMessageMetadata, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
+import { canonicalJson, canonicalUserMessageMetadata, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
 import { queryInChunks } from '../lib/queryChunks.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -505,24 +505,31 @@ export async function sendDm(
     ? `dmid_${await sha256Hex(JSON.stringify([workspaceId, fromAgentId, options.idempotencyKey]))}`
     : null;
   const directFingerprint = directRequestId
-    ? await sha256Hex(JSON.stringify({ data, address: options.address ?? null }))
+    ? await sha256Hex(canonicalJson({ data, address: options.address ?? null }))
     : '';
   // The request claim is transport-independent. If the recipient changes
   // between direct and A2A routing, both attempts still contend on one ID.
   const requestEgressId = !options.skipA2aIntercept && options.idempotencyKey
     ? `a2ae_${await sha256Hex(JSON.stringify([workspaceId, fromAgentId, options.idempotencyKey]))}`
     : null;
+  const requestEgressFingerprint = requestEgressId
+    ? await sha256Hex(canonicalJson(data))
+    : '';
+  const legacyRequestEgressFingerprint = requestEgressId
+    ? await sha256Hex(JSON.stringify(data))
+    : '';
+  const idempotencyNow = new Date();
   let [acceptedDirect] = directRequestId
     ? await db.select().from(directDmIdempotency).where(eq(directDmIdempotency.id, directRequestId))
     : [];
   await options.afterIdempotencyLookup?.();
   if (
     acceptedDirect
-    && acceptedDirect.createdAt.getTime() + DIRECT_DM_IDEMPOTENCY_TTL_MS <= Date.now()
+    && acceptedDirect.createdAt.getTime() + DIRECT_DM_IDEMPOTENCY_TTL_MS <= idempotencyNow.getTime()
   ) {
     await db.delete(directDmIdempotency).where(and(
       eq(directDmIdempotency.id, acceptedDirect.id),
-      lte(directDmIdempotency.createdAt, new Date(Date.now() - DIRECT_DM_IDEMPOTENCY_TTL_MS)),
+      lte(directDmIdempotency.createdAt, new Date(idempotencyNow.getTime() - DIRECT_DM_IDEMPOTENCY_TTL_MS)),
     ));
     [acceptedDirect] = await db
       .select()
@@ -544,11 +551,17 @@ export async function sendDm(
       _notifications_durable: true,
     };
   }
+  if (requestEgressId) {
+    await expireA2aEgressForReuse(db, requestEgressId, idempotencyNow);
+  }
   // Resolve durable request identity before mutable recipient/attachment metadata.
   // A removed/recreated target must never turn an accepted retry into a new send.
   const [accepted] = requestEgressId ? await db.select().from(a2aEgress).where(eq(a2aEgress.id, requestEgressId)) : [];
   if (accepted) {
-    if (accepted.fingerprint !== await sha256Hex(JSON.stringify(data))) {
+    if (
+      accepted.fingerprint !== requestEgressFingerprint
+      && accepted.fingerprint !== legacyRequestEgressFingerprint
+    ) {
       throw codedError('Idempotency-Key was reused with a different request payload', 'idempotency_key_reused', 409);
     }
     await dispatchA2aEgress(db, accepted.id);
@@ -640,7 +653,9 @@ export async function sendDm(
   const egressId = a2aTarget
     ? `a2ae_${await sha256Hex(JSON.stringify([workspaceId, fromAgentId, options.idempotencyKey ?? generateId()]))}`
     : null;
-  const fingerprint = egressId ? await sha256Hex(JSON.stringify(data)) : '';
+  const fingerprint = egressId
+    ? requestEgressFingerprint || await sha256Hex(canonicalJson(data))
+    : '';
   const messageId = generateId();
   // Match SQLite timestamp precision so live, retained response and delivery replay agree.
   const createdAt = new Date(Math.floor(Date.now() / 1000) * 1000);

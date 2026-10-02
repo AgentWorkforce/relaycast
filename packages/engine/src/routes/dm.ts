@@ -18,6 +18,7 @@ import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
 import { jsonError, jsonOk, parseJsonBody, parseQueryParams } from '../lib/httpResponse.js';
 import { parsePaginationQuery, positiveIntQueryParam } from '../lib/httpQuery.js';
+import { canonicalJson } from '../engine/messageMetadata.js';
 
 export const dmRoutes = new Hono<AppEnv>();
 
@@ -80,8 +81,19 @@ dmRoutes.post(
         ...(address !== undefined ? { address } : {}),
         text,
         ...(normalizedAttachments ? { attachments: normalizedAttachments } : {}),
-        ...(data !== undefined ? { data_sha256: await sha256Hex(JSON.stringify(data)) } : {}),
+        ...(data !== undefined ? { data_sha256: await sha256Hex(canonicalJson(data)) } : {}),
       };
+      // Existing KV records used insertion-order JSON. Accept that format only
+      // as a replay-compatible fingerprint during the 24-hour TTL window.
+      const legacyFingerprintBody = data === undefined ? fingerprintBody : {
+        ...fingerprintBody,
+        data_sha256: await sha256Hex(JSON.stringify(data)),
+      };
+      const withMode = (body: typeof fingerprintBody) => mode === 'steer'
+        ? { ...body, mode }
+        : body;
+      const fingerprint = canonicalJson(withMode(fingerprintBody));
+      const legacyFingerprint = JSON.stringify(withMode(legacyFingerprintBody));
 
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) {
@@ -109,9 +121,8 @@ dmRoutes.post(
         status: 201,
         // Backward compatibility: historical fingerprint excluded mode (equivalent to wait).
         // Only include mode when explicit steer is requested.
-        fingerprint: mode === 'steer'
-          ? JSON.stringify({ ...fingerprintBody, mode })
-          : JSON.stringify(fingerprintBody),
+        fingerprint,
+        compatibleFingerprints: legacyFingerprint === fingerprint ? [] : [legacyFingerprint],
         kv: c.get('engine').kv,
         operation: () => dmEngine.sendDm(db, workspace.id, agent!.id, {
           to,

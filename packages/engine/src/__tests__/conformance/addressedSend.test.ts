@@ -435,6 +435,25 @@ describe('addressed send', () => {
       // Nothing was accepted under the key yet, so a valid address is not a reuse conflict.
       expect((await send(alice.token, 'bob@laptop', { text: 'x' }, key)).status).toBe(201);
     });
+
+    it('replays equivalent nested metadata regardless of object key order', async () => {
+      const { alice } = await seed();
+      const key = { 'Idempotency-Key': 'retry-canonical-data' };
+      const first = await send(alice.token, 'bob@laptop', {
+        text: 'same metadata',
+        data: { outer: { beta: 2, alpha: 1 }, tail: true },
+      }, key);
+      expect(first.status).toBe(201);
+      const firstId = ((await first.json()) as { data: { id: string } }).data.id;
+
+      const replay = await send(alice.token, 'bob@laptop', {
+        text: 'same metadata',
+        data: { tail: true, outer: { alpha: 1, beta: 2 } },
+      }, key);
+      expect(replay.status).toBe(201);
+      expect(((await replay.json()) as { data: { id: string } }).data.id).toBe(firstId);
+      expect(await stack.runtime.deps.db.select().from(messages)).toHaveLength(1);
+    });
   });
 
   describe('address discovery', () => {

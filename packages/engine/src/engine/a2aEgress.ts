@@ -13,6 +13,15 @@ const notRetained = () => codedError('Accepted A2A message is no longer retained
 const targetGone = () => codedError('Accepted A2A target no longer registered at its original endpoint', 'a2a_target_gone', 410);
 const windowExpired = () => codedError('Accepted A2A retry window expired', 'a2a_egress_expired', 410);
 
+const cleanupEligible = (now: Date) => and(
+  lte(a2aEgress.createdAt, new Date(now.getTime() - A2A_EGRESS_RETRY_WINDOW_MS)),
+  or(
+    sql`${a2aEgress.leaseUntil} IS NULL`,
+    lte(a2aEgress.leaseUntil, now),
+    sql`${a2aEgress.status} != 'sending'`,
+  ),
+);
+
 async function validateSource(db: EngineDb, intent: typeof a2aEgress.$inferSelect) {
   if (expired(intent)) throw windowExpired();
   const [source] = await db.select({ id: messages.id }).from(messages).where(and(
@@ -94,14 +103,25 @@ export async function dispatchA2aEgress(db: EngineDb, id: string): Promise<void>
  * After deletion a key is fresh, as with the existing HTTP idempotency contract.
  */
 export async function cleanupA2aEgress(db: EngineDb, limit = 20): Promise<number> {
-  const eligible = and(
-    lte(a2aEgress.createdAt, new Date(Date.now() - A2A_EGRESS_RETRY_WINDOW_MS)),
-    or(sql`${a2aEgress.leaseUntil} IS NULL`, lte(a2aEgress.leaseUntil, new Date()), sql`${a2aEgress.status} != 'sending'`),
-  );
-  const candidates = db.select({ id: a2aEgress.id }).from(a2aEgress).where(eligible)
+  const candidates = db.select({ id: a2aEgress.id }).from(a2aEgress).where(cleanupEligible(new Date()))
     .orderBy(asc(a2aEgress.createdAt), asc(a2aEgress.id)).limit(batchLimit(limit));
   const deleted = await db.delete(a2aEgress).where(inArray(a2aEgress.id, candidates)).returning({ id: a2aEgress.id });
   return deleted.length;
+}
+
+/** Remove one expired request identity before the caller admits a fresh use of
+ * its key. A live transport lease wins the race and keeps the row until a
+ * later retry or maintenance pass.
+ */
+export async function expireA2aEgressForReuse(
+  db: EngineDb,
+  id: string,
+  now = new Date(),
+): Promise<boolean> {
+  const deleted = await db.delete(a2aEgress)
+    .where(and(eq(a2aEgress.id, id), cleanupEligible(now)))
+    .returning({ id: a2aEgress.id });
+  return deleted.length > 0;
 }
 
 /** Bounded cleanup for transport-independent DM request claims. Once the

@@ -27,7 +27,8 @@ import {
   workspaces,
 } from '../../db/schema.js';
 import { isPairReservationConflict, sendDm } from '../dm.js';
-import { sweepPendingA2aEgress } from '../a2aEgress.js';
+import { expireA2aEgressForReuse, sweepPendingA2aEgress } from '../a2aEgress.js';
+import { sha256Hex } from '../../lib/crypto.js';
 
 type Db = SqliteDbHandle['db'];
 
@@ -200,6 +201,72 @@ describe('1:1 DM conversation identity', () => {
       sendDm(db, ws, alice, { to: 'bob', text: 'changed' }, { idempotencyKey: 'logical-dm-2' }),
     ).rejects.toMatchObject({ code: 'idempotency_key_reused', status: 409 });
     expect(db.select().from(messages).all()).toHaveLength(1);
+  });
+
+  it('replays reordered nested metadata as the same keyed request', async () => {
+    const { db, ws, alice } = seed();
+    const first = await sendDm(db, ws, alice, {
+      to: 'bob',
+      text: 'metadata',
+      data: { outer: { beta: 2, alpha: 1 }, tail: true },
+    }, { idempotencyKey: 'canonical-metadata' });
+    const replay = await sendDm(db, ws, alice, {
+      to: 'bob',
+      text: 'metadata',
+      data: { tail: true, outer: { alpha: 1, beta: 2 } },
+    }, { idempotencyKey: 'canonical-metadata' });
+
+    expect(replay.id).toBe(first.id);
+    expect(db.select().from(messages).all()).toHaveLength(1);
+  });
+
+  it('expires a retained A2A identity before reusing an expired request key', async () => {
+    const { db, ws, alice } = seed();
+    const key = 'expired-a2a-identity';
+    const first = await sendDm(db, ws, alice, { to: 'bob', text: 'old' }, {
+      idempotencyKey: key,
+    });
+    const old = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    await db.update(directDmIdempotency).set({ createdAt: old });
+    const egressId = `a2ae_${await sha256Hex(JSON.stringify([ws, alice, key]))}`;
+    await db.insert(a2aEgress).values({
+      id: egressId,
+      workspaceId: ws,
+      messageId: first.id,
+      targetId: 'retired-a2a-target',
+      externalUrl: 'https://example.com/a2a/rpc',
+      fingerprint: 'expired',
+      status: 'sent',
+      createdAt: old,
+    });
+
+    const fresh = await sendDm(db, ws, alice, { to: 'bob', text: 'fresh' }, {
+      idempotencyKey: key,
+    });
+    expect(fresh.id).not.toBe(first.id);
+    expect(db.select().from(messages).all()).toHaveLength(2);
+    expect(db.select().from(a2aEgress).all()).toHaveLength(0);
+    expect(db.select().from(directDmIdempotency).all()).toHaveLength(1);
+  });
+
+  it('preserves an expired A2A identity while its transport lease is live', async () => {
+    const { db, ws, alice } = seed();
+    const old = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    const id = 'a2ae_live_lease';
+    await db.insert(a2aEgress).values({
+      id,
+      workspaceId: ws,
+      messageId: 'msg_live_lease',
+      targetId: 'a2a-target',
+      externalUrl: 'https://example.com/a2a/rpc',
+      fingerprint: 'fingerprint',
+      status: 'sending',
+      leaseUntil: new Date(Date.now() + 60_000),
+      createdAt: old,
+    });
+
+    expect(await expireA2aEgressForReuse(db, id)).toBe(false);
+    expect(db.select().from(a2aEgress).all()).toHaveLength(1);
   });
 
   /**
