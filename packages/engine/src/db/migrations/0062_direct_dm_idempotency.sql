@@ -2,6 +2,8 @@
 -- an atomic NX lock across isolates. This D1 claim is admitted in the same
 -- transaction as the message, making a caller's Idempotency-Key one
 -- database-enforced boundary across direct and A2A routing.
+-- The response snapshot preserves the exact accepted receipt for the same
+-- 24-hour replay window; bounded maintenance removes expired snapshots.
 CREATE TABLE direct_dm_idempotency (
   id TEXT PRIMARY KEY NOT NULL,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,

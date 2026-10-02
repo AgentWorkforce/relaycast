@@ -7,7 +7,11 @@ import { sendToExternalAgent } from './a2a.js';
 
 /** Same finite retry horizon as HTTP idempotency; payloads never dispatch after it. */
 export const A2A_EGRESS_RETRY_WINDOW_MS = 24 * 60 * 60 * 1000;
+export const DIRECT_DM_IDEMPOTENCY_CLEANUP_BATCH_SIZE = 500;
 const batchLimit = (limit: number) => Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.floor(limit))) : 20;
+const directClaimBatchLimit = (limit: number) => Number.isFinite(limit)
+  ? Math.max(1, Math.min(1_000, Math.floor(limit)))
+  : DIRECT_DM_IDEMPOTENCY_CLEANUP_BATCH_SIZE;
 const expired = (intent: typeof a2aEgress.$inferSelect) => intent.createdAt.getTime() + A2A_EGRESS_RETRY_WINDOW_MS <= Date.now();
 const notRetained = () => codedError('Accepted A2A message is no longer retained', 'a2a_message_not_retained', 410);
 const targetGone = () => codedError('Accepted A2A target no longer registered at its original endpoint', 'a2a_target_gone', 410);
@@ -129,14 +133,14 @@ export async function expireA2aEgressForReuse(
  */
 export async function cleanupDirectDmIdempotency(
   db: EngineDb,
-  limit = 20,
+  limit = DIRECT_DM_IDEMPOTENCY_CLEANUP_BATCH_SIZE,
   now = new Date(),
 ): Promise<number> {
   const expired = db.select({ id: directDmIdempotency.id })
     .from(directDmIdempotency)
     .where(lte(directDmIdempotency.createdAt, new Date(now.getTime() - A2A_EGRESS_RETRY_WINDOW_MS)))
     .orderBy(asc(directDmIdempotency.createdAt), asc(directDmIdempotency.id))
-    .limit(batchLimit(limit));
+    .limit(directClaimBatchLimit(limit));
   const deleted = await db.delete(directDmIdempotency)
     .where(inArray(directDmIdempotency.id, expired))
     .returning({ id: directDmIdempotency.id });
@@ -154,7 +158,10 @@ export async function sweepPendingA2aEgress(db: EngineDb, limit = 20): Promise<{
     try { await dispatchA2aEgress(db, intent.id); } catch { failed++; }
   }
   await cleanupA2aEgress(db, limit);
-  await cleanupDirectDmIdempotency(db, limit);
+  // Direct request claims arrive on every keyed /v1/dm call and are unrelated
+  // to the small transport retry budget. Give them their own bounded batch so
+  // a rotating hosted cron cannot accumulate snapshots beyond message retention.
+  await cleanupDirectDmIdempotency(db, DIRECT_DM_IDEMPOTENCY_CLEANUP_BATCH_SIZE);
   const inboundExpired = db.select({ id: a2aInbound.id }).from(a2aInbound)
     .where(lte(a2aInbound.createdAt, new Date(Date.now() - A2A_EGRESS_RETRY_WINDOW_MS)))
     .orderBy(asc(a2aInbound.createdAt), asc(a2aInbound.id)).limit(batchLimit(limit));

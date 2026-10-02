@@ -1,10 +1,10 @@
 import { createEngine } from '../../engine.js';
 import { BackgroundTasks } from '../../__tests__/backgroundTasks.js';
 import { afterEach, describe, expect, it } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { EventQueue, QueuedEvent } from '../../ports/event-queue.js';
 import type { EngineDb } from '../../ports/database.js';
-import { pendingEvents } from '../../db/schema.js';
+import { messages, pendingEvents } from '../../db/schema.js';
 import { sweepPendingEvents } from '../../engine/eventQueue.js';
 import { createWorkspace, registerAgent, makeNodeStack, type TestStack } from '../../__tests__/conformance/harness.js';
 import type { KeyValueStore } from '../../ports/kv.js';
@@ -118,7 +118,89 @@ async function postMessage(stack: OutboxStack, headers: Record<string, string> =
   });
 }
 
+async function postKeyedDm(stack: OutboxStack, subscribed: boolean, key: string) {
+  const ws = await createWorkspace(stack.app, `dm-outbox-${key}`);
+  if (subscribed) {
+    const subRes = await stack.app.request('/v1/subscriptions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ events: ['*'], url: 'http://127.0.0.1:1/hook' }),
+    });
+    expect(subRes.status).toBe(201);
+  }
+  const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+  await registerAgent(stack.app, ws.workspaceKey, 'bob');
+  stack.queue.sent.length = 0;
+  stack.queue.rowsVisibleAtSend.length = 0;
+  const response = await stack.app.request('/v1/dm', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${alice.token}`,
+      'Idempotency-Key': key,
+    },
+    body: JSON.stringify({ to: 'bob', text: 'persist exactly once' }),
+  });
+  return { ws, alice, response };
+}
+
 describe('engine send path (persist-first outbox)', () => {
+  it('skips the keyed DM outbox row and queue send without subscribers', async () => {
+    const stack = track(makeStack());
+    const { ws, response } = await postKeyedDm(stack, false, 'no-subscriber-dm');
+    expect(response.status).toBe(201);
+    await stack.settle();
+
+    expect(stack.queue.ofType('dm.received')).toHaveLength(0);
+    const rows = await stack.db.select().from(pendingEvents).where(and(
+      eq(pendingEvents.workspaceId, ws.workspaceId),
+      eq(pendingEvents.eventType, 'dm.received'),
+    ));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('persists and queues a keyed DM outbox row when a subscriber exists', async () => {
+    const stack = track(makeStack());
+    const { ws, response } = await postKeyedDm(stack, true, 'subscribed-dm');
+    expect(response.status).toBe(201);
+    await stack.settle();
+
+    const [event] = stack.queue.ofType('dm.received');
+    expect(event?.outboxId).toBeDefined();
+    const rows = await stack.db.select().from(pendingEvents).where(and(
+      eq(pendingEvents.workspaceId, ws.workspaceId),
+      eq(pendingEvents.eventType, 'dm.received'),
+    ));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.id).toBe(event!.outboxId);
+    const idx = stack.queue.sent.indexOf(event!);
+    expect(stack.queue.rowsVisibleAtSend[idx]).toBe(true);
+  });
+
+  it('marks a direct claim-table replay when the KV cache is unavailable', async () => {
+    const stack = track(makeStack());
+    stack.runtime.deps.kv.get = async () => { throw new Error('KV unavailable'); };
+    const first = await postKeyedDm(stack, false, 'claim-replay-header');
+    expect(first.response.status).toBe(201);
+    expect(first.response.headers.get('Idempotency-Replayed')).toBeNull();
+
+    const replay = await stack.app.request('/v1/dm', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${first.alice.token}`,
+        'Idempotency-Key': 'claim-replay-header',
+      },
+      body: JSON.stringify({ to: 'bob', text: 'persist exactly once' }),
+    });
+    expect(replay.status).toBe(201);
+    expect(replay.headers.get('Idempotency-Replayed')).toBe('true');
+    await expect(replay.json()).resolves.not.toHaveProperty('data._idempotency_replayed');
+
+    const rows = await stack.db.select().from(messages).where(eq(messages.workspaceId, first.ws.workspaceId));
+    expect(rows).toHaveLength(1);
+  });
+
   it('inserts the outbox row before invoking eventQueue.send and passes its id', async () => {
     const stack = track(makeStack());
     const res = await postMessage(stack);

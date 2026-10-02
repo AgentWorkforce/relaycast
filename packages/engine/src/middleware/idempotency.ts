@@ -12,6 +12,8 @@ interface StoredIdempotencyRecord<T> {
   status: number;
   data: T;
   fingerprint?: string;
+  /** Alternate fingerprints understood by this version; older engines ignore them. */
+  fingerprints?: string[];
 }
 
 export interface IdempotentResult<T> {
@@ -25,6 +27,7 @@ type DeliveryInternals = {
   _delivery?: unknown;
   _deliveries?: unknown;
   _delivery_rejections?: unknown;
+  _idempotency_replayed?: boolean;
 };
 
 interface RunIdempotentOptions<T> {
@@ -34,6 +37,8 @@ interface RunIdempotentOptions<T> {
   key?: string;
   status?: number;
   fingerprint?: string;
+  /** Primary fingerprint persisted for rollback compatibility. */
+  storageFingerprint?: string;
   /** Prior fingerprint formats accepted only when replaying an existing record. */
   compatibleFingerprints?: string[];
   ttlSeconds?: number;
@@ -53,10 +58,13 @@ interface RunIdempotentOptions<T> {
 
 function fingerprintMatches(
   stored: string | undefined,
+  storedCompatible: string[],
   current: string | undefined,
   compatible: string[],
 ): boolean {
-  return !stored || !current || stored === current || compatible.includes(stored);
+  if (!stored || !current) return true;
+  const accepted = new Set([current, ...compatible]);
+  return [stored, ...storedCompatible].some((candidate) => accepted.has(candidate));
 }
 
 function idempotencyUnavailableError(cause?: unknown): Error {
@@ -111,6 +119,7 @@ export function stripDeliveryInternals<T extends object>(data: T) {
     _delivery: _dropDelivery,
     _deliveries: _dropDeliveries,
     _delivery_rejections: _dropRejections,
+    _idempotency_replayed: _dropIdempotencyReplay,
     ...publicData
   } = data as T & DeliveryInternals;
   return publicData;
@@ -130,6 +139,7 @@ export async function runIdempotent<T>(
     scope,
     key,
     fingerprint,
+    storageFingerprint,
     compatibleFingerprints = [],
     operation,
     afterOperation,
@@ -155,7 +165,10 @@ export async function runIdempotent<T>(
   /** Replay a stored record, rejecting a key reused with a different payload. */
   const replayOf = (raw: string): IdempotentResult<T> => {
     const parsed = JSON.parse(raw) as StoredIdempotencyRecord<T>;
-    if ((requireFingerprint && !parsed.fingerprint) || !fingerprintMatches(parsed.fingerprint, fingerprint, compatibleFingerprints)) {
+    if (
+      (requireFingerprint && !parsed.fingerprint)
+      || !fingerprintMatches(parsed.fingerprint, parsed.fingerprints ?? [], fingerprint, compatibleFingerprints)
+    ) {
       const err = new Error('Idempotency-Key was reused with a different request payload');
       Object.assign(err, { code: 'idempotency_key_reused', status: 409 });
       throw err;
@@ -261,7 +274,12 @@ export async function runIdempotent<T>(
       const record: StoredIdempotencyRecord<T> = {
         status,
         data,
-        fingerprint,
+        fingerprint: storageFingerprint ?? fingerprint,
+        ...(
+          fingerprint && storageFingerprint && fingerprint !== storageFingerprint
+            ? { fingerprints: [fingerprint] }
+            : {}
+        ),
       };
       try {
         await kvStore.put(kvKey, JSON.stringify(record), { expirationTtl: ttlSeconds });

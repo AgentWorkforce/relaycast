@@ -33,7 +33,7 @@ import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig }
 import {
   type WorkspaceDeliveryPolicy,
 } from './workspaceDeliveryPolicy.js';
-import { dispatchA2aEgress, expireA2aEgressForReuse } from './a2aEgress.js';
+import { A2A_EGRESS_RETRY_WINDOW_MS, dispatchA2aEgress, expireA2aEgressForReuse } from './a2aEgress.js';
 import { buildDmReceivedEventData } from './deliveryWire.js';
 import { buildWorkspaceEventWrite } from './workspaceEvents.js';
 import { transformForClient } from './wsTransform.js';
@@ -59,8 +59,8 @@ interface SendDmOptions {
   skipA2aIntercept?: boolean;
   /** Stable request identity for resuming already admitted outbound A2A. */
   idempotencyKey?: string;
-  /** Test seam: pause after the durable request lookup, before admission. */
-  afterIdempotencyLookup?: () => Promise<void>;
+  /** Whether durable webhook fanout has any subscriber to receive it. */
+  hasWebhookSubscriptions?: boolean;
   /** Count an authenticated inbound peer in the same transaction as its DM. */
   receivedA2aAgentId?: string;
   /** Token hash authenticated by the route; checked with registration at SQL admission. */
@@ -72,7 +72,7 @@ interface SendDmOptions {
   /** Resolve only after durable accepted lookup (cached HTTP replay never calls sendDm). */
   resolveWorkspaceDeliveryPolicy?: () => Promise<WorkspaceDeliveryPolicy | undefined>;
   /** Fast paths only; durable events and delivery already committed before this hook. */
-  afterAdmission?: (data: SendDmResult, event: { seq: number; payload: Record<string, unknown>; data: Record<string, unknown>; outboxId: string }) => void;
+  afterAdmission?: (data: SendDmResult, event: { seq: number; payload: Record<string, unknown>; data: Record<string, unknown>; outboxId?: string }) => void;
   mailbox?: MailboxConfig;
   /** Server-resolved workspace growth policy; absent => no workspace guard. */
   workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy;
@@ -428,6 +428,7 @@ export type SendDmResult = AcceptedDmResult & {
   _delivery: DeliveryOutcomeRecords['deliveries'][number] | null;
   _delivery_rejections: DeliveryOutcomeRecords['rejections'];
   _notifications_durable?: boolean;
+  _idempotency_replayed?: boolean;
 };
 
 const legacyPublicFields = {
@@ -533,7 +534,6 @@ export async function sendDm(
   let [acceptedDirect] = directRequestId
     ? await db.select().from(directDmIdempotency).where(eq(directDmIdempotency.id, directRequestId))
     : [];
-  await options.afterIdempotencyLookup?.();
   if (
     acceptedDirect
     && acceptedDirect.createdAt.getTime() + DIRECT_DM_IDEMPOTENCY_TTL_MS <= idempotencyNow.getTime()
@@ -560,14 +560,27 @@ export async function sendDm(
       _delivery: null,
       _delivery_rejections: [],
       _notifications_durable: true,
+      _idempotency_replayed: true,
     };
-  }
-  if (requestEgressId) {
-    await expireA2aEgressForReuse(db, requestEgressId, idempotencyNow);
   }
   // Resolve durable request identity before mutable recipient/attachment metadata.
   // A removed/recreated target must never turn an accepted retry into a new send.
-  const [accepted] = requestEgressId ? await db.select().from(a2aEgress).where(eq(a2aEgress.id, requestEgressId)) : [];
+  let accepted: typeof a2aEgress.$inferSelect | undefined = requestEgressId
+    ? (await db.select().from(a2aEgress).where(eq(a2aEgress.id, requestEgressId)))[0]
+    : undefined;
+  if (
+    accepted
+    && accepted.createdAt.getTime() + A2A_EGRESS_RETRY_WINDOW_MS <= idempotencyNow.getTime()
+  ) {
+    const deleted = await expireA2aEgressForReuse(db, accepted.id, idempotencyNow);
+    if (deleted) {
+      accepted = undefined;
+    } else {
+      // A live transport lease may have won between the read and conditional
+      // delete. Re-read the row rather than admitting a competing identity.
+      [accepted] = await db.select().from(a2aEgress).where(eq(a2aEgress.id, requestEgressId!));
+    }
+  }
   if (accepted) {
     if (
       accepted.fingerprint !== requestEgressFingerprint
@@ -714,8 +727,11 @@ export async function sendDm(
     type: 'dm.received', workspace_id: workspaceId, data: eventData, timestamp: createdAt.toISOString(),
   });
   const directClaimId = directRequestId;
-  // The outbox, observer cursor log, response context and delivery share admission.
-  // None can escape a capacity rollback, or depend on external transport success.
+  const notificationsDurable = Boolean(egressId || options.receivedA2aAgentId || inboundId || directClaimId);
+  const persistWebhookOutbox = notificationsDurable && options.hasWebhookSubscriptions !== false;
+  // The optional webhook outbox, observer cursor log, response context and
+  // delivery share admission. None can escape a capacity rollback, or depend
+  // on external transport success.
   const persist = () => runAtomicWrites(db, (writeDb) => {
     const writes = buildDmMessageWrites(writeDb, workspaceId, fromAgentId, conv.channelId, data, attachments, messageId, createdAt,
       options.receivedA2aAgentId ? { id: options.receivedA2aAgentId, tokenHash: options.receivedA2aTokenHash } : undefined,
@@ -785,18 +801,18 @@ export async function sendDm(
 
     if (inboundId) writes.push(writeDb.insert(a2aInbound).values({ id: inboundId, workspaceId, messageId, fingerprint: inboundFingerprint, response: publicResult }));
     if (egressId) writes.push(writeDb.insert(a2aEgressContext).values({ id: egressId, messageId, response: publicResult }));
-    if (egressId || options.receivedA2aAgentId || inboundId || directClaimId) {
-      writes.push(
-        writeDb.insert(pendingEvents).values({ id: messageId, workspaceId, eventType: 'dm.received', payload: eventData }),
-        buildWorkspaceEventWrite(writeDb, workspaceId, { type: 'dm.received', payload: workspacePayload }),
-      );
+    if (persistWebhookOutbox) {
+      writes.push(writeDb.insert(pendingEvents).values({ id: messageId, workspaceId, eventType: 'dm.received', payload: eventData }));
+    }
+    if (notificationsDurable) {
+      writes.push(buildWorkspaceEventWrite(writeDb, workspaceId, { type: 'dm.received', payload: workspacePayload }));
     }
     return writes;
   }, { requireAtomic: Boolean(workspacePolicy || a2aTarget || options.receivedA2aAgentId || inboundId || directClaimId) });
   let admittedEventSeq: number | undefined;
   try {
     const results = await persist();
-    if (egressId || options.receivedA2aAgentId || inboundId || directClaimId) admittedEventSeq = (results[results.length - 1] as { seq: number }[])[0].seq;
+    if (notificationsDurable) admittedEventSeq = (results[results.length - 1] as { seq: number }[])[0].seq;
   } catch (error) {
     if (options.address !== undefined && databaseConstraintKind(error) === 'address_changed') {
       throw addressNotFound(options.address);
@@ -840,12 +856,15 @@ export async function sendDm(
     ...publicResult,
     _delivery: dmDelivery,
     _delivery_rejections: deliveryOutcomes.rejections,
-    ...((egressId || options.receivedA2aAgentId || inboundId || directClaimId) ? { _notifications_durable: true } : {}),
+    ...(notificationsDurable ? { _notifications_durable: true } : {}),
   };
-  if (egressId || options.receivedA2aAgentId || inboundId || directClaimId) {
+  if (notificationsDurable) {
     // Local fast paths run independently of transport. A crash here still leaves
-    // the webhook outbox, workspace cursor log and queued delivery recoverable.
-    options.afterAdmission?.(result, { seq: admittedEventSeq!, payload: workspacePayload, data: eventData, outboxId: messageId });
+    // any needed webhook outbox, workspace cursor log and queued delivery recoverable.
+    options.afterAdmission?.(result, {
+      seq: admittedEventSeq!, payload: workspacePayload, data: eventData,
+      ...(persistWebhookOutbox ? { outboxId: messageId } : {}),
+    });
   }
   if (egressId) await dispatchA2aEgress(db, egressId);
   return result;

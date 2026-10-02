@@ -255,6 +255,46 @@ describe('idempotency KV round trips', () => {
     },
   );
 
+  it('stores a rollback-compatible primary fingerprint with a canonical alias', async () => {
+    const kv = tracingKv(await storageKey());
+    const oldEngineFingerprint = JSON.stringify({
+      to: 'bob', text: 'hello', data_sha256: 'insertion-order-digest',
+    });
+    const canonicalFingerprint = JSON.stringify({
+      to: 'bob', text: 'hello', data_sha256: 'canonical-digest',
+    });
+    const operation = vi.fn(async () => ({ id: 'msg_1' }));
+
+    await runIdempotent({
+      ...identity,
+      kv,
+      fingerprint: canonicalFingerprint,
+      storageFingerprint: oldEngineFingerprint,
+      compatibleFingerprints: [oldEngineFingerprint],
+      operation,
+    });
+
+    const stored = JSON.parse(kv.puts.find((put) => put.label === 'put:record')!.value) as {
+      fingerprint: string;
+      fingerprints: string[];
+    };
+    // A rolled-back engine compares only this legacy primary field and ignores
+    // the additive aliases property, so it accepts the newly written record.
+    expect(stored.fingerprint).toBe(oldEngineFingerprint);
+    expect(stored.fingerprints).toEqual([canonicalFingerprint]);
+
+    const replayOperation = vi.fn(async () => ({ id: 'msg_2' }));
+    await expect(runIdempotent({
+      ...identity,
+      kv,
+      fingerprint: canonicalFingerprint,
+      storageFingerprint: oldEngineFingerprint,
+      compatibleFingerprints: [oldEngineFingerprint],
+      operation: replayOperation,
+    })).resolves.toEqual({ status: 201, replayed: true, data: { id: 'msg_1' } });
+    expect(replayOperation).not.toHaveBeenCalled();
+  });
+
   it('bounds retention for both the lock and the stored record', async () => {
     const kv = tracingKv(await storageKey());
     await runIdempotent({ ...identity, kv, ttlSeconds: 600, operation: async () => ({ id: 'msg_1' }) });

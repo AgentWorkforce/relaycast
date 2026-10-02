@@ -27,7 +27,11 @@ import {
   workspaces,
 } from '../../db/schema.js';
 import { isPairReservationConflict, sendDm } from '../dm.js';
-import { expireA2aEgressForReuse, sweepPendingA2aEgress } from '../a2aEgress.js';
+import {
+  DIRECT_DM_IDEMPOTENCY_CLEANUP_BATCH_SIZE,
+  expireA2aEgressForReuse,
+  sweepPendingA2aEgress,
+} from '../a2aEgress.js';
 import { sha256Hex } from '../../lib/crypto.js';
 
 type Db = SqliteDbHandle['db'];
@@ -122,30 +126,26 @@ describe('1:1 DM conversation identity', () => {
   it('admits two concurrent dispatch attempts with one idempotency key as one stored message', async () => {
     const { db, ws, alice } = seed();
     const request = { to: 'bob', text: 'only once' };
-    let lookups = 0;
-    let releaseLookups!: () => void;
-    let resumeAdmissions!: () => void;
-    const bothLookups = new Promise<void>((resolve) => { releaseLookups = resolve; });
-    const admissionGate = new Promise<void>((resolve) => { resumeAdmissions = resolve; });
-    const afterIdempotencyLookup = async () => {
-      lookups += 1;
-      if (lookups === 2) releaseLookups();
-      await admissionGate;
-    };
+    let transactionArrivals = 0;
+    let releaseAdmissions!: () => void;
+    const admissionGate = new Promise<void>((resolve) => { releaseAdmissions = resolve; });
+    const racingDb = new Proxy(db, {
+      get(target, prop) {
+        if (prop === 'withTransaction') {
+          return async <T>(fn: Parameters<NonNullable<Db['withTransaction']>>[0]): Promise<T> => {
+            transactionArrivals += 1;
+            if (transactionArrivals === 2) releaseAdmissions();
+            await admissionGate;
+            return target.withTransaction(fn) as Promise<T>;
+          };
+        }
+        const value = Reflect.get(target, prop, target) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
     const [first, second] = await Promise.all([
-      (async () => {
-        const result = sendDm(db, ws, alice, request, {
-          idempotencyKey: 'logical-dm-1',
-          afterIdempotencyLookup,
-        });
-        await bothLookups;
-        resumeAdmissions();
-        return result;
-      })(),
-      sendDm(db, ws, alice, request, {
-        idempotencyKey: 'logical-dm-1',
-        afterIdempotencyLookup,
-      }),
+      sendDm(racingDb, ws, alice, request, { idempotencyKey: 'logical-dm-1' }),
+      sendDm(racingDb, ws, alice, request, { idempotencyKey: 'logical-dm-1' }),
     ]);
 
     expect(second.id).toBe(first.id);
@@ -193,6 +193,29 @@ describe('1:1 DM conversation identity', () => {
     expect(await sweepPendingA2aEgress(db, 20)).toEqual({ attempted: 0, failed: 0 });
     expect(db.select().from(directDmIdempotency).all()).toHaveLength(0);
     expect(db.select().from(messages).all()).toHaveLength(1);
+  });
+
+  it('prunes direct request claims with its own bounded budget across sweeps', async () => {
+    const { db, ws } = seed();
+    const old = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    const count = DIRECT_DM_IDEMPOTENCY_CLEANUP_BATCH_SIZE + 1;
+    for (let i = 0; i < count; i += 1) {
+      db.insert(directDmIdempotency).values({
+        id: `dmid_expired_${i}`,
+        workspaceId: ws,
+        messageId: `msg_expired_${i}`,
+        fingerprint: `fingerprint_${i}`,
+        response: { id: `msg_expired_${i}` },
+        createdAt: old,
+      }).run();
+    }
+
+    // The A2A work budget is deliberately tiny; direct claims still consume
+    // their independent 500-row batch and never turn this into an unbounded delete.
+    expect(await sweepPendingA2aEgress(db, 2)).toEqual({ attempted: 0, failed: 0 });
+    expect(db.select().from(directDmIdempotency).all()).toHaveLength(1);
+    expect(await sweepPendingA2aEgress(db, 2)).toEqual({ attempted: 0, failed: 0 });
+    expect(db.select().from(directDmIdempotency).all()).toHaveLength(0);
   });
 
   it('rejects reuse of a direct-DM idempotency key for a different payload', async () => {

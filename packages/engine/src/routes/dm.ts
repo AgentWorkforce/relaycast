@@ -13,7 +13,7 @@ import { publishWorkspaceEvent } from './fanout.js';
 import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
 import { buildDmReceivedEventData } from '../engine/deliveryWire.js';
 import { runInBackground } from './background.js';
-import { sendWebhookEvent } from './webhookOutbox.js';
+import { sendWebhookEvent, shouldEnqueueWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
 import { jsonError, jsonOk, parseJsonBody, parseQueryParams } from '../lib/httpResponse.js';
@@ -92,7 +92,10 @@ dmRoutes.post(
       const withMode = (body: typeof fingerprintBody) => mode === 'steer'
         ? { ...body, mode }
         : body;
-      const fingerprint = canonicalJson(withMode(fingerprintBody));
+      // Keep the outer encoding byte-compatible with the pre-canonical format
+      // so a rolled-back engine accepts records written by this version. Only
+      // the nested caller data digest needs canonical ordering.
+      const fingerprint = JSON.stringify(withMode(fingerprintBody));
       const legacyFingerprint = JSON.stringify(withMode(legacyFingerprintBody));
 
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
@@ -122,32 +125,39 @@ dmRoutes.post(
         // Backward compatibility: historical fingerprint excluded mode (equivalent to wait).
         // Only include mode when explicit steer is requested.
         fingerprint,
+        storageFingerprint: legacyFingerprint,
         compatibleFingerprints: legacyFingerprint === fingerprint ? [] : [legacyFingerprint],
         kv: c.get('engine').kv,
-        operation: () => dmEngine.sendDm(db, workspace.id, agent!.id, {
-          to,
-          text,
-          attachments: normalizedAttachments,
-          data,
-          mode,
-        }, { mailbox, resolveWorkspaceDeliveryPolicy: () => resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace), idempotencyKey, address,
-          afterAdmission: (data, event) => {
-            runInBackground(c, c.get('engine').realtime.publishToWorkspaceStream({
-              workspaceId: workspace.id, event: { ...event.payload, seq: event.seq },
-            }), 'publish admitted dm.received');
-            runInBackground(c, c.get('engine').webhookQueue.send({
-              type: 'dm.received', workspaceId: workspace.id,
-              data: event.data, outboxId: event.outboxId,
-            }), 'queue admitted dm.received');
-            if (data._delivery) runInBackground(c,
-              routeDeliveryOutcomes(c, [data._delivery], 'dm.received', event.data),
-              'route admitted dm delivery');
-            if (data._delivery_rejections.length) runInBackground(c,
-              notifyDeliveryRejections(c, agent!.id, data._delivery_rejections),
-              'notify admitted dm delivery rejection');
-            trackDmSent(data);
-          },
-        }),
+        operation: async () => {
+          const hasWebhookSubscriptions = await shouldEnqueueWebhookEvent(c, workspace.id, 'dm.received');
+          return dmEngine.sendDm(db, workspace.id, agent!.id, {
+            to,
+            text,
+            attachments: normalizedAttachments,
+            data,
+            mode,
+          }, { mailbox, resolveWorkspaceDeliveryPolicy: () => resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace), idempotencyKey, address,
+            hasWebhookSubscriptions,
+            afterAdmission: (data, event) => {
+              runInBackground(c, c.get('engine').realtime.publishToWorkspaceStream({
+                workspaceId: workspace.id, event: { ...event.payload, seq: event.seq },
+              }), 'publish admitted dm.received');
+              if (event.outboxId) {
+                runInBackground(c, c.get('engine').webhookQueue.send({
+                  type: 'dm.received', workspaceId: workspace.id,
+                  data: event.data, outboxId: event.outboxId,
+                }), 'queue admitted dm.received');
+              }
+              if (data._delivery) runInBackground(c,
+                routeDeliveryOutcomes(c, [data._delivery], 'dm.received', event.data),
+                'route admitted dm delivery');
+              if (data._delivery_rejections.length) runInBackground(c,
+                notifyDeliveryRejections(c, agent!.id, data._delivery_rejections),
+                'notify admitted dm delivery rejection');
+              trackDmSent(data);
+            },
+          });
+        },
         afterOperation: async (data) => {
           if (data._notifications_durable) return;
           await sendWebhookEvent(c, {
@@ -158,16 +168,20 @@ dmRoutes.post(
         },
       });
 
-      if (!idempotent.replayed && !idempotent.data._notifications_durable) {
+      const effectiveIdempotent = idempotent.data._idempotency_replayed && !idempotent.replayed
+        ? { ...idempotent, replayed: true }
+        : idempotent;
+
+      if (!effectiveIdempotent.replayed && !effectiveIdempotent.data._notifications_durable) {
         const {
           _delivery,
           _delivery_rejections,
           ...publicDmData
-        } = idempotent.data as typeof idempotent.data & {
+        } = effectiveIdempotent.data as typeof effectiveIdempotent.data & {
           _delivery?: Parameters<typeof routeDeliveryOutcomes>[1][number] | null;
           _delivery_rejections?: Parameters<typeof notifyDeliveryRejections>[2];
         };
-        const eventData = toDmReceivedEventData(idempotent.data);
+        const eventData = toDmReceivedEventData(effectiveIdempotent.data);
         runInBackground(c, publishWorkspaceEvent(c, 'dm.received', eventData), 'publish dm.received');
 
         if (_delivery) {
@@ -188,7 +202,7 @@ dmRoutes.post(
         trackDmSent(publicDmData);
       }
 
-      return jsonIdempotentOk(c, idempotent);
+      return jsonIdempotentOk(c, effectiveIdempotent);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

@@ -694,7 +694,9 @@ export const messages = sqliteTable(
 /**
  * Atomic DM idempotency claims. Cloudflare KV remains the fast replay cache,
  * while this D1 row is the concurrency authority across direct and A2A
- * routing: the claim and message share one admission batch.
+ * routing: the claim and message share one admission batch. The response
+ * snapshot is retained for the 24-hour claim lifetime so a replay returns the
+ * exact public receipt even if mutable message context changes meanwhile.
  */
 export const directDmIdempotency = sqliteTable(
   'direct_dm_idempotency',
