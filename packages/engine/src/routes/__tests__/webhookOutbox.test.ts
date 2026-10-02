@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import type { EventQueue, QueuedEvent } from '../../ports/event-queue.js';
 import type { EngineDb } from '../../ports/database.js';
-import { messages, pendingEvents } from '../../db/schema.js';
+import { directDmIdempotency, messages, pendingEvents } from '../../db/schema.js';
 import { sweepPendingEvents } from '../../engine/eventQueue.js';
 import { createWorkspace, registerAgent, makeNodeStack, type TestStack } from '../../__tests__/conformance/harness.js';
 import type { KeyValueStore } from '../../ports/kv.js';
@@ -212,6 +212,9 @@ describe('engine send path (persist-first outbox)', () => {
     const first = await postKeyedDm(stack, false, idempotencyKey);
     expect(first.response.status).toBe(201);
     const firstBody = await first.response.json() as { data: { id: string } };
+    const [claim] = await stack.db.select().from(directDmIdempotency);
+    expect(claim).toBeDefined();
+    const claimCreatedAt = claim!.createdAt.getTime();
     const storageKey = await buildIdempotencyStorageKey(
       first.ws.workspaceId, first.alice.agentId, 'dm:direct', idempotencyKey,
     );
@@ -226,7 +229,7 @@ describe('engine send path (persist-first outbox)', () => {
       await originalPut(key, value, options);
     };
 
-    vi.setSystemTime(acceptedAt.getTime() + 23 * 60 * 60 * 1000);
+    vi.setSystemTime(claimCreatedAt + 23 * 60 * 60 * 1000);
     const replay = await stack.app.request('/v1/dm', {
       method: 'POST',
       headers: {
@@ -243,7 +246,7 @@ describe('engine send path (persist-first outbox)', () => {
     expect(replayRecord.data).not.toHaveProperty('_idempotency_replayed');
     expect(replayRecord.data).not.toHaveProperty('_idempotency_ttl_seconds');
 
-    vi.setSystemTime(acceptedAt.getTime() + 24 * 60 * 60 * 1000 + 1_000);
+    vi.setSystemTime(claimCreatedAt + 24 * 60 * 60 * 1000 + 1_000);
     const fresh = await stack.app.request('/v1/dm', {
       method: 'POST',
       headers: {

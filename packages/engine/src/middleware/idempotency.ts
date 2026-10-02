@@ -6,6 +6,9 @@ import { jsonOk } from '../lib/httpResponse.js';
 
 const IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60;
 const IDEMPOTENCY_LOCK_TTL_SECONDS = 30;
+// Cloudflare KV rejects expirationTtl values below 60 seconds. Avoid both that
+// write failure and a result expiring while its 30-second admission lock remains.
+const IDEMPOTENCY_MIN_RECORD_TTL_SECONDS = 60;
 const IDEMPOTENCY_KEY_MAX_LENGTH = 255;
 
 interface StoredIdempotencyRecord<T> {
@@ -300,13 +303,14 @@ export async function runIdempotent<T>(
         ),
       };
       try {
-        if (resultTtlSeconds > 0) {
+        if (resultTtlSeconds >= IDEMPOTENCY_MIN_RECORD_TTL_SECONDS) {
           await kvStore.put(kvKey, JSON.stringify(record), { expirationTtl: resultTtlSeconds });
           // The stored record answers every later request for this key, so the
           // lock needs no explicit delete — it simply expires.
         } else if (lockKey) {
-          // The authoritative claim expired while the operation was replaying.
-          // Do not extend it through KV, and release this request's short lock.
+          // The authoritative claim expired (or is too close to expiry for a
+          // valid cache record). Do not extend it through KV, and release the
+          // short lock so it cannot outlive the result and reject a fresh send.
           await kvStore.delete(lockKey);
           lockAcquired = false;
         }

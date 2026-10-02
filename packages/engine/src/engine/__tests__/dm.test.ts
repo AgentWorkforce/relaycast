@@ -39,6 +39,7 @@ type Db = SqliteDbHandle['db'];
 const handles: SqliteDbHandle[] = [];
 
 afterEach(() => {
+  vi.useRealTimers();
   for (const handle of handles.splice(0)) {
     try {
       handle.sqlite.close();
@@ -178,6 +179,20 @@ describe('1:1 DM conversation identity', () => {
     expect(db.select().from(messages).all()).toHaveLength(1);
     expect(db.select().from(directDmIdempotency).all()).toHaveLength(1);
     expect(db.select().from(a2aEgress).all()).toHaveLength(0);
+  });
+
+  it('reports a fresh claim TTL after post-admission work completes', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const acceptedAt = new Date('2026-10-02T00:00:00.000Z');
+    vi.setSystemTime(acceptedAt);
+    const { db, ws, alice } = seed();
+
+    const sent = await sendDm(db, ws, alice, { to: 'bob', text: 'slow completion' }, {
+      idempotencyKey: 'fresh-claim-ttl',
+      afterAdmission: () => vi.setSystemTime(acceptedAt.getTime() + 5_000),
+    });
+
+    expect(sent._idempotency_ttl_seconds).toBe(24 * 60 * 60 - 5);
   });
 
   it('prunes expired keyed request claims without deleting their messages', async () => {

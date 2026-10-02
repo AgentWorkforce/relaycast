@@ -295,12 +295,12 @@ describe('idempotency KV round trips', () => {
     expect(replayOperation).not.toHaveBeenCalled();
   });
 
-  it('does not cache a result whose authoritative lifetime has ended', async () => {
+  it.each([0, 1, 59])('does not cache a result with only %s seconds of authoritative lifetime', async (remainingTtl) => {
     const kv = tracingKv(await storageKey());
     await expect(runIdempotent({
       ...identity,
       kv,
-      ttlSecondsForResult: () => 0,
+      ttlSecondsForResult: () => remainingTtl,
       operation: async () => ({ id: 'expired-receipt' }),
     })).resolves.toMatchObject({ replayed: false, data: { id: 'expired-receipt' } });
 

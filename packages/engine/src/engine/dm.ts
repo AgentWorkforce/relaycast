@@ -871,6 +871,13 @@ export async function sendDm(
     });
   }
   if (egressId) await dispatchA2aEgress(db, egressId);
+  if (directClaimId) {
+    // Compute this after transport work so a slow A2A dispatch cannot refill KV
+    // beyond the authoritative claim's absolute 24-hour lifetime.
+    result._idempotency_ttl_seconds = Math.max(0, Math.floor(
+      (createdAt.getTime() + DIRECT_DM_IDEMPOTENCY_TTL_MS - Date.now()) / 1000,
+    ));
+  }
   return result;
 }
 
