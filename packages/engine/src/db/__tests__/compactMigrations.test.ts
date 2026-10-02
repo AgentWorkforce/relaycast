@@ -163,6 +163,14 @@ describe('compact maintenance migration path', () => {
     expect(handle.sqlite.pragma('foreign_key_list(direct_dm_idempotency)')).toContainEqual(
       expect.objectContaining({ table: 'workspaces', from: 'workspace_id', on_delete: 'CASCADE' }),
     );
+    expect(handle.sqlite.pragma('table_info(direct_dm_idempotency)')).toContainEqual(
+      expect.objectContaining({ name: 'id', notnull: 1, pk: 1 }),
+    );
+    expect(handle.sqlite.pragma('index_list(direct_dm_idempotency)')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ unique: 1, origin: 'pk' }),
+      expect.objectContaining({ name: 'idx_direct_dm_idempotency_workspace_created' }),
+      expect.objectContaining({ name: 'idx_direct_dm_idempotency_retention' }),
+    ]));
     expectConstraintsPreserved(beforeConstraints, constraints(handle));
     expect(handle.sqlite.prepare('SELECT * FROM maintenance_cursors ORDER BY id').all()).toEqual(cursorRows);
     expect(handle.sqlite.pragma('foreign_key_check')).toEqual([]);
