@@ -295,6 +295,19 @@ describe('idempotency KV round trips', () => {
     expect(replayOperation).not.toHaveBeenCalled();
   });
 
+  it('does not cache a result whose authoritative lifetime has ended', async () => {
+    const kv = tracingKv(await storageKey());
+    await expect(runIdempotent({
+      ...identity,
+      kv,
+      ttlSecondsForResult: () => 0,
+      operation: async () => ({ id: 'expired-receipt' }),
+    })).resolves.toMatchObject({ replayed: false, data: { id: 'expired-receipt' } });
+
+    expect(kv.puts.map((put) => put.label)).toEqual(['put:lock']);
+    expect(flat(kv)).toContain('delete:lock');
+  });
+
   it('bounds retention for both the lock and the stored record', async () => {
     const kv = tracingKv(await storageKey());
     await runIdempotent({ ...identity, kv, ttlSeconds: 600, operation: async () => ({ id: 'msg_1' }) });

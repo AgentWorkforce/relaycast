@@ -28,6 +28,7 @@ type DeliveryInternals = {
   _deliveries?: unknown;
   _delivery_rejections?: unknown;
   _idempotency_replayed?: boolean;
+  _idempotency_ttl_seconds?: number;
 };
 
 interface RunIdempotentOptions<T> {
@@ -42,6 +43,8 @@ interface RunIdempotentOptions<T> {
   /** Prior fingerprint formats accepted only when replaying an existing record. */
   compatibleFingerprints?: string[];
   ttlSeconds?: number;
+  /** Override result retention (for example, an authoritative claim's remaining lifetime). */
+  ttlSecondsForResult?: (data: T) => number | undefined;
   kv?: KeyValueStore;
   requireKv?: boolean;
   /** Fail closed on an unreadable prior record, without failing a committed write on KV completion loss. */
@@ -65,6 +68,16 @@ function fingerprintMatches(
   if (!stored || !current) return true;
   const accepted = new Set([current, ...compatible]);
   return [stored, ...storedCompatible].some((candidate) => accepted.has(candidate));
+}
+
+function stripReplayStorageInternals<T>(data: T): T {
+  if (!data || typeof data !== 'object') return data;
+  const {
+    _idempotency_replayed: _dropReplay,
+    _idempotency_ttl_seconds: _dropTtl,
+    ...storedData
+  } = data as T & Pick<DeliveryInternals, '_idempotency_replayed' | '_idempotency_ttl_seconds'>;
+  return storedData as T;
 }
 
 function idempotencyUnavailableError(cause?: unknown): Error {
@@ -120,6 +133,7 @@ export function stripDeliveryInternals<T extends object>(data: T) {
     _deliveries: _dropDeliveries,
     _delivery_rejections: _dropRejections,
     _idempotency_replayed: _dropIdempotencyReplay,
+    _idempotency_ttl_seconds: _dropIdempotencyTtl,
     ...publicData
   } = data as T & DeliveryInternals;
   return publicData;
@@ -145,6 +159,7 @@ export async function runIdempotent<T>(
     afterOperation,
     status = 201,
     ttlSeconds = IDEMPOTENCY_TTL_SECONDS,
+    ttlSecondsForResult,
     kv,
     requireKv = false,
     requireKvRead = false,
@@ -271,9 +286,12 @@ export async function runIdempotent<T>(
     if (afterOperation) await afterOperation(data);
 
     if (kvStore && kvKey && lockAcquired) {
+      const resultTtlSeconds = ttlSecondsForResult?.(data) ?? ttlSeconds;
       const record: StoredIdempotencyRecord<T> = {
         status,
-        data,
+        // Current-request replay metadata controls the header and cache TTL;
+        // it is not part of the public receipt and must not leak after rollback.
+        data: stripReplayStorageInternals(data),
         fingerprint: storageFingerprint ?? fingerprint,
         ...(
           fingerprint && storageFingerprint && fingerprint !== storageFingerprint
@@ -282,9 +300,16 @@ export async function runIdempotent<T>(
         ),
       };
       try {
-        await kvStore.put(kvKey, JSON.stringify(record), { expirationTtl: ttlSeconds });
-        // The stored record answers every later request for this key, so the
-        // lock needs no explicit delete — it simply expires.
+        if (resultTtlSeconds > 0) {
+          await kvStore.put(kvKey, JSON.stringify(record), { expirationTtl: resultTtlSeconds });
+          // The stored record answers every later request for this key, so the
+          // lock needs no explicit delete — it simply expires.
+        } else if (lockKey) {
+          // The authoritative claim expired while the operation was replaying.
+          // Do not extend it through KV, and release this request's short lock.
+          await kvStore.delete(lockKey);
+          lockAcquired = false;
+        }
       } catch (err) {
         // The record is missing, so the lock must go now: otherwise a retry
         // inside the lock TTL sees neither and is rejected as in-progress.

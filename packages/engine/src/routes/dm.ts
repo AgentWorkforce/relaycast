@@ -127,6 +127,7 @@ dmRoutes.post(
         fingerprint,
         storageFingerprint: legacyFingerprint,
         compatibleFingerprints: legacyFingerprint === fingerprint ? [] : [legacyFingerprint],
+        ttlSecondsForResult: (result) => result._idempotency_ttl_seconds,
         kv: c.get('engine').kv,
         operation: async () => {
           const hasWebhookSubscriptions = await shouldEnqueueWebhookEvent(c, workspace.id, 'dm.received');

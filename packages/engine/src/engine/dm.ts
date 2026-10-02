@@ -429,6 +429,7 @@ export type SendDmResult = AcceptedDmResult & {
   _delivery_rejections: DeliveryOutcomeRecords['rejections'];
   _notifications_durable?: boolean;
   _idempotency_replayed?: boolean;
+  _idempotency_ttl_seconds?: number;
 };
 
 const legacyPublicFields = {
@@ -561,6 +562,9 @@ export async function sendDm(
       _delivery_rejections: [],
       _notifications_durable: true,
       _idempotency_replayed: true,
+      _idempotency_ttl_seconds: Math.max(0, Math.floor(
+        (acceptedDirect.createdAt.getTime() + DIRECT_DM_IDEMPOTENCY_TTL_MS - Date.now()) / 1000,
+      )),
     };
   }
   // Resolve durable request identity before mutable recipient/attachment metadata.
