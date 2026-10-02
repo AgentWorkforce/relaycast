@@ -15,9 +15,11 @@ import { and, eq, isNotNull } from 'drizzle-orm';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
 import {
   agents,
+  directDmIdempotency,
   dmConversationReservations,
   dmConversations,
   dmParticipants,
+  messages,
   workspaces,
 } from '../../db/schema.js';
 import { isPairReservationConflict, sendDm } from '../dm.js';
@@ -109,6 +111,29 @@ describe('1:1 DM conversation identity', () => {
       .from(dmParticipants)
       .where(eq(dmParticipants.conversationId, first.conversation_id));
     expect(participants).toHaveLength(2);
+  });
+
+  it('admits two concurrent dispatch attempts with one idempotency key as one stored message', async () => {
+    const { db, ws, alice } = seed();
+    const request = { to: 'bob', text: 'only once' };
+    const [first, second] = await Promise.all([
+      sendDm(db, ws, alice, request, { idempotencyKey: 'logical-dm-1' }),
+      sendDm(db, ws, alice, request, { idempotencyKey: 'logical-dm-1' }),
+    ]);
+
+    expect(second.id).toBe(first.id);
+    expect(db.select().from(messages).all()).toHaveLength(1);
+    expect(db.select().from(directDmIdempotency).all()).toHaveLength(1);
+  });
+
+  it('rejects reuse of a direct-DM idempotency key for a different payload', async () => {
+    const { db, ws, alice } = seed();
+    await sendDm(db, ws, alice, { to: 'bob', text: 'first' }, { idempotencyKey: 'logical-dm-2' });
+
+    await expect(
+      sendDm(db, ws, alice, { to: 'bob', text: 'changed' }, { idempotencyKey: 'logical-dm-2' }),
+    ).rejects.toMatchObject({ code: 'idempotency_key_reused', status: 409 });
+    expect(db.select().from(messages).all()).toHaveLength(1);
   });
 
   /**

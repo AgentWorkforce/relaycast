@@ -691,6 +691,27 @@ export const messages = sqliteTable(
   ],
 );
 
+/**
+ * Atomic direct-DM idempotency claims. Cloudflare KV remains the fast replay
+ * cache, while this D1 row is the concurrency authority: the claim and the
+ * message are admitted in the same batch, so two isolates cannot store two
+ * messages for one caller key.
+ */
+export const directDmIdempotency = sqliteTable(
+  'direct_dm_idempotency',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    messageId: text('message_id').notNull(),
+    fingerprint: text('fingerprint').notNull(),
+    response: text('response', { mode: 'json' }).$type<Record<string, unknown>>().notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (table) => [index('idx_direct_dm_idempotency_workspace_created').on(table.workspaceId, table.createdAt)],
+);
+
 // Durable, payload-free evidence that a session_ref existed in a workspace.
 // Message retention may remove every matching message; this ledger deliberately
 // survives that pruning so the resolver can report aged_out instead of guessing

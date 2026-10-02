@@ -17,6 +17,7 @@ import {
   pendingEvents,
   messageLogs,
   nodes,
+  directDmIdempotency,
 } from '../db/schema.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { runAtomicWrites, databaseConstraintKind, type AtomicWrite } from '../ports/database.js';
@@ -52,6 +53,7 @@ import { canonicalUserMessageMetadata, publicMessageMetadata, sanitizeUserMessag
 import { queryInChunks } from '../lib/queryChunks.js';
 
 type Db = ReturnType<typeof getDb>;
+const DIRECT_DM_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 
 interface SendDmOptions {
   skipA2aIntercept?: boolean;
@@ -497,6 +499,39 @@ export async function sendDm(
   options: SendDmOptions = {},
 ): Promise<SendDmResult> {
   const startedAtMs = Date.now();
+  const directRequestId = options.idempotencyKey
+    ? `dmid_${await sha256Hex(JSON.stringify([workspaceId, fromAgentId, options.idempotencyKey]))}`
+    : null;
+  const directFingerprint = directRequestId
+    ? await sha256Hex(JSON.stringify({ data, address: options.address ?? null }))
+    : '';
+  let [acceptedDirect] = directRequestId
+    ? await db.select().from(directDmIdempotency).where(eq(directDmIdempotency.id, directRequestId))
+    : [];
+  if (
+    acceptedDirect
+    && acceptedDirect.createdAt.getTime() + DIRECT_DM_IDEMPOTENCY_TTL_MS <= Date.now()
+  ) {
+    await db.delete(directDmIdempotency).where(and(
+      eq(directDmIdempotency.id, acceptedDirect.id),
+      lte(directDmIdempotency.createdAt, new Date(Date.now() - DIRECT_DM_IDEMPOTENCY_TTL_MS)),
+    ));
+    [acceptedDirect] = await db
+      .select()
+      .from(directDmIdempotency)
+      .where(eq(directDmIdempotency.id, directRequestId!));
+  }
+  if (acceptedDirect) {
+    if (acceptedDirect.fingerprint !== directFingerprint) {
+      throw codedError('Idempotency-Key was reused with a different request payload', 'idempotency_key_reused', 409);
+    }
+    return {
+      ...(acceptedDirect.response as Omit<SendDmResult, '_delivery' | '_delivery_rejections'>),
+      _delivery: null,
+      _delivery_rejections: [],
+      _notifications_durable: true,
+    };
+  }
   // Resolve durable request identity before mutable recipient/attachment metadata.
   // A removed/recreated target must never turn an accepted retry into a new send.
   const requestEgressId = !options.skipA2aIntercept && options.idempotencyKey
@@ -643,12 +678,26 @@ export async function sendDm(
   const workspacePayload = transformForClient({
     type: 'dm.received', workspace_id: workspaceId, data: eventData, timestamp: createdAt.toISOString(),
   });
+  const directClaimId = !a2aTarget ? directRequestId : null;
   // The outbox, observer cursor log, response context and delivery share admission.
   // None can escape a capacity rollback, or depend on external transport success.
   const persist = () => runAtomicWrites(db, (writeDb) => {
     const writes = buildDmMessageWrites(writeDb, workspaceId, fromAgentId, conv.channelId, data, attachments, messageId, createdAt,
       options.receivedA2aAgentId ? { id: options.receivedA2aAgentId, tokenHash: options.receivedA2aTokenHash } : undefined,
       senderAddress, addressedRecipient);
+
+    if (directClaimId) {
+      // The unique claim is the first statement in the atomic admission. A
+      // concurrent loser rolls back before any message or delivery can escape.
+      writes.unshift(writeDb.insert(directDmIdempotency).values({
+        id: directClaimId,
+        workspaceId,
+        messageId,
+        fingerprint: directFingerprint,
+        response: publicResult,
+        createdAt,
+      }));
+    }
 
     if (egressId && a2aTarget && egressPayload) {
       // First statement owns the request identity; a competing attempt rolls
@@ -708,7 +757,7 @@ export async function sendDm(
       );
     }
     return writes;
-  }, { requireAtomic: Boolean(workspacePolicy || a2aTarget || options.receivedA2aAgentId || inboundId) });
+  }, { requireAtomic: Boolean(workspacePolicy || a2aTarget || options.receivedA2aAgentId || inboundId || directClaimId) });
   let admittedEventSeq: number | undefined;
   try {
     const results = await persist();
@@ -725,6 +774,20 @@ export async function sendDm(
       if (winner) {
         if (winner.fingerprint !== inboundFingerprint) throw codedError('Idempotency-Key was reused with a different request payload', 'idempotency_key_reused', 409);
         return sendDm(db, workspaceId, fromAgentId, data, options);
+      }
+    }
+    if (directClaimId) {
+      const [winner] = await db.select().from(directDmIdempotency).where(eq(directDmIdempotency.id, directClaimId));
+      if (winner) {
+        if (winner.fingerprint !== directFingerprint) {
+          throw codedError('Idempotency-Key was reused with a different request payload', 'idempotency_key_reused', 409);
+        }
+        return {
+          ...(winner.response as Omit<SendDmResult, '_delivery' | '_delivery_rejections'>),
+          _delivery: null,
+          _delivery_rejections: [],
+          _notifications_durable: true,
+        };
       }
     }
     // Inspect the actual committed winner after the losing atomic batch rolls back.
