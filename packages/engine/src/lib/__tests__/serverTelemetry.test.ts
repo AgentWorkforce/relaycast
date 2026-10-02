@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { sanitizeTelemetryProperties } from '@relaycast/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AppEnv } from '../../env.js';
 import type { TelemetryEvent } from '../../ports/telemetry.js';
@@ -33,7 +34,8 @@ function workspaceRow(metadata: Record<string, unknown> = {}): Workspace {
 interface EmitOptions {
   agent?: Agent;
   workspace?: Workspace;
-  event?: `relaycast_server_${string}`;
+  event?: 'relaycast_server_message_created' | 'relaycast_server_channel_joined';
+  properties?: Record<string, unknown>;
   headers?: Record<string, string>;
   attribution?: ServerEventAttribution;
 }
@@ -53,13 +55,15 @@ async function emit(options: EmitOptions = {}): Promise<TelemetryEvent> {
     await next();
   });
   app.post('/emit', (c) => {
-    emitServerEvent(
-      c,
-      WORKSPACE_ID,
-      options.event ?? 'relaycast_server_message_created',
-      { channel_id: 'ch_1', message_id: '1' },
-      options.attribution,
-    );
+    if (options.event === 'relaycast_server_channel_joined') {
+      emitServerEvent(c, WORKSPACE_ID, options.event, {
+        channel_name: 'general', agent_id: 'agent_1', ...options.properties,
+      }, options.attribution);
+    } else {
+      emitServerEvent(c, WORKSPACE_ID, 'relaycast_server_message_created', {
+        channel_id: 'ch_1', message_id: '1', ...options.properties,
+      }, options.attribution);
+    }
     return c.body(null, 204);
   });
 
@@ -69,6 +73,24 @@ async function emit(options: EmitOptions = {}): Promise<TelemetryEvent> {
 }
 
 describe('emitServerEvent attribution', () => {
+  it.each([undefined, 'ws_other'])('keeps the authoritative workspace id over caller value %s', async (workspaceId) => {
+    const properties = { workspace_id: workspaceId };
+    const event = await emit({ properties });
+
+    expect(event.properties.workspace_id).toBe(WORKSPACE_ID);
+    expect(sanitizeTelemetryProperties(event.properties).workspace_id).toBe(WORKSPACE_ID);
+    expect(properties.workspace_id).toBe(workspaceId);
+  });
+
+  it('retains the workspace id when the sink truncates extra properties', async () => {
+    const properties = Object.fromEntries(Array.from({ length: 80 }, (_, i) => [`extra_${i}`, i]));
+    const event = await emit({ properties });
+    const sanitized = sanitizeTelemetryProperties(event.properties);
+
+    expect(Object.keys(sanitized)).toHaveLength(64);
+    expect(sanitized.workspace_id).toBe(WORKSPACE_ID);
+  });
+
   it('attributes a human sender to their cloud user', async () => {
     const event = await emit({
       agent: agentRow({ type: 'human', name: 'will', metadata: { cloud_user_id: 'user_will' } }),

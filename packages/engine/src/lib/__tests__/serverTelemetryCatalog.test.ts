@@ -8,18 +8,14 @@ import { SERVER_TELEMETRY_EVENTS } from '@relaycast/types';
  * Guard: every event name passed to `emitServerEvent` must exist in
  * `SERVER_TELEMETRY_EVENTS`.
  *
- * `parseInternalTelemetryEvent` validates the name against a zod enum built
- * from that list, and the hosted sink invokes it as `void capture...(...)` — so
- * an unlisted name throws into a floating promise and the event is dropped
- * before it reaches PostHog, silently and with no error surfaced. This test is
- * the only thing standing between a new emit site and a permanently invisible
- * event.
+ * The emitter's types enforce catalog names and required properties. This
+ * source guard also catches call sites that bypass those checks with casts.
  */
 
 const ENGINE_SRC = path.resolve(fileURLToPath(new URL('../../', import.meta.url)));
 
 /** Every `emitServerEvent(` occurrence, including the declaration itself. */
-const EMIT_CALL = /emitServerEvent\(/g;
+const EMIT_CALL = /emitServerEvent(?:<[^>]*>)?\(/g;
 /** The event name is the third argument; the first two are short expressions. */
 const EMIT_CALL_WITH_NAME = /emitServerEvent\([\s\S]{0,120}?'(relaycast_server_[a-zA-Z0-9_]*)'/g;
 

@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased - Patch]
 
+### Added
+
+- `ServerTelemetryRequiredProperty<E>` exposes the properties `parseInternalTelemetryEvent` requires for each server telemetry event.
+
 ### Fixed
 
 - `WebhookSchema` and `Webhook` include required `workspace_id`, `channel_id`, and `channel_name` plus optional nullable `created_by`; manually constructed webhook values must include the required identity fields.

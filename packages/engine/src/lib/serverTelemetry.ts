@@ -2,6 +2,7 @@ import type { Context } from "hono";
 import {
   TELEMETRY_CLOUD_ID_MAX_LENGTH,
   type ServerTelemetryEventName,
+  type ServerTelemetryRequiredProperty,
   type TelemetryGroups,
   type TelemetryPersonSetOnce,
   type TelemetrySenderProperties,
@@ -19,7 +20,24 @@ import {
   UNKNOWN_ORIGIN_ACTOR,
 } from "./origin.js";
 
-type ServerEvent = `relaycast_server_${string}`;
+/**
+ * Properties for a server event. The hosted sink validates events with
+ * `parseInternalTelemetryEvent`, which drops any event missing a required
+ * property (or whose name is not in `SERVER_TELEMETRY_EVENTS`), so both are
+ * enforced here at compile time. `workspace_id` always comes from the
+ * `workspaceId` argument. Required values must not be `undefined`, which the
+ * sanitizer strips.
+ */
+type ServerEventProperties<E extends ServerTelemetryEventName> = Record<
+  string,
+  unknown
+> & {
+  [K in Exclude<ServerTelemetryRequiredProperty<E>, "workspace_id">]:
+    | string
+    | number
+    | boolean
+    | null;
+};
 
 export function normalizeRoutePathForTelemetry(value: string): string {
   const withoutQuery = value.split(/[?#]/)[0] ?? value;
@@ -167,14 +185,17 @@ function firstSendSetOnce(
  * workspace with person processing off. The workspace's cloud org and
  * workspace ids become PostHog groups.
  */
-export function emitServerEvent(
+export function emitServerEvent<E extends ServerTelemetryEventName>(
   c: Context<AppEnv>,
   workspaceId: string,
-  event: ServerEvent,
-  properties: Record<string, unknown>,
+  event: E,
+  properties: ServerEventProperties<E>,
   attribution: ServerEventAttribution = {},
 ): void {
-  const normalizedProperties = { ...properties };
+  const normalizedProperties: Record<string, unknown> = { ...properties };
+  // The `workspaceId` argument is authoritative; a caller value must not
+  // replace it.
+  delete normalizedProperties.workspace_id;
   if (typeof normalizedProperties.route_path === "string") {
     normalizedProperties.route_path = normalizeRoutePathForTelemetry(
       normalizedProperties.route_path,
@@ -213,7 +234,7 @@ export function emitServerEvent(
   const personId = cloudUserId ?? actor.actor_user_id ?? clientDistinctId;
   const groups = workspaceGroups(workspace);
   const setOnce =
-    personId && sender && SEND_EVENTS.has(event as ServerTelemetryEventName)
+    personId && sender && SEND_EVENTS.has(event)
       ? firstSendSetOnce(sender)
       : {};
 
@@ -226,6 +247,7 @@ export function emitServerEvent(
     properties: {
       app: "relaycast-server",
       surface: "cloud",
+      // Early, so the sink's 64-property cap can never truncate it away.
       workspace_id: workspaceId,
       ...(clientDistinctId ? { client_distinct_id: clientDistinctId } : {}),
       is_authenticated: Boolean(actor.actor_user_id),
