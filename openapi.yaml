@@ -5181,7 +5181,13 @@ paths:
       summary: Enroll or rotate a node token
       description: >
         Enroll a delivery node in the workspace or rotate the token for an existing node.
-        When `node_id` is supplied, it is the enrollment key: a matching node is rotated
+        A request that resolves an existing node by `node_id`, `name`, or `machine_id`
+        must also send that node's current token in `X-Relaycast-Node-Token`; the
+        workspace key alone cannot rotate or modify an established row. Supplying a
+        CSPRNG-generated `Idempotency-Key` of at least 32 characters makes that rotation
+        recoverable after a lost response when the same key, proof, and body are retried.
+        When `node_id`
+        is supplied, it is the enrollment key: an authorized matching node is rotated
         in place (and renamed if `name` differs), a new `node_id` creates a new node, and
         a `name` already held by a different node is rejected with `node_name_conflict`
         (409). Without `node_id`, an existing node with the same `name` is rotated; failing
@@ -5199,6 +5205,21 @@ paths:
         - Nodes
       security:
         - workspaceKey: []
+      parameters:
+        - name: X-Relaycast-Node-Token
+          in: header
+          required: false
+          schema:
+            type: string
+          description: Current node token required when this enrollment resolves an existing node. The workspace key remains the Authorization bearer credential.
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            minLength: 32
+            maxLength: 255
+          description: CSPRNG-generated recovery capability for an existing-node rotation. Reuse the same key with the same current token and request body after a transport failure to recover the same replacement token during the bounded replay window.
       requestBody:
         required: true
         content:
@@ -5210,12 +5231,12 @@ paths:
               properties:
                 node_id:
                   type: string
-                  description: Stable node identity. When supplied, enrollment keys on it — matching node rotated in place, new id creates a node — instead of resolving by name.
+                  description: Stable node identity. When supplied, enrollment keys on it — an authorized matching node is rotated in place, while a new id creates a node — instead of resolving by name.
                 name:
                   type: string
                 machine_id:
                   type: string
-                  description: Stable id of the host machine. Used as the enrollment key of last resort, after `node_id` and `name`, so a host that keeps no `node_id` and renames itself on each boot rotates its existing `broker` node instead of growing the roster. Reuse requires that broker to have heartbeated once and then gone stale; a row that never connected, one still live, and one with a future heartbeat are never adopted, so concurrent hosts sharing a `machine_id` (a cloned VM, or containers from one image) keep separate identities and credentials. Recorded on the node and returned on roster entries.
+                  description: Stable id of the host machine. Used as the enrollment key of last resort, after `node_id` and `name`, so a host that keeps no `node_id` can rotate its existing `broker` node instead of growing the roster when it also proves the current node token. Reuse requires that broker to have heartbeated once and then gone stale; a row that never connected, one still live, and one with a future heartbeat are never adopted, so concurrent hosts sharing a `machine_id` (a cloned VM, or containers from one image) keep separate identities and credentials. Recorded on the node and returned on roster entries.
                 kind:
                   type: string
                   enum: [ws, http_push, poll]
@@ -5255,7 +5276,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
         '409':
-          description: Node name is already enrolled by a different node
+          description: Node name conflict, or an existing node requires current-token proof
           content:
             application/json:
               schema:

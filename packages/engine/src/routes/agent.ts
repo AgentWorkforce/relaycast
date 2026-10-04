@@ -254,7 +254,7 @@ agentRoutes.post(
         max_agents: 1,
         tags: ['implicit', 'direct'],
         version: 'implicit',
-      });
+      }, { directAgentId: authAgent.id });
 
       return jsonOk(c, {
         node_id: nodeWithToken.id,

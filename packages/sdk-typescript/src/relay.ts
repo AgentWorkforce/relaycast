@@ -67,6 +67,7 @@ import type {
   ActionDefinition,
   RegisterActionRequest,
   BindAgentToNodeRequest,
+  CreateNodeOptions,
   CreateNodeRequest,
   CreateNodeResponse,
   DeleteNodeOptions,
@@ -976,8 +977,28 @@ export class RelayCast {
   };
 
   nodes = {
-    create: (data: CreateNodeRequest): Promise<CreateNodeResponse> =>
-      this.client.post('/v1/nodes', data),
+    create: (data: CreateNodeRequest, options?: CreateNodeOptions): Promise<CreateNodeResponse> => {
+      if (options?.currentToken !== undefined && !options.currentToken.trim()) {
+        throw new Error('currentToken must not be blank for node rotation');
+      }
+      if (options?.idempotencyKey !== undefined && !options.idempotencyKey.trim()) {
+        throw new Error('idempotencyKey must not be blank for node rotation recovery');
+      }
+      if (options?.idempotencyKey !== undefined && !options.currentToken) {
+        throw new Error('idempotencyKey requires currentToken for node rotation recovery');
+      }
+      const headers = {
+        ...(options?.currentToken ? { 'X-Relaycast-Node-Token': options.currentToken } : {}),
+        ...(options?.currentToken && options.idempotencyKey !== undefined
+          ? { 'Idempotency-Key': options.idempotencyKey }
+          : {}),
+      };
+      return this.client.post(
+        '/v1/nodes',
+        data,
+        Object.keys(headers).length > 0 ? { headers } : undefined,
+      );
+    },
 
     list: (query?: NodeListQuery): Promise<NodeRosterEntry[]> => {
       const params: Record<string, string> = {};

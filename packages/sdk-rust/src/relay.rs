@@ -1340,6 +1340,53 @@ impl RelayCast {
         self.client.post("/v1/nodes", Some(request), None).await
     }
 
+    /// Rotate or modify an established node after proving possession of its
+    /// current token. The proof is sent only in a header, never in the JSON
+    /// request body.
+    pub async fn create_node_with_current_token(
+        &self,
+        request: CreateNodeRequest,
+        current_token: &str,
+    ) -> Result<CreateNodeResponse> {
+        self.create_node_with_headers(request, current_token, None)
+            .await
+    }
+
+    /// Rotate an established node through the server's recoverable path. The
+    /// idempotency key must be CSPRNG-generated, at least 32 characters, and
+    /// reused with the same proof and request after a transport failure.
+    pub async fn create_node_with_rotation_recovery(
+        &self,
+        request: CreateNodeRequest,
+        current_token: &str,
+        idempotency_key: &str,
+    ) -> Result<CreateNodeResponse> {
+        self.create_node_with_headers(request, current_token, Some(idempotency_key))
+            .await
+    }
+
+    async fn create_node_with_headers(
+        &self,
+        request: CreateNodeRequest,
+        current_token: &str,
+        idempotency_key: Option<&str>,
+    ) -> Result<CreateNodeResponse> {
+        let headers = vec![(
+            "X-Relaycast-Node-Token".to_string(),
+            current_token.to_string(),
+        )];
+        self.client
+            .post(
+                "/v1/nodes",
+                Some(request),
+                Some(RequestOptions {
+                    headers: Some(headers),
+                    idempotency_key: idempotency_key.map(str::to_owned),
+                }),
+            )
+            .await
+    }
+
     /// List fleet nodes on the roster.
     pub async fn list_nodes(&self, query: Option<NodeListQuery>) -> Result<Vec<NodeRosterEntry>> {
         let query = query.unwrap_or_default();

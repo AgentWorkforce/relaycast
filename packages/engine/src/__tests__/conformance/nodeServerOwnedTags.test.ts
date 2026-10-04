@@ -16,16 +16,26 @@ const ENROLLED_CLOUD_TAGS = [
 
 describe('fleet node server-owned cloud:* tags', () => {
   let stack: TestStack;
-  beforeEach(() => { stack = makeNodeStack(); });
+  let currentNodeToken: string | undefined;
+  beforeEach(() => {
+    stack = makeNodeStack();
+    currentNodeToken = undefined;
+  });
   afterEach(() => stack.close());
 
   async function enroll(workspaceKey: string, body: Record<string, unknown>) {
     const response = await stack.app.request('/v1/nodes', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${workspaceKey}` },
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${workspaceKey}`,
+        ...(currentNodeToken ? { 'X-Relaycast-Node-Token': currentNodeToken } : {}),
+      },
       body: JSON.stringify({ node_id: 'node_sandbox', name: 'sandbox-node', version: 'test-node', ...body }),
     });
     expect(response.ok).toBe(true);
+    const created = (await response.json()) as { data: { token: string } };
+    currentNodeToken = created.data.token;
   }
 
   async function readTags(workspaceKey: string): Promise<string[]> {

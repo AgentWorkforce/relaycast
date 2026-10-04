@@ -28,7 +28,11 @@ import { deliverPendingToNode, handleNodeReconnect } from '../../index.js';
  */
 describe('durable delivery api', () => {
   let stack: TestStack;
-  beforeEach(() => { stack = makeNodeStack({ ttlMs: 60_000 }); });
+  let enrolledNodeTokens: Map<string, string>;
+  beforeEach(() => {
+    stack = makeNodeStack({ ttlMs: 60_000 });
+    enrolledNodeTokens = new Map();
+  });
   afterEach(async () => {
     await stack.close();
   });
@@ -89,9 +93,15 @@ describe('durable delivery api', () => {
         { name: FLEET_DELIVERY_CURSOR_CAPABILITY, kind: 'capacity' },
       ]
       : [{ name: 'spawn:claude', kind: 'capacity' }];
+    const tokenKey = `${ws.workspaceId}:${id}`;
+    const currentToken = enrolledNodeTokens.get(tokenKey);
     const create = await stack.app.request('/v1/nodes', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+        ...(currentToken ? { 'X-Relaycast-Node-Token': currentToken } : {}),
+      },
       body: JSON.stringify({
         node_id: id,
         name,
@@ -102,6 +112,8 @@ describe('durable delivery api', () => {
       }),
     });
     expect(create.status).toBe(201);
+    const created = (await create.json()) as { data: { token: string } };
+    enrolledNodeTokens.set(tokenKey, created.data.token);
 
     const sock = new FakeSocket();
     const handle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, id, sock);

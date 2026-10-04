@@ -7,7 +7,7 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
 
 ### Changed
 
@@ -15,6 +15,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `POST /v1/nodes` requires an established node's current token in `X-Relaycast-Node-Token` before rotating or modifying the row; workspace-key-only enrollment remains valid for genuinely new nodes and returns `409 node_token_proof_required` without mutation for existing rows. A high-entropy `Idempotency-Key` binds the prior proof and exact request for 24 hours so a retry after a lost committed response recovers the same replacement token without another mutation. Hosts must apply `0063_node_rotation_recovery.sql` before upgrading.
 - `POST /v1/dm` admits one idempotency claim and durable notification state atomically across direct and A2A routing, preventing concurrent retries on different server isolates from creating duplicate messages or losing post-commit recovery. Hosts must apply `0062_direct_dm_idempotency.sql` before upgrading.
 - `emitServerEvent` only accepts `SERVER_TELEMETRY_EVENTS` names and requires each event's required properties at compile time; `workspace_id` always comes from the `workspaceId` argument.
 - `GET /v1/webhooks` returns `workspace_id`, `channel_id`, `channel_name`, and `created_by` for SDK compatibility while retaining `channel` for existing REST clients.

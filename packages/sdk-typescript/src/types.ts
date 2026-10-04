@@ -379,6 +379,21 @@ export interface CreateNodeRequest {
   version?: string;
 }
 
+export interface CreateNodeOptions {
+  /**
+   * The node's current token. Required when `CreateNodeRequest` resolves an
+   * established node by id, name, or machine id; sent only in the
+   * `X-Relaycast-Node-Token` header and never serialized into the JSON body.
+   */
+  currentToken?: string;
+  /**
+   * CSPRNG-generated operation key (at least 32 characters). Reuse it with the
+   * same current token and request body to recover the replacement token after
+   * a lost response.
+   */
+  idempotencyKey?: string;
+}
+
 export interface CreateNodeResponse extends NodeRosterEntry {
   token: string;
 }

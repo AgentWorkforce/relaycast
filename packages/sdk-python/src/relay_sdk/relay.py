@@ -49,6 +49,17 @@ def _enc(value: str) -> str:
     return quote(value, safe="")
 
 
+def _validate_node_rotation_options(
+    current_token: str | None, idempotency_key: str | None,
+) -> None:
+    if current_token is not None and not current_token.strip():
+        raise ValueError("current_token must not be blank for node rotation")
+    if idempotency_key is not None and not idempotency_key.strip():
+        raise ValueError("idempotency_key must not be blank for node rotation recovery")
+    if idempotency_key is not None and current_token is None:
+        raise ValueError("idempotency_key requires current_token for node rotation recovery")
+
+
 def _workspace_create_headers(
     idempotency_key: str | None, api_key: str | None, base_url: str | None,
 ) -> dict[str, str]:
@@ -253,8 +264,24 @@ class _NodesNamespace:
     def __init__(self, client: HttpClient) -> None:
         self._client = client
 
-    def create(self, data: CreateNodeRequest) -> CreateNodeResponse:
-        result = self._client.post("/v1/nodes", data.model_dump(exclude_none=True))
+    def create(
+        self,
+        data: CreateNodeRequest,
+        *,
+        current_token: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> CreateNodeResponse:
+        _validate_node_rotation_options(current_token, idempotency_key)
+        headers = {
+            **({"X-Relaycast-Node-Token": current_token} if current_token is not None else {}),
+            **({"Idempotency-Key": idempotency_key} if idempotency_key is not None else {}),
+        }
+        result = self._client.post(
+            "/v1/nodes",
+            data.model_dump(exclude_none=True),
+            headers=headers or None,
+            retry=idempotency_key is not None,
+        )
         return CreateNodeResponse.model_validate(result)
 
     def list(self, *, capability: str | None = None, name: str | None = None) -> list[NodeRosterEntry]:
@@ -703,8 +730,24 @@ class _AsyncNodesNamespace:
     def __init__(self, client: AsyncHttpClient) -> None:
         self._client = client
 
-    async def create(self, data: CreateNodeRequest) -> CreateNodeResponse:
-        result = await self._client.post("/v1/nodes", data.model_dump(exclude_none=True))
+    async def create(
+        self,
+        data: CreateNodeRequest,
+        *,
+        current_token: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> CreateNodeResponse:
+        _validate_node_rotation_options(current_token, idempotency_key)
+        headers = {
+            **({"X-Relaycast-Node-Token": current_token} if current_token is not None else {}),
+            **({"Idempotency-Key": idempotency_key} if idempotency_key is not None else {}),
+        }
+        result = await self._client.post(
+            "/v1/nodes",
+            data.model_dump(exclude_none=True),
+            headers=headers or None,
+            retry=idempotency_key is not None,
+        )
         return CreateNodeResponse.model_validate(result)
 
     async def list(self, *, capability: str | None = None, name: str | None = None) -> list[NodeRosterEntry]:

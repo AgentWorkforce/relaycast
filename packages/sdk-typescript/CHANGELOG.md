@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `nodes.create(request, { currentToken, idempotencyKey })` sends current-node proof without placing the credential in JSON and can reuse a high-entropy operation key to recover a committed rotation after a lost response.
 
 ## [8.16.0] - 2026-10-01
 

@@ -4,7 +4,15 @@ All notable changes to `relaycast-swift` will be documented in this file.
 
 See the [root changelog](../../CHANGELOG.md) for cross-package release highlights.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `CreateNodeRequest.machineId` and `nodes.create(request, currentToken:idempotencyKey:)` support machine-aware enrollment and recoverable rotation without placing credentials in JSON; unkeyed creates are never replayed after an ambiguous failure.
+
+### Changed
+
+- Automatic retries default to idempotent HTTP methods or requests carrying an idempotency key; unkeyed `POST` and `PATCH` requests are sent once unless a caller explicitly enables retries.
 
 ## [8.16.0] - 2026-10-01
 

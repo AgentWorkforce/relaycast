@@ -534,6 +534,7 @@ class NodeRosterEntry(BaseModel):
 class CreateNodeRequest(BaseModel):
     node_id: str | None = None
     name: str
+    machine_id: str | None = None
     kind: NodeKind | None = None
     role: NodeRole | None = None
     delivery_adapter: str | None = None
