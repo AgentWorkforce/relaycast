@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Delivery routing treats agents with `metadata.source = "cloud-relay-connect"` as probe-pulled even when normal registration or a later claim gives them an active `ws.node.v1` binding. New rows omit node routing, and redrive rewrites queued legacy rows to `self_connected` without erasing the prior dispatch attempt or error.
 
 ## [9.2.0] - 2026-10-09
 

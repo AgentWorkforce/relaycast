@@ -1449,6 +1449,134 @@ describe('durable delivery api', () => {
     expect(row.dispatchAttempts).toBe(1);
   });
 
+  it('routes Relay Connect participants through probe pull when a machine node claims the agent', async () => {
+    const ws = await createWorkspace(stack.app, 'connect-probe-pull');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const registration = await stack.app.request('/v1/agents', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({
+        name: 'connect-host',
+        auto_join_general: false,
+        direct_machine_prefix: 'cloud',
+        metadata: { source: 'cloud-relay-connect', connect_id: 'connect-test', role: 'host' },
+      }),
+    });
+    expect(registration.status).toBe(201);
+    const registered = (await registration.json()) as { data: { id: string; token: string; name: string } };
+    const host = { agentId: registered.data.id, token: registered.data.token, name: registered.data.name };
+    const node = await attachDirectNodeSocket(stack, ws.workspaceId, host);
+    const joined = await stack.app.request('/v1/channels/general/join', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${host.token}` },
+    });
+    expect(joined.status).toBe(200);
+
+    // The standard registration path creates an implicit node and the socket
+    // above claims it. The Connect source marker still makes probe pull the
+    // exclusive delivery path.
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'probe owns this delivery' }),
+    });
+    expect(post.status).toBe(201);
+    await stack.settle();
+
+    expect(node.sock.ofType('deliver')).toHaveLength(0);
+    const [row] = await stack.runtime.deps.db
+      .select()
+      .from(deliveries)
+      .where(and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, host.agentId)));
+    expect(row).toMatchObject({
+      status: 'queued',
+      locationType: 'self_connected',
+      locationNodeId: null,
+      routeNodeId: null,
+      routeNodeKind: null,
+      routeNodeRole: null,
+      deliveryAdapter: null,
+      dispatchAttempts: 0,
+      lastDispatchError: null,
+    });
+    expect(await listDeliveries(host.token)).toMatchObject([
+      { id: row.id, status: 'queued', location_type: 'self_connected', delivery_adapter: null },
+    ]);
+  });
+
+  it('moves a previously failed Connect node backlog onto the probe pull path', async () => {
+    const ws = await createWorkspace(stack.app, 'connect-probe-fallback');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const host = await registerViaNode(node, 'connect-host');
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'legacy node-routed Connect delivery' }),
+    });
+    expect(post.status).toBe(201);
+    await waitForAssertion(() => expect(node.sock.ofType('deliver')).toHaveLength(1));
+    const secondPost = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'second legacy node-routed Connect delivery' }),
+    });
+    expect(secondPost.status).toBe(201);
+    await waitForAssertion(() => expect(node.sock.ofType('deliver')).toHaveLength(2));
+
+    const db = stack.runtime.deps.db;
+    const rowFilter = and(
+      eq(deliveries.workspaceId, ws.workspaceId),
+      eq(deliveries.agentId, host.agentId),
+    );
+    await db
+      .update(deliveries)
+      .set({
+        status: 'queued',
+        deliveredAt: null,
+        dispatchAttempts: 1,
+        nextAttemptAt: null,
+        lastDispatchError: 'node socket send failed',
+      })
+      .where(rowFilter);
+    await db
+      .update(agents)
+      .set({ metadata: { source: 'cloud-relay-connect', connect_id: 'connect-test', role: 'host' } })
+      .where(and(eq(agents.workspaceId, ws.workspaceId), eq(agents.id, host.agentId)));
+    const beforeDeliver = node.sock.ofType('deliver').length;
+
+    expect(await sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date() })).toBe(2);
+    expect(node.sock.ofType('deliver')).toHaveLength(beforeDeliver);
+
+    const rows = await db.select().from(deliveries).where(rowFilter);
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row).toMatchObject({
+        status: 'queued',
+        locationType: 'self_connected',
+        locationNodeId: null,
+        routeNodeId: null,
+        routeNodeKind: null,
+        routeNodeRole: null,
+        deliveryAdapter: null,
+        dispatchAttempts: 1,
+        nextAttemptAt: null,
+        lastDispatchError: 'node socket send failed',
+      });
+    }
+    const pulled = await listDeliveries(host.token);
+    expect(pulled).toHaveLength(2);
+    expect(pulled).toEqual(expect.arrayContaining(rows.map((row) => expect.objectContaining({
+      id: row.id,
+      status: 'queued',
+      location_type: 'self_connected',
+      delivery_adapter: null,
+      dispatch_attempts: 1,
+      last_dispatch_error: 'node socket send failed',
+    }))));
+  });
+
   it('sweep redrives two queued ws-node rows for one agent in ascending seq order', async () => {
     // Regression for #271: the broker injects deliver frames only when
     // `seq == received_up_to_seq + 1`. If both of an agent's inline dispatches
