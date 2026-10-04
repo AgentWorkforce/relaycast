@@ -977,10 +977,17 @@ export class RelayCast {
   };
 
   nodes = {
-    create: (data: CreateNodeRequest, options?: CreateNodeOptions): Promise<CreateNodeResponse> =>
-      this.client.post('/v1/nodes', data, options?.currentToken
-        ? { headers: { 'X-Relaycast-Node-Token': options.currentToken } }
-        : undefined),
+    create: (data: CreateNodeRequest, options?: CreateNodeOptions): Promise<CreateNodeResponse> => {
+      const headers = {
+        ...(options?.currentToken ? { 'X-Relaycast-Node-Token': options.currentToken } : {}),
+        ...(options?.idempotencyKey ? { 'Idempotency-Key': options.idempotencyKey } : {}),
+      };
+      return this.client.post(
+        '/v1/nodes',
+        data,
+        Object.keys(headers).length > 0 ? { headers } : undefined,
+      );
+    },
 
     list: (query?: NodeListQuery): Promise<NodeRosterEntry[]> => {
       const params: Record<string, string> = {};

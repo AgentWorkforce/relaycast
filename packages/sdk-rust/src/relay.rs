@@ -1348,15 +1348,41 @@ impl RelayCast {
         request: CreateNodeRequest,
         current_token: &str,
     ) -> Result<CreateNodeResponse> {
+        self.create_node_with_headers(request, current_token, None).await
+    }
+
+    /// Rotate an established node through the server's recoverable path. The
+    /// idempotency key must be CSPRNG-generated, at least 32 characters, and
+    /// reused with the same proof and request after a transport failure.
+    pub async fn create_node_with_rotation_recovery(
+        &self,
+        request: CreateNodeRequest,
+        current_token: &str,
+        idempotency_key: &str,
+    ) -> Result<CreateNodeResponse> {
+        self.create_node_with_headers(request, current_token, Some(idempotency_key))
+            .await
+    }
+
+    async fn create_node_with_headers(
+        &self,
+        request: CreateNodeRequest,
+        current_token: &str,
+        idempotency_key: Option<&str>,
+    ) -> Result<CreateNodeResponse> {
+        let mut headers = vec![(
+            "X-Relaycast-Node-Token".to_string(),
+            current_token.to_string(),
+        )];
+        if let Some(idempotency_key) = idempotency_key {
+            headers.push(("Idempotency-Key".to_string(), idempotency_key.to_string()));
+        }
         self.client
             .post(
                 "/v1/nodes",
                 Some(request),
                 Some(RequestOptions {
-                    headers: Some(vec![(
-                        "X-Relaycast-Node-Token".to_string(),
-                        current_token.to_string(),
-                    )]),
+                    headers: Some(headers),
                     ..Default::default()
                 }),
             )

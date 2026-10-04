@@ -3066,13 +3066,19 @@ describe('node adapter conformance', () => {
   });
 
   describe('node enrollment identity', () => {
-    async function enroll(workspaceKey: string, body: Record<string, unknown>, currentNodeToken?: string) {
+    async function enroll(
+      workspaceKey: string,
+      body: Record<string, unknown>,
+      currentNodeToken?: string,
+      idempotencyKey?: string,
+    ) {
       const res = await stack.app.request('/v1/nodes', {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
           authorization: `Bearer ${workspaceKey}`,
           ...(currentNodeToken ? { 'x-relaycast-node-token': currentNodeToken } : {}),
+          ...(idempotencyKey ? { 'idempotency-key': idempotencyKey } : {}),
         },
         body: JSON.stringify(body),
       });
@@ -3169,6 +3175,83 @@ describe('node adapter conformance', () => {
       expect(row.name).toBe('new-name');
       expect(row.version).toBe('v2');
       expect(row.tokenHash).toBe(await sha256Hex(renamed.body.data!.token));
+    });
+
+    it('recovers the same rotated token after a committed response is lost', async () => {
+      const ws = await createWorkspace(stack.app, 'enroll-idempotent-rotation-ws');
+      const first = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'old-name', version: 'v1' });
+      expect(first.status).toBe(201);
+
+      const request = { node_id: 'node_a', name: 'new-name', version: 'v2' };
+      const idempotencyKey = 'node-rotation-00000000-0000-4000-8000-000000000001';
+      const rotated = await enroll(ws.workspaceKey, request, first.body.data?.token, idempotencyKey);
+      expect(rotated.status).toBe(201);
+      const [afterCommit] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_a'));
+
+      // Simulate a caller that never observed the first 201 and retries with
+      // its retained proof and the same operation key.
+      const recovered = await enroll(ws.workspaceKey, request, first.body.data?.token, idempotencyKey);
+      expect(recovered.status).toBe(201);
+      expect(recovered.body.data?.token).toBe(rotated.body.data?.token);
+      const [afterReplay] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_a'));
+      expect(afterReplay).toEqual(afterCommit);
+
+      // The superseded proof is not a general grace credential: changing the
+      // body or operation key cannot recover or mutate the node.
+      const changedBody = await enroll(
+        ws.workspaceKey,
+        { ...request, version: 'attacker-version' },
+        first.body.data?.token,
+        idempotencyKey,
+      );
+      expect(changedBody.status).toBe(409);
+      expect(changedBody.body.error?.code).toBe('node_token_proof_required');
+      const changedKey = await enroll(
+        ws.workspaceKey,
+        request,
+        first.body.data?.token,
+        'node-rotation-00000000-0000-4000-8000-000000000002',
+      );
+      expect(changedKey.status).toBe(409);
+      expect(changedKey.body.error?.code).toBe('node_token_proof_required');
+      const [afterRejectedReplays] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_a'));
+      expect(afterRejectedReplays).toEqual(afterCommit);
+    });
+
+    it('requires a high-entropy idempotency key for node-token recovery', async () => {
+      const ws = await createWorkspace(stack.app, 'enroll-weak-idempotency-ws');
+      const first = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'host' });
+      expect(first.status).toBe(201);
+
+      const rejected = await enroll(
+        ws.workspaceKey,
+        { node_id: 'node_a', name: 'host', version: 'v2' },
+        first.body.data?.token,
+        'predictable-key',
+      );
+      expect(rejected.status).toBe(400);
+      expect(rejected.body.error?.code).toBe('node_rotation_idempotency_key_too_weak');
+    });
+
+    it('rejects superseded-token recovery after its bounded replay window expires', async () => {
+      const ws = await createWorkspace(stack.app, 'enroll-expired-recovery-ws');
+      const first = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'host', version: 'v1' });
+      const request = { node_id: 'node_a', name: 'host', version: 'v2' };
+      const idempotencyKey = 'node-rotation-00000000-0000-4000-8000-000000000003';
+      const rotated = await enroll(ws.workspaceKey, request, first.body.data?.token, idempotencyKey);
+      expect(rotated.status).toBe(201);
+
+      await stack.runtime.deps.db
+        .update(nodes)
+        .set({ previousTokenExpiresAt: new Date(Date.now() - 1_000) })
+        .where(eq(nodes.id, 'node_a'));
+      const [before] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_a'));
+
+      const rejected = await enroll(ws.workspaceKey, request, first.body.data?.token, idempotencyKey);
+      expect(rejected.status).toBe(409);
+      expect(rejected.body.error?.code).toBe('node_token_proof_required');
+      const [after] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_a'));
+      expect(after).toEqual(before);
     });
 
     it('rejects invalid node-token proof and leaves the established row unchanged', async () => {

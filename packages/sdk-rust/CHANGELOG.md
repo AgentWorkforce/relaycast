@@ -33,7 +33,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
-- `RelayCast::create_node_with_current_token` sends current-node proof for authorized rotation or modification of an established node without placing the credential in the JSON body.
+- `RelayCast::create_node_with_current_token` sends current-node proof for authorized rotation or modification of an established node without placing the credential in the JSON body. `create_node_with_rotation_recovery` also sends a caller-retained idempotency key for lost-response recovery, and `CreateNodeRequest` now exposes optional `machine_id`.
 - `WorkspaceBootstrapOptions::with_origin(client, version)` and `RelayCast::lookup_workspace_with_options(WorkspaceLookupOptions)` identify products on anonymous workspace creation and lookup; legacy calls retain SDK defaults.
 
 - `RelayCastOptions::with_origin(client, version)` and `AgentClient::with_options(ClientOptions)` configure product attribution, inherited by agent HTTP/WebSocket traffic and preserved across token replacement.

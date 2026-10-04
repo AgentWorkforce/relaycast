@@ -348,10 +348,13 @@ final class RelaycastTests: XCTestCase {
         MockURLProtocol.handler = { request in
             switch (request.httpMethod, request.url?.path) {
             case ("POST", "/v1/nodes"):
+                XCTAssertEqual(request.value(forHTTPHeaderField: "X-Relaycast-Node-Token"), "nt_live_current")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), "node-rotation-00000000-0000-4000-8000-000000000001")
                 let body = try XCTUnwrap(requestBodyData(request))
                 let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
                 XCTAssertEqual(json["name"] as? String, "http-node")
                 XCTAssertEqual(json["kind"] as? String, "http_push")
+                XCTAssertNil(json["current_token"])
                 let delivery = try XCTUnwrap(json["delivery"] as? [String: Any])
                 let auth = try XCTUnwrap(delivery["auth"] as? [String: Any])
                 XCTAssertEqual(auth["signature_header"] as? String, "X-Custom-Signature")
@@ -450,7 +453,7 @@ final class RelaycastTests: XCTestCase {
                     prefix: "sig="
                 )
             ))
-        ))
+        ), currentToken: "nt_live_current", idempotencyKey: "node-rotation-00000000-0000-4000-8000-000000000001")
         XCTAssertEqual(created.token, "nt_live_test")
         XCTAssertEqual(created.deliveryAdapter, "http.hmac.v1")
         guard case .httpPush(let createdDelivery) = created.delivery else {

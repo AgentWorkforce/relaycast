@@ -54,6 +54,20 @@ function snapshot(handle: SqliteDbHandle) {
         const { status_updated_at: _statusUpdatedAt, ...existing } = row as Record<string, unknown>;
         return JSON.stringify(existing);
       }
+      // 0063 adds only bounded node-rotation recovery metadata. Exclude those
+      // nullable fields so this comparison remains byte-for-byte over every
+      // pre-existing value while the explicit schema assertions below cover
+      // the new columns.
+      if (name === 'nodes') {
+        const {
+          previous_token_hash: _previousTokenHash,
+          previous_token_expires_at: _previousTokenExpiresAt,
+          rotation_idempotency_key_hash: _rotationIdempotencyKeyHash,
+          rotation_request_digest: _rotationRequestDigest,
+          ...existing
+        } = row as Record<string, unknown>;
+        return JSON.stringify(existing);
+      }
       return JSON.stringify(row);
     }).sort();
     return [name, rows.length, createHash('sha256').update(JSON.stringify(rows)).digest('hex')];
@@ -102,6 +116,9 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
         table = { ...table, sql: table.sql.replace(', task_state TEXT', '') };
       }
       if (table.name === 'agents' && original) {
+        return { ...table, sql: original.sql };
+      }
+      if (table.name === 'nodes' && original) {
         return { ...table, sql: original.sql };
       }
       return {
@@ -170,6 +187,12 @@ describe('compact maintenance migration path', () => {
       expect.objectContaining({ unique: 1, origin: 'pk' }),
       expect.objectContaining({ name: 'idx_direct_dm_idempotency_workspace_created' }),
       expect.objectContaining({ name: 'idx_direct_dm_idempotency_retention' }),
+    ]));
+    expect(handle.sqlite.pragma('table_info(nodes)')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'previous_token_hash', notnull: 0 }),
+      expect.objectContaining({ name: 'previous_token_expires_at', notnull: 0 }),
+      expect.objectContaining({ name: 'rotation_idempotency_key_hash', notnull: 0 }),
+      expect.objectContaining({ name: 'rotation_request_digest', notnull: 0 }),
     ]));
     expectConstraintsPreserved(beforeConstraints, constraints(handle));
     expect(handle.sqlite.prepare('SELECT * FROM maintenance_cursors ORDER BY id').all()).toEqual(cursorRows);

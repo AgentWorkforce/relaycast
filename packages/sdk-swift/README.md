@@ -68,6 +68,20 @@ The Swift SDK mirrors the TypeScript SDK's main surface:
 Swift APIs are camelCase. HTTP JSON remains Relaycast snake_case on the wire; the SDK handles
 encoding and decoding centrally.
 
+For an existing node, retain the token returned by its previous enrollment and
+pass it separately so it is sent as header proof rather than JSON:
+
+```swift
+let rotated = try await relay.nodes.create(
+    CreateNodeRequest(nodeId: node.id, name: node.name, version: "2.0.0"),
+    currentToken: node.token,
+    idempotencyKey: persistedRotationUUID.uuidString
+)
+```
+
+Persist the CSPRNG-generated key until the call succeeds, and reuse the same
+key, token, and request after a transport failure to recover the replacement.
+
 ## Self-Hosting
 
 By default, the SDK talks to `https://cast.agentrelay.com`. To self-host, run the engine and pass

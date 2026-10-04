@@ -21,6 +21,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Added
 
 - Rust workspace and agent clients accept product origin metadata across HTTP, WebSocket, token replacement, and anonymous workspace bootstrap.
+- TypeScript, Python, Rust, and Swift node helpers accept the current node token as header-only proof and a stable idempotency key for recoverable rotation of an established node; Rust node requests also expose `machine_id`.
 
 ### Changed
 
@@ -28,7 +29,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
-- Node enrollment no longer lets a workspace key alone rotate, rename, reshape, or reset an established node; existing rows require proof of their current node token while genuinely new node IDs remain enrollable.
+- Node enrollment no longer lets a workspace key alone rotate, rename, reshape, or reset an established node; existing rows require proof of their current node token while genuinely new node IDs remain enrollable. Keyed rotations retain a bounded, request-bound recovery record so a lost committed response returns the same replacement token on retry. Hosts must apply `0063_node_rotation_recovery.sql` before upgrading.
 - Direct-message idempotency is now enforced atomically across direct and A2A routing, so concurrent retries reaching different server isolates cannot create duplicate rows or lose post-commit notification recovery.
 - Server telemetry events can no longer be emitted with an unlisted name, a missing required property, or an overridden `workspace_id`, any of which made hosted ingestion silently drop them.
 - Fix webhook listing responses so published SDKs can deserialize them, restoring webhook cleanup for integrations.

@@ -2651,6 +2651,7 @@ async fn nodes_and_triggers_use_expected_endpoints() {
         .create_node(CreateNodeRequest {
             node_id: None,
             name: "http-node".to_string(),
+            machine_id: None,
             kind: Some("http_push".to_string()),
             role: None,
             delivery_adapter: None,
@@ -2683,7 +2684,15 @@ async fn nodes_and_triggers_use_expected_endpoints() {
     Mock::given(method("POST"))
         .and(path("/v1/nodes"))
         .and(header("x-relaycast-node-token", "nt_live_current"))
-        .and(body_json(json!({ "node_id": "node_http", "name": "renamed" })))
+        .and(header(
+            "idempotency-key",
+            "node-rotation-00000000-0000-4000-8000-000000000001",
+        ))
+        .and(body_json(json!({
+            "node_id": "node_http",
+            "name": "renamed",
+            "machine_id": "machine_http"
+        })))
         .respond_with(ok(json!({
             "id": "node_http", "name": "renamed", "kind": "http_push", "role": "direct",
             "delivery_adapter": "http.basic.v1", "delivery": null, "capabilities": [], "tags": [],
@@ -2695,10 +2704,11 @@ async fn nodes_and_triggers_use_expected_endpoints() {
         .mount(&server)
         .await;
     let rotated = relay
-        .create_node_with_current_token(
+        .create_node_with_rotation_recovery(
             CreateNodeRequest {
                 node_id: Some("node_http".to_string()),
                 name: "renamed".to_string(),
+                machine_id: Some("machine_http".to_string()),
                 kind: None,
                 role: None,
                 delivery_adapter: None,
@@ -2709,6 +2719,7 @@ async fn nodes_and_triggers_use_expected_endpoints() {
                 version: None,
             },
             "nt_live_current",
+            "node-rotation-00000000-0000-4000-8000-000000000001",
         )
         .await
         .expect("create_node_with_current_token failed");

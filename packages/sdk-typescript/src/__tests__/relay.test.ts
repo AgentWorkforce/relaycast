@@ -855,12 +855,16 @@ describe('RelayCast', () => {
 
       await relay.nodes.create(
         { nodeId: 'node_1', name: 'renamed', version: 'v2' },
-        { currentToken: 'nt_live_current' },
+        {
+          currentToken: 'nt_live_current',
+          idempotencyKey: 'node-rotation-00000000-0000-4000-8000-000000000001',
+        },
       );
 
       const [url, init] = mockFetch.mock.calls[0]!;
       expect(url).toBe('https://cast.agentrelay.com/v1/nodes');
       expect(init.headers['X-Relaycast-Node-Token']).toBe('nt_live_current');
+      expect(init.headers['Idempotency-Key']).toBe('node-rotation-00000000-0000-4000-8000-000000000001');
       expect(JSON.parse(init.body)).toEqual({ node_id: 'node_1', name: 'renamed', version: 'v2' });
     });
 

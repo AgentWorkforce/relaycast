@@ -60,6 +60,8 @@ type AgentRow = typeof agents.$inferSelect;
 type NodeKind = 'ws' | 'http_push' | 'poll';
 type NodeRole = 'direct' | 'broker';
 
+const NODE_ROTATION_RECOVERY_TTL_MS = 24 * 60 * 60 * 1_000;
+
 /** Minimal socket surface used by node-control dispatchers to send reply frames. */
 export interface NodeSocketLike {
   send(data: string): void;
@@ -400,9 +402,14 @@ export async function createNodeToken(
   authorization: {
     expectedTokenHash?: string;
     directAgentId?: string;
+    rotationRecovery?: {
+      replacementToken: string;
+      idempotencyKeyHash: string;
+      requestDigest: string;
+    };
   } = {},
 ) {
-  const token = `nt_live_${randomHex(24)}`;
+  const token = authorization.rotationRecovery?.replacementToken ?? `nt_live_${randomHex(24)}`;
   const tokenHash = await sha256Hex(token);
   const name = data.name.startsWith('#') ? data.name.slice(1) : data.name;
   // Reject names that are empty or still #-prefixed after normalization: an
@@ -415,7 +422,7 @@ export async function createNodeToken(
   // lookup is only a fallback for callers without a stable id. A name held by
   // a *different* node id is a conflict — mirroring node.register — never a
   // silent rewrite of the other node.
-  const existing = await resolveNodeForEnroll(db, workspaceId, data);
+  const existing = await resolveNodeForEnroll(db, workspaceId, data, authorization.expectedTokenHash);
   if (data.node_id !== undefined) {
     const nameHolder = await getNodeByName(db, workspaceId, name);
     if (nameHolder && nameHolder.id !== data.node_id) {
@@ -451,6 +458,18 @@ export async function createNodeToken(
     const authorizedDirectNode = authorization.directAgentId !== undefined
       && existing.id === directNodeIdForAgent(authorization.directAgentId)
       && existing.role === 'direct';
+    const recovery = authorization.rotationRecovery;
+    const isIdempotentRotationReplay = (candidate: NodeRow) => hasPresentedTokenProof
+      && recovery !== undefined
+      && candidate.tokenHash === tokenHash
+      && candidate.previousTokenHash === authorization.expectedTokenHash
+      && candidate.rotationIdempotencyKeyHash === recovery.idempotencyKeyHash
+      && candidate.rotationRequestDigest === recovery.requestDigest
+      && candidate.previousTokenExpiresAt !== null
+      && candidate.previousTokenExpiresAt.getTime() > now.getTime();
+    if (isIdempotentRotationReplay(existing)) {
+      return { ...publicNode(existing), token };
+    }
     if (!hasPresentedTokenProof && !authorizedDirectNode) {
       throw codedError(
         'Node already exists; its current node token is required to rotate or modify it',
@@ -463,6 +482,18 @@ export async function createNodeToken(
       .set({
         name,
         tokenHash,
+        previousTokenHash: hasPresentedTokenProof && !authorizedDirectNode && recovery
+          ? authorization.expectedTokenHash
+          : null,
+        previousTokenExpiresAt: hasPresentedTokenProof && !authorizedDirectNode && recovery
+          ? new Date(now.getTime() + NODE_ROTATION_RECOVERY_TTL_MS)
+          : null,
+        rotationIdempotencyKeyHash: hasPresentedTokenProof && !authorizedDirectNode && recovery
+          ? recovery.idempotencyKeyHash
+          : null,
+        rotationRequestDigest: hasPresentedTokenProof && !authorizedDirectNode && recovery
+          ? recovery.requestDigest
+          : null,
         kind,
         role,
         deliveryAdapter,
@@ -494,6 +525,13 @@ export async function createNodeToken(
       ))
       .returning();
     if (!updated) {
+      // Two identical retries can both read the previous generation before
+      // either update runs. If the other request committed this exact keyed
+      // rotation, recover its result instead of returning a spurious conflict.
+      const winner = recovery ? await getNodeById(db, workspaceId, existing.id) : null;
+      if (winner && isIdempotentRotationReplay(winner)) {
+        return { ...publicNode(winner), token };
+      }
       throw codedError(
         'Node token changed before enrollment completed; retry with the current node token',
         'node_token_proof_required',
@@ -577,40 +615,62 @@ const MACHINE_MATCH_SCAN_LIMIT = 20;
  * separate nodes. Declining the match costs an extra roster row; rejecting the
  * enrollment outright would break a whole fleet booted from one image.
  *
- * Ordered oldest-first so a roster that already holds several rows for one
- * machine converges onto its earliest reusable row instead of picking
- * arbitrarily.
+ * Current-token proof selects its exact reusable generation when several
+ * brokers share one machine. Without matching proof, the fallback remains
+ * oldest-first so a roster converges instead of picking arbitrarily.
  */
-export async function getBrokerNodeByMachineId(db: Db, workspaceId: string, machineId: string) {
+export async function getBrokerNodeByMachineId(
+  db: Db,
+  workspaceId: string,
+  machineId: string,
+  expectedTokenHash?: string,
+) {
   // Exclude live rows in SQL so the bound below counts only reusable
   // candidates. Bounding first and filtering after would let a machine with
   // enough live brokers hide its one offline row past the limit, and enrollment
   // would insert a new row instead of reusing it.
   const now = new Date();
   const liveCutoff = new Date(now.getTime() - NODE_LIVENESS_TTL_MS);
+  const reusableWhere = and(
+    eq(nodes.workspaceId, workspaceId),
+    eq(nodes.machineId, machineId),
+    eq(nodes.role, 'broker'),
+    // Mirrors isReusableForMachineMatch in full, so the scan bound below
+    // counts only rows that are actually reusable. A stale proof alone is not
+    // enough: a broker that registered recently has a fresh lastHeartbeatAt
+    // and is therefore live, and admitting those here would let them crowd
+    // the window and hide the one reusable row behind them.
+    isNotNull(nodes.provenLiveAt),
+    lt(nodes.provenLiveAt, liveCutoff),
+    // not live — mirrors isNodeLive
+    or(
+      ne(nodes.status, 'online'),
+      isNull(nodes.lastHeartbeatAt),
+      lt(nodes.lastHeartbeatAt, liveCutoff),
+    ),
+    // no future-dated heartbeat — server clock rollback
+    or(isNull(nodes.lastHeartbeatAt), lte(nodes.lastHeartbeatAt, now)),
+  );
+
+  // Several legitimate brokers may share one machine id (VM clones and
+  // containers are common). When the caller retains its token, select that
+  // exact reusable generation before the oldest-row fallback so one broker's
+  // proof is never checked against a sibling row.
+  if (expectedTokenHash !== undefined) {
+    const [provenCandidate] = await db
+      .select()
+      .from(nodes)
+      .where(and(reusableWhere, eq(nodes.tokenHash, expectedTokenHash)))
+      .limit(1);
+    if (provenCandidate && isReusableForMachineMatch(provenCandidate)) {
+      return provenCandidate;
+    }
+  }
+
   const candidates = await db
     .select()
     .from(nodes)
-    .where(and(
-      eq(nodes.workspaceId, workspaceId),
-      eq(nodes.machineId, machineId),
-      eq(nodes.role, 'broker'),
-      // Mirrors isReusableForMachineMatch in full, so the scan bound below
-      // counts only rows that are actually reusable. A stale proof alone is not
-      // enough: a broker that registered recently has a fresh lastHeartbeatAt
-      // and is therefore live, and admitting those here would let them crowd
-      // the window and hide the one reusable row behind them.
-      isNotNull(nodes.provenLiveAt),
-      lt(nodes.provenLiveAt, liveCutoff),
-      // not live — mirrors isNodeLive
-      or(
-        ne(nodes.status, 'online'),
-        isNull(nodes.lastHeartbeatAt),
-        lt(nodes.lastHeartbeatAt, liveCutoff),
-      ),
-      // no future-dated heartbeat — server clock rollback
-      or(isNull(nodes.lastHeartbeatAt), lte(nodes.lastHeartbeatAt, now)),
-    ))
+    .where(reusableWhere)
     .orderBy(asc(nodes.createdAt), asc(nodes.id))
     .limit(MACHINE_MATCH_SCAN_LIMIT);
   // The SQL above is a pre-filter for `isReusableForMachineMatch`, which is the
@@ -662,6 +722,7 @@ export async function resolveNodeForEnroll(
   db: Db,
   workspaceId: string,
   data: { node_id?: string; name: string; machine_id?: string; kind?: string; role?: NodeRole; max_agents?: number },
+  expectedTokenHash?: string,
 ) {
   if (data.node_id !== undefined) {
     return getNodeById(db, workspaceId, data.node_id);
@@ -669,7 +730,7 @@ export async function resolveNodeForEnroll(
   const byName = await getNodeByName(db, workspaceId, data.name);
   if (byName) return byName;
   if (data.machine_id !== undefined && requestedNodeRole(data) === 'broker') {
-    return getBrokerNodeByMachineId(db, workspaceId, data.machine_id);
+    return getBrokerNodeByMachineId(db, workspaceId, data.machine_id, expectedTokenHash);
   }
   return null;
 }

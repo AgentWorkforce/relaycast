@@ -224,12 +224,17 @@ class TestRelay:
                         prefix="sig=",
                     ),
                 ),
-            )
+            ),
+            current_token="nt_live_current",
+            idempotency_key="node-rotation-00000000-0000-4000-8000-000000000001",
         )
         assert created.kind == "http_push"
         assert created.token == "nt_live_test"
         create_body = json.loads(create_route.calls[0].request.content)
         assert create_body["delivery"]["auth"]["signature_header"] == "X-Custom-Signature"
+        assert "current_token" not in create_body
+        assert create_route.calls[0].request.headers["X-Relaycast-Node-Token"] == "nt_live_current"
+        assert create_route.calls[0].request.headers["Idempotency-Key"] == "node-rotation-00000000-0000-4000-8000-000000000001"
 
         list_route = respx.get(f"{BASE}/v1/nodes").mock(return_value=ok([NODE_DATA]))
         nodes = r.nodes.list(capability="code")
@@ -456,13 +461,18 @@ class TestAsyncRelay:
                     name="http-node",
                     kind="http_push",
                     delivery=HttpPushNodeDelivery(url="https://receiver.example.test/relaycast"),
-                )
+                ),
+                current_token="nt_live_current",
+                idempotency_key="node-rotation-00000000-0000-4000-8000-000000000001",
             )
             binding = await r.nodes.bind_agent(
                 "http-node",
                 BindAgentToNodeRequest(agent_name="billing-agent"),
             )
         assert created.token == "nt_live_test"
+        assert create_route.calls[0].request.headers["X-Relaycast-Node-Token"] == "nt_live_current"
+        assert create_route.calls[0].request.headers["Idempotency-Key"] == "node-rotation-00000000-0000-4000-8000-000000000001"
+        assert "current_token" not in json.loads(create_route.calls[0].request.content)
         assert binding.agent_name == "billing-agent"
         assert create_route.called
         assert bind_route.called

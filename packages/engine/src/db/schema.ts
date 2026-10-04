@@ -242,6 +242,14 @@ export const nodes = sqliteTable(
       .references(() => workspaces.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     tokenHash: text('token_hash').notNull().unique(),
+    // A successful idempotent rotation retains only the superseded token hash
+    // and request binding for a bounded recovery window. This lets a caller
+    // recover the replacement after a lost 201 without making the workspace
+    // key sufficient to rotate an established node.
+    previousTokenHash: text('previous_token_hash'),
+    previousTokenExpiresAt: integer('previous_token_expires_at', { mode: 'timestamp' }),
+    rotationIdempotencyKeyHash: text('rotation_idempotency_key_hash'),
+    rotationRequestDigest: text('rotation_request_digest'),
     // Physical machine grouping in fleet views and a placement input; never a
     // capability scope. Set at enrollment when the caller supplies it, and by a
     // provider on register; null when neither reports one.

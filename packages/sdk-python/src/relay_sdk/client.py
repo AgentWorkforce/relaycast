@@ -123,8 +123,8 @@ class HttpClient:
     def get(self, path: str, query: dict[str, str] | None = None) -> Any:
         return self.request("GET", path, query=query)
 
-    def post(self, path: str, body: Any = None) -> Any:
-        return self.request("POST", path, body=body)
+    def post(self, path: str, body: Any = None, *, headers: dict[str, str] | None = None) -> Any:
+        return self.request("POST", path, body=body, headers=headers)
 
     def patch(self, path: str, body: Any = None) -> Any:
         return self.request("PATCH", path, body=body)
@@ -244,8 +244,8 @@ class AsyncHttpClient:
     async def get(self, path: str, query: dict[str, str] | None = None) -> Any:
         return await self.request("GET", path, query=query)
 
-    async def post(self, path: str, body: Any = None) -> Any:
-        return await self.request("POST", path, body=body)
+    async def post(self, path: str, body: Any = None, *, headers: dict[str, str] | None = None) -> Any:
+        return await self.request("POST", path, body=body, headers=headers)
 
     async def patch(self, path: str, body: Any = None) -> Any:
         return await self.request("PATCH", path, body=body)

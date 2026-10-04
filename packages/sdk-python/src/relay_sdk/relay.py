@@ -253,8 +253,18 @@ class _NodesNamespace:
     def __init__(self, client: HttpClient) -> None:
         self._client = client
 
-    def create(self, data: CreateNodeRequest) -> CreateNodeResponse:
-        result = self._client.post("/v1/nodes", data.model_dump(exclude_none=True))
+    def create(
+        self,
+        data: CreateNodeRequest,
+        *,
+        current_token: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> CreateNodeResponse:
+        headers = {
+            **({"X-Relaycast-Node-Token": current_token} if current_token else {}),
+            **({"Idempotency-Key": idempotency_key} if idempotency_key else {}),
+        }
+        result = self._client.post("/v1/nodes", data.model_dump(exclude_none=True), headers=headers or None)
         return CreateNodeResponse.model_validate(result)
 
     def list(self, *, capability: str | None = None, name: str | None = None) -> list[NodeRosterEntry]:
@@ -703,8 +713,18 @@ class _AsyncNodesNamespace:
     def __init__(self, client: AsyncHttpClient) -> None:
         self._client = client
 
-    async def create(self, data: CreateNodeRequest) -> CreateNodeResponse:
-        result = await self._client.post("/v1/nodes", data.model_dump(exclude_none=True))
+    async def create(
+        self,
+        data: CreateNodeRequest,
+        *,
+        current_token: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> CreateNodeResponse:
+        headers = {
+            **({"X-Relaycast-Node-Token": current_token} if current_token else {}),
+            **({"Idempotency-Key": idempotency_key} if idempotency_key else {}),
+        }
+        result = await self._client.post("/v1/nodes", data.model_dump(exclude_none=True), headers=headers or None)
         return CreateNodeResponse.model_validate(result)
 
     async def list(self, *, capability: str | None = None, name: str | None = None) -> list[NodeRosterEntry]:

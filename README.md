@@ -819,7 +819,11 @@ name alone left each boot's row behind forever. Passing `machine_id` can rotate
 the machine's existing `broker` node instead. Rotating or modifying any existing
 row requires both the workspace key and that row's current node token, sent as
 `X-Relaycast-Node-Token`; a workspace key alone can only create a genuinely new
-node. Only `broker` nodes are matched
+node. For crash-safe rotation, also send a CSPRNG-generated `Idempotency-Key`
+of at least 32 characters and reuse the same key, current token, and request
+body after a transport failure. During a 24-hour recovery window, the server
+returns the same replacement token without mutating the row again; a changed
+key or body is rejected. Only `broker` nodes are matched
 this way — a machine legitimately runs many `direct` node-of-one delivery hosts
 — and passing an explicit `node_id` pins identity, which is how you run two
 brokers on one machine. The value is recorded on the node and returned on

@@ -2195,6 +2195,8 @@ pub struct CreateNodeRequest {
     pub node_id: Option<String>,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub machine_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,

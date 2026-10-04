@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `nodes.create(request, { currentToken })` sends current-node proof for authorized rotation or modification of an established node without placing the credential in the JSON body.
+- `nodes.create(request, { currentToken, idempotencyKey })` sends current-node proof without placing the credential in JSON and can reuse a high-entropy operation key to recover a committed rotation after a lost response.
 
 ## [8.16.0] - 2026-10-01
 

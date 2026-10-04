@@ -106,6 +106,32 @@ describe('node enrollment — machine_id dedupe', () => {
     expect(await roster(ws.workspaceKey)).toHaveLength(1);
   });
 
+  it('matches current-token proof to the right reusable broker when a machine has several rows', async () => {
+    const ws = await createWorkspace(stack.app, 'dedupe-proof-selects-holder');
+    const first = await enroll(ws.workspaceKey, {
+      node_id: 'node_first', name: 'first-host', machine_id: 'machine-a', role: 'broker', max_agents: 4,
+    });
+    const second = await enroll(ws.workspaceKey, {
+      node_id: 'node_second', name: 'second-host', machine_id: 'machine-a', role: 'broker', max_agents: 4,
+    });
+    await markConnectedThenGone('node_first');
+    await markConnectedThenGone('node_second');
+
+    const reboot = await enroll(
+      ws.workspaceKey,
+      { name: 'second-host-reboot', machine_id: 'machine-a', role: 'broker', max_agents: 4 },
+      second.body.data?.token as string,
+    );
+    expect(reboot.status).toBe(201);
+    expect(reboot.body.data?.id).toBe('node_second');
+
+    const rows = await roster(ws.workspaceKey);
+    expect(rows).toHaveLength(2);
+    expect(rows.find((row) => row.id === 'node_first')?.name).toBe('first-host');
+    expect(rows.find((row) => row.id === 'node_second')?.name).toBe('second-host-reboot');
+    expect(first.body.data?.token).not.toBe(second.body.data?.token);
+  });
+
   it('never reuses a row that has not connected, so cold-boot clones stay separate', async () => {
     // Two hosts from one baked image enrolling moments apart. This request
     // sequence is byte-identical to one host enrolling twice, so enrollment

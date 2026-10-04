@@ -662,8 +662,19 @@ public final class RelayNodesService: @unchecked Sendable {
         self.relay = relay
     }
 
-    public func create(_ request: CreateNodeRequest) async throws -> CreateNodeResponse {
-        try await relay.client.post("/v1/nodes", body: request)
+    public func create(
+        _ request: CreateNodeRequest,
+        currentToken: String? = nil,
+        idempotencyKey: String? = nil
+    ) async throws -> CreateNodeResponse {
+        var headers: [String: String] = [:]
+        if let currentToken { headers["X-Relaycast-Node-Token"] = currentToken }
+        if let idempotencyKey { headers["Idempotency-Key"] = idempotencyKey }
+        return try await relay.client.post(
+            "/v1/nodes",
+            body: request,
+            options: RequestOptions(headers: headers)
+        )
     }
 
     public func list(_ query: NodeListQuery = NodeListQuery()) async throws -> [NodeRosterEntry] {
