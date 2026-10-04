@@ -57,13 +57,15 @@ When rotating or changing an existing node, retain the token returned by its
 previous enrollment and pass it separately from the JSON request:
 
 ```python
+from relay_sdk import AsyncRelay
 from relay_sdk.models import CreateNodeRequest
 
-rotated = relay.nodes.create(
-    CreateNodeRequest(node_id=node.id, name=node.name, version="2.0.0"),
-    current_token=node.token,
-    idempotency_key=persisted_rotation_uuid,
-)
+async with AsyncRelay(api_key="rk_live_xxx") as relay:
+    rotated = await relay.nodes.create(
+        CreateNodeRequest(node_id=node.id, name=node.name, version="2.0.0"),
+        current_token=node.token,
+        idempotency_key=persisted_rotation_uuid,
+    )
 ```
 
 Generate the idempotency key with a CSPRNG (a UUIDv4 is sufficient), persist it

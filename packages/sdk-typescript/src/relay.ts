@@ -981,9 +981,12 @@ export class RelayCast {
       if (options?.idempotencyKey !== undefined && !options.currentToken) {
         throw new Error('idempotencyKey requires currentToken for node rotation recovery');
       }
+      if (options?.idempotencyKey === '') {
+        throw new Error('idempotencyKey must not be empty for node rotation recovery');
+      }
       const headers = {
         ...(options?.currentToken ? { 'X-Relaycast-Node-Token': options.currentToken } : {}),
-        ...(options?.currentToken && options.idempotencyKey
+        ...(options?.currentToken && options.idempotencyKey !== undefined
           ? { 'Idempotency-Key': options.idempotencyKey }
           : {}),
       };

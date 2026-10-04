@@ -879,6 +879,17 @@ describe('RelayCast', () => {
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
+    it('create() rejects an empty recovery key before sending', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      expect(() => relay.nodes.create(
+        { nodeId: 'node_1', name: 'renamed', version: 'v2' },
+        { currentToken: 'nt_live_current', idempotencyKey: '' },
+      )).toThrow('idempotencyKey must not be empty');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
     it('list() with status builds the query and camelizes stale roster fields', async () => {
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
