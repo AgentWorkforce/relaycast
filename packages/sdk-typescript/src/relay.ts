@@ -67,6 +67,7 @@ import type {
   ActionDefinition,
   RegisterActionRequest,
   BindAgentToNodeRequest,
+  CreateNodeOptions,
   CreateNodeRequest,
   CreateNodeResponse,
   DeleteNodeOptions,
@@ -976,8 +977,10 @@ export class RelayCast {
   };
 
   nodes = {
-    create: (data: CreateNodeRequest): Promise<CreateNodeResponse> =>
-      this.client.post('/v1/nodes', data),
+    create: (data: CreateNodeRequest, options?: CreateNodeOptions): Promise<CreateNodeResponse> =>
+      this.client.post('/v1/nodes', data, options?.currentToken
+        ? { headers: { 'X-Relaycast-Node-Token': options.currentToken } }
+        : undefined),
 
     list: (query?: NodeListQuery): Promise<NodeRosterEntry[]> => {
       const params: Record<string, string> = {};

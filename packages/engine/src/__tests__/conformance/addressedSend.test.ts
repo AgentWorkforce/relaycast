@@ -16,7 +16,11 @@ type Json = Record<string, unknown>;
  */
 describe('addressed send', () => {
   let stack: TestStack;
-  beforeEach(() => { stack = makeNodeStack({ ttlMs: 60_000 }); });
+  let enrolledNodeTokens: Map<string, string>;
+  beforeEach(() => {
+    stack = makeNodeStack({ ttlMs: 60_000 });
+    enrolledNodeTokens = new Map();
+  });
   afterEach(async () => {
     await stack.close();
   });
@@ -28,15 +32,23 @@ describe('addressed send', () => {
     machineId?: string,
     tags: string[] = [],
   ) {
+    const tokenKey = `${ws.workspaceId}:${nodeId}`;
+    const currentToken = enrolledNodeTokens.get(tokenKey);
     const enroll = await stack.app.request('/v1/nodes', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+        ...(currentToken ? { 'X-Relaycast-Node-Token': currentToken } : {}),
+      },
       body: JSON.stringify({
         node_id: nodeId, name, ...(machineId ? { machine_id: machineId } : {}), tags,
         capabilities: ['spawn:claude'], max_agents: 4, version: 'test-node',
       }),
     });
     expect(enroll.status).toBe(201);
+    const created = (await enroll.json()) as { data: { token: string } };
+    enrolledNodeTokens.set(tokenKey, created.data.token);
 
     const sock = new FakeSocket();
     const handle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, nodeId, sock);

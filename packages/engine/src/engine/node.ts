@@ -397,6 +397,10 @@ export async function createNodeToken(
     tags?: string[];
     version?: string;
   },
+  authorization: {
+    expectedTokenHash?: string;
+    directAgentId?: string;
+  } = {},
 ) {
   const token = `nt_live_${randomHex(24)}`;
   const tokenHash = await sha256Hex(token);
@@ -443,6 +447,17 @@ export async function createNodeToken(
   }
 
   if (existing) {
+    const hasPresentedTokenProof = authorization.expectedTokenHash !== undefined;
+    const authorizedDirectNode = authorization.directAgentId !== undefined
+      && existing.id === directNodeIdForAgent(authorization.directAgentId)
+      && existing.role === 'direct';
+    if (!hasPresentedTokenProof && !authorizedDirectNode) {
+      throw codedError(
+        'Node already exists; its current node token is required to rotate or modify it',
+        'node_token_proof_required',
+        409,
+      );
+    }
     const [updated] = await db
       .update(nodes)
       .set({
@@ -467,8 +482,24 @@ export async function createNodeToken(
         load: 0,
         loadReported: false,
       })
-      .where(eq(nodes.id, existing.id))
+      // Token proof is a generation fence, not just a read-time check. If a
+      // concurrent rotation changes the credential after `existing` was read,
+      // this request must not overwrite the winner with stale authority.
+      .where(and(
+        eq(nodes.workspaceId, workspaceId),
+        eq(nodes.id, existing.id),
+        ...(hasPresentedTokenProof && !authorizedDirectNode
+          ? [eq(nodes.tokenHash, authorization.expectedTokenHash!)]
+          : []),
+      ))
       .returning();
+    if (!updated) {
+      throw codedError(
+        'Node token changed before enrollment completed; retry with the current node token',
+        'node_token_proof_required',
+        409,
+      );
+    }
     return { ...publicNode(updated), token };
   }
 
@@ -615,8 +646,9 @@ export function requestedNodeRole(data: { kind?: string; role?: NodeRole; max_ag
  * The machine_id step is what stops the roster refilling. A host that enrolls
  * without a persisted node_id arrives under a fresh name on every boot, and
  * each of those names used to mint a brand-new row that nothing ever reclaimed.
- * Falling back to the machine's existing broker turns re-enrollment into a
- * token rotation on the row that is already there.
+ * Falling back to the machine's existing broker lets an authorized holder
+ * rotate the row that is already there. createNodeToken separately requires
+ * proof of that row's current token before any existing row can change.
  *
  * node_id and name still win, so a caller that pins either keeps the exact
  * identity it asked for; passing node_id is the way to opt out of machine

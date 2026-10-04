@@ -118,7 +118,8 @@ function observerAgentIdsFilter(observer: ObserverContext): string[] | undefined
   return normalizeObserverFilters(observer.filters).agent_ids;
 }
 
-// POST /v1/nodes - enroll or rotate a node token (workspace-key only)
+// POST /v1/nodes - workspace-key enrollment; established rows also require
+// proof of the current node token.
 nodeRoutes.post('/nodes', requireWorkspaceKey, rateLimit, async (c) => {
   try {
     const parsed = await parseJsonBody(c, createNodeSchema, 'invalid node body');
@@ -166,12 +167,16 @@ async function enrollNode(c: Context<AppEnv>, data: z.infer<typeof createNodeSch
     if (role === 'direct' && (data.max_agents ?? existing?.maxAgents ?? 1) !== 1) {
       return jsonError(c, 'direct_node_capacity_exceeded', 'direct nodes can bind at most one agent', 400);
     }
+    const currentNodeToken = c.req.header('X-Relaycast-Node-Token');
+    const expectedTokenHash = currentNodeToken
+      ? await c.get('engine').auth.hashToken(currentNodeToken)
+      : undefined;
     const result = await nodeEngine.createNodeToken(c.get('db'), c.get('workspace').id, {
       ...data,
       kind,
       role,
       delivery: delivery && !('success' in delivery) ? delivery : null,
-    });
+    }, { expectedTokenHash });
     return jsonCreated(c, result);
   } catch (err: unknown) {
     return errorResponse(c, err);

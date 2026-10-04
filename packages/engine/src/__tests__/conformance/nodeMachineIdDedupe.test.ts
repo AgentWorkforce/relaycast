@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { makeNodeStack, createWorkspace, FakeSocket, type TestStack } from './harness.js';
 import { nodes } from '../../db/schema.js';
 import { isNodeLive, isReusableForMachineMatch } from '../../engine/placement.js';
+import { sha256Hex } from '../../lib/crypto.js';
 
 /**
  * Enrollment dedupes on machine_id.
@@ -21,10 +22,14 @@ describe('node enrollment — machine_id dedupe', () => {
   beforeEach(() => { stack = makeNodeStack(); });
   afterEach(() => stack.close());
 
-  async function enroll(workspaceKey: string, body: Record<string, unknown>) {
+  async function enroll(workspaceKey: string, body: Record<string, unknown>, currentNodeToken?: string) {
     const res = await stack.app.request('/v1/nodes', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${workspaceKey}` },
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${workspaceKey}`,
+        ...(currentNodeToken ? { 'x-relaycast-node-token': currentNodeToken } : {}),
+      },
       body: JSON.stringify(body),
     });
     return { status: res.status, body: (await res.json()) as { data?: Record<string, unknown> } };
@@ -61,7 +66,11 @@ describe('node enrollment — machine_id dedupe', () => {
     expect(first.status).toBe(201);
     await markConnectedThenGone(first.body.data?.id as string);
 
-    const second = await enroll(ws.workspaceKey, { name: 'host-a-boot2', machine_id: 'machine-a' });
+    const second = await enroll(
+      ws.workspaceKey,
+      { name: 'host-a-boot2', machine_id: 'machine-a' },
+      first.body.data?.token as string,
+    );
     expect(second.status).toBe(201);
 
     expect(second.body.data?.id).toBe(first.body.data?.id);
@@ -71,6 +80,30 @@ describe('node enrollment — machine_id dedupe', () => {
     const rows = await roster(ws.workspaceKey);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.machine_id).toBe('machine-a');
+  });
+
+  it('does not let a workspace key adopt and rename a reusable machine row without token proof', async () => {
+    const ws = await createWorkspace(stack.app, 'dedupe-proof-required');
+    const first = await enroll(ws.workspaceKey, {
+      name: 'host-a-boot1', machine_id: 'machine-a', version: 'v1',
+    });
+    await markConnectedThenGone(first.body.data?.id as string);
+    const [before] = await stack.runtime.deps.db
+      .select()
+      .from(nodes)
+      .where(eq(nodes.id, first.body.data?.id as string));
+
+    const rejected = await enroll(ws.workspaceKey, {
+      name: 'attacker-name', machine_id: 'machine-a', version: 'attacker-version',
+    });
+    expect(rejected.status).toBe(409);
+
+    const [after] = await stack.runtime.deps.db
+      .select()
+      .from(nodes)
+      .where(eq(nodes.id, first.body.data?.id as string));
+    expect(after).toEqual(before);
+    expect(await roster(ws.workspaceKey)).toHaveLength(1);
   });
 
   it('never reuses a row that has not connected, so cold-boot clones stay separate', async () => {
@@ -109,7 +142,11 @@ describe('node enrollment — machine_id dedupe', () => {
     const first = await enroll(ws.workspaceKey, { name: 'host-boot1', machine_id: 'machine-a', role: 'broker', max_agents: 4 });
     await markConnectedThenGone(first.body.data?.id as string);
 
-    const second = await enroll(ws.workspaceKey, { name: 'host-boot2', machine_id: 'machine-a', role: 'broker', max_agents: 4 });
+    const second = await enroll(
+      ws.workspaceKey,
+      { name: 'host-boot2', machine_id: 'machine-a', role: 'broker', max_agents: 4 },
+      first.body.data?.token as string,
+    );
     expect(second.body.data?.id).toBe(first.body.data?.id);
 
     const [afterReuse] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, second.body.data?.id as string));
@@ -121,14 +158,13 @@ describe('node enrollment — machine_id dedupe', () => {
     // The second host's row and credential survive.
     const [rowTwo] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, second.body.data?.id as string));
     expect(rowTwo!.name).toBe('host-boot2');
-    const { sha256Hex } = await import('../../lib/crypto.js');
     expect(rowTwo!.tokenHash).toBe(await sha256Hex(second.body.data?.token as string));
   });
 
   it('a real heartbeat frame is what unlocks reuse', async () => {
     // End-to-end: enroll, register, heartbeat, then age the proof out.
     const ws = await createWorkspace(stack.app, 'heartbeat-unlocks');
-    await enroll(ws.workspaceKey, {
+    const enrolled = await enroll(ws.workspaceKey, {
       node_id: 'node_hb', name: 'broker-host', machine_id: 'machine-a', role: 'broker', max_agents: 4,
     });
     const handle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, 'node_hb', new FakeSocket());
@@ -151,7 +187,11 @@ describe('node enrollment — machine_id dedupe', () => {
 
     // Age the proof out; now the row is reusable.
     await markConnectedThenGone('node_hb');
-    const reboot = await enroll(ws.workspaceKey, { name: 'broker-host-reboot', machine_id: 'machine-a' });
+    const reboot = await enroll(
+      ws.workspaceKey,
+      { name: 'broker-host-reboot', machine_id: 'machine-a' },
+      enrolled.body.data?.token as string,
+    );
     expect(reboot.body.data?.id).toBe('node_hb');
     expect(await roster(ws.workspaceKey)).toHaveLength(1);
   });
@@ -293,16 +333,17 @@ describe('node enrollment — machine_id dedupe', () => {
         provenLiveAt: new Date(now - 600_000), createdAt: new Date(now - 10_000 + i),
       });
     }
+    const reusableToken = 'nt_live_reusable';
     await stack.runtime.deps.db.insert(nodes).values({
       id: 'node_reusable', workspaceId: ws.workspaceId, name: 'gone-host',
-      tokenHash: 'hash-reusable', machineId: 'machine-a', role: 'broker', kind: 'ws',
+      tokenHash: await sha256Hex(reusableToken), machineId: 'machine-a', role: 'broker', kind: 'ws',
       status: 'offline', lastHeartbeatAt: new Date(now - 600_000),
       provenLiveAt: new Date(now - 600_000), createdAt: new Date(now),
     });
 
     const reboot = await enroll(ws.workspaceKey, {
       name: 'gone-host-reboot', machine_id: 'machine-a', role: 'broker', max_agents: 4,
-    });
+    }, reusableToken);
     expect(reboot.body.data?.id).toBe('node_reusable');
     expect(await roster(ws.workspaceKey)).toHaveLength(26);
   });
@@ -351,16 +392,17 @@ describe('node enrollment — machine_id dedupe', () => {
         provenLiveAt: new Date(now - 600_000), createdAt: new Date(now - 10_000 + i),
       });
     }
+    const reusableToken = 'nt_live_reusable_2';
     await stack.runtime.deps.db.insert(nodes).values({
       id: 'node_reusable_2', workspaceId: ws.workspaceId, name: 'gone-host',
-      tokenHash: 'hash-reusable-2', machineId: 'machine-a', role: 'broker', kind: 'ws',
+      tokenHash: await sha256Hex(reusableToken), machineId: 'machine-a', role: 'broker', kind: 'ws',
       status: 'offline', lastHeartbeatAt: new Date(now - 600_000),
       provenLiveAt: new Date(now - 600_000), createdAt: new Date(now),
     });
 
     const reboot = await enroll(ws.workspaceKey, {
       name: 'gone-host-reboot', machine_id: 'machine-a', role: 'broker', max_agents: 4,
-    });
+    }, reusableToken);
     expect(reboot.body.data?.id).toBe('node_reusable_2');
     expect(await roster(ws.workspaceKey)).toHaveLength(26);
   });
@@ -379,7 +421,7 @@ describe('node enrollment — machine_id dedupe', () => {
   it('still keys on name when the caller sends no machine_id', async () => {
     const ws = await createWorkspace(stack.app, 'noname');
     const first = await enroll(ws.workspaceKey, { name: 'host-a' });
-    const second = await enroll(ws.workspaceKey, { name: 'host-a' });
+    const second = await enroll(ws.workspaceKey, { name: 'host-a' }, first.body.data?.token as string);
     expect(second.body.data?.id).toBe(first.body.data?.id);
     expect(await roster(ws.workspaceKey)).toHaveLength(1);
   });
@@ -404,7 +446,11 @@ describe('node enrollment — machine_id dedupe', () => {
     // Registering made it live and gave it a heartbeat. Age it out, which is
     // the host having connected and then gone, and the next boot dedupes.
     await markConnectedThenGone('node_m');
-    const reboot = await enroll(ws.workspaceKey, { name: 'broker-host-reboot', machine_id: 'machine-a' });
+    const reboot = await enroll(
+      ws.workspaceKey,
+      { name: 'broker-host-reboot', machine_id: 'machine-a' },
+      enrolled.body.data?.token as string,
+    );
     expect(reboot.body.data?.id).toBe('node_m');
     expect(await roster(ws.workspaceKey)).toHaveLength(1);
   });

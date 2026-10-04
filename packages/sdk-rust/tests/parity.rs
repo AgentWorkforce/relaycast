@@ -2680,6 +2680,41 @@ async fn nodes_and_triggers_use_expected_endpoints() {
     assert_eq!(created.node.role.as_deref(), Some("direct"));
     assert_eq!(created.token, "nt_live_test");
 
+    Mock::given(method("POST"))
+        .and(path("/v1/nodes"))
+        .and(header("x-relaycast-node-token", "nt_live_current"))
+        .and(body_json(json!({ "node_id": "node_http", "name": "renamed" })))
+        .respond_with(ok(json!({
+            "id": "node_http", "name": "renamed", "kind": "http_push", "role": "direct",
+            "delivery_adapter": "http.basic.v1", "delivery": null, "capabilities": [], "tags": [],
+            "version": "unknown", "status": "offline", "live": false, "handlers_live": false,
+            "load": 0, "active_agents": 0, "max_agents": 1, "last_heartbeat_at": null,
+            "created_at": "2026-01-01T00:00:00.000Z", "token": "nt_live_rotated"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let rotated = relay
+        .create_node_with_current_token(
+            CreateNodeRequest {
+                node_id: Some("node_http".to_string()),
+                name: "renamed".to_string(),
+                kind: None,
+                role: None,
+                delivery_adapter: None,
+                delivery: None,
+                capabilities: None,
+                max_agents: None,
+                tags: None,
+                version: None,
+            },
+            "nt_live_current",
+        )
+        .await
+        .expect("create_node_with_current_token failed");
+    assert_eq!(rotated.node.name, "renamed");
+    assert_eq!(rotated.token, "nt_live_rotated");
+
     Mock::given(method("GET"))
         .and(path("/v1/nodes"))
         .and(query_param("capability", "gpu"))

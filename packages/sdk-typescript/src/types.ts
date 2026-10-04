@@ -379,6 +379,15 @@ export interface CreateNodeRequest {
   version?: string;
 }
 
+export interface CreateNodeOptions {
+  /**
+   * The node's current token. Required when `CreateNodeRequest` resolves an
+   * established node by id, name, or machine id; sent only in the
+   * `X-Relaycast-Node-Token` header and never serialized into the JSON body.
+   */
+  currentToken?: string;
+}
+
 export interface CreateNodeResponse extends NodeRosterEntry {
   token: string;
 }

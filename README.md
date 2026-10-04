@@ -815,8 +815,11 @@ allowing larger broker-style endpoints with `max_agents`.
 Enrollment resolves an existing node by `node_id`, then `name`, then
 `machine_id`. That last step keeps the roster bounded: a fleet host that
 persists no `node_id` enrolls under a fresh name on every boot, and matching on
-name alone left each boot's row behind forever. Passing `machine_id` rotates
-the machine's existing `broker` node instead. Only `broker` nodes are matched
+name alone left each boot's row behind forever. Passing `machine_id` can rotate
+the machine's existing `broker` node instead. Rotating or modifying any existing
+row requires both the workspace key and that row's current node token, sent as
+`X-Relaycast-Node-Token`; a workspace key alone can only create a genuinely new
+node. Only `broker` nodes are matched
 this way — a machine legitimately runs many `direct` node-of-one delivery hosts
 — and passing an explicit `node_id` pins identity, which is how you run two
 brokers on one machine. The value is recorded on the node and returned on
@@ -863,6 +866,12 @@ const node = await relay.nodes.create({
     },
   },
 });
+
+// Later, prove possession of the established node before rotating or changing it.
+const rotated = await relay.nodes.create(
+  { nodeId: node.id, name: node.name, version: '2.0.0' },
+  { currentToken: node.token },
+);
 
 await relay.nodes.bindAgent(node.name, { agentName: 'billing-agent' });
 

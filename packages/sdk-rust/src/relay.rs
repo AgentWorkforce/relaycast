@@ -1340,6 +1340,29 @@ impl RelayCast {
         self.client.post("/v1/nodes", Some(request), None).await
     }
 
+    /// Rotate or modify an established node after proving possession of its
+    /// current token. The proof is sent only in a header, never in the JSON
+    /// request body.
+    pub async fn create_node_with_current_token(
+        &self,
+        request: CreateNodeRequest,
+        current_token: &str,
+    ) -> Result<CreateNodeResponse> {
+        self.client
+            .post(
+                "/v1/nodes",
+                Some(request),
+                Some(RequestOptions {
+                    headers: Some(vec![(
+                        "X-Relaycast-Node-Token".to_string(),
+                        current_token.to_string(),
+                    )]),
+                    ..Default::default()
+                }),
+            )
+            .await
+    }
+
     /// List fleet nodes on the roster.
     pub async fn list_nodes(&self, query: Option<NodeListQuery>) -> Result<Vec<NodeRosterEntry>> {
         let query = query.unwrap_or_default();
