@@ -1484,6 +1484,13 @@ describe('durable delivery api', () => {
     await stack.settle();
 
     expect(node.sock.ofType('deliver')).toHaveLength(0);
+    expect(await deliverPendingToNode(
+      stack.runtime.deps.db,
+      stack.runtime.realtime,
+      ws.workspaceId,
+      node.nodeId,
+    )).toBe(0);
+    expect(node.sock.ofType('deliver')).toHaveLength(0);
     const [row] = await stack.runtime.deps.db
       .select()
       .from(deliveries)
@@ -1546,6 +1553,13 @@ describe('durable delivery api', () => {
       .where(and(eq(agents.workspaceId, ws.workspaceId), eq(agents.id, host.agentId)));
     const beforeDeliver = node.sock.ofType('deliver').length;
 
+    expect(await deliverPendingToNode(
+      stack.runtime.deps.db,
+      stack.runtime.realtime,
+      ws.workspaceId,
+      node.id,
+    )).toBe(0);
+    expect(node.sock.ofType('deliver')).toHaveLength(beforeDeliver);
     expect(await sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date() })).toBe(2);
     expect(node.sock.ofType('deliver')).toHaveLength(beforeDeliver);
 

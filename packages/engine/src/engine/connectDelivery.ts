@@ -12,5 +12,5 @@ export function isRelayConnectProbePullMetadata(metadata: unknown): boolean {
 
 /** SQL equivalent of {@link isRelayConnectProbePullMetadata}. */
 export function isRelayConnectProbePullSql(metadata: SQLWrapper): SQL<boolean> {
-  return sql<boolean>`json_extract(COALESCE(${metadata}, '{}'), '$.source') = ${RELAY_CONNECT_METADATA_SOURCE}`;
+  return sql<boolean>`COALESCE(json_extract(COALESCE(${metadata}, '{}'), '$.source') = ${RELAY_CONNECT_METADATA_SOURCE}, FALSE)`;
 }
