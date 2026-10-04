@@ -59,10 +59,14 @@ public struct ClientOptions: Equatable, Sendable {
 public struct RequestOptions: Equatable, Sendable {
     public var headers: [String: String]
     public var idempotencyKey: String?
+    /// Override automatic retry behavior for this request. Leave nil to use
+    /// the client's existing policy.
+    public var retry: Bool?
 
-    public init(headers: [String: String] = [:], idempotencyKey: String? = nil) {
+    public init(headers: [String: String] = [:], idempotencyKey: String? = nil, retry: Bool? = nil) {
         self.headers = headers
         self.idempotencyKey = idempotencyKey
+        self.retry = retry
     }
 }
 
@@ -177,7 +181,9 @@ public final class HttpClient: @unchecked Sendable {
                     throw RelayError.transport(message: "Relaycast response was not HTTP", statusCode: nil, retryable: true, cause: nil)
                 }
 
-                if retryPolicy.retryOn.contains(http.statusCode), attempt < retryPolicy.maxRetries {
+                if options.retry != false,
+                   retryPolicy.retryOn.contains(http.statusCode),
+                   attempt < retryPolicy.maxRetries {
                     let delay = retryDelayMilliseconds(policy: retryPolicy, attempt: attempt, response: http)
                     attempt += 1
                     try await sleep(milliseconds: delay)
@@ -216,7 +222,7 @@ public final class HttpClient: @unchecked Sendable {
             } catch let error as RelayError {
                 throw error
             } catch {
-                if attempt < retryPolicy.maxRetries {
+                if options.retry != false, attempt < retryPolicy.maxRetries {
                     let delay = retryDelayMilliseconds(policy: retryPolicy, attempt: attempt, response: nil)
                     attempt += 1
                     try await sleep(milliseconds: delay)

@@ -353,6 +353,7 @@ final class RelaycastTests: XCTestCase {
                 let body = try XCTUnwrap(requestBodyData(request))
                 let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
                 XCTAssertEqual(json["name"] as? String, "http-node")
+                XCTAssertEqual(json["machine_id"] as? String, "machine-http")
                 XCTAssertEqual(json["kind"] as? String, "http_push")
                 XCTAssertNil(json["current_token"])
                 let delivery = try XCTUnwrap(json["delivery"] as? [String: Any])
@@ -440,6 +441,7 @@ final class RelaycastTests: XCTestCase {
 
         let created = try await relay.nodes.create(CreateNodeRequest(
             name: "http-node",
+            machineId: "machine-http",
             kind: "http_push",
             delivery: .httpPush(HttpPushNodeDelivery(
                 url: "https://receiver.example.test/relaycast",
@@ -470,6 +472,37 @@ final class RelaycastTests: XCTestCase {
         XCTAssertEqual(binding.priority, 5)
 
         try await relay.nodes.unbindAgent("http-node", agentName: "billing-agent")
+    }
+
+    func testNodeCreateWithoutRecoveryKeyDoesNotRetryAmbiguousServerFailure() async throws {
+        let session = makeMockSession()
+        let relay = try RelayCast(
+            options: RelayCastOptions(
+                apiKey: "rk_test",
+                baseURL: "https://relay.test",
+                retryPolicy: RetryPolicy(maxRetries: 2, backoffMilliseconds: 0, jitter: false)
+            ),
+            session: session
+        )
+        var attempts = 0
+        MockURLProtocol.handler = { _ in
+            attempts += 1
+            return jsonResponse([
+                "ok": false,
+                "error": ["code": "database_overloaded", "message": "ambiguous failure"]
+            ], status: 503)
+        }
+
+        do {
+            let _ = try await relay.nodes.create(
+                CreateNodeRequest(nodeId: "node_1", name: "http-node"),
+                currentToken: "nt_live_current"
+            )
+            XCTFail("Expected ambiguous server failure")
+        } catch let error as RelayError {
+            XCTAssertEqual(error.statusCode, 503)
+        }
+        XCTAssertEqual(attempts, 1)
     }
 
     func testObserverTokensCreateListUpdateRotateAndRevoke() async throws {

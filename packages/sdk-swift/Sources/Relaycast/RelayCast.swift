@@ -667,13 +667,19 @@ public final class RelayNodesService: @unchecked Sendable {
         currentToken: String? = nil,
         idempotencyKey: String? = nil
     ) async throws -> CreateNodeResponse {
+        if idempotencyKey != nil && currentToken == nil {
+            throw RelayError.invalidRequest("idempotencyKey requires currentToken for node rotation recovery")
+        }
         var headers: [String: String] = [:]
         if let currentToken { headers["X-Relaycast-Node-Token"] = currentToken }
-        if let idempotencyKey { headers["Idempotency-Key"] = idempotencyKey }
         return try await relay.client.post(
             "/v1/nodes",
             body: request,
-            options: RequestOptions(headers: headers)
+            options: RequestOptions(
+                headers: headers,
+                idempotencyKey: idempotencyKey,
+                retry: idempotencyKey != nil
+            )
         )
     }
 

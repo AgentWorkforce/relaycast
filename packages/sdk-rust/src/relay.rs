@@ -1348,7 +1348,8 @@ impl RelayCast {
         request: CreateNodeRequest,
         current_token: &str,
     ) -> Result<CreateNodeResponse> {
-        self.create_node_with_headers(request, current_token, None).await
+        self.create_node_with_headers(request, current_token, None)
+            .await
     }
 
     /// Rotate an established node through the server's recoverable path. The
@@ -1370,20 +1371,17 @@ impl RelayCast {
         current_token: &str,
         idempotency_key: Option<&str>,
     ) -> Result<CreateNodeResponse> {
-        let mut headers = vec![(
+        let headers = vec![(
             "X-Relaycast-Node-Token".to_string(),
             current_token.to_string(),
         )];
-        if let Some(idempotency_key) = idempotency_key {
-            headers.push(("Idempotency-Key".to_string(), idempotency_key.to_string()));
-        }
         self.client
             .post(
                 "/v1/nodes",
                 Some(request),
                 Some(RequestOptions {
                     headers: Some(headers),
-                    ..Default::default()
+                    idempotency_key: idempotency_key.map(str::to_owned),
                 }),
             )
             .await

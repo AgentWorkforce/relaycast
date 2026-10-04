@@ -978,9 +978,14 @@ export class RelayCast {
 
   nodes = {
     create: (data: CreateNodeRequest, options?: CreateNodeOptions): Promise<CreateNodeResponse> => {
+      if (options?.idempotencyKey !== undefined && !options.currentToken) {
+        throw new Error('idempotencyKey requires currentToken for node rotation recovery');
+      }
       const headers = {
         ...(options?.currentToken ? { 'X-Relaycast-Node-Token': options.currentToken } : {}),
-        ...(options?.idempotencyKey ? { 'Idempotency-Key': options.idempotencyKey } : {}),
+        ...(options?.currentToken && options.idempotencyKey
+          ? { 'Idempotency-Key': options.idempotencyKey }
+          : {}),
       };
       return this.client.post(
         '/v1/nodes',

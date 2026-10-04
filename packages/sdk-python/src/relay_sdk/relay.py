@@ -260,11 +260,18 @@ class _NodesNamespace:
         current_token: str | None = None,
         idempotency_key: str | None = None,
     ) -> CreateNodeResponse:
+        if idempotency_key is not None and current_token is None:
+            raise ValueError("idempotency_key requires current_token for node rotation recovery")
         headers = {
-            **({"X-Relaycast-Node-Token": current_token} if current_token else {}),
-            **({"Idempotency-Key": idempotency_key} if idempotency_key else {}),
+            **({"X-Relaycast-Node-Token": current_token} if current_token is not None else {}),
+            **({"Idempotency-Key": idempotency_key} if idempotency_key is not None else {}),
         }
-        result = self._client.post("/v1/nodes", data.model_dump(exclude_none=True), headers=headers or None)
+        result = self._client.post(
+            "/v1/nodes",
+            data.model_dump(exclude_none=True),
+            headers=headers or None,
+            retry=idempotency_key is not None,
+        )
         return CreateNodeResponse.model_validate(result)
 
     def list(self, *, capability: str | None = None, name: str | None = None) -> list[NodeRosterEntry]:
@@ -720,11 +727,18 @@ class _AsyncNodesNamespace:
         current_token: str | None = None,
         idempotency_key: str | None = None,
     ) -> CreateNodeResponse:
+        if idempotency_key is not None and current_token is None:
+            raise ValueError("idempotency_key requires current_token for node rotation recovery")
         headers = {
-            **({"X-Relaycast-Node-Token": current_token} if current_token else {}),
-            **({"Idempotency-Key": idempotency_key} if idempotency_key else {}),
+            **({"X-Relaycast-Node-Token": current_token} if current_token is not None else {}),
+            **({"Idempotency-Key": idempotency_key} if idempotency_key is not None else {}),
         }
-        result = await self._client.post("/v1/nodes", data.model_dump(exclude_none=True), headers=headers or None)
+        result = await self._client.post(
+            "/v1/nodes",
+            data.model_dump(exclude_none=True),
+            headers=headers or None,
+            retry=idempotency_key is not None,
+        )
         return CreateNodeResponse.model_validate(result)
 
     async def list(self, *, capability: str | None = None, name: str | None = None) -> list[NodeRosterEntry]:

@@ -2693,6 +2693,26 @@ async fn nodes_and_triggers_use_expected_endpoints() {
             "name": "renamed",
             "machine_id": "machine_http"
         })))
+        .respond_with(
+            api_error(503, "database_overloaded", "retry keyed node rotation")
+                .insert_header("Retry-After", "0"),
+        )
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/nodes"))
+        .and(header("x-relaycast-node-token", "nt_live_current"))
+        .and(header(
+            "idempotency-key",
+            "node-rotation-00000000-0000-4000-8000-000000000001",
+        ))
+        .and(body_json(json!({
+            "node_id": "node_http",
+            "name": "renamed",
+            "machine_id": "machine_http"
+        })))
         .respond_with(ok(json!({
             "id": "node_http", "name": "renamed", "kind": "http_push", "role": "direct",
             "delivery_adapter": "http.basic.v1", "delivery": null, "capabilities": [], "tags": [],

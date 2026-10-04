@@ -4,11 +4,11 @@ All notable changes to `relaycast-swift` will be documented in this file.
 
 See the [root changelog](../../CHANGELOG.md) for cross-package release highlights.
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
 
 ### Added
 
-- `nodes.create(request, currentToken:idempotencyKey:)` sends current-node proof without placing the credential in JSON and can reuse a high-entropy operation key to recover a committed rotation after a lost response.
+- `CreateNodeRequest.machineId` and `nodes.create(request, currentToken:idempotencyKey:)` support machine-aware enrollment and recoverable rotation without placing credentials in JSON; unkeyed creates are never replayed after an ambiguous failure.
 
 ## [8.16.0] - 2026-10-01
 

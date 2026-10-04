@@ -3233,6 +3233,23 @@ describe('node adapter conformance', () => {
       expect(rejected.body.error?.code).toBe('node_rotation_idempotency_key_too_weak');
     });
 
+    it('rejects a rotation recovery key without current-token proof', async () => {
+      const ws = await createWorkspace(stack.app, 'enroll-key-without-proof-ws');
+      const rejected = await enroll(
+        ws.workspaceKey,
+        { node_id: 'node_a', name: 'host' },
+        undefined,
+        'node-rotation-00000000-0000-4000-8000-000000000005',
+      );
+      expect(rejected.status).toBe(400);
+      expect(rejected.body.error?.code).toBe('node_rotation_idempotency_requires_current_token');
+      const rows = await stack.runtime.deps.db
+        .select()
+        .from(nodes)
+        .where(eq(nodes.workspaceId, ws.workspaceId));
+      expect(rows).toEqual([]);
+    });
+
     it('rejects superseded-token recovery after its bounded replay window expires', async () => {
       const ws = await createWorkspace(stack.app, 'enroll-expired-recovery-ws');
       const first = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'host', version: 'v1' });

@@ -868,6 +868,17 @@ describe('RelayCast', () => {
       expect(JSON.parse(init.body)).toEqual({ node_id: 'node_1', name: 'renamed', version: 'v2' });
     });
 
+    it('create() rejects a recovery key without current-token proof before sending', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      expect(() => relay.nodes.create(
+        { name: 'new-node' },
+        { idempotencyKey: 'node-rotation-00000000-0000-4000-8000-000000000001' },
+      )).toThrow('idempotencyKey requires currentToken');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
     it('list() with status builds the query and camelizes stale roster fields', async () => {
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });

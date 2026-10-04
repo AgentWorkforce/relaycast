@@ -118,8 +118,18 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
       if (table.name === 'agents' && original) {
         return { ...table, sql: original.sql };
       }
-      if (table.name === 'nodes' && original) {
-        return { ...table, sql: original.sql };
+      // 0063 appends four nullable recovery fields. Remove only their exact
+      // additive DDL so changes to every pre-existing node constraint remain
+      // visible to this preservation assertion.
+      if (table.name === 'nodes') {
+        table = {
+          ...table,
+          sql: table.sql
+            .replace(', previous_token_hash TEXT DEFAULT NULL', '')
+            .replace(', previous_token_expires_at INTEGER DEFAULT NULL', '')
+            .replace(', rotation_idempotency_key_hash TEXT DEFAULT NULL', '')
+            .replace(', rotation_request_digest TEXT DEFAULT NULL', ''),
+        };
       }
       return {
         ...table,

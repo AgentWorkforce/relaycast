@@ -151,6 +151,14 @@ async function enrollNode(c: Context<AppEnv>, data: z.infer<typeof createNodeSch
     if (idempotencyError) {
       return jsonError(c, 'invalid_idempotency_key', idempotencyError, 400);
     }
+    if (idempotencyKey && !currentNodeToken) {
+      return jsonError(
+        c,
+        'node_rotation_idempotency_requires_current_token',
+        'Node rotation Idempotency-Key requires X-Relaycast-Node-Token proof',
+        400,
+      );
+    }
     if (currentNodeToken && idempotencyKey && idempotencyKey.length < 32) {
       return jsonError(
         c,

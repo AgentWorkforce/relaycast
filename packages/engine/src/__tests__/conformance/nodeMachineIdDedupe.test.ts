@@ -22,17 +22,26 @@ describe('node enrollment — machine_id dedupe', () => {
   beforeEach(() => { stack = makeNodeStack(); });
   afterEach(() => stack.close());
 
-  async function enroll(workspaceKey: string, body: Record<string, unknown>, currentNodeToken?: string) {
+  async function enroll(
+    workspaceKey: string,
+    body: Record<string, unknown>,
+    currentNodeToken?: string,
+    idempotencyKey?: string,
+  ) {
     const res = await stack.app.request('/v1/nodes', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
         authorization: `Bearer ${workspaceKey}`,
         ...(currentNodeToken ? { 'x-relaycast-node-token': currentNodeToken } : {}),
+        ...(idempotencyKey ? { 'idempotency-key': idempotencyKey } : {}),
       },
       body: JSON.stringify(body),
     });
-    return { status: res.status, body: (await res.json()) as { data?: Record<string, unknown> } };
+    return {
+      status: res.status,
+      body: (await res.json()) as { data?: Record<string, unknown>; error?: { code: string } },
+    };
   }
 
   async function roster(workspaceKey: string) {
@@ -130,6 +139,34 @@ describe('node enrollment — machine_id dedupe', () => {
     expect(rows.find((row) => row.id === 'node_first')?.name).toBe('first-host');
     expect(rows.find((row) => row.id === 'node_second')?.name).toBe('second-host-reboot');
     expect(first.body.data?.token).not.toBe(second.body.data?.token);
+  });
+
+  it('rejects a changed machine-id recovery request instead of creating a second node', async () => {
+    const ws = await createWorkspace(stack.app, 'dedupe-changed-recovery');
+    const first = await enroll(ws.workspaceKey, {
+      name: 'host-a-boot1', machine_id: 'machine-a', role: 'broker', max_agents: 4,
+    });
+    await markConnectedThenGone(first.body.data?.id as string);
+
+    const idempotencyKey = 'node-rotation-00000000-0000-4000-8000-000000000004';
+    const rotated = await enroll(
+      ws.workspaceKey,
+      { name: 'host-a-boot2', machine_id: 'machine-a', role: 'broker', max_agents: 4 },
+      first.body.data?.token as string,
+      idempotencyKey,
+    );
+    expect(rotated.status).toBe(201);
+    const rowsAfterRotation = await roster(ws.workspaceKey);
+
+    const changed = await enroll(
+      ws.workspaceKey,
+      { name: 'host-a-boot3', machine_id: 'machine-a', role: 'broker', max_agents: 4 },
+      first.body.data?.token as string,
+      idempotencyKey,
+    );
+    expect(changed.status).toBe(409);
+    expect(changed.body.error?.code).toBe('node_token_proof_required');
+    expect(await roster(ws.workspaceKey)).toEqual(rowsAfterRotation);
   });
 
   it('never reuses a row that has not connected, so cold-boot clones stay separate', async () => {

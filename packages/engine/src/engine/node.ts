@@ -726,14 +726,37 @@ export async function resolveNodeForEnroll(
   expectedTokenHash?: string,
 ) {
   if (data.node_id !== undefined) {
-    return getNodeById(db, workspaceId, data.node_id);
+    const byId = await getNodeById(db, workspaceId, data.node_id);
+    if (byId) return byId;
+    // A caller retrying a committed rotation may change the request body by
+    // mistake. Resolve the superseded proof below so that request is rejected
+    // against the rotated row rather than treated as a new-node enrollment.
+    return expectedTokenHash === undefined
+      ? null
+      : getNodeByPreviousTokenHash(db, workspaceId, expectedTokenHash);
   }
   const byName = await getNodeByName(db, workspaceId, data.name);
   if (byName) return byName;
   if (data.machine_id !== undefined && requestedNodeRole(data) === 'broker') {
-    return getBrokerNodeByMachineId(db, workspaceId, data.machine_id, expectedTokenHash);
+    const byMachine = await getBrokerNodeByMachineId(db, workspaceId, data.machine_id, expectedTokenHash);
+    if (byMachine) return byMachine;
   }
-  return null;
+  // Machine reuse clears provenLiveAt, so a committed keyed rotation no
+  // longer qualifies for the normal reusable-row lookup. Falling back to the
+  // bounded superseded proof makes an exact retry recoverable and a changed
+  // body/key fail closed instead of inserting a second node.
+  return expectedTokenHash === undefined
+    ? null
+    : getNodeByPreviousTokenHash(db, workspaceId, expectedTokenHash);
+}
+
+async function getNodeByPreviousTokenHash(db: Db, workspaceId: string, tokenHash: string) {
+  const [node] = await db
+    .select()
+    .from(nodes)
+    .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.previousTokenHash, tokenHash)))
+    .limit(1);
+  return node ?? null;
 }
 
 export interface RegisterNodeResult {
