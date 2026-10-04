@@ -708,7 +708,8 @@ export function requestedNodeRole(data: { kind?: string; role?: NodeRole; max_ag
  * each of those names used to mint a brand-new row that nothing ever reclaimed.
  * Falling back to the machine's existing broker lets an authorized holder
  * rotate the row that is already there. createNodeToken separately requires
- * proof of that row's current token before any existing row can change.
+ * current-node-token proof for enrollment, or authenticated-agent authorization
+ * for that agent's canonical direct node, before an existing row can change.
  *
  * node_id and name still win, so a caller that pins either keeps the exact
  * identity it asked for; passing node_id is the way to opt out of machine
