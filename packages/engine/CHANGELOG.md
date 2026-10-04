@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased - Minor]
 
+### Fixed
+
+- Delivery routing treats agents with `metadata.source = "cloud-relay-connect"` as probe-pulled even when normal registration or a later claim gives them an active `ws.node.v1` binding. New rows omit node routing, and redrive rewrites queued legacy rows to `self_connected` without erasing the prior dispatch attempt or error.
+
 ### Added
 
 - `GET /v1/messages/:id/deliveries`: `{ message_id, deliveries: [{ id, agent_id, agent_name, status, created_at, delivered_at, acked_at, dead_lettered_at, error, read_at }] }`, one read joining `deliveries` to `read_receipts`, creation order, capped at 500 (`MESSAGE_DELIVERIES_MAX`). An agent token must be the message's sender; any other message is `404 message_not_found`. A workspace key reads any message; an observer token is gated like `GET /v1/messages/:id` (`messages:read`, or `dms:read` with `include_dms`, plus filters); node tokens are refused.
