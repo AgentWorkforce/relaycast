@@ -291,6 +291,25 @@ class TestRelay:
         assert create_route.call_count == 0
 
     @respx.mock
+    def test_nodes_reject_blank_rotation_credentials_before_request(self):
+        create_route = respx.post(f"{BASE}/v1/nodes")
+        r = Relay(KEY, base_url=BASE)
+
+        for current_token, idempotency_key in [
+            ("", None),
+            (" \t", None),
+            ("nt_live_current", ""),
+            ("nt_live_current", " \t"),
+        ]:
+            with pytest.raises(ValueError, match="must not be blank"):
+                r.nodes.create(
+                    CreateNodeRequest(node_id="node_1", name="http-node"),
+                    current_token=current_token,
+                    idempotency_key=idempotency_key,
+                )
+        assert create_route.call_count == 0
+
+    @respx.mock
     def test_observer_tokens_create_list_update_rotate_and_revoke(self):
         create_route = respx.post(f"{BASE}/v1/observer-tokens").mock(return_value=ok(OBSERVER_TOKEN_DATA))
         r = Relay(KEY, base_url=BASE)
@@ -526,6 +545,25 @@ class TestAsyncRelay:
                 )
         assert error.value.status == 503
         assert create_route.call_count == 1
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_nodes_async_reject_blank_rotation_credentials_before_request(self):
+        create_route = respx.post(f"{BASE}/v1/nodes")
+        async with AsyncRelay(KEY, base_url=BASE) as r:
+            for current_token, idempotency_key in [
+                ("", None),
+                (" \t", None),
+                ("nt_live_current", ""),
+                ("nt_live_current", " \t"),
+            ]:
+                with pytest.raises(ValueError, match="must not be blank"):
+                    await r.nodes.create(
+                        CreateNodeRequest(node_id="node_1", name="http-node"),
+                        current_token=current_token,
+                        idempotency_key=idempotency_key,
+                    )
+        assert create_route.call_count == 0
 
     @pytest.mark.asyncio
     @respx.mock

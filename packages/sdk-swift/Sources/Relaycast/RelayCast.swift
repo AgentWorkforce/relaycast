@@ -667,6 +667,12 @@ public final class RelayNodesService: @unchecked Sendable {
         currentToken: String? = nil,
         idempotencyKey: String? = nil
     ) async throws -> CreateNodeResponse {
+        if let currentToken, currentToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw RelayError.invalidRequest("currentToken must not be blank for node rotation")
+        }
+        if let idempotencyKey, idempotencyKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw RelayError.invalidRequest("idempotencyKey must not be blank for node rotation recovery")
+        }
         if idempotencyKey != nil && currentToken == nil {
             throw RelayError.invalidRequest("idempotencyKey requires currentToken for node rotation recovery")
         }

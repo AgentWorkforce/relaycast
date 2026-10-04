@@ -49,6 +49,17 @@ def _enc(value: str) -> str:
     return quote(value, safe="")
 
 
+def _validate_node_rotation_options(
+    current_token: str | None, idempotency_key: str | None,
+) -> None:
+    if current_token is not None and not current_token.strip():
+        raise ValueError("current_token must not be blank for node rotation")
+    if idempotency_key is not None and not idempotency_key.strip():
+        raise ValueError("idempotency_key must not be blank for node rotation recovery")
+    if idempotency_key is not None and current_token is None:
+        raise ValueError("idempotency_key requires current_token for node rotation recovery")
+
+
 def _workspace_create_headers(
     idempotency_key: str | None, api_key: str | None, base_url: str | None,
 ) -> dict[str, str]:
@@ -260,8 +271,7 @@ class _NodesNamespace:
         current_token: str | None = None,
         idempotency_key: str | None = None,
     ) -> CreateNodeResponse:
-        if idempotency_key is not None and current_token is None:
-            raise ValueError("idempotency_key requires current_token for node rotation recovery")
+        _validate_node_rotation_options(current_token, idempotency_key)
         headers = {
             **({"X-Relaycast-Node-Token": current_token} if current_token is not None else {}),
             **({"Idempotency-Key": idempotency_key} if idempotency_key is not None else {}),
@@ -727,8 +737,7 @@ class _AsyncNodesNamespace:
         current_token: str | None = None,
         idempotency_key: str | None = None,
     ) -> CreateNodeResponse:
-        if idempotency_key is not None and current_token is None:
-            raise ValueError("idempotency_key requires current_token for node rotation recovery")
+        _validate_node_rotation_options(current_token, idempotency_key)
         headers = {
             **({"X-Relaycast-Node-Token": current_token} if current_token is not None else {}),
             **({"Idempotency-Key": idempotency_key} if idempotency_key is not None else {}),

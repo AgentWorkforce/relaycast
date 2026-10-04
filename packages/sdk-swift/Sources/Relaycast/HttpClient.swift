@@ -171,6 +171,7 @@ public final class HttpClient: @unchecked Sendable {
         query: [String: String] = [:],
         options: RequestOptions = RequestOptions()
     ) async throws -> T {
+        let shouldRetry = options.retry ?? isRetrySafe(method: method, idempotencyKey: options.idempotencyKey)
         var attempt = 0
 
         while true {
@@ -181,7 +182,7 @@ public final class HttpClient: @unchecked Sendable {
                     throw RelayError.transport(message: "Relaycast response was not HTTP", statusCode: nil, retryable: true, cause: nil)
                 }
 
-                if options.retry != false,
+                if shouldRetry,
                    retryPolicy.retryOn.contains(http.statusCode),
                    attempt < retryPolicy.maxRetries {
                     let delay = retryDelayMilliseconds(policy: retryPolicy, attempt: attempt, response: http)
@@ -222,7 +223,7 @@ public final class HttpClient: @unchecked Sendable {
             } catch let error as RelayError {
                 throw error
             } catch {
-                if options.retry != false, attempt < retryPolicy.maxRetries {
+                if shouldRetry, attempt < retryPolicy.maxRetries {
                     let delay = retryDelayMilliseconds(policy: retryPolicy, attempt: attempt, response: nil)
                     attempt += 1
                     try await sleep(milliseconds: delay)
@@ -297,6 +298,15 @@ public final class HttpClient: @unchecked Sendable {
         items.append(contentsOf: query.map { URLQueryItem(name: snakeCase($0.key), value: $0.value) })
         components?.queryItems = items
         return components?.url
+    }
+}
+
+private func isRetrySafe(method: String, idempotencyKey: String?) -> Bool {
+    switch method.uppercased() {
+    case "GET", "HEAD", "OPTIONS", "PUT", "DELETE":
+        return true
+    default:
+        return idempotencyKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
 }
 

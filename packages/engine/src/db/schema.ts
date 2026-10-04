@@ -286,6 +286,7 @@ export const nodes = sqliteTable(
     index('idx_nodes_status_heartbeat').on(table.workspaceId, table.status, table.lastHeartbeatAt),
     index('idx_nodes_workspace_machine').on(table.workspaceId, table.machineId),
     index('idx_nodes_workspace_machine_proven').on(table.workspaceId, table.machineId, table.provenLiveAt),
+    index('idx_nodes_workspace_previous_token').on(table.workspaceId, table.previousTokenHash),
   ],
 );
 

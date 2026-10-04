@@ -203,6 +203,65 @@ final class RelaycastTests: XCTestCase {
         XCTAssertEqual(attempts, 2)
     }
 
+    func testHttpClientDoesNotRetryUnkeyedPostStatusFailure() async throws {
+        let session = makeMockSession()
+        let client = try HttpClient(
+            options: ClientOptions(
+                apiKey: "rk_test",
+                baseURL: "https://relay.test",
+                retryPolicy: RetryPolicy(maxRetries: 2, backoffMilliseconds: 0, jitter: false)
+            ),
+            session: session
+        )
+        var attempts = 0
+        MockURLProtocol.handler = { _ in
+            attempts += 1
+            return jsonResponse([
+                "ok": false,
+                "error": ["code": "server_error", "message": "Try again"]
+            ], status: 503)
+        }
+
+        do {
+            let _: CreateAgentResponse = try await client.post(
+                "/v1/agents",
+                body: CreateAgentRequest(name: "Worker", type: .agent)
+            )
+            XCTFail("Expected server failure")
+        } catch let error as RelayError {
+            XCTAssertEqual(error.statusCode, 503)
+        }
+        XCTAssertEqual(attempts, 1)
+    }
+
+    func testHttpClientDoesNotRetryUnkeyedPatchTransportFailure() async throws {
+        let session = makeMockSession()
+        let client = try HttpClient(
+            options: ClientOptions(
+                apiKey: "rk_test",
+                baseURL: "https://relay.test",
+                retryPolicy: RetryPolicy(maxRetries: 2, backoffMilliseconds: 0, jitter: false)
+            ),
+            session: session
+        )
+        var attempts = 0
+        MockURLProtocol.handler = { _ in
+            attempts += 1
+            throw URLError(.timedOut)
+        }
+
+        do {
+            let _: Workspace = try await client.patch(
+                "/v1/workspace",
+                body: UpdateWorkspaceRequest(name: "renamed")
+            )
+            XCTFail("Expected transport failure")
+        } catch let error as RelayError {
+            XCTAssertEqual(error.code, "transport_error")
+        }
+        XCTAssertEqual(attempts, 1)
+    }
+
     func testRelayCastRegistersAgentAndResolvesIdentity() async throws {
         let session = makeMockSession()
         let relay = try RelayCast(
@@ -503,6 +562,38 @@ final class RelaycastTests: XCTestCase {
             XCTAssertEqual(error.statusCode, 503)
         }
         XCTAssertEqual(attempts, 1)
+    }
+
+    func testNodeCreateRejectsBlankRotationCredentialsBeforeRequest() async throws {
+        let session = makeMockSession()
+        let relay = try RelayCast(
+            options: RelayCastOptions(apiKey: "rk_test", baseURL: "https://relay.test"),
+            session: session
+        )
+        var attempts = 0
+        MockURLProtocol.handler = { _ in
+            attempts += 1
+            return jsonResponse(["ok": true, "data": [:]])
+        }
+
+        for (currentToken, idempotencyKey) in [
+            ("", nil),
+            (" \t", nil),
+            ("nt_live_current", ""),
+            ("nt_live_current", " \t")
+        ] as [(String?, String?)] {
+            do {
+                let _ = try await relay.nodes.create(
+                    CreateNodeRequest(nodeId: "node_1", name: "http-node"),
+                    currentToken: currentToken,
+                    idempotencyKey: idempotencyKey
+                )
+                XCTFail("Expected blank rotation credential rejection")
+            } catch let error as RelayError {
+                XCTAssertEqual(error.code, "invalid_request")
+            }
+        }
+        XCTAssertEqual(attempts, 0)
     }
 
     func testObserverTokensCreateListUpdateRotateAndRevoke() async throws {

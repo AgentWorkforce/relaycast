@@ -204,6 +204,14 @@ describe('compact maintenance migration path', () => {
       expect.objectContaining({ name: 'rotation_idempotency_key_hash', notnull: 0 }),
       expect.objectContaining({ name: 'rotation_request_digest', notnull: 0 }),
     ]));
+    expect(handle.sqlite.pragma('index_list(nodes)')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'idx_nodes_workspace_previous_token', unique: 0 }),
+    ]));
+    const recoveryLookup = JSON.stringify(handle.sqlite.prepare(
+      'EXPLAIN QUERY PLAN SELECT id FROM nodes WHERE workspace_id = ? AND previous_token_hash = ?',
+    ).all('workspace11', 'node-key'));
+    expect(recoveryLookup).toContain('idx_nodes_workspace_previous_token');
+    expect(recoveryLookup).not.toContain('SCAN nodes');
     expectConstraintsPreserved(beforeConstraints, constraints(handle));
     expect(handle.sqlite.prepare('SELECT * FROM maintenance_cursors ORDER BY id').all()).toEqual(cursorRows);
     expect(handle.sqlite.pragma('foreign_key_check')).toEqual([]);

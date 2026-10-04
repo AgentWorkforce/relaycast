@@ -883,10 +883,25 @@ describe('RelayCast', () => {
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
-      expect(() => relay.nodes.create(
-        { nodeId: 'node_1', name: 'renamed', version: 'v2' },
-        { currentToken: 'nt_live_current', idempotencyKey: '' },
-      )).toThrow('idempotencyKey must not be empty');
+      for (const idempotencyKey of ['', ' \t']) {
+        expect(() => relay.nodes.create(
+          { nodeId: 'node_1', name: 'renamed', version: 'v2' },
+          { currentToken: 'nt_live_current', idempotencyKey },
+        )).toThrow('idempotencyKey must not be blank');
+      }
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('create() rejects a blank current token before sending', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      for (const currentToken of ['', ' \t']) {
+        expect(() => relay.nodes.create(
+          { nodeId: 'node_1', name: 'renamed', version: 'v2' },
+          { currentToken },
+        )).toThrow('currentToken must not be blank');
+      }
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
