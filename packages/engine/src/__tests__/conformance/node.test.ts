@@ -3111,22 +3111,33 @@ describe('node adapter conformance', () => {
       expect(rows[0].version).toBe('v2');
     });
 
-    it('re-enrolling the same node_id under a new name renames the node', async () => {
+    it('rejects a workspace-key-only rename of an established node and leaves the row unchanged', async () => {
       const ws = await createWorkspace(stack.app, 'enroll-rename-ws');
-      const first = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'old-name' });
+      const first = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'old-name', version: 'v1' });
       expect(first.status).toBe(201);
 
-      const renamed = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'new-name' });
-      expect(renamed.status).toBe(201);
-      expect(renamed.body.data?.id).toBe('node_a');
-      expect(renamed.body.data?.name).toBe('new-name');
-
-      const rows = await stack.runtime.deps.db
+      await stack.runtime.deps.db
+        .update(nodes)
+        .set({ status: 'online', handlersLive: true, load: 0.5 })
+        .where(eq(nodes.id, 'node_a'));
+      const [before] = await stack.runtime.deps.db
         .select()
         .from(nodes)
-        .where(eq(nodes.workspaceId, ws.workspaceId));
-      expect(rows).toHaveLength(1);
-      expect(rows[0].name).toBe('new-name');
+        .where(eq(nodes.id, 'node_a'));
+
+      const renamed = await enroll(ws.workspaceKey, {
+        node_id: 'node_a',
+        name: 'new-name',
+        version: 'attacker-version',
+      });
+      expect(renamed.status).toBe(409);
+      expect(renamed.body.error?.code).toBe('node_token_proof_required');
+
+      const [after] = await stack.runtime.deps.db
+        .select()
+        .from(nodes)
+        .where(eq(nodes.id, 'node_a'));
+      expect(after).toEqual(before);
     });
 
     it('rejects renaming a node onto a name held by a different node', async () => {
