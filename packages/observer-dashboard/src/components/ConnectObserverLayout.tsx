@@ -8,7 +8,6 @@ import { formatUtcTimestamp, sanitizeConnectObserverText } from '../lib/connect-
 import type { DmMessage, WorkspaceDmConversation } from '@relaycast/sdk';
 
 const PAGE_SIZE = 100;
-const MAX_PAGES_PER_CONVERSATION = 100;
 const REFRESH_INTERVAL_MS = 15_000;
 
 type ObservedMessage = DmMessage & {
@@ -21,8 +20,9 @@ async function loadConversationMessages(
   conversation: WorkspaceDmConversation,
 ): Promise<ObservedMessage[]> {
   const messages: ObservedMessage[] = [];
+  const seenCursors = new Set<string>();
   let before: string | undefined;
-  for (let pageNumber = 0; pageNumber < MAX_PAGES_PER_CONVERSATION; pageNumber += 1) {
+  while (true) {
     const page = await relay.dmMessages(conversation.id, {
       limit: PAGE_SIZE,
       ...(before ? { before } : {}),
@@ -36,7 +36,8 @@ async function loadConversationMessages(
     );
     if (page.length < PAGE_SIZE) break;
     const oldest = [...page].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))[0];
-    if (!oldest || oldest.id === before) break;
+    if (!oldest || seenCursors.has(oldest.id)) break;
+    seenCursors.add(oldest.id);
     before = oldest.id;
   }
   return messages;
