@@ -8,12 +8,19 @@ import {
   agents,
 } from '../db/schema.js';
 import { codedError } from '../lib/httpError.js';
+import { D1_SAFE_IN_QUERY_CHUNK_SIZE, queryInChunks } from '../lib/queryChunks.js';
 import { publicMessageMetadata } from './messageMetadata.js';
 
 type Db = ReturnType<typeof getDb>;
 
 export function dmMessagePageLimit(limit?: number): number {
   return Math.min(Math.max(limit || 50, 1), 100);
+}
+
+const DM_COUNT_AGENT_CHUNK_SIZE = Math.floor(D1_SAFE_IN_QUERY_CHUNK_SIZE / 2);
+
+export function dmFilteredCountConversationChunkSize(agentFilterCount: number): number {
+  return Math.max(1, D1_SAFE_IN_QUERY_CHUNK_SIZE - Math.min(agentFilterCount, DM_COUNT_AGENT_CHUNK_SIZE));
 }
 
 export async function listAllDmConversations(db: Db, workspaceId: string): Promise<WorkspaceDmConversation[]> {
@@ -172,19 +179,43 @@ export async function countDmMessagesForWorkspaceConversations(
   opts: { agentIds?: string[]; createdAfter?: string } = {},
 ): Promise<Map<string, number>> {
   if (conversationIds.length === 0) return new Map();
-  const conditions = [
-    inArray(dmConversations.id, conversationIds),
-    eq(dmConversations.workspaceId, workspaceId),
-    eq(messages.workspaceId, workspaceId),
-  ];
-  if (opts.agentIds?.length) conditions.push(inArray(messages.agentId, opts.agentIds));
-  if (opts.createdAfter) conditions.push(gte(messages.createdAt, new Date(opts.createdAfter)));
+  const uniqueAgentIds = opts.agentIds?.length ? [...new Set(opts.agentIds)] : [];
+  const agentChunks: Array<string[] | null> = [];
+  if (uniqueAgentIds.length === 0) {
+    agentChunks.push(null);
+  } else {
+    for (let index = 0; index < uniqueAgentIds.length; index += DM_COUNT_AGENT_CHUNK_SIZE) {
+      agentChunks.push(uniqueAgentIds.slice(index, index + DM_COUNT_AGENT_CHUNK_SIZE));
+    }
+  }
 
-  const rows = await db
-    .select({ conversationId: dmConversations.id, count: sql<number>`count(*)` })
-    .from(messages)
-    .innerJoin(dmConversations, eq(messages.channelId, dmConversations.channelId))
-    .where(and(...conditions))
-    .groupBy(dmConversations.id);
-  return new Map(rows.map((row) => [row.conversationId, Number(row.count)]));
+  const counts = new Map<string, number>();
+  // D1 permits 100 bound parameters. Keep the two workspace predicates and
+  // optional date predicate outside the shared 90-bind IN budget, while
+  // splitting both axes so even large agent filters remain safe.
+  for (const agentChunk of agentChunks) {
+    const rows = await queryInChunks(
+      conversationIds,
+      (conversationChunk) => {
+        const conditions = [
+          inArray(dmConversations.id, conversationChunk),
+          eq(dmConversations.workspaceId, workspaceId),
+          eq(messages.workspaceId, workspaceId),
+        ];
+        if (agentChunk) conditions.push(inArray(messages.agentId, agentChunk));
+        if (opts.createdAfter) conditions.push(gte(messages.createdAt, new Date(opts.createdAfter)));
+        return db
+          .select({ conversationId: dmConversations.id, count: sql<number>`count(*)` })
+          .from(messages)
+          .innerJoin(dmConversations, eq(messages.channelId, dmConversations.channelId))
+          .where(and(...conditions))
+          .groupBy(dmConversations.id);
+      },
+      dmFilteredCountConversationChunkSize(agentChunk?.length ?? 0),
+    );
+    for (const row of rows) {
+      counts.set(row.conversationId, (counts.get(row.conversationId) ?? 0) + Number(row.count));
+    }
+  }
+  return counts;
 }

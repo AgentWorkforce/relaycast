@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { messages, observerTokens } from '../../db/schema.js';
-import { dmMessagePageLimit } from '../../engine/dmAll.js';
+import { dmFilteredCountConversationChunkSize, dmMessagePageLimit } from '../../engine/dmAll.js';
 import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
 
 async function mintConnectObserver(
@@ -55,6 +55,11 @@ describe('Relay Connect observer capability', () => {
 
   it('opens one room, reads historical and new DMs, and fails closed for writes, other rooms, expiry, revocation, and room deletion', async () => {
     expect(dmMessagePageLimit(101)).toBe(100);
+    const eightAgentConversationChunk = dmFilteredCountConversationChunkSize(8);
+    expect(Math.ceil(91 / eightAgentConversationChunk)).toBe(2);
+    // Two workspace predicates plus a created_after predicate remain outside
+    // the shared IN-clause budget and still stay below D1's 100-bind ceiling.
+    expect(eightAgentConversationChunk + 8 + 3).toBeLessThanOrEqual(100);
     const roomA = await createWorkspace(stack.app, 'connect-room-a');
     const roomB = await createWorkspace(stack.app, 'connect-room-b');
     const alice = await registerAgent(stack.app, roomA.workspaceKey, 'alice');
