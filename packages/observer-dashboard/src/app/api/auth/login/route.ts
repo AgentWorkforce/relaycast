@@ -135,6 +135,7 @@ export async function POST(request: NextRequest) {
       previousTokenId: previousWsTokenId,
       previousEngine,
       candidates,
+      nextApiKey: apiKey,
       nextTokenId: wsTokenId,
     });
     // Remember the minted token id so logout can revoke it on the engine.

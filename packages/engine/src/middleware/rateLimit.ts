@@ -8,6 +8,10 @@ import { presenceRefresh } from './presenceRefresh.js';
 
 /** Per-workspace requests-per-minute ceiling when the host configures none. */
 export const DEFAULT_RATE_LIMIT_PER_MINUTE = 30_000;
+// Each observer link gets this share of the workspace allowance. A second,
+// shared observer bucket then caps the sum so minting more links cannot
+// multiply workspace throughput.
+const OBSERVER_RATE_LIMIT_MULTIPLIER = 0.1;
 
 function validRatePerMinute(value: number | undefined): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
@@ -98,12 +102,9 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
   // The rate limiter port is not workspace-scoped, so the workspace id is part
   // of the bucket key (the Cloudflare adapter previously scoped via the DO id).
   const now = Date.now();
-  // A shared observer link may have several viewers polling concurrently. Keep
-  // that traffic out of the workspace-admin bucket, and keep independently
-  // minted observer links from starving one another.
   const observerToken = c.get('observerToken');
-  const principal = observerToken ? `observer:${observerToken.id}` : 'workspace';
-  const bucketKey = `${workspace.id}:${principal}:${routeKey ?? 'global'}:${rateLimitWindow(now)}`;
+  const routeBucket = routeKey ?? 'global';
+  const window = rateLimitWindow(now);
 
   // An invalid ceiling (config or hook) or a failing hook degrades to the next
   // valid one, never to no limit or to refusing everything.
@@ -120,20 +121,45 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
     }
   }
   const limit = routeKey ? Math.ceil(globalLimit * ROUTE_MULTIPLIERS[routeKey]) : globalLimit;
+  // Observer polling must not consume the workspace-admin bucket. Bound each
+  // link to a share of the workspace allowance, then apply a shared observer
+  // ceiling so minting more links cannot multiply workspace throughput.
+  // Preserve the historical admin key shape so deploys do not reset in-flight
+  // workspace counters.
+  const bucketLimits = observerToken
+    ? [
+        {
+          bucketKey: `${workspace.id}:observer:${observerToken.id}:${routeBucket}:${window}`,
+          limit: Math.max(1, Math.ceil(limit * OBSERVER_RATE_LIMIT_MULTIPLIER)),
+        },
+        { bucketKey: `${workspace.id}:observers:${routeBucket}:${window}`, limit },
+      ]
+    : [{ bucketKey: `${workspace.id}:${routeBucket}:${window}`, limit }];
 
   try {
-    const { allowed, count, remaining } = await rateLimiter.check({ bucketKey, limit, windowMs: RATE_LIMIT_WINDOW_MS });
     const resetAt = rateLimitWindowResetAt(now);
-    c.header('X-RateLimit-Limit', String(limit));
-    c.header('X-RateLimit-Remaining', String(remaining ?? Math.max(0, limit - count)));
-    c.header('X-RateLimit-Reset', String(Math.ceil(resetAt / 1000)));
-
-    if (!allowed) {
-      // Transient by construction: the bucket is keyed to this minute, so the
-      // advertised wait is the real one.
-      setRetryContract(c, resetAt, now);
-      return jsonError(c, 'rate_limit_exceeded', `Rate limit exceeded. ${limit} requests per minute allowed.`, 429);
+    let primaryResult: { count: number; remaining: number } | undefined;
+    for (const bucket of bucketLimits) {
+      const result = await rateLimiter.check({
+        bucketKey: bucket.bucketKey,
+        limit: bucket.limit,
+        windowMs: RATE_LIMIT_WINDOW_MS,
+      });
+      primaryResult ??= result;
+      if (!result.allowed) {
+        c.header('X-RateLimit-Limit', String(bucket.limit));
+        c.header('X-RateLimit-Remaining', String(result.remaining ?? Math.max(0, bucket.limit - result.count)));
+        c.header('X-RateLimit-Reset', String(Math.ceil(resetAt / 1000)));
+        // Transient by construction: the bucket is keyed to this minute, so the
+        // advertised wait is the real one.
+        setRetryContract(c, resetAt, now);
+        return jsonError(c, 'rate_limit_exceeded', `Rate limit exceeded. ${bucket.limit} requests per minute allowed.`, 429);
+      }
     }
+    const primaryLimit = bucketLimits[0].limit;
+    c.header('X-RateLimit-Limit', String(primaryLimit));
+    c.header('X-RateLimit-Remaining', String(primaryResult?.remaining ?? Math.max(0, primaryLimit - (primaryResult?.count ?? 0))));
+    c.header('X-RateLimit-Reset', String(Math.ceil(resetAt / 1000)));
   } catch {
     // Only the limiter backend failing is fail-open — a transient infra hiccup
     // shouldn't 500 the request (the limit was still computed above).
