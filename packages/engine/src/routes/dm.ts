@@ -15,7 +15,7 @@ import { buildDmReceivedEventData } from '../engine/deliveryWire.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent, shouldEnqueueWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
-import { errorResponse } from '../lib/httpError.js';
+import { asCodedError, errorResponse } from '../lib/httpError.js';
 import { jsonError, jsonOk, parseJsonBody, parseQueryParams } from '../lib/httpResponse.js';
 import { parsePaginationQuery, positiveIntQueryParam } from '../lib/httpQuery.js';
 import { canonicalJson } from '../engine/messageMetadata.js';
@@ -243,17 +243,17 @@ dmRoutes.get(
   requireAgentToken,
   rateLimit,
   async (c) => {
-    try {
-      const db = c.get('db');
-      const workspace = c.get('workspace');
-      const agent = c.get('agent');
-      const query = parsePaginationQuery(c);
-      if (!query.ok) {
-        return query.response;
-      }
-      const { limit, before, after } = query.data;
+    const db = c.get('db');
+    const workspace = c.get('workspace');
+    const agent = c.get('agent');
+    const query = parsePaginationQuery(c);
+    if (!query.ok) {
+      return query.response;
+    }
+    const { limit, before, after } = query.data;
 
-      const conversationId = c.req.param('conversation_id');
+    const conversationId = c.req.param('conversation_id');
+    try {
       const msgs = await dmEngine.getDmMessages(
         db,
         workspace.id,
@@ -263,7 +263,10 @@ dmRoutes.get(
       );
       return jsonOk(c, msgs);
     } catch (err: unknown) {
-      return errorResponse(c, err);
+      if ((asCodedError(err).status ?? 500) < 500) {
+        return errorResponse(c, err);
+      }
+      throw err;
     }
   },
 );

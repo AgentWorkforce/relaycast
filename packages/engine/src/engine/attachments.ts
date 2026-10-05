@@ -2,6 +2,7 @@ import { and, asc, eq, inArray } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { messageAttachments, files } from '../db/schema.js';
 import { codedError } from '../lib/httpError.js';
+import { queryInChunks } from '../lib/queryChunks.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -79,7 +80,8 @@ export async function fetchAttachmentsBatch(
   const map = new Map<string, AttachmentRow[]>();
   if (msgIds.length === 0) return map;
 
-  const rows = await db
+  const uniqueMsgIds = [...new Set(msgIds)];
+  const rows = await queryInChunks(uniqueMsgIds, (chunk) => db
     .select({
       messageId: messageAttachments.messageId,
       fileId: messageAttachments.fileId,
@@ -89,8 +91,8 @@ export async function fetchAttachmentsBatch(
     })
     .from(messageAttachments)
     .innerJoin(files, eq(messageAttachments.fileId, files.id))
-    .where(and(inArray(messageAttachments.messageId, msgIds), eq(files.workspaceId, workspaceId)))
-    .orderBy(asc(messageAttachments.messageId), asc(messageAttachments.position));
+    .where(and(inArray(messageAttachments.messageId, chunk), eq(files.workspaceId, workspaceId)))
+    .orderBy(asc(messageAttachments.messageId), asc(messageAttachments.position)));
 
   for (const row of rows) {
     const list = map.get(row.messageId) || [];
