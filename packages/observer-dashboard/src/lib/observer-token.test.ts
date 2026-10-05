@@ -117,6 +117,7 @@ describe('revokeObserverStreamToken', () => {
       expect.objectContaining({
         method: 'DELETE',
         headers: { Authorization: 'Bearer rk_live_admin' },
+        signal: expect.any(AbortSignal),
       })
     );
   });

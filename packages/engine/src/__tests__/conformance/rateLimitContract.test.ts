@@ -80,17 +80,24 @@ describe('rate limit contract', () => {
     );
     ratePerMin = 20;
 
-    for (const observer of observers.slice(0, 10)) {
+    for (const observer of observers.slice(0, 9)) {
       expect((await get('/v1/dm/conversations/all', observer)).status).toBe(200);
       expect((await get('/v1/dm/conversations/all', observer)).status).toBe(200);
     }
+    expect((await get('/v1/dm/conversations/all', observers[9])).status).toBe(200);
     const perLinkThrottle = await get('/v1/dm/conversations/all', observers[0]);
     expect(perLinkThrottle.status).toBe(429);
     expect(perLinkThrottle.headers.get('X-RateLimit-Limit')).toBe('2');
 
-    // A fresh eleventh link has per-link capacity, but the shared observer
-    // ceiling prevents minted links from multiplying workspace throughput.
-    const aggregateThrottle = await get('/v1/dm/conversations/all', observers[10]);
+    // The shared observer bucket is now tighter than this fresh link, so the
+    // successful response must advertise the aggregate limit and remaining.
+    const finalAggregateSlot = await get('/v1/dm/conversations/all', observers[10]);
+    expect(finalAggregateSlot.status).toBe(200);
+    expect(finalAggregateSlot.headers.get('X-RateLimit-Limit')).toBe('20');
+    expect(finalAggregateSlot.headers.get('X-RateLimit-Remaining')).toBe('0');
+
+    // A link that still has per-link capacity cannot exceed the shared ceiling.
+    const aggregateThrottle = await get('/v1/dm/conversations/all', observers[9]);
     expect(aggregateThrottle.status).toBe(429);
     expect(aggregateThrottle.headers.get('X-RateLimit-Limit')).toBe('20');
 

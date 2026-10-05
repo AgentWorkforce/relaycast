@@ -26,6 +26,7 @@ const DASHBOARD_OBSERVER_TOKEN_PREFIX = 'observer-dashboard';
  * token never expires out from under an otherwise-valid session.
  */
 const DASHBOARD_OBSERVER_TOKEN_TTL_MS = 60 * 60 * 24 * 30 * 1000;
+const OBSERVER_TOKEN_REVOKE_TIMEOUT_MS = 5_000;
 
 /**
  * Full read scope set, mirroring the engine's `OBSERVER_SCOPES`
@@ -139,6 +140,7 @@ export async function revokeObserverStreamToken(
         method: 'DELETE',
         headers: { Authorization: `Bearer ${adminKey}` },
         cache: 'no-store',
+        signal: AbortSignal.timeout(OBSERVER_TOKEN_REVOKE_TIMEOUT_MS),
       }
     );
     return response.ok;

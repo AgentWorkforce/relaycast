@@ -95,14 +95,13 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
 
   try {
     const resetAt = rateLimitWindowResetAt(now);
-    let primaryResult: { count: number; remaining: number } | undefined;
+    let tightestResult: { limit: number; count: number; remaining: number } | undefined;
     for (const bucket of bucketLimits) {
       const result = await rateLimiter.check({
         bucketKey: bucket.bucketKey,
         limit: bucket.limit,
         windowMs: RATE_LIMIT_WINDOW_MS,
       });
-      primaryResult ??= result;
       if (!result.allowed) {
         c.header('X-RateLimit-Limit', String(bucket.limit));
         c.header('X-RateLimit-Remaining', String(result.remaining ?? Math.max(0, bucket.limit - result.count)));
@@ -112,10 +111,13 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
         setRetryContract(c, resetAt, now);
         return jsonError(c, 'rate_limit_exceeded', `Rate limit exceeded. ${bucket.limit} requests per minute allowed for ${workspace.plan} plan.`, 429);
       }
+      if (!tightestResult || result.remaining < tightestResult.remaining) {
+        tightestResult = { limit: bucket.limit, count: result.count, remaining: result.remaining };
+      }
     }
-    const primaryLimit = bucketLimits[0].limit;
-    c.header('X-RateLimit-Limit', String(primaryLimit));
-    c.header('X-RateLimit-Remaining', String(primaryResult?.remaining ?? Math.max(0, primaryLimit - (primaryResult?.count ?? 0))));
+    const responseLimit = tightestResult?.limit ?? bucketLimits[0].limit;
+    c.header('X-RateLimit-Limit', String(responseLimit));
+    c.header('X-RateLimit-Remaining', String(tightestResult?.remaining ?? Math.max(0, responseLimit - (tightestResult?.count ?? 0))));
     c.header('X-RateLimit-Reset', String(Math.ceil(resetAt / 1000)));
   } catch {
     // Only the limiter backend failing is fail-open — a transient infra hiccup
