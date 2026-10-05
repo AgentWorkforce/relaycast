@@ -80,7 +80,8 @@ export async function fetchAttachmentsBatch(
   const map = new Map<string, AttachmentRow[]>();
   if (msgIds.length === 0) return map;
 
-  const rows = await queryInChunks(msgIds, (chunk) => db
+  const uniqueMsgIds = [...new Set(msgIds)];
+  const rows = await queryInChunks(uniqueMsgIds, (chunk) => db
     .select({
       messageId: messageAttachments.messageId,
       fileId: messageAttachments.fileId,

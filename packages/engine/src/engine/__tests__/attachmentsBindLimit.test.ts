@@ -86,6 +86,12 @@ describe('fetchAttachmentsBatch D1 bind limit', () => {
       expect(result.get(messageIds[89])?.[0].file_id).toBe('file-89');
       expect(result.get(messageIds[90])?.[0].file_id).toBe('file-90');
       expect(result.get(messageIds[99])?.[0].file_id).toBe('file-99');
+
+      const repeatedIdResult = await fetchAttachmentsBatch(db, 'ws', [
+        ...messageIds.slice(0, 90),
+        messageIds[0]!,
+      ]);
+      expect(repeatedIdResult.get(messageIds[0])).toEqual(result.get(messageIds[0]));
     } finally {
       handle.sqlite.close();
     }
