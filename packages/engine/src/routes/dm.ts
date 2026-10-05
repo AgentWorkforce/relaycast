@@ -243,27 +243,23 @@ dmRoutes.get(
   requireAgentToken,
   rateLimit,
   async (c) => {
-    try {
-      const db = c.get('db');
-      const workspace = c.get('workspace');
-      const agent = c.get('agent');
-      const query = parsePaginationQuery(c);
-      if (!query.ok) {
-        return query.response;
-      }
-      const { limit, before, after } = query.data;
-
-      const conversationId = c.req.param('conversation_id');
-      const msgs = await dmEngine.getDmMessages(
-        db,
-        workspace.id,
-        conversationId,
-        agent!.id,
-        { limit, before, after },
-      );
-      return jsonOk(c, msgs);
-    } catch (err: unknown) {
-      return errorResponse(c, err);
+    const db = c.get('db');
+    const workspace = c.get('workspace');
+    const agent = c.get('agent');
+    const query = parsePaginationQuery(c);
+    if (!query.ok) {
+      return query.response;
     }
+    const { limit, before, after } = query.data;
+
+    const conversationId = c.req.param('conversation_id');
+    const msgs = await dmEngine.getDmMessages(
+      db,
+      workspace.id,
+      conversationId,
+      agent!.id,
+      { limit, before, after },
+    );
+    return jsonOk(c, msgs);
   },
 );
