@@ -45,13 +45,16 @@ describe('Relay Connect observer presentation', () => {
   it('does not restart Connect authentication when capability scrubbing rerenders the route', () => {
     const identity = connectObserverIdentity('ot_room', '2026-11-05T00:00:00.000Z');
     expect(
-      shouldInitializeConnectObserver(identity, 'ot_room', '2026-11-05T00:00:00.000Z', null),
+      shouldInitializeConnectObserver('connect', identity, 'ot_room', '2026-11-05T00:00:00.000Z', null),
     ).toBe(false);
     expect(
-      shouldInitializeConnectObserver(null, 'ot_room', '2026-11-05T00:00:00.000Z', 'ot_live_new'),
+      shouldInitializeConnectObserver(null, null, 'ot_room', '2026-11-05T00:00:00.000Z', 'ot_live_new'),
     ).toBe(true);
     expect(
-      shouldInitializeConnectObserver(identity, 'ot_other', '2026-11-05T00:00:00.000Z', null),
+      shouldInitializeConnectObserver('connect', identity, 'ot_other', '2026-11-05T00:00:00.000Z', null),
+    ).toBe(true);
+    expect(
+      shouldInitializeConnectObserver('workspace', identity, 'ot_room', '2026-11-05T00:00:00.000Z', null),
     ).toBe(true);
   });
 

@@ -27,11 +27,13 @@ export function connectObserverUrlWithoutCapability(value: string): string {
 }
 
 export function shouldInitializeConnectObserver(
+  previousMode: 'workspace' | 'connect' | null,
   previousIdentity: string | null,
   observerId: string | null,
   expiresAt: string | null,
   capability: string | null,
 ): boolean {
+  if (previousMode !== 'connect') return true;
   const identity = `${observerId ?? ''}\u0000${expiresAt ?? ''}`;
   return previousIdentity !== identity || capability !== null;
 }

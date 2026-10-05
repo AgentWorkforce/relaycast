@@ -32,15 +32,18 @@ export function RelaySessionProvider({
   const [accessFailure, setAccessFailure] = useState<'expired' | 'unavailable' | null>(null);
   const requestSeq = useRef(0);
   const connectIdentity = useRef<string | null>(null);
+  const previousMode = useRef<'workspace' | 'connect' | null>(null);
 
   useEffect(() => {
     const observerIdParam = searchParams.get('observer_id');
     const fragmentKey = mode === 'connect' ? new URLSearchParams(window.location.hash.slice(1)).get('key') : null;
     const keyParam = searchParams.get('key') ?? fragmentKey;
     const expiresAt = searchParams.get('expires_at');
+    const priorMode = previousMode.current;
+    previousMode.current = mode;
     if (
       mode === 'connect'
-      && !shouldInitializeConnectObserver(connectIdentity.current, observerIdParam, expiresAt, keyParam)
+      && !shouldInitializeConnectObserver(priorMode, connectIdentity.current, observerIdParam, expiresAt, keyParam)
     ) {
       return;
     }

@@ -59,6 +59,7 @@ describe('Relay Connect observer capability', () => {
     const roomB = await createWorkspace(stack.app, 'connect-room-b');
     const alice = await registerAgent(stack.app, roomA.workspaceKey, 'alice');
     const bob = await registerAgent(stack.app, roomA.workspaceKey, 'bob');
+    await registerAgent(stack.app, roomA.workspaceKey, 'carol');
     const mallory = await registerAgent(stack.app, roomB.workspaceKey, 'mallory');
     await registerAgent(stack.app, roomB.workspaceKey, 'victor');
 
@@ -115,6 +116,7 @@ describe('Relay Connect observer capability', () => {
     // Pagination metadata is based on the raw page, so an agent filter cannot
     // make an empty visible page look exhausted while older allowed rows exist.
     await sendDm(stack, bob.token, 'alice', 'newest hidden by agent filter');
+    const secondConversation = await sendDm(stack, alice.token, 'carol', 'visible in a second conversation');
     const aliceOnly = await mintConnectObserver(
       stack,
       roomA.workspaceKey,
@@ -125,8 +127,16 @@ describe('Relay Connect observer capability', () => {
       headers: { authorization: `Bearer ${aliceOnly.token}` },
     });
     expect(filteredConversations.status).toBe(200);
-    await expect(filteredConversations.json()).resolves.toMatchObject({
-      data: [{ id: historicalA.data.conversation_id, last_message: null, message_count: 2 }],
+    const filteredConversationBody = (await filteredConversations.json()) as {
+      data: Array<{ id: string; last_message: unknown; message_count: number }>;
+    };
+    expect(filteredConversationBody.data).toHaveLength(2);
+    expect(filteredConversationBody.data.find(({ id }) => id === historicalA.data.conversation_id)).toMatchObject({
+      last_message: null,
+      message_count: 2,
+    });
+    expect(filteredConversationBody.data.find(({ id }) => id === secondConversation.data.conversation_id)).toMatchObject({
+      message_count: 1,
     });
     const hiddenRawPage = await stack.app.request(
       `/v1/dm/conversations/${historicalA.data.conversation_id}/messages?limit=1&page=1`,

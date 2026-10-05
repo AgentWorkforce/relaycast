@@ -165,23 +165,26 @@ export async function getDmMessagesForWorkspace(
   }));
 }
 
-export async function countDmMessagesForWorkspace(
+export async function countDmMessagesForWorkspaceConversations(
   db: Db,
   workspaceId: string,
-  conversationId: string,
+  conversationIds: string[],
   opts: { agentIds?: string[]; createdAfter?: string } = {},
-): Promise<number> {
+): Promise<Map<string, number>> {
+  if (conversationIds.length === 0) return new Map();
   const conditions = [
-    eq(dmConversations.id, conversationId),
+    inArray(dmConversations.id, conversationIds),
     eq(dmConversations.workspaceId, workspaceId),
+    eq(messages.workspaceId, workspaceId),
   ];
   if (opts.agentIds?.length) conditions.push(inArray(messages.agentId, opts.agentIds));
   if (opts.createdAfter) conditions.push(gte(messages.createdAt, new Date(opts.createdAfter)));
 
-  const [row] = await db
-    .select({ count: sql<number>`count(*)` })
+  const rows = await db
+    .select({ conversationId: dmConversations.id, count: sql<number>`count(*)` })
     .from(messages)
     .innerJoin(dmConversations, eq(messages.channelId, dmConversations.channelId))
-    .where(and(...conditions));
-  return Number(row?.count ?? 0);
+    .where(and(...conditions))
+    .groupBy(dmConversations.id);
+  return new Map(rows.map((row) => [row.conversationId, Number(row.count)]));
 }

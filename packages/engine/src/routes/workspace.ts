@@ -508,22 +508,27 @@ workspaceRoutes.get('/dm/conversations/all', requireWorkspaceRead('dms:read', { 
       .filter((conversation) => observerAllowsConversation(observer, conversation.id));
     const filters = observer ? normalizeObserverFilters(observer.filters) : null;
     const filtersMessages = Boolean(filters?.agent_ids?.length || filters?.created_after);
-    const conversations = await Promise.all(allowedConversations.map(async (conversation) => {
+    const filteredCounts = observer && filtersMessages
+      ? await dmAllEngine.countDmMessagesForWorkspaceConversations(
+        db,
+        workspace.id,
+        allowedConversations.map((conversation) => conversation.id),
+        { agentIds: filters?.agent_ids, createdAfter: filters?.created_after },
+      )
+      : null;
+    const conversations = allowedConversations.map((conversation) => {
       const visibleLastMessage = conversation.last_message && !observerAllowsMessage(observer, conversation.last_message)
         ? null
         : conversation.last_message;
-      if (!observer || !filtersMessages) {
+      if (!filteredCounts) {
         return { ...conversation, last_message: visibleLastMessage };
       }
       return {
         ...conversation,
         last_message: visibleLastMessage,
-        message_count: await dmAllEngine.countDmMessagesForWorkspace(db, workspace.id, conversation.id, {
-          agentIds: filters?.agent_ids,
-          createdAfter: filters?.created_after,
-        }),
+        message_count: filteredCounts.get(conversation.id) ?? 0,
       };
-    }));
+    });
     return jsonOk(c, conversations);
   } catch (err: unknown) {
     return errorResponse(c, err);
