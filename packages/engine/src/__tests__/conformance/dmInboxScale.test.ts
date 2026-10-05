@@ -132,6 +132,24 @@ describe('DM inbox scaling', () => {
     expect(response.status).toBe(400);
   });
 
+  it('keeps expected participant errors out of global error logs', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const response = await stack.app.request('/v1/dm/unknown-conversation/messages', {
+        headers: { authorization: `Bearer ${agentToken}` },
+      });
+
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toEqual({
+        ok: false,
+        error: { code: 'forbidden', message: 'Not a participant in this conversation' },
+      });
+      expect(errorLog).not.toHaveBeenCalled();
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
   it('lets history read failures reach the global handler for logging and telemetry', async () => {
     const captureException = vi.spyOn(stack.runtime.deps.telemetry, 'captureException');
     const sqlite = stack.runtime.handle.sqlite;

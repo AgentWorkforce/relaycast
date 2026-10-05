@@ -15,7 +15,7 @@ import { buildDmReceivedEventData } from '../engine/deliveryWire.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent, shouldEnqueueWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
-import { errorResponse } from '../lib/httpError.js';
+import { asCodedError, errorResponse } from '../lib/httpError.js';
 import { jsonError, jsonOk, parseJsonBody, parseQueryParams } from '../lib/httpResponse.js';
 import { parsePaginationQuery, positiveIntQueryParam } from '../lib/httpQuery.js';
 import { canonicalJson } from '../engine/messageMetadata.js';
@@ -253,13 +253,20 @@ dmRoutes.get(
     const { limit, before, after } = query.data;
 
     const conversationId = c.req.param('conversation_id');
-    const msgs = await dmEngine.getDmMessages(
-      db,
-      workspace.id,
-      conversationId,
-      agent!.id,
-      { limit, before, after },
-    );
-    return jsonOk(c, msgs);
+    try {
+      const msgs = await dmEngine.getDmMessages(
+        db,
+        workspace.id,
+        conversationId,
+        agent!.id,
+        { limit, before, after },
+      );
+      return jsonOk(c, msgs);
+    } catch (err: unknown) {
+      if ((asCodedError(err).status ?? 500) < 500) {
+        return errorResponse(c, err);
+      }
+      throw err;
+    }
   },
 );
