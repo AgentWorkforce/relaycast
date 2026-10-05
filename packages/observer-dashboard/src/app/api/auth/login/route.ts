@@ -5,7 +5,7 @@ import {
   resolveRelayServerCandidatesFromRequest,
   selectEngineForKey,
 } from '../../../../lib/relay-server';
-import { mintObserverStreamToken, revokeObserverStreamToken } from '../../../../lib/observer-token';
+import { mintObserverStreamToken, revokePreviousObserverStreamToken } from '../../../../lib/observer-token';
 
 export const runtime = 'edge';
 
@@ -90,6 +90,9 @@ export async function POST(request: NextRequest) {
     }
 
     const cookieStore = await cookies();
+    const previousApiKey = cookieStore.get(COOKIE_NAME)?.value;
+    const previousWsTokenId = cookieStore.get(WS_TOKEN_ID_COOKIE_NAME)?.value;
+    const previousEngine = cookieStore.get(ENGINE_COOKIE_NAME)?.value;
     const cookieOptions = {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
@@ -120,14 +123,16 @@ export async function POST(request: NextRequest) {
       cookieStore.delete(WS_TOKEN_COOKIE_NAME);
     }
 
-    // Revoke the observer token minted for this browser's previous session
-    // before overwriting its id — otherwise repeated workspace-key logins
-    // orphan tokens that stay active until their 30-day expiry. Best effort;
-    // only a workspace key can revoke, and a different key just 404s harmlessly.
-    const previousWsTokenId = cookieStore.get(WS_TOKEN_ID_COOKIE_NAME)?.value;
-    if (previousWsTokenId && previousWsTokenId !== wsTokenId && apiKey.startsWith('rk_live_')) {
-      await revokeObserverStreamToken(relayServer, apiKey, previousWsTokenId);
-    }
+    // Revoke the token minted for the browser's previous workspace session,
+    // even when the new login uses a Connect observer capability. Use only the
+    // remembered, allowlisted engine with the previous workspace credential.
+    await revokePreviousObserverStreamToken({
+      previousApiKey,
+      previousTokenId: previousWsTokenId,
+      previousEngine,
+      candidates,
+      nextTokenId: wsTokenId,
+    });
     // Remember the minted token id so logout can revoke it on the engine.
     if (wsTokenId) {
       cookieStore.set(WS_TOKEN_ID_COOKIE_NAME, wsTokenId, cookieOptions);

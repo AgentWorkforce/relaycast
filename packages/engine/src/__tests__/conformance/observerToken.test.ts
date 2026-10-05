@@ -115,7 +115,20 @@ describe('observer tokens', () => {
       method: 'DELETE',
       headers: { authorization: `Bearer ${ws.workspaceKey}` },
     });
-    expect(revokeAgain.status).toBe(404);
+    expect(revokeAgain.status).toBe(204);
+
+    const otherWorkspace = await createWorkspace(stack.app, 'observer-lifecycle-other-ws');
+    const crossWorkspaceRevoke = await stack.app.request(`/v1/observer-tokens/${created.data.id}`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${otherWorkspace.workspaceKey}` },
+    });
+    expect(crossWorkspaceRevoke.status).toBe(404);
+
+    const missingRevoke = await stack.app.request('/v1/observer-tokens/ot_missing', {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    expect(missingRevoke.status).toBe(404);
 
     const rotateRevoked = await stack.app.request(`/v1/observer-tokens/${created.data.id}/rotate`, {
       method: 'POST',

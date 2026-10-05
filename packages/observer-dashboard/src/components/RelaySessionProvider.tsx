@@ -6,6 +6,7 @@ import { RelayProvider } from '@relaycast/react';
 import { setAuth } from '../lib/auth';
 import { resetActivityIfWorkspaceChanged } from '../lib/activity-store';
 import {
+  connectObserverCapability,
   connectObserverIdentity,
   connectObserverUrlWithoutCapability,
   shouldInitializeConnectObserver,
@@ -37,7 +38,7 @@ export function RelaySessionProvider({
   useEffect(() => {
     const observerIdParam = searchParams.get('observer_id');
     const fragmentKey = mode === 'connect' ? new URLSearchParams(window.location.hash.slice(1)).get('key') : null;
-    const keyParam = searchParams.get('key') ?? fragmentKey;
+    const keyParam = connectObserverCapability(mode, searchParams.get('key'), fragmentKey);
     const expiresAt = searchParams.get('expires_at');
     const priorMode = previousMode.current;
     previousMode.current = mode;

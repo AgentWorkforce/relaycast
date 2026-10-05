@@ -30,6 +30,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
+- Connect observer links redact both public join URL forms, accept capabilities only from URL fragments, isolate viewer rate-limit buckets, and clean up a prior dashboard stream token when the browser changes sessions.
+- Repeating an observer-token revocation now succeeds for the owning workspace while missing and cross-workspace ids remain indistinguishable.
 - Cloudflare D1 no longer rejects full 100-message history reads when attachment metadata is hydrated.
 - DM history query failures reach Relaycast Cloud's D1 overload handler and shared exception telemetry instead of becoming opaque route-level 500 responses.
 - Node enrollment no longer lets a workspace key alone rotate, rename, reshape, or reset an established node; existing rows require proof of their current node token while genuinely new node IDs remain enrollable. Keyed rotations retain a bounded, request-bound recovery record so a lost committed response returns the same replacement token on retry. Hosts must apply `0063_node_rotation_recovery.sql` before upgrading.
