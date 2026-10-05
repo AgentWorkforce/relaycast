@@ -29,6 +29,7 @@ import type {
   EventSubscription,
   ActivityItem,
   DmMessage,
+  DmMessagePage,
   DmReceivedEvent,
   WorkspaceDmConversation,
   TokenRotateResponse,
@@ -1116,6 +1117,17 @@ export class RelayCast {
 
   dmMessages = async (conversationId: string, opts?: { limit?: number; before?: string; after?: string }): Promise<DmMessage[]> => {
     const query: Record<string, string> = {};
+    if (opts?.limit !== undefined) query.limit = String(opts.limit);
+    if (opts?.before) query.before = opts.before;
+    if (opts?.after) query.after = opts.after;
+    return this.client.get(`/v1/dm/conversations/${encodeURIComponent(conversationId)}/messages`, query);
+  };
+
+  dmMessagePage = async (
+    conversationId: string,
+    opts?: { limit?: number; before?: string; after?: string },
+  ): Promise<DmMessagePage> => {
+    const query: Record<string, string> = { page: '1' };
     if (opts?.limit !== undefined) query.limit = String(opts.limit);
     if (opts?.before) query.before = opts.before;
     if (opts?.after) query.after = opts.after;

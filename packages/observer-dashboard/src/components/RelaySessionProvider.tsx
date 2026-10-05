@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { RelayProvider } from '@relaycast/react';
 import { setAuth } from '../lib/auth';
 import { resetActivityIfWorkspaceChanged } from '../lib/activity-store';
+import { connectObserverUrlWithoutCapability } from '../lib/connect-observer';
 
 interface Session {
   apiKey: string;
@@ -33,6 +34,17 @@ export function RelaySessionProvider({
     const fragmentKey = mode === 'connect' ? new URLSearchParams(window.location.hash.slice(1)).get('key') : null;
     const keyParam = searchParams.get('key') ?? fragmentKey;
     const expiresAt = searchParams.get('expires_at');
+    if (mode === 'connect' && keyParam) {
+      // Capture the capability above, then remove it before any asynchronous
+      // validation so success, rejection, expiry, and network failure all
+      // leave a non-replayable address-bar entry.
+      window.history.replaceState({}, '', connectObserverUrlWithoutCapability(window.location.href));
+    }
+    // An identity change is an authorization boundary. Unmount the room view
+    // immediately so its message cache cannot survive into another session.
+    setChecking(true);
+    setSession(null);
+    setAccessFailure(null);
 
     async function initSession() {
       try {
@@ -48,7 +60,7 @@ export function RelaySessionProvider({
         if (
           mode === 'connect' &&
           (!observerIdParam ||
-            !/^ot_[A-Za-z0-9_-]+$/.test(observerIdParam) ||
+            !/^ot_(?!live_)[A-Za-z0-9_-]+$/.test(observerIdParam) ||
             (keyParam !== null && !keyParam.startsWith('ot_live_')))
         ) {
           setAccessFailure('unavailable');
@@ -100,16 +112,7 @@ export function RelaySessionProvider({
             wsToken: data.wsToken ?? null,
             baseUrl: data.baseUrl,
           });
-          if (keyParam) {
-            if (mode === 'connect') {
-              const sanitized = new URL(window.location.href);
-              sanitized.searchParams.delete('key');
-              sanitized.hash = '';
-              window.history.replaceState({}, '', sanitized);
-            } else {
-              router.replace('/');
-            }
-          }
+          if (keyParam && mode !== 'connect') router.replace('/');
         } else {
           if (mode === 'connect') {
             setAccessFailure('unavailable');

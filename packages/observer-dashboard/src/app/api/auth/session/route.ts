@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import {
   orderByRemembered,
+  observerBindingMatches,
   pickRememberedEngine,
   resolveRelayServerCandidatesFromRequest,
   selectEngineForKey,
@@ -34,7 +35,7 @@ export async function GET(request: NextRequest) {
 
   const candidates = resolveRelayServerCandidatesFromRequest(request);
   const remembered = pickRememberedEngine(cookieStore.get(ENGINE_COOKIE_NAME)?.value, candidates);
-  const { baseUrl, rejectedAny, inconclusiveAny } = await selectEngineForKey(
+  const { baseUrl, rejectedAny, inconclusiveAny, observerTokenId } = await selectEngineForKey(
     orderByRemembered(candidates, remembered),
     apiKey,
   );
@@ -44,6 +45,11 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ authenticated: false, error: 'Unable to validate session' }, { status: 503 });
     }
 
+    return NextResponse.json({ authenticated: false }, { status: 401 });
+  }
+
+  const connectObserverId = cookieStore.get(CONNECT_OBSERVER_ID_COOKIE_NAME)?.value ?? null;
+  if (!observerBindingMatches(connectObserverId, observerTokenId)) {
     return NextResponse.json({ authenticated: false }, { status: 401 });
   }
 
@@ -67,7 +73,7 @@ export async function GET(request: NextRequest) {
     // A workspace-key session with no ws token (mint failed, or a session
     // created before this cookie existed) has no live stream until next login.
     wsToken: wsToken ?? null,
-    connectObserverId: cookieStore.get(CONNECT_OBSERVER_ID_COOKIE_NAME)?.value ?? null,
+    connectObserverId,
     baseUrl,
   });
 }

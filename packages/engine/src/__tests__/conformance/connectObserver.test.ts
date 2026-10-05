@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { observerTokens } from '../../db/schema.js';
+import { messages, observerTokens } from '../../db/schema.js';
 import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
 
-async function mintConnectObserver(stack: TestStack, workspaceKey: string, name: string) {
+async function mintConnectObserver(
+  stack: TestStack,
+  workspaceKey: string,
+  name: string,
+  filters: { include_dms: true; agent_ids?: string[] } = { include_dms: true },
+) {
   const response = await stack.app.request('/v1/observer-tokens', {
     method: 'POST',
     headers: {
@@ -13,7 +18,7 @@ async function mintConnectObserver(stack: TestStack, workspaceKey: string, name:
     body: JSON.stringify({
       name,
       scopes: ['stream:read', 'dms:read'],
-      filters: { include_dms: true },
+      filters,
       expires_at: new Date(Date.now() + 60_000).toISOString(),
     }),
   });
@@ -51,7 +56,7 @@ describe('Relay Connect observer capability', () => {
     const roomA = await createWorkspace(stack.app, 'connect-room-a');
     const roomB = await createWorkspace(stack.app, 'connect-room-b');
     const alice = await registerAgent(stack.app, roomA.workspaceKey, 'alice');
-    await registerAgent(stack.app, roomA.workspaceKey, 'bob');
+    const bob = await registerAgent(stack.app, roomA.workspaceKey, 'bob');
     const mallory = await registerAgent(stack.app, roomB.workspaceKey, 'mallory');
     await registerAgent(stack.app, roomB.workspaceKey, 'victor');
 
@@ -64,7 +69,7 @@ describe('Relay Connect observer capability', () => {
     });
     expect(open.status).toBe(200);
     await expect(open.json()).resolves.toMatchObject({
-      data: { id: roomA.workspaceId },
+      data: { id: roomA.workspaceId, observer_token_id: observer.id },
     });
 
     await sendDm(stack, alice.token, 'bob', 'new room A');
@@ -82,19 +87,65 @@ describe('Relay Connect observer capability', () => {
     });
 
     const history = await stack.app.request(
-      `/v1/dm/conversations/${historicalA.data.conversation_id}/messages?limit=100`,
+      `/v1/dm/conversations/${historicalA.data.conversation_id}/messages?limit=100&page=1`,
       { headers: { authorization: `Bearer ${observer.token}` } },
     );
     expect(history.status).toBe(200);
     const historyBody = (await history.json()) as {
-      data: Array<{ agent_name: string; created_at: string; text: string }>;
+      data: {
+        messages: Array<{ agent_name: string; created_at: string; text: string }>;
+        exhausted: boolean;
+        next_before: string | null;
+      };
     };
-    expect(historyBody.data.map((message) => message.text)).toEqual(
+    expect(historyBody.data.messages.map((message) => message.text)).toEqual(
       expect.arrayContaining(['historical room A', 'new room A']),
     );
-    expect(historyBody.data.every((message) => message.agent_name === 'alice')).toBe(true);
-    expect(historyBody.data.every((message) => Number.isFinite(Date.parse(message.created_at)))).toBe(true);
-    expect(historyBody.data.map((message) => message.text)).not.toContain('private room B');
+    expect(historyBody.data.messages.every((message) => message.agent_name === 'alice')).toBe(true);
+    expect(
+      historyBody.data.messages.every(
+        (message) => Number.isFinite(Date.parse(message.created_at)) && message.created_at.endsWith('Z'),
+      ),
+    ).toBe(true);
+    expect(historyBody.data.messages.map((message) => message.text)).not.toContain('private room B');
+    expect(historyBody.data.exhausted).toBe(true);
+
+    // Pagination metadata is based on the raw page, so an agent filter cannot
+    // make an empty visible page look exhausted while older allowed rows exist.
+    await sendDm(stack, bob.token, 'alice', 'newest hidden by agent filter');
+    const aliceOnly = await mintConnectObserver(
+      stack,
+      roomA.workspaceKey,
+      'connect-observer-alice-only',
+      { include_dms: true, agent_ids: [alice.agentId] },
+    );
+    const filteredConversations = await stack.app.request('/v1/dm/conversations/all', {
+      headers: { authorization: `Bearer ${aliceOnly.token}` },
+    });
+    expect(filteredConversations.status).toBe(200);
+    await expect(filteredConversations.json()).resolves.toMatchObject({
+      data: [{ id: historicalA.data.conversation_id, last_message: null }],
+    });
+    const hiddenRawPage = await stack.app.request(
+      `/v1/dm/conversations/${historicalA.data.conversation_id}/messages?limit=1&page=1`,
+      { headers: { authorization: `Bearer ${aliceOnly.token}` } },
+    );
+    const hiddenRawPageBody = (await hiddenRawPage.json()) as {
+      data: { messages: unknown[]; next_before: string; exhausted: boolean };
+    };
+    expect(hiddenRawPageBody.data).toMatchObject({ messages: [], exhausted: false });
+    const olderAllowedPage = await stack.app.request(
+      `/v1/dm/conversations/${historicalA.data.conversation_id}/messages?limit=1&page=1&before=${hiddenRawPageBody.data.next_before}`,
+      { headers: { authorization: `Bearer ${aliceOnly.token}` } },
+    );
+    await expect(olderAllowedPage.json()).resolves.toMatchObject({
+      data: { messages: [{ agent_name: 'alice' }] },
+    });
+
+    const dmMessagesBeforeWrites = await stack.runtime.deps.db
+      .select()
+      .from(messages)
+      .where(eq(messages.workspaceId, roomA.workspaceId));
 
     const sendDenied = await stack.app.request('/v1/dm', {
       method: 'POST',
@@ -105,6 +156,9 @@ describe('Relay Connect observer capability', () => {
       body: JSON.stringify({ to: 'bob', text: 'observer must not send' }),
     });
     expect(sendDenied.status).toBe(401);
+    await expect(sendDenied.json()).resolves.toMatchObject({
+      error: { code: 'observer_token_forbidden' },
+    });
 
     const replyDenied = await stack.app.request(`/v1/dm/${historicalA.data.conversation_id}/messages`, {
       method: 'POST',
@@ -115,6 +169,15 @@ describe('Relay Connect observer capability', () => {
       body: JSON.stringify({ text: 'observer must not reply' }),
     });
     expect(replyDenied.status).toBe(401);
+    await expect(replyDenied.json()).resolves.toMatchObject({
+      error: { code: 'observer_token_forbidden' },
+    });
+
+    const dmMessagesAfterWrites = await stack.runtime.deps.db
+      .select()
+      .from(messages)
+      .where(eq(messages.workspaceId, roomA.workspaceId));
+    expect(dmMessagesAfterWrites).toHaveLength(dmMessagesBeforeWrites.length);
 
     const crossRoom = await stack.app.request(
       `/v1/dm/conversations/${privateB.data.conversation_id}/messages?limit=100`,

@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { resolveRelayServerCandidatesFromRequest, selectEngineForKey } from '../../../../lib/relay-server';
+import {
+  observerBindingMatches,
+  resolveRelayServerCandidatesFromRequest,
+  selectEngineForKey,
+} from '../../../../lib/relay-server';
 import { mintObserverStreamToken, revokeObserverStreamToken } from '../../../../lib/observer-token';
 
 export const runtime = 'edge';
@@ -40,7 +44,7 @@ export async function POST(request: NextRequest) {
     if (
       connectObserverId !== undefined &&
       (typeof connectObserverId !== 'string' ||
-        !/^ot_[A-Za-z0-9_-]+$/.test(connectObserverId) ||
+        !/^ot_(?!live_)[A-Za-z0-9_-]+$/.test(connectObserverId) ||
         !apiKey.startsWith('ot_live_'))
     ) {
       return NextResponse.json({ success: false, error: 'Invalid Connect observer binding' }, { status: 400 });
@@ -49,7 +53,12 @@ export async function POST(request: NextRequest) {
     // Always probe the server-configured candidates (prevents SSRF). The first
     // engine that accepts the key wins; gateway is tried before legacy api.
     const candidates = resolveRelayServerCandidatesFromRequest(request);
-    const { baseUrl: relayServer, rejectedAny, inconclusiveAny } = await selectEngineForKey(candidates, apiKey);
+    const {
+      baseUrl: relayServer,
+      rejectedAny,
+      inconclusiveAny,
+      observerTokenId,
+    } = await selectEngineForKey(candidates, apiKey);
 
     if (!relayServer) {
       if (!rejectedAny || inconclusiveAny) {
@@ -57,6 +66,9 @@ export async function POST(request: NextRequest) {
       }
 
       return NextResponse.json({ success: false, error: 'Invalid API key' }, { status: 401 });
+    }
+    if (!observerBindingMatches(connectObserverId, observerTokenId)) {
+      return NextResponse.json({ success: false, error: 'Observer binding mismatch' }, { status: 401 });
     }
 
     // Resolve the stream credential. An observer-token login is already a valid

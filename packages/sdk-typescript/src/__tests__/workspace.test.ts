@@ -109,6 +109,23 @@ describe('Relay workspace methods', () => {
     });
   });
 
+  it('dmMessagePage() returns the raw-page cursor used for filtered pagination', async () => {
+    const { RelayCast } = await import('../relay.js');
+    const relay = new RelayCast({ apiKey: 'ot_live_test123' });
+
+    mockFetch.mockImplementation(() =>
+      mockResponse({ messages: [], next_before: 'msg_100', exhausted: false }),
+    );
+    await expect(relay.dmMessagePage('c_1', { limit: 100 })).resolves.toEqual({
+      messages: [],
+      nextBefore: 'msg_100',
+      exhausted: false,
+    });
+
+    const [url] = mockFetch.mock.calls[0]!;
+    expect(url).toBe('https://cast.agentrelay.com/v1/dm/conversations/c_1/messages?page=1&limit=100');
+  });
+
   it('agents.rotateToken() calls POST /v1/agents/:name/rotate-token', async () => {
     const { RelayCast } = await import('../relay.js');
     const relay = new RelayCast({ apiKey: 'rk_live_test123' });

@@ -661,6 +661,11 @@ export type CreateWorkspaceResponse = Camelize<Raw.CreateWorkspaceResponse>;
 export type WorkspaceLookup = Camelize<Raw.WorkspaceLookup>;
 export type SendDmResponse = Camelize<Raw.SendDmResponse>;
 export type DmMessage = Camelize<Raw.DmMessage>;
+export interface DmMessagePage {
+  messages: DmMessage[];
+  nextBefore: string | null;
+  exhausted: boolean;
+}
 export type DmConversationSummary = Camelize<Raw.DmConversationSummary>;
 export type DmConversationParticipant = Camelize<Raw.DmConversationParticipant>;
 export type DmLastMessage = Camelize<Raw.DmLastMessage>;

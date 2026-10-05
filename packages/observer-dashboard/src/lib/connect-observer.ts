@@ -2,7 +2,7 @@ import type { DmMessage, WorkspaceDmConversation } from '@relaycast/sdk';
 
 const DM_PAGE_SIZE = 100;
 
-const CREDENTIAL_PATTERN = /\b(?:rk_live|at_live|nt_live|ot_live)_[A-Za-z0-9_-]+\b/g;
+const CREDENTIAL_PATTERN = /\b(?:rk_live|at_live|nt_live|ot_live|wh_live)_[A-Za-z0-9_-]+\b/g;
 const CONNECT_INVITE_PATTERN =
   /https?:\/\/(?:www\.)?agentrelay\.com\/connect\/[A-Za-z0-9_-]+(?:\.json|\.md)?(?:\?[^\s]*)?/gi;
 
@@ -18,6 +18,13 @@ export function formatUtcTimestamp(timestamp: string): string {
   return `${date.toISOString().replace('T', ' ').replace('.000Z', 'Z').replace('Z', ' UTC')}`;
 }
 
+export function connectObserverUrlWithoutCapability(value: string): string {
+  const url = new URL(value);
+  url.searchParams.delete('key');
+  url.hash = '';
+  return url.toString();
+}
+
 export type ConnectObservedMessage = DmMessage & {
   conversationId: string;
   participants: string[];
@@ -25,10 +32,10 @@ export type ConnectObservedMessage = DmMessage & {
 
 export async function loadConnectConversationMessages(
   relay: {
-    dmMessages(
+    dmMessagePage(
       conversationId: string,
       options: { limit: number; before?: string; after?: string },
-    ): Promise<DmMessage[]>;
+    ): Promise<{ messages: DmMessage[]; nextBefore: string | null; exhausted: boolean }>;
   },
   conversation: WorkspaceDmConversation,
   after?: string,
@@ -37,22 +44,22 @@ export async function loadConnectConversationMessages(
   const seenCursors = new Set<string>();
   let before: string | undefined;
   while (true) {
-    const page = await relay.dmMessages(conversation.id, {
+    const page = await relay.dmMessagePage(conversation.id, {
       limit: DM_PAGE_SIZE,
       ...(before ? { before } : {}),
       ...(after ? { after } : {}),
     });
     messages.push(
-      ...page.map((message) => ({
+      ...page.messages.map((message) => ({
         ...message,
         conversationId: conversation.id,
         participants: conversation.participants,
       })),
     );
-    if (page.length < DM_PAGE_SIZE) break;
-    // The workspace history endpoint is ordered by descending fixed-width
-    // snowflake id and its `before` cursor is id-based, not timestamp-based.
-    const cursor = page.at(-1)?.id;
+    if (page.exhausted) break;
+    // The cursor comes from the raw server page. It must advance even when an
+    // observer filter hides every row returned to this client.
+    const cursor = page.nextBefore;
     if (!cursor || seenCursors.has(cursor)) break;
     seenCursors.add(cursor);
     before = cursor;
