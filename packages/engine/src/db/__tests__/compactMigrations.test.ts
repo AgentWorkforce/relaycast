@@ -54,7 +54,7 @@ function snapshot(handle: SqliteDbHandle) {
         const { status_updated_at: _statusUpdatedAt, ...existing } = row as Record<string, unknown>;
         return JSON.stringify(existing);
       }
-      // 0063 adds only bounded node-rotation recovery metadata. Exclude those
+      // 0066 adds only bounded node-rotation recovery metadata. Exclude those
       // nullable fields so this comparison remains byte-for-byte over every
       // pre-existing value while the explicit schema assertions below cover
       // the new columns.
@@ -118,7 +118,7 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
       if (table.name === 'agents' && original) {
         return { ...table, sql: original.sql };
       }
-      // 0063 appends four nullable recovery fields. Remove only their exact
+      // 0066 appends four nullable recovery fields. Remove only their exact
       // additive DDL so changes to every pre-existing node constraint remain
       // visible to this preservation assertion.
       if (table.name === 'nodes') {
