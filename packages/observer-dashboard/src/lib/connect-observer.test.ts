@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   connectObserverExpiryDelay,
+  connectObserverIdentity,
   connectObserverUrlWithoutCapability,
   formatUtcTimestamp,
   loadConnectConversationMessages,
   sanitizeConnectObserverText,
+  shouldInitializeConnectObserver,
 } from './connect-observer';
 import type { DmMessage, WorkspaceDmConversation } from '@relaycast/sdk';
 
@@ -38,6 +40,19 @@ describe('Relay Connect observer presentation', () => {
     expect(connectObserverExpiryDelay('2026-10-05T00:00:01.000Z', now)).toBe(1_000);
     expect(connectObserverExpiryDelay('2026-10-04T00:00:00.000Z', now)).toBe(0);
     expect(connectObserverExpiryDelay('not-a-date', now)).toBeNull();
+  });
+
+  it('does not restart Connect authentication when capability scrubbing rerenders the route', () => {
+    const identity = connectObserverIdentity('ot_room', '2026-11-05T00:00:00.000Z');
+    expect(
+      shouldInitializeConnectObserver(identity, 'ot_room', '2026-11-05T00:00:00.000Z', null),
+    ).toBe(false);
+    expect(
+      shouldInitializeConnectObserver(null, 'ot_room', '2026-11-05T00:00:00.000Z', 'ot_live_new'),
+    ).toBe(true);
+    expect(
+      shouldInitializeConnectObserver(identity, 'ot_other', '2026-11-05T00:00:00.000Z', null),
+    ).toBe(true);
   });
 
   it('paginates by message id when a full page shares one timestamp', async () => {

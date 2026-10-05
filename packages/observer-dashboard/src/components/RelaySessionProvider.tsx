@@ -5,7 +5,11 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { RelayProvider } from '@relaycast/react';
 import { setAuth } from '../lib/auth';
 import { resetActivityIfWorkspaceChanged } from '../lib/activity-store';
-import { connectObserverUrlWithoutCapability } from '../lib/connect-observer';
+import {
+  connectObserverIdentity,
+  connectObserverUrlWithoutCapability,
+  shouldInitializeConnectObserver,
+} from '../lib/connect-observer';
 
 interface Session {
   apiKey: string;
@@ -27,13 +31,23 @@ export function RelaySessionProvider({
   const [checking, setChecking] = useState(true);
   const [accessFailure, setAccessFailure] = useState<'expired' | 'unavailable' | null>(null);
   const requestSeq = useRef(0);
+  const connectIdentity = useRef<string | null>(null);
 
   useEffect(() => {
-    const seq = ++requestSeq.current;
     const observerIdParam = searchParams.get('observer_id');
     const fragmentKey = mode === 'connect' ? new URLSearchParams(window.location.hash.slice(1)).get('key') : null;
     const keyParam = searchParams.get('key') ?? fragmentKey;
     const expiresAt = searchParams.get('expires_at');
+    if (
+      mode === 'connect'
+      && !shouldInitializeConnectObserver(connectIdentity.current, observerIdParam, expiresAt, keyParam)
+    ) {
+      return;
+    }
+    if (mode === 'connect') {
+      connectIdentity.current = connectObserverIdentity(observerIdParam, expiresAt);
+    }
+    const seq = ++requestSeq.current;
     if (mode === 'connect' && keyParam) {
       // Capture the capability above, then remove it before any asynchronous
       // validation so success, rejection, expiry, and network failure all

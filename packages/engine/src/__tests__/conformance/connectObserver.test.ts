@@ -126,7 +126,7 @@ describe('Relay Connect observer capability', () => {
     });
     expect(filteredConversations.status).toBe(200);
     await expect(filteredConversations.json()).resolves.toMatchObject({
-      data: [{ id: historicalA.data.conversation_id, last_message: null }],
+      data: [{ id: historicalA.data.conversation_id, last_message: null, message_count: 2 }],
     });
     const hiddenRawPage = await stack.app.request(
       `/v1/dm/conversations/${historicalA.data.conversation_id}/messages?limit=1&page=1`,

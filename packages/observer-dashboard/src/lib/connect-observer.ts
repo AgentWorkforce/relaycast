@@ -26,6 +26,20 @@ export function connectObserverUrlWithoutCapability(value: string): string {
   return url.toString();
 }
 
+export function shouldInitializeConnectObserver(
+  previousIdentity: string | null,
+  observerId: string | null,
+  expiresAt: string | null,
+  capability: string | null,
+): boolean {
+  const identity = `${observerId ?? ''}\u0000${expiresAt ?? ''}`;
+  return previousIdentity !== identity || capability !== null;
+}
+
+export function connectObserverIdentity(observerId: string | null, expiresAt: string | null): string {
+  return `${observerId ?? ''}\u0000${expiresAt ?? ''}`;
+}
+
 export function connectObserverExpiryDelay(expiresAt: string, now = Date.now()): number | null {
   const deadline = Date.parse(expiresAt);
   if (!Number.isFinite(deadline)) return null;

@@ -19,6 +19,7 @@ import {
   observerAllowsConversation,
   observerAllowsEvent,
   observerAllowsMessage,
+  normalizeObserverFilters,
   OBSERVER_SCOPES,
 } from '../engine/observerToken.js';
 import {
@@ -503,12 +504,26 @@ workspaceRoutes.get('/dm/conversations/all', requireWorkspaceRead('dms:read', { 
     const db = c.get('db');
     const workspace = c.get('workspace');
     const observer = getObserverTokenFromContext(c);
-    const conversations = (await dmAllEngine.listAllDmConversations(db, workspace.id))
-      .filter((conversation) => observerAllowsConversation(observer, conversation.id))
-      .map((conversation) =>
-        conversation.last_message && !observerAllowsMessage(observer, conversation.last_message)
-          ? { ...conversation, last_message: null }
-          : conversation);
+    const allowedConversations = (await dmAllEngine.listAllDmConversations(db, workspace.id))
+      .filter((conversation) => observerAllowsConversation(observer, conversation.id));
+    const filters = observer ? normalizeObserverFilters(observer.filters) : null;
+    const filtersMessages = Boolean(filters?.agent_ids?.length || filters?.created_after);
+    const conversations = await Promise.all(allowedConversations.map(async (conversation) => {
+      const visibleLastMessage = conversation.last_message && !observerAllowsMessage(observer, conversation.last_message)
+        ? null
+        : conversation.last_message;
+      if (!observer || !filtersMessages) {
+        return { ...conversation, last_message: visibleLastMessage };
+      }
+      return {
+        ...conversation,
+        last_message: visibleLastMessage,
+        message_count: await dmAllEngine.countDmMessagesForWorkspace(db, workspace.id, conversation.id, {
+          agentIds: filters?.agent_ids,
+          createdAfter: filters?.created_after,
+        }),
+      };
+    }));
     return jsonOk(c, conversations);
   } catch (err: unknown) {
     return errorResponse(c, err);

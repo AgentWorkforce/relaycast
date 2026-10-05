@@ -1,4 +1,4 @@
-import { eq, and, sql, lt, gt, inArray } from 'drizzle-orm';
+import { eq, and, sql, lt, gt, gte, inArray } from 'drizzle-orm';
 import type { DmMessage, WorkspaceDmConversation } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import {
@@ -163,4 +163,25 @@ export async function getDmMessagesForWorkspace(
     metadata: publicMessageMetadata(r.metadata as Record<string, unknown> | null),
     created_at: r.createdAt.toISOString(),
   }));
+}
+
+export async function countDmMessagesForWorkspace(
+  db: Db,
+  workspaceId: string,
+  conversationId: string,
+  opts: { agentIds?: string[]; createdAfter?: string } = {},
+): Promise<number> {
+  const conditions = [
+    eq(dmConversations.id, conversationId),
+    eq(dmConversations.workspaceId, workspaceId),
+  ];
+  if (opts.agentIds?.length) conditions.push(inArray(messages.agentId, opts.agentIds));
+  if (opts.createdAfter) conditions.push(gte(messages.createdAt, new Date(opts.createdAfter)));
+
+  const [row] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(messages)
+    .innerJoin(dmConversations, eq(messages.channelId, dmConversations.channelId))
+    .where(and(...conditions));
+  return Number(row?.count ?? 0);
 }
