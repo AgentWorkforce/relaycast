@@ -7,6 +7,7 @@ import {
   formatUtcTimestamp,
   loadConnectConversationMessages,
   sanitizeConnectObserverText,
+  shouldScrubConnectObserverCapability,
   shouldInitializeConnectObserver,
 } from './connect-observer';
 import type { DmMessage, WorkspaceDmConversation } from '@relaycast/sdk';
@@ -31,6 +32,13 @@ describe('Relay Connect observer presentation', () => {
     expect(connectObserverCapability('connect', 'ot_live_query', null)).toBeNull();
     expect(connectObserverCapability('connect', 'ot_live_query', 'ot_live_fragment')).toBe('ot_live_fragment');
     expect(connectObserverCapability('workspace', 'rk_live_query', null)).toBe('rk_live_query');
+  });
+
+  it('scrubs rejected query capabilities as well as accepted fragment capabilities', () => {
+    expect(shouldScrubConnectObserverCapability('connect', 'ot_live_query', null)).toBe(true);
+    expect(shouldScrubConnectObserverCapability('connect', null, 'ot_live_fragment')).toBe(true);
+    expect(shouldScrubConnectObserverCapability('connect', null, null)).toBe(false);
+    expect(shouldScrubConnectObserverCapability('workspace', 'rk_live_query', null)).toBe(false);
   });
 
   it('removes query and fragment capabilities without removing the room binding', () => {

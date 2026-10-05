@@ -9,6 +9,7 @@ import {
   connectObserverCapability,
   connectObserverIdentity,
   connectObserverUrlWithoutCapability,
+  shouldScrubConnectObserverCapability,
   shouldInitializeConnectObserver,
 } from '../lib/connect-observer';
 
@@ -37,8 +38,9 @@ export function RelaySessionProvider({
 
   useEffect(() => {
     const observerIdParam = searchParams.get('observer_id');
+    const queryKey = searchParams.get('key');
     const fragmentKey = mode === 'connect' ? new URLSearchParams(window.location.hash.slice(1)).get('key') : null;
-    const keyParam = connectObserverCapability(mode, searchParams.get('key'), fragmentKey);
+    const keyParam = connectObserverCapability(mode, queryKey, fragmentKey);
     const expiresAt = searchParams.get('expires_at');
     const priorMode = previousMode.current;
     previousMode.current = mode;
@@ -52,7 +54,7 @@ export function RelaySessionProvider({
       connectIdentity.current = connectObserverIdentity(observerIdParam, expiresAt);
     }
     const seq = ++requestSeq.current;
-    if (mode === 'connect' && keyParam) {
+    if (shouldScrubConnectObserverCapability(mode, queryKey, fragmentKey)) {
       // Capture the capability above, then remove it before any asynchronous
       // validation so success, rejection, expiry, and network failure all
       // leave a non-replayable address-bar entry.

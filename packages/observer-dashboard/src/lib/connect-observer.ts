@@ -36,6 +36,14 @@ export function connectObserverCapability(
   return mode === 'connect' ? fragmentCapability : queryCapability;
 }
 
+export function shouldScrubConnectObserverCapability(
+  mode: 'workspace' | 'connect',
+  queryCapability: string | null,
+  fragmentCapability: string | null,
+): boolean {
+  return mode === 'connect' && (queryCapability !== null || fragmentCapability !== null);
+}
+
 export function shouldInitializeConnectObserver(
   previousMode: 'workspace' | 'connect' | null,
   previousIdentity: string | null,

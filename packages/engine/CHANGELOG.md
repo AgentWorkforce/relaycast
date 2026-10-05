@@ -15,6 +15,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `DELETE /v1/observer-tokens/:id` is idempotent for a token owned by the authenticated workspace, while missing and cross-workspace ids still return `404`.
 - DM, channel, thread, and delivery attachment hydration splits large message-ID lookups into D1-safe chunks, so full 100-message history pages stay within Cloudflare D1's bound-parameter limit.
 - `GET /v1/dm/:conversation_id/messages` lets query failures reach the global error handler for exception telemetry and host-specific error classification.
 - `POST /v1/nodes` requires an established node's current token in `X-Relaycast-Node-Token` before rotating or modifying the row; workspace-key-only enrollment remains valid for genuinely new nodes and returns `409 node_token_proof_required` without mutation for existing rows. A high-entropy `Idempotency-Key` binds the prior proof and exact request for 24 hours so a retry after a lost committed response recovers the same replacement token without another mutation. Hosts must apply `0063_node_rotation_recovery.sql` before upgrading.
