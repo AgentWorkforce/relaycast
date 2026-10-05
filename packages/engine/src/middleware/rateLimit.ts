@@ -98,7 +98,12 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
   // The rate limiter port is not workspace-scoped, so the workspace id is part
   // of the bucket key (the Cloudflare adapter previously scoped via the DO id).
   const now = Date.now();
-  const bucketKey = `${workspace.id}:${routeKey ?? 'global'}:${rateLimitWindow(now)}`;
+  // A shared observer link may have several viewers polling concurrently. Keep
+  // that traffic out of the workspace-admin bucket, and keep independently
+  // minted observer links from starving one another.
+  const observerToken = c.get('observerToken');
+  const principal = observerToken ? `observer:${observerToken.id}` : 'workspace';
+  const bucketKey = `${workspace.id}:${principal}:${routeKey ?? 'global'}:${rateLimitWindow(now)}`;
 
   // An invalid ceiling (config or hook) or a failing hook degrades to the next
   // valid one, never to no limit or to refusing everything.

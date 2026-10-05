@@ -32,6 +32,42 @@ describe('rate limit contract', () => {
     expect(identity.status).toBe(200);
   });
 
+  it('isolates observer-token traffic from workspace and other observer buckets', async () => {
+    let ratePerMin = 10;
+    stack = makeNodeStack({
+      admission: {
+        async rateLimitPerMinute() {
+          return ratePerMin;
+        },
+      },
+    });
+    const ws = await createWorkspace(stack.app, 'observer-bucket-ws');
+    const mint = async (name: string) => {
+      const response = await stack!.app.request('/v1/observer-tokens', {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${ws.workspaceKey}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ name, scopes: ['dms:read'], filters: { include_dms: true } }),
+      });
+      expect(response.status).toBe(201);
+      return ((await response.json()) as { data: { token: string } }).data.token;
+    };
+    const observerA = await mint('observer-a');
+    const observerB = await mint('observer-b');
+    ratePerMin = 4;
+
+    expect((await get('/v1/dm/conversations/all', observerA)).status).toBe(200);
+    expect((await get('/v1/dm/conversations/all', observerA)).status).toBe(200);
+    expect((await get('/v1/dm/conversations/all', observerA)).status).toBe(200);
+    expect((await get('/v1/dm/conversations/all', observerA)).status).toBe(200);
+    expect((await get('/v1/dm/conversations/all', observerA)).status).toBe(429);
+
+    expect((await get('/v1/dm/conversations/all', observerB)).status).toBe(200);
+    expect((await get('/v1/agents', ws.workspaceKey)).status).toBe(200);
+  });
+
   it('puts a bounded retry contract on a throttled response', async () => {
     stack = makeNodeStack({ rateLimitPerMinute: 1 });
     const ws = await createWorkspace(stack.app, 'retry-contract-ws');

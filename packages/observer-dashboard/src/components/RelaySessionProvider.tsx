@@ -7,6 +7,7 @@ import { login } from '../lib/auth';
 import { resetActivityIfWorkspaceChanged } from '../lib/activity-store';
 import {
   classifyConnectObserverStatus,
+  connectObserverCapability,
   connectObserverExpiryDelay,
   connectObserverIdentity,
   connectObserverRetryDelay,
@@ -69,11 +70,12 @@ export function RelaySessionProvider({
   useEffect(() => {
     const observerIdParam = searchParams.get('observer_id');
     const fragmentKey = mode === 'connect' ? new URLSearchParams(window.location.hash.slice(1)).get('key') : null;
-    const urlKey = searchParams.get('key') ?? fragmentKey;
+    // Connect links are fragment-only. A query credential is rejected and never sent.
+    const acceptedKey = connectObserverCapability(mode, searchParams.get('key'), fragmentKey);
     const expiresAt = searchParams.get('expires_at');
-    const resumesAbortedOpen = mode === 'connect' && !urlKey && Boolean(inFlight.current?.signal.aborted)
+    const resumesAbortedOpen = mode === 'connect' && !acceptedKey && Boolean(inFlight.current?.signal.aborted)
       && connectIdentity.current === connectObserverIdentity(observerIdParam, expiresAt);
-    const keyParam = urlKey ?? (resumesAbortedOpen ? capturedCapability.current : null);
+    const keyParam = acceptedKey ?? (resumesAbortedOpen ? capturedCapability.current : null);
     const priorMode = previousMode.current;
     previousMode.current = mode;
     if (

@@ -1,4 +1,4 @@
-import { isObserverToken } from '@relaycast/types';
+import { isObserverToken, isWorkspaceKey } from '@relaycast/types';
 
 /**
  * Observer-token minting for workspace-key logins.
@@ -17,6 +17,8 @@ import { isObserverToken } from '@relaycast/types';
  * dashboard sessions, and a revoked fixed name would permanently block
  * re-minting under the engine's unique (workspace_id, name) constraint.
  */
+
+import { pickRememberedEngine } from './relay-server';
 
 /** Name prefix for tokens this dashboard mints; each mint appends a unique id. */
 const DASHBOARD_OBSERVER_TOKEN_PREFIX = 'observer-dashboard';
@@ -147,4 +149,24 @@ export async function revokeObserverStreamToken(
       error
     );
   }
+}
+
+export async function revokePreviousObserverStreamToken(input: {
+  previousApiKey: string | null | undefined;
+  previousTokenId: string | null | undefined;
+  previousEngine: string | null | undefined;
+  candidates: string[];
+  nextTokenId: string | null;
+}): Promise<void> {
+  if (
+    !input.previousApiKey
+    || !isWorkspaceKey(input.previousApiKey)
+    || !input.previousTokenId
+    || input.previousTokenId === input.nextTokenId
+  ) {
+    return;
+  }
+  const previousEngine = pickRememberedEngine(input.previousEngine, input.candidates);
+  if (!previousEngine) return;
+  await revokeObserverStreamToken(previousEngine, input.previousApiKey, input.previousTokenId);
 }

@@ -3,6 +3,7 @@ import {
   CONNECT_OBSERVER_MAX_RETRIES,
   classifyConnectObserverError,
   classifyConnectObserverStatus,
+  connectObserverCapability,
   connectObserverExpiryDelay,
   connectObserverRetryDelay,
   parseRetryAfterMs,
@@ -29,10 +30,10 @@ describe('Relay Connect observer presentation', () => {
   it('redacts capability material and Connect invite URLs from observed text', () => {
     expect(
       sanitizeConnectObserverText(
-        'Use https://agentrelay.com/connect/opaque_room.md?x=1 with ot_live_secret, rk_live_admin, and wh_live_hook.',
+        'Use https://agentrelay.com/connect/opaque_room.md?x=1 or https://agentrelay.com/cloud/connect/opaque_room/join?source=dm with ot_live_secret, rk_live_admin, and wh_live_hook.',
       ),
     ).toBe(
-      'Use [Relay Connect invite redacted] with [credential redacted], [credential redacted], and [credential redacted].',
+      'Use [Relay Connect invite redacted] or [Relay Connect invite redacted] with [credential redacted], [credential redacted], and [credential redacted].',
     );
   });
 
@@ -40,6 +41,12 @@ describe('Relay Connect observer presentation', () => {
     expect(sanitizeConnectObserverText(`Use ${arCredential('observer', 1)}now.`)).toBe('Use [credential redacted]now.');
     expect(sanitizeConnectObserverText('token=ot_live_secret,next')).toBe('token=[credential redacted],next');
     expect(sanitizeConnectObserverText(`key ${arCredential('workspace', 2)}x`)).toBe('key [credential redacted]x');
+  });
+
+  it('accepts Connect capabilities only from the URL fragment', () => {
+    expect(connectObserverCapability('connect', 'ot_live_query', null)).toBeNull();
+    expect(connectObserverCapability('connect', 'ot_live_query', 'ot_live_fragment')).toBe('ot_live_fragment');
+    expect(connectObserverCapability('workspace', 'rk_live_query', null)).toBe('rk_live_query');
   });
 
   it('removes query and fragment capabilities without removing the room binding', () => {
