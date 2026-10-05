@@ -12,6 +12,10 @@ import { publicMessageMetadata } from './messageMetadata.js';
 
 type Db = ReturnType<typeof getDb>;
 
+export function dmMessagePageLimit(limit?: number): number {
+  return Math.min(Math.max(limit || 50, 1), 100);
+}
+
 export async function listAllDmConversations(db: Db, workspaceId: string): Promise<WorkspaceDmConversation[]> {
   const conversations = await db
     .select({
@@ -108,7 +112,7 @@ export async function getDmMessagesForWorkspace(
   conversationId: string,
   opts: { limit?: number; before?: string; after?: string } = {},
 ): Promise<DmMessage[]> {
-  const limit = Math.min(Math.max(opts.limit || 50, 1), 100);
+  const limit = dmMessagePageLimit(opts.limit);
 
   const [conv] = await db
     .select()

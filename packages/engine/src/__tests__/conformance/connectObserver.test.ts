@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { messages, observerTokens } from '../../db/schema.js';
+import { dmMessagePageLimit } from '../../engine/dmAll.js';
 import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
 
 async function mintConnectObserver(
@@ -53,6 +54,7 @@ describe('Relay Connect observer capability', () => {
   afterEach(() => stack.close());
 
   it('opens one room, reads historical and new DMs, and fails closed for writes, other rooms, expiry, revocation, and room deletion', async () => {
+    expect(dmMessagePageLimit(101)).toBe(100);
     const roomA = await createWorkspace(stack.app, 'connect-room-a');
     const roomB = await createWorkspace(stack.app, 'connect-room-b');
     const alice = await registerAgent(stack.app, roomA.workspaceKey, 'alice');

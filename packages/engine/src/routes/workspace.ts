@@ -535,7 +535,7 @@ workspaceRoutes.get('/dm/conversations/:conversation_id/messages', requireWorksp
     );
     const visible = msgs.filter((message) => observerAllowsMessage(getObserverTokenFromContext(c), message));
     if (c.req.query('page') === '1') {
-      const effectiveLimit = limit ?? 50;
+      const effectiveLimit = dmAllEngine.dmMessagePageLimit(limit);
       return jsonOk(c, {
         messages: visible,
         // Advance over the raw page, not the filtered result. An observer's

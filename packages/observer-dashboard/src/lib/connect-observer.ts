@@ -1,6 +1,7 @@
 import type { DmMessage, WorkspaceDmConversation } from '@relaycast/sdk';
 
 const DM_PAGE_SIZE = 100;
+const MAX_BROWSER_TIMEOUT_MS = 2_147_000_000;
 
 const CREDENTIAL_PATTERN = /\b(?:rk_live|at_live|nt_live|ot_live|wh_live)_[A-Za-z0-9_-]+\b/g;
 const CONNECT_INVITE_PATTERN =
@@ -23,6 +24,12 @@ export function connectObserverUrlWithoutCapability(value: string): string {
   url.searchParams.delete('key');
   url.hash = '';
   return url.toString();
+}
+
+export function connectObserverExpiryDelay(expiresAt: string, now = Date.now()): number | null {
+  const deadline = Date.parse(expiresAt);
+  if (!Number.isFinite(deadline)) return null;
+  return Math.max(0, Math.min(deadline - now, MAX_BROWSER_TIMEOUT_MS));
 }
 
 export type ConnectObservedMessage = DmMessage & {

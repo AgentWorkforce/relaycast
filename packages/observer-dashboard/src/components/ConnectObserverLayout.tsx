@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import { useEvent, useRelay } from '@relaycast/react';
 import { MessageSquareText, ShieldCheck } from 'lucide-react';
 import {
+  connectObserverExpiryDelay,
   formatUtcTimestamp,
   loadConnectConversationMessages,
   sanitizeConnectObserverText,
@@ -67,15 +68,22 @@ export function ConnectObserverLayout() {
 
   useEffect(() => {
     if (!expiresAt) return;
-    const deadline = Date.parse(expiresAt);
-    if (!Number.isFinite(deadline)) return;
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) {
-      setExpired(true);
-      return;
-    }
-    const timer = window.setTimeout(() => setExpired(true), remaining);
-    return () => window.clearTimeout(timer);
+    let timer: number | undefined;
+    const checkExpiry = () => {
+      const delay = connectObserverExpiryDelay(expiresAt);
+      if (delay === null) return;
+      if (delay <= 0) {
+        setExpired(true);
+        return;
+      }
+      // Browser timers use a signed 32-bit delay. Long-lived rooms therefore
+      // wake at safe checkpoints until the real deadline is reached.
+      timer = window.setTimeout(checkExpiry, delay);
+    };
+    checkExpiry();
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [expiresAt]);
 
   const expiryLabel = useMemo(() => (expiresAt ? formatUtcTimestamp(expiresAt) : null), [expiresAt]);

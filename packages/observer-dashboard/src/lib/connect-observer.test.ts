@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  connectObserverExpiryDelay,
   connectObserverUrlWithoutCapability,
   formatUtcTimestamp,
   loadConnectConversationMessages,
@@ -29,6 +30,14 @@ describe('Relay Connect observer presentation', () => {
         'https://agentrelay.com/observer/connect?observer_id=ot_room&key=ot_live_query#key=ot_live_fragment',
       ),
     ).toBe('https://agentrelay.com/observer/connect?observer_id=ot_room');
+  });
+
+  it('schedules long-lived expiry checks without overflowing browser timers', () => {
+    const now = Date.parse('2026-10-05T00:00:00.000Z');
+    expect(connectObserverExpiryDelay('2026-11-05T00:00:00.000Z', now)).toBe(2_147_000_000);
+    expect(connectObserverExpiryDelay('2026-10-05T00:00:01.000Z', now)).toBe(1_000);
+    expect(connectObserverExpiryDelay('2026-10-04T00:00:00.000Z', now)).toBe(0);
+    expect(connectObserverExpiryDelay('not-a-date', now)).toBeNull();
   });
 
   it('paginates by message id when a full page shares one timestamp', async () => {
