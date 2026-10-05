@@ -29,7 +29,9 @@ export function RelaySessionProvider({
 
   useEffect(() => {
     const seq = ++requestSeq.current;
-    const keyParam = searchParams.get('key');
+    const observerIdParam = searchParams.get('observer_id');
+    const fragmentKey = mode === 'connect' ? new URLSearchParams(window.location.hash.slice(1)).get('key') : null;
+    const keyParam = searchParams.get('key') ?? fragmentKey;
     const expiresAt = searchParams.get('expires_at');
 
     async function initSession() {
@@ -43,8 +45,20 @@ export function RelaySessionProvider({
           setAccessFailure('expired');
           return;
         }
+        if (
+          mode === 'connect' &&
+          (!observerIdParam ||
+            !/^ot_[A-Za-z0-9_-]+$/.test(observerIdParam) ||
+            (keyParam !== null && !keyParam.startsWith('ot_live_')))
+        ) {
+          setAccessFailure('unavailable');
+          return;
+        }
         if (keyParam?.startsWith('rk_live_') || keyParam?.startsWith('ot_live_')) {
-          const success = await setAuth(keyParam);
+          const success = await setAuth(
+            keyParam,
+            mode === 'connect' ? { connectObserverId: observerIdParam! } : undefined,
+          );
           if (seq !== requestSeq.current) return;
           if (!success) {
             if (mode === 'connect') {
@@ -71,7 +85,10 @@ export function RelaySessionProvider({
         const data = await res.json();
         if (seq !== requestSeq.current) return;
 
-        if (data?.authenticated && (mode !== 'connect' || data.apiKey?.startsWith('ot_live_'))) {
+        if (
+          data?.authenticated &&
+          (mode !== 'connect' || (data.apiKey?.startsWith('ot_live_') && data.connectObserverId === observerIdParam))
+        ) {
           // Drop another workspace's cached activity before this dashboard
           // mounts, so switching keys never hydrates stale cross-workspace events.
           resetActivityIfWorkspaceChanged(data.apiKey);
@@ -87,6 +104,7 @@ export function RelaySessionProvider({
             if (mode === 'connect') {
               const sanitized = new URL(window.location.href);
               sanitized.searchParams.delete('key');
+              sanitized.hash = '';
               window.history.replaceState({}, '', sanitized);
             } else {
               router.replace('/');

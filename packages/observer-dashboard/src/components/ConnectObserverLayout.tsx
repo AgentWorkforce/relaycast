@@ -1,68 +1,50 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useEvent, useRelay } from '@relaycast/react';
 import { MessageSquareText, ShieldCheck } from 'lucide-react';
-import { formatUtcTimestamp, sanitizeConnectObserverText } from '../lib/connect-observer';
-import type { DmMessage, WorkspaceDmConversation } from '@relaycast/sdk';
+import {
+  formatUtcTimestamp,
+  loadConnectConversationMessages,
+  sanitizeConnectObserverText,
+  type ConnectObservedMessage,
+} from '../lib/connect-observer';
 
-const PAGE_SIZE = 100;
 const REFRESH_INTERVAL_MS = 15_000;
-
-type ObservedMessage = DmMessage & {
-  conversationId: string;
-  participants: string[];
-};
-
-async function loadConversationMessages(
-  relay: ReturnType<typeof useRelay>,
-  conversation: WorkspaceDmConversation,
-): Promise<ObservedMessage[]> {
-  const messages: ObservedMessage[] = [];
-  const seenCursors = new Set<string>();
-  let before: string | undefined;
-  while (true) {
-    const page = await relay.dmMessages(conversation.id, {
-      limit: PAGE_SIZE,
-      ...(before ? { before } : {}),
-    });
-    messages.push(
-      ...page.map((message) => ({
-        ...message,
-        conversationId: conversation.id,
-        participants: conversation.participants,
-      })),
-    );
-    if (page.length < PAGE_SIZE) break;
-    const oldest = [...page].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))[0];
-    if (!oldest || seenCursors.has(oldest.id)) break;
-    seenCursors.add(oldest.id);
-    before = oldest.id;
-  }
-  return messages;
-}
 
 export function ConnectObserverLayout() {
   const relay = useRelay();
   const searchParams = useSearchParams();
   const expiresAt = searchParams.get('expires_at');
-  const [messages, setMessages] = useState<ObservedMessage[]>([]);
+  const [messages, setMessages] = useState<ConnectObservedMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [unavailable, setUnavailable] = useState(false);
   const [expired, setExpired] = useState(Boolean(expiresAt && Date.parse(expiresAt) <= Date.now()));
+  const messageCache = useRef(new Map<string, ConnectObservedMessage>());
+  const newestByConversation = useRef(new Map<string, string>());
+  const refreshInFlight = useRef(false);
 
   const refresh = useCallback(async () => {
-    if (expired) return;
+    if (expired || refreshInFlight.current) return;
+    refreshInFlight.current = true;
     try {
       const conversations = await relay.allDmConversations();
-      const pages = await Promise.all(
-        conversations.map((conversation) => loadConversationMessages(relay, conversation)),
-      );
-      const unique = new Map<string, ObservedMessage>();
-      for (const message of pages.flat()) unique.set(message.id, message);
+      // Read conversations sequentially so a large room does not burst through
+      // the workspace request budget. After the initial history walk, only
+      // messages newer than the remembered snowflake are requested.
+      for (const conversation of conversations) {
+        const previousNewest = newestByConversation.current.get(conversation.id);
+        const page = await loadConnectConversationMessages(relay, conversation, previousNewest);
+        for (const message of page) messageCache.current.set(message.id, message);
+        const newest = page.reduce<string | undefined>(
+          (candidate, message) => (candidate === undefined || message.id > candidate ? message.id : candidate),
+          previousNewest,
+        );
+        if (newest) newestByConversation.current.set(conversation.id, newest);
+      }
       setMessages(
-        [...unique.values()].sort(
+        [...messageCache.current.values()].sort(
           (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id),
         ),
       );
@@ -71,6 +53,7 @@ export function ConnectObserverLayout() {
       setUnavailable(true);
     } finally {
       setLoading(false);
+      refreshInFlight.current = false;
     }
   }, [expired, relay]);
 

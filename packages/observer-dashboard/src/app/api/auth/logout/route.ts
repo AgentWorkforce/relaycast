@@ -1,9 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import {
-  pickRememberedEngine,
-  resolveRelayServerCandidatesFromRequest,
-} from '../../../../lib/relay-server';
+import { pickRememberedEngine, resolveRelayServerCandidatesFromRequest } from '../../../../lib/relay-server';
 import { revokeObserverStreamToken } from '../../../../lib/observer-token';
 
 export const runtime = 'edge';
@@ -12,6 +9,7 @@ const COOKIE_NAME = 'relaycast_key';
 const AGENT_COOKIE_NAME = 'relaycast_agent_token';
 const WS_TOKEN_COOKIE_NAME = 'relaycast_ws_token';
 const WS_TOKEN_ID_COOKIE_NAME = 'relaycast_ws_token_id';
+const CONNECT_OBSERVER_ID_COOKIE_NAME = 'relaycast_connect_observer_id';
 const ENGINE_COOKIE_NAME = 'relaycast_engine';
 
 /**
@@ -31,7 +29,7 @@ export async function POST(request: NextRequest) {
   if (wsTokenId && adminKey?.startsWith('rk_live_')) {
     const baseUrl = pickRememberedEngine(
       cookieStore.get(ENGINE_COOKIE_NAME)?.value,
-      resolveRelayServerCandidatesFromRequest(request)
+      resolveRelayServerCandidatesFromRequest(request),
     );
     if (baseUrl) {
       await revokeObserverStreamToken(baseUrl, adminKey, wsTokenId);
@@ -42,6 +40,7 @@ export async function POST(request: NextRequest) {
   cookieStore.delete(AGENT_COOKIE_NAME);
   cookieStore.delete(WS_TOKEN_COOKIE_NAME);
   cookieStore.delete(WS_TOKEN_ID_COOKIE_NAME);
+  cookieStore.delete(CONNECT_OBSERVER_ID_COOKIE_NAME);
   cookieStore.delete(ENGINE_COOKIE_NAME);
   return NextResponse.json({ success: true });
 }

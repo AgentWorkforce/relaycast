@@ -1,13 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import {
-  resolveRelayServerCandidatesFromRequest,
-  selectEngineForKey,
-} from '../../../../lib/relay-server';
-import {
-  mintObserverStreamToken,
-  revokeObserverStreamToken,
-} from '../../../../lib/observer-token';
+import { resolveRelayServerCandidatesFromRequest, selectEngineForKey } from '../../../../lib/relay-server';
+import { mintObserverStreamToken, revokeObserverStreamToken } from '../../../../lib/observer-token';
 
 export const runtime = 'edge';
 
@@ -15,6 +9,7 @@ const COOKIE_NAME = 'relaycast_key';
 const AGENT_COOKIE_NAME = 'relaycast_agent_token';
 const WS_TOKEN_COOKIE_NAME = 'relaycast_ws_token';
 const WS_TOKEN_ID_COOKIE_NAME = 'relaycast_ws_token_id';
+const CONNECT_OBSERVER_ID_COOKIE_NAME = 'relaycast_connect_observer_id';
 const ENGINE_COOKIE_NAME = 'relaycast_engine';
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 
@@ -37,36 +32,31 @@ const COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
  */
 export async function POST(request: NextRequest) {
   try {
-    const { apiKey } = await request.json();
+    const { apiKey, connectObserverId } = await request.json();
 
     if (typeof apiKey !== 'string' || (!apiKey.startsWith('rk_live_') && !apiKey.startsWith('ot_live_'))) {
-      return NextResponse.json(
-        { success: false, error: 'Invalid API key format' },
-        { status: 400 }
-      );
+      return NextResponse.json({ success: false, error: 'Invalid API key format' }, { status: 400 });
+    }
+    if (
+      connectObserverId !== undefined &&
+      (typeof connectObserverId !== 'string' ||
+        !/^ot_[A-Za-z0-9_-]+$/.test(connectObserverId) ||
+        !apiKey.startsWith('ot_live_'))
+    ) {
+      return NextResponse.json({ success: false, error: 'Invalid Connect observer binding' }, { status: 400 });
     }
 
     // Always probe the server-configured candidates (prevents SSRF). The first
     // engine that accepts the key wins; gateway is tried before legacy api.
     const candidates = resolveRelayServerCandidatesFromRequest(request);
-    const {
-      baseUrl: relayServer,
-      rejectedAny,
-      inconclusiveAny,
-    } = await selectEngineForKey(candidates, apiKey);
+    const { baseUrl: relayServer, rejectedAny, inconclusiveAny } = await selectEngineForKey(candidates, apiKey);
 
     if (!relayServer) {
       if (!rejectedAny || inconclusiveAny) {
-        return NextResponse.json(
-          { success: false, error: 'Unable to validate API key' },
-          { status: 503 }
-        );
+        return NextResponse.json({ success: false, error: 'Unable to validate API key' }, { status: 503 });
       }
 
-      return NextResponse.json(
-        { success: false, error: 'Invalid API key' },
-        { status: 401 }
-      );
+      return NextResponse.json({ success: false, error: 'Invalid API key' }, { status: 401 });
     }
 
     // Resolve the stream credential. An observer-token login is already a valid
@@ -83,9 +73,7 @@ export async function POST(request: NextRequest) {
         wsToken = minted.token;
         wsTokenId = minted.id;
       } else {
-        console.error(
-          '[api/auth/login] Failed to mint observer stream token for workspace key'
-        );
+        console.error('[api/auth/login] Failed to mint observer stream token for workspace key');
       }
     }
 
@@ -99,6 +87,12 @@ export async function POST(request: NextRequest) {
     };
 
     cookieStore.set(COOKIE_NAME, apiKey, cookieOptions);
+
+    if (connectObserverId) {
+      cookieStore.set(CONNECT_OBSERVER_ID_COOKIE_NAME, connectObserverId, cookieOptions);
+    } else {
+      cookieStore.delete(CONNECT_OBSERVER_ID_COOKIE_NAME);
+    }
 
     // Agent cookie remains for compatibility with existing client shape.
     // Both workspace keys and observer tokens are accepted by the read-only
@@ -119,11 +113,7 @@ export async function POST(request: NextRequest) {
     // orphan tokens that stay active until their 30-day expiry. Best effort;
     // only a workspace key can revoke, and a different key just 404s harmlessly.
     const previousWsTokenId = cookieStore.get(WS_TOKEN_ID_COOKIE_NAME)?.value;
-    if (
-      previousWsTokenId &&
-      previousWsTokenId !== wsTokenId &&
-      apiKey.startsWith('rk_live_')
-    ) {
+    if (previousWsTokenId && previousWsTokenId !== wsTokenId && apiKey.startsWith('rk_live_')) {
       await revokeObserverStreamToken(relayServer, apiKey, previousWsTokenId);
     }
     // Remember the minted token id so logout can revoke it on the engine.
@@ -146,9 +136,6 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error('[api/auth/login] Error:', error);
-    return NextResponse.json(
-      { success: false, error: 'Login failed' },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: false, error: 'Login failed' }, { status: 500 });
   }
 }
