@@ -104,11 +104,13 @@ describe('revokeObserverStreamToken', () => {
   it('sends DELETE for the token id with the admin key', async () => {
     const fetchMock = mockFetch(new Response(null, { status: 204 }));
 
-    await revokeObserverStreamToken(
-      'https://cast.agentrelay.com',
-      'rk_live_admin',
-      'ot_1'
-    );
+    await expect(
+      revokeObserverStreamToken(
+        'https://cast.agentrelay.com',
+        'rk_live_admin',
+        'ot_1'
+      )
+    ).resolves.toBe(true);
 
     expect(fetchMock).toHaveBeenCalledWith(
       'https://cast.agentrelay.com/v1/observer-tokens/ot_1',
@@ -129,7 +131,7 @@ describe('revokeObserverStreamToken', () => {
         'rk_live_admin',
         'ot_1'
       )
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(false);
   });
 });
 
@@ -147,12 +149,41 @@ describe('revokePreviousObserverStreamToken', () => {
       previousTokenId: 'ot_previous',
       previousEngine: 'https://cast.agentrelay.com',
       candidates: ['https://cast.agentrelay.com'],
+      nextApiKey: 'ot_live_next',
       nextTokenId: null,
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
       'https://cast.agentrelay.com/v1/observer-tokens/ot_previous',
-      expect.objectContaining({ headers: { Authorization: 'Bearer rk_live_previous' } }),
+      expect.objectContaining({
+        method: 'DELETE',
+        headers: { Authorization: 'Bearer rk_live_previous' },
+      }),
+    );
+  });
+
+  it('retries revocation with a newly validated rotated workspace key', async () => {
+    const fetchMock = mockFetch(
+      jsonResponse({ ok: false }, 401),
+      new Response(null, { status: 204 }),
+    );
+
+    await revokePreviousObserverStreamToken({
+      previousApiKey: 'rk_live_rotated',
+      previousTokenId: 'ot_previous',
+      previousEngine: 'https://cast.agentrelay.com',
+      candidates: ['https://cast.agentrelay.com'],
+      nextApiKey: 'rk_live_current',
+      nextTokenId: 'ot_next',
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      'https://cast.agentrelay.com/v1/observer-tokens/ot_previous',
+      expect.objectContaining({
+        method: 'DELETE',
+        headers: { Authorization: 'Bearer rk_live_current' },
+      }),
     );
   });
 
@@ -163,6 +194,7 @@ describe('revokePreviousObserverStreamToken', () => {
       previousTokenId: 'ot_same',
       previousEngine: 'https://cast.agentrelay.com',
       candidates: ['https://cast.agentrelay.com'],
+      nextApiKey: 'rk_live_previous',
       nextTokenId: 'ot_same',
     });
     await revokePreviousObserverStreamToken({
@@ -170,6 +202,7 @@ describe('revokePreviousObserverStreamToken', () => {
       previousTokenId: 'ot_previous',
       previousEngine: 'https://attacker.example.com',
       candidates: ['https://cast.agentrelay.com'],
+      nextApiKey: 'rk_live_next',
       nextTokenId: null,
     });
     expect(fetchMock).not.toHaveBeenCalled();

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { EntitlementsProvider, PlanLimits, Workspace } from '../../ports/index.js';
 import { InProcessRateLimiter } from '../../adapters/node/rate-limit.js';
 import { createWorkspace, makeNodeStack, type TestStack } from './harness.js';
@@ -21,7 +21,10 @@ function entitlementsWithRate(ratePerMin: number): EntitlementsProvider {
 describe('rate limit contract', () => {
   let stack: TestStack | undefined;
 
-  afterEach(() => stack?.close());
+  afterEach(() => {
+    stack?.close();
+    vi.restoreAllMocks();
+  });
 
   const get = (path: string, key: string) =>
     (stack as TestStack).app.request(path, { headers: { authorization: `Bearer ${key}` } });
@@ -49,7 +52,8 @@ describe('rate limit contract', () => {
   });
 
   it('isolates observer-token traffic from workspace and other observer buckets', async () => {
-    let ratePerMin = 10;
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-10-05T12:00:00.000Z'));
+    let ratePerMin = 1_000;
     stack = makeNodeStack({
       entitlements: {
         ...entitlementsWithRate(ratePerMin),
@@ -71,17 +75,26 @@ describe('rate limit contract', () => {
       expect(response.status).toBe(201);
       return ((await response.json()) as { data: { token: string } }).data.token;
     };
-    const observerA = await mint('observer-a');
-    const observerB = await mint('observer-b');
-    ratePerMin = 4;
+    const observers = await Promise.all(
+      Array.from({ length: 11 }, (_, index) => mint(`observer-${index}`)),
+    );
+    ratePerMin = 20;
 
-    expect((await get('/v1/dm/conversations/all', observerA)).status).toBe(200);
-    expect((await get('/v1/dm/conversations/all', observerA)).status).toBe(200);
-    expect((await get('/v1/dm/conversations/all', observerA)).status).toBe(200);
-    expect((await get('/v1/dm/conversations/all', observerA)).status).toBe(200);
-    expect((await get('/v1/dm/conversations/all', observerA)).status).toBe(429);
+    for (const observer of observers.slice(0, 10)) {
+      expect((await get('/v1/dm/conversations/all', observer)).status).toBe(200);
+      expect((await get('/v1/dm/conversations/all', observer)).status).toBe(200);
+    }
+    const perLinkThrottle = await get('/v1/dm/conversations/all', observers[0]);
+    expect(perLinkThrottle.status).toBe(429);
+    expect(perLinkThrottle.headers.get('X-RateLimit-Limit')).toBe('2');
 
-    expect((await get('/v1/dm/conversations/all', observerB)).status).toBe(200);
+    // A fresh eleventh link has per-link capacity, but the shared observer
+    // ceiling prevents minted links from multiplying workspace throughput.
+    const aggregateThrottle = await get('/v1/dm/conversations/all', observers[10]);
+    expect(aggregateThrottle.status).toBe(429);
+    expect(aggregateThrottle.headers.get('X-RateLimit-Limit')).toBe('20');
+
+    // Observer traffic remains isolated from the historical admin bucket.
     expect((await get('/v1/agents', ws.workspaceKey)).status).toBe(200);
   });
 

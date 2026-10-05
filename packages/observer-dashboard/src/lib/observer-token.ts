@@ -128,9 +128,9 @@ export async function revokeObserverStreamToken(
   baseUrl: string,
   adminKey: string,
   tokenId: string
-): Promise<void> {
+): Promise<boolean> {
   try {
-    await fetch(
+    const response = await fetch(
       new URL(
         `/v1/observer-tokens/${encodeURIComponent(tokenId)}`,
         baseUrl
@@ -141,11 +141,13 @@ export async function revokeObserverStreamToken(
         cache: 'no-store',
       }
     );
+    return response.ok;
   } catch (error) {
     console.error(
       '[revokeObserverStreamToken] Failed to revoke observer token:',
       error
     );
+    return false;
   }
 }
 
@@ -154,16 +156,21 @@ export async function revokePreviousObserverStreamToken(input: {
   previousTokenId: string | null | undefined;
   previousEngine: string | null | undefined;
   candidates: string[];
+  nextApiKey: string | null | undefined;
   nextTokenId: string | null;
 }): Promise<void> {
   if (
-    !input.previousApiKey?.startsWith('rk_live_')
-    || !input.previousTokenId
+    !input.previousTokenId
     || input.previousTokenId === input.nextTokenId
   ) {
     return;
   }
   const previousEngine = pickRememberedEngine(input.previousEngine, input.candidates);
   if (!previousEngine) return;
-  await revokeObserverStreamToken(previousEngine, input.previousApiKey, input.previousTokenId);
+  const adminKeys = [input.previousApiKey, input.nextApiKey]
+    .filter((key): key is string => Boolean(key?.startsWith('rk_live_')))
+    .filter((key, index, keys) => keys.indexOf(key) === index);
+  for (const adminKey of adminKeys) {
+    if (await revokeObserverStreamToken(previousEngine, adminKey, input.previousTokenId)) return;
+  }
 }

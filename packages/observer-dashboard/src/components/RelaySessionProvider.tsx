@@ -44,6 +44,12 @@ export function RelaySessionProvider({
     const expiresAt = searchParams.get('expires_at');
     const priorMode = previousMode.current;
     previousMode.current = mode;
+    if (shouldScrubConnectObserverCapability(mode, queryKey, fragmentKey)) {
+      // Scrub even when this is a same-room rerender that does not need to
+      // restart authentication. Rejected query credentials must never linger
+      // in browser history or a later referrer.
+      window.history.replaceState({}, '', connectObserverUrlWithoutCapability(window.location.href));
+    }
     if (
       mode === 'connect'
       && !shouldInitializeConnectObserver(priorMode, connectIdentity.current, observerIdParam, expiresAt, keyParam)
@@ -54,12 +60,6 @@ export function RelaySessionProvider({
       connectIdentity.current = connectObserverIdentity(observerIdParam, expiresAt);
     }
     const seq = ++requestSeq.current;
-    if (shouldScrubConnectObserverCapability(mode, queryKey, fragmentKey)) {
-      // Capture the capability above, then remove it before any asynchronous
-      // validation so success, rejection, expiry, and network failure all
-      // leave a non-replayable address-bar entry.
-      window.history.replaceState({}, '', connectObserverUrlWithoutCapability(window.location.href));
-    }
     // An identity change is an authorization boundary. Unmount the room view
     // immediately so its message cache cannot survive into another session.
     setChecking(true);

@@ -30,7 +30,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
-- Connect observer links redact both public join URL forms, accept capabilities only from URL fragments, isolate viewer rate-limit buckets, and clean up a prior dashboard stream token when the browser changes sessions.
+- Connect observer messages redact both public Relay Connect invite URL forms.
+- Connect observer links accept capabilities only from URL fragments and remove rejected credentials from browser history; reopen the original link if first-open validation fails.
+- Observer links have isolated, bounded rate-limit budgets that do not consume the workspace-admin allowance or multiply the workspace observer ceiling.
+- Changing dashboard sessions cleans up the prior dashboard-minted stream token, including after a workspace-key rotation.
 - Repeating an observer-token revocation now succeeds for the owning workspace while missing and cross-workspace ids remain indistinguishable.
 - Cloudflare D1 no longer rejects full 100-message history reads when attachment metadata is hydrated.
 - DM history query failures reach Relaycast Cloud's D1 overload handler and shared exception telemetry instead of becoming opaque route-level 500 responses.
