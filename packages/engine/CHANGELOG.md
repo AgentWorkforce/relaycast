@@ -23,6 +23,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `actorConfigFromEnv(env)` reads the actor's engine config from the self-host variables and throws `ConfigError` on a bad value; like `bin/serve.ts`, it trims `RELAYCAST_INTERNAL_SECRET` and treats blank as unset.
 - `InProcessRealtime.setBackgroundScheduler` hands the adapter's fire-and-forget work to the host; unset, it runs detached as before.
 - `loadActiveObserverToken(db, workspaceId, tokenId)` is exported from the node adapter.
+- `RateLimiter.checkMany` counts a batch of buckets in one decision: every bucket is accepted or every count stays unchanged. Authenticated requests call it, including workspace-admin traffic.
 - `@relaycast/engine/adapters/actor`: attached sockets are kept in the actor's `_actor_sockets` table (`ACTOR_SOCKETS_TABLE`, `ActorSocketTable`) and replayed on the next activation, so an actor's sleep costs its clients no reconnect.
 - `InProcessRealtime.attachNodeSocket` takes `{ connectionId, earlyDrain }`; `nodeConnectionState` / `restoreNodeConnectionState` / `providerConnectionId` expose a node connection's binding to hosts that persist it.
 - `ensureActorSchema(sql)` applies the engine migrations and the adapter's tables inside an actor call; read-only when current.
@@ -45,6 +46,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Prevent stalled webhook delivery attempts from overwriting a newer attempt’s status or retry deadline after their lease is reclaimed.
 - Reduce database work during settled webhook outbox cleanup while preserving retention and deletion counts (migration `0082_pending_events_settled_retention.sql`).
+- `DELETE /v1/observer-tokens/:id` is idempotent for a token owned by the authenticated workspace, while missing and cross-workspace ids still return `404`.
+- Observer-authenticated reads use a bounded per-token budget within a shared workspace-observer ceiling and do not spend the workspace-admin bucket. Workspace-admin counters keep their existing bucket keys.
 - A direct agent whose client reconnects before the server notices the old socket stays online: the new socket supersedes the old one instead of being refused `provider_instance_conflict`, on the Node self-host and the workspace actor.
 - After such a reconnect the agent's actions are invokable at once, instead of answering 503 `handler_unavailable` until the next heartbeat.
 - Frames a superseded node socket still had queued are answered `connection_superseded`, so a stale `node.deregister` no longer removes the new socket's binding and actions; frames settling in-flight work still pass.

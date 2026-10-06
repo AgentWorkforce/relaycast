@@ -146,14 +146,17 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
     })));
     for (const [index, bucket] of bucketLimits.entries()) {
       const result = results[index];
-      if (!result.allowed) {
-        c.header('X-RateLimit-Limit', String(bucket.limit));
-        c.header('X-RateLimit-Remaining', String(result.remaining ?? Math.max(0, bucket.limit - result.count)));
+      if (!result?.allowed) {
+        const responseLimit = bucket.limit;
+        const count = result?.count ?? responseLimit;
+        const remaining = result?.remaining ?? Math.max(0, responseLimit - count);
+        c.header('X-RateLimit-Limit', String(responseLimit));
+        c.header('X-RateLimit-Remaining', String(remaining));
         c.header('X-RateLimit-Reset', String(Math.ceil(resetAt / 1000)));
         // Transient by construction: the bucket is keyed to this minute, so the
         // advertised wait is the real one.
         setRetryContract(c, resetAt, now);
-        return jsonError(c, 'rate_limit_exceeded', `Rate limit exceeded. ${bucket.limit} requests per minute allowed.`, 429);
+        return jsonError(c, 'rate_limit_exceeded', `Rate limit exceeded. ${responseLimit} requests per minute allowed.`, 429);
       }
       if (!tightestResult || result.remaining < tightestResult.remaining) {
         tightestResult = { limit: bucket.limit, count: result.count, remaining: result.remaining };

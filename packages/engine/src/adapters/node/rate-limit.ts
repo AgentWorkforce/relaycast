@@ -38,7 +38,7 @@ export class InProcessRateLimiter implements RateLimiter {
     // observer bucket. The synchronous decision and updates make this atomic
     // within the in-process limiter's event loop.
     if (capacity.every(Boolean)) {
-      for (const bucket of buckets) bucket.count += 1;
+      for (const bucket of new Set(buckets)) bucket.count += 1;
     }
     return args.map(({ limit }, index) => ({
       count: buckets[index].count,
