@@ -196,4 +196,15 @@ describe('in-process rate limiter', () => {
     expect(after.count).toBe(1);
     expect(after.remaining).toBe(1);
   });
+
+  it('counts a repeated bucket key only once in a batch', async () => {
+    const limiter = new InProcessRateLimiter();
+    const duplicate = { bucketKey: 'same-observer-bucket', limit: 1, windowMs: 60_000 };
+
+    expect((await limiter.checkMany([duplicate, duplicate])).map((result) => result.allowed))
+      .toEqual([true, true]);
+    const after = await limiter.check(duplicate);
+    expect(after.allowed).toBe(false);
+    expect(after.count).toBe(1);
+  });
 });

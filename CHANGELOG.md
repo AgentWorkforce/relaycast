@@ -16,7 +16,15 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Connect observer messages redact both public Relay Connect invite URL forms.
+- Connect observer links accept capabilities only from URL fragments and remove rejected credentials from browser history; reopen the original link if first-open validation fails.
+- Observer links have isolated, bounded rate-limit budgets that do not consume the workspace-admin allowance or multiply the workspace observer ceiling.
+- Changing dashboard sessions cleans up the prior dashboard-minted stream token, including after a workspace-key rotation.
+- Repeating an observer-token revocation now succeeds for the owning workspace while missing and cross-workspace ids remain indistinguishable.
 
 ## [9.0.0] - 2026-10-06
 
@@ -32,11 +40,6 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
-- Connect observer messages redact both public Relay Connect invite URL forms.
-- Connect observer links accept capabilities only from URL fragments and remove rejected credentials from browser history; reopen the original link if first-open validation fails.
-- Observer links have isolated, bounded rate-limit budgets that do not consume the workspace-admin allowance or multiply the workspace observer ceiling.
-- Changing dashboard sessions cleans up the prior dashboard-minted stream token, including after a workspace-key rotation.
-- Repeating an observer-token revocation now succeeds for the owning workspace while missing and cross-workspace ids remain indistinguishable.
 - Cloudflare D1 no longer rejects full 100-message history reads when attachment metadata is hydrated.
 - DM history query failures reach Relaycast Cloud's D1 overload handler and shared exception telemetry instead of becoming opaque route-level 500 responses.
 - Node enrollment no longer lets a workspace key alone rotate, rename, reshape, or reset an established node; existing rows require proof of their current node token while genuinely new node IDs remain enrollable. Keyed rotations retain a bounded, request-bound recovery record so a lost committed response returns the same replacement token on retry. Hosts must apply `0063_node_rotation_recovery.sql` before upgrading.
