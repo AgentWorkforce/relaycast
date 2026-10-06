@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { EntitlementsProvider, PlanLimits, Workspace } from '../../ports/index.js';
 import { InProcessRateLimiter } from '../../adapters/node/rate-limit.js';
 import { createWorkspace, makeNodeStack, type TestStack } from './harness.js';
@@ -21,7 +21,10 @@ function entitlementsWithRate(ratePerMin: number): EntitlementsProvider {
 describe('rate limit contract', () => {
   let stack: TestStack | undefined;
 
-  afterEach(() => stack?.close());
+  afterEach(() => {
+    stack?.close();
+    vi.restoreAllMocks();
+  });
 
   const get = (path: string, key: string) =>
     (stack as TestStack).app.request(path, { headers: { authorization: `Bearer ${key}` } });
@@ -46,6 +49,66 @@ describe('rate limit contract', () => {
 
     const identity = await get('/v1/workspace', ws.workspaceKey);
     expect(identity.status).toBe(200);
+  });
+
+  it('isolates observer-token traffic from workspace and other observer buckets', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-10-05T12:00:00.000Z'));
+    let ratePerMin = 1_000;
+    stack = makeNodeStack({
+      entitlements: {
+        ...entitlementsWithRate(ratePerMin),
+        async getLimits(workspace: Workspace): Promise<PlanLimits> {
+          return entitlementsWithRate(ratePerMin).getLimits(workspace);
+        },
+      },
+    });
+    const ws = await createWorkspace(stack.app, 'observer-bucket-ws');
+    const mint = async (name: string) => {
+      const response = await stack!.app.request('/v1/observer-tokens', {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${ws.workspaceKey}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ name, scopes: ['dms:read'], filters: { include_dms: true } }),
+      });
+      expect(response.status).toBe(201);
+      return ((await response.json()) as { data: { token: string } }).data.token;
+    };
+    const observers = await Promise.all(
+      Array.from({ length: 11 }, (_, index) => mint(`observer-${index}`)),
+    );
+    ratePerMin = 20;
+
+    for (const observer of observers.slice(0, 9)) {
+      expect((await get('/v1/dm/conversations/all', observer)).status).toBe(200);
+      expect((await get('/v1/dm/conversations/all', observer)).status).toBe(200);
+    }
+    expect((await get('/v1/dm/conversations/all', observers[9])).status).toBe(200);
+    const perLinkThrottle = await get('/v1/dm/conversations/all', observers[0]);
+    expect(perLinkThrottle.status).toBe(429);
+    expect(perLinkThrottle.headers.get('X-RateLimit-Limit')).toBe('2');
+
+    // The shared observer bucket is now tighter than this fresh link, so the
+    // successful response must advertise the aggregate limit and remaining.
+    const finalAggregateSlot = await get('/v1/dm/conversations/all', observers[10]);
+    expect(finalAggregateSlot.status).toBe(200);
+    expect(finalAggregateSlot.headers.get('X-RateLimit-Limit')).toBe('20');
+    expect(finalAggregateSlot.headers.get('X-RateLimit-Remaining')).toBe('0');
+
+    // A link that still has per-link capacity cannot exceed the shared ceiling.
+    const aggregateThrottle = await get('/v1/dm/conversations/all', observers[9]);
+    expect(aggregateThrottle.status).toBe(429);
+    expect(aggregateThrottle.headers.get('X-RateLimit-Limit')).toBe('20');
+
+    // Hitting the shared ceiling must not spend this link's remaining slots.
+    ratePerMin = 24;
+    expect((await get('/v1/dm/conversations/all', observers[9])).status).toBe(200);
+    expect((await get('/v1/dm/conversations/all', observers[9])).status).toBe(200);
+    expect((await get('/v1/dm/conversations/all', observers[9])).status).toBe(429);
+
+    // Observer traffic remains isolated from the historical admin bucket.
+    expect((await get('/v1/agents', ws.workspaceKey)).status).toBe(200);
   });
 
   it('puts a bounded retry contract on a throttled response', async () => {
@@ -115,5 +178,33 @@ describe('in-process rate limiter', () => {
     expect(afterRetries.allowed).toBe(false);
     expect(afterRetries.count).toBe(2);
     expect(afterRetries.remaining).toBe(0);
+  });
+
+  it('does not consume either bucket when a batch is rejected', async () => {
+    const limiter = new InProcessRateLimiter();
+    const args = [
+      { bucketKey: 'observer-link', limit: 2, windowMs: 60_000 },
+      { bucketKey: 'observers-shared', limit: 1, windowMs: 60_000 },
+    ];
+    await limiter.check({ bucketKey: 'observers-shared', limit: 1, windowMs: 60_000 });
+
+    const rejected = await limiter.checkMany(args);
+    expect(rejected.map((result) => result.allowed)).toEqual([true, false]);
+    expect(rejected.map((result) => result.count)).toEqual([0, 1]);
+
+    const after = await limiter.check({ bucketKey: 'observer-link', limit: 2, windowMs: 60_000 });
+    expect(after.count).toBe(1);
+    expect(after.remaining).toBe(1);
+  });
+
+  it('counts a repeated bucket key only once in a batch', async () => {
+    const limiter = new InProcessRateLimiter();
+    const duplicate = { bucketKey: 'same-observer-bucket', limit: 1, windowMs: 60_000 };
+
+    expect((await limiter.checkMany([duplicate, duplicate])).map((result) => result.allowed))
+      .toEqual([true, true]);
+    const after = await limiter.check(duplicate);
+    expect(after.allowed).toBe(false);
+    expect(after.count).toBe(1);
   });
 });

@@ -111,8 +111,16 @@ observerTokenRoutes.post('/observer-tokens/:id/rotate', requireWorkspaceKey, rat
 
 observerTokenRoutes.delete('/observer-tokens/:id', requireWorkspaceKey, rateLimit, async (c) => {
   try {
-    const revoked = await revokeObserverToken(c.get('db'), c.get('workspace').id, c.req.param('id'));
-    if (!revoked) return observerTokenNotFound(c);
+    const db = c.get('db');
+    const workspaceId = c.get('workspace').id;
+    const id = c.req.param('id');
+    const revoked = await revokeObserverToken(db, workspaceId, id);
+    // DELETE is idempotent for a token that belongs to this workspace. This
+    // lets a host safely retry revocation after losing the first response while
+    // still hiding missing and cross-workspace token ids behind the same 404.
+    if (!revoked && !(await getObserverToken(db, workspaceId, id))) {
+      return observerTokenNotFound(c);
+    }
     return jsonNoContent(c);
   } catch (err: unknown) {
     return errorResponse(c, err);

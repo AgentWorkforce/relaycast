@@ -5,7 +5,7 @@ const MAX_BROWSER_TIMEOUT_MS = 2_147_000_000;
 
 const CREDENTIAL_PATTERN = /\b(?:rk_live|at_live|nt_live|ot_live|wh_live)_[A-Za-z0-9_-]+\b/g;
 const CONNECT_INVITE_PATTERN =
-  /https?:\/\/(?:www\.)?agentrelay\.com\/connect\/[A-Za-z0-9_-]+(?:\.json|\.md)?(?:\?[^\s]*)?/gi;
+  /https?:\/\/(?:www\.)?agentrelay\.com\/(?:connect\/[A-Za-z0-9_-]+(?:\.json|\.md)?|cloud\/connect\/[A-Za-z0-9_-]+\/join)(?:\?[^\s]*)?/gi;
 
 export function sanitizeConnectObserverText(text: string): string {
   return text
@@ -24,6 +24,24 @@ export function connectObserverUrlWithoutCapability(value: string): string {
   url.searchParams.delete('key');
   url.hash = '';
   return url.toString();
+}
+
+export function connectObserverCapability(
+  mode: 'workspace' | 'connect',
+  queryCapability: string | null,
+  fragmentCapability: string | null,
+): string | null {
+  // Connect links are fragment-only so legacy query credentials are never
+  // copied into requests, logs, referrers, or server-rendered URLs.
+  return mode === 'connect' ? fragmentCapability : queryCapability;
+}
+
+export function shouldScrubConnectObserverCapability(
+  mode: 'workspace' | 'connect',
+  queryCapability: string | null,
+  fragmentCapability: string | null,
+): boolean {
+  return mode === 'connect' && (queryCapability !== null || fragmentCapability !== null);
 }
 
 export function shouldInitializeConnectObserver(

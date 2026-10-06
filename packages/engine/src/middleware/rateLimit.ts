@@ -9,6 +9,7 @@ import { usageTracker } from './usageTracker.js';
 // Conservative per-minute ceiling applied when the entitlements lookup fails,
 // so an entitlements outage degrades to a safe default rather than no limit.
 const FALLBACK_RATE_PER_MIN = 300;
+const OBSERVER_RATE_LIMIT_MULTIPLIER = 0.1;
 const checkApiCallPlanLimit = checkPlanLimit('api_calls');
 
 // Per-route rate limit multipliers (fraction of the global per-minute limit).
@@ -63,7 +64,9 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
   // The rate limiter port is not workspace-scoped, so the workspace id is part
   // of the bucket key (the Cloudflare adapter previously scoped via the DO id).
   const now = Date.now();
-  const bucketKey = `${workspace.id}:${routeKey ?? 'global'}:${rateLimitWindow(now)}`;
+  const observerToken = c.get('observerToken');
+  const routeBucket = routeKey ?? 'global';
+  const window = rateLimitWindow(now);
 
   // Resolve the per-minute limit. If entitlements are unavailable, fall back to
   // a conservative default and still enforce it — an entitlements outage must
@@ -75,20 +78,48 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
     globalLimit = FALLBACK_RATE_PER_MIN;
   }
   const limit = routeKey ? Math.ceil(globalLimit * ROUTE_MULTIPLIERS[routeKey]) : globalLimit;
+  // Observer polling must not consume the workspace-admin bucket. Bound each
+  // link to a share of the workspace allowance, then apply a shared observer
+  // ceiling so minting more links cannot multiply workspace throughput.
+  // Preserve the historical admin key shape so deploys do not reset in-flight
+  // workspace counters.
+  const bucketLimits = observerToken
+    ? [
+        {
+          bucketKey: `${workspace.id}:observer:${observerToken.id}:${routeBucket}:${window}`,
+          limit: Math.max(1, Math.ceil(limit * OBSERVER_RATE_LIMIT_MULTIPLIER)),
+        },
+        { bucketKey: `${workspace.id}:observers:${routeBucket}:${window}`, limit },
+      ]
+    : [{ bucketKey: `${workspace.id}:${routeBucket}:${window}`, limit }];
 
   try {
-    const { allowed, count, remaining } = await rateLimiter.check({ bucketKey, limit, windowMs: RATE_LIMIT_WINDOW_MS });
     const resetAt = rateLimitWindowResetAt(now);
-    c.header('X-RateLimit-Limit', String(limit));
-    c.header('X-RateLimit-Remaining', String(remaining ?? Math.max(0, limit - count)));
-    c.header('X-RateLimit-Reset', String(Math.ceil(resetAt / 1000)));
-
-    if (!allowed) {
-      // Transient by construction: the bucket is keyed to this minute, so the
-      // advertised wait is the real one.
-      setRetryContract(c, resetAt, now);
-      return jsonError(c, 'rate_limit_exceeded', `Rate limit exceeded. ${limit} requests per minute allowed for ${workspace.plan} plan.`, 429);
+    let tightestResult: { limit: number; count: number; remaining: number } | undefined;
+    const results = await rateLimiter.checkMany(bucketLimits.map((bucket) => ({
+      bucketKey: bucket.bucketKey,
+      limit: bucket.limit,
+      windowMs: RATE_LIMIT_WINDOW_MS,
+    })));
+    for (const [index, bucket] of bucketLimits.entries()) {
+      const result = results[index];
+      if (!result.allowed) {
+        c.header('X-RateLimit-Limit', String(bucket.limit));
+        c.header('X-RateLimit-Remaining', String(result.remaining ?? Math.max(0, bucket.limit - result.count)));
+        c.header('X-RateLimit-Reset', String(Math.ceil(resetAt / 1000)));
+        // Transient by construction: the bucket is keyed to this minute, so the
+        // advertised wait is the real one.
+        setRetryContract(c, resetAt, now);
+        return jsonError(c, 'rate_limit_exceeded', `Rate limit exceeded. ${bucket.limit} requests per minute allowed for ${workspace.plan} plan.`, 429);
+      }
+      if (!tightestResult || result.remaining < tightestResult.remaining) {
+        tightestResult = { limit: bucket.limit, count: result.count, remaining: result.remaining };
+      }
     }
+    const responseLimit = tightestResult?.limit ?? bucketLimits[0].limit;
+    c.header('X-RateLimit-Limit', String(responseLimit));
+    c.header('X-RateLimit-Remaining', String(tightestResult?.remaining ?? Math.max(0, responseLimit - (tightestResult?.count ?? 0))));
+    c.header('X-RateLimit-Reset', String(Math.ceil(resetAt / 1000)));
   } catch {
     // Only the limiter backend failing is fail-open — a transient infra hiccup
     // shouldn't 500 the request (the limit was still computed above).

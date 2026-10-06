@@ -16,7 +16,15 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Connect observer messages redact both public Relay Connect invite URL forms.
+- Connect observer links accept capabilities only from URL fragments and remove rejected credentials from browser history; reopen the original link if first-open validation fails.
+- Observer links have isolated, bounded rate-limit budgets that do not consume the workspace-admin allowance or multiply the workspace observer ceiling.
+- Changing dashboard sessions cleans up the prior dashboard-minted stream token, including after a workspace-key rotation.
+- Repeating an observer-token revocation now succeeds for the owning workspace while missing and cross-workspace ids remain indistinguishable.
 
 ## [9.0.0] - 2026-10-06
 
@@ -664,7 +672,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v9.0.0...HEAD
+[Unreleased - Patch]: https://github.com/AgentWorkforce/relaycast/compare/v9.0.0...HEAD
 [9.0.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.16.0...v9.0.0
 [8.16.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.15.0...v8.16.0
 [8.15.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.14.0...v8.15.0

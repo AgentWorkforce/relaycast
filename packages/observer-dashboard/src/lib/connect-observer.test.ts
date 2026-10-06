@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   connectObserverExpiryDelay,
+  connectObserverCapability,
   connectObserverIdentity,
   connectObserverUrlWithoutCapability,
   formatUtcTimestamp,
   loadConnectConversationMessages,
   sanitizeConnectObserverText,
+  shouldScrubConnectObserverCapability,
   shouldInitializeConnectObserver,
 } from './connect-observer';
 import type { DmMessage, WorkspaceDmConversation } from '@relaycast/sdk';
@@ -19,11 +21,24 @@ describe('Relay Connect observer presentation', () => {
   it('redacts capability material and Connect invite URLs from observed text', () => {
     expect(
       sanitizeConnectObserverText(
-        'Use https://agentrelay.com/connect/opaque_room.md?x=1 with ot_live_secret, rk_live_admin, and wh_live_hook.',
+        'Use https://agentrelay.com/connect/opaque_room.md?x=1 or https://agentrelay.com/cloud/connect/opaque_room/join?source=dm with ot_live_secret, rk_live_admin, and wh_live_hook.',
       ),
     ).toBe(
-      'Use [Relay Connect invite redacted] with [credential redacted], [credential redacted], and [credential redacted].',
+      'Use [Relay Connect invite redacted] or [Relay Connect invite redacted] with [credential redacted], [credential redacted], and [credential redacted].',
     );
+  });
+
+  it('accepts Connect capabilities only from the URL fragment', () => {
+    expect(connectObserverCapability('connect', 'ot_live_query', null)).toBeNull();
+    expect(connectObserverCapability('connect', 'ot_live_query', 'ot_live_fragment')).toBe('ot_live_fragment');
+    expect(connectObserverCapability('workspace', 'rk_live_query', null)).toBe('rk_live_query');
+  });
+
+  it('scrubs rejected query capabilities as well as accepted fragment capabilities', () => {
+    expect(shouldScrubConnectObserverCapability('connect', 'ot_live_query', null)).toBe(true);
+    expect(shouldScrubConnectObserverCapability('connect', null, 'ot_live_fragment')).toBe(true);
+    expect(shouldScrubConnectObserverCapability('connect', null, null)).toBe(false);
+    expect(shouldScrubConnectObserverCapability('workspace', 'rk_live_query', null)).toBe(false);
   });
 
   it('removes query and fragment capabilities without removing the room binding', () => {

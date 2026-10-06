@@ -7,7 +7,12 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- `DELETE /v1/observer-tokens/:id` is idempotent for a token owned by the authenticated workspace, while missing and cross-workspace ids still return `404`.
+- Observer-authenticated reads use a bounded per-token budget within a shared workspace-observer ceiling, while workspace-admin rate-limit counters retain their existing bucket keys.
 
 ## [9.0.0] - 2026-10-06
 
