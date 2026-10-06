@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { agentNodeBindings, agents, nodes } from '../../db/schema.js';
+import { eq } from 'drizzle-orm';
+import { agentNodeBindings, agents, nodes, workspaces } from '../../db/schema.js';
 import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
 
 /**
@@ -296,6 +297,12 @@ describe('observer-authorized node history pagination (#422 follow-up)', () => {
 
   it('handles high-cardinality observer authorization without exceeding bind limits or skipping interleaved rows', async () => {
     const ws = await createWorkspace(stack.app, 'observer-history-wide-ws');
+    // This fixture paginates far beyond the free plan's per-observer request
+    // budget. Use the self-host plan so it exercises SQL pagination rather
+    // than the independently tested rate limit.
+    await stack.runtime.deps.db.update(workspaces)
+      .set({ plan: 'selfhost' })
+      .where(eq(workspaces.id, ws.workspaceId));
     const allowedAgents = await Promise.all(
       Array.from({ length: 140 }, async (_, i) => registerAgent(stack.app, ws.workspaceKey, `observer-wide-allowed-${i}`)),
     );
