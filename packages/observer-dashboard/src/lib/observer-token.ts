@@ -157,6 +157,7 @@ export async function revokeObserverStreamToken(
 
 export async function revokePreviousObserverStreamToken(input: {
   previousApiKey: string | null | undefined;
+  previousStreamToken?: string | null;
   previousTokenId: string | null | undefined;
   previousEngine: string | null | undefined;
   candidates: string[];
@@ -166,6 +167,7 @@ export async function revokePreviousObserverStreamToken(input: {
   if (
     !input.previousTokenId
     || input.previousTokenId === input.nextTokenId
+    || input.previousStreamToken === input.nextApiKey
   ) {
     return;
   }
