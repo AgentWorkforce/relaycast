@@ -20,6 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Added
 
+- Relay Connect hosts can share a room-scoped, read-only observer page that aggregates historical and new direct messages with UTC timestamps and fails closed when the room is deleted or its capability expires or is revoked.
 - Rust workspace and agent clients accept product origin metadata across HTTP, WebSocket, token replacement, and anonymous workspace bootstrap.
 - TypeScript, Python, Rust, and Swift node helpers accept the current node token as header-only proof and a stable idempotency key for recoverable rotation of an established node; Rust node requests also expose `machine_id`.
 
