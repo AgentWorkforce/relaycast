@@ -208,4 +208,18 @@ describe('revokePreviousObserverStreamToken', () => {
     });
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it('keeps a previously minted stream token when it becomes the next login credential', async () => {
+    const fetchMock = mockFetch();
+    await revokePreviousObserverStreamToken({
+      previousApiKey: 'rk_live_previous',
+      previousStreamToken: 'ot_live_reused',
+      previousTokenId: 'ot_reused',
+      previousEngine: 'https://cast.agentrelay.com',
+      candidates: ['https://cast.agentrelay.com'],
+      nextApiKey: 'ot_live_reused',
+      nextTokenId: null,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

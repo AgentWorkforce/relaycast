@@ -96,12 +96,13 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
   try {
     const resetAt = rateLimitWindowResetAt(now);
     let tightestResult: { limit: number; count: number; remaining: number } | undefined;
-    for (const bucket of bucketLimits) {
-      const result = await rateLimiter.check({
-        bucketKey: bucket.bucketKey,
-        limit: bucket.limit,
-        windowMs: RATE_LIMIT_WINDOW_MS,
-      });
+    const results = await rateLimiter.checkMany(bucketLimits.map((bucket) => ({
+      bucketKey: bucket.bucketKey,
+      limit: bucket.limit,
+      windowMs: RATE_LIMIT_WINDOW_MS,
+    })));
+    for (const [index, bucket] of bucketLimits.entries()) {
+      const result = results[index];
       if (!result.allowed) {
         c.header('X-RateLimit-Limit', String(bucket.limit));
         c.header('X-RateLimit-Remaining', String(result.remaining ?? Math.max(0, bucket.limit - result.count)));

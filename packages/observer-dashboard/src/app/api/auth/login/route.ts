@@ -91,6 +91,7 @@ export async function POST(request: NextRequest) {
 
     const cookieStore = await cookies();
     const previousApiKey = cookieStore.get(COOKIE_NAME)?.value;
+    const previousWsToken = cookieStore.get(WS_TOKEN_COOKIE_NAME)?.value;
     const previousWsTokenId = cookieStore.get(WS_TOKEN_ID_COOKIE_NAME)?.value;
     const previousEngine = cookieStore.get(ENGINE_COOKIE_NAME)?.value;
     const cookieOptions = {
@@ -128,6 +129,7 @@ export async function POST(request: NextRequest) {
     // remembered, allowlisted engine with the previous workspace credential.
     await revokePreviousObserverStreamToken({
       previousApiKey,
+      previousStreamToken: previousWsToken,
       previousTokenId: previousWsTokenId,
       previousEngine,
       candidates,

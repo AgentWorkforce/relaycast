@@ -101,6 +101,12 @@ describe('rate limit contract', () => {
     expect(aggregateThrottle.status).toBe(429);
     expect(aggregateThrottle.headers.get('X-RateLimit-Limit')).toBe('20');
 
+    // Hitting the shared ceiling must not spend this link's remaining slots.
+    ratePerMin = 24;
+    expect((await get('/v1/dm/conversations/all', observers[9])).status).toBe(200);
+    expect((await get('/v1/dm/conversations/all', observers[9])).status).toBe(200);
+    expect((await get('/v1/dm/conversations/all', observers[9])).status).toBe(429);
+
     // Observer traffic remains isolated from the historical admin bucket.
     expect((await get('/v1/agents', ws.workspaceKey)).status).toBe(200);
   });
@@ -172,5 +178,22 @@ describe('in-process rate limiter', () => {
     expect(afterRetries.allowed).toBe(false);
     expect(afterRetries.count).toBe(2);
     expect(afterRetries.remaining).toBe(0);
+  });
+
+  it('does not consume either bucket when a batch is rejected', async () => {
+    const limiter = new InProcessRateLimiter();
+    const args = [
+      { bucketKey: 'observer-link', limit: 2, windowMs: 60_000 },
+      { bucketKey: 'observers-shared', limit: 1, windowMs: 60_000 },
+    ];
+    await limiter.check({ bucketKey: 'observers-shared', limit: 1, windowMs: 60_000 });
+
+    const rejected = await limiter.checkMany(args);
+    expect(rejected.map((result) => result.allowed)).toEqual([true, false]);
+    expect(rejected.map((result) => result.count)).toEqual([0, 1]);
+
+    const after = await limiter.check({ bucketKey: 'observer-link', limit: 2, windowMs: 60_000 });
+    expect(after.count).toBe(1);
+    expect(after.remaining).toBe(1);
   });
 });

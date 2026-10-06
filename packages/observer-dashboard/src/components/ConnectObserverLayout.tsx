@@ -50,8 +50,11 @@ export function ConnectObserverLayout() {
         ),
       );
       setUnavailable(false);
-    } catch {
-      setUnavailable(true);
+    } catch (error) {
+      // Keep already-loaded history visible while transient transport errors
+      // or rate limits recover. Only a denied or missing room ends access.
+      const status = (error as { statusCode?: number } | null)?.statusCode;
+      if (status === 401 || status === 403 || status === 404) setUnavailable(true);
     } finally {
       setLoading(false);
       refreshInFlight.current = false;
