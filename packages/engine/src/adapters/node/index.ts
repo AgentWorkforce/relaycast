@@ -52,7 +52,9 @@ function settleLegacySelfHostPlans(sqlite: SqliteDbHandle['sqlite'], plan: strin
       'INSERT INTO node_selfhost_plan_upgrade (id, decided_at) VALUES (1, ?)',
     ).run(new Date().toISOString());
   });
-  settle();
+  // BEGIN IMMEDIATE so a second process waits on busy_timeout instead of
+  // reading "no decision" and then failing its write.
+  settle.immediate();
 }
 
 export {

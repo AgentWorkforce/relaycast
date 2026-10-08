@@ -28,7 +28,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Workspace expiry is enforced at authentication: once a workspace created with `expires_in_seconds` passes `expires_at`, its workspace key, agent tokens, node tokens, observer tokens, agent recovery proofs, inbound A2A webhook tokens, and both WebSocket upgrades return `401 workspace_expired` instead of staying usable until the reap deletes it.
 - The invocation timeout, retry, and task-deadline sweeps use indexes instead of scanning every action invocation, which removes the periodic "D1 DB is overloaded" queueing on large workspaces.
-- Self-hosted workspaces use the `selfhost` plan: unlimited API calls and a 30,000 request per minute ceiling.
+- With the built-in entitlements provider, self-hosted workspaces default to the `selfhost` plan: unlimited API calls and a 30,000 request per minute ceiling.
 - The first self-host startup whose default is `selfhost` promotes every workspace still stored as `free` to `selfhost`. Later startups leave stored plans unchanged.
 
 ## [9.0.0] - 2026-10-06
