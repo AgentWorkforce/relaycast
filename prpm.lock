@@ -210,9 +210,26 @@
       "sourceFormat": "claude",
       "sourceSubtype": "skill",
       "installedPath": ".opencode/skills/running-headless-orchestrator/SKILL.md"
+    },
+    "@agent-relay/merge-train-snippet#agents.md:AGENTS.md": {
+      "version": "1.0.0",
+      "resolved": "https://registry.prpm.dev/api/v1/packages/%40agent-relay%2Fmerge-train-snippet/1.0.0.tar.gz",
+      "integrity": "sha256-a85e34747a332452ab6d8d7f814c828d404a3a77dd724f16878d26b91fb7d5bb",
+      "format": "agents.md",
+      "subtype": "snippet",
+      "sourceFormat": "generic",
+      "sourceSubtype": "snippet",
+      "installedPath": "AGENTS.md",
+      "snippetMetadata": {
+        "targetPath": "AGENTS.md",
+        "config": {
+          "target": "AGENTS.md",
+          "position": "append"
+        }
+      }
     }
   },
-  "generated": "2026-04-16T10:57:23.198Z",
+  "generated": "2026-10-08T22:48:10.325Z",
   "collections": {
     "agent-relay-starter": {
       "name_slug": "agent-relay-starter",
