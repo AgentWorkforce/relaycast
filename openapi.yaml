@@ -259,6 +259,13 @@ components:
           description: Snowflake ID
         name:
           type: string
+        plan:
+          type: string
+          enum: [free, pro, enterprise, selfhost]
+          description: >-
+            Entitlement tier stored for this workspace. Self-host persists
+            `selfhost` (unlimited API calls, 30,000 requests per minute). Hosted
+            workspaces persist their billing tier (`free`, `pro`, or `enterprise`).
         metadata:
           $ref: '#/components/schemas/WorkspaceMetadata'
         key:

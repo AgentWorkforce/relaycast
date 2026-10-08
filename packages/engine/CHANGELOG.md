@@ -13,6 +13,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Authentication rejects an expired workspace for every credential kind with `401 workspace_expired`, rather than admitting it until `reapExpiredWorkspaces` deletes the row. The built-in provider enforces it, and the engine re-checks every `AuthProvider` result so an injected hosting provider cannot admit an expired workspace; the node WebSocket upgrade, agent recovery by work-unit proof, and the inbound A2A webhook, which resolve their principal directly, gained their own gate.
 - The invocation sweeps no longer scan all of `action_invocations`. Migrations `0064_action_invocations_status_dispatched_index.sql`, `0065_action_invocations_task_deadline_any_status.sql`, and `0066_action_invocations_status_sweep_ranges.sql` add `(status, dispatched_at)`, `(status, retry_after_at)`, and partial `(status, json_extract(task_state, '$.deadline'))` indexes, and drop the interim deadline-only index from 0065. They change no data; apply them with the other engine migrations.
+- The Node adapter persists `plan: selfhost` on workspace create and, on startup, promotes rows still on the schema default `free`. `EngineConfig.defaultWorkspacePlan` selects `free`, `pro`, or `enterprise` instead. Hosted creates that leave the field unset still store `free`.
 
 ### Added
 

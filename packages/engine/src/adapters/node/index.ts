@@ -22,6 +22,20 @@ import { sweepPendingA2aEgress } from '../../engine/a2aEgress.js';
 import { reapExpiredWorkspaces } from '../../engine/workspace.js';
 import { createNodeOutboundWebhookFetch } from './ssrf-fetch.js';
 
+/**
+ * Rows created before self-host persisted a plan carry the schema default
+ * `free`, which selects the hosted free quota. Promote them only when this
+ * process's own default is the unlimited `selfhost` tier.
+ */
+function promoteImplicitSelfHostPlans(sqlite: SqliteDbHandle['sqlite'], plan: string | undefined): void {
+  if (plan !== 'selfhost') return;
+  const table = sqlite.prepare(
+    "SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'workspaces'",
+  ).get();
+  if (!table) return;
+  sqlite.prepare("UPDATE workspaces SET plan = 'selfhost' WHERE plan = 'free'").run();
+}
+
 export {
   InProcessRealtime,
   InProcessPresence,
@@ -173,6 +187,12 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
     outboundWebhookFetch,
     retention: options.config?.retention ?? { messageTtlDays },
   };
+  // A custom entitlements provider owns the tier. Only the built-in static
+  // provider, whose `selfhost` table is unlimited, gets that plan by default.
+  if ((!options.config || !Object.hasOwn(options.config, 'defaultWorkspacePlan')) && !options.entitlements) {
+    config.defaultWorkspacePlan = 'selfhost';
+  }
+  promoteImplicitSelfHostPlans(handle.sqlite, config.defaultWorkspacePlan);
 
   const deps: EngineDeps = {
     db,

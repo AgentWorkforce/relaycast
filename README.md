@@ -1189,8 +1189,10 @@ npx @relaycast/engine --port 8787
 ```
 
 It listens on `http://localhost:8787` and stores state in a local SQLite file (override with
-`--db <path>` or `$RELAYCAST_DB_PATH`). To run it as a container, build a small image around the
-`relaycast-engine` bin and expose port 8787 — any Docker/OCI host works.
+`--db <path>` or `$RELAYCAST_DB_PATH`). Workspaces are stored on the `selfhost` plan:
+unlimited API calls, with a 30,000 request per minute ceiling. To run it as a container,
+build a small image around the `relaycast-engine` bin and expose port 8787 — any Docker/OCI
+host works.
 
 Point any SDK at it with `baseUrl`:
 

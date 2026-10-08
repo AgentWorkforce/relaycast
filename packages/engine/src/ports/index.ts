@@ -129,6 +129,14 @@ export interface EngineConfig {
    */
   workspaceBootstrapProofRequired?: boolean;
   /**
+   * Plan persisted by `POST /v1/workspaces`. The Node self-host adapter sets
+   * `selfhost` when this is omitted, and on startup promotes rows still on the
+   * schema default `free`. Hosted deployments leave it unset so new workspaces
+   * stay on that default until billing assigns a tier. Set `free`, `pro`, or
+   * `enterprise` to opt a self-host process into that table.
+   */
+  defaultWorkspacePlan?: 'free' | 'pro' | 'enterprise' | 'selfhost';
+  /**
    * Optional egress proxy for http_push node delivery. When set, nodes that
    * register with `delivery.use_proxy: true` have their webhook POST routed
    * through this forwarder instead of hitting the destination directly — the
