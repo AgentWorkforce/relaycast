@@ -16,7 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Minor]
+## [Unreleased]
+
+## [9.1.0] - 2026-10-08
 
 ### Added
 
@@ -675,7 +677,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased - Minor]: https://github.com/AgentWorkforce/relaycast/compare/v9.0.0...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v9.1.0...HEAD
+[9.1.0]: https://github.com/AgentWorkforce/relaycast/compare/v9.0.0...v9.1.0
 [9.0.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.16.0...v9.0.0
 [8.16.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.15.0...v8.16.0
 [8.15.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.14.0...v8.15.0
