@@ -343,10 +343,12 @@ Be honest with yourself about what self-host is and isn't:
 You *can* front self-host with your own SSO/proxy, but the shipped default is plain
 API keys.
 
-`POST /v1/workspaces` persists `plan: selfhost`. On startup, rows still on the
-schema default `free` are promoted to `selfhost`, so a database created by an
-older engine keeps that tier after upgrade. An embedding host selects `free`,
-`pro`, or `enterprise` with `defaultWorkspacePlan`.
+`POST /v1/workspaces` persists `plan: selfhost`. The first startup whose
+default is `selfhost` promotes every workspace still stored as `free`, so a
+database created by an older engine gets that tier, and records the decision.
+Later startups do not rewrite `plan`. An embedding host selects `free`, `pro`,
+or `enterprise` with `defaultWorkspacePlan`. A first startup that selects one
+of those tiers leaves existing rows on their stored plan.
 
 ---
 

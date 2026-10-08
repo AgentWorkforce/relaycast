@@ -70,7 +70,7 @@ type CreateWorkspaceOptions =
        * unless the process configured another tier. Omitted leaves the schema
        * default (`free`), which hosted creates rely on.
        */
-      plan?: string;
+      plan?: 'free' | 'pro' | 'enterprise' | 'selfhost';
     };
 
 export const DEFAULT_WORKSPACE_REAP_LIMIT = 25;

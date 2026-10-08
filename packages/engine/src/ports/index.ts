@@ -130,10 +130,12 @@ export interface EngineConfig {
   workspaceBootstrapProofRequired?: boolean;
   /**
    * Plan persisted by `POST /v1/workspaces`. The Node self-host adapter sets
-   * `selfhost` when this is omitted or `undefined`, and on startup promotes
-   * rows still on the schema default `free`. Hosted deployments leave it unset
-   * so new workspaces stay on that default until billing assigns a tier. Set
-   * `free`, `pro`, or `enterprise` to opt a self-host process into that table.
+   * `selfhost` when this is omitted or `undefined`. The first startup whose
+   * default is `selfhost` promotes rows still stored as `free` and records that
+   * decision; later startups do not rewrite `plan`. A first startup that
+   * selects `free`, `pro`, or `enterprise` leaves existing rows unchanged.
+   * Hosted deployments leave this unset so new workspaces stay on the schema
+   * default until billing assigns a tier.
    */
   defaultWorkspacePlan?: 'free' | 'pro' | 'enterprise' | 'selfhost';
   /**

@@ -23,19 +23,36 @@ import { reapExpiredWorkspaces } from '../../engine/workspace.js';
 import { createNodeOutboundWebhookFetch } from './ssrf-fetch.js';
 
 /**
- * Rows created before self-host persisted a plan carry the schema default
- * `free`, which selects the hosted free quota. Promote them only when this
- * process's own default is the unlimited `selfhost` tier. Nothing on the row
- * distinguishes that default from a plan written as `free`; set
- * `defaultWorkspacePlan` to `free`, `pro`, or `enterprise` to keep those rows.
+ * Databases created before self-host persisted a plan store the schema default
+ * `free`, and nothing on the row distinguishes that default from a plan written
+ * as `free`. The first Node startup records one decision: when this process's
+ * default is `selfhost`, those rows are promoted; otherwise they stay. Later
+ * startups do not rewrite `plan`.
  */
-function promoteImplicitSelfHostPlans(sqlite: SqliteDbHandle['sqlite'], plan: string | undefined): void {
-  if (plan !== 'selfhost') return;
+function settleLegacySelfHostPlans(sqlite: SqliteDbHandle['sqlite'], plan: string | undefined): void {
   const table = sqlite.prepare(
     "SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'workspaces'",
   ).get();
   if (!table) return;
-  sqlite.prepare("UPDATE workspaces SET plan = 'selfhost' WHERE plan = 'free'").run();
+  sqlite.prepare(
+    `CREATE TABLE IF NOT EXISTS node_selfhost_plan_upgrade (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      decided_at TEXT NOT NULL
+    )`,
+  ).run();
+  const settle = sqlite.transaction(() => {
+    const decided = sqlite.prepare(
+      'SELECT 1 AS ok FROM node_selfhost_plan_upgrade WHERE id = 1',
+    ).get();
+    if (decided) return;
+    if (plan === 'selfhost') {
+      sqlite.prepare("UPDATE workspaces SET plan = 'selfhost' WHERE plan = 'free'").run();
+    }
+    sqlite.prepare(
+      'INSERT INTO node_selfhost_plan_upgrade (id, decided_at) VALUES (1, ?)',
+    ).run(new Date().toISOString());
+  });
+  settle();
 }
 
 export {
@@ -196,7 +213,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
   if (config.defaultWorkspacePlan === undefined && !options.entitlements) {
     config.defaultWorkspacePlan = 'selfhost';
   }
-  promoteImplicitSelfHostPlans(handle.sqlite, config.defaultWorkspacePlan);
+  settleLegacySelfHostPlans(handle.sqlite, config.defaultWorkspacePlan);
 
   const deps: EngineDeps = {
     db,

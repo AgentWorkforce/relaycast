@@ -96,11 +96,66 @@ describe('self-host workspace plan', () => {
 
   it('rejects an unknown plan', async () => {
     stack = makeNodeStack();
-    await expect(createWorkspaceRow(stack.runtime.deps.db, 'bad-plan', { plan: 'nope' }))
+    await expect(createWorkspaceRow(stack.runtime.deps.db, 'bad-plan', { plan: 'nope' as 'free' }))
       .rejects.toMatchObject({ code: 'invalid_workspace_plan' });
   });
 
-  it('promotes an existing free row to selfhost on the next self-host start', async () => {
+  it('keeps an explicit free workspace when a later startup defaults to selfhost', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'relaycast-selfhost-plan-'));
+    const dbPath = join(dir, 'relaycast.db');
+    const base = {
+      dbPath,
+      baseUrl: 'http://localhost:0',
+      migrate: true,
+      eventQueue: { pollIntervalMs: 0 },
+      presence: { ttlMs: 60_000, sweepIntervalMs: 0 },
+    } as const;
+    const first = createNodeRuntime({
+      ...base,
+      config: { environment: 'test', defaultWorkspacePlan: 'free' },
+    });
+    let firstClosed = false;
+    try {
+      const created = await createEngine(first.deps).request('/v1/workspaces', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'stay-free' }),
+      });
+      expect(created.status).toBe(201);
+      const { api_key: apiKey } = (await created.json() as { data: { api_key: string } }).data;
+      first.close();
+      firstClosed = true;
+
+      const restarted = createNodeRuntime({
+        ...base,
+        config: { environment: 'test' },
+      });
+      try {
+        const after = await createEngine(restarted.deps).request('/v1/workspace', {
+          headers: { authorization: `Bearer ${apiKey}` },
+        });
+        expect(after.status).toBe(200);
+        const afterBody = await after.json() as { data: { id: string; plan: string } };
+        expect(afterBody.data.plan).toBe('free');
+        await restarted.deps.kv.put(usageCounterKey(afterBody.data.id, 'api_calls'), '100000');
+        const blocked = await createEngine(restarted.deps).request('/v1/agents', {
+          headers: { authorization: `Bearer ${apiKey}` },
+        });
+        expect(blocked.status).toBe(429);
+        await expect(blocked.json()).resolves.toMatchObject({
+          ok: false,
+          error: { code: 'plan_limit_exceeded' },
+        });
+      } finally {
+        restarted.close();
+      }
+    } finally {
+      if (!firstClosed) first.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('promotes a free row that predates the upgrade decision', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'relaycast-selfhost-plan-'));
     const dbPath = join(dir, 'relaycast.db');
     const base = {
@@ -127,6 +182,8 @@ describe('self-host workspace plan', () => {
         headers: { authorization: `Bearer ${apiKey}` },
       });
       await expect(before.json()).resolves.toMatchObject({ data: { plan: 'free' } });
+      // A database written before this decision has free rows and no record.
+      first.handle.sqlite.prepare('DELETE FROM node_selfhost_plan_upgrade').run();
       first.close();
       firstClosed = true;
 
