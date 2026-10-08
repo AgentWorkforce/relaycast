@@ -1,10 +1,11 @@
-import { and, desc, eq, gte, inArray, lt, lte, sql } from 'drizzle-orm';
+import { and, desc, eq, exists, gte, inArray, lt, lte, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { eventSubscriptions, pendingEvents, webhookDeliveries } from '../db/schema.js';
 import { hmacSha256Hex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
 import { signStandardWebhook } from '../lib/standardWebhook.js';
+import { runAtomicWrites } from '../ports/database.js';
 import { getActiveSubscriptions } from './eventSubscription.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -595,36 +596,51 @@ export async function replayWebhookDelivery(
   }
 
   const now = new Date();
-  // Reset the parent first. An interruption here leaves a harmless claimable
-  // parent with a terminal child: a retry can still reset the child. Reversing
-  // the order could strand a pending child behind a failed parent forever.
-  await db
-    .update(pendingEvents)
-    .set({
-      status: 'pending',
-      attempts: 0,
-      maxAttempts: 32,
-      processAfter: now,
-      lastError: null,
-      completedAt: null,
-    })
-    .where(eq(pendingEvents.id, row.eventId));
-
-  const [replayed] = await db
-    .update(webhookDeliveries)
-    .set({
-      status: 'pending',
-      attempts: 0,
-      nextAttemptAt: now,
-      lastError: null,
-      lastStatus: null,
-      completedAt: null,
-    })
-    .where(and(
-      eq(webhookDeliveries.id, row.id),
-      inArray(webhookDeliveries.status, ['failed', 'dead_letter']),
-    ))
-    .returning({ id: webhookDeliveries.id });
+  // Reset the parent and child in one adapter-portable atomic unit. The parent
+  // predicate observes the child while it is still terminal, so a stale
+  // concurrent replay cannot resurrect the parent after another replay wins.
+  // Atomicity also prevents a queue poll from claiming the parent between the
+  // two statements and settling it before the child becomes pending.
+  const [, replayedRows] = await runAtomicWrites(db, tx => [
+    tx
+      .update(pendingEvents)
+      .set({
+        status: 'pending',
+        attempts: 0,
+        maxAttempts: 32,
+        processAfter: now,
+        lastError: null,
+        completedAt: null,
+      })
+      .where(and(
+        eq(pendingEvents.id, row.eventId),
+        exists(
+          tx
+            .select({ id: webhookDeliveries.id })
+            .from(webhookDeliveries)
+            .where(and(
+              eq(webhookDeliveries.id, row.id),
+              inArray(webhookDeliveries.status, ['failed', 'dead_letter']),
+            )),
+        ),
+      )),
+    tx
+      .update(webhookDeliveries)
+      .set({
+        status: 'pending',
+        attempts: 0,
+        nextAttemptAt: now,
+        lastError: null,
+        lastStatus: null,
+        completedAt: null,
+      })
+      .where(and(
+        eq(webhookDeliveries.id, row.id),
+        inArray(webhookDeliveries.status, ['failed', 'dead_letter']),
+      ))
+      .returning({ id: webhookDeliveries.id }),
+  ], { requireAtomic: true });
+  const [replayed] = replayedRows as Array<{ id: string }>;
   if (!replayed) {
     const [current] = await db
       .select({ status: webhookDeliveries.status })

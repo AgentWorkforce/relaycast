@@ -51,13 +51,16 @@ describe('webhook delivery health and replay', () => {
     });
 
     const send = vi.spyOn(stack.runtime.webhookQueue, 'send').mockResolvedValue();
-    const replay = await stack.app.request(
+    const replayRequest = () => stack.app.request(
       `/v1/subscriptions/${subscription.data.id}/deliveries/whd_dead_letter/replay`,
       {
         method: 'POST',
         headers: { authorization: `Bearer ${workspace.workspaceKey}` },
       },
     );
+    const attempts = await Promise.all([replayRequest(), replayRequest()]);
+    expect(attempts.map(response => response.status).sort()).toEqual([200, 409]);
+    const replay = attempts.find(response => response.status === 200)!;
     expect(replay.status).toBe(200);
     await expect(replay.json()).resolves.toMatchObject({
       data: { id: 'whd_dead_letter', status: 'pending' },
@@ -69,14 +72,6 @@ describe('webhook delivery health and replay', () => {
       data: { text: 'replay me' },
     });
 
-    const duplicateReplay = await stack.app.request(
-      `/v1/subscriptions/${subscription.data.id}/deliveries/whd_dead_letter/replay`,
-      {
-        method: 'POST',
-        headers: { authorization: `Bearer ${workspace.workspaceKey}` },
-      },
-    );
-    expect(duplicateReplay.status).toBe(409);
     expect(send).toHaveBeenCalledTimes(1);
 
     const [delivery] = await stack.runtime.deps.db.select().from(webhookDeliveries);
