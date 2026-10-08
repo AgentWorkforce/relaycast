@@ -1603,6 +1603,14 @@ components:
         path_glob:
           type: string
           description: Relayfile path glob to bind to this channel.
+        event_types:
+          type: array
+          maxItems: 32
+          uniqueItems: true
+          items:
+            type: string
+            pattern: '^[A-Za-z0-9._:-]+$'
+          description: Optional provider event types accepted by the callback.
 
     RelayfileInboundTarget:
       type: object
@@ -1614,6 +1622,7 @@ components:
         - channel
         - provider
         - path_glob
+        - event_types
       properties:
         url:
           type: string
@@ -1632,6 +1641,10 @@ components:
           type: string
         path_glob:
           type: string
+        event_types:
+          type: array
+          items:
+            type: string
 
     RelayfileInboundEventSnapshot:
       description: Provider record snapshot. Cloud sync envelopes expose their inner provider payload in message metadata and formatting; provider event semantics still require authenticated top-level event metadata.
@@ -6144,6 +6157,12 @@ paths:
           schema:
             type: string
             enum: ['1']
+        - name: event_types
+          in: query
+          required: false
+          description: Comma-separated provider event types sealed into the callback HMAC.
+          schema:
+            type: string
           description: Server-issued opt-in sealed into the target signing secret. Do not add to legacy URLs; reprovision the target with a workspace key.
         - name: X-Relay-Timestamp
           in: header

@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased - Minor]
 
+### Added
+
+- `POST /v1/integrations/relayfile/inbound-target` accepts optional `event_types` filters and signs them into the returned callback target.
+
 ### Fixed
 
 - Authentication rejects an expired workspace for every credential kind with `401 workspace_expired`, rather than admitting it until `reapExpiredWorkspaces` deletes the row. The built-in provider enforces it, and the engine re-checks every `AuthProvider` result so an injected hosting provider cannot admit an expired workspace; the node WebSocket upgrade, agent recovery by work-unit proof, and the inbound A2A webhook, which resolve their principal directly, gained their own gate.

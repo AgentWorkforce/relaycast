@@ -30,6 +30,7 @@ const createTargetSchema = z.object({
   channel: z.string().min(1),
   provider: z.string().min(1),
   path_glob: z.string().trim().min(1),
+  event_types: z.array(z.string().trim().regex(/^[A-Za-z0-9._:-]+$/)).min(1).max(32).optional(),
 });
 
 const providerRecordEnvelopeSchema = z.object({
@@ -110,6 +111,7 @@ async (c) => {
 
   const provider = normalizeProvider(parsed.data.provider);
   const pathGlob = normalizePathGlob(parsed.data.path_glob);
+  const eventTypes = normalizeEventTypes(parsed.data.event_types);
   // This route requires a workspace key. Seal its authorization into the
   // callback URL/secret; legacy target secrets cannot opt themselves in.
   const githubPrIdentityAuthorized = provider === 'github' && /^\/github\/repos\/([^/*]+)\/([^/*]+)\/pulls\/[1-9]\d*\/\*\*$/.test(pathGlob);
@@ -118,11 +120,13 @@ async (c) => {
     channelId: channel.id,
     provider,
     pathGlob,
+    eventTypes,
     githubPrIdentityAuthorized,
   });
   const url = new URL(`/v1/integrations/relayfile/inbound/${encodeURIComponent(workspace.id)}/${encodeURIComponent(channel.id)}`, c.req.url);
   url.searchParams.set('provider', provider);
   url.searchParams.set('path_glob', pathGlob);
+  if (eventTypes.length > 0) url.searchParams.set('event_types', eventTypes.join(','));
   if (githubPrIdentityAuthorized) url.searchParams.set('github_pr_identity', '1');
 
   return jsonCreated(c, {
@@ -133,6 +137,7 @@ async (c) => {
     channel: channel.name,
     provider,
     path_glob: pathGlob,
+    event_types: eventTypes,
   });
 });
 
@@ -152,6 +157,7 @@ async (c) => {
     return jsonError(c, 'bad_request', 'missing relayfile inbound route parameters', 400);
   }
   const pathGlob = normalizePathGlob(rawPathGlob);
+  const eventTypes = normalizeEventTypes(c.req.query('event_types')?.split(','));
   const githubPrIdentityAuthorized = c.req.query('github_pr_identity') === '1';
 
   const master = c.get('engine').config?.relayfileInboundSecret?.trim();
@@ -164,7 +170,7 @@ async (c) => {
     return jsonError(c, 'payload_too_large', 'relayfile event body exceeds maximum size', 413);
   }
   const rawBody = rawBodyResult.body;
-  const secret = await deriveRelayfileInboundSecret(master, { workspaceId, channelId, provider, pathGlob, githubPrIdentityAuthorized });
+  const secret = await deriveRelayfileInboundSecret(master, { workspaceId, channelId, provider, pathGlob, eventTypes, githubPrIdentityAuthorized });
   const verified = await verifyRelayfileSignature(c.req.raw.headers, rawBody, secret, Date.now());
   if (!verified.ok) {
     logger.warn('relayfile inbound signature rejected', { workspace_id: workspaceId, channel_id: channelId, reason: verified.reason });
@@ -207,6 +213,9 @@ async (c) => {
   }
   if (event.type !== 'file.created' && event.type !== 'file.updated') {
     return jsonOk(c, { skipped: 'ignored_event_type' });
+  }
+  if (eventTypes.length > 0 && !eventTypes.includes(event.providerEventType ?? event.type)) {
+    return jsonOk(c, { skipped: 'provider_event_type_mismatch' });
   }
 
   const channel = await getChannelById(c.get('db'), workspaceId, channelId);
@@ -368,13 +377,17 @@ async function getChannelById(db: AppEnv['Variables']['db'], workspaceId: string
  */
 export async function deriveRelayfileInboundSecret(
   master: string,
-  input: { workspaceId: string; channelId: string; provider: string; pathGlob: string; githubPrIdentityAuthorized?: boolean },
+  input: { workspaceId: string; channelId: string; provider: string; pathGlob: string; eventTypes?: string[]; githubPrIdentityAuthorized?: boolean },
 ): Promise<string> {
   // New targets use a disjoint, structured domain. Appending a marker to the
   // legacy glob would collide with a literal glob ending in that same marker.
-  const label = input.githubPrIdentityAuthorized
-    ? JSON.stringify([`${SECRET_LABEL}:github-pr-identity-v1`, input.workspaceId, input.channelId, normalizeProvider(input.provider), normalizePathGlob(input.pathGlob)])
-    : `${SECRET_LABEL}:${input.workspaceId}:${input.channelId}:${normalizeProvider(input.provider)}:${normalizePathGlob(input.pathGlob)}`;
+  const eventTypes = normalizeEventTypes(input.eventTypes);
+  const version = input.githubPrIdentityAuthorized ? `${SECRET_LABEL}:github-pr-identity-v2` : `${SECRET_LABEL}:event-types-v2`;
+  const label = eventTypes.length > 0
+    ? JSON.stringify([version, input.workspaceId, input.channelId, normalizeProvider(input.provider), normalizePathGlob(input.pathGlob), eventTypes])
+    : input.githubPrIdentityAuthorized
+      ? JSON.stringify([`${SECRET_LABEL}:github-pr-identity-v1`, input.workspaceId, input.channelId, normalizeProvider(input.provider), normalizePathGlob(input.pathGlob)])
+      : `${SECRET_LABEL}:${input.workspaceId}:${input.channelId}:${normalizeProvider(input.provider)}:${normalizePathGlob(input.pathGlob)}`;
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(master), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   const signed = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(label));
   return bytesToHex(new Uint8Array(signed));
@@ -485,6 +498,10 @@ function normalizePathGlob(pathGlob: string): string {
   const trimmed = pathGlob.trim();
   if (!trimmed || trimmed === '*') return '/**';
   return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+}
+
+function normalizeEventTypes(eventTypes: readonly string[] | undefined): string[] {
+  return [...new Set((eventTypes ?? []).map((value) => value.trim()).filter(Boolean))].sort();
 }
 
 function eventMatchesGlob(path: string, glob: string): boolean {

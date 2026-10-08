@@ -223,6 +223,63 @@ describe('relayfile inbound bridge', () => {
     }));
   });
 
+  it('binds provider event type filters into the target and drops nonmatching events', async () => {
+    const stack = makeStack();
+    const ws = await createWorkspace(stack.app, 'relayfile-event-types');
+    const agent = await registerAgent(stack.app, ws.workspaceKey, 'filtered-reader');
+    await stack.app.request('/v1/channels/general/join', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${agent.token}` },
+    });
+
+    const targetResponse = await stack.app.request('/v1/integrations/relayfile/inbound-target', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({
+        channel: 'general',
+        provider: 'github',
+        path_glob: '/github/repos/acme/api/**',
+        event_types: ['pull_request.closed', 'pull_request.opened', 'pull_request.closed'],
+      }),
+    });
+    expect(targetResponse.status).toBe(201);
+    const { data: target } = await targetResponse.json();
+    expect(target.event_types).toEqual(['pull_request.closed', 'pull_request.opened']);
+    expect(new URL(target.url).searchParams.get('event_types')).toBe('pull_request.closed,pull_request.opened');
+
+    const send = async (eventId: string, providerEventType: string) => {
+      const body = JSON.stringify({
+        eventId,
+        type: 'file.updated',
+        provider: 'github',
+        path: `/github/repos/acme/api/pulls/${eventId}/meta.json`,
+        providerEventType,
+      });
+      return stack.app.request(target.url, {
+        method: 'POST',
+        body,
+        headers: { ...signedHeaders(target.secret, body), 'X-Relay-Event-Id': eventId },
+      });
+    };
+
+    expect((await send('allowed', 'pull_request.closed')).status).toBe(201);
+    expect(await (await send('rejected', 'issues.edited')).json()).toMatchObject({
+      data: { skipped: 'provider_event_type_mismatch' },
+    });
+    const inbox = await stack.app.request('/v1/deliveries', {
+      headers: { authorization: `Bearer ${agent.token}` },
+    });
+    expect((await inbox.json()).data).toHaveLength(1);
+
+    const unfilteredSecret = await deriveRelayfileInboundSecret('relaycast-master', {
+      workspaceId: target.workspace_id,
+      channelId: target.channel_id,
+      provider: 'github',
+      pathGlob: '/github/repos/acme/api/**',
+    });
+    expect(unfilteredSecret).not.toBe(target.secret);
+  });
+
   it('rejects whitespace-only relayfile target path globs', async () => {
     const stack = makeStack();
     const ws = await createWorkspace(stack.app, 'relayfile-target-blank-glob');
