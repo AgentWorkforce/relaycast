@@ -6,7 +6,13 @@ import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { a2aAgents, a2aInbound, agents, messages, workspaces } from '../db/schema.js';
 import { requireAuth, hashToken } from '../middleware/auth.js';
-import { authenticateUnexpired } from '../auth/workspaceExpiry.js';
+import {
+  authenticateUnexpired,
+  isWorkspaceExpired,
+  WORKSPACE_EXPIRED_CODE,
+  WORKSPACE_EXPIRED_MESSAGE,
+} from '../auth/workspaceExpiry.js';
+import { getWorkspaceExpiry } from '../engine/workspace.js';
 import { asCodedError, codedError, errorResponse, type CodedError } from '../lib/httpError.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { buildIdempotencyStorageKey, runIdempotent } from '../middleware/idempotency.js';
@@ -670,6 +676,12 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
     const tokenHash = token ? await hashToken(token) : null;
     if (!tokenHash || tokenHash !== relayAgent.tokenHash) {
       return jsonError(c, 'unauthorized', 'Missing or invalid bearer token', 401);
+    }
+    // The webhook matches the agent token directly rather than through the
+    // auth provider, so it needs its own expiry gate (relaycast#464).
+    const workspace = await getWorkspaceExpiry(db, relayAgent.workspaceId);
+    if (workspace && isWorkspaceExpired(workspace)) {
+      return jsonError(c, WORKSPACE_EXPIRED_CODE, WORKSPACE_EXPIRED_MESSAGE, 401);
     }
 
     const rawPayload = await c.req.json();

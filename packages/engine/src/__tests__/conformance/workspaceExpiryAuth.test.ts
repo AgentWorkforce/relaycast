@@ -4,6 +4,7 @@ import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from '.
 import { workspaces } from '../../db/schema.js';
 import { MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH } from '../../engine/workspace.js';
 import { authenticateNodeWs, authenticateRealtimeWs } from '../../engine/wsAuth.js';
+import { sha256Hex } from '../../lib/crypto.js';
 
 // Relay Connect hands out one expiring workspace per Connect as the room
 // boundary, so "the link stops working at `expires_at`" has to hold without
@@ -12,6 +13,7 @@ interface ExpiringRoom {
   workspaceId: string;
   workspaceKey: string;
   agentToken: string;
+  agentId: string;
   nodeToken: string;
   observerToken: string;
 }
@@ -64,6 +66,7 @@ describe('workspace expiry at authentication', () => {
       workspaceId: workspace.data.workspace_id,
       workspaceKey,
       agentToken: agent.token,
+      agentId: agent.agentId,
       nodeToken: node.data.token,
       observerToken: observer.data.token,
     };
@@ -175,6 +178,73 @@ describe('workspace expiry at authentication', () => {
     expect(await authenticateNodeWs(deps, room.nodeToken)).toMatchObject({
       ok: false, status: 401, code: 'invalid_token',
     });
+  });
+
+  it('reports workspace expiry, not a recovery refusal, for an expired agent token', async () => {
+    const room = await makeRoom('expired-recovery-token-room');
+
+    await setExpiry(room.workspaceId, new Date(Date.now() - 1_000));
+
+    await expectExpired(await stack.app.request('/v1/agents/room-member/recover', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${room.agentToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ expected_agent_id: room.agentId }),
+    }));
+  });
+
+  it('refuses work-unit proof recovery once the workspace is past its deadline', async () => {
+    const room = await makeRoom('expired-recovery-proof-room');
+    const proof = 'expiring-work-unit-proof';
+    const registered = await stack.app.request('/v1/agents', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${room.workspaceKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'proof-holder', recovery_proof_hash: await sha256Hex(proof) }),
+    });
+    expect(registered.status).toBe(201);
+    const { data } = await registered.json() as { data: { id: string } };
+
+    await setExpiry(room.workspaceId, new Date(Date.now() - 1_000));
+
+    // The proof is valid and matches the identity, so only the expiry gate
+    // stands between it and a freshly rotated token.
+    await expectExpired(await stack.app.request('/v1/agents/proof-holder/recover', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ expected_agent_id: data.id, recovery_proof: proof }),
+    }));
+  });
+
+  it('refuses inbound A2A webhook delivery once the workspace is past its deadline', async () => {
+    const room = await makeRoom('expired-a2a-room');
+    const registered = await stack.app.request('/v1/a2a/register', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${room.workspaceKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        agent_card: {
+          name: 'peer',
+          url: 'https://peer.example/a2a/rpc',
+          version: '1.0.0',
+          skills: [{ id: 'peer', name: 'peer' }],
+        },
+        target_agent: 'peer',
+      }),
+    });
+    const registeredBody = await registered.json();
+    expect(registered.status, JSON.stringify(registeredBody)).toBe(201);
+    const { data } = registeredBody as { data: { relay_token: string; webhook_url: string } };
+    const webhookPath = new URL(data.webhook_url, 'http://localhost').pathname;
+    const deliver = () => stack.app.request(webhookPath, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${data.relay_token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    // Live: the token is accepted and the empty body fails JSON-RPC parsing.
+    expect((await deliver()).status).toBe(400);
+
+    await setExpiry(room.workspaceId, new Date(Date.now() - 1_000));
+
+    await expectExpired(await deliver());
   });
 
   it('refuses to mint a child workspace from an expired owner key', async () => {
