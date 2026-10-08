@@ -166,7 +166,7 @@ export async function postEphemeralEventToHttpPushNode(args: {
 
   try {
     const headers = { ...(await buildHttpPushHeaders(config, args.event.eventType, null, body, timestamp)), ...resolved.proxyHeaders };
-    const response = await (args.fetch ?? globalThis.fetch)(resolved.requestUrl, {
+    const requestInit = {
       method: 'POST',
       headers,
       body,
@@ -174,7 +174,11 @@ export async function postEphemeralEventToHttpPushNode(args: {
       // 3xx as non-ok below (response.ok is false for 3xx).
       redirect: 'manual',
       signal: AbortSignal.timeout(10_000),
-    });
+    } satisfies RequestInit;
+    const response = args.fetch
+      ? await args.fetch(resolved.requestUrl, requestInit)
+      // Workerd requires fetch to be invoked as a method of globalThis.
+      : await globalThis.fetch(resolved.requestUrl, requestInit);
     // We only inspect status; release the connection instead of leaking the body.
     await response.body?.cancel().catch(() => {});
     return response.ok;
