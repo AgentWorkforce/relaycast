@@ -69,6 +69,16 @@ describe('webhook delivery health and replay', () => {
       data: { text: 'replay me' },
     });
 
+    const duplicateReplay = await stack.app.request(
+      `/v1/subscriptions/${subscription.data.id}/deliveries/whd_dead_letter/replay`,
+      {
+        method: 'POST',
+        headers: { authorization: `Bearer ${workspace.workspaceKey}` },
+      },
+    );
+    expect(duplicateReplay.status).toBe(409);
+    expect(send).toHaveBeenCalledTimes(1);
+
     const [delivery] = await stack.runtime.deps.db.select().from(webhookDeliveries);
     const [event] = await stack.runtime.deps.db.select().from(pendingEvents);
     expect(delivery).toMatchObject({ status: 'pending', attempts: 0, lastError: null });

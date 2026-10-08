@@ -6139,7 +6139,7 @@ paths:
         '404':
           description: Delivery not found
         '409':
-          description: Delivery already succeeded and cannot be replayed
+          description: Delivery is pending or already succeeded and cannot be replayed
 
   /integrations/relayfile/inbound-target:
     post:

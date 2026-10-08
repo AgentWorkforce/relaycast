@@ -520,12 +520,12 @@ export async function replayWebhookDelivery(
       eq(webhookDeliveries.id, deliveryId),
     ));
   if (!row) return { kind: 'not_found' };
-  if (row.status !== 'failed' && row.status !== 'dead_letter' && row.status !== 'pending') {
+  if (row.status !== 'failed' && row.status !== 'dead_letter') {
     return { kind: 'not_replayable', status: row.status };
   }
 
   const now = new Date();
-  await db
+  const [replayed] = await db
     .update(webhookDeliveries)
     .set({
       status: 'pending',
@@ -537,8 +537,18 @@ export async function replayWebhookDelivery(
     })
     .where(and(
       eq(webhookDeliveries.id, row.id),
-      inArray(webhookDeliveries.status, ['pending', 'failed', 'dead_letter']),
-    ));
+      inArray(webhookDeliveries.status, ['failed', 'dead_letter']),
+    ))
+    .returning({ id: webhookDeliveries.id });
+  if (!replayed) {
+    const [current] = await db
+      .select({ status: webhookDeliveries.status })
+      .from(webhookDeliveries)
+      .where(eq(webhookDeliveries.id, row.id));
+    return current
+      ? { kind: 'not_replayable', status: current.status }
+      : { kind: 'not_found' };
+  }
   await db
     .update(pendingEvents)
     .set({
