@@ -36,6 +36,36 @@ describe('self-host workspace plan', () => {
     expect(stillOpen.status).toBe(200);
   });
 
+  it('treats an explicit undefined default plan as omitted', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'relaycast-selfhost-plan-'));
+    const runtime = createNodeRuntime({
+      dbPath: join(dir, 'relaycast.db'),
+      baseUrl: 'http://localhost:0',
+      migrate: true,
+      eventQueue: { pollIntervalMs: 0 },
+      presence: { ttlMs: 60_000, sweepIntervalMs: 0 },
+      config: { environment: 'test', defaultWorkspacePlan: undefined },
+    });
+    try {
+      const created = await createEngine(runtime.deps).request('/v1/workspaces', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'undefined-plan' }),
+      });
+      expect(created.status).toBe(201);
+      const { api_key: apiKey } = (await created.json() as { data: { api_key: string } }).data;
+      const identity = await createEngine(runtime.deps).request('/v1/workspace', {
+        headers: { authorization: `Bearer ${apiKey}` },
+      });
+      expect(identity.status).toBe(200);
+      await expect(identity.json()).resolves.toMatchObject({ data: { plan: 'selfhost' } });
+      expect(identity.headers.get('X-RateLimit-Limit')).toBe('30000');
+    } finally {
+      runtime.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('keeps an explicit free tier on the free quota', async () => {
     stack = makeNodeStack({ defaultWorkspacePlan: 'free' });
     const ws = await createWorkspace(stack.app, 'explicit-free');

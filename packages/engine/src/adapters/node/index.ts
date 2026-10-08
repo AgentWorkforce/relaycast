@@ -25,7 +25,9 @@ import { createNodeOutboundWebhookFetch } from './ssrf-fetch.js';
 /**
  * Rows created before self-host persisted a plan carry the schema default
  * `free`, which selects the hosted free quota. Promote them only when this
- * process's own default is the unlimited `selfhost` tier.
+ * process's own default is the unlimited `selfhost` tier. Nothing on the row
+ * distinguishes that default from a plan written as `free`; set
+ * `defaultWorkspacePlan` to `free`, `pro`, or `enterprise` to keep those rows.
  */
 function promoteImplicitSelfHostPlans(sqlite: SqliteDbHandle['sqlite'], plan: string | undefined): void {
   if (plan !== 'selfhost') return;
@@ -189,7 +191,9 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
   };
   // A custom entitlements provider owns the tier. Only the built-in static
   // provider, whose `selfhost` table is unlimited, gets that plan by default.
-  if ((!options.config || !Object.hasOwn(options.config, 'defaultWorkspacePlan')) && !options.entitlements) {
+  // An own property set to `undefined` is omitted: `exactOptionalPropertyTypes`
+  // is off, so forwarding an unset env value still lands here.
+  if (config.defaultWorkspacePlan === undefined && !options.entitlements) {
     config.defaultWorkspacePlan = 'selfhost';
   }
   promoteImplicitSelfHostPlans(handle.sqlite, config.defaultWorkspacePlan);
