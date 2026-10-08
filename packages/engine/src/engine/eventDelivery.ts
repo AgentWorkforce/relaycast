@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, lte, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lt, lte, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { eventSubscriptions, pendingEvents, webhookDeliveries } from '../db/schema.js';
 import { hmacSha256Hex, sha256Hex } from '../lib/crypto.js';
@@ -49,7 +49,10 @@ export interface DeliverEventOptions {
   eventId?: string;
   /** Stable event creation timestamp. Retries only refresh the signing timestamp. */
   eventTimestamp?: Date | string;
-  /** Platform-specific fetch. Node supplies a DNS-pinning implementation in production. */
+  /**
+   * Platform-specific SSRF-safe fetch. Required whenever a matching target is
+   * delivered; omission fails closed instead of falling back to global fetch.
+   */
   fetch?: Fetch;
   /** Deterministic clock seam for tests. */
   now?: Date;
@@ -82,8 +85,19 @@ function publicDeliveryHeaders(headers: Record<string, string> | null): Record<s
       const lower = name.toLowerCase();
       return lower !== 'content-type'
         && !lower.startsWith('x-relay-')
-        && !lower.startsWith('webhook-');
+        && !lower.startsWith('webhook-')
+        && lower !== 'x-forward-to'
+        && lower !== 'x-proxy-auth';
     }),
+  );
+}
+
+function requireSafeFetch(fetchImpl: Fetch | undefined): Fetch {
+  if (fetchImpl) return fetchImpl;
+  throw codedError(
+    'Outbound webhook delivery requires a platform SSRF-safe fetch implementation',
+    'event_delivery_fetch_required',
+    503,
   );
 }
 
@@ -182,6 +196,9 @@ async function attemptDelivery(
     });
     await response.body?.cancel().catch(() => {});
     if (response.ok) return { ok: true, retryable: false, status: response.status, error: null };
+    if (response.status >= 300 && response.status < 400) {
+      return { ok: false, retryable: false, status: response.status, error: `HTTP ${response.status}` };
+    }
     if (response.status === 410 || response.status === 413) {
       return { ok: false, retryable: false, status: response.status, error: `HTTP ${response.status}` };
     }
@@ -259,9 +276,46 @@ async function claimDelivery(db: Db, id: string, now: Date) {
       eq(webhookDeliveries.id, id),
       eq(webhookDeliveries.status, 'pending'),
       lte(webhookDeliveries.nextAttemptAt, now),
+      lt(webhookDeliveries.attempts, MAX_DELIVERY_ATTEMPTS),
     ))
     .returning();
   return claimed ?? null;
+}
+
+/**
+ * A worker can crash after issuing the final HTTP request but before recording
+ * its outcome. Once that final lease expires, dead-letter it instead of
+ * claiming an eighth attempt.
+ */
+async function deadLetterExpiredFinalAttempts(db: Db, eventId: string, now: Date): Promise<void> {
+  await db
+    .update(webhookDeliveries)
+    .set({
+      status: 'dead_letter',
+      lastError: 'attempts exhausted after delivery lease expired',
+      completedAt: now,
+    })
+    .where(and(
+      eq(webhookDeliveries.eventId, eventId),
+      eq(webhookDeliveries.status, 'pending'),
+      lte(webhookDeliveries.nextAttemptAt, now),
+      gte(webhookDeliveries.attempts, MAX_DELIVERY_ATTEMPTS),
+    ));
+}
+
+async function failUnavailableDelivery(db: Db, id: string, now: Date): Promise<void> {
+  await db
+    .update(webhookDeliveries)
+    .set({
+      status: 'failed',
+      lastError: 'subscription inactive or no longer matches this event',
+      completedAt: now,
+    })
+    .where(and(
+      eq(webhookDeliveries.id, id),
+      eq(webhookDeliveries.status, 'pending'),
+      lte(webhookDeliveries.nextAttemptAt, now),
+    ));
 }
 
 async function settleDelivery(
@@ -327,15 +381,17 @@ async function deliverWithoutPersistence(
   payload: Record<string, unknown>,
   eventBody: string,
   now: Date,
-  fetchImpl: Fetch,
+  fetchImpl: Fetch | undefined,
 ): Promise<EventDeliverySummary> {
   const targets = (await activeTargets(db, workspaceId, eventType))
     .filter((target) => matchesFilter(target.filter, payload));
   if (targets.length === 0) return emptySummary();
 
+  const safeFetch = requireSafeFetch(fetchImpl);
+
   const results = await Promise.all(targets.map(async (target) => {
     const id = `whd_${globalThis.crypto.randomUUID()}`;
-    return attemptDelivery(fetchImpl, target, eventType, id, eventBody, now);
+    return attemptDelivery(safeFetch, target, eventType, id, eventBody, now);
   }));
   const retryableFailures = results.filter((result) => !result.ok && result.retryable).length;
   if (retryableFailures > 0) {
@@ -379,7 +435,7 @@ export async function deliverEvent(
     timestamp: eventTimestamp,
     data: payload,
   });
-  const fetchImpl = options.fetch ?? globalThis.fetch;
+  const fetchImpl = options.fetch;
 
   if (!options.eventId) {
     return deliverWithoutPersistence(db, workspaceId, eventType, payload, body, now, fetchImpl);
@@ -388,15 +444,29 @@ export async function deliverEvent(
   const targets = (await activeTargets(db, workspaceId, eventType))
     .filter((target) => matchesFilter(target.filter, payload));
   if (!await initializePersistentDeliveries(db, options.eventId, targets)) {
-    return deliverWithoutPersistence(db, workspaceId, eventType, payload, body, now, fetchImpl);
+    // `eventId` identifies an outbox row. If that row was already pruned, an
+    // at-least-once queue replay is stale; delivering without persistence here
+    // would create new delivery ids and fan the event out a second time.
+    return emptySummary();
   }
 
   const targetById = new Map(targets.map((target) => [target.id, target]));
+  await deadLetterExpiredFinalAttempts(db, options.eventId, now);
   const rows = await db
     .select()
     .from(webhookDeliveries)
     .where(eq(webhookDeliveries.eventId, options.eventId));
   if (rows.length === 0) return emptySummary();
+
+  const dueRows = rows.filter(
+    (row) => row.status === 'pending' && row.nextAttemptAt.getTime() <= now.getTime(),
+  );
+  await Promise.all(dueRows
+    .filter((row) => !targetById.has(row.subscriptionId))
+    .map((row) => failUnavailableDelivery(db, row.id, now)));
+  const safeFetch = dueRows.some((row) => targetById.has(row.subscriptionId))
+    ? requireSafeFetch(fetchImpl)
+    : undefined;
 
   await Promise.all(rows.map(async (row) => {
     if (row.status !== 'pending' || row.nextAttemptAt.getTime() > now.getTime()) return;
@@ -404,7 +474,7 @@ export async function deliverEvent(
     if (!target) return;
     const claimed = await claimDelivery(db, row.id, now);
     if (!claimed) return;
-    const result = await attemptDelivery(fetchImpl, target, eventType, claimed.id, body, now);
+    const result = await attemptDelivery(safeFetch!, target, eventType, claimed.id, body, now);
     await settleDelivery(db, claimed, result, now);
   }));
 
@@ -525,6 +595,21 @@ export async function replayWebhookDelivery(
   }
 
   const now = new Date();
+  // Reset the parent first. An interruption here leaves a harmless claimable
+  // parent with a terminal child: a retry can still reset the child. Reversing
+  // the order could strand a pending child behind a failed parent forever.
+  await db
+    .update(pendingEvents)
+    .set({
+      status: 'pending',
+      attempts: 0,
+      maxAttempts: 32,
+      processAfter: now,
+      lastError: null,
+      completedAt: null,
+    })
+    .where(eq(pendingEvents.id, row.eventId));
+
   const [replayed] = await db
     .update(webhookDeliveries)
     .set({
@@ -549,18 +634,6 @@ export async function replayWebhookDelivery(
       ? { kind: 'not_replayable', status: current.status }
       : { kind: 'not_found' };
   }
-  await db
-    .update(pendingEvents)
-    .set({
-      status: 'pending',
-      attempts: 0,
-      maxAttempts: 32,
-      processAfter: now,
-      lastError: null,
-      completedAt: null,
-    })
-    .where(eq(pendingEvents.id, row.eventId));
-
   return {
     kind: 'replayed',
     event: {

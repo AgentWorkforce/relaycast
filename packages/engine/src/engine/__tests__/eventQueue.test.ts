@@ -84,7 +84,11 @@ describe('sweepPendingEvents', () => {
     await byType['c.rescheduled'].reschedule('try later', 120_000);
 
     const rows = await db.select().from(pendingEvents);
-    expect(rows.map((r) => r.eventType).sort()).toEqual(['b.failed', 'c.rescheduled']);
+    expect(rows.map((r) => r.eventType).sort()).toEqual(['a.completed', 'b.failed', 'c.rescheduled']);
+
+    const completed = rows.find((r) => r.eventType === 'a.completed')!;
+    expect(completed.status).toBe('completed');
+    expect(completed.completedAt).not.toBeNull();
 
     const failed = rows.find((r) => r.eventType === 'b.failed')!;
     expect(failed.status).toBe('failed');
@@ -128,7 +132,7 @@ describe('sweepPendingEvents', () => {
 });
 
 describe('cleanupOldEvents', () => {
-  it('settles and prunes exhausted pending rows instead of leaving them unclaimable', async () => {
+  it('retains a newly settled exhausted row for 24h from settlement', async () => {
     const { db } = track(openDb());
     const ws = await seedWorkspace(db);
     const id = await enqueueEvent(db, ws, 'message.created', {});
@@ -145,7 +149,15 @@ describe('cleanupOldEvents', () => {
 
     const deleted = await cleanupOldEvents(db);
 
-    expect(deleted).toBe(1);
+    expect(deleted).toBe(0);
+    const [settled] = await db.select().from(pendingEvents);
+    expect(settled.status).toBe('failed');
+    expect(settled.completedAt).not.toBeNull();
+
+    await db.update(pendingEvents)
+      .set({ completedAt: new Date(Date.now() - 48 * 60 * 60 * 1000) })
+      .where(eq(pendingEvents.id, id));
+    expect(await cleanupOldEvents(db)).toBe(1);
     expect(await db.select().from(pendingEvents)).toHaveLength(0);
   });
 

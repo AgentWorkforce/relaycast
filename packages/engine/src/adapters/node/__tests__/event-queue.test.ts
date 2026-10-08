@@ -11,6 +11,7 @@ import { deliverEvent, WEBHOOK_RETRY_DELAYS_MS } from '../../../engine/eventDeli
 import { BackgroundTasks } from '../../../__tests__/backgroundTasks.js';
 import { pendingEvents, webhookDeliveries, workspaces, eventSubscriptions } from '../../../db/schema.js';
 import { verifyStandardWebhook } from '../../../lib/standardWebhook.js';
+import { nodeSafeWebhookFetch } from '../ssrf-fetch.js';
 
 const HOOK_URL = 'https://hooks.example.test/relay';
 
@@ -58,7 +59,12 @@ function makeQueue(
   opts: ConstructorParameters<typeof DurableEventQueue>[2] = {},
   onError: (err: unknown, ctx: Record<string, unknown>) => void = () => {},
 ): DurableEventQueue & { settle(): Promise<void> } {
-  const queue = new DurableEventQueue(db, onError, { pollIntervalMs: 0, ...opts });
+  const testFetch: typeof globalThis.fetch = (input, init) => globalThis.fetch(input, init);
+  const queue = new DurableEventQueue(db, onError, {
+    pollIntervalMs: 0,
+    fetch: testFetch,
+    ...opts,
+  });
   const tasks = new BackgroundTasks();
   const poll = queue.poll.bind(queue);
   queue.poll = () => tasks.track(poll());
@@ -87,6 +93,12 @@ afterEach(async () => {
 });
 
 describe('DurableEventQueue', () => {
+  it('fails closed when a host omits its SSRF-safe fetch implementation', () => {
+    const { db } = track(openDb());
+    expect(() => new DurableEventQueue(db, undefined, { pollIntervalMs: 0 }))
+      .toThrow(/SSRF-safe fetch/);
+  });
+
   it('send persists the outbox row before delivery completes', async () => {
     const { db } = track(openDb());
     const ws = await seedWorkspace(db);
@@ -113,7 +125,9 @@ describe('DurableEventQueue', () => {
       release();
       await queue.settle();
     }
-    expect(await pendingRows(db)).toHaveLength(0);
+    const [settled] = await pendingRows(db);
+    expect(settled).toMatchObject({ status: 'completed' });
+    expect(settled.completedAt).not.toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -134,12 +148,13 @@ describe('DurableEventQueue', () => {
     await queue.send({ type: 'message.created', workspaceId: ws, data, outboxId });
 
     await queue.settle();
-    expect(await pendingRows(db)).toHaveLength(0);
+    expect(await pendingRows(db)).toHaveLength(1);
+    expect((await pendingRows(db))[0]).toMatchObject({ id: outboxId, status: 'completed' });
     // Exactly one delivery — a second row would have produced a second fetch.
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('successful delivery deletes the row and signs the payload', async () => {
+  it('successful delivery retains bounded health history and signs the payload', async () => {
     const { db } = track(openDb());
     const ws = await seedWorkspace(db);
     await seedSubscription(db, ws, { secret: 'shh' });
@@ -151,7 +166,11 @@ describe('DurableEventQueue', () => {
     await enqueueEvent(db, ws, 'message.created', { text: 'hello' });
     await queue.poll();
 
-    expect(await pendingRows(db)).toHaveLength(0);
+    const [event] = await pendingRows(db);
+    expect(event).toMatchObject({ status: 'completed' });
+    expect(event.completedAt).not.toBeNull();
+    const [delivery] = await db.select().from(webhookDeliveries);
+    expect(delivery).toMatchObject({ status: 'succeeded', attempts: 1, lastStatus: 200 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe(HOOK_URL);
@@ -206,6 +225,40 @@ describe('DurableEventQueue', () => {
 
     await queue.poll();
     expect(fetchMock).toHaveBeenCalledTimes(1); // settled rows are never reclaimed
+  });
+
+  it('settles redirects as terminal without retrying them', async () => {
+    const { db } = track(openDb());
+    const ws = await seedWorkspace(db);
+    await seedSubscription(db, ws);
+    const fetchMock = vi.fn(async () => new Response(null, {
+      status: 302,
+      headers: { location: 'https://other.example.test/hook' },
+    }));
+    const queue = makeQueue(db, { fetch: fetchMock as typeof globalThis.fetch });
+    await enqueueEvent(db, ws, 'message.created', { text: 'do not follow' });
+
+    await queue.poll();
+
+    const [delivery] = await db.select().from(webhookDeliveries);
+    expect(delivery).toMatchObject({ status: 'failed', attempts: 1, lastStatus: 302 });
+    expect((await pendingRows(db))[0]).toMatchObject({ status: 'failed' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats a missing durable parent as an already-settled queue replay', async () => {
+    const { db } = track(openDb());
+    const ws = await seedWorkspace(db);
+    await seedSubscription(db, ws);
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+
+    const summary = await deliverEvent(db, ws, 'message.created', { text: 'stale replay' }, {
+      eventId: 'evt_already_pruned',
+      fetch: fetchMock as typeof globalThis.fetch,
+    });
+
+    expect(summary).toMatchObject({ attempted: 0, succeeded: 0, failed: 0 });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('retries only the failed subscriber and never re-sends to a successful one', async () => {
@@ -312,6 +365,69 @@ describe('DurableEventQueue', () => {
     expect(fetchMock).toHaveBeenCalledTimes(7);
   });
 
+  it('dead-letters an expired final delivery lease without sending attempt eight', async () => {
+    const { db } = track(openDb());
+    const ws = await seedWorkspace(db);
+    const subscriptionId = await seedSubscription(db, ws);
+    const eventId = await enqueueEvent(db, ws, 'message.created', { text: 'leased final attempt' });
+    const [event] = await db.select().from(pendingEvents).where(eq(pendingEvents.id, eventId));
+    await db.update(pendingEvents)
+      .set({ webhookInitialized: true })
+      .where(eq(pendingEvents.id, eventId));
+    await db.insert(webhookDeliveries).values({
+      id: 'whd_expired_final_attempt',
+      eventId,
+      subscriptionId,
+      attempts: 7,
+      nextAttemptAt: new Date(Date.now() - 1_000),
+    });
+    const fetchMock = vi.fn(async () => new Response('', { status: 503 }));
+
+    const summary = await deliverEvent(db, ws, event.eventType, event.payload as Record<string, unknown>, {
+      eventId,
+      eventTimestamp: event.createdAt,
+      fetch: fetchMock as typeof globalThis.fetch,
+      now: new Date(),
+    });
+
+    expect(summary).toMatchObject({ attempted: 1, failed: 1, deadLettered: 1 });
+    expect(fetchMock).not.toHaveBeenCalled();
+    const [delivery] = await db.select().from(webhookDeliveries);
+    expect(delivery).toMatchObject({
+      status: 'dead_letter',
+      attempts: 7,
+      lastError: 'attempts exhausted after delivery lease expired',
+    });
+  });
+
+  it('settles a due delivery when its subscription becomes inactive', async () => {
+    const { db } = track(openDb());
+    const ws = await seedWorkspace(db);
+    const subscriptionId = await seedSubscription(db, ws);
+    const fetchMock = vi.fn(async () => new Response('', { status: 503 }));
+    const queue = makeQueue(db, { fetch: fetchMock as typeof globalThis.fetch });
+    const eventId = await enqueueEvent(db, ws, 'message.created', { text: 'disable target' });
+    await queue.poll();
+
+    const due = new Date(Date.now() - 1_000);
+    await db.update(eventSubscriptions)
+      .set({ isActive: false })
+      .where(eq(eventSubscriptions.id, subscriptionId));
+    await db.update(webhookDeliveries).set({ nextAttemptAt: due });
+    await db.update(pendingEvents).set({ processAfter: due }).where(eq(pendingEvents.id, eventId));
+    await queue.poll();
+
+    const [delivery] = await db.select().from(webhookDeliveries);
+    expect(delivery).toMatchObject({
+      status: 'failed',
+      attempts: 1,
+      lastError: 'subscription inactive or no longer matches this event',
+    });
+    const [event] = await pendingRows(db);
+    expect(event).toMatchObject({ status: 'failed' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('exhausting maxAttempts settles the row as failed', async () => {
     const { db } = track(openDb());
     const ws = await seedWorkspace(db);
@@ -389,7 +505,8 @@ describe('DurableEventQueue', () => {
       startup.mockRestore();
       try {
         await Promise.all(startupWork);
-        expect(await pendingRows(runtime.deps.db)).toHaveLength(0);
+        expect(await pendingRows(runtime.deps.db)).toHaveLength(1);
+        expect((await pendingRows(runtime.deps.db))[0]).toMatchObject({ status: 'completed' });
         expect(fetchMock).toHaveBeenCalledTimes(1);
       } finally {
         await Promise.all(startupWork);
@@ -416,6 +533,9 @@ describe('DurableEventQueue', () => {
     startup.mockRestore();
     try {
       expect(runtime.deps.config?.retention).toEqual({ messageTtlDays: 45 });
+      // Vitest sets its own environment marker; only an explicit engine test
+      // environment may downgrade the production DNS-pinning transport.
+      expect(runtime.deps.config?.outboundWebhookFetch).toBe(nodeSafeWebhookFetch);
     } finally {
       await Promise.all(startupWork);
       runtime.close();

@@ -6074,7 +6074,8 @@ paths:
       summary: List outbound webhook delivery health
       description: >
         Lists durable per-event delivery state for one subscription, including pending retries,
-        terminal failures, and dead letters. Retryable failures use delays of 30 seconds, 2 minutes,
+        terminal failures, and dead letters. Settled history is retained for 24 hours from completion.
+        Retryable failures use delays of 30 seconds, 2 minutes,
         10 minutes, 30 minutes, 1 hour, and 2 hours before attempt seven is dead-lettered.
       tags:
         - Subscriptions

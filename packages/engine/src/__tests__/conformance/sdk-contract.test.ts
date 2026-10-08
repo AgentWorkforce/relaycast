@@ -817,6 +817,8 @@ describe('SDK v8 service contract', () => {
           'Content-Type': 'text/plain',
           'x-relay-event': 'spoofed',
           'X-Relay-Timestamp': 'spoofed',
+          'X-Forward-To': 'https://internal.example.test',
+          'X-Proxy-Auth': 'attacker-controlled',
         },
         secret: 'shared-secret',
       }),
@@ -839,7 +841,9 @@ describe('SDK v8 service contract', () => {
     expectRedactedHeaders(getBody.data.headers);
 
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }));
-    await deliverEvent(stack.runtime.deps.db, ws.workspaceId, 'message.created', { text: 'hello' });
+    await deliverEvent(stack.runtime.deps.db, ws.workspaceId, 'message.created', { text: 'hello' }, {
+      fetch: fetchMock as typeof globalThis.fetch,
+    });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -849,6 +853,8 @@ describe('SDK v8 service contract', () => {
     expect(headers['X-Relay-Event']).toBe('message.created');
     expect(headers['x-relay-event']).toBeUndefined();
     expect(headers['X-Relay-Timestamp']).not.toBe('spoofed');
+    expect(headers['X-Forward-To']).toBeUndefined();
+    expect(headers['X-Proxy-Auth']).toBeUndefined();
     expect(headers['X-Relay-Signature']).toMatch(/^sha256=[0-9a-f]{64}$/);
   });
 

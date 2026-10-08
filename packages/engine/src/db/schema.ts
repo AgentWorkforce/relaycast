@@ -1329,6 +1329,7 @@ export const pendingEvents = sqliteTable(
     // Parent claims cover crashes and scheduling; per-subscriber retry limits
     // live on webhookDeliveries. Keep enough headroom that lease recovery
     // cannot exhaust the parent before a subscriber reaches its final attempt.
+    // Settled parents remain for 24h delivery-health/replay retention.
     maxAttempts: integer('max_attempts').notNull().default(32),
     webhookInitialized: integer('webhook_initialized', { mode: 'boolean' }).notNull().default(false),
     lastError: text('last_error'),

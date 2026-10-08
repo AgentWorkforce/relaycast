@@ -1115,8 +1115,9 @@ use HTTPS, resolve only to global addresses, and cannot redirect.
 Delivery retry state is isolated per subscription, so a healthy target is not re-sent an
 event because another target failed. Retryable failures wait 30 seconds, 2 minutes,
 10 minutes, 30 minutes, 1 hour, then 2 hours before attempt seven enters `dead_letter`.
-Inspect delivery health with `GET /subscriptions/:id/deliveries` and replay a failed or
-dead-lettered attempt with `POST /subscriptions/:id/deliveries/:delivery_id/replay`.
+Inspect delivery health with `GET /subscriptions/:id/deliveries`; settled history is retained
+for 24 hours from completion. Replay a failed or dead-lettered attempt with
+`POST /subscriptions/:id/deliveries/:delivery_id/replay`.
 Stored custom header values are redacted from subscription create/list/get responses.
 
 Realtime-first usage with the TypeScript SDK — react to delivery events live, and replay the

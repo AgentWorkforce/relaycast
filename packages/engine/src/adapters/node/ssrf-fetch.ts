@@ -33,18 +33,27 @@ const dispatcher = new Agent({
 });
 
 /** HTTPS-only fetch whose connector validates and pins DNS answers at connect time. */
-export const nodeSafeWebhookFetch: typeof globalThis.fetch = async (input, init) => {
-  const rawUrl = typeof input === 'string'
-    ? input
-    : input instanceof URL
-      ? input.toString()
-      : input.url;
-  if (!isSafeExternalUrl(rawUrl, { strict: true, requireHttps: true })) {
-    throw new Error('Unsafe outbound webhook URL');
-  }
-  return undiciFetch(rawUrl, {
-    ...(init as UndiciRequestInit),
-    redirect: 'manual',
-    dispatcher,
-  }) as unknown as Response;
-};
+export function createNodeSafeWebhookFetch(
+  fetchImpl: typeof undiciFetch = undiciFetch,
+): typeof globalThis.fetch {
+  return async (input, init) => {
+    const rawUrl = typeof input === 'string'
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+    if (!isSafeExternalUrl(rawUrl, { strict: true, requireHttps: true })) {
+      throw new Error('Unsafe outbound webhook URL');
+    }
+    const requestInput = input instanceof Request
+      ? input as unknown as Parameters<typeof undiciFetch>[0]
+      : rawUrl;
+    return fetchImpl(requestInput, {
+      ...(init as UndiciRequestInit),
+      redirect: 'manual',
+      dispatcher,
+    }) as unknown as Response;
+  };
+}
+
+export const nodeSafeWebhookFetch = createNodeSafeWebhookFetch();

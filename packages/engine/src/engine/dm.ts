@@ -806,7 +806,15 @@ export async function sendDm(
     if (inboundId) writes.push(writeDb.insert(a2aInbound).values({ id: inboundId, workspaceId, messageId, fingerprint: inboundFingerprint, response: publicResult }));
     if (egressId) writes.push(writeDb.insert(a2aEgressContext).values({ id: egressId, messageId, response: publicResult }));
     if (persistWebhookOutbox) {
-      writes.push(writeDb.insert(pendingEvents).values({ id: messageId, workspaceId, eventType: 'dm.received', payload: eventData }));
+      writes.push(writeDb.insert(pendingEvents).values({
+        id: messageId,
+        workspaceId,
+        eventType: 'dm.received',
+        payload: eventData,
+        // Migration 0067 cannot change SQLite's existing column default; set
+        // the per-target retry headroom explicitly on this direct insert.
+        maxAttempts: 32,
+      }));
     }
     if (notificationsDurable) {
       writes.push(buildWorkspaceEventWrite(writeDb, workspaceId, { type: 'dm.received', payload: workspacePayload }));

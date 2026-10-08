@@ -102,9 +102,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
   const db = handle.db;
 
   const telemetry = options.telemetry ?? new NoopTelemetrySink();
-  const testEnvironment = options.config?.environment === 'test'
-    || process.env.NODE_ENV === 'test'
-    || process.env.VITEST === 'true';
+  const testEnvironment = options.config?.environment === 'test';
   const testFetch: typeof globalThis.fetch = (input, init) => globalThis.fetch(input, init);
   const outboundWebhookFetch = options.config?.outboundWebhookFetch
     ?? (testEnvironment ? testFetch : nodeSafeWebhookFetch);

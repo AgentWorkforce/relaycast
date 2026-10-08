@@ -646,7 +646,9 @@ try {
     await run('UPDATE deliveries SET next_attempt_at=0 WHERE workspace_id=?',f.ws);
     const recoverLocal=async()=>{
       for(const event of await sweepPendingEvents(db)){
-        const result=await deliverEvent(db,event.workspaceId,event.eventType,event.payload);
+        const result=await deliverEvent(db,event.workspaceId,event.eventType,event.payload,{
+          eventId:event.id,eventTimestamp:event.createdAt,fetch:globalThis.fetch,
+        });
         assert.equal(result.failed,0);await event.complete();
       }
       await sweepDueNodeDeliveries({...deps,db});
@@ -666,7 +668,8 @@ try {
     assert.equal(f.localReceipts.webhooks.length,1);assert.equal(f.localReceipts.deliveries.length,1);
     assert.equal(await scalar("SELECT count(*) FROM workspace_events WHERE workspace_id=? AND type='dm.received'",f.ws),1);
     assert.equal(await scalar('SELECT count(*) FROM messages WHERE workspace_id=?',f.ws),1);
-    assert.equal(await scalar('SELECT count(*) FROM pending_events WHERE workspace_id=?',f.ws),0);
+    assert.equal(await scalar('SELECT count(*) FROM pending_events WHERE workspace_id=?',f.ws),1);
+    assert.equal(await scalar('SELECT status FROM pending_events WHERE workspace_id=?',f.ws),'completed');
     record('route failure plus lost live/queue fast paths: egress + webhook + node sweeps and workspace cursor replay; once-only identities',{messageId:id,workspaceSeq:dmEvents[0].seq,webhooks:1,deliveries:1});
   }
   if (!process.env.REVIEW_CASE || process.env.REVIEW_CASE==='atomic') {

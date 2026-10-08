@@ -8,7 +8,8 @@ ALTER TABLE pending_events
 
 -- One durable retry state per (outbox event, subscription). Successful
 -- subscribers are never re-sent when another target is down, and exhausted
--- rows remain queryable/replayable while the failed parent outbox row exists.
+-- rows remain queryable/replayable for the parent's bounded post-settlement
+-- retention window.
 CREATE TABLE webhook_deliveries (
   id TEXT PRIMARY KEY NOT NULL,
   event_id TEXT NOT NULL REFERENCES pending_events(id) ON DELETE CASCADE,

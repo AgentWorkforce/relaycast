@@ -50,9 +50,11 @@ export interface DurableEventQueueOptions {
  * Durable webhook delivery for self-host, replacing the Cloudflare Queue + DLQ.
  * `send` persists a `pending_events` outbox row first, then a background poller
  * claims due rows and fans them out via `deliverEvent` (HMAC signing and
- * retryable-vs-terminal classification unchanged). Success deletes the row;
- * terminal failures settle it as `failed`; retryable failures back off
+ * retryable-vs-terminal classification unchanged). Success settles the row as
+ * `completed`; terminal failures settle it as `failed`; retryable failures back off
  * exponentially and survive process restarts — `start()` resumes whatever is due.
+ * A platform SSRF-safe `fetch` is mandatory; `createNodeRuntime` supplies the
+ * DNS-pinning Node implementation.
  */
 export class DurableEventQueue implements EventQueue {
   private readonly pollIntervalMs: number;
@@ -80,7 +82,10 @@ export class DurableEventQueue implements EventQueue {
     this.batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE;
     this.cleanupIntervalMs = options.cleanupIntervalMs ?? DEFAULT_CLEANUP_INTERVAL_MS;
     this.retention = options.retention ?? {};
-    this.fetchImpl = options.fetch ?? globalThis.fetch;
+    if (!options.fetch) {
+      throw new Error('DurableEventQueue requires an SSRF-safe fetch implementation');
+    }
+    this.fetchImpl = options.fetch;
   }
 
   /**
