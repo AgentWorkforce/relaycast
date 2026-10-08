@@ -7,11 +7,16 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
 
 ### Fixed
 
+- Authentication rejects an expired workspace for every credential kind with `401 workspace_expired`, rather than admitting it until `reapExpiredWorkspaces` deletes the row. The built-in provider enforces it, and the engine re-checks every `AuthProvider` result so an injected hosting provider cannot admit an expired workspace; the node WebSocket upgrade, agent recovery by work-unit proof, and the inbound A2A webhook, which resolve their principal directly, gained their own gate.
 - The invocation sweeps no longer scan all of `action_invocations`. Migrations `0064_action_invocations_status_dispatched_index.sql`, `0065_action_invocations_task_deadline_any_status.sql`, and `0066_action_invocations_status_sweep_ranges.sql` add `(status, dispatched_at)`, `(status, retry_after_at)`, and partial `(status, json_extract(task_state, '$.deadline'))` indexes, and drop the interim deadline-only index from 0065. They change no data; apply them with the other engine migrations.
+
+### Added
+
+- `isWorkspaceExpired`, `authenticateUnexpired`, and `WORKSPACE_EXPIRED_CODE` for hosts composing their own auth paths, plus `getWorkspaceExpiry` for a minimal expiry read.
 
 ## [9.0.0] - 2026-10-06
 

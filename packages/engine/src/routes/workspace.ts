@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { CreateWorkspaceRequestSchema, UpdateWorkspaceRequestSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { requireAgentToken, requireWorkspaceKey, requireWorkspaceRead } from '../middleware/auth.js';
+import { authenticateUnexpired } from '../auth/workspaceExpiry.js';
 import { parseIdempotencyKey } from '../middleware/idempotency.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { RATE_LIMIT_WINDOW_MS, rateLimitWindow, rateLimitWindowResetAt, setRetryContract } from '../lib/throttle.js';
@@ -217,7 +218,7 @@ workspaceRoutes.post('/workspaces', async (c) => {
       ? ownerAuthorization.token
       : undefined;
     if (idempotencyKey && ownerApiKey) {
-      const ownerAuth = await c.get('engine').auth.authenticate({ token: ownerApiKey, require: 'workspace', db });
+      const ownerAuth = await authenticateUnexpired(c.get('engine').auth, { token: ownerApiKey, require: 'workspace', db });
       if (!ownerAuth.ok) {
         return jsonError(c, ownerAuth.code, ownerAuth.message, ownerAuth.status as ContentfulStatusCode);
       }

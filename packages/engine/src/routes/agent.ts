@@ -4,6 +4,13 @@ import { and, eq } from 'drizzle-orm';
 import { AGENT_TOKEN_HASH_PATTERN, AgentTypeSchema, CliTypeSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { requireWorkspaceKey, requireAuth, requireAgentToken, requireSender, requireWorkspaceRead } from '../middleware/auth.js';
+import {
+  authenticateUnexpired,
+  isWorkspaceExpired,
+  WORKSPACE_EXPIRED_CODE,
+  WORKSPACE_EXPIRED_MESSAGE,
+} from '../auth/workspaceExpiry.js';
+import { getWorkspaceExpiry } from '../engine/workspace.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as agentEngine from '../engine/agent.js';
 import { agentRetentionSchema, retainAgents } from '../engine/agentRetention.js';
@@ -384,6 +391,12 @@ agentRoutes.post(
           && credential.agentId === parsed.data.expected_agent_id
           && credential.agentName === name
         ) {
+          // A recovery proof is a credential like any other: it must not keep
+          // identity recovery available past the workspace deadline (#464).
+          const workspace = await getWorkspaceExpiry(db, credential.workspaceId);
+          if (workspace && isWorkspaceExpired(workspace)) {
+            return jsonError(c, WORKSPACE_EXPIRED_CODE, WORKSPACE_EXPIRED_MESSAGE, 401);
+          }
           target = await identityTargetByName(db, credential.workspaceId, name);
           authority = 'work_unit_proof';
           actor = `work_unit:${credential.workUnitId ?? 'proof'}`;
@@ -393,8 +406,11 @@ agentRoutes.post(
         // alongside agent/workspace credentials. Workspace credentials still
         // fail below because they establish neither agent nor origin-node
         // authority; this only makes the explicit origin-node branch reachable.
-        const auth = await c.get('engine').auth.authenticate({ token, require: 'sender', db });
+        const auth = await authenticateUnexpired(c.get('engine').auth, { token, require: 'sender', db });
         if (!auth.ok) {
+          if (auth.code === WORKSPACE_EXPIRED_CODE) {
+            return jsonError(c, WORKSPACE_EXPIRED_CODE, WORKSPACE_EXPIRED_MESSAGE, 401);
+          }
           return jsonError(c, 'agent_recovery_not_authorized', 'Recovery credential was not accepted', 403);
         }
         target = await identityTargetByName(db, auth.workspace.id, name);

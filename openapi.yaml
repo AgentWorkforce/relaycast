@@ -1716,7 +1716,12 @@ components:
       properties:
         code:
           type: string
-          description: Machine-readable error code. Invalid agent tokens are reported as `agent_token_invalid` so clients can re-register or rotate the agent identity.
+          description: >-
+            Machine-readable error code. Invalid agent tokens are reported as
+            `agent_token_invalid` so clients can re-register or rotate the agent
+            identity. A workspace key, agent token, node token, or observer
+            token for a workspace past its `expires_at` is reported as
+            `workspace_expired` with HTTP 401.
         message:
           type: string
 
@@ -1799,6 +1804,10 @@ paths:
                     Explicit lifetime for a throwaway workspace. Omit for a
                     persistent workspace. Once stored, the resulting expiry is
                     the sole automatic whole-workspace deletion predicate.
+                    Authentication enforces it at `expires_at`: from that
+                    instant the workspace key and the workspace's agent, node,
+                    and observer tokens return `401 workspace_expired`,
+                    independent of when the background reap deletes the data.
                 provenance:
                   $ref: '#/components/schemas/WorkspaceProvenanceInput'
                 metadata:

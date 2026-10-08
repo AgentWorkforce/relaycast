@@ -128,9 +128,21 @@ export type { WorkspaceRetentionSettings } from './db/schema.js';
 export {
   reapExpiredWorkspaces,
   drainFileCleanup,
+  getWorkspaceExpiry,
   DEFAULT_WORKSPACE_REAP_LIMIT,
   DEFAULT_FILE_CLEANUP_LIMIT,
 } from './engine/workspace.js';
+
+// Expiry is enforced at authentication, not just by the reap. Hosts that
+// compose their own credential paths reuse these so an expired workspace stays
+// rejected whatever provider resolved it.
+export {
+  isWorkspaceExpired,
+  authenticateUnexpired,
+  workspaceExpiredAuthResult,
+  WORKSPACE_EXPIRED_CODE,
+  WORKSPACE_EXPIRED_MESSAGE,
+} from './auth/workspaceExpiry.js';
 
 // Durable workspace event log (observer plane): append + cursor reads over
 // `workspace_events`, and the shared append+stamp+publish helper used by every

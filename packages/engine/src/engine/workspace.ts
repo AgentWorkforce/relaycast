@@ -558,6 +558,21 @@ export async function getWorkspaceByName(db: Db, name: string) {
   };
 }
 
+/**
+ * Minimal expiry read for auth paths that resolve their principal directly
+ * (the node WebSocket upgrade) and still have to honour workspace expiry.
+ */
+export async function getWorkspaceExpiry(
+  db: Db,
+  workspaceId: string,
+): Promise<{ expiresAt: Date | null } | null> {
+  const [workspace] = await db
+    .select({ expiresAt: workspaces.expiresAt })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId));
+  return workspace ?? null;
+}
+
 export async function getWorkspace(
   db: Db,
   workspaceId: string,
