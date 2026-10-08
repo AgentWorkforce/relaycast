@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   ci:
-    if: (github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || github.head_ref == 'trunk'
+    if: (github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || (github.head_ref == 'trunk' && github.event.pull_request.head.repo.full_name == github.repository && github.base_ref == 'main')
     name: Lint, Build & Test
     runs-on: ubuntu-latest
     steps:
@@ -33,7 +33,7 @@ jobs:
       - run: npm run test:container
 
   container:
-    if: (github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || github.head_ref == 'trunk'
+    if: (github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || (github.head_ref == 'trunk' && github.event.pull_request.head.repo.full_name == github.repository && github.base_ref == 'main')
     name: Container (${{ matrix.platform }})
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -134,7 +134,7 @@ jobs:
         run: docker rm --force --volumes relaycast-ci-${{ matrix.arch }} 2>/dev/null || true
 
   rust-sdk:
-    if: (github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || github.head_ref == 'trunk'
+    if: (github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || (github.head_ref == 'trunk' && github.event.pull_request.head.repo.full_name == github.repository && github.base_ref == 'main')
     name: Rust SDK
     runs-on: ubuntu-latest
     steps:
