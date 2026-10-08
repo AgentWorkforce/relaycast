@@ -17,6 +17,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Added
 
 - `isWorkspaceExpired`, `authenticateUnexpired`, and `WORKSPACE_EXPIRED_CODE` for hosts composing their own auth paths, plus `getWorkspaceExpiry` for a minimal expiry read.
+- Outbound subscriptions and HTTP push HMAC auth can opt into Standard Webhooks signing.
+- Subscription delivery health and replay endpoints expose durable per-target retry/dead-letter state. Migration `0067_webhook_delivery_reliability.sql` adds the signature scheme, per-event initialization fence, delivery table, and retry headroom.
+
+### Changed
+
+- Production webhook delivery requires public HTTPS destinations, rejects IANA special-purpose DNS answers at connect time, and never follows redirects.
+- Failed subscriber deliveries retry independently on the 30s/2m/10m/30m/1h/2h schedule before dead-lettering attempt seven.
 
 ## [9.0.0] - 2026-10-06
 

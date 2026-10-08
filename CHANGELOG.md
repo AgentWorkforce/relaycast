@@ -18,6 +18,12 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
+### Added
+
+- Outbound subscriptions and HTTP push nodes can opt into Standard Webhooks signing.
+- Durable per-subscriber retries expose delivery health and support dead-letter replay with stable delivery IDs for receiver-side deduplication.
+- Production webhook delivery requires public HTTPS destinations, rejects redirects, and pins DNS resolution at connect time to block DNS rebinding.
+
 ### Fixed
 
 - Workspace expiry is enforced at authentication: once a workspace created with `expires_in_seconds` passes `expires_at`, its workspace key, agent tokens, node tokens, observer tokens, agent recovery proofs, inbound A2A webhook tokens, and both WebSocket upgrades return `401 workspace_expired` instead of staying usable until the reap deletes it.

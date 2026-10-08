@@ -56,6 +56,7 @@ receiptRoutes.post(
                 nodeConnections: c.get('engine').nodeConnections,
                 environment: c.get('engine').config?.environment,
                 httpPushProxy: c.get('engine').config?.httpPushProxy,
+                outboundWebhookFetch: c.get('engine').config?.outboundWebhookFetch,
                 workspaceId: workspace.id,
               },
               {

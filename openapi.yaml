@@ -1189,6 +1189,14 @@ components:
             prefix:
               type: string
               default: sha256=
+            signature_scheme:
+              type: string
+              enum: [standard-webhooks]
+              description: >
+                Opt into Standard Webhooks signing. `secret` must use the `whsec_`
+                format and decode to 24-64 bytes. Delivery sends `webhook-id`,
+                `webhook-timestamp`, and `webhook-signature` instead of the legacy
+                configurable HMAC headers.
 
     HttpPushNodeDelivery:
       type: object
@@ -5954,12 +5962,15 @@ paths:
         Subscribe an external webhook endpoint to workspace events. `events` is a free-form array of
         dotted event names (or `["*"]` to receive every event, including new ones such as
         `agent.exited` and `node.status.online` / `node.status.offline`). Delivery payloads are JSON:
-        `{ type, workspace_id, timestamp, data }`. If `secret` is provided, Relaycast signs the exact
-        JSON request body with HMAC-SHA256 and sends `X-Relay-Signature: sha256=<hex>` along with
-        `X-Relay-Event` and `X-Relay-Timestamp`. Custom `headers` are included on delivery; Relay's
+        `{ type, workspace_id, timestamp, data }`. Every delivery has a stable `webhook-id` across
+        retries. If `secret` is provided, the default `legacy` scheme signs the exact JSON body with
+        HMAC-SHA256 and sends `X-Relay-Signature: sha256=<hex>`. Set `signature_scheme` to
+        `standard-webhooks` with a 24-64-byte base64 `whsec_` secret to send `webhook-timestamp` and
+        `webhook-signature: v1,<base64>` instead. Custom `headers` are included on delivery; Relay's
         own `Content-Type` and `X-Relay-*` headers take precedence. Header names must be valid
         HTTP field names, values cannot contain CR/LF, and stored custom header values are redacted
-        from subscription create/list/get responses.
+        from subscription create/list/get responses. Production callback URLs must use HTTPS and
+        resolve only to globally routable addresses; redirects are not followed.
       tags:
         - Subscriptions
       security:
@@ -5990,6 +6001,11 @@ paths:
                   description: Custom headers to include on outbound delivery requests, such as Authorization. Values are redacted in API responses.
                 secret:
                   type: string
+                  description: Signing secret. Standard Webhooks requires `whsec_` plus 24-64 base64-decoded bytes.
+                signature_scheme:
+                  type: string
+                  enum: [legacy, standard-webhooks]
+                  default: legacy
       responses:
         '201':
           description: Subscription created
@@ -6052,6 +6068,79 @@ paths:
       responses:
         '204':
           description: Subscription deleted
+
+  /subscriptions/{id}/deliveries:
+    get:
+      summary: List outbound webhook delivery health
+      description: >
+        Lists durable per-event delivery state for one subscription, including pending retries,
+        terminal failures, and dead letters. Settled history is retained for 24 hours from completion.
+        Retryable failures use delays of 30 seconds, 2 minutes,
+        10 minutes, 30 minutes, 1 hour, and 2 hours before attempt seven is dead-lettered.
+      tags:
+        - Subscriptions
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [pending, succeeded, failed, dead_letter]
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        '200':
+          description: Delivery health list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /subscriptions/{id}/deliveries/{delivery_id}/replay:
+    post:
+      summary: Replay a failed outbound webhook delivery
+      description: Resets one terminal or dead-letter delivery and its durable event, then requeues it.
+      tags:
+        - Subscriptions
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: delivery_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Delivery requeued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '404':
+          description: Delivery not found
+        '409':
+          description: Delivery is pending or already succeeded and cannot be replayed
 
   /integrations/relayfile/inbound-target:
     post:

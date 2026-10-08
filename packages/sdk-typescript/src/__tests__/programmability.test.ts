@@ -190,6 +190,51 @@ describe('Programmability SDK', () => {
       expect(url).toBe('https://cast.agentrelay.com/v1/subscriptions/sub_1');
       expect(init.method).toBe('DELETE');
     });
+
+    it('creates Standard Webhooks subscriptions with the snake_case wire field', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      mockFetch.mockImplementation(() => mockResponse({ id: 'sub_1' }));
+
+      await relay.subscriptions.create({
+        events: ['message.created'],
+        url: 'https://hook.example.com',
+        secret: 'whsec_test',
+        signatureScheme: 'standard-webhooks',
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(JSON.parse(init.body)).toMatchObject({ signature_scheme: 'standard-webhooks' });
+    });
+
+    it('lists delivery health and replays one delivery', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      mockFetch.mockImplementation(() => mockResponse([]));
+
+      await relay.subscriptions.deliveries('sub/1', { status: 'dead_letter', limit: 25 });
+      let [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/subscriptions/sub%2F1/deliveries?status=dead_letter&limit=25');
+      expect(init.method).toBe('GET');
+
+      mockFetch.mockClear();
+      mockFetch.mockImplementation(() => mockResponse({ id: 'whd_1', status: 'pending' }));
+      await relay.subscriptions.replayDelivery('sub/1', 'whd/1');
+      [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/subscriptions/sub%2F1/deliveries/whd%2F1/replay');
+      expect(init.method).toBe('POST');
+    });
+
+    it('rejects delivery-health limits outside the server contract', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      expect(() => relay.subscriptions.deliveries('sub_1', { limit: 0 }))
+        .toThrow('limit must be an integer from 1 to 100');
+      expect(() => relay.subscriptions.deliveries('sub_1', { limit: 101 }))
+        .toThrow('limit must be an integer from 1 to 100');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
   });
 
   // === Actions (workspace-level on Relay, invoke on AgentClient) ===

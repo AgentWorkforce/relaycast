@@ -20,6 +20,7 @@ import { sendNodePresenceContext } from '../../engine/nodeContext.js';
 import { createDeliveryMaintenanceRunner } from './delivery-maintenance.js';
 import { sweepPendingA2aEgress } from '../../engine/a2aEgress.js';
 import { reapExpiredWorkspaces } from '../../engine/workspace.js';
+import { createNodeOutboundWebhookFetch } from './ssrf-fetch.js';
 
 export {
   InProcessRealtime,
@@ -101,6 +102,12 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
   const db = handle.db;
 
   const telemetry = options.telemetry ?? new NoopTelemetrySink();
+  const testEnvironment = options.config?.environment === 'test';
+  const testFetch: typeof globalThis.fetch = (input, init) => globalThis.fetch(input, init);
+  const outboundWebhookFetch = options.config?.outboundWebhookFetch
+    ?? (testEnvironment
+      ? testFetch
+      : createNodeOutboundWebhookFetch(options.config?.httpPushProxy?.url));
   const realtime = new InProcessRealtime(db);
   const upstreamOnPresenceEvent = options.presence?.onPresenceEvent;
   const presence = new InProcessPresence(realtime, {
@@ -115,7 +122,15 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
       // so a slow or black-holed http_push receiver must not stall them. WS
       // context sends are in-memory; the http_push POST runs detached.
       void sendNodePresenceContext(
-        { db, nodeConnections: realtime, realtime, workspaceId, environment: options.config?.environment, httpPushProxy: options.config?.httpPushProxy },
+        {
+          db,
+          nodeConnections: realtime,
+          realtime,
+          workspaceId,
+          environment: options.config?.environment,
+          httpPushProxy: options.config?.httpPushProxy,
+          outboundWebhookFetch,
+        },
         {
           subjectAgentId,
           event: eventType,
@@ -138,7 +153,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
   const webhookQueue = new DurableEventQueue(
     db,
     (err, ctx) => telemetry.captureException(err, ctx),
-    options.eventQueue,
+    { ...options.eventQueue, fetch: options.eventQueue?.fetch ?? outboundWebhookFetch },
   );
   // Resume any deliveries left over from a previous process (the outbox's point).
   webhookQueue.start();
@@ -155,6 +170,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
     : retentionOptions?.defaults?.messageTtlDays ?? null;
   const config: EngineConfig = {
     ...options.config,
+    outboundWebhookFetch,
     retention: options.config?.retention ?? { messageTtlDays },
   };
 

@@ -31,6 +31,7 @@ it('upgrades existing actions and results additively, preserving rows and every 
       '0064_action_invocations_status_dispatched_index.sql',
       '0065_action_invocations_task_deadline_any_status.sql',
       '0066_action_invocations_status_sweep_ranges.sql',
+      '0067_webhook_delivery_reliability.sql',
     ]);
     for (const table of before) {
       const columns = db.pragma(`table_info(${table.name})`) as { name: string }[];

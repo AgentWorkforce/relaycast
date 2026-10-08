@@ -93,7 +93,14 @@ function constraints(handle: SqliteDbHandle) {
 function expectConstraintsPreserved(before: ReturnType<typeof constraints>, after: ReturnType<typeof constraints>) {
   // 0050 may add these redundant named lookup indexes, but must not alter any
   // original constraint (including a lookup that already existed via 0049).
-  expect(after.filter(table => !['maintenance_cursors', 'a2a_egress', 'a2a_egress_context', 'a2a_inbound', 'direct_dm_idempotency'].includes(table.name) || before.some(original => original.name === table.name))
+  expect(after.filter(table => ![
+    'maintenance_cursors',
+    'a2a_egress',
+    'a2a_egress_context',
+    'a2a_inbound',
+    'direct_dm_idempotency',
+    'webhook_deliveries',
+  ].includes(table.name) || before.some(original => original.name === table.name))
     .map(table => {
       const original = before.find(candidate => candidate.name === table.name);
       // 0055 adds optional event identity columns and their index after the
@@ -114,6 +121,12 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
       }
       if (table.name === 'action_invocations') {
         table = { ...table, sql: table.sql.replace(', task_state TEXT', '') };
+      }
+      if (table.name === 'event_subscriptions') {
+        table = { ...table, sql: table.sql.replace(", signature_scheme TEXT NOT NULL DEFAULT 'legacy'", '') };
+      }
+      if (table.name === 'pending_events') {
+        table = { ...table, sql: table.sql.replace(', webhook_initialized INTEGER NOT NULL DEFAULT 0', '') };
       }
       if (table.name === 'agents' && original) {
         return { ...table, sql: original.sql };
@@ -164,7 +177,13 @@ describe('compact maintenance migration path', () => {
     const after = snapshot(handle);
     // Remote-DM and direct-idempotency migrations add empty tables; every
     // pre-existing row and table must remain.
-    expect(after.filter(([name]) => !['a2a_egress', 'a2a_egress_context', 'a2a_inbound', 'direct_dm_idempotency'].includes(String(name)))).toEqual(before);
+    expect(after.filter(([name]) => ![
+      'a2a_egress',
+      'a2a_egress_context',
+      'a2a_inbound',
+      'direct_dm_idempotency',
+      'webhook_deliveries',
+    ].includes(String(name)))).toEqual(before);
     expect(after.find(([name]) => name === 'a2a_egress')).toEqual([
       'a2a_egress', 0, createHash('sha256').update('[]').digest('hex'),
     ]);
@@ -177,6 +196,23 @@ describe('compact maintenance migration path', () => {
     expect(after.find(([name]) => name === 'direct_dm_idempotency')).toEqual([
       'direct_dm_idempotency', 0, createHash('sha256').update('[]').digest('hex'),
     ]);
+    expect(after.find(([name]) => name === 'webhook_deliveries')).toEqual([
+      'webhook_deliveries', 0, createHash('sha256').update('[]').digest('hex'),
+    ]);
+    expect(handle.sqlite.pragma('foreign_key_list(webhook_deliveries)')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ table: 'pending_events', from: 'event_id', on_delete: 'CASCADE' }),
+      expect.objectContaining({ table: 'event_subscriptions', from: 'subscription_id', on_delete: 'CASCADE' }),
+    ]));
+    expect(handle.sqlite.pragma('table_info(webhook_deliveries)')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'id', notnull: 1, pk: 1 }),
+      expect.objectContaining({ name: 'event_id', notnull: 1 }),
+      expect.objectContaining({ name: 'subscription_id', notnull: 1 }),
+    ]));
+    expect(handle.sqlite.pragma('index_list(webhook_deliveries)')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'webhook_deliveries_event_subscription_unique', unique: 1 }),
+      expect.objectContaining({ name: 'idx_webhook_deliveries_due', unique: 0 }),
+      expect.objectContaining({ name: 'idx_webhook_deliveries_subscription', unique: 0 }),
+    ]));
     expect(handle.sqlite.pragma('foreign_key_list(a2a_inbound)')).toEqual(expect.arrayContaining([
       expect.objectContaining({ table: 'workspaces', from: 'workspace_id', on_delete: 'CASCADE' }),
       expect.objectContaining({ table: 'messages', from: 'message_id', on_delete: 'SET NULL' }),

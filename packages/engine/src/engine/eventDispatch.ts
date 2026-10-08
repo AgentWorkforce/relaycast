@@ -95,6 +95,7 @@ function nodeContextDeps(deps: EventDispatchDeps, workspaceId: string) {
     workspaceId,
     environment: deps.engine.config?.environment,
     httpPushProxy: deps.engine.config?.httpPushProxy,
+    outboundWebhookFetch: deps.engine.config?.outboundWebhookFetch,
   };
 }
 
@@ -210,6 +211,7 @@ export async function publishEventsToAgents(
           realtime: deps.engine.realtime,
           environment: deps.engine.config?.environment,
           httpPushProxy: deps.engine.config?.httpPushProxy,
+          outboundWebhookFetch: deps.engine.config?.outboundWebhookFetch,
         },
         contextEvents,
       ).catch((err) => onSinkError?.('node_context', err)),

@@ -7,7 +7,13 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Subscriptions and HTTP push node delivery can opt into Standard Webhooks signing.
+- `subscriptions.deliveries()` lists per-event delivery health.
+- `subscriptions.replayDelivery()` replays failed or dead-lettered deliveries.
 
 ## [9.0.0] - 2026-10-06
 

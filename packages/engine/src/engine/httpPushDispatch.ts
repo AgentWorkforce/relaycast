@@ -1,5 +1,6 @@
 import { hmacSha256Hex } from '../lib/crypto.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
+import { signStandardWebhook } from '../lib/standardWebhook.js';
 
 // Relaycast-controlled headers must always win over operator-supplied
 // static_headers so a node config can't mask the event type or delivery id.
@@ -7,6 +8,9 @@ const RELAYCAST_CONTROLLED_HEADERS = new Set([
   'content-type',
   'x-relaycast-event',
   'x-relaycast-delivery',
+  'webhook-id',
+  'webhook-timestamp',
+  'webhook-signature',
   // Egress-proxy control headers: never let operator-supplied static_headers set
   // these (case-insensitively), or a node could inject `x-forward-to` to point
   // the proxy at an internal address and bypass the SSRF check on the real url.
@@ -48,6 +52,8 @@ export async function buildHttpPushHeaders(
     'Content-Type': 'application/json',
     'X-Relaycast-Event': eventType,
   };
+  const webhookId = deliveryId ?? `whd_${globalThis.crypto.randomUUID()}`;
+  headers['webhook-id'] = webhookId;
   if (deliveryId) headers['X-Relaycast-Delivery'] = deliveryId;
 
   if (auth.type === 'bearer' && typeof auth.token === 'string') {
@@ -56,12 +62,23 @@ export async function buildHttpPushHeaders(
     // Merge operator headers without clobbering the Relaycast protocol headers.
     Object.assign(headers, publicHeaders(auth.headers as Record<string, unknown> | undefined, RELAYCAST_CONTROLLED_HEADERS));
   } else if (auth.type === 'hmac_sha256' && typeof auth.secret === 'string') {
-    const timestampHeader = typeof auth.timestamp_header === 'string' ? auth.timestamp_header : 'X-Relaycast-Timestamp';
-    const signatureHeader = typeof auth.signature_header === 'string' ? auth.signature_header : 'X-Relaycast-Signature';
-    const prefix = typeof auth.prefix === 'string' ? auth.prefix : 'sha256=';
-    const signedPayload = auth.signed_payload === 'body' ? body : `${timestamp}.${body}`;
-    headers[timestampHeader] = timestamp;
-    headers[signatureHeader] = `${prefix}${await hmacSha256Hex(signedPayload, auth.secret)}`;
+    if (auth.signature_scheme === 'standard-webhooks') {
+      const timestampSeconds = String(Math.floor(new Date(timestamp).getTime() / 1000));
+      headers['webhook-timestamp'] = timestampSeconds;
+      headers['webhook-signature'] = await signStandardWebhook(
+        auth.secret,
+        webhookId,
+        timestampSeconds,
+        body,
+      );
+    } else {
+      const timestampHeader = typeof auth.timestamp_header === 'string' ? auth.timestamp_header : 'X-Relaycast-Timestamp';
+      const signatureHeader = typeof auth.signature_header === 'string' ? auth.signature_header : 'X-Relaycast-Signature';
+      const prefix = typeof auth.prefix === 'string' ? auth.prefix : 'sha256=';
+      const signedPayload = auth.signed_payload === 'body' ? body : `${timestamp}.${body}`;
+      headers[timestampHeader] = timestamp;
+      headers[signatureHeader] = `${prefix}${await hmacSha256Hex(signedPayload, auth.secret)}`;
+    }
   }
 
   return headers;
@@ -123,11 +140,12 @@ export async function postEphemeralEventToHttpPushNode(args: {
   event: EphemeralNodeEvent;
   /** Egress proxy for `use_proxy` nodes; omit to always POST direct. */
   proxy?: HttpPushProxyConfig;
+  fetch?: typeof globalThis.fetch;
 }): Promise<boolean> {
   const config = args.deliveryConfig ?? {};
   const url = typeof config.url === 'string' ? config.url : null;
   if (!url) return false;
-  if (!isSafeExternalUrl(url, { strict: args.strict })) return false;
+  if (!isSafeExternalUrl(url, { strict: args.strict, requireHttps: args.strict })) return false;
 
   // Honor `use_proxy` here too, so a proxied node's ephemeral events reach the
   // receiver in the same environment durable messages do. Best-effort: if the
@@ -148,7 +166,7 @@ export async function postEphemeralEventToHttpPushNode(args: {
 
   try {
     const headers = { ...(await buildHttpPushHeaders(config, args.event.eventType, null, body, timestamp)), ...resolved.proxyHeaders };
-    const response = await globalThis.fetch(resolved.requestUrl, {
+    const response = await (args.fetch ?? globalThis.fetch)(resolved.requestUrl, {
       method: 'POST',
       headers,
       body,

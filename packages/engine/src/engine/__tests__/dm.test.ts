@@ -152,7 +152,9 @@ describe('1:1 DM conversation identity', () => {
     expect(second.id).toBe(first.id);
     expect(db.select().from(messages).all()).toHaveLength(1);
     expect(db.select().from(directDmIdempotency).all()).toHaveLength(1);
-    expect(db.select().from(pendingEvents).all()).toHaveLength(1);
+    const outbox = db.select().from(pendingEvents).all();
+    expect(outbox).toHaveLength(1);
+    expect(outbox[0].maxAttempts).toBe(32);
     expect(db.select().from(workspaceEvents).all()).toHaveLength(1);
   });
 

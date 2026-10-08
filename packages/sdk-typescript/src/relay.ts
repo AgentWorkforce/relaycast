@@ -27,6 +27,9 @@ import type {
   CreateSubscriptionRequest,
   CreateSubscriptionResponse,
   EventSubscription,
+  WebhookDelivery,
+  WebhookDeliveryStatus,
+  ReplayWebhookDeliveryResponse,
   ActivityItem,
   DmMessage,
   DmMessagePage,
@@ -961,6 +964,26 @@ export class RelayCast {
 
     delete: (id: string): Promise<void> =>
       this.client.delete(`/v1/subscriptions/${encodeURIComponent(id)}`),
+
+    deliveries: (
+      id: string,
+      query: { status?: WebhookDeliveryStatus; limit?: number } = {},
+    ): Promise<WebhookDelivery[]> => {
+      if (query.limit != null
+        && (!Number.isInteger(query.limit) || query.limit < 1 || query.limit > 100)) {
+        throw new RangeError('subscriptions.deliveries limit must be an integer from 1 to 100');
+      }
+      const params: Record<string, string> = {};
+      if (query.status) params.status = query.status;
+      if (query.limit != null) params.limit = String(query.limit);
+      return this.client.get(`/v1/subscriptions/${encodeURIComponent(id)}/deliveries`, params);
+    },
+
+    replayDelivery: (id: string, deliveryId: string): Promise<ReplayWebhookDeliveryResponse> =>
+      this.client.post(
+        `/v1/subscriptions/${encodeURIComponent(id)}/deliveries/${encodeURIComponent(deliveryId)}/replay`,
+        {},
+      ),
   };
 
   actions = {

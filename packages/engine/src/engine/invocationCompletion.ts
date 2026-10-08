@@ -53,6 +53,7 @@ export async function emitInvocationCompletionEffects(
         workspaceId,
         environment: deps.config?.environment,
         httpPushProxy: deps.config?.httpPushProxy,
+        outboundWebhookFetch: deps.config?.outboundWebhookFetch,
       }, {
         agentIds: [result.caller_id],
         event: eventType,
@@ -184,6 +185,7 @@ export async function emitAgentExitedEffects(
         workspaceId,
         environment: deps.config?.environment,
         httpPushProxy: deps.config?.httpPushProxy,
+        outboundWebhookFetch: deps.config?.outboundWebhookFetch,
       }, {
         agentIds: [callerId],
         event: eventType,

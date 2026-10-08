@@ -16,6 +16,7 @@ type NodeContextDeps = {
   environment?: string;
   /** Egress proxy for http_push nodes that opt in with `delivery.use_proxy`. */
   httpPushProxy?: HttpPushProxyConfig;
+  outboundWebhookFetch?: typeof globalThis.fetch;
 };
 
 type ScopedNodeRow = {
@@ -184,6 +185,7 @@ async function sendContextToRows(
           deliveryConfig: group.deliveryConfig,
           strict: strictHttpPushDispatch(deps.environment),
           proxy: deps.httpPushProxy,
+          fetch: deps.outboundWebhookFetch,
           event: {
             workspaceId: deps.workspaceId,
             eventType: message.event,

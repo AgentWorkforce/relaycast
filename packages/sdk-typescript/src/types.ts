@@ -314,6 +314,8 @@ export type NodeDeliveryAuth =
     signedPayload?: 'body' | 'timestamp.body';
     encoding?: 'hex';
     prefix?: string;
+    /** Use Standard Webhooks headers/signing; requires a 24-64 byte `whsec_` secret. */
+    signatureScheme?: 'standard-webhooks';
   };
 
 export interface HttpPushNodeDelivery {
@@ -671,6 +673,9 @@ export type DmConversationParticipant = Camelize<Raw.DmConversationParticipant>;
 export type DmLastMessage = Camelize<Raw.DmLastMessage>;
 export type DmReceivedEvent = Camelize<Raw.DmReceivedEvent>;
 export type EventSubscription = Camelize<Raw.EventSubscription>;
+export type WebhookDelivery = Camelize<Raw.WebhookDelivery>;
+export type WebhookDeliveryStatus = Raw.WebhookDeliveryStatus;
+export type ReplayWebhookDeliveryResponse = Camelize<Raw.ReplayWebhookDeliveryResponse>;
 export type FileInfo = Camelize<Raw.FileInfo>;
 export type CompleteUploadResponse = Camelize<Raw.CompleteUploadResponse>;
 export type FileUploadedEvent = Camelize<Raw.FileUploadedEvent>;

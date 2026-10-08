@@ -13,6 +13,7 @@ export interface ClaimedEvent {
   payload: Record<string, unknown>;
   attempts: number;
   maxAttempts: number;
+  createdAt: Date;
 }
 
 export async function enqueueEvent(
@@ -28,6 +29,7 @@ export async function enqueueEvent(
     workspaceId,
     eventType,
     payload,
+    maxAttempts: 32,
   });
 
   return id;
@@ -81,12 +83,16 @@ export async function claimDueEvents(
     payload: row.payload as Record<string, unknown>,
     attempts: row.attempts,
     maxAttempts: row.maxAttempts,
+    createdAt: row.createdAt,
   }));
 }
 
-/** Delivery succeeded — drop the row. */
+/** Delivery succeeded — retain it for bounded delivery-health history. */
 export async function completeEvent(db: Db, id: string): Promise<void> {
-  await db.delete(pendingEvents).where(eq(pendingEvents.id, id));
+  await db
+    .update(pendingEvents)
+    .set({ status: 'completed', completedAt: new Date() })
+    .where(and(eq(pendingEvents.id, id), eq(pendingEvents.status, 'pending')));
 }
 
 /**
@@ -145,7 +151,7 @@ export async function rescheduleEvent(
 
 /** A claimed row bundled with its settle callbacks (see {@link sweepPendingEvents}). */
 export interface SweptEvent extends ClaimedEvent {
-  /** Delivery succeeded — drop the row. */
+  /** Delivery succeeded — retain it for bounded delivery-health history. */
   complete(): Promise<void>;
   /** Terminal failure — settle the row as `failed`. */
   fail(error: string): Promise<void>;
@@ -183,7 +189,7 @@ export async function sweepPendingEvents(
   }));
 }
 
-// Cleanup completed and failed events older than given age (default 24h)
+// Cleanup completed and failed events older than their settlement age (default 24h).
 export async function cleanupOldEvents(db: Db, maxAgeMs = 24 * 60 * 60 * 1000): Promise<number> {
   // Settle exhausted pending rows first so they become prunable. A row that
   // consumed its final attempt without settling is unclaimable forever
@@ -198,7 +204,7 @@ export async function cleanupOldEvents(db: Db, maxAgeMs = 24 * 60 * 60 * 1000): 
     .where(
       and(
         inArray(pendingEvents.status, ['completed', 'failed']),
-        lte(pendingEvents.createdAt, cutoff),
+        lte(pendingEvents.completedAt, cutoff),
       ),
     )
     .returning();
