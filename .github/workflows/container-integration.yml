@@ -47,6 +47,7 @@ permissions:
 
 jobs:
   container-integration:
+    if: (github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || github.head_ref == 'trunk'
     name: Build and test the real image
     runs-on: ubuntu-latest
     timeout-minutes: 15
