@@ -17,7 +17,7 @@ try {
   const shadow = new Set(sqlite.sqlite.prepare('PRAGMA table_list').all().filter(row => row.type === 'shadow').map(row => row.name));
   const definitions = sqlite.sqlite.prepare("SELECT name,sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 ELSE 2 END,rowid").all();
   for (const row of definitions) {
-    if (shadow.has(row.name) || row.name === 'idx_action_invocations_task_deadline' || row.name === 'idx_action_invocations_task_deadline_any_status') continue;
+    if (shadow.has(row.name) || row.name === 'idx_action_invocations_task_deadline' || row.name === 'idx_action_invocations_task_deadline_any_status' || row.name === 'idx_action_invocations_status_task_deadline') continue;
     // Build the previous schema, then exercise the actual migration against it.
     const ddl = row.sql.replace(", execution_mode TEXT NOT NULL DEFAULT 'short'", '').replace(', task_state TEXT', '');
     await d1.prepare(ddl).run();
