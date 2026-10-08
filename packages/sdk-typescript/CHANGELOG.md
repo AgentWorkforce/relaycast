@@ -11,7 +11,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `subscriptions` can select Standard Webhooks signing, list per-event delivery health, and replay failed or dead-lettered deliveries.
+- Subscriptions and HTTP push node delivery can opt into Standard Webhooks signing.
+- `subscriptions.deliveries()` lists per-event delivery health.
+- `subscriptions.replayDelivery()` replays failed or dead-lettered deliveries.
 
 ## [9.0.0] - 2026-10-06
 

@@ -224,6 +224,17 @@ describe('Programmability SDK', () => {
       expect(url).toBe('https://cast.agentrelay.com/v1/subscriptions/sub%2F1/deliveries/whd%2F1/replay');
       expect(init.method).toBe('POST');
     });
+
+    it('rejects delivery-health limits outside the server contract', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      expect(() => relay.subscriptions.deliveries('sub_1', { limit: 0 }))
+        .toThrow('limit must be an integer from 1 to 100');
+      expect(() => relay.subscriptions.deliveries('sub_1', { limit: 101 }))
+        .toThrow('limit must be an integer from 1 to 100');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
   });
 
   // === Actions (workspace-level on Relay, invoke on AgentClient) ===

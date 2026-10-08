@@ -57,3 +57,36 @@ export function createNodeSafeWebhookFetch(
 }
 
 export const nodeSafeWebhookFetch = createNodeSafeWebhookFetch();
+
+function normalizedUrl(input: string | URL | Request): string | null {
+  try {
+    const rawUrl = typeof input === 'string'
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+    return new URL(rawUrl).href;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Keep direct webhook connections on the DNS-pinning transport while allowing
+ * an exact operator-configured egress proxy URL to use the platform transport.
+ * The proxy is a trusted deployment boundary and may intentionally be private
+ * or plain HTTP; untrusted node destinations are validated before proxying.
+ */
+export function createNodeOutboundWebhookFetch(
+  proxyUrl?: string,
+  safeFetch: typeof globalThis.fetch = nodeSafeWebhookFetch,
+  proxyFetch: typeof globalThis.fetch = globalThis.fetch,
+): typeof globalThis.fetch {
+  const trustedProxyUrl = proxyUrl ? normalizedUrl(proxyUrl) : null;
+  return (input, init) => {
+    if (trustedProxyUrl && normalizedUrl(input) === trustedProxyUrl) {
+      return proxyFetch(input, { ...init, redirect: 'manual' });
+    }
+    return safeFetch(input, init);
+  };
+}

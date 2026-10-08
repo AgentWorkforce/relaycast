@@ -26,6 +26,7 @@ describe('Standard Webhooks signing', () => {
       timestamp,
       body,
       `v1,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= ${officialSignature}`,
+      { nowSeconds: Number(timestamp) },
     )).resolves.toBe(true);
   });
 
@@ -36,9 +37,21 @@ describe('Standard Webhooks signing', () => {
       timestamp,
       `${body} `,
       officialSignature,
+      { nowSeconds: Number(timestamp) },
     )).resolves.toBe(false);
     expect(isValidStandardWebhookSecret('shared-secret')).toBe(false);
     expect(isValidStandardWebhookSecret('whsec_YWJj')).toBe(false);
     expect(isValidStandardWebhookSecret(secret)).toBe(true);
+  });
+
+  it('rejects valid signatures outside the five-minute replay window', async () => {
+    await expect(verifyStandardWebhook(
+      secret,
+      messageId,
+      timestamp,
+      body,
+      officialSignature,
+      { nowSeconds: Number(timestamp) + 301 },
+    )).resolves.toBe(false);
   });
 });

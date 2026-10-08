@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { fetch as undiciFetch } from 'undici';
-import { createNodeSafeWebhookFetch } from '../ssrf-fetch.js';
+import { createNodeOutboundWebhookFetch, createNodeSafeWebhookFetch } from '../ssrf-fetch.js';
 
 describe('createNodeSafeWebhookFetch', () => {
   it('preserves Request method, headers, body, and signal', async () => {
@@ -26,5 +26,24 @@ describe('createNodeSafeWebhookFetch', () => {
     expect(forwarded.signal.aborted).toBe(true);
     await expect(forwarded.clone().text()).resolves.toBe('payload');
     expect(init.redirect).toBe('manual');
+  });
+
+  it('uses the platform transport only for the exact configured egress proxy', async () => {
+    const safeFetch = vi.fn(async () => new Response(null, { status: 204 }));
+    const proxyFetch = vi.fn(async () => new Response(null, { status: 202 }));
+    const outboundFetch = createNodeOutboundWebhookFetch(
+      'http://egress.internal:8080/forward',
+      safeFetch,
+      proxyFetch,
+    );
+
+    await expect(outboundFetch('http://egress.internal:8080/forward'))
+      .resolves.toMatchObject({ status: 202 });
+    await expect(outboundFetch('https://8.8.8.8/webhook'))
+      .resolves.toMatchObject({ status: 204 });
+
+    expect(proxyFetch).toHaveBeenCalledTimes(1);
+    expect(proxyFetch.mock.calls[0]?.[1]?.redirect).toBe('manual');
+    expect(safeFetch).toHaveBeenCalledTimes(1);
   });
 });

@@ -20,7 +20,7 @@ import { sendNodePresenceContext } from '../../engine/nodeContext.js';
 import { createDeliveryMaintenanceRunner } from './delivery-maintenance.js';
 import { sweepPendingA2aEgress } from '../../engine/a2aEgress.js';
 import { reapExpiredWorkspaces } from '../../engine/workspace.js';
-import { nodeSafeWebhookFetch } from './ssrf-fetch.js';
+import { createNodeOutboundWebhookFetch } from './ssrf-fetch.js';
 
 export {
   InProcessRealtime,
@@ -105,7 +105,9 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
   const testEnvironment = options.config?.environment === 'test';
   const testFetch: typeof globalThis.fetch = (input, init) => globalThis.fetch(input, init);
   const outboundWebhookFetch = options.config?.outboundWebhookFetch
-    ?? (testEnvironment ? testFetch : nodeSafeWebhookFetch);
+    ?? (testEnvironment
+      ? testFetch
+      : createNodeOutboundWebhookFetch(options.config?.httpPushProxy?.url));
   const realtime = new InProcessRealtime(db);
   const upstreamOnPresenceEvent = options.presence?.onPresenceEvent;
   const presence = new InProcessPresence(realtime, {

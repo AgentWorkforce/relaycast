@@ -20,6 +20,7 @@ describe('buildHttpPushHeaders', () => {
       headers['webhook-timestamp'],
       body,
       headers['webhook-signature'],
+      { nowSeconds: Number(headers['webhook-timestamp']) },
     )).resolves.toBe(true);
   });
 

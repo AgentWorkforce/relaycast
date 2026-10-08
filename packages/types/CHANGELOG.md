@@ -11,7 +11,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- Subscription types expose Standard Webhooks selection plus durable webhook delivery health and replay responses.
+- Subscriptions and HTTP push node auth support selecting the Standard Webhooks signature scheme.
+- Webhook delivery types expose durable delivery status and replay responses.
 
 ## [9.0.0] - 2026-10-06
 

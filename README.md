@@ -899,7 +899,7 @@ result ambiguous, check the immutable node id before choosing whether to retry.
 The node delivery contract controls how Relaycast sends future deliveries for bound
 agents. Built-in HTTP push auth modes are `none`, `bearer`, `static_headers`, and
 `hmac_sha256`; stored secrets and header values are redacted from node roster responses.
-For `hmac_sha256`, set `signatureScheme: 'standard-webhooks'` with a valid `whsec_`
+For `hmac_sha256`, set `signature_scheme: 'standard-webhooks'` (SDK: `signatureScheme`) with a valid `whsec_`
 secret to use the interoperable `webhook-*` headers; omitting it preserves the legacy
 configurable `X-Relaycast-Signature` contract.
 `ackMode: 'manual'` leaves deliveries delivered until the agent acks them, `on_2xx` acks
@@ -1109,7 +1109,7 @@ the default `signature_scheme: 'legacy'` sends `X-Relay-Signature: sha256=<hex>`
 HMAC-SHA256 over the exact JSON request body. Set `signature_scheme: 'standard-webhooks'`
 with a 24-64-byte base64 `whsec_` secret to send
 `webhook-id`, `webhook-timestamp`, and `webhook-signature: v1,<base64>` instead.
-`webhook-id` is stable across retries under either scheme. Production webhook URLs must
+`webhook-id` is stable across persisted retries under either scheme. Production webhook URLs must
 use HTTPS, resolve only to global addresses, and cannot redirect.
 
 Delivery retry state is isolated per subscription, so a healthy target is not re-sent an

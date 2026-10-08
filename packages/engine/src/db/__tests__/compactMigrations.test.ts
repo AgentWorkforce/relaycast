@@ -199,6 +199,20 @@ describe('compact maintenance migration path', () => {
     expect(after.find(([name]) => name === 'webhook_deliveries')).toEqual([
       'webhook_deliveries', 0, createHash('sha256').update('[]').digest('hex'),
     ]);
+    expect(handle.sqlite.pragma('foreign_key_list(webhook_deliveries)')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ table: 'pending_events', from: 'event_id', on_delete: 'CASCADE' }),
+      expect.objectContaining({ table: 'event_subscriptions', from: 'subscription_id', on_delete: 'CASCADE' }),
+    ]));
+    expect(handle.sqlite.pragma('table_info(webhook_deliveries)')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'id', notnull: 1, pk: 1 }),
+      expect.objectContaining({ name: 'event_id', notnull: 1 }),
+      expect.objectContaining({ name: 'subscription_id', notnull: 1 }),
+    ]));
+    expect(handle.sqlite.pragma('index_list(webhook_deliveries)')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'webhook_deliveries_event_subscription_unique', unique: 1 }),
+      expect.objectContaining({ name: 'idx_webhook_deliveries_due', unique: 0 }),
+      expect.objectContaining({ name: 'idx_webhook_deliveries_subscription', unique: 0 }),
+    ]));
     expect(handle.sqlite.pragma('foreign_key_list(a2a_inbound)')).toEqual(expect.arrayContaining([
       expect.objectContaining({ table: 'workspaces', from: 'workspace_id', on_delete: 'CASCADE' }),
       expect.objectContaining({ table: 'messages', from: 'message_id', on_delete: 'SET NULL' }),

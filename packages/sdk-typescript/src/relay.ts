@@ -969,6 +969,10 @@ export class RelayCast {
       id: string,
       query: { status?: WebhookDeliveryStatus; limit?: number } = {},
     ): Promise<WebhookDelivery[]> => {
+      if (query.limit != null
+        && (!Number.isInteger(query.limit) || query.limit < 1 || query.limit > 100)) {
+        throw new RangeError('subscriptions.deliveries limit must be an integer from 1 to 100');
+      }
       const params: Record<string, string> = {};
       if (query.status) params.status = query.status;
       if (query.limit != null) params.limit = String(query.limit);

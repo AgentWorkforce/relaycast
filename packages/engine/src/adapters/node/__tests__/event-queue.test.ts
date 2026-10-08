@@ -11,7 +11,7 @@ import { deliverEvent, WEBHOOK_RETRY_DELAYS_MS } from '../../../engine/eventDeli
 import { BackgroundTasks } from '../../../__tests__/backgroundTasks.js';
 import { pendingEvents, webhookDeliveries, workspaces, eventSubscriptions } from '../../../db/schema.js';
 import { verifyStandardWebhook } from '../../../lib/standardWebhook.js';
-import { nodeSafeWebhookFetch } from '../ssrf-fetch.js';
+import { createNodeOutboundWebhookFetch } from '../ssrf-fetch.js';
 
 const HOOK_URL = 'https://hooks.example.test/relay';
 
@@ -535,7 +535,8 @@ describe('DurableEventQueue', () => {
       expect(runtime.deps.config?.retention).toEqual({ messageTtlDays: 45 });
       // Vitest sets its own environment marker; only an explicit engine test
       // environment may downgrade the production DNS-pinning transport.
-      expect(runtime.deps.config?.outboundWebhookFetch).toBe(nodeSafeWebhookFetch);
+      expect(runtime.deps.config?.outboundWebhookFetch).toBeTypeOf('function');
+      expect(runtime.deps.config?.outboundWebhookFetch).not.toBe(globalThis.fetch);
     } finally {
       await Promise.all(startupWork);
       runtime.close();

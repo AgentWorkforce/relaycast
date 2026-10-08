@@ -3,6 +3,7 @@ const encoder = new TextEncoder();
 const STANDARD_WEBHOOK_SECRET_PREFIX = 'whsec_';
 const MIN_SECRET_BYTES = 24;
 const MAX_SECRET_BYTES = 64;
+const DEFAULT_TIMESTAMP_TOLERANCE_SECONDS = 5 * 60;
 
 function decodeBase64(value: string): Uint8Array {
   const normalized = value.replace(/\s/g, '');
@@ -76,14 +77,33 @@ export async function signStandardWebhook(
   return `v1,${encodeBase64(signature)}`;
 }
 
-/** Accept any matching v1 signature from the rotation-friendly space-delimited header. */
+export interface VerifyStandardWebhookOptions {
+  /** Unix time used for freshness checks; defaults to the current time. */
+  nowSeconds?: number;
+  /** Maximum allowed clock skew in seconds; defaults to five minutes. */
+  toleranceSeconds?: number;
+}
+
+/** Accept a fresh matching v1 signature from the rotation-friendly space-delimited header. */
 export async function verifyStandardWebhook(
   secretWhsec: string,
   msgId: string,
   tsSeconds: string,
   rawBody: string,
   signatureHeader: string,
+  options: VerifyStandardWebhookOptions = {},
 ): Promise<boolean> {
+  if (!/^\d+$/.test(tsSeconds)) return false;
+  const timestamp = Number(tsSeconds);
+  const now = options.nowSeconds ?? Math.floor(Date.now() / 1000);
+  const tolerance = options.toleranceSeconds ?? DEFAULT_TIMESTAMP_TOLERANCE_SECONDS;
+  if (!Number.isSafeInteger(timestamp)
+    || !Number.isSafeInteger(now)
+    || !Number.isSafeInteger(tolerance)
+    || tolerance < 0
+    || Math.abs(now - timestamp) > tolerance) {
+    return false;
+  }
   const expected = await signStandardWebhook(secretWhsec, msgId, tsSeconds, rawBody);
   for (const candidate of signatureHeader.trim().split(/\s+/)) {
     if (!candidate.startsWith('v1,') || candidate.length !== expected.length) continue;

@@ -20,7 +20,9 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Added
 
-- Outbound subscriptions and HTTP push nodes can opt into Standard Webhooks signing, while durable per-subscriber retries, delivery health, dead-letter replay, stable delivery IDs, and DNS-pinned HTTPS egress prevent one bad target or DNS rebinding from losing or duplicating events.
+- Outbound subscriptions and HTTP push nodes can opt into Standard Webhooks signing.
+- Durable per-subscriber retries expose delivery health and support dead-letter replay with stable delivery IDs for receiver-side deduplication.
+- Production webhook delivery requires public HTTPS destinations, rejects redirects, and pins DNS resolution at connect time to block DNS rebinding.
 
 ### Fixed
 
