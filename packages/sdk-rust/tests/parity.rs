@@ -2651,6 +2651,7 @@ async fn nodes_and_triggers_use_expected_endpoints() {
         .create_node(CreateNodeRequest {
             node_id: None,
             name: "http-node".to_string(),
+            machine_id: None,
             kind: Some("http_push".to_string()),
             role: None,
             delivery_adapter: None,
@@ -2679,6 +2680,71 @@ async fn nodes_and_triggers_use_expected_endpoints() {
     assert_eq!(created.node.kind.as_deref(), Some("http_push"));
     assert_eq!(created.node.role.as_deref(), Some("direct"));
     assert_eq!(created.token, "nt_live_test");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/nodes"))
+        .and(header("x-relaycast-node-token", "nt_live_current"))
+        .and(header(
+            "idempotency-key",
+            "node-rotation-00000000-0000-4000-8000-000000000001",
+        ))
+        .and(body_json(json!({
+            "node_id": "node_http",
+            "name": "renamed",
+            "machine_id": "machine_http"
+        })))
+        .respond_with(
+            api_error(503, "database_overloaded", "retry keyed node rotation")
+                .insert_header("Retry-After", "0"),
+        )
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/nodes"))
+        .and(header("x-relaycast-node-token", "nt_live_current"))
+        .and(header(
+            "idempotency-key",
+            "node-rotation-00000000-0000-4000-8000-000000000001",
+        ))
+        .and(body_json(json!({
+            "node_id": "node_http",
+            "name": "renamed",
+            "machine_id": "machine_http"
+        })))
+        .respond_with(ok(json!({
+            "id": "node_http", "name": "renamed", "kind": "http_push", "role": "direct",
+            "delivery_adapter": "http.basic.v1", "delivery": null, "capabilities": [], "tags": [],
+            "version": "unknown", "status": "offline", "live": false, "handlers_live": false,
+            "load": 0, "active_agents": 0, "max_agents": 1, "last_heartbeat_at": null,
+            "created_at": "2026-01-01T00:00:00.000Z", "token": "nt_live_rotated"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let rotated = relay
+        .create_node_with_rotation_recovery(
+            CreateNodeRequest {
+                node_id: Some("node_http".to_string()),
+                name: "renamed".to_string(),
+                machine_id: Some("machine_http".to_string()),
+                kind: None,
+                role: None,
+                delivery_adapter: None,
+                delivery: None,
+                capabilities: None,
+                max_agents: None,
+                tags: None,
+                version: None,
+            },
+            "nt_live_current",
+            "node-rotation-00000000-0000-4000-8000-000000000001",
+        )
+        .await
+        .expect("create_node_with_current_token failed");
+    assert_eq!(rotated.node.name, "renamed");
+    assert_eq!(rotated.token, "nt_live_rotated");
 
     Mock::given(method("GET"))
         .and(path("/v1/nodes"))

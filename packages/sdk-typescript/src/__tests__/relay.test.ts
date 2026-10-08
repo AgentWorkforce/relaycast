@@ -846,6 +846,65 @@ describe('RelayCast', () => {
   });
 
   describe('nodes', () => {
+    it('create() sends current-token proof in a header and not the JSON body', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      mockFetch.mockImplementation(() => mockResponse({
+        id: 'node_1', name: 'renamed', token: 'nt_live_new',
+      }, true, 201));
+
+      await relay.nodes.create(
+        { nodeId: 'node_1', name: 'renamed', version: 'v2' },
+        {
+          currentToken: 'nt_live_current',
+          idempotencyKey: 'node-rotation-00000000-0000-4000-8000-000000000001',
+        },
+      );
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/nodes');
+      expect(init.headers['X-Relaycast-Node-Token']).toBe('nt_live_current');
+      expect(init.headers['Idempotency-Key']).toBe('node-rotation-00000000-0000-4000-8000-000000000001');
+      expect(JSON.parse(init.body)).toEqual({ node_id: 'node_1', name: 'renamed', version: 'v2' });
+    });
+
+    it('create() rejects a recovery key without current-token proof before sending', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      expect(() => relay.nodes.create(
+        { name: 'new-node' },
+        { idempotencyKey: 'node-rotation-00000000-0000-4000-8000-000000000001' },
+      )).toThrow('idempotencyKey requires currentToken');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('create() rejects an empty recovery key before sending', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      for (const idempotencyKey of ['', ' \t']) {
+        expect(() => relay.nodes.create(
+          { nodeId: 'node_1', name: 'renamed', version: 'v2' },
+          { currentToken: 'nt_live_current', idempotencyKey },
+        )).toThrow('idempotencyKey must not be blank');
+      }
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('create() rejects a blank current token before sending', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      for (const currentToken of ['', ' \t']) {
+        expect(() => relay.nodes.create(
+          { nodeId: 'node_1', name: 'renamed', version: 'v2' },
+          { currentToken },
+        )).toThrow('currentToken must not be blank');
+      }
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
     it('list() with status builds the query and camelizes stale roster fields', async () => {
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });

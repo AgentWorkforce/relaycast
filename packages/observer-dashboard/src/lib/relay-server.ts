@@ -99,6 +99,15 @@ export interface EngineSelection {
   rejectedAny: boolean;
   /** True if at least one candidate could not definitively validate the key. */
   inconclusiveAny: boolean;
+  /** Authoritative observer record id when the accepted key is an observer token. */
+  observerTokenId: string | null;
+}
+
+export function observerBindingMatches(
+  expectedObserverId: string | null | undefined,
+  authenticatedObserverId: string | null,
+): boolean {
+  return !expectedObserverId || expectedObserverId === authenticatedObserverId;
 }
 
 /**
@@ -122,7 +131,17 @@ export async function selectEngineForKey(
       });
       reachedAny = true;
       if (res.ok) {
-        return { baseUrl, reachedAny, rejectedAny, inconclusiveAny };
+        let observerTokenId: string | null = null;
+        try {
+          const body = (await res.json()) as { data?: { observer_token_id?: unknown } };
+          if (typeof body?.data?.observer_token_id === 'string') {
+            observerTokenId = body.data.observer_token_id;
+          }
+        } catch {
+          // A successful legacy engine may not return a JSON body. It remains
+          // usable for workspace sessions, but cannot establish Connect binding.
+        }
+        return { baseUrl, reachedAny, rejectedAny, inconclusiveAny, observerTokenId };
       }
       if (res.status === 401 || res.status === 403) {
         rejectedAny = true;
@@ -134,7 +153,7 @@ export async function selectEngineForKey(
       // Unreachable engine — fall through to the next candidate.
     }
   }
-  return { baseUrl: null, reachedAny, rejectedAny, inconclusiveAny };
+  return { baseUrl: null, reachedAny, rejectedAny, inconclusiveAny, observerTokenId: null };
 }
 
 /**

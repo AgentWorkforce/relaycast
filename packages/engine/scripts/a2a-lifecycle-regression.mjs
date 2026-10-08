@@ -198,10 +198,12 @@ try {
     const f=await setup('expiry-before-dispatch');const before=f.calls();f.healthy();
     await run('UPDATE a2a_egress SET created_at=unixepoch()-86401 WHERE workspace_id=?',f.ws);
     const replay=await f.retry();expectStatus(replay,410);assert.equal(replay.body.error.code,'a2a_egress_expired');assert.equal(f.calls(),before);assert.equal((await f.intent()).payload,null);
-    await cleanupA2aEgress(db,100);assert.equal(await f.intent(),undefined);
-    // After the documented window and cleanup, the old key is fresh.
+    // The transport row alone is not the request boundary anymore. Once the
+    // authoritative request claim also expires, admission retires the old A2A
+    // identity before reusing the key.
+    await run('UPDATE direct_dm_idempotency SET created_at=unixepoch()-86401 WHERE workspace_id=?',f.ws);
     expectStatus(await f.retry(),201);assert.equal(f.calls(),before+1);
-    record('expired pending intent never sends; typed 410 until cleanup, then key is fresh');
+    record('expired pending intent never sends; typed 410 until request claim expiry, then key is fresh');
   }
   {
     // Isolate cleanup counts from previous expired fixtures.
@@ -222,9 +224,9 @@ try {
     const sending=f.retry();await started;
     await run('UPDATE a2a_egress SET created_at=unixepoch()-86401 WHERE workspace_id=?',f.ws);
     assert.equal(await cleanupA2aEgress(db,100),0);assert.equal((await f.intent()).status,'sending');
-    expectStatus(await f.retry(),409);assert.equal(calls,1);release();expectStatus(await sending,201);
+    const replay=await f.retry();expectStatus(replay,201);assert.equal(calls,1);release();const admitted=await sending;expectStatus(admitted,201);assert.equal(replay.body.data.id,admitted.body.data.id);
     assert.equal((await f.intent()).status,'sent');assert.equal((await f.intent()).payload,null);assert.equal(await cleanupA2aEgress(db,100),1);
-    record('cleanup preserves active lease; concurrent retry excluded; cleanup after settlement',{calls});
+    record('cleanup preserves active lease; concurrent retry returns stable receipt; cleanup after settlement',{calls});
   }
   {
     const f=await setup('expired-crash-lease');f.healthy();const before=f.calls();

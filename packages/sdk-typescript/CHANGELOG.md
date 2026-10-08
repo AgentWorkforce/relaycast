@@ -9,6 +9,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [9.0.0] - 2026-10-06
+
+### Added
+
+- `nodes.create(request, { currentToken, idempotencyKey })` sends current-node proof without placing the credential in JSON and can reuse a high-entropy operation key to recover a committed rotation after a lost response.
+
+## [8.16.0] - 2026-10-01
+
+### Added
+
+- Workspace creation and setup accept application-defined metadata; workspace updates shallow-merge metadata and delete keys whose values are null.
+
 ## [8.14.0] - 2026-09-30
 
 ### Added

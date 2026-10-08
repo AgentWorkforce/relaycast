@@ -59,10 +59,14 @@ public struct ClientOptions: Equatable, Sendable {
 public struct RequestOptions: Equatable, Sendable {
     public var headers: [String: String]
     public var idempotencyKey: String?
+    /// Override automatic retry behavior for this request. Leave nil to use
+    /// the client's existing policy.
+    public var retry: Bool?
 
-    public init(headers: [String: String] = [:], idempotencyKey: String? = nil) {
+    public init(headers: [String: String] = [:], idempotencyKey: String? = nil, retry: Bool? = nil) {
         self.headers = headers
         self.idempotencyKey = idempotencyKey
+        self.retry = retry
     }
 }
 
@@ -167,6 +171,7 @@ public final class HttpClient: @unchecked Sendable {
         query: [String: String] = [:],
         options: RequestOptions = RequestOptions()
     ) async throws -> T {
+        let shouldRetry = options.retry ?? isRetrySafe(method: method, idempotencyKey: options.idempotencyKey)
         var attempt = 0
 
         while true {
@@ -177,7 +182,9 @@ public final class HttpClient: @unchecked Sendable {
                     throw RelayError.transport(message: "Relaycast response was not HTTP", statusCode: nil, retryable: true, cause: nil)
                 }
 
-                if retryPolicy.retryOn.contains(http.statusCode), attempt < retryPolicy.maxRetries {
+                if shouldRetry,
+                   retryPolicy.retryOn.contains(http.statusCode),
+                   attempt < retryPolicy.maxRetries {
                     let delay = retryDelayMilliseconds(policy: retryPolicy, attempt: attempt, response: http)
                     attempt += 1
                     try await sleep(milliseconds: delay)
@@ -216,7 +223,7 @@ public final class HttpClient: @unchecked Sendable {
             } catch let error as RelayError {
                 throw error
             } catch {
-                if attempt < retryPolicy.maxRetries {
+                if shouldRetry, attempt < retryPolicy.maxRetries {
                     let delay = retryDelayMilliseconds(policy: retryPolicy, attempt: attempt, response: nil)
                     attempt += 1
                     try await sleep(milliseconds: delay)
@@ -291,6 +298,15 @@ public final class HttpClient: @unchecked Sendable {
         items.append(contentsOf: query.map { URLQueryItem(name: snakeCase($0.key), value: $0.value) })
         components?.queryItems = items
         return components?.url
+    }
+}
+
+private func isRetrySafe(method: String, idempotencyKey: String?) -> Bool {
+    switch method.uppercased() {
+    case "GET", "HEAD", "OPTIONS", "PUT", "DELETE":
+        return true
+    default:
+        return idempotencyKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
 }
 

@@ -1,3 +1,4 @@
+import { WorkspaceMetadataSchema } from '@relaycast/types';
 import { and, asc, eq, gt, inArray, isNull, like, lte, or, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { workspaces, channels, fileCleanupQueue, workspaceEvents, workspaceCreateIdempotency } from '../db/schema.js';
@@ -57,6 +58,7 @@ type CreateWorkspaceOptions =
       idempotencyKey?: string;
       requestDigest?: string;
       expiresAt?: Date;
+      metadata?: Record<string, unknown>;
       provenance?: WorkspaceProvenanceRecord;
       usageClassification?: 'internal' | 'external' | 'unknown';
       classificationSource?: 'creator' | 'operator' | 'unclassified';
@@ -83,10 +85,27 @@ function hashApiKey(apiKey: string): Promise<string> {
   return sha256Hex(apiKey);
 }
 
+function canonicalMetadata(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalMetadata);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [
+      key, canonicalMetadata((value as Record<string, unknown>)[key]),
+    ]));
+  }
+  return value;
+}
+
+function validatedMetadata(value: Record<string, unknown>): Record<string, unknown> {
+  const parsed = WorkspaceMetadataSchema.safeParse(value);
+  if (!parsed.success) throw codedError(parsed.error.issues[0].message, 'invalid_metadata', 400);
+  return parsed.data;
+}
+
 /** Canonical digest for the public workspace-create request contract. */
 export function workspaceCreateRequestDigest(input: {
   name: string;
   expiresInSeconds?: number;
+  metadata?: Record<string, unknown>;
   provenance?: Pick<WorkspaceProvenanceRecord, 'source' | 'origin_id' | 'classification'>;
 }): Promise<string> {
   const provenance = input.provenance === undefined
@@ -101,6 +120,7 @@ export function workspaceCreateRequestDigest(input: {
 
   return sha256Hex(JSON.stringify({
     name: input.name,
+    ...(input.metadata === undefined ? {} : { metadata: canonicalMetadata(input.metadata) }),
     ...(input.expiresInSeconds === undefined ? {} : { expires_in_seconds: input.expiresInSeconds }),
     ...(provenance === undefined ? {} : { provenance }),
   }));
@@ -247,6 +267,7 @@ export async function createWorkspace(
 
   const ownerApiKeyHash = providedOwnerApiKeyHash ?? derivedOwnerApiKeyHash;
   const createOptions = typeof options === 'string' ? undefined : options;
+  const metadata = createOptions?.metadata === undefined ? undefined : validatedMetadata(createOptions.metadata);
   const idempotencyKey = createOptions?.idempotencyKey;
   const requestDigest = createOptions?.requestDigest;
   const ownerIdempotency = Boolean(idempotencyKey && (providedOwnerApiKey || providedOwnerApiKeyHash));
@@ -383,6 +404,7 @@ export async function createWorkspace(
                 name,
                 apiKeyHash,
                 expiresAt,
+                ...(metadata === undefined ? {} : { metadata }),
                 provenance: createOptions?.provenance,
                 usageClassification: createOptions?.usageClassification ?? 'unknown',
                 classificationSource: createOptions?.classificationSource ?? 'unclassified',
@@ -596,7 +618,7 @@ export async function getWorkspace(
 export async function updateWorkspace(
   db: Db,
   workspaceId: string,
-  updates: { name?: string; system_prompt?: string | null },
+  updates: { name?: string; system_prompt?: string | null; metadata?: Record<string, unknown> },
   deploymentMessageTtlDays?: number | null,
 ) {
   const setClause: Record<string, unknown> = {};
@@ -604,8 +626,32 @@ export async function updateWorkspace(
   if (updates.system_prompt !== undefined)
     setClause.systemPrompt = updates.system_prompt;
 
-  if (Object.keys(setClause).length === 0) {
+  if (Object.keys(setClause).length === 0 && updates.metadata === undefined) {
     return getWorkspace(db, workspaceId, deploymentMessageTtlDays);
+  }
+
+  if (updates.metadata !== undefined) {
+    const patch = validatedMetadata(updates.metadata);
+    // Compare-and-swap keeps independent concurrent patches without requiring
+    // an interactive transaction (unavailable on the D1 adapter).
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const [current] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId));
+      if (!current) return null;
+      const merged = { ...(current.metadata ?? {}) };
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === null) delete merged[key];
+        else merged[key] = value;
+      }
+      const [updated] = await db.update(workspaces)
+        .set({ ...setClause, metadata: validatedMetadata(merged) })
+        .where(and(
+          eq(workspaces.id, workspaceId),
+          current.metadata === null ? isNull(workspaces.metadata) : eq(workspaces.metadata, current.metadata),
+        ))
+        .returning();
+      if (updated) return getWorkspace(db, updated.id, deploymentMessageTtlDays);
+    }
+    throw codedError('Workspace metadata changed concurrently; retry the update', 'workspace_metadata_conflict', 409);
   }
 
   const [updated] = await db

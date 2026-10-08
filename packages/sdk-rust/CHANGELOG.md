@@ -8,7 +8,11 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased - Major]
 
+- Workspace creation accepts arbitrary JSON metadata, and updates shallow merge metadata with top-level null values deleting keys.
+
 ### Fixed
+
+- Workspace reads and updates accept current engine responses that omit the private API key hash.
 
 - Anonymous keyed workspace bootstrap rejects remote HTTP and redirects, preventing its recovery capability from reaching another origin.
 - `RelayError::retry_after_ms()` exposes the authoritative server delay for exact-release overload handling.
@@ -19,6 +23,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Changed
 
+- **BREAKING:** `RelayCastOptions` and `WorkspaceBootstrapOptions` struct literals must include the new `origin_client` and `origin_version` fields; prefer `RelayCastOptions::new(...)` and builders.
+
 - Automatic 5xx retries require an idempotent request or an idempotency key.
 - **BREAKING:** `RelayCast::rotate_agent_token` now requires the current agent token; use `take_over_agent` or `recover_agent` to replace an identity you cannot authenticate as.
 - **BREAKING:** `AgentRegistrationClient::register_agent_token` is create-only and returns `AgentRegistrationError::AlreadyExists` on conflicts; use a unique name or persist the token for self-rollover.
@@ -26,6 +32,11 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - `NodeRosterEntry.load` is now `Option<f64>`, matching the API's explicit unreported state; direct-agent heartbeats no longer label a constant utilization as measured.
 
 ### Added
+
+- `RelayCast::create_node_with_current_token` sends current-node proof for authorized rotation or modification of an established node without placing the credential in the JSON body. `create_node_with_rotation_recovery` also sends a caller-retained idempotency key for lost-response recovery, and `CreateNodeRequest` now exposes optional `machine_id`.
+- `WorkspaceBootstrapOptions::with_origin(client, version)` and `RelayCast::lookup_workspace_with_options(WorkspaceLookupOptions)` identify products on anonymous workspace creation and lookup; legacy calls retain SDK defaults.
+
+- `RelayCastOptions::with_origin(client, version)` and `AgentClient::with_options(ClientOptions)` configure product attribution, inherited by agent HTTP/WebSocket traffic and preserved across token replacement.
 
 - `RelayCast::emit_agent_event_with_idempotency_key` preserves a stable event key across retries.
 

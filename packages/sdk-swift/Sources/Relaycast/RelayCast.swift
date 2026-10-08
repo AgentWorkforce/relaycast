@@ -51,11 +51,13 @@ public struct RelayCastOptions: Equatable, Sendable {
 }
 
 public struct WorkspaceBootstrapOptions: Equatable, Sendable {
+    public var metadata: [String: JSONValue]?
     public var apiKey: String?
     public var baseURL: String?
     public var agentRelayDistinctID: String?
 
-    public init(apiKey: String? = nil, baseURL: String? = nil, agentRelayDistinctID: String? = nil) {
+    public init(apiKey: String? = nil, baseURL: String? = nil, agentRelayDistinctID: String? = nil, metadata: [String: JSONValue]? = nil) {
+        self.metadata = metadata
         self.apiKey = apiKey
         self.baseURL = baseURL
         self.agentRelayDistinctID = agentRelayDistinctID
@@ -155,7 +157,7 @@ public final class RelayCast: @unchecked Sendable {
         let (workspace, _) = try await workspaceRequest(
             method: "POST",
             path: "/v1/workspaces",
-            body: CreateWorkspaceRequest(name: name),
+            body: CreateWorkspaceRequest(name: name, metadata: options.metadata),
             options: options
         ) as (CreateWorkspaceResponse, Int)
         return workspace
@@ -189,7 +191,7 @@ public final class RelayCast: @unchecked Sendable {
         let (workspace, status) = try await workspaceRequest(
             method: "POST",
             path: "/v1/workspaces",
-            body: CreateWorkspaceRequest(name: name),
+            body: CreateWorkspaceRequest(name: name, metadata: options.metadata),
             options: options
         ) as (CreateWorkspaceResponse, Int)
         return EnsureWorkspaceResponse(
@@ -660,8 +662,31 @@ public final class RelayNodesService: @unchecked Sendable {
         self.relay = relay
     }
 
-    public func create(_ request: CreateNodeRequest) async throws -> CreateNodeResponse {
-        try await relay.client.post("/v1/nodes", body: request)
+    public func create(
+        _ request: CreateNodeRequest,
+        currentToken: String? = nil,
+        idempotencyKey: String? = nil
+    ) async throws -> CreateNodeResponse {
+        if let currentToken, currentToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw RelayError.invalidRequest("currentToken must not be blank for node rotation")
+        }
+        if let idempotencyKey, idempotencyKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw RelayError.invalidRequest("idempotencyKey must not be blank for node rotation recovery")
+        }
+        if idempotencyKey != nil && currentToken == nil {
+            throw RelayError.invalidRequest("idempotencyKey requires currentToken for node rotation recovery")
+        }
+        var headers: [String: String] = [:]
+        if let currentToken { headers["X-Relaycast-Node-Token"] = currentToken }
+        return try await relay.client.post(
+            "/v1/nodes",
+            body: request,
+            options: RequestOptions(
+                headers: headers,
+                idempotencyKey: idempotencyKey,
+                retry: idempotencyKey != nil
+            )
+        )
     }
 
     public func list(_ query: NodeListQuery = NodeListQuery()) async throws -> [NodeRosterEntry] {

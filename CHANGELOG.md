@@ -21,6 +21,45 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Fixed
 
 - Workspace expiry is enforced at authentication: once a workspace created with `expires_in_seconds` passes `expires_at`, its workspace key, agent tokens, node tokens, observer tokens, and both WebSocket upgrades return `401 workspace_expired` instead of staying usable until the reap deletes it.
+- The invocation timeout, retry, and task-deadline sweeps use indexes instead of scanning every action invocation, which removes the periodic "D1 DB is overloaded" queueing on large workspaces.
+
+## [9.0.0] - 2026-10-06
+
+### Added
+
+- Relay Connect hosts can share a room-scoped, read-only observer page that aggregates historical and new direct messages with UTC timestamps and fails closed when the room is deleted or its capability expires or is revoked.
+- Rust workspace and agent clients accept product origin metadata across HTTP, WebSocket, token replacement, and anonymous workspace bootstrap.
+- TypeScript, Python, Rust, and Swift node helpers accept the current node token as header-only proof and a stable idempotency key for recoverable rotation of an established node; Rust node requests also expose `machine_id`.
+
+### Changed
+
+- Idempotent writes (`Idempotency-Key`) complete in four serialized key/value round trips instead of six, cutting roughly 0.4s from a warm idempotent DM send without widening the concurrent-retry window.
+
+### Fixed
+
+- Cloudflare D1 no longer rejects full 100-message history reads when attachment metadata is hydrated.
+- DM history query failures reach Relaycast Cloud's D1 overload handler and shared exception telemetry instead of becoming opaque route-level 500 responses.
+- Node enrollment no longer lets a workspace key alone rotate, rename, reshape, or reset an established node; existing rows require proof of their current node token while genuinely new node IDs remain enrollable. Keyed rotations retain a bounded, request-bound recovery record so a lost committed response returns the same replacement token on retry. Hosts must apply `0063_node_rotation_recovery.sql` before upgrading.
+- Direct-message idempotency is now enforced atomically across direct and A2A routing, so concurrent retries reaching different server isolates cannot create duplicate rows or lose post-commit notification recovery.
+- Server telemetry events can no longer be emitted with an unlisted name, a missing required property, or an overridden `workspace_id`, any of which made hosted ingestion silently drop them.
+- Fix webhook listing responses so published SDKs can deserialize them, restoring webhook cleanup for integrations.
+
+## [8.16.0] - 2026-10-01
+
+### Added
+
+- Create, read, and update workspace metadata across the API and TypeScript, Python, Rust, and Swift SDKs, with shallow merging, null deletion, and size limits and rejection of secret-like keys.
+
+### Fixed
+
+- Observer chat and activity now scroll independently within the viewport, display oldest to newest, and preserve reading position when new entries arrive. Clearing activity resumes following new events.
+- Python and Rust workspace reads accept public responses without private API-key hashes; Python workspace creation retries safely only when an idempotency key is supplied.
+
+## [8.15.0] - 2026-10-01
+
+### Added
+
+- Server telemetry attributes each event to the cloud user behind the acting agent (`metadata.cloud_user_id`) and groups it by the workspace's cloud org and workspace; events with no known person use `relaycast-ws:<workspace_id>` without a person profile.
 
 ## [8.14.0] - 2026-09-30
 
@@ -630,7 +669,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v8.14.0...HEAD
+[Unreleased - Patch]: https://github.com/AgentWorkforce/relaycast/compare/v9.0.0...HEAD
+[9.0.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.16.0...v9.0.0
+[8.16.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.15.0...v8.16.0
+[8.15.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.14.0...v8.15.0
 [8.14.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.13.1...v8.14.0
 [8.13.1]: https://github.com/AgentWorkforce/relaycast/compare/v8.13.0...v8.13.1
 [8.13.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.12.0...v8.13.0

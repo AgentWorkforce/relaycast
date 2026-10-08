@@ -242,6 +242,14 @@ export const nodes = sqliteTable(
       .references(() => workspaces.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     tokenHash: text('token_hash').notNull().unique(),
+    // A successful idempotent rotation retains only the superseded token hash
+    // and request binding for a bounded recovery window. This lets a caller
+    // recover the replacement after a lost 201 without making the workspace
+    // key sufficient to rotate an established node.
+    previousTokenHash: text('previous_token_hash'),
+    previousTokenExpiresAt: integer('previous_token_expires_at', { mode: 'timestamp' }),
+    rotationIdempotencyKeyHash: text('rotation_idempotency_key_hash'),
+    rotationRequestDigest: text('rotation_request_digest'),
     // Physical machine grouping in fleet views and a placement input; never a
     // capability scope. Set at enrollment when the caller supplies it, and by a
     // provider on register; null when neither reports one.
@@ -278,6 +286,7 @@ export const nodes = sqliteTable(
     index('idx_nodes_status_heartbeat').on(table.workspaceId, table.status, table.lastHeartbeatAt),
     index('idx_nodes_workspace_machine').on(table.workspaceId, table.machineId),
     index('idx_nodes_workspace_machine_proven').on(table.workspaceId, table.machineId, table.provenLiveAt),
+    index('idx_nodes_workspace_previous_token').on(table.workspaceId, table.previousTokenHash),
   ],
 );
 
@@ -688,6 +697,31 @@ export const messages = sqliteTable(
       sql`length(${table.id})`,
       table.id,
     ),
+  ],
+);
+
+/**
+ * Atomic DM idempotency claims. Cloudflare KV remains the fast replay cache,
+ * while this D1 row is the concurrency authority across direct and A2A
+ * routing: the claim and message share one admission batch. The response
+ * snapshot is retained for the 24-hour claim lifetime so a replay returns the
+ * exact public receipt even if mutable message context changes meanwhile.
+ */
+export const directDmIdempotency = sqliteTable(
+  'direct_dm_idempotency',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    messageId: text('message_id').notNull(),
+    fingerprint: text('fingerprint').notNull(),
+    response: text('response', { mode: 'json' }).$type<Record<string, unknown>>().notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (table) => [
+    index('idx_direct_dm_idempotency_workspace_created').on(table.workspaceId, table.createdAt),
+    index('idx_direct_dm_idempotency_retention').on(table.createdAt, table.id),
   ],
 );
 

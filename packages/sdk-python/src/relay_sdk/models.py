@@ -127,7 +127,7 @@ class ObserverToken(BaseModel):
 class Workspace(BaseModel):
     id: str
     name: str
-    api_key_hash: str
+    api_key_hash: str | None = None
     system_prompt: str | None = None
     created_at: str
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -135,11 +135,13 @@ class Workspace(BaseModel):
 
 class CreateWorkspaceRequest(BaseModel):
     name: str
+    metadata: dict[str, Any] | None = None
 
 
 class UpdateWorkspaceRequest(BaseModel):
     name: str | None = None
     system_prompt: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class CreateWorkspaceResponse(BaseModel):
@@ -532,6 +534,7 @@ class NodeRosterEntry(BaseModel):
 class CreateNodeRequest(BaseModel):
     node_id: str | None = None
     name: str
+    machine_id: str | None = None
     kind: NodeKind | None = None
     role: NodeRole | None = None
     delivery_adapter: str | None = None

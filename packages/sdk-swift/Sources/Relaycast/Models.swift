@@ -30,9 +30,11 @@ public struct Workspace: Codable, Equatable, Sendable {
 
 public struct CreateWorkspaceRequest: Codable, Equatable, Sendable {
     public var name: String
+    public var metadata: [String: JSONValue]?
 
-    public init(name: String) {
+    public init(name: String, metadata: [String: JSONValue]? = nil) {
         self.name = name
+        self.metadata = metadata
     }
 }
 
@@ -60,9 +62,13 @@ public struct UpdateWorkspaceRequest: Codable, Equatable, Sendable {
     public var name: String?
     public var systemPrompt: String?
 
-    public init(name: String? = nil, systemPrompt: String? = nil) {
+    /// Shallow merge into workspace metadata; top-level `.null` values delete keys.
+    public var metadata: [String: JSONValue]?
+
+    public init(name: String? = nil, systemPrompt: String? = nil, metadata: [String: JSONValue]? = nil) {
         self.name = name
         self.systemPrompt = systemPrompt
+        self.metadata = metadata
     }
 }
 
@@ -1836,6 +1842,7 @@ extension NodeDeliveryConfig: ExpressibleByDictionaryLiteral {
 public struct CreateNodeRequest: Codable, Equatable, Sendable {
     public let nodeId: String?
     public let name: String
+    public let machineId: String?
     public let kind: String?
     public let role: String?
     public let deliveryAdapter: String?
@@ -1845,9 +1852,10 @@ public struct CreateNodeRequest: Codable, Equatable, Sendable {
     public let tags: [String]?
     public let version: String?
 
-    public init(nodeId: String? = nil, name: String, kind: String? = nil, role: String? = nil, deliveryAdapter: String? = nil, delivery: NodeDeliveryConfig? = nil, capabilities: [String]? = nil, maxAgents: Int? = nil, tags: [String]? = nil, version: String? = nil) {
+    public init(nodeId: String? = nil, name: String, machineId: String? = nil, kind: String? = nil, role: String? = nil, deliveryAdapter: String? = nil, delivery: NodeDeliveryConfig? = nil, capabilities: [String]? = nil, maxAgents: Int? = nil, tags: [String]? = nil, version: String? = nil) {
         self.nodeId = nodeId
         self.name = name
+        self.machineId = machineId
         self.kind = kind
         self.role = role
         self.deliveryAdapter = deliveryAdapter

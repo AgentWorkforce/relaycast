@@ -211,6 +211,7 @@ class TestRelay:
         created = r.nodes.create(
             CreateNodeRequest(
                 name="http-node",
+                machine_id="machine-http",
                 kind="http_push",
                 delivery=HttpPushNodeDelivery(
                     url="https://receiver.example.test/relaycast",
@@ -224,12 +225,18 @@ class TestRelay:
                         prefix="sig=",
                     ),
                 ),
-            )
+            ),
+            current_token="nt_live_current",
+            idempotency_key="node-rotation-00000000-0000-4000-8000-000000000001",
         )
         assert created.kind == "http_push"
         assert created.token == "nt_live_test"
         create_body = json.loads(create_route.calls[0].request.content)
+        assert create_body["machine_id"] == "machine-http"
         assert create_body["delivery"]["auth"]["signature_header"] == "X-Custom-Signature"
+        assert "current_token" not in create_body
+        assert create_route.calls[0].request.headers["X-Relaycast-Node-Token"] == "nt_live_current"
+        assert create_route.calls[0].request.headers["Idempotency-Key"] == "node-rotation-00000000-0000-4000-8000-000000000001"
 
         list_route = respx.get(f"{BASE}/v1/nodes").mock(return_value=ok([NODE_DATA]))
         nodes = r.nodes.list(capability="code")
@@ -254,6 +261,53 @@ class TestRelay:
         )
         assert r.nodes.unbind_agent("http-node", "billing-agent") is None
         assert unbind_route.called
+
+    @respx.mock
+    def test_nodes_unkeyed_rotation_does_not_retry_ambiguous_5xx(self):
+        create_route = respx.post(f"{BASE}/v1/nodes").mock(
+            return_value=httpx.Response(
+                503,
+                json={"ok": False, "error": {"code": "overloaded", "message": "try later"}},
+            )
+        )
+        r = Relay(KEY, base_url=BASE)
+        with pytest.raises(RelayError) as error:
+            r.nodes.create(
+                CreateNodeRequest(node_id="node_1", name="http-node"),
+                current_token="nt_live_current",
+            )
+        assert error.value.status == 503
+        assert create_route.call_count == 1
+
+    @respx.mock
+    def test_nodes_recovery_key_requires_current_token(self):
+        create_route = respx.post(f"{BASE}/v1/nodes")
+        r = Relay(KEY, base_url=BASE)
+        with pytest.raises(ValueError, match="requires current_token"):
+            r.nodes.create(
+                CreateNodeRequest(name="new-node"),
+                idempotency_key="node-rotation-00000000-0000-4000-8000-000000000001",
+            )
+        assert create_route.call_count == 0
+
+    @respx.mock
+    def test_nodes_reject_blank_rotation_credentials_before_request(self):
+        create_route = respx.post(f"{BASE}/v1/nodes")
+        r = Relay(KEY, base_url=BASE)
+
+        for current_token, idempotency_key in [
+            ("", None),
+            (" \t", None),
+            ("nt_live_current", ""),
+            ("nt_live_current", " \t"),
+        ]:
+            with pytest.raises(ValueError, match="must not be blank"):
+                r.nodes.create(
+                    CreateNodeRequest(node_id="node_1", name="http-node"),
+                    current_token=current_token,
+                    idempotency_key=idempotency_key,
+                )
+        assert create_route.call_count == 0
 
     @respx.mock
     def test_observer_tokens_create_list_update_rotate_and_revoke(self):
@@ -454,18 +508,62 @@ class TestAsyncRelay:
             created = await r.nodes.create(
                 CreateNodeRequest(
                     name="http-node",
+                    machine_id="machine-http",
                     kind="http_push",
                     delivery=HttpPushNodeDelivery(url="https://receiver.example.test/relaycast"),
-                )
+                ),
+                current_token="nt_live_current",
+                idempotency_key="node-rotation-00000000-0000-4000-8000-000000000001",
             )
             binding = await r.nodes.bind_agent(
                 "http-node",
                 BindAgentToNodeRequest(agent_name="billing-agent"),
             )
         assert created.token == "nt_live_test"
+        assert create_route.calls[0].request.headers["X-Relaycast-Node-Token"] == "nt_live_current"
+        assert create_route.calls[0].request.headers["Idempotency-Key"] == "node-rotation-00000000-0000-4000-8000-000000000001"
+        assert json.loads(create_route.calls[0].request.content)["machine_id"] == "machine-http"
+        assert "current_token" not in json.loads(create_route.calls[0].request.content)
         assert binding.agent_name == "billing-agent"
         assert create_route.called
         assert bind_route.called
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_nodes_async_unkeyed_rotation_does_not_retry_ambiguous_5xx(self):
+        create_route = respx.post(f"{BASE}/v1/nodes").mock(
+            return_value=httpx.Response(
+                503,
+                json={"ok": False, "error": {"code": "overloaded", "message": "try later"}},
+            )
+        )
+        async with AsyncRelay(KEY, base_url=BASE) as r:
+            with pytest.raises(RelayError) as error:
+                await r.nodes.create(
+                    CreateNodeRequest(node_id="node_1", name="http-node"),
+                    current_token="nt_live_current",
+                )
+        assert error.value.status == 503
+        assert create_route.call_count == 1
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_nodes_async_reject_blank_rotation_credentials_before_request(self):
+        create_route = respx.post(f"{BASE}/v1/nodes")
+        async with AsyncRelay(KEY, base_url=BASE) as r:
+            for current_token, idempotency_key in [
+                ("", None),
+                (" \t", None),
+                ("nt_live_current", ""),
+                ("nt_live_current", " \t"),
+            ]:
+                with pytest.raises(ValueError, match="must not be blank"):
+                    await r.nodes.create(
+                        CreateNodeRequest(node_id="node_1", name="http-node"),
+                        current_token=current_token,
+                        idempotency_key=idempotency_key,
+                    )
+        assert create_route.call_count == 0
 
     @pytest.mark.asyncio
     @respx.mock

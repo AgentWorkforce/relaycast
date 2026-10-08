@@ -303,10 +303,10 @@ try {
     globalThis.fetch=async(url,init)=>{if(String(url)!=='https://example.com/a2a')return originalFetch(url,init);calls++;entered();await gate;return Response.json({jsonrpc:'2.0',id:JSON.parse(init.body).id,result:{}});};
     const noKv=createEngine({...deps,kv:undefined});
     const first=request(ws,'/v1/dm',{to:'recipient-1',text:'same'},{key:'same',engineApp:noKv});await started;
-    expectStatus(await request(ws,'/v1/dm',{to:'recipient-1',text:'same'},{key:'same',engineApp:noKv}),409);assert.equal(calls,1);release();expectStatus(await first,201);
+    const replay=await request(ws,'/v1/dm',{to:'recipient-1',text:'same'},{key:'same',engineApp:noKv});expectStatus(replay,201);assert.equal(calls,1);release();const admitted=await first;expectStatus(admitted,201);assert.equal(replay.body.data.id,admitted.body.data.id);
     expectStatus(await request(ws,'/v1/dm',{to:'recipient-1',text:'same'},{key:'same',engineApp:noKv}),201);assert.equal(calls,1);assert.equal(await depth(ws),1);
     expectStatus(await request(ws,'/v1/dm',{to:'recipient-1',text:'different'},{key:'same',engineApp:noKv}),409);assert.equal(calls,1);
-    globalThis.fetch=originalFetch;record('HTTP concurrent same-key transport lease without KV; mismatch refused',{calls});
+    globalThis.fetch=originalFetch;record('HTTP concurrent same-key transport lease replays receipt without KV; mismatch refused',{calls});
   }
   {
     const ws=await seed('egress-recovery',1,{cap:1});

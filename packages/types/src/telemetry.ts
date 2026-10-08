@@ -124,6 +124,39 @@ export const telemetryPropertiesSchema = z
     }
   });
 
+export const TELEMETRY_SENDER_TYPES = ['human', 'agent', 'system'] as const;
+
+export type TelemetrySenderType = typeof TELEMETRY_SENDER_TYPES[number];
+
+/** Who acted on a server event, from the acting agent row. */
+export interface TelemetrySenderProperties {
+  /** `human` when `agents.type = 'human'`; otherwise the agent's type. */
+  sender_type: TelemetrySenderType;
+  agent_id: string;
+  agent_name: string;
+  /** The cloud user who owns a non-human actor; that user is the event's person. */
+  agent_owner_user_id?: string;
+}
+
+/** Longest cloud user, org or workspace id that telemetry attributes to. */
+export const TELEMETRY_CLOUD_ID_MAX_LENGTH = 128;
+
+/** PostHog groups, taken from the cloud ids cloud writes onto `workspaces.metadata`. */
+export const telemetryGroupsSchema = z.object({
+  organization: telemetryString(TELEMETRY_CLOUD_ID_MAX_LENGTH).optional(),
+  workspace: telemetryString(TELEMETRY_CLOUD_ID_MAX_LENGTH).optional(),
+}).strict();
+
+export type TelemetryGroups = z.infer<typeof telemetryGroupsSchema>;
+
+/** Person properties written once, on the person's first send of each kind. */
+export const telemetryPersonSetOnceSchema = z.object({
+  first_human_message_at: telemetryString(64).optional(),
+  first_agent_message_at: telemetryString(64).optional(),
+}).strict();
+
+export type TelemetryPersonSetOnce = z.infer<typeof telemetryPersonSetOnceSchema>;
+
 const telemetryEnvelopeBaseSchema = z.object({
   distinct_id: telemetryString(128),
   properties: telemetryPropertiesSchema.default({}),
@@ -137,11 +170,15 @@ export type TelemetryIngestionEvent = z.infer<typeof telemetryIngestionEventSche
 
 export const internalTelemetryEventSchema = telemetryEnvelopeBaseSchema.extend({
   event: telemetryEventSchema,
+  groups: telemetryGroupsSchema.optional(),
+  set_once: telemetryPersonSetOnceSchema.optional(),
+  /** `false` for events whose distinct id is not a person (the workspace fallback). */
+  process_person_profile: z.boolean().optional(),
 }).merge(telemetryOriginSchema);
 
 export type InternalTelemetryEvent = z.infer<typeof internalTelemetryEventSchema>;
 
-const REQUIRED_SERVER_EVENT_PROPS: Record<ServerTelemetryEventName, readonly string[]> = {
+const REQUIRED_SERVER_EVENT_PROPS = {
   relaycast_server_workspace_created: ['workspace_id'],
   relaycast_server_workspace_updated: ['workspace_id'],
   relaycast_server_workspace_deleted: ['workspace_id'],
@@ -200,7 +237,11 @@ const REQUIRED_SERVER_EVENT_PROPS: Record<ServerTelemetryEventName, readonly str
   relaycast_server_route_feedback_recorded: ['workspace_id', 'agent_name', 'success'],
   relaycast_server_routing_config_updated: ['workspace_id'],
   relaycast_server_relayfile_inbound_delivered: ['workspace_id', 'provider'],
-};
+} as const satisfies Record<ServerTelemetryEventName, readonly string[]>;
+
+/** Properties `parseInternalTelemetryEvent` requires for a server event. */
+export type ServerTelemetryRequiredProperty<E extends ServerTelemetryEventName> =
+  (typeof REQUIRED_SERVER_EVENT_PROPS)[E][number];
 
 const BLOCKED_PROPERTY_PATTERNS = [
   /token/i,
@@ -266,7 +307,7 @@ export function normalizeTelemetryOrigin(origin: Partial<TelemetryOrigin> | unde
 }
 
 function ensureRequiredServerProperties(event: ServerTelemetryEventName, properties: Record<string, TelemetryPropertyValue>): void {
-  const required = REQUIRED_SERVER_EVENT_PROPS[event];
+  const required: readonly string[] = REQUIRED_SERVER_EVENT_PROPS[event];
   const missing = required.filter((key) => !(key in properties));
   if (missing.length > 0) {
     throw new Error(`Missing required properties for ${event}: ${missing.join(', ')}`);

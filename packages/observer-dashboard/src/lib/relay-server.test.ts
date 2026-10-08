@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   orderByRemembered,
+  observerBindingMatches,
   pickRememberedEngine,
   resolveRelayServerCandidatesFromHost,
   selectEngineForKey,
@@ -107,6 +108,7 @@ describe('selectEngineForKey', () => {
       reachedAny: true,
       rejectedAny: true,
       inconclusiveAny: false,
+      observerTokenId: null,
     });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -137,6 +139,7 @@ describe('selectEngineForKey', () => {
       reachedAny: true,
       rejectedAny: true,
       inconclusiveAny: false,
+      observerTokenId: null,
     });
   });
 
@@ -156,6 +159,7 @@ describe('selectEngineForKey', () => {
       reachedAny: true,
       rejectedAny: true,
       inconclusiveAny: true,
+      observerTokenId: null,
     });
   });
 
@@ -172,6 +176,7 @@ describe('selectEngineForKey', () => {
       reachedAny: true,
       rejectedAny: true,
       inconclusiveAny: true,
+      observerTokenId: null,
     });
   });
 
@@ -184,5 +189,26 @@ describe('selectEngineForKey', () => {
       'https://self-hosted.example.com/v1/workspace',
       expect.any(Object)
     );
+  });
+
+  it('returns the authoritative observer id from an accepted observer credential', async () => {
+    mockFetch(
+      Response.json({ data: { id: 'workspace-a', observer_token_id: 'ot_room_a' } }),
+    );
+
+    await expect(
+      selectEngineForKey(['https://cast.agentrelay.com'], 'ot_live_secret'),
+    ).resolves.toMatchObject({
+      baseUrl: 'https://cast.agentrelay.com',
+      observerTokenId: 'ot_room_a',
+    });
+  });
+});
+
+describe('observerBindingMatches', () => {
+  it('requires the authenticated observer record to match the room link', () => {
+    expect(observerBindingMatches('ot_room_a', 'ot_room_a')).toBe(true);
+    expect(observerBindingMatches('ot_room_a', 'ot_room_b')).toBe(false);
+    expect(observerBindingMatches('ot_room_a', null)).toBe(false);
   });
 });

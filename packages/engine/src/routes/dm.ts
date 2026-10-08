@@ -13,11 +13,12 @@ import { publishWorkspaceEvent } from './fanout.js';
 import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
 import { buildDmReceivedEventData } from '../engine/deliveryWire.js';
 import { runInBackground } from './background.js';
-import { sendWebhookEvent } from './webhookOutbox.js';
+import { sendWebhookEvent, shouldEnqueueWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
-import { errorResponse } from '../lib/httpError.js';
+import { asCodedError, errorResponse } from '../lib/httpError.js';
 import { jsonError, jsonOk, parseJsonBody, parseQueryParams } from '../lib/httpResponse.js';
 import { parsePaginationQuery, positiveIntQueryParam } from '../lib/httpQuery.js';
+import { canonicalJson } from '../engine/messageMetadata.js';
 
 export const dmRoutes = new Hono<AppEnv>();
 
@@ -80,8 +81,22 @@ dmRoutes.post(
         ...(address !== undefined ? { address } : {}),
         text,
         ...(normalizedAttachments ? { attachments: normalizedAttachments } : {}),
-        ...(data !== undefined ? { data_sha256: await sha256Hex(JSON.stringify(data)) } : {}),
+        ...(data !== undefined ? { data_sha256: await sha256Hex(canonicalJson(data)) } : {}),
       };
+      // Existing KV records used insertion-order JSON. Accept that format only
+      // as a replay-compatible fingerprint during the 24-hour TTL window.
+      const legacyFingerprintBody = data === undefined ? fingerprintBody : {
+        ...fingerprintBody,
+        data_sha256: await sha256Hex(JSON.stringify(data)),
+      };
+      const withMode = (body: typeof fingerprintBody) => mode === 'steer'
+        ? { ...body, mode }
+        : body;
+      // Keep the outer encoding byte-compatible with the pre-canonical format
+      // so a rolled-back engine accepts records written by this version. Only
+      // the nested caller data digest needs canonical ordering.
+      const fingerprint = JSON.stringify(withMode(fingerprintBody));
+      const legacyFingerprint = JSON.stringify(withMode(legacyFingerprintBody));
 
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) {
@@ -109,34 +124,41 @@ dmRoutes.post(
         status: 201,
         // Backward compatibility: historical fingerprint excluded mode (equivalent to wait).
         // Only include mode when explicit steer is requested.
-        fingerprint: mode === 'steer'
-          ? JSON.stringify({ ...fingerprintBody, mode })
-          : JSON.stringify(fingerprintBody),
+        fingerprint,
+        storageFingerprint: legacyFingerprint,
+        compatibleFingerprints: legacyFingerprint === fingerprint ? [] : [legacyFingerprint],
+        ttlSecondsForResult: (result) => result._idempotency_ttl_seconds,
         kv: c.get('engine').kv,
-        operation: () => dmEngine.sendDm(db, workspace.id, agent!.id, {
-          to,
-          text,
-          attachments: normalizedAttachments,
-          data,
-          mode,
-        }, { mailbox, resolveWorkspaceDeliveryPolicy: () => resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace), idempotencyKey, address,
-          afterAdmission: (data, event) => {
-            runInBackground(c, c.get('engine').realtime.publishToWorkspaceStream({
-              workspaceId: workspace.id, event: { ...event.payload, seq: event.seq },
-            }), 'publish admitted dm.received');
-            runInBackground(c, c.get('engine').webhookQueue.send({
-              type: 'dm.received', workspaceId: workspace.id,
-              data: event.data, outboxId: event.outboxId,
-            }), 'queue admitted dm.received');
-            if (data._delivery) runInBackground(c,
-              routeDeliveryOutcomes(c, [data._delivery], 'dm.received', event.data),
-              'route admitted dm delivery');
-            if (data._delivery_rejections.length) runInBackground(c,
-              notifyDeliveryRejections(c, agent!.id, data._delivery_rejections),
-              'notify admitted dm delivery rejection');
-            trackDmSent(data);
-          },
-        }),
+        operation: async () => {
+          const hasWebhookSubscriptions = await shouldEnqueueWebhookEvent(c, workspace.id, 'dm.received');
+          return dmEngine.sendDm(db, workspace.id, agent!.id, {
+            to,
+            text,
+            attachments: normalizedAttachments,
+            data,
+            mode,
+          }, { mailbox, resolveWorkspaceDeliveryPolicy: () => resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace), idempotencyKey, address,
+            hasWebhookSubscriptions,
+            afterAdmission: (data, event) => {
+              runInBackground(c, c.get('engine').realtime.publishToWorkspaceStream({
+                workspaceId: workspace.id, event: { ...event.payload, seq: event.seq },
+              }), 'publish admitted dm.received');
+              if (event.outboxId) {
+                runInBackground(c, c.get('engine').webhookQueue.send({
+                  type: 'dm.received', workspaceId: workspace.id,
+                  data: event.data, outboxId: event.outboxId,
+                }), 'queue admitted dm.received');
+              }
+              if (data._delivery) runInBackground(c,
+                routeDeliveryOutcomes(c, [data._delivery], 'dm.received', event.data),
+                'route admitted dm delivery');
+              if (data._delivery_rejections.length) runInBackground(c,
+                notifyDeliveryRejections(c, agent!.id, data._delivery_rejections),
+                'notify admitted dm delivery rejection');
+              trackDmSent(data);
+            },
+          });
+        },
         afterOperation: async (data) => {
           if (data._notifications_durable) return;
           await sendWebhookEvent(c, {
@@ -147,16 +169,20 @@ dmRoutes.post(
         },
       });
 
-      if (!idempotent.replayed && !idempotent.data._notifications_durable) {
+      const effectiveIdempotent = idempotent.data._idempotency_replayed && !idempotent.replayed
+        ? { ...idempotent, replayed: true }
+        : idempotent;
+
+      if (!effectiveIdempotent.replayed && !effectiveIdempotent.data._notifications_durable) {
         const {
           _delivery,
           _delivery_rejections,
           ...publicDmData
-        } = idempotent.data as typeof idempotent.data & {
+        } = effectiveIdempotent.data as typeof effectiveIdempotent.data & {
           _delivery?: Parameters<typeof routeDeliveryOutcomes>[1][number] | null;
           _delivery_rejections?: Parameters<typeof notifyDeliveryRejections>[2];
         };
-        const eventData = toDmReceivedEventData(idempotent.data);
+        const eventData = toDmReceivedEventData(effectiveIdempotent.data);
         runInBackground(c, publishWorkspaceEvent(c, 'dm.received', eventData), 'publish dm.received');
 
         if (_delivery) {
@@ -177,7 +203,7 @@ dmRoutes.post(
         trackDmSent(publicDmData);
       }
 
-      return jsonIdempotentOk(c, idempotent);
+      return jsonIdempotentOk(c, effectiveIdempotent);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -217,17 +243,17 @@ dmRoutes.get(
   requireAgentToken,
   rateLimit,
   async (c) => {
-    try {
-      const db = c.get('db');
-      const workspace = c.get('workspace');
-      const agent = c.get('agent');
-      const query = parsePaginationQuery(c);
-      if (!query.ok) {
-        return query.response;
-      }
-      const { limit, before, after } = query.data;
+    const db = c.get('db');
+    const workspace = c.get('workspace');
+    const agent = c.get('agent');
+    const query = parsePaginationQuery(c);
+    if (!query.ok) {
+      return query.response;
+    }
+    const { limit, before, after } = query.data;
 
-      const conversationId = c.req.param('conversation_id');
+    const conversationId = c.req.param('conversation_id');
+    try {
       const msgs = await dmEngine.getDmMessages(
         db,
         workspace.id,
@@ -237,7 +263,10 @@ dmRoutes.get(
       );
       return jsonOk(c, msgs);
     } catch (err: unknown) {
-      return errorResponse(c, err);
+      if ((asCodedError(err).status ?? 500) < 500) {
+        return errorResponse(c, err);
+      }
+      throw err;
     }
   },
 );

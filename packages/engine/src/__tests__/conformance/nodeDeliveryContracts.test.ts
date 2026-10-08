@@ -61,6 +61,7 @@ describe('node delivery contracts', () => {
     expect(res.status).toBe(201);
     return (await res.json()) as {
       data: {
+        token: string;
         name: string;
         kind: string;
         role: string;
@@ -627,6 +628,7 @@ describe('node delivery contracts', () => {
       headers: {
         'content-type': 'application/json',
         authorization: `Bearer ${ws.workspaceKey}`,
+        'X-Relaycast-Node-Token': node.data.token,
       },
       body: JSON.stringify({ name: node.data.name }),
     });

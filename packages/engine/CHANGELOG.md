@@ -12,10 +12,38 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Fixed
 
 - Authentication rejects an expired workspace for every credential kind with `401 workspace_expired`, rather than admitting it until `reapExpiredWorkspaces` deletes the row. The built-in provider enforces it, and the engine re-checks every `AuthProvider` result so an injected hosting provider cannot admit an expired workspace; the node WebSocket upgrade, which resolves its principal directly, gained its own gate.
+- The invocation sweeps no longer scan all of `action_invocations`. Migrations `0064_action_invocations_status_dispatched_index.sql`, `0065_action_invocations_task_deadline_any_status.sql`, and `0066_action_invocations_status_sweep_ranges.sql` add `(status, dispatched_at)`, `(status, retry_after_at)`, and partial `(status, json_extract(task_state, '$.deadline'))` indexes, and drop the interim deadline-only index from 0065. They change no data; apply them with the other engine migrations.
 
 ### Added
 
 - `isWorkspaceExpired`, `authenticateUnexpired`, and `WORKSPACE_EXPIRED_CODE` for hosts composing their own auth paths, plus `getWorkspaceExpiry` for a minimal expiry read.
+
+## [9.0.0] - 2026-10-06
+
+### Changed
+
+- `runIdempotent` reads the stored record and the in-flight lock in one round trip and lets the lock expire instead of deleting it after a stored success: a fresh key now costs four serialized KV round trips instead of six. The post-lock record fence remains ahead of the operation so a concurrent completion is replayed instead of duplicated. Replay, conflicting-key rejection, in-progress rejection, interruption recovery, and retention bounds are unchanged.
+
+### Fixed
+
+- DM, channel, thread, and delivery attachment hydration splits large message-ID lookups into D1-safe chunks, so full 100-message history pages stay within Cloudflare D1's bound-parameter limit.
+- `GET /v1/dm/:conversation_id/messages` lets query failures reach the global error handler for exception telemetry and host-specific error classification.
+- `POST /v1/nodes` requires an established node's current token in `X-Relaycast-Node-Token` before rotating or modifying the row; workspace-key-only enrollment remains valid for genuinely new nodes and returns `409 node_token_proof_required` without mutation for existing rows. A high-entropy `Idempotency-Key` binds the prior proof and exact request for 24 hours so a retry after a lost committed response recovers the same replacement token without another mutation. Hosts must apply `0063_node_rotation_recovery.sql` before upgrading.
+- `POST /v1/dm` admits one idempotency claim and durable notification state atomically across direct and A2A routing, preventing concurrent retries on different server isolates from creating duplicate messages or losing post-commit recovery. Hosts must apply `0062_direct_dm_idempotency.sql` before upgrading.
+- `emitServerEvent` only accepts `SERVER_TELEMETRY_EVENTS` names and requires each event's required properties at compile time; `workspace_id` always comes from the `workspaceId` argument.
+- `GET /v1/webhooks` returns `workspace_id`, `channel_id`, `channel_name`, and `created_by` for SDK compatibility while retaining `channel` for existing REST clients.
+
+## [8.16.0] - 2026-10-01
+
+### Added
+
+- Workspace creation accepts public metadata; workspace updates merge top-level keys, with null deleting a key, while enforcing JSON size limits and rejecting secret-like keys.
+
+## [8.15.0] - 2026-10-01
+
+### Added
+
+- Server events belong to the acting agent's cloud user, carry sender fields and org/workspace groups, and fall back to a non-person workspace id; `TelemetryEvent` gains optional `groups`, `setOnce` and `processPersonProfile` for sinks (see [TELEMETRY.md](../../TELEMETRY.md)).
 
 ## [8.14.0] - 2026-09-30
 

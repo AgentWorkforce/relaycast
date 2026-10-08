@@ -3,7 +3,7 @@ import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { createMiddleware } from 'hono/factory';
 import { z } from 'zod';
-import { WorkspaceProvenanceInputSchema } from '@relaycast/types';
+import { CreateWorkspaceRequestSchema, UpdateWorkspaceRequestSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { requireAgentToken, requireWorkspaceKey, requireWorkspaceRead } from '../middleware/auth.js';
 import { authenticateUnexpired } from '../auth/workspaceExpiry.js';
@@ -20,6 +20,7 @@ import {
   observerAllowsConversation,
   observerAllowsEvent,
   observerAllowsMessage,
+  normalizeObserverFilters,
   OBSERVER_SCOPES,
 } from '../engine/observerToken.js';
 import {
@@ -48,16 +49,8 @@ import { runInBackground } from './background.js';
 
 export const workspaceRoutes = new Hono<AppEnv>();
 
-const createWorkspaceSchema = z.object({
-  name: z.string().min(1),
-  expires_in_seconds: z.number().int().min(60).max(30 * 24 * 60 * 60).optional(),
-  provenance: WorkspaceProvenanceInputSchema.optional(),
-});
-
-const updateWorkspaceSchema = z.object({
-  name: z.string().optional(),
-  system_prompt: z.string().nullable().optional(),
-});
+const createWorkspaceSchema = CreateWorkspaceRequestSchema.extend({ name: z.string().min(1) });
+const updateWorkspaceSchema = UpdateWorkspaceRequestSchema;
 
 const activityQuerySchema = z.object({
   limit: positiveIntQueryParam({ defaultValue: 20, max: 500 }),
@@ -210,6 +203,7 @@ workspaceRoutes.post('/workspaces', async (c) => {
       name,
       expires_in_seconds: expiresInSeconds,
       provenance: declaredProvenance,
+      metadata,
     } = parsed.data;
     const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
     if (idempotencyError) {
@@ -232,6 +226,7 @@ workspaceRoutes.post('/workspaces', async (c) => {
     const requestDigest = idempotencyKey
       ? await workspaceEngine.workspaceCreateRequestDigest({
         name,
+        ...(metadata === undefined ? {} : { metadata }),
         ...(expiresInSeconds === undefined ? {} : { expiresInSeconds }),
         ...(declaredProvenance === undefined ? {} : { provenance: declaredProvenance }),
       })
@@ -254,6 +249,7 @@ workspaceRoutes.post('/workspaces', async (c) => {
         ...(expiresInSeconds
           ? { expiresAt: new Date(Date.now() + expiresInSeconds * 1_000) }
           : {}),
+        ...(metadata === undefined ? {} : { metadata }),
         ...attribution,
       },
     );
@@ -338,7 +334,11 @@ workspaceRoutes.get(
       }
       const observer = getObserverTokenFromContext(c);
       return jsonOk(c, observer
-        ? { ...workspace, provenance: redactProvenanceForObserver(workspace.provenance) }
+        ? {
+          ...workspace,
+          observer_token_id: observer.id,
+          provenance: redactProvenanceForObserver(workspace.provenance),
+        }
         : workspace);
     } catch (err: unknown) {
       return errorResponse(c, err);
@@ -456,6 +456,7 @@ workspaceRoutes.patch('/workspace', requireWorkspaceKey, rateLimit, async (c) =>
     emitServerEvent(c, workspace.id, 'relaycast_server_workspace_updated', {
       changed_name: typeof body?.name === 'string',
       changed_system_prompt: typeof body?.system_prompt === 'string',
+      changed_metadata: body.metadata !== undefined,
     });
     return jsonOk(c, updated);
   } catch (err: unknown) {
@@ -504,10 +505,31 @@ workspaceRoutes.get('/dm/conversations/all', requireWorkspaceRead('dms:read', { 
     const db = c.get('db');
     const workspace = c.get('workspace');
     const observer = getObserverTokenFromContext(c);
-    const conversations = (await dmAllEngine.listAllDmConversations(db, workspace.id))
-      .filter((conversation) =>
-        observerAllowsConversation(observer, conversation.id)
-        && (!conversation.last_message || observerAllowsMessage(observer, conversation.last_message)));
+    const allowedConversations = (await dmAllEngine.listAllDmConversations(db, workspace.id))
+      .filter((conversation) => observerAllowsConversation(observer, conversation.id));
+    const filters = observer ? normalizeObserverFilters(observer.filters) : null;
+    const filtersMessages = Boolean(filters?.agent_ids?.length || filters?.created_after);
+    const filteredCounts = observer && filtersMessages
+      ? await dmAllEngine.countDmMessagesForWorkspaceConversations(
+        db,
+        workspace.id,
+        allowedConversations.map((conversation) => conversation.id),
+        { agentIds: filters?.agent_ids, createdAfter: filters?.created_after },
+      )
+      : null;
+    const conversations = allowedConversations.map((conversation) => {
+      const visibleLastMessage = conversation.last_message && !observerAllowsMessage(observer, conversation.last_message)
+        ? null
+        : conversation.last_message;
+      if (!filteredCounts) {
+        return { ...conversation, last_message: visibleLastMessage };
+      }
+      return {
+        ...conversation,
+        last_message: visibleLastMessage,
+        message_count: filteredCounts.get(conversation.id) ?? 0,
+      };
+    });
     return jsonOk(c, conversations);
   } catch (err: unknown) {
     return errorResponse(c, err);
@@ -532,7 +554,19 @@ workspaceRoutes.get('/dm/conversations/:conversation_id/messages', requireWorksp
     const msgs = await dmAllEngine.getDmMessagesForWorkspace(
       db, workspace.id, conversationId, { limit, before, after },
     );
-    return jsonOk(c, msgs.filter((message) => observerAllowsMessage(getObserverTokenFromContext(c), message)));
+    const visible = msgs.filter((message) => observerAllowsMessage(getObserverTokenFromContext(c), message));
+    if (c.req.query('page') === '1') {
+      const effectiveLimit = dmAllEngine.dmMessagePageLimit(limit);
+      return jsonOk(c, {
+        messages: visible,
+        // Advance over the raw page, not the filtered result. An observer's
+        // agent filter may hide every row in this page while older allowed
+        // rows still exist.
+        next_before: msgs.at(-1)?.id ?? null,
+        exhausted: msgs.length < effectiveLimit,
+      });
+    }
+    return jsonOk(c, visible);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }

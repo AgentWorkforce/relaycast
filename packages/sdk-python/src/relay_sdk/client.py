@@ -54,11 +54,12 @@ class HttpClient:
 
     def _headers(self, with_body: bool = False) -> dict[str, str]:
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
             "X-SDK-Version": SDK_VERSION,
             "X-Relaycast-Origin-Client": self.origin_client,
             "X-Relaycast-Origin-Version": self.origin_version,
         }
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         if self.agent_relay_distinct_id:
             headers[AGENT_RELAY_DISTINCT_ID_HEADER] = self.agent_relay_distinct_id
         if with_body:
@@ -71,6 +72,9 @@ class HttpClient:
         path: str,
         body: Any = None,
         query: dict[str, str] | None = None,
+        *,
+        headers: dict[str, str] | None = None,
+        retry: bool = True,
     ) -> Any:
         url = f"{self.base_url}{path}"
         if query:
@@ -79,7 +83,7 @@ class HttpClient:
                 url = f"{url}?{urlencode(filtered)}"
 
         has_body = body is not None and method.upper() != "GET"
-        headers = self._headers(with_body=has_body)
+        headers = {**self._headers(with_body=has_body), **(headers or {})}
 
         for attempt in range(len(_RETRY_BACKOFFS) + 1):
             response = self._client.request(
@@ -89,7 +93,7 @@ class HttpClient:
                 json=body if has_body else None,
             )
 
-            if 500 <= response.status_code <= 599 and attempt < len(_RETRY_BACKOFFS):
+            if retry and 500 <= response.status_code <= 599 and attempt < len(_RETRY_BACKOFFS):
                 import time
                 time.sleep(_RETRY_BACKOFFS[attempt])
                 continue
@@ -119,8 +123,15 @@ class HttpClient:
     def get(self, path: str, query: dict[str, str] | None = None) -> Any:
         return self.request("GET", path, query=query)
 
-    def post(self, path: str, body: Any = None) -> Any:
-        return self.request("POST", path, body=body)
+    def post(
+        self,
+        path: str,
+        body: Any = None,
+        *,
+        headers: dict[str, str] | None = None,
+        retry: bool = True,
+    ) -> Any:
+        return self.request("POST", path, body=body, headers=headers, retry=retry)
 
     def patch(self, path: str, body: Any = None) -> Any:
         return self.request("PATCH", path, body=body)
@@ -172,11 +183,12 @@ class AsyncHttpClient:
 
     def _headers(self, with_body: bool = False) -> dict[str, str]:
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
             "X-SDK-Version": SDK_VERSION,
             "X-Relaycast-Origin-Client": self.origin_client,
             "X-Relaycast-Origin-Version": self.origin_version,
         }
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         if self.agent_relay_distinct_id:
             headers[AGENT_RELAY_DISTINCT_ID_HEADER] = self.agent_relay_distinct_id
         if with_body:
@@ -189,6 +201,9 @@ class AsyncHttpClient:
         path: str,
         body: Any = None,
         query: dict[str, str] | None = None,
+        *,
+        headers: dict[str, str] | None = None,
+        retry: bool = True,
     ) -> Any:
         url = f"{self.base_url}{path}"
         if query:
@@ -197,7 +212,7 @@ class AsyncHttpClient:
                 url = f"{url}?{urlencode(filtered)}"
 
         has_body = body is not None and method.upper() != "GET"
-        headers = self._headers(with_body=has_body)
+        headers = {**self._headers(with_body=has_body), **(headers or {})}
 
         for attempt in range(len(_RETRY_BACKOFFS) + 1):
             response = await self._client.request(
@@ -207,7 +222,7 @@ class AsyncHttpClient:
                 json=body if has_body else None,
             )
 
-            if 500 <= response.status_code <= 599 and attempt < len(_RETRY_BACKOFFS):
+            if retry and 500 <= response.status_code <= 599 and attempt < len(_RETRY_BACKOFFS):
                 await asyncio.sleep(_RETRY_BACKOFFS[attempt])
                 continue
 
@@ -236,8 +251,15 @@ class AsyncHttpClient:
     async def get(self, path: str, query: dict[str, str] | None = None) -> Any:
         return await self.request("GET", path, query=query)
 
-    async def post(self, path: str, body: Any = None) -> Any:
-        return await self.request("POST", path, body=body)
+    async def post(
+        self,
+        path: str,
+        body: Any = None,
+        *,
+        headers: dict[str, str] | None = None,
+        retry: bool = True,
+    ) -> Any:
+        return await self.request("POST", path, body=body, headers=headers, retry=retry)
 
     async def patch(self, path: str, body: Any = None) -> Any:
         return await self.request("PATCH", path, body=body)

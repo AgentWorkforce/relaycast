@@ -2015,6 +2015,29 @@ describe('node providers', () => {
     expect(deliverFramesOfType(py.sock, 'message.created').length).toBeGreaterThanOrEqual(1);
   });
 
+  it('attributes node-token message telemetry to the `from` agent', async () => {
+    const ws = await createWorkspace(stack.app, 'nt-msg-telemetry');
+    const poster = await registerAgent(stack.app, ws.workspaceKey, 'poster');
+    await stack.runtime.deps.db
+      .update(agents)
+      .set({ type: 'human', metadata: { cloud_user_id: 'user_poster' } })
+      .where(eq(agents.id, poster.agentId));
+    const nodeToken = await enrollNodeWithToken(ws, 'node_a', 'alpha');
+    const capture = vi.spyOn(stack.runtime.deps.telemetry, 'capture');
+
+    const res = await postMessage(nodeToken, 'general', { text: 'hi', from: 'poster' });
+    expect(res.status).toBe(201);
+
+    const created = capture.mock.calls
+      .map(([event]) => event)
+      .find((event) => event.name === 'relaycast_server_message_created');
+    expect(created).toMatchObject({
+      distinctId: 'user_poster',
+      setOnce: { first_human_message_at: expect.any(String) },
+      properties: { sender_type: 'human', agent_id: poster.agentId, agent_name: 'poster' },
+    });
+  });
+
   it('requires `from` on a node-token message', async () => {
     const ws = await createWorkspace(stack.app, 'nt-msg-from-required');
     const nodeToken = await enrollNodeWithToken(ws, 'node_a', 'alpha');

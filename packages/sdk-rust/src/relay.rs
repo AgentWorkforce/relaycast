@@ -66,6 +66,10 @@ pub struct RelayCastOptions {
     /// To self-host, run the engine (`relaycast-engine`, default port 8787) and
     /// set this to e.g. `http://localhost:8787`.
     pub base_url: Option<String>,
+    /// Product identifier sent as `X-Relaycast-Origin-Client`; defaults to `@relaycast/sdk-rust`.
+    pub origin_client: Option<String>,
+    /// Product version sent as `X-Relaycast-Origin-Version`; defaults to the crate version.
+    pub origin_version: Option<String>,
     /// User-Agent-style identifier for the origin_actor driving requests
     /// (e.g. `"claude-code/2.3 (model=opus-4.8)"`, `"codex"`, `"human"`). Sent as
     /// the `X-Relaycast-Origin-Actor` header so server-side telemetry can attribute
@@ -82,6 +86,8 @@ impl RelayCastOptions {
         Self {
             api_key: api_key.into(),
             base_url: None,
+            origin_client: None,
+            origin_version: None,
             origin_actor: None,
             agent_relay_distinct_id: None,
         }
@@ -90,6 +96,17 @@ impl RelayCastOptions {
     /// Set a custom base URL.
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = Some(base_url.into());
+        self
+    }
+
+    /// Set the product identifier and version used for HTTP and agent WebSocket traffic.
+    pub fn with_origin(
+        mut self,
+        origin_client: impl Into<String>,
+        origin_version: impl Into<String>,
+    ) -> Self {
+        self.origin_client = Some(origin_client.into());
+        self.origin_version = Some(origin_version.into());
         self
     }
 
@@ -127,6 +144,8 @@ impl RelayCast {
 
         let mut client_options = ClientOptions::new(options.api_key);
         client_options = client_options.with_base_url(base_url);
+        client_options.origin_client = options.origin_client;
+        client_options.origin_version = options.origin_version;
         if let Some(origin_actor) = options.origin_actor {
             client_options = client_options.with_origin_actor(origin_actor);
         }
@@ -163,7 +182,10 @@ impl RelayCast {
     ) -> Result<CreateWorkspaceResponse> {
         let WorkspaceBootstrapOptions {
             base_url,
+            origin_client,
+            origin_version,
             provenance,
+            metadata,
             idempotency_key,
             bootstrap_secret,
         } = options;
@@ -213,13 +235,23 @@ impl RelayCast {
         } else {
             reqwest::Client::new()
         };
+        let mut body = serde_json::json!({ "name": name, "provenance": provenance });
+        if let Some(metadata) = metadata {
+            body["metadata"] = serde_json::Value::Object(metadata);
+        }
         let mut request = client
             .post(&url)
             .header("Content-Type", "application/json")
             .header("X-SDK-Version", SDK_VERSION)
-            .header("X-Relaycast-Origin-Client", DEFAULT_ORIGIN_CLIENT)
-            .header("X-Relaycast-Origin-Version", SDK_VERSION)
-            .json(&serde_json::json!({ "name": name, "provenance": provenance }));
+            .header(
+                "X-Relaycast-Origin-Client",
+                origin_client.as_deref().unwrap_or(DEFAULT_ORIGIN_CLIENT),
+            )
+            .header(
+                "X-Relaycast-Origin-Version",
+                origin_version.as_deref().unwrap_or(SDK_VERSION),
+            )
+            .json(&body);
         if let Some(key) = idempotency_key {
             request = request.header("Idempotency-Key", key);
         }
@@ -994,9 +1026,21 @@ impl RelayCast {
         name: &str,
         base_url: Option<&str>,
     ) -> Result<Option<WorkspaceLookup>> {
+        let mut options = WorkspaceLookupOptions::new();
+        if let Some(base_url) = base_url {
+            options = options.with_base_url(base_url);
+        }
+        Self::lookup_workspace_with_options(name, options).await
+    }
+
+    /// Look up a workspace with configurable product origin metadata.
+    pub async fn lookup_workspace_with_options(
+        name: &str,
+        options: WorkspaceLookupOptions,
+    ) -> Result<Option<WorkspaceLookup>> {
         let url = format!(
             "{}/v1/workspaces/by-name/{}",
-            base_url.unwrap_or(DEFAULT_BASE_URL),
+            options.base_url.as_deref().unwrap_or(DEFAULT_BASE_URL),
             urlencoding::encode(name)
         );
 
@@ -1005,8 +1049,14 @@ impl RelayCast {
             .get(&url)
             .header("Content-Type", "application/json")
             .header("X-SDK-Version", SDK_VERSION)
-            .header("X-Relaycast-Origin-Client", DEFAULT_ORIGIN_CLIENT)
-            .header("X-Relaycast-Origin-Version", SDK_VERSION)
+            .header(
+                "X-Relaycast-Origin-Client",
+                options.origin_client.as_deref().unwrap_or(DEFAULT_ORIGIN_CLIENT),
+            )
+            .header(
+                "X-Relaycast-Origin-Version",
+                options.origin_version.as_deref().unwrap_or(SDK_VERSION),
+            )
             .send()
             .await?;
 
@@ -1288,6 +1338,53 @@ impl RelayCast {
     /// Enroll or rotate a node token.
     pub async fn create_node(&self, request: CreateNodeRequest) -> Result<CreateNodeResponse> {
         self.client.post("/v1/nodes", Some(request), None).await
+    }
+
+    /// Rotate or modify an established node after proving possession of its
+    /// current token. The proof is sent only in a header, never in the JSON
+    /// request body.
+    pub async fn create_node_with_current_token(
+        &self,
+        request: CreateNodeRequest,
+        current_token: &str,
+    ) -> Result<CreateNodeResponse> {
+        self.create_node_with_headers(request, current_token, None)
+            .await
+    }
+
+    /// Rotate an established node through the server's recoverable path. The
+    /// idempotency key must be CSPRNG-generated, at least 32 characters, and
+    /// reused with the same proof and request after a transport failure.
+    pub async fn create_node_with_rotation_recovery(
+        &self,
+        request: CreateNodeRequest,
+        current_token: &str,
+        idempotency_key: &str,
+    ) -> Result<CreateNodeResponse> {
+        self.create_node_with_headers(request, current_token, Some(idempotency_key))
+            .await
+    }
+
+    async fn create_node_with_headers(
+        &self,
+        request: CreateNodeRequest,
+        current_token: &str,
+        idempotency_key: Option<&str>,
+    ) -> Result<CreateNodeResponse> {
+        let headers = vec![(
+            "X-Relaycast-Node-Token".to_string(),
+            current_token.to_string(),
+        )];
+        self.client
+            .post(
+                "/v1/nodes",
+                Some(request),
+                Some(RequestOptions {
+                    headers: Some(headers),
+                    idempotency_key: idempotency_key.map(str::to_owned),
+                }),
+            )
+            .await
     }
 
     /// List fleet nodes on the roster.

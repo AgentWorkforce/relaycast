@@ -102,13 +102,15 @@ info:
     | `X-Relaycast-Origin-Actor` | `origin_actor` | UA-style path identifying the caller, `{app}/{type}[/{name}]` (e.g. `agent-relay-cli/agent/claude-code`). Supersedes the former `X-Relaycast-Harness`. |
     | `X-Agent-Relay-Distinct-Id` | `agent_relay_distinct_id` | Analytics person key for the caller. |
     | `X-Agent-Relay-Machine-Id` | `agent_relay_machine_id` | Anonymous hashed id of the host machine. Sent alongside the distinct id, not instead of it. |
-    | `X-Agent-Relay-User-Id` | `agent_relay_user_id` | Signed-in user id from the calling product's own account system. Used as the person key when present. |
+    | `X-Agent-Relay-User-Id` | `agent_relay_user_id` | Signed-in user id from the calling product's own account system. Used as the person key when the acting agent has no `metadata.cloud_user_id`. |
     | `X-Agent-Relay-Org-Id` | `agent_relay_org_id` | Organization id, for per-customer rollups. |
     | `X-Agent-Relay-Org-Slug` | `agent_relay_org_slug` | Human-readable organization slug. |
 
-    Relaycast has no user table of its own — a workspace is an API-key row — so
-    these are the only way hosted usage can be reported per person or per
-    organization rather than only per workspace.
+    The person key is the acting agent's `metadata.cloud_user_id` when set,
+    then `X-Agent-Relay-User-Id`, then `X-Agent-Relay-Distinct-Id`. Without any
+    of them the event belongs to the workspace and creates no person. Organization
+    and workspace groups come from the workspace's `metadata.cloud_org_id` and
+    `metadata.cloud_workspace_id`.
 
     The query-parameter forms exist for WebSocket upgrades (`/v1/ws`,
     `/v1/node/ws`), where browsers cannot set custom headers; the header wins
@@ -232,6 +234,23 @@ components:
             actor_org_slug:
               type: string
 
+    WorkspaceMetadata:
+      type: object
+      additionalProperties: true
+      maxProperties: 100
+      description: >-
+        Workspace labels readable by any valid workspace observer token; never
+        store credentials in metadata. Key rejection is an accidental-secret
+        guardrail, not a guarantee about values. Limited to 16384 bytes of serialized UTF-8 JSON, 100
+        top-level keys, and 128 Unicode code points per key. Objects and arrays
+        may nest eight levels below the top-level metadata object; primitive
+        values do not add a nesting level.
+        Secret-like keys (tokens, passwords, credentials, authorization, and
+        API/private/access/refresh keys) and prototype keys are rejected
+        recursively. PATCH shallow-merges top-level keys, with null deleting a
+        key; nested objects are replaced in full. The merged result is subject
+        to the same limits. Create idempotency digests include metadata.
+
     Workspace:
       type: object
       properties:
@@ -240,6 +259,8 @@ components:
           description: Snowflake ID
         name:
           type: string
+        metadata:
+          $ref: '#/components/schemas/WorkspaceMetadata'
         key:
           type: string
           description: Workspace API key (only returned on creation)
@@ -1789,6 +1810,8 @@ paths:
                     independent of when the background reap deletes the data.
                 provenance:
                   $ref: '#/components/schemas/WorkspaceProvenanceInput'
+                metadata:
+                  $ref: '#/components/schemas/WorkspaceMetadata'
       parameters:
         - name: Idempotency-Key
           in: header
@@ -1985,7 +2008,7 @@ paths:
 
     patch:
       summary: Update workspace
-      description: Update workspace settings
+      description: Update workspace settings; metadata shallow-merges and top-level null values delete keys.
       tags:
         - Workspaces
       security:
@@ -1998,6 +2021,11 @@ paths:
               properties:
                 name:
                   type: string
+                system_prompt:
+                  type: string
+                  nullable: true
+                metadata:
+                  $ref: '#/components/schemas/WorkspaceMetadata'
       responses:
         '200':
           description: Workspace updated
@@ -5162,7 +5190,13 @@ paths:
       summary: Enroll or rotate a node token
       description: >
         Enroll a delivery node in the workspace or rotate the token for an existing node.
-        When `node_id` is supplied, it is the enrollment key: a matching node is rotated
+        A request that resolves an existing node by `node_id`, `name`, or `machine_id`
+        must also send that node's current token in `X-Relaycast-Node-Token`; the
+        workspace key alone cannot rotate or modify an established row. Supplying a
+        CSPRNG-generated `Idempotency-Key` of at least 32 characters makes that rotation
+        recoverable after a lost response when the same key, proof, and body are retried.
+        When `node_id`
+        is supplied, it is the enrollment key: an authorized matching node is rotated
         in place (and renamed if `name` differs), a new `node_id` creates a new node, and
         a `name` already held by a different node is rejected with `node_name_conflict`
         (409). Without `node_id`, an existing node with the same `name` is rotated; failing
@@ -5180,6 +5214,21 @@ paths:
         - Nodes
       security:
         - workspaceKey: []
+      parameters:
+        - name: X-Relaycast-Node-Token
+          in: header
+          required: false
+          schema:
+            type: string
+          description: Current node token required when this enrollment resolves an existing node. The workspace key remains the Authorization bearer credential.
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            minLength: 32
+            maxLength: 255
+          description: CSPRNG-generated recovery capability for an existing-node rotation. Reuse the same key with the same current token and request body after a transport failure to recover the same replacement token during the bounded replay window.
       requestBody:
         required: true
         content:
@@ -5191,12 +5240,12 @@ paths:
               properties:
                 node_id:
                   type: string
-                  description: Stable node identity. When supplied, enrollment keys on it — matching node rotated in place, new id creates a node — instead of resolving by name.
+                  description: Stable node identity. When supplied, enrollment keys on it — an authorized matching node is rotated in place, while a new id creates a node — instead of resolving by name.
                 name:
                   type: string
                 machine_id:
                   type: string
-                  description: Stable id of the host machine. Used as the enrollment key of last resort, after `node_id` and `name`, so a host that keeps no `node_id` and renames itself on each boot rotates its existing `broker` node instead of growing the roster. Reuse requires that broker to have heartbeated once and then gone stale; a row that never connected, one still live, and one with a future heartbeat are never adopted, so concurrent hosts sharing a `machine_id` (a cloned VM, or containers from one image) keep separate identities and credentials. Recorded on the node and returned on roster entries.
+                  description: Stable id of the host machine. Used as the enrollment key of last resort, after `node_id` and `name`, so a host that keeps no `node_id` can rotate its existing `broker` node instead of growing the roster when it also proves the current node token. Reuse requires that broker to have heartbeated once and then gone stale; a row that never connected, one still live, and one with a future heartbeat are never adopted, so concurrent hosts sharing a `machine_id` (a cloned VM, or containers from one image) keep separate identities and credentials. Recorded on the node and returned on roster entries.
                 kind:
                   type: string
                   enum: [ws, http_push, poll]
@@ -5236,7 +5285,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
         '409':
-          description: Node name is already enrolled by a different node
+          description: Node name conflict, or an existing node requires current-token proof
           content:
             application/json:
               schema:

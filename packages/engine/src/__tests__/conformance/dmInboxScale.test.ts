@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
 
 const CONVERSATION_COUNT = 151;
@@ -130,6 +130,55 @@ describe('DM inbox scaling', () => {
       headers: { authorization: `Bearer ${agentToken}` },
     });
     expect(response.status).toBe(400);
+  });
+
+  it('keeps expected participant errors out of global error logs', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const response = await stack.app.request('/v1/dm/unknown-conversation/messages', {
+        headers: { authorization: `Bearer ${agentToken}` },
+      });
+
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toEqual({
+        ok: false,
+        error: { code: 'forbidden', message: 'Not a participant in this conversation' },
+      });
+      expect(errorLog).not.toHaveBeenCalled();
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  it('lets history read failures reach the global handler for logging and telemetry', async () => {
+    const captureException = vi.spyOn(stack.runtime.deps.telemetry, 'captureException');
+    const sqlite = stack.runtime.handle.sqlite;
+    const originalPrepare = sqlite.prepare.bind(sqlite);
+    const path = '/v1/dm/dm_conversation_151/messages';
+    sqlite.prepare = ((source: string) => {
+      if (source.includes('from "dm_participants"')) {
+        throw new Error('D1_ERROR: D1 DB is overloaded. Requests queued for too long.');
+      }
+      return originalPrepare(source);
+    }) as typeof sqlite.prepare;
+
+    try {
+      const response = await stack.app.request(path, {
+        headers: { authorization: `Bearer ${agentToken}` },
+      });
+
+      expect(response.status).toBe(500);
+      await expect(response.json()).resolves.toEqual({
+        ok: false,
+        error: { code: 'internal_error', message: 'Internal server error' },
+      });
+      expect(captureException).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'D1_ERROR: D1 DB is overloaded. Requests queued for too long.' }),
+        expect.objectContaining({ path, method: 'GET', status_code: 500, error_code: 'internal_error' }),
+      );
+    } finally {
+      sqlite.prepare = originalPrepare as typeof sqlite.prepare;
+    }
   });
 
   it('lists same-second conversations in newest-first insertion order', async () => {

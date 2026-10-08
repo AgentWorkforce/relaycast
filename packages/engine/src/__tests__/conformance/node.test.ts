@@ -3066,10 +3066,20 @@ describe('node adapter conformance', () => {
   });
 
   describe('node enrollment identity', () => {
-    async function enroll(workspaceKey: string, body: Record<string, unknown>) {
+    async function enroll(
+      workspaceKey: string,
+      body: Record<string, unknown>,
+      currentNodeToken?: string,
+      idempotencyKey?: string,
+    ) {
       const res = await stack.app.request('/v1/nodes', {
         method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${workspaceKey}` },
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${workspaceKey}`,
+          ...(currentNodeToken ? { 'x-relaycast-node-token': currentNodeToken } : {}),
+          ...(idempotencyKey ? { 'idempotency-key': idempotencyKey } : {}),
+        },
         body: JSON.stringify(body),
       });
       return { status: res.status, body: await res.json() as { data?: { id: string; name: string; token: string }; error?: { code: string } } };
@@ -3098,7 +3108,11 @@ describe('node adapter conformance', () => {
       const first = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'host', version: 'v1' });
       expect(first.status).toBe(201);
 
-      const second = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'host', version: 'v2' });
+      const second = await enroll(
+        ws.workspaceKey,
+        { node_id: 'node_a', name: 'host', version: 'v2' },
+        first.body.data?.token,
+      );
       expect(second.status).toBe(201);
       expect(second.body.data?.id).toBe('node_a');
       expect(second.body.data?.token).not.toBe(first.body.data?.token);
@@ -3111,22 +3125,168 @@ describe('node adapter conformance', () => {
       expect(rows[0].version).toBe('v2');
     });
 
-    it('re-enrolling the same node_id under a new name renames the node', async () => {
+    it('rejects a workspace-key-only rename of an established node and leaves the row unchanged', async () => {
       const ws = await createWorkspace(stack.app, 'enroll-rename-ws');
-      const first = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'old-name' });
+      const first = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'old-name', version: 'v1' });
       expect(first.status).toBe(201);
 
-      const renamed = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'new-name' });
-      expect(renamed.status).toBe(201);
-      expect(renamed.body.data?.id).toBe('node_a');
-      expect(renamed.body.data?.name).toBe('new-name');
+      await stack.runtime.deps.db
+        .update(nodes)
+        .set({ status: 'online', handlersLive: true, load: 0.5 })
+        .where(eq(nodes.id, 'node_a'));
+      const [before] = await stack.runtime.deps.db
+        .select()
+        .from(nodes)
+        .where(eq(nodes.id, 'node_a'));
 
+      const renamed = await enroll(ws.workspaceKey, {
+        node_id: 'node_a',
+        name: 'new-name',
+        version: 'attacker-version',
+      });
+      expect(renamed.status).toBe(409);
+      expect(renamed.body.error?.code).toBe('node_token_proof_required');
+
+      const [after] = await stack.runtime.deps.db
+        .select()
+        .from(nodes)
+        .where(eq(nodes.id, 'node_a'));
+      expect(after).toEqual(before);
+    });
+
+    it('allows an established node holder to rename and rotate with its current token', async () => {
+      const ws = await createWorkspace(stack.app, 'enroll-proven-rename-ws');
+      const first = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'old-name', version: 'v1' });
+      expect(first.status).toBe(201);
+
+      const renamed = await enroll(
+        ws.workspaceKey,
+        { node_id: 'node_a', name: 'new-name', version: 'v2' },
+        first.body.data?.token,
+      );
+      expect(renamed.status).toBe(201);
+      expect(renamed.body.data).toMatchObject({ id: 'node_a', name: 'new-name' });
+      expect(renamed.body.data?.token).not.toBe(first.body.data?.token);
+
+      const [row] = await stack.runtime.deps.db
+        .select()
+        .from(nodes)
+        .where(eq(nodes.id, 'node_a'));
+      expect(row.name).toBe('new-name');
+      expect(row.version).toBe('v2');
+      expect(row.tokenHash).toBe(await sha256Hex(renamed.body.data!.token));
+    });
+
+    it('recovers the same rotated token after a committed response is lost', async () => {
+      const ws = await createWorkspace(stack.app, 'enroll-idempotent-rotation-ws');
+      const first = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'old-name', version: 'v1' });
+      expect(first.status).toBe(201);
+
+      const request = { node_id: 'node_a', name: 'new-name', version: 'v2' };
+      const idempotencyKey = 'node-rotation-00000000-0000-4000-8000-000000000001';
+      const rotated = await enroll(ws.workspaceKey, request, first.body.data?.token, idempotencyKey);
+      expect(rotated.status).toBe(201);
+      const [afterCommit] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_a'));
+
+      // Simulate a caller that never observed the first 201 and retries with
+      // its retained proof and the same operation key.
+      const recovered = await enroll(ws.workspaceKey, request, first.body.data?.token, idempotencyKey);
+      expect(recovered.status).toBe(201);
+      expect(recovered.body.data?.token).toBe(rotated.body.data?.token);
+      const [afterReplay] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_a'));
+      expect(afterReplay).toEqual(afterCommit);
+
+      // The superseded proof is not a general grace credential: changing the
+      // body or operation key cannot recover or mutate the node.
+      const changedBody = await enroll(
+        ws.workspaceKey,
+        { ...request, version: 'attacker-version' },
+        first.body.data?.token,
+        idempotencyKey,
+      );
+      expect(changedBody.status).toBe(409);
+      expect(changedBody.body.error?.code).toBe('node_token_proof_required');
+      const changedKey = await enroll(
+        ws.workspaceKey,
+        request,
+        first.body.data?.token,
+        'node-rotation-00000000-0000-4000-8000-000000000002',
+      );
+      expect(changedKey.status).toBe(409);
+      expect(changedKey.body.error?.code).toBe('node_token_proof_required');
+      const [afterRejectedReplays] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_a'));
+      expect(afterRejectedReplays).toEqual(afterCommit);
+    });
+
+    it('requires a high-entropy idempotency key for node-token recovery', async () => {
+      const ws = await createWorkspace(stack.app, 'enroll-weak-idempotency-ws');
+      const first = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'host' });
+      expect(first.status).toBe(201);
+
+      const rejected = await enroll(
+        ws.workspaceKey,
+        { node_id: 'node_a', name: 'host', version: 'v2' },
+        first.body.data?.token,
+        'predictable-key',
+      );
+      expect(rejected.status).toBe(400);
+      expect(rejected.body.error?.code).toBe('node_rotation_idempotency_key_too_weak');
+    });
+
+    it('rejects a rotation recovery key without current-token proof', async () => {
+      const ws = await createWorkspace(stack.app, 'enroll-key-without-proof-ws');
+      const rejected = await enroll(
+        ws.workspaceKey,
+        { node_id: 'node_a', name: 'host' },
+        undefined,
+        'node-rotation-00000000-0000-4000-8000-000000000005',
+      );
+      expect(rejected.status).toBe(400);
+      expect(rejected.body.error?.code).toBe('node_rotation_idempotency_requires_current_token');
       const rows = await stack.runtime.deps.db
         .select()
         .from(nodes)
         .where(eq(nodes.workspaceId, ws.workspaceId));
-      expect(rows).toHaveLength(1);
-      expect(rows[0].name).toBe('new-name');
+      expect(rows).toEqual([]);
+    });
+
+    it('rejects superseded-token recovery after its bounded replay window expires', async () => {
+      const ws = await createWorkspace(stack.app, 'enroll-expired-recovery-ws');
+      const first = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'host', version: 'v1' });
+      const request = { node_id: 'node_a', name: 'host', version: 'v2' };
+      const idempotencyKey = 'node-rotation-00000000-0000-4000-8000-000000000003';
+      const rotated = await enroll(ws.workspaceKey, request, first.body.data?.token, idempotencyKey);
+      expect(rotated.status).toBe(201);
+
+      await stack.runtime.deps.db
+        .update(nodes)
+        .set({ previousTokenExpiresAt: new Date(Date.now() - 1_000) })
+        .where(eq(nodes.id, 'node_a'));
+      const [before] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_a'));
+
+      const rejected = await enroll(ws.workspaceKey, request, first.body.data?.token, idempotencyKey);
+      expect(rejected.status).toBe(409);
+      expect(rejected.body.error?.code).toBe('node_token_proof_required');
+      const [after] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_a'));
+      expect(after).toEqual(before);
+    });
+
+    it('rejects invalid node-token proof and leaves the established row unchanged', async () => {
+      const ws = await createWorkspace(stack.app, 'enroll-invalid-proof-ws');
+      const first = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'host', version: 'v1' });
+      expect(first.status).toBe(201);
+      const [before] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_a'));
+
+      const rejected = await enroll(
+        ws.workspaceKey,
+        { node_id: 'node_a', name: 'attacker-name', version: 'attacker-version' },
+        'nt_live_not_the_current_token',
+      );
+      expect(rejected.status).toBe(409);
+      expect(rejected.body.error?.code).toBe('node_token_proof_required');
+
+      const [after] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_a'));
+      expect(after).toEqual(before);
     });
 
     it('rejects renaming a node onto a name held by a different node', async () => {
@@ -3163,10 +3323,29 @@ describe('node adapter conformance', () => {
       const first = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'host' });
       expect(first.status).toBe(201);
 
-      const rotated = await enroll(ws.workspaceKey, { name: 'host' });
+      const rotated = await enroll(ws.workspaceKey, { name: 'host' }, first.body.data?.token);
       expect(rotated.status).toBe(201);
       expect(rotated.body.data?.id).toBe('node_a');
       expect(rotated.body.data?.token).not.toBe(first.body.data?.token);
+    });
+
+    it('keeps authenticated direct-agent node token minting working', async () => {
+      const ws = await createWorkspace(stack.app, 'direct-node-token-mint-ws');
+      const agent = await registerAgent(stack.app, ws.workspaceKey, 'direct-agent');
+
+      const mint = () => stack.app.request('/v1/agent/node-token', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${agent.token}` },
+      });
+      const first = await mint();
+      expect(first.status).toBe(200);
+      const firstBody = await first.json() as { data: { node_id: string; token: string } };
+      const second = await mint();
+      expect(second.status).toBe(200);
+      const secondBody = await second.json() as { data: { node_id: string; token: string } };
+
+      expect(secondBody.data.node_id).toBe(firstBody.data.node_id);
+      expect(secondBody.data.token).not.toBe(firstBody.data.token);
     });
   });
 });

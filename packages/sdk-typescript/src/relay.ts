@@ -1,4 +1,5 @@
 import type {
+  JsonValue,
   A2aAgentCard,
   A2aAgentRecord,
   Agent,
@@ -28,6 +29,7 @@ import type {
   EventSubscription,
   ActivityItem,
   DmMessage,
+  DmMessagePage,
   DmReceivedEvent,
   WorkspaceDmConversation,
   TokenRotateResponse,
@@ -66,6 +68,7 @@ import type {
   ActionDefinition,
   RegisterActionRequest,
   BindAgentToNodeRequest,
+  CreateNodeOptions,
   CreateNodeRequest,
   CreateNodeResponse,
   DeleteNodeOptions,
@@ -199,6 +202,8 @@ export interface WorkspaceIdentityOptions {
 }
 
 export interface WorkspaceBootstrapOptions extends WorkspaceIdentityOptions {
+  /** Application-defined JSON stored on the workspace. */
+  metadata?: Record<string, JsonValue>;
   apiKey?: string;
   baseUrl?: string;
   /** Explicit lifetime for a throwaway workspace; omit for persistence. */
@@ -486,6 +491,7 @@ export class RelayCast {
         ...(resolved.expiresInSeconds !== undefined
           ? { expires_in_seconds: resolved.expiresInSeconds }
           : {}),
+        ...(resolved.metadata !== undefined ? { metadata: resolved.metadata } : {}),
         provenance: toWorkspaceProvenanceInput(resolved.provenance),
       }),
     });
@@ -972,8 +978,28 @@ export class RelayCast {
   };
 
   nodes = {
-    create: (data: CreateNodeRequest): Promise<CreateNodeResponse> =>
-      this.client.post('/v1/nodes', data),
+    create: (data: CreateNodeRequest, options?: CreateNodeOptions): Promise<CreateNodeResponse> => {
+      if (options?.currentToken !== undefined && !options.currentToken.trim()) {
+        throw new Error('currentToken must not be blank for node rotation');
+      }
+      if (options?.idempotencyKey !== undefined && !options.idempotencyKey.trim()) {
+        throw new Error('idempotencyKey must not be blank for node rotation recovery');
+      }
+      if (options?.idempotencyKey !== undefined && !options.currentToken) {
+        throw new Error('idempotencyKey requires currentToken for node rotation recovery');
+      }
+      const headers = {
+        ...(options?.currentToken ? { 'X-Relaycast-Node-Token': options.currentToken } : {}),
+        ...(options?.currentToken && options.idempotencyKey !== undefined
+          ? { 'Idempotency-Key': options.idempotencyKey }
+          : {}),
+      };
+      return this.client.post(
+        '/v1/nodes',
+        data,
+        Object.keys(headers).length > 0 ? { headers } : undefined,
+      );
+    },
 
     list: (query?: NodeListQuery): Promise<NodeRosterEntry[]> => {
       const params: Record<string, string> = {};
@@ -1091,6 +1117,17 @@ export class RelayCast {
 
   dmMessages = async (conversationId: string, opts?: { limit?: number; before?: string; after?: string }): Promise<DmMessage[]> => {
     const query: Record<string, string> = {};
+    if (opts?.limit !== undefined) query.limit = String(opts.limit);
+    if (opts?.before) query.before = opts.before;
+    if (opts?.after) query.after = opts.after;
+    return this.client.get(`/v1/dm/conversations/${encodeURIComponent(conversationId)}/messages`, query);
+  };
+
+  dmMessagePage = async (
+    conversationId: string,
+    opts?: { limit?: number; before?: string; after?: string },
+  ): Promise<DmMessagePage> => {
+    const query: Record<string, string> = { page: '1' };
     if (opts?.limit !== undefined) query.limit = String(opts.limit);
     if (opts?.before) query.before = opts.before;
     if (opts?.after) query.after = opts.after;

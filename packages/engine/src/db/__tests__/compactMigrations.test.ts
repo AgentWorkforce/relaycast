@@ -54,6 +54,20 @@ function snapshot(handle: SqliteDbHandle) {
         const { status_updated_at: _statusUpdatedAt, ...existing } = row as Record<string, unknown>;
         return JSON.stringify(existing);
       }
+      // 0063 adds only bounded node-rotation recovery metadata. Exclude those
+      // nullable fields so this comparison remains byte-for-byte over every
+      // pre-existing value while the explicit schema assertions below cover
+      // the new columns.
+      if (name === 'nodes') {
+        const {
+          previous_token_hash: _previousTokenHash,
+          previous_token_expires_at: _previousTokenExpiresAt,
+          rotation_idempotency_key_hash: _rotationIdempotencyKeyHash,
+          rotation_request_digest: _rotationRequestDigest,
+          ...existing
+        } = row as Record<string, unknown>;
+        return JSON.stringify(existing);
+      }
       return JSON.stringify(row);
     }).sort();
     return [name, rows.length, createHash('sha256').update(JSON.stringify(rows)).digest('hex')];
@@ -79,7 +93,7 @@ function constraints(handle: SqliteDbHandle) {
 function expectConstraintsPreserved(before: ReturnType<typeof constraints>, after: ReturnType<typeof constraints>) {
   // 0050 may add these redundant named lookup indexes, but must not alter any
   // original constraint (including a lookup that already existed via 0049).
-  expect(after.filter(table => !['maintenance_cursors', 'a2a_egress', 'a2a_egress_context', 'a2a_inbound'].includes(table.name) || before.some(original => original.name === table.name))
+  expect(after.filter(table => !['maintenance_cursors', 'a2a_egress', 'a2a_egress_context', 'a2a_inbound', 'direct_dm_idempotency'].includes(table.name) || before.some(original => original.name === table.name))
     .map(table => {
       const original = before.find(candidate => candidate.name === table.name);
       // 0055 adds optional event identity columns and their index after the
@@ -103,6 +117,19 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
       }
       if (table.name === 'agents' && original) {
         return { ...table, sql: original.sql };
+      }
+      // 0063 appends four nullable recovery fields. Remove only their exact
+      // additive DDL so changes to every pre-existing node constraint remain
+      // visible to this preservation assertion.
+      if (table.name === 'nodes') {
+        table = {
+          ...table,
+          sql: table.sql
+            .replace(', previous_token_hash TEXT DEFAULT NULL', '')
+            .replace(', previous_token_expires_at INTEGER DEFAULT NULL', '')
+            .replace(', rotation_idempotency_key_hash TEXT DEFAULT NULL', '')
+            .replace(', rotation_request_digest TEXT DEFAULT NULL', ''),
+        };
       }
       return {
         ...table,
@@ -135,8 +162,9 @@ describe('compact maintenance migration path', () => {
     const beforeConstraints = constraints(handle);
     expect(runMigrations(handle).applied).toEqual(files.filter(name => name >= replacement));
     const after = snapshot(handle);
-    // 0057/0058 add empty tables; every pre-existing row and table must remain.
-    expect(after.filter(([name]) => !['a2a_egress', 'a2a_egress_context', 'a2a_inbound'].includes(String(name)))).toEqual(before);
+    // Remote-DM and direct-idempotency migrations add empty tables; every
+    // pre-existing row and table must remain.
+    expect(after.filter(([name]) => !['a2a_egress', 'a2a_egress_context', 'a2a_inbound', 'direct_dm_idempotency'].includes(String(name)))).toEqual(before);
     expect(after.find(([name]) => name === 'a2a_egress')).toEqual([
       'a2a_egress', 0, createHash('sha256').update('[]').digest('hex'),
     ]);
@@ -145,6 +173,9 @@ describe('compact maintenance migration path', () => {
     ]);
     expect(after.find(([name]) => name === 'a2a_inbound')).toEqual([
       'a2a_inbound', 0, createHash('sha256').update('[]').digest('hex'),
+    ]);
+    expect(after.find(([name]) => name === 'direct_dm_idempotency')).toEqual([
+      'direct_dm_idempotency', 0, createHash('sha256').update('[]').digest('hex'),
     ]);
     expect(handle.sqlite.pragma('foreign_key_list(a2a_inbound)')).toEqual(expect.arrayContaining([
       expect.objectContaining({ table: 'workspaces', from: 'workspace_id', on_delete: 'CASCADE' }),
@@ -156,6 +187,31 @@ describe('compact maintenance migration path', () => {
     expect(handle.sqlite.pragma('foreign_key_list(a2a_egress)')).toContainEqual(
       expect.objectContaining({ table: 'workspaces', from: 'workspace_id', on_delete: 'CASCADE' }),
     );
+    expect(handle.sqlite.pragma('foreign_key_list(direct_dm_idempotency)')).toContainEqual(
+      expect.objectContaining({ table: 'workspaces', from: 'workspace_id', on_delete: 'CASCADE' }),
+    );
+    expect(handle.sqlite.pragma('table_info(direct_dm_idempotency)')).toContainEqual(
+      expect.objectContaining({ name: 'id', notnull: 1, pk: 1 }),
+    );
+    expect(handle.sqlite.pragma('index_list(direct_dm_idempotency)')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ unique: 1, origin: 'pk' }),
+      expect.objectContaining({ name: 'idx_direct_dm_idempotency_workspace_created' }),
+      expect.objectContaining({ name: 'idx_direct_dm_idempotency_retention' }),
+    ]));
+    expect(handle.sqlite.pragma('table_info(nodes)')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'previous_token_hash', notnull: 0 }),
+      expect.objectContaining({ name: 'previous_token_expires_at', notnull: 0 }),
+      expect.objectContaining({ name: 'rotation_idempotency_key_hash', notnull: 0 }),
+      expect.objectContaining({ name: 'rotation_request_digest', notnull: 0 }),
+    ]));
+    expect(handle.sqlite.pragma('index_list(nodes)')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'idx_nodes_workspace_previous_token', unique: 0 }),
+    ]));
+    const recoveryLookup = JSON.stringify(handle.sqlite.prepare(
+      'EXPLAIN QUERY PLAN SELECT id FROM nodes WHERE workspace_id = ? AND previous_token_hash = ?',
+    ).all('workspace11', 'node-key'));
+    expect(recoveryLookup).toContain('idx_nodes_workspace_previous_token');
+    expect(recoveryLookup).not.toContain('SCAN nodes');
     expectConstraintsPreserved(beforeConstraints, constraints(handle));
     expect(handle.sqlite.prepare('SELECT * FROM maintenance_cursors ORDER BY id').all()).toEqual(cursorRows);
     expect(handle.sqlite.pragma('foreign_key_check')).toEqual([]);

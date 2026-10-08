@@ -9,6 +9,28 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [9.0.0] - 2026-10-06
+
+### Added
+
+- `ServerTelemetryRequiredProperty<E>` exposes the properties `parseInternalTelemetryEvent` requires for each server telemetry event.
+
+### Fixed
+
+- `WebhookSchema` and `Webhook` include required `workspace_id`, `channel_id`, and `channel_name` plus optional nullable `created_by`; manually constructed webhook values must include the required identity fields.
+
+## [8.16.0] - 2026-10-01
+
+### Added
+
+- Workspace create/update requests accept public JSON metadata validated by `WorkspaceMetadataSchema` (16 KiB, 100 top-level keys, 128 Unicode code points per key, eight nested object/array levels below the root; secret-like keys rejected).
+
+## [8.15.0] - 2026-10-01
+
+### Added
+
+- `internalTelemetryEventSchema` accepts optional `groups`, `set_once` and `process_person_profile`; `TelemetrySenderProperties`, `TelemetryGroups` and `TelemetryPersonSetOnce` describe them.
+
 ## [8.14.0] - 2026-09-30
 
 ### Added

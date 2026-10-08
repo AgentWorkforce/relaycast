@@ -2,12 +2,15 @@
  * Authenticate via server-side endpoint which sets httpOnly cookies.
  * Returns true on success.
  */
-export async function setAuth(apiKey: string): Promise<boolean> {
+export async function setAuth(apiKey: string, options?: { connectObserverId?: string }): Promise<boolean> {
   try {
     const res = await fetch('/observer/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ apiKey }),
+      body: JSON.stringify({
+        apiKey,
+        ...(options?.connectObserverId ? { connectObserverId: options.connectObserverId } : {}),
+      }),
     });
     const data = await res.json();
     return data.success === true;

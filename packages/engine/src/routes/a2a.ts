@@ -40,7 +40,7 @@ const sqlInboundCompletionSchema = z.object({
 
 // KV is only an advisory completion cache. Public content and the replay
 // decision belong to SQL, where source pruning can scrub them atomically.
-async function receiveIdempotently(c: Context<AppEnv>, options: Omit<Parameters<typeof runIdempotent<dmEngine.SendDmResult>>[0], 'operation'> & {
+async function receiveIdempotently(c: Context<AppEnv>, options: Omit<Parameters<typeof runIdempotent<dmEngine.SendDmResult>>[0], 'operation' | 'ttlSecondsForResult'> & {
   operation: (legacyInbound?: unknown) => Promise<dmEngine.SendDmResult>;
 }) {
   const inboundId = options.key
@@ -58,8 +58,12 @@ async function receiveIdempotently(c: Context<AppEnv>, options: Omit<Parameters<
         // SQL absence was verified above. Source pruning retains a SQL
         // tombstone; only expiry cleanup removes that identity. A delayed KV
         // completion cannot extend its window or reject a new fingerprint.
-        // sendDm rechecks SQL atomically if another admission races this read.
+        // The matching short-lived KV lock is advisory for the generic HTTP
+        // path too; it must not block a fresh admission after the authoritative
+        // SQL identity expires. sendDm rechecks SQL atomically if another
+        // admission races either read.
         if (key === completionKey && raw && sqlInboundCompletionSchema.safeParse(JSON.parse(raw)).success) return null;
+        if (key === `${completionKey}:lock`) return null;
         return raw;
       };
       const value = Reflect.get(target, property);

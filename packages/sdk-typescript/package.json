@@ -1,6 +1,6 @@
 {
   "name": "@relaycast/sdk",
-  "version": "8.14.0",
+  "version": "9.0.0",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -24,11 +24,12 @@
   "scripts": {
     "build": "tsc",
     "prepublishOnly": "npm run build",
-    "test": "vitest run",
-    "lint": "eslint src/"
+    "test": "npm run test:types && vitest run",
+    "lint": "eslint src/",
+    "test:types": "tsc -p tsconfig.workspace-types.json"
   },
   "dependencies": {
-    "@relaycast/types": "8.14.0",
+    "@relaycast/types": "9.0.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
