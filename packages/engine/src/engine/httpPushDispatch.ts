@@ -119,6 +119,25 @@ export function resolveHttpPushProxy(
   };
 }
 
+/**
+ * POST to an HTTP push receiver without following redirects. Workerd requires
+ * its platform fetch to retain `globalThis` as the receiver, so the default is
+ * called as a method instead of being extracted into a standalone function.
+ */
+export function postHttpPush(
+  requestUrl: string,
+  init: RequestInit,
+  fetchImpl?: typeof globalThis.fetch,
+): Promise<Response> {
+  const requestInit = {
+    ...init,
+    method: 'POST',
+    redirect: 'manual',
+  } satisfies RequestInit;
+  if (fetchImpl) return fetchImpl.call(globalThis, requestUrl, requestInit);
+  return globalThis.fetch(requestUrl, requestInit);
+}
+
 export interface EphemeralNodeEvent {
   workspaceId: string;
   eventType: string;
@@ -166,19 +185,11 @@ export async function postEphemeralEventToHttpPushNode(args: {
 
   try {
     const headers = { ...(await buildHttpPushHeaders(config, args.event.eventType, null, body, timestamp)), ...resolved.proxyHeaders };
-    const requestInit = {
-      method: 'POST',
+    const response = await postHttpPush(resolved.requestUrl, {
       headers,
       body,
-      // Cloudflare Workers reject redirect:'error'; use 'manual' and treat any
-      // 3xx as non-ok below (response.ok is false for 3xx).
-      redirect: 'manual',
       signal: AbortSignal.timeout(10_000),
-    } satisfies RequestInit;
-    const response = args.fetch
-      ? await args.fetch(resolved.requestUrl, requestInit)
-      // Workerd requires fetch to be invoked as a method of globalThis.
-      : await globalThis.fetch(resolved.requestUrl, requestInit);
+    }, args.fetch);
     // We only inspect status; release the connection instead of leaking the body.
     await response.body?.cancel().catch(() => {});
     return response.ok;

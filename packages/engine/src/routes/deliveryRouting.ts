@@ -8,7 +8,7 @@ import type {
   DeliveryRejectionRecord,
 } from '../engine/deliveryWrites.js';
 import { agents, agentNodeBindings, deliveries as deliveryRows, nodes } from '../db/schema.js';
-import { buildHttpPushHeaders, resolveHttpPushProxy } from '../engine/httpPushDispatch.js';
+import { buildHttpPushHeaders, postHttpPush, resolveHttpPushProxy } from '../engine/httpPushDispatch.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
 import { settlePool } from '../lib/settlePool.js';
 import { queryInChunks } from '../lib/queryChunks.js';
@@ -299,23 +299,13 @@ async function dispatchHttpPush(args: {
     // Build headers inside the claim/retry boundary so a signing failure is
     // recorded as a retryable dispatch error rather than rejecting uncaught.
     const headers = { ...(await buildHttpPushHeaders(config, args.eventType, args.delivery.id, body, timestamp)), ...proxyHeaders };
-    const requestInit = {
-      method: 'POST',
+    // Do not follow redirects: a 3xx could point the configured URL at an
+    // internal address and bypass its SSRF validation.
+    const response = await postHttpPush(requestUrl, {
       headers,
       body,
-      // Do NOT follow redirects: a 3xx could point `url` at an internal address
-      // and bypass the SSRF check above. Cloudflare Workers rejects
-      // `redirect: 'error'` outright ("won't be implemented at the edge"), which
-      // would throw on every dispatch and strand every http_push delivery — so
-      // use 'manual' and reject any redirect ourselves below.
-      redirect: 'manual',
       signal: AbortSignal.timeout(10_000),
-    } satisfies RequestInit;
-    const outboundFetch = args.ctx.engine.config?.outboundWebhookFetch;
-    const response = outboundFetch
-      ? await outboundFetch(requestUrl, requestInit)
-      // Workerd requires fetch to be invoked as a method of globalThis.
-      : await globalThis.fetch(requestUrl, requestInit);
+    }, args.ctx.engine.config?.outboundWebhookFetch);
 
     // `redirect: 'manual'` surfaces a redirect as a 3xx status (or an
     // opaqueredirect response with status 0); treat both as a hard failure.
