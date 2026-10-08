@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- The invocation sweeps no longer scan all of `action_invocations`. Migrations `0064_action_invocations_status_dispatched_index.sql`, `0065_action_invocations_task_deadline_any_status.sql`, and `0066_action_invocations_status_sweep_ranges.sql` add `(status, dispatched_at)`, `(status, retry_after_at)`, and partial `(status, json_extract(task_state, '$.deadline'))` indexes, and drop the interim deadline-only index from 0065. They change no data; apply them with the other engine migrations.
 
 ## [9.0.0] - 2026-10-06
 

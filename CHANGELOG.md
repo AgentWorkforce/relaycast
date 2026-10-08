@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- The invocation timeout, retry, and task-deadline sweeps use indexes instead of scanning every action invocation, which removes the periodic "D1 DB is overloaded" queueing on large workspaces.
 
 ## [9.0.0] - 2026-10-06
 
@@ -664,7 +668,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v9.0.0...HEAD
+[Unreleased - Patch]: https://github.com/AgentWorkforce/relaycast/compare/v9.0.0...HEAD
 [9.0.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.16.0...v9.0.0
 [8.16.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.15.0...v8.16.0
 [8.15.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.14.0...v8.15.0
