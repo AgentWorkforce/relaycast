@@ -3,6 +3,7 @@
   "private": true,
   "version": "9.0.0",
   "dependencies": {
-    "@relaycast/engine": "9.0.0"
+    "@relaycast/engine": "9.0.0",
+    "undici": "7.28.0"
   }
 }
