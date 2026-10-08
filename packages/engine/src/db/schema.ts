@@ -1042,6 +1042,10 @@ export const eventSubscriptions = sqliteTable(
     url: text('url').notNull(),
     headers: text('headers', { mode: 'json' }).$type<Record<string, string>>(),
     secret: text('secret'),
+    signatureScheme: text('signature_scheme')
+      .$type<'legacy' | 'standard-webhooks'>()
+      .notNull()
+      .default('legacy'),
     isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   },
@@ -1322,7 +1326,11 @@ export const pendingEvents = sqliteTable(
     payload: text('payload', { mode: 'json' }).notNull(),
     status: text('status').notNull().default('pending'),
     attempts: integer('attempts').notNull().default(0),
-    maxAttempts: integer('max_attempts').notNull().default(5),
+    // Parent claims cover crashes and scheduling; per-subscriber retry limits
+    // live on webhookDeliveries. Keep enough headroom that lease recovery
+    // cannot exhaust the parent before a subscriber reaches its final attempt.
+    maxAttempts: integer('max_attempts').notNull().default(32),
+    webhookInitialized: integer('webhook_initialized', { mode: 'boolean' }).notNull().default(false),
     lastError: text('last_error'),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
     processAfter: integer('process_after', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
@@ -1331,6 +1339,40 @@ export const pendingEvents = sqliteTable(
   (table) => [
     index('idx_pending_events_status').on(table.status, table.processAfter),
     index('idx_pending_events_workspace').on(table.workspaceId),
+  ],
+);
+
+// ============================================
+// Per-subscriber Webhook Deliveries
+// ============================================
+export const webhookDeliveries = sqliteTable(
+  'webhook_deliveries',
+  {
+    id: text('id').primaryKey(),
+    eventId: text('event_id')
+      .notNull()
+      .references(() => pendingEvents.id, { onDelete: 'cascade' }),
+    subscriptionId: text('subscription_id')
+      .notNull()
+      .references(() => eventSubscriptions.id, { onDelete: 'cascade' }),
+    status: text('status')
+      .$type<'pending' | 'succeeded' | 'failed' | 'dead_letter'>()
+      .notNull()
+      .default('pending'),
+    attempts: integer('attempts').notNull().default(0),
+    nextAttemptAt: integer('next_attempt_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    lastError: text('last_error'),
+    lastStatus: integer('last_status'),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    completedAt: integer('completed_at', { mode: 'timestamp' }),
+  },
+  (table) => [
+    uniqueIndex('webhook_deliveries_event_subscription_unique')
+      .on(table.eventId, table.subscriptionId),
+    index('idx_webhook_deliveries_due').on(table.status, table.nextAttemptAt),
+    index('idx_webhook_deliveries_subscription').on(table.subscriptionId, table.createdAt),
   ],
 );
 

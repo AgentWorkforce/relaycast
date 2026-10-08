@@ -13,6 +13,7 @@ export interface ClaimedEvent {
   payload: Record<string, unknown>;
   attempts: number;
   maxAttempts: number;
+  createdAt: Date;
 }
 
 export async function enqueueEvent(
@@ -28,6 +29,7 @@ export async function enqueueEvent(
     workspaceId,
     eventType,
     payload,
+    maxAttempts: 32,
   });
 
   return id;
@@ -81,6 +83,7 @@ export async function claimDueEvents(
     payload: row.payload as Record<string, unknown>,
     attempts: row.attempts,
     maxAttempts: row.maxAttempts,
+    createdAt: row.createdAt,
   }));
 }
 

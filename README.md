@@ -899,6 +899,9 @@ result ambiguous, check the immutable node id before choosing whether to retry.
 The node delivery contract controls how Relaycast sends future deliveries for bound
 agents. Built-in HTTP push auth modes are `none`, `bearer`, `static_headers`, and
 `hmac_sha256`; stored secrets and header values are redacted from node roster responses.
+For `hmac_sha256`, set `signatureScheme: 'standard-webhooks'` with a valid `whsec_`
+secret to use the interoperable `webhook-*` headers; omitting it preserves the legacy
+configurable `X-Relaycast-Signature` contract.
 `ackMode: 'manual'` leaves deliveries delivered until the agent acks them, `on_2xx` acks
 on any 2xx HTTP response, and `response` acks when the response body declares an ack.
 Manual HTTP receivers ack by calling `/v1/deliveries/:id/ack` with the bound agent's
@@ -1102,9 +1105,19 @@ Inbound webhooks created with `POST /webhooks` return `{ url, token }`. External
 must post to `url` with `Authorization: Bearer <token>` and may send either
 `{ "message": "...", "author": "..." }` or the existing `{ "text": "...", "source": "..." }`
 shape. Outbound subscriptions accept custom delivery `headers`; when a `secret` is set,
-deliveries include `X-Relay-Signature: sha256=<hex>`, an HMAC-SHA256 over the exact JSON
-request body, plus `X-Relay-Event` and `X-Relay-Timestamp`. Stored custom header values
-are redacted from subscription create/list/get responses.
+the default `signature_scheme: 'legacy'` sends `X-Relay-Signature: sha256=<hex>`, an
+HMAC-SHA256 over the exact JSON request body. Set `signature_scheme: 'standard-webhooks'`
+with a 24-64-byte base64 `whsec_` secret to send
+`webhook-id`, `webhook-timestamp`, and `webhook-signature: v1,<base64>` instead.
+`webhook-id` is stable across retries under either scheme. Production webhook URLs must
+use HTTPS, resolve only to global addresses, and cannot redirect.
+
+Delivery retry state is isolated per subscription, so a healthy target is not re-sent an
+event because another target failed. Retryable failures wait 30 seconds, 2 minutes,
+10 minutes, 30 minutes, 1 hour, then 2 hours before attempt seven enters `dead_letter`.
+Inspect delivery health with `GET /subscriptions/:id/deliveries` and replay a failed or
+dead-lettered attempt with `POST /subscriptions/:id/deliveries/:delivery_id/replay`.
+Stored custom header values are redacted from subscription create/list/get responses.
 
 Realtime-first usage with the TypeScript SDK — react to delivery events live, and replay the
 durable queue on reconnect instead of polling:

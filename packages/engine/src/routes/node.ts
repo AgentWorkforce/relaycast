@@ -8,6 +8,7 @@ import { parseIdempotencyKey } from '../middleware/idempotency.js';
 import { asCodedError, errorResponse } from '../lib/httpError.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
 import { sha256Hex } from '../lib/crypto.js';
+import { isValidStandardWebhookSecret } from '../lib/standardWebhook.js';
 import {
   jsonCreated,
   jsonError,
@@ -51,6 +52,7 @@ const deliveryAuthSchema = z.discriminatedUnion('type', [
     signed_payload: z.enum(['body', 'timestamp.body']).default('timestamp.body'),
     encoding: z.literal('hex').default('hex'),
     prefix: z.string().default('sha256='),
+    signature_scheme: z.literal('standard-webhooks').optional(),
   }),
 ]);
 
@@ -62,6 +64,18 @@ const httpDeliverySchema = z.object({
   // (EngineConfig.httpPushProxy). `url` stays the real destination; the engine
   // forwards through the proxy at dispatch time. See dispatchHttpPush.
   use_proxy: z.boolean().optional(),
+}).superRefine((delivery, ctx) => {
+  if (
+    delivery.auth.type === 'hmac_sha256'
+    && delivery.auth.signature_scheme === 'standard-webhooks'
+    && !isValidStandardWebhookSecret(delivery.auth.secret)
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['auth', 'secret'],
+      message: 'standard-webhooks requires a whsec_ secret that decodes to 24-64 bytes',
+    });
+  }
 });
 
 const createNodeSchema = z.object({
@@ -192,7 +206,8 @@ async function enrollNode(c: Context<AppEnv>, data: z.infer<typeof createNodeSch
       if (!url) {
         return jsonError(c, 'invalid_node_delivery', 'http_push nodes require delivery.url', 400);
       }
-      if (!isSafeExternalUrl(url, { strict: strictExternalUrl(c) })) {
+      const strict = strictExternalUrl(c);
+      if (!isSafeExternalUrl(url, { strict, requireHttps: strict })) {
         return jsonError(c, 'unsafe_node_delivery_url', 'delivery.url is not allowed', 400);
       }
     }
@@ -414,6 +429,7 @@ nodeRoutes.post('/nodes/:node/actions/:name/invoke', requireAuth, rateLimit, asy
             nodeConnections: c.get('engine').nodeConnections,
             environment: c.get('engine').config?.environment,
             httpPushProxy: c.get('engine').config?.httpPushProxy,
+            outboundWebhookFetch: c.get('engine').config?.outboundWebhookFetch,
             workspaceId: workspace.id,
           },
           {

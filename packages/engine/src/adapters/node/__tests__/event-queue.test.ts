@@ -7,8 +7,10 @@ import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../database.js'
 import { DurableEventQueue } from '../event-queue.js';
 import { createNodeRuntime } from '../index.js';
 import { claimDueEvents, enqueueEvent } from '../../../engine/eventQueue.js';
+import { deliverEvent, WEBHOOK_RETRY_DELAYS_MS } from '../../../engine/eventDelivery.js';
 import { BackgroundTasks } from '../../../__tests__/backgroundTasks.js';
-import { pendingEvents, workspaces, eventSubscriptions } from '../../../db/schema.js';
+import { pendingEvents, webhookDeliveries, workspaces, eventSubscriptions } from '../../../db/schema.js';
+import { verifyStandardWebhook } from '../../../lib/standardWebhook.js';
 
 const HOOK_URL = 'https://hooks.example.test/relay';
 
@@ -29,15 +31,22 @@ async function seedWorkspace(db: SqliteDbHandle['db']): Promise<string> {
 async function seedSubscription(
   db: SqliteDbHandle['db'],
   workspaceId: string,
-  opts: { secret?: string } = {},
-): Promise<void> {
+  opts: {
+    secret?: string;
+    url?: string;
+    signatureScheme?: 'legacy' | 'standard-webhooks';
+  } = {},
+): Promise<string> {
+  const id = `sub_${++seq}`;
   await db.insert(eventSubscriptions).values({
-    id: `sub_${++seq}`,
+    id,
     workspaceId,
     events: ['*'],
-    url: HOOK_URL,
+    url: opts.url ?? HOOK_URL,
     secret: opts.secret ?? null,
+    signatureScheme: opts.signatureScheme ?? 'legacy',
   });
+  return id;
 }
 
 async function pendingRows(db: SqliteDbHandle['db']) {
@@ -159,7 +168,7 @@ describe('DurableEventQueue', () => {
     const fetchMock = vi.fn(async () => new Response('boom', { status: 503 }));
     vi.stubGlobal('fetch', fetchMock);
 
-    const queue = makeQueue(db, { baseBackoffMs: 60_000 });
+    const queue = makeQueue(db);
     await enqueueEvent(db, ws, 'message.created', { text: 'retry me' });
     const before = Date.now();
     await queue.poll();
@@ -168,8 +177,8 @@ describe('DurableEventQueue', () => {
     expect(row.status).toBe('pending');
     expect(row.attempts).toBe(1);
     expect(row.lastError).toMatch(/Retryable webhook delivery failures/);
-    // processAfter pushed out by the 60s backoff (well beyond the claim lease).
-    expect(row.processAfter.getTime()).toBeGreaterThan(before + 50_000);
+    // The first per-subscriber retry uses the fixed 30s schedule.
+    expect(row.processAfter.getTime()).toBeGreaterThan(before + 20_000);
 
     // Not due yet — a second poll claims nothing and sends nothing new.
     const callsAfterFirstPoll = fetchMock.mock.calls.length;
@@ -197,6 +206,110 @@ describe('DurableEventQueue', () => {
 
     await queue.poll();
     expect(fetchMock).toHaveBeenCalledTimes(1); // settled rows are never reclaimed
+  });
+
+  it('retries only the failed subscriber and never re-sends to a successful one', async () => {
+    const { db } = track(openDb());
+    const ws = await seedWorkspace(db);
+    const successfulUrl = 'https://hooks.example.test/success';
+    const retryingUrl = 'https://hooks.example.test/retry';
+    await seedSubscription(db, ws, { url: successfulUrl });
+    await seedSubscription(db, ws, { url: retryingUrl });
+
+    const fetchMock = vi.fn(async (url: string | URL | Request) =>
+      new Response(String(url) === successfulUrl ? null : '', {
+        status: String(url) === successfulUrl ? 204 : 503,
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const queue = makeQueue(db);
+    const eventId = await enqueueEvent(db, ws, 'message.created', { text: 'fanout' });
+    await queue.poll();
+
+    let deliveries = await db.select().from(webhookDeliveries);
+    expect(deliveries.map((row) => row.status).sort()).toEqual(['pending', 'succeeded']);
+    expect(fetchMock.mock.calls.map(([url]) => String(url)).sort())
+      .toEqual([retryingUrl, successfulUrl].sort());
+
+    const due = new Date(Date.now() - 1_000);
+    await db.update(webhookDeliveries)
+      .set({ nextAttemptAt: due })
+      .where(eq(webhookDeliveries.status, 'pending'));
+    await db.update(pendingEvents).set({ processAfter: due }).where(eq(pendingEvents.id, eventId));
+    await queue.poll();
+
+    deliveries = await db.select().from(webhookDeliveries);
+    expect(deliveries.find((row) => row.status === 'succeeded')?.attempts).toBe(1);
+    expect(fetchMock.mock.calls.filter(([url]) => String(url) === successfulUrl)).toHaveLength(1);
+    expect(fetchMock.mock.calls.filter(([url]) => String(url) === retryingUrl)).toHaveLength(2);
+  });
+
+  it('uses a stable Standard Webhooks delivery id and valid signature across retries', async () => {
+    const { db } = track(openDb());
+    const ws = await seedWorkspace(db);
+    const secret = 'whsec_MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=';
+    await seedSubscription(db, ws, { secret, signatureScheme: 'standard-webhooks' });
+
+    const attempts: Array<{ headers: Record<string, string>; body: string }> = [];
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      attempts.push({ headers: init?.headers as Record<string, string>, body: String(init?.body) });
+      return new Response(attempts.length === 1 ? '' : null, { status: attempts.length === 1 ? 503 : 204 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const queue = makeQueue(db);
+    const eventId = await enqueueEvent(db, ws, 'message.created', { text: 'signed' });
+    await queue.poll();
+    const due = new Date(Date.now() - 1_000);
+    await db.update(webhookDeliveries).set({ nextAttemptAt: due });
+    await db.update(pendingEvents).set({ processAfter: due }).where(eq(pendingEvents.id, eventId));
+    await queue.poll();
+
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0].headers['webhook-id']).toBe(attempts[1].headers['webhook-id']);
+    for (const attempt of attempts) {
+      await expect(verifyStandardWebhook(
+        secret,
+        attempt.headers['webhook-id'],
+        attempt.headers['webhook-timestamp'],
+        attempt.body,
+        attempt.headers['webhook-signature'],
+      )).resolves.toBe(true);
+      expect(attempt.headers['X-Relay-Signature']).toBeUndefined();
+    }
+  });
+
+  it('uses the exact retry schedule then dead-letters attempt seven', async () => {
+    const { db } = track(openDb());
+    const ws = await seedWorkspace(db);
+    await seedSubscription(db, ws);
+    const eventId = await enqueueEvent(db, ws, 'message.created', { text: 'dead letter' });
+    const [event] = await db.select().from(pendingEvents).where(eq(pendingEvents.id, eventId));
+    const fetchMock = vi.fn(async () => new Response('', { status: 503 }));
+    let now = new Date(Math.ceil(Date.now() / 1000) * 1000 + 60 * 60_000);
+
+    for (const delay of WEBHOOK_RETRY_DELAYS_MS) {
+      await expect(deliverEvent(db, ws, event.eventType, event.payload as Record<string, unknown>, {
+        eventId,
+        eventTimestamp: event.createdAt,
+        fetch: fetchMock as typeof globalThis.fetch,
+        now,
+      })).rejects.toMatchObject({ code: 'event_delivery_retryable_failure' });
+      const [delivery] = await db.select().from(webhookDeliveries);
+      expect(delivery.nextAttemptAt.getTime()).toBe(now.getTime() + delay);
+      now = delivery.nextAttemptAt;
+    }
+
+    const summary = await deliverEvent(db, ws, event.eventType, event.payload as Record<string, unknown>, {
+      eventId,
+      eventTimestamp: event.createdAt,
+      fetch: fetchMock as typeof globalThis.fetch,
+      now,
+    });
+    expect(summary).toMatchObject({ failed: 1, deadLettered: 1, retryableFailures: 0 });
+    const [delivery] = await db.select().from(webhookDeliveries);
+    expect(delivery).toMatchObject({ status: 'dead_letter', attempts: 7, lastStatus: 503 });
+    expect(fetchMock).toHaveBeenCalledTimes(7);
   });
 
   it('exhausting maxAttempts settles the row as failed', async () => {
@@ -268,6 +381,7 @@ describe('DurableEventQueue', () => {
       const runtime = createNodeRuntime({
         dbPath,
         baseUrl: 'http://localhost:0',
+        config: { environment: 'test' },
         presence: { sweepIntervalMs: 0 },
         eventQueue: { pollIntervalMs: 0 },
       });

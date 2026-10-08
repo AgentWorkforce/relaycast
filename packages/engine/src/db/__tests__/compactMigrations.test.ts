@@ -93,7 +93,14 @@ function constraints(handle: SqliteDbHandle) {
 function expectConstraintsPreserved(before: ReturnType<typeof constraints>, after: ReturnType<typeof constraints>) {
   // 0050 may add these redundant named lookup indexes, but must not alter any
   // original constraint (including a lookup that already existed via 0049).
-  expect(after.filter(table => !['maintenance_cursors', 'a2a_egress', 'a2a_egress_context', 'a2a_inbound', 'direct_dm_idempotency'].includes(table.name) || before.some(original => original.name === table.name))
+  expect(after.filter(table => ![
+    'maintenance_cursors',
+    'a2a_egress',
+    'a2a_egress_context',
+    'a2a_inbound',
+    'direct_dm_idempotency',
+    'webhook_deliveries',
+  ].includes(table.name) || before.some(original => original.name === table.name))
     .map(table => {
       const original = before.find(candidate => candidate.name === table.name);
       // 0055 adds optional event identity columns and their index after the
@@ -114,6 +121,12 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
       }
       if (table.name === 'action_invocations') {
         table = { ...table, sql: table.sql.replace(', task_state TEXT', '') };
+      }
+      if (table.name === 'event_subscriptions') {
+        table = { ...table, sql: table.sql.replace(", signature_scheme TEXT NOT NULL DEFAULT 'legacy'", '') };
+      }
+      if (table.name === 'pending_events') {
+        table = { ...table, sql: table.sql.replace(', webhook_initialized INTEGER NOT NULL DEFAULT 0', '') };
       }
       if (table.name === 'agents' && original) {
         return { ...table, sql: original.sql };
@@ -164,7 +177,13 @@ describe('compact maintenance migration path', () => {
     const after = snapshot(handle);
     // Remote-DM and direct-idempotency migrations add empty tables; every
     // pre-existing row and table must remain.
-    expect(after.filter(([name]) => !['a2a_egress', 'a2a_egress_context', 'a2a_inbound', 'direct_dm_idempotency'].includes(String(name)))).toEqual(before);
+    expect(after.filter(([name]) => ![
+      'a2a_egress',
+      'a2a_egress_context',
+      'a2a_inbound',
+      'direct_dm_idempotency',
+      'webhook_deliveries',
+    ].includes(String(name)))).toEqual(before);
     expect(after.find(([name]) => name === 'a2a_egress')).toEqual([
       'a2a_egress', 0, createHash('sha256').update('[]').digest('hex'),
     ]);
@@ -176,6 +195,9 @@ describe('compact maintenance migration path', () => {
     ]);
     expect(after.find(([name]) => name === 'direct_dm_idempotency')).toEqual([
       'direct_dm_idempotency', 0, createHash('sha256').update('[]').digest('hex'),
+    ]);
+    expect(after.find(([name]) => name === 'webhook_deliveries')).toEqual([
+      'webhook_deliveries', 0, createHash('sha256').update('[]').digest('hex'),
     ]);
     expect(handle.sqlite.pragma('foreign_key_list(a2a_inbound)')).toEqual(expect.arrayContaining([
       expect.objectContaining({ table: 'workspaces', from: 'workspace_id', on_delete: 'CASCADE' }),

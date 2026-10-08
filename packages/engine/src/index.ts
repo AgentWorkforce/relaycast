@@ -52,6 +52,11 @@ export {
   usagePeriodResetAt,
 } from './engine/usage.js';
 export { NoopTelemetrySink } from './providers/noop-telemetry.js';
+export {
+  isValidStandardWebhookSecret,
+  signStandardWebhook,
+  verifyStandardWebhook,
+} from './lib/standardWebhook.js';
 
 // Database helpers + schema for adapters and migrations.
 export { getDb, healthCheck as dbHealthCheck } from './db/index.js';

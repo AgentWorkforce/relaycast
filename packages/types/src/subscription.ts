@@ -44,6 +44,8 @@ export type SubscriptionFilter = z.infer<typeof SubscriptionFilterSchema>;
 const HeaderNameSchema = z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/);
 const HeaderValueSchema = z.string().refine((value) => !/[\r\n]/.test(value), 'header values cannot contain CR/LF');
 const SubscriptionHeadersSchema = z.record(HeaderNameSchema, HeaderValueSchema);
+export const SubscriptionSignatureSchemeSchema = z.enum(['legacy', 'standard-webhooks']);
+export type SubscriptionSignatureScheme = z.infer<typeof SubscriptionSignatureSchemeSchema>;
 
 export const EventSubscriptionSchema = z.object({
   id: z.string(),
@@ -51,6 +53,7 @@ export const EventSubscriptionSchema = z.object({
   filter: SubscriptionFilterSchema.nullable(),
   url: z.string(),
   headers: SubscriptionHeadersSchema.nullable().optional(),
+  signature_scheme: SubscriptionSignatureSchemeSchema,
   is_active: z.boolean(),
   created_at: z.string(),
 });
@@ -62,6 +65,7 @@ export const CreateSubscriptionRequestSchema = z.object({
   url: z.string(),
   headers: SubscriptionHeadersSchema.optional(),
   secret: z.string().optional(),
+  signature_scheme: SubscriptionSignatureSchemeSchema.optional(),
 });
 export type CreateSubscriptionRequest = z.infer<typeof CreateSubscriptionRequestSchema>;
 
@@ -71,7 +75,31 @@ export const CreateSubscriptionResponseSchema = z.object({
   filter: SubscriptionFilterSchema.nullable(),
   url: z.string(),
   headers: SubscriptionHeadersSchema.nullable().optional(),
+  signature_scheme: SubscriptionSignatureSchemeSchema,
   is_active: z.boolean(),
   created_at: z.string(),
 });
 export type CreateSubscriptionResponse = z.infer<typeof CreateSubscriptionResponseSchema>;
+
+export const WebhookDeliveryStatusSchema = z.enum(['pending', 'succeeded', 'failed', 'dead_letter']);
+export type WebhookDeliveryStatus = z.infer<typeof WebhookDeliveryStatusSchema>;
+
+export const WebhookDeliverySchema = z.object({
+  id: z.string(),
+  event_id: z.string(),
+  event_type: z.string(),
+  status: WebhookDeliveryStatusSchema,
+  attempts: z.number().int().nonnegative(),
+  next_attempt_at: z.string().nullable(),
+  last_error: z.string().nullable(),
+  last_status: z.number().int().nullable(),
+  created_at: z.string(),
+  completed_at: z.string().nullable(),
+});
+export type WebhookDelivery = z.infer<typeof WebhookDeliverySchema>;
+
+export const ReplayWebhookDeliveryResponseSchema = z.object({
+  id: z.string(),
+  status: z.literal('pending'),
+});
+export type ReplayWebhookDeliveryResponse = z.infer<typeof ReplayWebhookDeliveryResponseSchema>;

@@ -95,6 +95,12 @@ export interface EngineConfig {
   appSemver?: string;
   sdkSemver?: string;
   /**
+   * HTTPS-only outbound webhook transport. Hosted adapters provide an
+   * equivalent connector; the Node adapter defaults to DNS validation and IP
+   * pinning at socket-connect time to prevent DNS rebinding.
+   */
+  outboundWebhookFetch?: typeof globalThis.fetch;
+  /**
    * Effective deployment-wide retention fallback. Adapters must provide an
    * explicit value (`null` means never prune); omission is reported as unknown
    * so a hosted deployment can never accidentally advertise replay coverage.

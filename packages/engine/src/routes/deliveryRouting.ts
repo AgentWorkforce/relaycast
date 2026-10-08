@@ -228,7 +228,8 @@ async function dispatchHttpPush(args: {
     await recordDispatchRetry(args.ctx, args.delivery.id, 'invalid http_push delivery config: missing url', { incrementAttempts: true });
     return 'failed';
   }
-  if (!isSafeExternalUrl(url, { strict: strictExternalUrl(args.ctx.engine) })) {
+  const strict = strictExternalUrl(args.ctx.engine);
+  if (!isSafeExternalUrl(url, { strict, requireHttps: strict })) {
     await recordDispatchRetry(args.ctx, args.delivery.id, 'unsafe http_push delivery url', { incrementAttempts: true });
     return 'failed';
   }
@@ -298,7 +299,7 @@ async function dispatchHttpPush(args: {
     // Build headers inside the claim/retry boundary so a signing failure is
     // recorded as a retryable dispatch error rather than rejecting uncaught.
     const headers = { ...(await buildHttpPushHeaders(config, args.eventType, args.delivery.id, body, timestamp)), ...proxyHeaders };
-    const response = await globalThis.fetch(requestUrl, {
+    const response = await (args.ctx.engine.config?.outboundWebhookFetch ?? globalThis.fetch)(requestUrl, {
       method: 'POST',
       headers,
       body,
