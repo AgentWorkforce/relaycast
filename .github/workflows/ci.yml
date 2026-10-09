@@ -3,18 +3,28 @@ name: CI
 on:
   pull_request:
     branches: [main]
+    # The trunk -> main promotion PR runs only when opened/reopened or when the
+    # merge-train sweeper (AgentWorkforce/cloud packages/web/lib/merge-train)
+    # adds `ci:run`: once per new trunk head, batched on its 10-minute tick.
+    # Never on synchronize. Other label events skip every job (see the per-job
+    # gate) and never cancel a real run (see `concurrency`).
+    types: [opened, reopened, labeled]
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # PR runs collapse per pull request, so a newer ci:run cancels the run for a
+  # superseded trunk head. A `labeled` event for any label other than `ci:run`
+  # runs nothing, so it gets its own throwaway group: it must never cancel the
+  # PR's in-progress run.
+  group: ci-${{ github.event_name != 'pull_request' && format('dispatch-{0}', github.run_id) || ((github.event.action == 'labeled' && github.event.label.name != 'ci:run') && format('ignored-{0}', github.run_id) || format('pr-{0}', github.event.pull_request.number)) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
   ci:
-    if: (github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || (github.head_ref == 'trunk' && github.event.pull_request.head.repo.full_name == github.repository && github.base_ref == 'main')
+    if: (github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || (github.head_ref == 'trunk' && github.event.pull_request.head.repo.full_name == github.repository && github.base_ref == 'main' && (github.event.action != 'labeled' || github.event.label.name == 'ci:run'))
     name: Lint, Build & Test
     runs-on: ubuntu-latest
     steps:
@@ -33,7 +43,7 @@ jobs:
       - run: npm run test:container
 
   container:
-    if: (github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || (github.head_ref == 'trunk' && github.event.pull_request.head.repo.full_name == github.repository && github.base_ref == 'main')
+    if: (github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || (github.head_ref == 'trunk' && github.event.pull_request.head.repo.full_name == github.repository && github.base_ref == 'main' && (github.event.action != 'labeled' || github.event.label.name == 'ci:run'))
     name: Container (${{ matrix.platform }})
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -134,7 +144,7 @@ jobs:
         run: docker rm --force --volumes relaycast-ci-${{ matrix.arch }} 2>/dev/null || true
 
   rust-sdk:
-    if: (github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || (github.head_ref == 'trunk' && github.event.pull_request.head.repo.full_name == github.repository && github.base_ref == 'main')
+    if: (github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || (github.head_ref == 'trunk' && github.event.pull_request.head.repo.full_name == github.repository && github.base_ref == 'main' && (github.event.action != 'labeled' || github.event.label.name == 'ci:run'))
     name: Rust SDK
     runs-on: ubuntu-latest
     steps:
