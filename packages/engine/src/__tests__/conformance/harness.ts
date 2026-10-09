@@ -82,6 +82,9 @@ export function makeNodeStack(options?: {
       eventQueue: { pollIntervalMs: 0 },
       presence: { ttlMs: options?.ttlMs ?? 60_000, sweepIntervalMs: 0 },
     });
+  } catch (err) {
+    rmSync(fileDir, { recursive: true, force: true });
+    throw err;
   } finally {
     DurableEventQueue.prototype.poll = poll;
   }
