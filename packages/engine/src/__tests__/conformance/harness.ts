@@ -55,6 +55,9 @@ export function makeNodeStack(options?: {
 }): TestStack {
   const tasks = new BackgroundTasks();
   observePresence();
+  // Blobs go to a per-stack temp dir that close() removes, not the checkout.
+  // Created before any global patching so a failure here leaves nothing behind.
+  const fileDir = mkdtempSync(join(tmpdir(), 'relaycast-conformance-files-'));
   // start() launches poll() before createNodeRuntime returns. Capture that exact
   // promise; calling poll() again would return early while it is already busy.
   const poll = DurableEventQueue.prototype.poll;
@@ -62,8 +65,6 @@ export function makeNodeStack(options?: {
     return tasks.track(poll.call(this));
   };
   let runtime: NodeRuntime;
-  // Blobs go to a per-stack temp dir that close() removes, not the checkout.
-  const fileDir = mkdtempSync(join(tmpdir(), 'relaycast-conformance-files-'));
   try {
     runtime = createNodeRuntime({
       dbPath: ':memory:',
@@ -89,12 +90,23 @@ export function makeNodeStack(options?: {
     DurableEventQueue.prototype.poll = poll;
   }
   contextTasks.set(runtime.deps.db, tasks);
-  const queuePoll = runtime.webhookQueue.poll.bind(runtime.webhookQueue);
-  runtime.webhookQueue.poll = () => tasks.track(queuePoll());
-  const drainNode = runtime.realtime.drainNode.bind(runtime.realtime);
-  runtime.realtime.drainNode = (...args) => tasks.track(drainNode(...args));
-  const app = createEngine(runtime.deps);
-  tasks.bind(app);
+  let app: Hono<AppEnv>;
+  try {
+    const queuePoll = runtime.webhookQueue.poll.bind(runtime.webhookQueue);
+    runtime.webhookQueue.poll = () => tasks.track(queuePoll());
+    const drainNode = runtime.realtime.drainNode.bind(runtime.realtime);
+    runtime.realtime.drainNode = (...args) => tasks.track(drainNode(...args));
+    app = createEngine(runtime.deps);
+    tasks.bind(app);
+  } catch (err) {
+    // No stack is registered yet, so close() would never run: release here.
+    try {
+      runtime.close();
+    } finally {
+      rmSync(fileDir, { recursive: true, force: true });
+    }
+    throw err;
+  }
   let closing: Promise<void> | undefined;
   const stack: TestStack = {
     app, runtime,
