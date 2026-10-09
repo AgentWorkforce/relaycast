@@ -17,6 +17,7 @@ type Candidate = {
   id: string;
   workspace_id: string;
   created_at: number;
+  expires_at: number | null;
   seq: number;
   message_id: string;
   agent_id: string;
@@ -40,6 +41,9 @@ const tables: Table[] = [
   { result: 'deliveries', name: 'deliveries', index: 'idx_deliveries_settled_retention',
     keys: ['created_at', 'id'], setting: 'delivery_ttl_days', fallback: 'deliveryTtlDays',
     predicate: "status IN ('acked', 'failed', 'dead_lettered')" },
+  { result: 'expiredDeliveries', name: 'deliveries', index: 'idx_deliveries_active_expiry',
+    keys: ['expires_at', 'id'],
+    predicate: "status IN ('queued', 'delivered') AND expires_at IS NOT NULL" },
   { result: 'messageLogs', name: 'message_logs', index: 'idx_message_logs_retention',
     keys: ['length(id)', 'id'], setting: 'message_log_ttl_days', fallback: 'messageLogTtlDays' },
   { result: 'workspaceEvents', name: 'workspace_events', index: 'idx_workspace_events_retention',
@@ -53,13 +57,28 @@ const tables: Table[] = [
 
 /** Project a candidate onto its table's ordered keyset cursor. */
 function key(row: Candidate, table: Table): (string | number)[] {
-  return table.keys.map(k => k === 'length(id)' ? row.id.length : row[k as keyof Candidate] as string | number);
+  return table.keys.map(k => {
+    if (k === 'length(id)') return row.id.length;
+    return row[k as keyof Candidate] as string | number;
+  });
 }
 
 /** Apply exact workspace policy after the bounded candidate read. */
-function expired(row: Candidate, table: Table, defaults: Required<RetentionDefaults>, nowMs: number): boolean {
+function expired(
+  row: Candidate,
+  table: Table,
+  defaults: Required<RetentionDefaults>,
+  nowMs: number,
+  expiredDeliveryGraceDays: number,
+): boolean {
   if (!row.eligible) return false;
   if (!table.setting || !table.fallback) return true;
+  if (table.result === 'expiredDeliveries') {
+    const graceMs = Math.max(0, Math.floor(expiredDeliveryGraceDays * DAY_MS));
+    // expires_at is stored as a unix timestamp (seconds), so multiply by 1000.
+    if (row.expires_at == null) return false;
+    return row.expires_at * 1000 < nowMs - graceMs;
+  }
   const settings = row.retention ? JSON.parse(row.retention) as WorkspaceRetentionSettings : {};
   const override = settings[table.setting];
   const ttl = override === undefined ? defaults[table.fallback] : override;
@@ -94,6 +113,7 @@ export async function pruneBounded(db: EngineDb, opts: PruneOptions): Promise<Pr
   const started = Date.now();
   const budget = boundedInteger(opts.maxDurationMs, 10_000, 30_000);
   const nowMs = (opts.now ?? new Date()).getTime();
+  const expiredDeliveryGraceDays = opts.expiredDeliveryGraceDays ?? 7;
   const defaults: Required<RetentionDefaults> = {
     messageTtlDays: null, deliveryTtlDays: 90, messageLogTtlDays: 90, workspaceEventTtlDays: 30,
     ...Object.fromEntries(Object.entries(opts.defaults ?? {}).filter(([, value]) => value !== undefined)),
@@ -115,7 +135,7 @@ export async function pruneBounded(db: EngineDb, opts: PruneOptions): Promise<Pr
   const saved = await db.all<{ cursor: string }>(sql`SELECT cursor FROM maintenance_cursors WHERE id = 'retention-v1'`);
   const parsed = saved[0] ? stateSchema.safeParse(decodeCursor(saved[0].cursor)) : undefined;
   const state: State = parsed?.success ? parsed.data : { next: 0, positions: {}, highs: {} };
-  const result: PruneResult = { messages: 0, deliveries: 0, messageLogs: 0, readReceipts: 0, workspaceEvents: 0 };
+  const result: PruneResult = { messages: 0, deliveries: 0, expiredDeliveries: 0, messageLogs: 0, readReceipts: 0, workspaceEvents: 0 };
   const finished = new Set<number>();
   for (let step = 0; step < rounds * tables.length && Date.now() - started < budget; step++) {
     const index = state.next;
@@ -137,6 +157,7 @@ export async function pruneBounded(db: EngineDb, opts: PruneOptions): Promise<Pr
     }
     const columns = sql.raw(table.result === 'readReceipts' ? 'message_id, agent_id'
       : table.result === 'workspaceEvents' ? 'workspace_id, seq, created_at'
+      : table.result === 'expiredDeliveries' ? 'id, workspace_id, created_at, expires_at'
         : 'id, workspace_id, created_at');
     // A traversal has a finite end even while new rows keep arriving. Without
     // this fence the cursor might never wrap to retained rows that later age out.
@@ -180,7 +201,7 @@ export async function pruneBounded(db: EngineDb, opts: PruneOptions): Promise<Pr
       ${table.setting ? sql`LEFT JOIN workspaces w ON w.id = page.workspace_id` : sql``}
       ORDER BY ${sql.raw(table.keys.map(k => k === 'length(id)' ? 'length(page.id)' : 'page.' + k).join(', '))}
     `);
-    const removable = page.filter(row => expired(row, table, defaults, nowMs));
+    const removable = page.filter(row => expired(row, table, defaults, nowMs, expiredDeliveryGraceDays));
     // Two-key identities need two bindings each; leave room under D1's 100.
     for (let offset = 0; offset < removable.length; offset += 40) {
       const chunk = removable.slice(offset, offset + 40);
