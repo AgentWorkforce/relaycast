@@ -9,7 +9,8 @@ import {
 import { files, messageAttachments, messages } from '../../db/schema.js';
 
 const TEXT_BYTES = new TextEncoder().encode('hello world\n');
-// A real (tiny) PNG signature + header so the content round-trips as binary.
+// Arbitrary binary bytes starting with a PNG signature and partial header;
+// nothing decodes them, they only need to round-trip unchanged.
 const PNG_BYTES = new Uint8Array([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0xff, 0x00,
 ]);

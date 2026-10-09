@@ -103,7 +103,7 @@ describe('file tools', () => {
     vi.stubGlobal('fetch', fetchMock);
     const client = await connect(true, agentClient);
 
-    await client.callTool({
+    const result = await client.callTool({
       name: 'message.file.upload',
       arguments: { filename: 'shot.png', content_base64: PNG_BYTES.toString('base64') },
     });
@@ -118,6 +118,7 @@ describe('file tools', () => {
     expect(init.method).toBe('PUT');
     expect(Buffer.from(init.body as Uint8Array)).toEqual(PNG_BYTES);
     expect(agentClient.files.complete).toHaveBeenCalledWith('f1');
+    expect(structured(result)).toMatchObject({ id: 'f1', filename: 'shot.png', status: 'complete' });
   });
 
   it('does not complete an upload whose bytes were rejected, and keeps the signature out of the error', async () => {

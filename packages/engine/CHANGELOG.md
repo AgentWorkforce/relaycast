@@ -16,7 +16,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- `completeUpload` refuses a file with no or empty stored bytes (`409 upload_incomplete`) and records the stored size.
+- When the `FileStorage` adapter implements `statObject` (both bundled adapters do), `completeUpload` refuses a file with no or empty stored bytes (`409 upload_incomplete`) and records the stored size.
 - HTTP push delivery invokes the default Cloudflare Workers `fetch` through `globalThis`, avoiding workerd's `Illegal invocation` rejection while preserving manual redirect handling.
 
 ## [9.1.0] - 2026-10-08
