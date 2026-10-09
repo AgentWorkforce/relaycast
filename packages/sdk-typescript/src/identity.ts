@@ -6,6 +6,17 @@ export interface RegisterAgentInput extends CreateAgentRequest {
 
 export type RegisterOrRotateInput = CreateAgentRequest;
 
+/**
+ * Register accepts the optional `recoveryProof` fallback: on a name conflict,
+ * instead of failing closed it presents the proof to `agents.recover` and
+ * returns a fresh token for the existing identity. Omitting it preserves the
+ * create-only, fail-closed contract — the proof is the only thing that lets a
+ * caller legitimately mint a new token for a name it does not currently hold.
+ */
+export type RegisterOrRecoverInput = CreateAgentRequest & {
+  recoveryProof?: string;
+};
+
 export interface RecoverAgentInput {
   name: string;
   expectedAgentId: string;

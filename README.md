@@ -280,6 +280,12 @@ const recovered = await relay.agents.recover({
 });
 ```
 
+`relay.agents.registerOrRecover({ name, recoveryProof, ... })` wraps that
+register-then-recover sequence for callers migrating off the old rotate-on-conflict
+behavior: it registers normally, and only on a name conflict does it look up the
+existing agent's id and fall back to `agents.recover()` with the supplied proof. No
+proof means it stays fail-closed, same as `register`.
+
 The current agent token and the server-owned origin-node credential are also
 valid self-service recovery proofs. Workspace owners have an explicit
 `POST /v1/agents/{name}/takeover` escape hatch that requires the expected id,
