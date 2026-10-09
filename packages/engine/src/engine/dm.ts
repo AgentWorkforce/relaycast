@@ -29,7 +29,7 @@ import {
   fetchDirectDeliveryOutcomes,
   type DeliveryOutcomeRecords,
 } from './deliveryWrites.js';
-import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
+import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS, type MailboxConfig } from './mailboxConfig.js';
 import {
   type WorkspaceDeliveryPolicy,
 } from './workspaceDeliveryPolicy.js';
@@ -690,6 +690,7 @@ export async function sendDm(
   const mailbox = options.mailbox ?? {
     ttlMs: DEFAULT_MAILBOX_TTL_MS,
     depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
+    offlineExcludeMs: DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS,
   };
 
   let egressPayload: ReturnType<typeof a2aEngine.translateRelayToA2a> | undefined;

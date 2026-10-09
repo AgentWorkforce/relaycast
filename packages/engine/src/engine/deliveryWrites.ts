@@ -36,11 +36,13 @@ export interface DeliveryFanoutRecord {
   nextAttemptAt?: Date | null;
 }
 
+export type DeliveryRejectionReason = 'depth_cap' | 'recipient_offline';
+
 export interface DeliveryRejectionRecord {
   agentId: string;
   agentName: string;
   messageId: string;
-  reason: 'depth_cap';
+  reason: DeliveryRejectionReason;
   error: string;
   retryable: false;
 }
@@ -133,6 +135,24 @@ function belowDepthCapSql(workspaceId: string, agentId: unknown, depthCap: numbe
 }
 
 /**
+ * True unless the recipient agent has been continuously offline longer than
+ * `offlineExcludeMs`. Broadcast fanout (channel + group-DM) excludes such
+ * agents from the candidate set entirely, rather than charging them a new
+ * delivery: a dead agent sits under its own per-recipient `depthCap`
+ * indefinitely, so without this a workspace's shared delivery-depth budget
+ * (see workspaceDeliveryPolicy) keeps draining into mailboxes nobody will
+ * ever read, starving fanout to agents that are actually online.
+ */
+function notLongOfflineSql(offlineExcludeMs: number): SQL {
+  return sql`NOT ${longOfflineSql(offlineExcludeMs)}`;
+}
+
+function longOfflineSql(offlineExcludeMs: number): SQL<number> {
+  const cutoffSeconds = Math.floor(offlineExcludeMs / 1000);
+  return sql<number>`(${agents.status} = ${'offline'} AND ${agents.lastSeen} < (unixepoch() - ${cutoffSeconds}))`;
+}
+
+/**
  * Compose the `workspace_id` value for a delivery insert.
  *
  * `deliveries.workspace_id` is NOT NULL, so emitting NULL for a failing
@@ -166,6 +186,8 @@ export function buildChannelDeliveryWrite(
     mode: DeliveryMode;
     ttlMs: number;
     depthCap: number;
+    /** Recipients offline longer than this are excluded from the fanout. */
+    offlineExcludeMs: number;
     reason?: ChannelDeliveryReason;
     mentionHandles?: readonly string[];
     /** Abort the enclosing atomic write when ANY recipient has no capacity. */
@@ -246,6 +268,7 @@ export function buildChannelDeliveryWrite(
             channelMuteDeliveryFilter(mentionHandles),
             ne(channelMembers.agentId, input.senderAgentId),
             newDeliveryIdentitySql(input.messageId, channelMembers.agentId),
+            notLongOfflineSql(input.offlineExcludeMs),
             input.rejectOnOverflow ? undefined : belowDepthCapSql(input.workspaceId, channelMembers.agentId, input.depthCap),
           ),
         )),
@@ -263,6 +286,8 @@ export function buildGroupDmDeliveryWrite(
     mode: DeliveryMode;
     ttlMs: number;
     depthCap: number;
+    /** Recipients offline longer than this are excluded from the fanout. */
+    offlineExcludeMs: number;
     /** Server-resolved workspace growth policy; absent => no workspace guard. */
     workspacePolicy?: WorkspaceDeliveryPolicy;
   },
@@ -324,6 +349,7 @@ export function buildGroupDmDeliveryWrite(
             isNull(dmParticipants.leftAt),
             ne(dmParticipants.agentId, input.senderAgentId),
             newDeliveryIdentitySql(input.messageId, dmParticipants.agentId),
+            notLongOfflineSql(input.offlineExcludeMs),
             belowDepthCapSql(input.workspaceId, dmParticipants.agentId, input.depthCap),
           ),
         )),
@@ -451,22 +477,31 @@ export async function fetchDeliveryFanoutRecords(
   }));
 }
 
-function missingDepthCapRejections(
-  intended: Array<{ agentId: string; agentName: string }>,
+function missingDeliveryRejections(
+  intended: Array<{ agentId: string; agentName: string; offline: number | boolean }>,
   deliveries: DeliveryFanoutRecord[],
   messageId: string,
 ): DeliveryRejectionRecord[] {
   const inserted = new Set(deliveries.map((delivery) => delivery.agentId));
   return intended
     .filter((recipient) => !inserted.has(recipient.agentId))
-    .map((recipient) => ({
-      agentId: recipient.agentId,
-      agentName: recipient.agentName,
-      messageId,
-      reason: 'depth_cap' as const,
-      error: 'mailbox depth cap exceeded',
-      retryable: false as const,
-    }));
+    .map((recipient) => (recipient.offline
+      ? {
+        agentId: recipient.agentId,
+        agentName: recipient.agentName,
+        messageId,
+        reason: 'recipient_offline' as const,
+        error: 'recipient has been offline too long to receive new deliveries',
+        retryable: false as const,
+      }
+      : {
+        agentId: recipient.agentId,
+        agentName: recipient.agentName,
+        messageId,
+        reason: 'depth_cap' as const,
+        error: 'mailbox depth cap exceeded',
+        retryable: false as const,
+      }));
 }
 
 export async function fetchChannelDeliveryOutcomes(
@@ -475,6 +510,7 @@ export async function fetchChannelDeliveryOutcomes(
     messageId: string;
     channelId: string;
     senderAgentId: string;
+    offlineExcludeMs: number;
     mentionHandles?: readonly string[];
   },
 ): Promise<DeliveryOutcomeRecords> {
@@ -485,6 +521,7 @@ export async function fetchChannelDeliveryOutcomes(
       .select({
         agentId: channelMembers.agentId,
         agentName: agents.name,
+        offline: longOfflineSql(input.offlineExcludeMs),
       })
       .from(channelMembers)
       .innerJoin(agents, eq(channelMembers.agentId, agents.id))
@@ -497,7 +534,7 @@ export async function fetchChannelDeliveryOutcomes(
   ]);
   return {
     deliveries,
-    rejections: missingDepthCapRejections(intended, deliveries, input.messageId),
+    rejections: missingDeliveryRejections(intended, deliveries, input.messageId),
   };
 }
 
@@ -507,6 +544,7 @@ export async function fetchGroupDeliveryOutcomes(
     messageId: string;
     conversationId: string;
     senderAgentId: string;
+    offlineExcludeMs: number;
   },
 ): Promise<DeliveryOutcomeRecords> {
   const [deliveries, intended] = await Promise.all([
@@ -515,6 +553,7 @@ export async function fetchGroupDeliveryOutcomes(
       .select({
         agentId: dmParticipants.agentId,
         agentName: agents.name,
+        offline: longOfflineSql(input.offlineExcludeMs),
       })
       .from(dmParticipants)
       .innerJoin(agents, eq(dmParticipants.agentId, agents.id))
@@ -527,7 +566,7 @@ export async function fetchGroupDeliveryOutcomes(
   ]);
   return {
     deliveries,
-    rejections: missingDepthCapRejections(intended, deliveries, input.messageId),
+    rejections: missingDeliveryRejections(intended, deliveries, input.messageId),
   };
 }
 
@@ -544,12 +583,15 @@ export async function fetchDirectDeliveryOutcomes(
       .select({
         agentId: agents.id,
         agentName: agents.name,
+        offline: sql<number>`0`,
       })
       .from(agents)
       .where(inArray(agents.id, [input.recipientAgentId])),
   ]);
   return {
     deliveries,
-    rejections: missingDepthCapRejections(intended, deliveries, input.messageId),
+    // A direct message always targets this one explicitly-chosen recipient
+    // (never excluded for being offline), so any gap here is a depth_cap miss.
+    rejections: missingDeliveryRejections(intended, deliveries, input.messageId),
   };
 }

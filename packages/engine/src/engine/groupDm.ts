@@ -8,7 +8,7 @@ import {
   fetchGroupDeliveryOutcomes,
   type DeliveryOutcomeRecords,
 } from './deliveryWrites.js';
-import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
+import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS, type MailboxConfig } from './mailboxConfig.js';
 import type { WorkspaceDeliveryPolicy } from './workspaceDeliveryPolicy.js';
 import { codedError } from '../lib/httpError.js';
 import { resolveSendAttachments } from './attachments.js';
@@ -146,6 +146,7 @@ export async function postGroupMessage(
   const mailbox = options.mailbox ?? {
     ttlMs: DEFAULT_MAILBOX_TTL_MS,
     depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
+    offlineExcludeMs: DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS,
   };
 
   // Durable writes run as one atomic unit when the adapter supports it; fanout
@@ -195,6 +196,7 @@ export async function postGroupMessage(
         mode: data.mode === 'steer' ? 'next-tool-call' : 'immediate',
         ttlMs: mailbox.ttlMs,
         depthCap: mailbox.depthCap,
+        offlineExcludeMs: mailbox.offlineExcludeMs,
         workspacePolicy: options.workspaceDeliveryPolicy,
       }),
     );
@@ -206,6 +208,7 @@ export async function postGroupMessage(
     messageId,
     conversationId,
     senderAgentId: agentId,
+    offlineExcludeMs: mailbox.offlineExcludeMs,
   });
 
   const injectionMode = data.mode ?? 'wait';
