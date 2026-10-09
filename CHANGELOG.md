@@ -16,11 +16,16 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
+
+### Added
+
+- Channel and group-DM broadcasts stop charging new deliveries to recipients offline longer than `EngineConfig.mailbox.offlineExcludeMs` (default 24h), configurable globally or per workspace.
 
 ### Fixed
 
 - Cloudflare Workers can dispatch HTTP push deliveries without rejecting an unbound platform `fetch` call.
+- Long-offline agents no longer accumulate a fresh delivery on every subsequent broadcast, which let a handful of dead agents exhaust a workspace's shared delivery-depth cap and starve live traffic.
 
 ## [9.1.0] - 2026-10-08
 
