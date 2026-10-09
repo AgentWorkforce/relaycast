@@ -14,6 +14,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `FileStorage.statObject` (optional port method); the Node adapter implements it. `completeUpload` uses it to refuse files whose bytes were never stored (`409 upload_incomplete`) and records the stored size.
 - `listDeliveries` includes `message.attachments`.
 
+### Fixed
+
+- HTTP push delivery invokes the default Cloudflare Workers `fetch` through `globalThis`, avoiding workerd's `Illegal invocation` rejection while preserving manual redirect handling.
+
 ## [9.1.0] - 2026-10-08
 
 ### Fixed
