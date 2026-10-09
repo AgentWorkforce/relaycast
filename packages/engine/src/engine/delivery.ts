@@ -152,6 +152,7 @@ export async function listDeliveries(
     .leftJoin(agents, eq(messages.agentId, agents.id))
     .where(inArray(messages.id, messageIds));
   const msgById = new Map(msgRows.map((m) => [m.id, m]));
+  const attachmentsByMessageId = await fetchAttachmentsBatch(db, workspaceId, messageIds);
 
   return rows.map((row) => {
     const msg = msgById.get(row.messageId);
@@ -168,6 +169,7 @@ export async function listDeliveries(
           text: msg.body,
           thread_id: msg.threadId ?? null,
           created_at: msg.createdAt.toISOString(),
+          attachments: attachmentsByMessageId.get(msg.id) ?? [],
         }
         : null,
     };

@@ -3,6 +3,7 @@ import { files, agents } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 import type { getDb } from '../db/index.js';
 import type { FileStorage } from '../ports/files.js';
+import { codedError } from '../lib/httpError.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -63,13 +64,28 @@ export async function completeUpload(
     return null;
   }
 
+  // A completed file is attachable, so its bytes must actually be stored.
+  // Recipients see the stored size, whatever the upload request declared.
+  let sizeBytes = file.sizeBytes;
+  if (storage.statObject) {
+    const stored = await storage.statObject({ storageKey: file.storageKey });
+    if (!stored) {
+      throw codedError(
+        'Upload not received: PUT the file bytes to upload_url before completing',
+        'upload_incomplete',
+        409,
+      );
+    }
+    sizeBytes = stored.sizeBytes;
+  }
+
   // Generate the URL before flipping status, so a transient storage error keeps
   // completeUpload retry-safe (the row stays `pending` rather than `complete`).
   const downloadUrl = await storage.createDownloadUrl({ storageKey: file.storageKey });
 
   await db
     .update(files)
-    .set({ status: 'complete' })
+    .set({ status: 'complete', sizeBytes })
     .where(eq(files.id, fileId));
 
   return {
@@ -77,7 +93,7 @@ export async function completeUpload(
     download_url: downloadUrl,
     filename: file.filename,
     content_type: file.contentType,
-    size_bytes: file.sizeBytes,
+    size_bytes: sizeBytes,
   };
 }
 

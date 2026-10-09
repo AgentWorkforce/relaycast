@@ -4815,7 +4815,7 @@ paths:
   /files/{id}/complete:
     post:
       summary: Complete file upload
-      description: Mark an upload complete after object upload succeeds
+      description: Mark an upload complete after its bytes were PUT to the upload URL. The stored object must exist; the recorded size becomes the stored size. Only completed files can be attached to channel messages, DMs, group DMs and thread replies.
       tags:
         - Files
       security:
@@ -4833,6 +4833,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '404':
+          description: File not found, not owned by the caller, or already completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The file bytes were never PUT to the upload URL (`upload_incomplete`); upload them and retry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /files:
     get:
