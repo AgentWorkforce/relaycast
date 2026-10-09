@@ -8,7 +8,3 @@ Use `AGENTS.md` as the primary instruction document.
 - Keep `README.md` and `openapi.yaml` aligned with behavior.
 - Do not introduce mixed-case field fallbacks.
 - Follow repo scripts and conventions defined in `AGENTS.md`.
-
-## Merging
-
-Before opening or merging any PR, follow "Merging: `trunk` + the `mergeable` label" in AGENTS.md.
