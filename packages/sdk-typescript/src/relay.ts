@@ -142,6 +142,7 @@ import {
   type EnrollRecoveryCredentialInput,
   type RecoverAgentInput,
   type RegisterAgentInput,
+  type RegisterOrRecoverInput,
   type RegisterOrRotateInput,
   type ResolvedIdentity,
   type RevokeAgentTokenInput,
@@ -644,6 +645,41 @@ export class RelayCast {
     return this.registerAgent(data);
   }
 
+  /**
+   * Register, falling back to proof-gated recovery on a name conflict
+   * instead of failing closed. Unlike the deprecated `registerOrRotate`
+   * (which never rotates), this only reissues a token for an existing name
+   * when the caller presents `recoveryProof` matching the hash enrolled at
+   * that identity's original registration — the secure replacement for
+   * callers that relied on silent rotation.
+   */
+  async registerOrRecover(data: RegisterOrRecoverInput): Promise<CreateAgentResponse> {
+    const { recoveryProof, ...registerData } = data;
+    try {
+      return await this.registerAgent(registerData);
+    } catch (err) {
+      if (!recoveryProof || !(err instanceof RelayError) || err.code !== 'name_conflict') {
+        throw err;
+      }
+      const existing = await this.agents.get(data.name);
+      const recovered = await this.agents.recover({
+        name: data.name,
+        expectedAgentId: existing.id,
+        recoveryProof,
+        reason: 'registerOrRecover fallback after name conflict',
+      });
+      return {
+        id: recovered.agentId,
+        name: recovered.name,
+        token: recovered.token,
+        status: existing.status,
+        // Every persisted agent row has created_at; Agent's type only marks it
+        // optional for response variants that omit it, which this one does not.
+        createdAt: existing.createdAt as string,
+      };
+    }
+  }
+
   async resolveIdentity(): Promise<ResolvedIdentity> {
     return this.resolveIdentityInternal();
   }
@@ -898,6 +934,8 @@ export class RelayCast {
       this.registerAgent(data),
     registerOrRotate: (data: RegisterOrRotateInput): Promise<CreateAgentResponse> =>
       this.registerOrRotate(data),
+    registerOrRecover: (data: RegisterOrRecoverInput): Promise<CreateAgentResponse> =>
+      this.registerOrRecover(data),
     resolveIdentity: (): Promise<ResolvedIdentity> =>
       this.resolveIdentity(),
     spawn: (data: SpawnAgentRequest): Promise<SpawnAgentResponse> =>

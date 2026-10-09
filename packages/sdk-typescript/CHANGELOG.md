@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `agents.registerOrRecover()` registers and, only on a name conflict with a caller-supplied `recoveryProof`, falls back to `agents.recover()` instead of failing closed. This is the secure migration path for callers that relied on the deprecated `registerOrRotate`'s old silent-rotation behavior.
 
 ## [9.1.0] - 2026-10-08
 
