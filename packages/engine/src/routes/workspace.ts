@@ -250,6 +250,9 @@ workspaceRoutes.post('/workspaces', async (c) => {
           ? { expiresAt: new Date(Date.now() + expiresInSeconds * 1_000) }
           : {}),
         ...(metadata === undefined ? {} : { metadata }),
+        ...(c.get('engine').config?.defaultWorkspacePlan
+          ? { plan: c.get('engine').config.defaultWorkspacePlan }
+          : {}),
         ...attribution,
       },
     );

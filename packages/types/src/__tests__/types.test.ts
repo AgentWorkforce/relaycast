@@ -99,6 +99,7 @@ describe('Type definitions', () => {
     expectTypeOf<'free'>().toMatchTypeOf<Workspace['plan']>();
     expectTypeOf<'pro'>().toMatchTypeOf<Workspace['plan']>();
     expectTypeOf<'enterprise'>().toMatchTypeOf<Workspace['plan']>();
+    expectTypeOf<'selfhost'>().toMatchTypeOf<Workspace['plan']>();
   });
 
   it('defaults attribution fields for responses from pre-attribution engines', () => {

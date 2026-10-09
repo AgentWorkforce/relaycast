@@ -16,6 +16,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Subscriptions and HTTP push node auth support selecting the Standard Webhooks signature scheme.
 - Webhook delivery types expose durable delivery status and replay responses.
 
+### Fixed
+
+- `Workspace.plan` accepts `selfhost`, the tier a self-hosted workspace persists.
+
 ## [9.0.0] - 2026-10-06
 
 ### Added

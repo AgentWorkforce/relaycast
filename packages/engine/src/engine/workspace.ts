@@ -9,6 +9,7 @@ import { D1WriteRetryExhaustedError, retryD1Write } from '../lib/d1Retry.js';
 import { runAtomicWrites } from '../ports/database.js';
 import type { FileStorage } from '../ports/files.js';
 import type { WorkspaceProvenanceRecord } from '../db/schema.js';
+import { PLAN_LIMITS } from '../providers/static-entitlements.js';
 import { resolveEffectiveMessageRetention } from './retention.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -64,6 +65,12 @@ type CreateWorkspaceOptions =
       classificationSource?: 'creator' | 'operator' | 'unclassified';
       classificationReason?: string | null;
       classifiedAt?: Date | null;
+      /**
+       * Entitlement tier to persist. The Node self-host route passes `selfhost`
+       * unless the process configured another tier. Omitted leaves the schema
+       * default (`free`), which hosted creates rely on.
+       */
+      plan?: 'free' | 'pro' | 'enterprise' | 'selfhost';
     };
 
 export const DEFAULT_WORKSPACE_REAP_LIMIT = 25;
@@ -267,6 +274,10 @@ export async function createWorkspace(
 
   const ownerApiKeyHash = providedOwnerApiKeyHash ?? derivedOwnerApiKeyHash;
   const createOptions = typeof options === 'string' ? undefined : options;
+  const plan = createOptions?.plan;
+  if (plan !== undefined && !Object.hasOwn(PLAN_LIMITS, plan)) {
+    throw codedError(`Unknown workspace plan "${plan}"`, 'invalid_workspace_plan', 500);
+  }
   const metadata = createOptions?.metadata === undefined ? undefined : validatedMetadata(createOptions.metadata);
   const idempotencyKey = createOptions?.idempotencyKey;
   const requestDigest = createOptions?.requestDigest;
@@ -404,6 +415,7 @@ export async function createWorkspace(
                 name,
                 apiKeyHash,
                 expiresAt,
+                ...(plan === undefined ? {} : { plan }),
                 ...(metadata === undefined ? {} : { metadata }),
                 provenance: createOptions?.provenance,
                 usageClassification: createOptions?.usageClassification ?? 'unknown',

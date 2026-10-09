@@ -16,10 +16,11 @@ export interface PlanLimits {
  * Pluggable plan limits / usage — the billing seam.
  *
  * Self-host uses `StaticEntitlementsProvider`, seeded from today's hardcoded
- * `PLAN_LIMITS` (free/pro/enterprise), defaulting single-tenant deployments to a
- * generous/unlimited tier. The cloud product injects a provider that resolves
- * quotas from its billing system (e.g. a Stripe subscription) per workspace and
- * reports metered usage.
+ * `PLAN_LIMITS` (free/pro/enterprise/selfhost). The Node adapter persists
+ * `selfhost` so single-tenant deployments get unlimited quotas, with a
+ * 30,000 request per minute ceiling. The cloud product injects a provider
+ * that resolves quotas from its billing system (e.g. a Stripe subscription)
+ * per workspace and reports metered usage.
  */
 export interface EntitlementsProvider {
   /** Resolve the active plan limits for a workspace. */

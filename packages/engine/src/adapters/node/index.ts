@@ -22,6 +22,41 @@ import { sweepPendingA2aEgress } from '../../engine/a2aEgress.js';
 import { reapExpiredWorkspaces } from '../../engine/workspace.js';
 import { createNodeOutboundWebhookFetch } from './ssrf-fetch.js';
 
+/**
+ * Databases created before self-host persisted a plan store the schema default
+ * `free`, and nothing on the row distinguishes that default from a plan written
+ * as `free`. The first Node startup records one decision: when this process's
+ * default is `selfhost`, those rows are promoted; otherwise they stay. Later
+ * startups do not rewrite `plan`.
+ */
+function settleLegacySelfHostPlans(sqlite: SqliteDbHandle['sqlite'], plan: string | undefined): void {
+  const table = sqlite.prepare(
+    "SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'workspaces'",
+  ).get();
+  if (!table) return;
+  sqlite.prepare(
+    `CREATE TABLE IF NOT EXISTS node_selfhost_plan_upgrade (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      decided_at TEXT NOT NULL
+    )`,
+  ).run();
+  const settle = sqlite.transaction(() => {
+    const decided = sqlite.prepare(
+      'SELECT 1 AS ok FROM node_selfhost_plan_upgrade WHERE id = 1',
+    ).get();
+    if (decided) return;
+    if (plan === 'selfhost') {
+      sqlite.prepare("UPDATE workspaces SET plan = 'selfhost' WHERE plan = 'free'").run();
+    }
+    sqlite.prepare(
+      'INSERT INTO node_selfhost_plan_upgrade (id, decided_at) VALUES (1, ?)',
+    ).run(new Date().toISOString());
+  });
+  // BEGIN IMMEDIATE so a second process waits on busy_timeout instead of
+  // reading "no decision" and then failing its write.
+  settle.immediate();
+}
+
 export {
   InProcessRealtime,
   InProcessPresence,
@@ -173,6 +208,14 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
     outboundWebhookFetch,
     retention: options.config?.retention ?? { messageTtlDays },
   };
+  // A custom entitlements provider owns the tier. Only the built-in static
+  // provider, whose `selfhost` table is unlimited, gets that plan by default.
+  // An own property set to `undefined` is omitted: `exactOptionalPropertyTypes`
+  // is off, so forwarding an unset env value still lands here.
+  if (config.defaultWorkspacePlan === undefined && !options.entitlements) {
+    config.defaultWorkspacePlan = 'selfhost';
+  }
+  settleLegacySelfHostPlans(handle.sqlite, config.defaultWorkspacePlan);
 
   const deps: EngineDeps = {
     db,
