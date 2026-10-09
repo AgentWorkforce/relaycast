@@ -158,9 +158,15 @@ export interface EngineConfig {
   mailbox?: {
     deliveryTtlMs?: number;
     depthCap?: number;
+    /**
+     * Broadcast fanout stops creating new deliveries for a recipient once it
+     * has been continuously offline longer than this. Defaults to 24h.
+     */
+    offlineExcludeMs?: number;
     workspaces?: Record<string, {
       deliveryTtlMs?: number;
       depthCap?: number;
+      offlineExcludeMs?: number;
     }>;
   };
   /**
