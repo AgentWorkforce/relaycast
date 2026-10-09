@@ -44,6 +44,20 @@ function safeFilename(name: string): string {
   return cleaned || 'attachment';
 }
 
+/**
+ * Decode strict base64. `Buffer.from(..., 'base64')` silently skips invalid
+ * characters, which would upload different bytes than the caller sent.
+ */
+function decodeBase64Strict(value: string): Buffer {
+  const compact = value.replace(/\s+/g, '');
+  const bytes = Buffer.from(compact, 'base64');
+  const valid = /^[A-Za-z0-9+/]*={0,2}$/.test(compact)
+    && compact.length % 4 !== 1
+    && bytes.toString('base64').replace(/=+$/, '') === compact.replace(/=+$/, '');
+  if (!valid) throw new Error('content_base64 is not valid base64.');
+  return bytes;
+}
+
 /** Read a response body, refusing it as soon as it exceeds `max` bytes. */
 async function readCapped(res: Response, max: number, fileId: string): Promise<Uint8Array> {
   const tooLarge = () => new Error(`File ${fileId} is over the ${max}-byte download limit.`);
@@ -272,6 +286,9 @@ export function registerFeatureTools(
     const client = getAgentClient(undefined, asIdentity);
 
     let result: Record<string, unknown>;
+    if (filePath !== undefined && content_base64 !== undefined) {
+      throw new Error('Pass either `path` or `content_base64`, not both.');
+    }
     if (filePath !== undefined || content_base64 !== undefined) {
       let bytes: Uint8Array;
       let name: string;
@@ -285,7 +302,7 @@ export function registerFeatureTools(
         name = filename ?? path.basename(filePath);
       } else {
         if (!filename) throw new Error('filename is required with content_base64.');
-        bytes = Buffer.from(content_base64!, 'base64');
+        bytes = decodeBase64Strict(content_base64!);
         name = filename;
         if (bytes.byteLength > MAX_FILE_BYTES) {
           throw new Error(`Cannot upload ${name}: ${bytes.byteLength} bytes exceeds the ${MAX_FILE_BYTES}-byte limit.`);
@@ -376,6 +393,11 @@ export function registerFeatureTools(
         throw new Error(`Downloading file ${file_id} failed with HTTP ${res.status} at ${new URL(file.downloadUrl).origin}.`);
       }
       const bytes = await readCapped(res, MAX_FILE_BYTES, file_id);
+      if (bytes.byteLength !== file.sizeBytes) {
+        throw new Error(
+          `Downloading file ${file_id} returned ${bytes.byteLength} bytes, expected ${file.sizeBytes}; nothing was saved.`,
+        );
+      }
       const name = safeFilename(file.filename);
       let target: string;
       if (!out) {

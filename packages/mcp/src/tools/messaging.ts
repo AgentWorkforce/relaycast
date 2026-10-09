@@ -35,7 +35,7 @@ export function registerMessagingTools(
     inputSchema: {
       channel: z.string().describe('Name of the channel to post the message to (e.g. "general", "build-alerts")'),
       text: z.string().describe('The message body text, which may include @mentions of other agents'),
-      attachments: z.array(z.string()).optional().describe('Array of completed file IDs from message.file.upload to attach'),
+      attachments: z.array(z.string()).optional().describe('File IDs to attach: from message.file.upload with a path or bytes, or from message.file.complete after a manual upload'),
       data: z.record(z.string(), z.unknown()).optional().describe('Structured message metadata, including session_ref for replay correlation'),
       ...workspaceRoutingInputShape,
       ...identityOverrideInputShape,
@@ -122,7 +122,7 @@ export function registerMessagingTools(
     inputSchema: {
       to: z.string().describe('Name of the registered agent to send the direct message to'),
       text: z.string().describe('The direct message body text'),
-      attachments: z.array(z.string()).optional().describe('Array of completed file IDs from message.file.upload to attach'),
+      attachments: z.array(z.string()).optional().describe('File IDs to attach: from message.file.upload with a path or bytes, or from message.file.complete after a manual upload'),
       data: z.record(z.string(), z.unknown()).optional().describe('Structured DM metadata, including session_ref for replay correlation'),
       ...workspaceRoutingInputShape,
       ...identityOverrideInputShape,
@@ -169,7 +169,7 @@ export function registerMessagingTools(
       participants: z.array(z.string()).describe('Array of agent names to include in the group conversation'),
       name: z.string().optional().describe('Optional display name for the group conversation (e.g. "Backend Team", "Project Alpha")'),
       text: z.string().describe('The first message to send to the group, which initiates the conversation'),
-      attachments: z.array(z.string()).optional().describe('Array of completed file IDs from message.file.upload to attach'),
+      attachments: z.array(z.string()).optional().describe('File IDs to attach: from message.file.upload with a path or bytes, or from message.file.complete after a manual upload'),
       data: z.record(z.string(), z.unknown()).optional().describe('Structured first-message metadata, including session_ref for replay correlation'),
       ...workspaceRoutingInputShape,
       ...identityOverrideInputShape,
@@ -178,6 +178,14 @@ export function registerMessagingTools(
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ participants, name, text, attachments, data, workspace_id, workspace_alias, as: asIdentity }) => {
     const client = getAgentClient(workspaceRefFromArgs({ workspace_id, workspace_alias }), asIdentity);
+    // Check attachments before creating the group: a bad file id would fail the
+    // first message after the conversation exists, stranding it.
+    for (const fileId of attachments ?? []) {
+      const file = await client.files.get(fileId);
+      if (file.status !== 'complete') {
+        throw new Error(`Attachment ${fileId} is not a completed upload; nothing was sent.`);
+      }
+    }
     const conversation = await client.dms.createGroup({ participants, name });
     const options = sendOptions(attachments, data);
     const message = options === undefined

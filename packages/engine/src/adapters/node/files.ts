@@ -1,6 +1,6 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname, join, normalize, sep } from 'node:path';
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { basename, dirname, join, normalize, sep } from 'node:path';
 import { z } from 'zod';
 import type { FileStorage } from '../../ports/files.js';
 
@@ -67,9 +67,15 @@ export class LocalFileStorage implements FileStorage {
   async deleteObjects(args: { storageKeys: string[] }): Promise<void> {
     for (const storageKey of args.storageKeys) {
       const path = this.resolvePath(storageKey);
+      // Also sweep temporaries a crashed write left beside the object.
+      const prefix = `${basename(path)}.`;
+      const leftovers = await readdir(dirname(path)).catch(() => [] as string[]);
       await Promise.all([
         rm(path, { force: true }),
         rm(`${path}.ct`, { force: true }),
+        ...leftovers
+          .filter((name) => name.startsWith(prefix) && /\.tmp(\.ct)?$/.test(name))
+          .map((name) => rm(join(dirname(path), name), { force: true })),
       ]);
     }
   }
@@ -112,13 +118,17 @@ export class LocalFileStorage implements FileStorage {
     await mkdir(dirname(path), { recursive: true });
     // Write to a temporary file and rename it into place, so a concurrent
     // statObject/read never sees a partially written object.
+    // The content type is published only after the bytes, so a failed PUT
+    // never leaves stored bytes paired with another upload's type.
     const tmp = `${path}.${randomUUID()}.tmp`;
+    const ctTmp = `${tmp}.ct`;
     try {
-      await writeFile(`${path}.ct`, contentType || 'application/octet-stream');
       await writeFile(tmp, bytes);
+      await writeFile(ctTmp, contentType || 'application/octet-stream');
       await rename(tmp, path);
+      await rename(ctTmp, `${path}.ct`);
     } catch (err) {
-      await rm(tmp, { force: true });
+      await Promise.all([rm(tmp, { force: true }), rm(ctTmp, { force: true })]);
       throw err;
     }
   }

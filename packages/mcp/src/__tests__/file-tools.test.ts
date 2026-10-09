@@ -15,6 +15,7 @@ const DOWNLOAD_URL = 'https://files.example.test/_relayfiles?token=download-sign
 function createAgentClient() {
   return {
     dm: vi.fn(async () => ({ id: 'dm1' })),
+    send: vi.fn(async () => ({ id: 'm1' })),
     dms: {
       createGroup: vi.fn(async () => ({ id: 'conv1' })),
       sendMessage: vi.fn(async () => ({ id: 'gdm1' })),
@@ -187,6 +188,12 @@ describe('file tools', () => {
       arguments: { participants: ['a', 'b'], text: 'see screenshot', attachments: ['f1'] },
     });
 
+    await client.callTool({
+      name: 'message.post',
+      arguments: { channel: 'general', text: 'see screenshot', attachments: ['f1'] },
+    });
+
+    expect(agentClient.send).toHaveBeenCalledWith('general', 'see screenshot', { attachments: ['f1'] });
     expect(agentClient.dm).toHaveBeenCalledWith('linux-agent', 'see screenshot', { attachments: ['f1'] });
     expect(agentClient.dms.sendMessage).toHaveBeenCalledWith('conv1', 'see screenshot', { attachments: ['f1'] });
   });
@@ -221,5 +228,55 @@ describe('file tools', () => {
     const result = await client.callTool({ name: 'message.file.download', arguments: { file_id: 'f1', path: dir } });
 
     expect(errorText(result)).toContain('download limit');
+  });
+
+  it('checks group DM attachments before creating the conversation', async () => {
+    agentClient.files.get.mockResolvedValueOnce({
+      id: 'f2',
+      filename: 'shot.png',
+      contentType: 'image/png',
+      sizeBytes: 8,
+      status: 'pending',
+      downloadUrl: null,
+    } as never);
+    const client = await connect(false, agentClient);
+
+    const result = await client.callTool({
+      name: 'message.dm.send_group',
+      arguments: { participants: ['a', 'b'], text: 'see screenshot', attachments: ['f2'] },
+    });
+
+    expect(errorText(result)).toContain('not a completed upload');
+    expect(agentClient.dms.createGroup).not.toHaveBeenCalled();
+  });
+
+  it('rejects ambiguous or malformed byte inputs before uploading', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const file = path.join(dir, 'shot.png');
+    await writeFile(file, PNG_BYTES);
+    const client = await connect(true, agentClient);
+
+    const both = await client.callTool({
+      name: 'message.file.upload',
+      arguments: { path: file, filename: 'shot.png', content_base64: PNG_BYTES.toString('base64') },
+    });
+    expect(errorText(both)).toContain('not both');
+    const corrupt = await client.callTool({
+      name: 'message.file.upload',
+      arguments: { filename: 'shot.png', content_base64: 'iVBOR!!w0KGgo=' },
+    });
+    expect(errorText(corrupt)).toContain('not valid base64');
+    expect(agentClient.files.upload).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses a truncated download instead of saving a partial file', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(PNG_BYTES.subarray(0, 3), { status: 200 })));
+    const client = await connect(true, agentClient);
+
+    const result = await client.callTool({ name: 'message.file.download', arguments: { file_id: 'f1', path: dir } });
+
+    expect(errorText(result)).toContain('expected 8');
   });
 });

@@ -20,7 +20,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Added
 
-- MCP `message.file.upload` on stdio servers uploads a local `path` or inline `content_base64` end to end, so the returned file id is ready to attach (hosted servers keep the upload-URL flow); new `message.file.complete`, `message.file.get` and (stdio) `message.file.download` tools.
+- MCP `message.file.upload` on stdio servers uploads a local `path` or inline `content_base64` end to end, so the returned file id is ready to attach.
+- MCP `message.file.complete` finishes an upload whose bytes were PUT to its `upload_url`, the flow hosted servers use.
+- MCP `message.file.get` returns a file's details and short-lived download URL.
+- MCP `message.file.download` (stdio servers) saves an attachment locally and returns its path.
 - MCP `message.dm.send` and `message.dm.send_group` accept `attachments`, so files can be sent by direct message.
 - Durable delivery items (`GET /v1/deliveries`) carry the message's `attachments`, so pull-based recipients see attached files.
 
