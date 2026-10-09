@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- `agent.exited`, `node.status.online`, and `node.status.offline` WebSocket events now have camelCase SDK types (`AgentExitedEvent`, `NodeStatusOnlineEvent`, `NodeStatusOfflineEvent`) and `on.agentExited`/`on.nodeOnline`/`on.nodeOffline` handlers. Previously these events had no SDK type at all, so consumers reached for the snake_case raw type exported by `@relaycast/types` — which type-checked but silently read `undefined` against the camelized payload the client actually delivers.
+
 ## [9.1.0] - 2026-10-08
 
 ### Added
