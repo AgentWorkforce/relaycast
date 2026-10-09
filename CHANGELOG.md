@@ -20,7 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Added
 
-- MCP `message.file.upload` uploads a local `path` (stdio servers only) or inline `content_base64` end to end, so the returned file id is ready to attach; new `message.file.complete`, `message.file.get` and (stdio) `message.file.download` tools.
+- MCP `message.file.upload` on stdio servers uploads a local `path` or inline `content_base64` end to end, so the returned file id is ready to attach (hosted servers keep the upload-URL flow); new `message.file.complete`, `message.file.get` and (stdio) `message.file.download` tools.
 - MCP `message.dm.send` and `message.dm.send_group` accept `attachments`, so files can be sent by direct message.
 - Durable delivery items (`GET /v1/deliveries`) carry the message's `attachments`, so pull-based recipients see attached files.
 
