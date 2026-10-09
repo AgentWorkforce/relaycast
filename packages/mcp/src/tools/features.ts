@@ -40,9 +40,36 @@ function contentTypeFor(filename: string): string {
 /** A sender-supplied file name reduced to one safe path segment. */
 function safeFilename(name: string): string {
   const base = path.basename(name.replace(/\\/g, '/'));
-  // eslint-disable-next-line no-control-regex
   const cleaned = base.replace(/[\u0000-\u001f\u007f]/g, '').replace(/^\.+/, '').trim();
   return cleaned || 'attachment';
+}
+
+/** Read a response body, refusing it as soon as it exceeds `max` bytes. */
+async function readCapped(res: Response, max: number, fileId: string): Promise<Uint8Array> {
+  const tooLarge = () => new Error(`File ${fileId} is over the ${max}-byte download limit.`);
+  const declared = Number(res.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > max) throw tooLarge();
+  if (!res.body) return new Uint8Array(0);
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel();
+      throw tooLarge();
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }
 
 /** Request an upload, PUT the bytes, and complete it, so the file id can be attached. */
@@ -216,15 +243,20 @@ export function registerFeatureTools(
 
   server.registerTool('message.file.upload', {
     title: 'Upload File',
-    description: 'Upload a file to the workspace and get a file ID to pass as `attachments` to message.post, message.dm.send or message.dm.send_group. '
-      + (localFiles ? 'Pass `path` to upload a local file, or ' : 'Pass ')
-      + '`content_base64` with `filename` to upload inline bytes; the tool stores the bytes and completes the upload, so the returned `id` is ready to attach. '
-      + 'With only `filename`, `content_type` and `size_bytes` it returns a signed `upload_url`: PUT the bytes there, then call message.file.complete before attaching.',
+    description: localFiles
+      ? 'Upload a file to the workspace and get a file ID to pass as `attachments` to message.post, message.dm.send or message.dm.send_group. '
+        + 'Pass a local `path`, or `content_base64` with `filename`: the tool stores the bytes and completes the upload, so the returned `id` is ready to attach. '
+        + 'With only `filename`, `content_type` and `size_bytes` it returns a signed `upload_url`: PUT the bytes there, then call message.file.complete before attaching.'
+      : 'Request an upload for a file: returns a signed `upload_url` and file `id`. PUT the bytes to `upload_url`, then call message.file.complete; the completed `id` can be passed as `attachments` to message.post, message.dm.send or message.dm.send_group.',
     inputSchema: {
+      // Byte uploads make this process PUT to a server-supplied URL, so they
+      // exist only when the server runs locally next to the agent (stdio).
       ...(localFiles
-        ? { path: z.string().optional().describe('Absolute or relative path of a local file to upload (e.g. a screenshot)') }
+        ? {
+            path: z.string().optional().describe('Absolute or relative path of a local file to upload (e.g. a screenshot)'),
+            content_base64: z.string().optional().describe('The file bytes, base64-encoded'),
+          }
         : {}),
-      content_base64: z.string().optional().describe('The file bytes, base64-encoded'),
       filename: z.string().optional().describe('Name of the file including extension (e.g. "report.pdf", "screenshot.png"); defaults to the basename of `path`'),
       content_type: z.string().optional().describe('MIME type (e.g. "image/png"); guessed from the file name when omitted'),
       size_bytes: z.number().optional().describe('Size in bytes; only needed when requesting an upload URL without bytes'),
@@ -233,8 +265,10 @@ export function registerFeatureTools(
     outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async (args) => {
-    const { content_base64, filename, content_type, size_bytes, as: asIdentity } = args;
-    const filePath = localFiles ? (args as { path?: string }).path : undefined;
+    const { filename, content_type, size_bytes, as: asIdentity } = args;
+    const bytesArgs = localFiles ? (args as { path?: string; content_base64?: string }) : {};
+    const filePath = bytesArgs.path;
+    const content_base64 = bytesArgs.content_base64;
     const client = getAgentClient(undefined, asIdentity);
 
     let result: Record<string, unknown>;
@@ -269,7 +303,7 @@ export function registerFeatureTools(
         throw new Error(
           localFiles
             ? 'Pass `path`, or `content_base64` with `filename`, or all of `filename`, `content_type` and `size_bytes`.'
-            : 'Pass `content_base64` with `filename`, or all of `filename`, `content_type` and `size_bytes`.',
+            : 'Pass all of `filename`, `content_type` and `size_bytes`.',
         );
       }
       const upload = await client.files.upload({ filename, contentType: content_type, sizeBytes: size_bytes });
@@ -341,7 +375,7 @@ export function registerFeatureTools(
       if (!res.ok) {
         throw new Error(`Downloading file ${file_id} failed with HTTP ${res.status} at ${new URL(file.downloadUrl).origin}.`);
       }
-      const bytes = new Uint8Array(await res.arrayBuffer());
+      const bytes = await readCapped(res, MAX_FILE_BYTES, file_id);
       const name = safeFilename(file.filename);
       let target: string;
       if (!out) {

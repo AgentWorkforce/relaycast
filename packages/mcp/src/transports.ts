@@ -212,6 +212,8 @@ export function createHttpHandler(baseOptions: McpServerOptions, lifecycle?: Ses
       const mcpServer = createRelayMcpServer({
         ...baseOptions,
         telemetryTransport: 'http',
+        // Remote clients must never read or write files on this host.
+        localFiles: false,
         telemetry,
       });
 

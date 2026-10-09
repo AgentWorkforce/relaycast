@@ -1,5 +1,5 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, normalize, sep } from 'node:path';
 import { z } from 'zod';
 import type { FileStorage } from '../../ports/files.js';
@@ -56,8 +56,11 @@ export class LocalFileStorage implements FileStorage {
     try {
       const info = await stat(this.resolvePath(args.storageKey));
       return info.isFile() ? { sizeBytes: info.size } : null;
-    } catch {
-      return null;
+    } catch (err) {
+      // Only a missing object means "never uploaded"; any other failure is a
+      // storage error the caller should surface rather than report as a 409.
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw err;
     }
   }
 
@@ -107,8 +110,17 @@ export class LocalFileStorage implements FileStorage {
   async write(key: string, bytes: Buffer, contentType: string): Promise<void> {
     const path = this.resolvePath(key);
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, bytes);
-    await writeFile(`${path}.ct`, contentType || 'application/octet-stream');
+    // Write to a temporary file and rename it into place, so a concurrent
+    // statObject/read never sees a partially written object.
+    const tmp = `${path}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(`${path}.ct`, contentType || 'application/octet-stream');
+      await writeFile(tmp, bytes);
+      await rename(tmp, path);
+    } catch (err) {
+      await rm(tmp, { force: true });
+      throw err;
+    }
   }
 
   async read(key: string): Promise<{ bytes: Buffer; contentType: string } | null> {

@@ -99,7 +99,7 @@ describe('file tools', () => {
 
   it('uploads inline base64 bytes', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 200 })));
-    const client = await connect(false, agentClient);
+    const client = await connect(true, agentClient);
 
     await client.callTool({
       name: 'message.file.upload',
@@ -116,7 +116,7 @@ describe('file tools', () => {
 
   it('does not complete an upload whose bytes were rejected, and keeps the signature out of the error', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('AccessDenied', { status: 403 })));
-    const client = await connect(false, agentClient);
+    const client = await connect(true, agentClient);
 
     const result = await client.callTool({
       name: 'message.file.upload',
@@ -129,7 +129,7 @@ describe('file tools', () => {
     expect(agentClient.files.complete).not.toHaveBeenCalled();
   });
 
-  it('never reads local paths when the server is hosted', async () => {
+  it('never reads local paths or PUTs bytes when the server is hosted', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
     const file = path.join(dir, 'secret.txt');
@@ -139,10 +139,17 @@ describe('file tools', () => {
     const tools = await client.listTools();
     expect(tools.tools.map((tool) => tool.name)).not.toContain('message.file.download');
     const upload = tools.tools.find((tool) => tool.name === 'message.file.upload');
-    expect(Object.keys((upload?.inputSchema as { properties: object }).properties)).not.toContain('path');
+    const properties = Object.keys((upload?.inputSchema as { properties: object }).properties);
+    expect(properties).not.toContain('path');
+    expect(properties).not.toContain('content_base64');
 
-    const result = await client.callTool({ name: 'message.file.upload', arguments: { path: file } });
-    expect(errorText(result)).toContain('content_base64');
+    const fromPath = await client.callTool({ name: 'message.file.upload', arguments: { path: file } });
+    expect(errorText(fromPath)).toContain('size_bytes');
+    const inline = await client.callTool({
+      name: 'message.file.upload',
+      arguments: { filename: 'shot.png', content_base64: PNG_BYTES.toString('base64') },
+    });
+    expect(errorText(inline)).toContain('size_bytes');
     expect(agentClient.files.upload).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -193,5 +200,21 @@ describe('file tools', () => {
     const saved = structured(result);
     expect(saved.path).toBe(path.join(dir, 'shot.png'));
     expect(await readFile(saved.path as string)).toEqual(PNG_BYTES);
+  });
+
+  it('refuses a download whose bytes exceed the limit even when the record claims it is small', async () => {
+    const huge = new Uint8Array(25 * 1024 * 1024 + 1);
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(huge);
+        controller.close();
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(stream, { status: 200 })));
+    const client = await connect(true, agentClient);
+
+    const result = await client.callTool({ name: 'message.file.download', arguments: { file_id: 'f1', path: dir } });
+
+    expect(errorText(result)).toContain('download limit');
   });
 });
