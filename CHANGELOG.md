@@ -21,6 +21,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Fixed
 
 - TypeScript SDK: `agent.on.*` event handlers can be registered before `connect()` instead of throwing.
+- TypeScript SDK: `agent.exited`, `node.status.online`, and `node.status.offline` have camelCase event types and `on.agentExited`, `on.nodeOnline`, and `on.nodeOffline` handlers.
 
 ## [9.2.0] - 2026-10-09
 
