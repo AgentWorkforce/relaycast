@@ -98,7 +98,8 @@ describe('file tools', () => {
   });
 
   it('uploads inline base64 bytes', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 200 })));
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
     const client = await connect(true, agentClient);
 
     await client.callTool({
@@ -111,6 +112,10 @@ describe('file tools', () => {
       contentType: 'image/png',
       sizeBytes: PNG_BYTES.byteLength,
     });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(UPLOAD_URL);
+    expect(init.method).toBe('PUT');
+    expect(Buffer.from(init.body as Uint8Array)).toEqual(PNG_BYTES);
     expect(agentClient.files.complete).toHaveBeenCalledWith('f1');
   });
 

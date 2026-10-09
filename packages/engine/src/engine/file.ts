@@ -69,7 +69,7 @@ export async function completeUpload(
   let sizeBytes = file.sizeBytes;
   if (storage.statObject) {
     const stored = await storage.statObject({ storageKey: file.storageKey });
-    if (!stored) {
+    if (!stored || stored.sizeBytes === 0) {
       throw codedError(
         'Upload not received: PUT the file bytes to upload_url before completing',
         'upload_incomplete',

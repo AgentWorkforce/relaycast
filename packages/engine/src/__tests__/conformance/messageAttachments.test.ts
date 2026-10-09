@@ -22,14 +22,14 @@ async function storeFile(
   stack: TestStack,
   token: string,
   filename: string,
-  opts: { complete?: boolean; put?: boolean; bytes?: Uint8Array; contentType?: string } = {},
+  opts: { complete?: boolean; put?: boolean; bytes?: Uint8Array; contentType?: string; sizeBytes?: number } = {},
 ): Promise<string> {
   const bytes = opts.bytes ?? TEXT_BYTES;
   const contentType = opts.contentType ?? 'text/plain';
   const upload = await stack.app.request('/v1/files/upload', {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-    body: JSON.stringify({ filename, content_type: contentType, size_bytes: bytes.byteLength }),
+    body: JSON.stringify({ filename, content_type: contentType, size_bytes: opts.sizeBytes ?? bytes.byteLength }),
   });
   expect(upload.status).toBe(201);
   const uploadBody = await upload.json() as { data: { id: string; upload_url: string } };
@@ -177,13 +177,33 @@ describe('channel message attachments', () => {
     expect((await res.json() as { error: { code: string } }).error.code).toBe('invalid_attachments');
   });
 
+  it('refuses to complete an upload whose stored object is empty', async () => {
+    const ws = await createWorkspace(stack.app, 'channel-attachments-empty-ws');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const fileId = await storeFile(stack, alice.token, 'empty.png', {
+      bytes: new Uint8Array(0),
+      sizeBytes: 100,
+      complete: false,
+    });
+
+    const completeRes = await stack.app.request(`/v1/files/${fileId}/complete`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${alice.token}` },
+    });
+    expect(completeRes.status).toBe(409);
+    expect((await completeRes.json() as { error: { code: string } }).error.code).toBe('upload_incomplete');
+  });
+
   it('records the stored size and lets another channel member download the exact bytes', async () => {
     const ws = await createWorkspace(stack.app, 'channel-attachments-download-ws');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
     const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    // Declare a size that differs from the bytes actually PUT: the completed
+    // file must report what was stored, not what was declared.
     const fileId = await storeFile(stack, alice.token, 'screenshot.png', {
       bytes: PNG_BYTES,
       contentType: 'image/png',
+      sizeBytes: 1000,
     });
 
     const res = await postMessage(alice.token, [fileId]);
@@ -273,5 +293,9 @@ describe('direct message attachments', () => {
     expect(sent.status).toBe(400);
     expect((await sent.json() as { error: { code: string } }).error.code).toBe('invalid_attachments');
     expect(await stack.runtime.deps.db.select().from(messageAttachments)).toHaveLength(0);
+    expect(await stack.runtime.deps.db
+      .select()
+      .from(messages)
+      .where(eq(messages.workspaceId, ws.workspaceId))).toHaveLength(0);
   });
 });

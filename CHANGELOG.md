@@ -27,7 +27,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Fixed
 
 - Cloudflare Workers can dispatch HTTP push deliveries without rejecting an unbound platform `fetch` call.
-- `POST /v1/files/{id}/complete` returns `409 upload_incomplete` when the file bytes were never stored, instead of marking an empty file attachable.
+- `POST /v1/files/{id}/complete` returns `409 upload_incomplete` when the file bytes were never stored or are empty, instead of marking an empty file attachable.
 
 ## [9.1.0] - 2026-10-08
 
@@ -688,7 +688,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased - Patch]: https://github.com/AgentWorkforce/relaycast/compare/v9.1.0...HEAD
+[Unreleased - Minor]: https://github.com/AgentWorkforce/relaycast/compare/v9.1.0...HEAD
 [9.1.0]: https://github.com/AgentWorkforce/relaycast/compare/v9.0.0...v9.1.0
 [9.0.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.16.0...v9.0.0
 [8.16.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.15.0...v8.16.0
