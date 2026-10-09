@@ -75,7 +75,11 @@ test("feature PRs into trunk get the ready check the sweeper requires", () => {
   assert.match(source, /\n    branches: \[trunk\]\n    types: \[labeled, synchronize, reopened\]\n/);
   assert.match(source, /\n    name: Merge-train ready check\n/);
   assert.match(source, /contains\(github\.event\.pull_request\.labels\.\*\.name, 'mergeable'\)/);
-  assert.match(source, /head\.repo\.full_name == github\.repository/);
+  // Fork PRs get the check too (no secrets under `pull_request`); trust is the sweeper's gate.
+  assert.doesNotMatch(source, /head\.repo\.full_name/);
+  assert.doesNotMatch(source, /^  pull_request_target:/m);
+  assert.doesNotMatch(source, /secrets\./);
+  assert.match(source, /persist-credentials: false/);
   // The sweeper kicks missing runs with `ready:check`: the job runs on ANY label event.
   assert.doesNotMatch(source, /event\.label\.name/);
 });
