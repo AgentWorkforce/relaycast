@@ -21,6 +21,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Fixed
 
 - Cloudflare Workers can dispatch HTTP push deliveries without rejecting an unbound platform `fetch` call.
+- TypeScript SDK: `agent.on.*` event handlers can be registered before `connect()` instead of throwing.
 
 ## [9.1.0] - 2026-10-08
 
