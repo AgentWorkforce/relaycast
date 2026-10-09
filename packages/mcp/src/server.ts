@@ -45,6 +45,8 @@ export interface McpServerOptions {
   /** When true, the `register` tool enforces the pre-registered agentName. */
   strictAgentName?: boolean;
   telemetryTransport?: 'stdio' | 'http';
+  /** Let file tools read and write local paths; set only when the server runs next to the agent (stdio). */
+  localFiles?: boolean;
   telemetry?: McpTelemetry;
   /** Multi-workspace configs parsed from RELAY_WORKSPACES_JSON. */
   workspaces?: McpWorkspaceConfig[];
@@ -436,7 +438,10 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
   );
   registerChannelTools(mcpServer, getAgentClient);
   registerMessagingTools(mcpServer, getAgentClient);
-  registerFeatureTools(mcpServer, getAgentClient);
+  registerFeatureTools(mcpServer, getAgentClient, {
+    // Never for HTTP: remote clients must not read or write this host's files.
+    localFiles: options.localFiles === true && options.telemetryTransport !== 'http',
+  });
   registerProgrammabilityTools(mcpServer, getRelay, getAgentClient);
 
   // Register system prompt

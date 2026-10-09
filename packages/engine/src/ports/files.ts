@@ -18,6 +18,13 @@ export interface FileStorage {
     sizeBytes: number;
   }): Promise<{ uploadUrl: string; expiresAt: string }>;
 
+  /**
+   * Report whether bytes are stored under `storageKey`, and how many. The
+   * engine calls it before completing an upload so a file whose PUT never
+   * landed cannot be attached. Optional: without it, completion is trusted.
+   */
+  statObject?(args: { storageKey: string }): Promise<{ sizeBytes: number } | null>;
+
   /** Return a URL the client can `GET` the file bytes from, valid ~1h. */
   createDownloadUrl(args: { storageKey: string }): Promise<string>;
 

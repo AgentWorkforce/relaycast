@@ -147,11 +147,19 @@ export async function listDeliveries(
       metadata: messages.metadata,
       threadId: messages.threadId,
       createdAt: messages.createdAt,
+      hasAttachments: messages.hasAttachments,
     })
     .from(messages)
     .leftJoin(agents, eq(messages.agentId, agents.id))
     .where(inArray(messages.id, messageIds));
   const msgById = new Map(msgRows.map((m) => [m.id, m]));
+  // Only messages flagged with attachments need hydration; text-only replays
+  // skip the extra queries.
+  const attachmentsByMessageId = await fetchAttachmentsBatch(
+    db,
+    workspaceId,
+    msgRows.filter((m) => m.hasAttachments).map((m) => m.id),
+  );
 
   return rows.map((row) => {
     const msg = msgById.get(row.messageId);
@@ -168,6 +176,7 @@ export async function listDeliveries(
           text: msg.body,
           thread_id: msg.threadId ?? null,
           created_at: msg.createdAt.toISOString(),
+          attachments: attachmentsByMessageId.get(msg.id) ?? [],
         }
         : null,
     };

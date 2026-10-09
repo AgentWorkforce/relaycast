@@ -7,10 +7,16 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
+
+### Added
+
+- `FileStorage.statObject` (optional port method), implemented by the Node adapter.
+- `listDeliveries` includes `message.attachments`.
 
 ### Fixed
 
+- When the `FileStorage` adapter implements `statObject` (both bundled adapters do), `completeUpload` refuses a file with no or empty stored bytes (`409 upload_incomplete`) and records the stored size.
 - HTTP push delivery invokes the default Cloudflare Workers `fetch` through `globalThis`, avoiding workerd's `Illegal invocation` rejection while preserving manual redirect handling.
 
 ## [9.1.0] - 2026-10-08

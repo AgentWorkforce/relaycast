@@ -609,6 +609,13 @@ describe('workspace lifecycle', () => {
     const upload = await uploadResponse.json() as {
       data: { id: string; upload_url: string; expires_at: string };
     };
+    // Completion requires stored bytes; the late PUT below re-uses the same URL.
+    const firstPut = await stack.runtime.fileHandler(new Request(upload.data.upload_url, {
+      method: 'PUT',
+      headers: { 'content-type': 'text/plain' },
+      body: 'once',
+    }));
+    expect(firstPut.status).toBe(200);
     const completeResponse = await stack.app.request(`/v1/files/${upload.data.id}/complete`, {
       method: 'POST',
       headers: { authorization: `Bearer ${agent.token}` },

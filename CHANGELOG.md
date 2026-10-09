@@ -16,11 +16,21 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
+
+### Added
+
+- MCP `message.file.upload` on stdio servers uploads a local `path` or inline `content_base64` end to end, so the returned file id is ready to attach.
+- MCP `message.file.complete` finishes an upload whose bytes were PUT to its `upload_url`, the flow hosted servers use.
+- MCP `message.file.get` returns a file's details and short-lived download URL.
+- MCP `message.file.download` (stdio servers) saves an attachment locally and returns its path.
+- MCP `message.dm.send` and `message.dm.send_group` accept `attachments`, so files can be sent by direct message.
+- Durable delivery items (`GET /v1/deliveries`) carry the message's `attachments`, so pull-based recipients see attached files.
 
 ### Fixed
 
 - Cloudflare Workers can dispatch HTTP push deliveries without rejecting an unbound platform `fetch` call.
+- `POST /v1/files/{id}/complete` returns `409 upload_incomplete` when the file bytes were never stored or are empty, instead of marking an empty file attachable.
 
 ## [9.1.0] - 2026-10-08
 
@@ -681,7 +691,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased - Patch]: https://github.com/AgentWorkforce/relaycast/compare/v9.1.0...HEAD
+[Unreleased - Minor]: https://github.com/AgentWorkforce/relaycast/compare/v9.1.0...HEAD
 [9.1.0]: https://github.com/AgentWorkforce/relaycast/compare/v9.0.0...v9.1.0
 [9.0.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.16.0...v9.0.0
 [8.16.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.15.0...v8.16.0

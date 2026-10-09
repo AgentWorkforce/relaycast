@@ -176,9 +176,22 @@ describe('createRelayMcpServer', () => {
     await Promise.all([client.connect(ct), mcpServer.connect(st)]);
   });
 
-  it('lists all 45 tools', async () => {
+  it('exposes local file tools only to local (non-HTTP) servers', async () => {
+    async function toolNames(options: Parameters<typeof createServer>[0]) {
+      const server = createRelayMcpServer(options);
+      const c = new Client({ name: 'files-client', version: '0.1.0' });
+      const [ct, st] = InMemoryTransport.createLinkedPair();
+      await Promise.all([c.connect(ct), server.connect(st)]);
+      return (await c.listTools()).tools.map((t) => t.name);
+    }
+    expect(await toolNames({ apiKey: 'test-key', localFiles: true })).toContain('message.file.download');
+    expect(await toolNames({ apiKey: 'test-key', localFiles: true, telemetryTransport: 'http' }))
+      .not.toContain('message.file.download');
+  });
+
+  it('lists all 47 tools', async () => {
     const tools = await client.listTools();
-    expect(tools.tools.length).toBe(45);
+    expect(tools.tools.length).toBe(47);
     const toolNames = tools.tools.map((t) => t.name).sort();
     expect(toolNames).toEqual([
       'agent.add',
@@ -210,6 +223,8 @@ describe('createRelayMcpServer', () => {
       'message.dm.list',
       'message.dm.send',
       'message.dm.send_group',
+      'message.file.complete',
+      'message.file.get',
       'message.file.upload',
       'message.get_thread',
       'message.inbox.check',

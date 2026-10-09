@@ -1,6 +1,6 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { dirname, join, normalize, sep } from 'node:path';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { basename, dirname, join, normalize, sep } from 'node:path';
 import { z } from 'zod';
 import type { FileStorage } from '../../ports/files.js';
 
@@ -52,12 +52,30 @@ export class LocalFileStorage implements FileStorage {
     return this.url({ key: args.storageKey, op: 'get', exp });
   }
 
+  async statObject(args: { storageKey: string }): Promise<{ sizeBytes: number } | null> {
+    try {
+      const info = await stat(this.resolvePath(args.storageKey));
+      return info.isFile() ? { sizeBytes: info.size } : null;
+    } catch (err) {
+      // Only a missing object means "never uploaded"; any other failure is a
+      // storage error the caller should surface rather than report as a 409.
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw err;
+    }
+  }
+
   async deleteObjects(args: { storageKeys: string[] }): Promise<void> {
     for (const storageKey of args.storageKeys) {
       const path = this.resolvePath(storageKey);
+      // Also sweep temporaries a crashed write left beside the object.
+      const prefix = `${basename(path)}.`;
+      const leftovers = await readdir(dirname(path)).catch(() => [] as string[]);
       await Promise.all([
         rm(path, { force: true }),
         rm(`${path}.ct`, { force: true }),
+        ...leftovers
+          .filter((name) => name.startsWith(prefix) && /\.tmp(\.ct)?$/.test(name))
+          .map((name) => rm(join(dirname(path), name), { force: true })),
       ]);
     }
   }
@@ -98,8 +116,21 @@ export class LocalFileStorage implements FileStorage {
   async write(key: string, bytes: Buffer, contentType: string): Promise<void> {
     const path = this.resolvePath(key);
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, bytes);
-    await writeFile(`${path}.ct`, contentType || 'application/octet-stream');
+    // Write to a temporary file and rename it into place, so a concurrent
+    // statObject/read never sees a partially written object.
+    // The content type is published only after the bytes, so a failed PUT
+    // never leaves stored bytes paired with another upload's type.
+    const tmp = `${path}.${randomUUID()}.tmp`;
+    const ctTmp = `${tmp}.ct`;
+    try {
+      await writeFile(tmp, bytes);
+      await writeFile(ctTmp, contentType || 'application/octet-stream');
+      await rename(tmp, path);
+      await rename(ctTmp, `${path}.ct`);
+    } catch (err) {
+      await Promise.all([rm(tmp, { force: true }), rm(ctTmp, { force: true })]);
+      throw err;
+    }
   }
 
   async read(key: string): Promise<{ bytes: Buffer; contentType: string } | null> {

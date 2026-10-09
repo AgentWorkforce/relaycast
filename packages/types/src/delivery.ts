@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { FileAttachmentSchema } from './file.js';
 
 // Durable delivery status lifecycle:
 //   queued    -> durable row accepted, not yet sent to the current location
@@ -22,6 +23,8 @@ export const DeliveryMessageSchema = z.object({
   text: z.string(),
   thread_id: z.string().nullable(),
   created_at: z.string(),
+  /** Stored files attached to the message; `GET /v1/files/{file_id}` returns a `download_url` for the bytes. */
+  attachments: z.array(FileAttachmentSchema).optional(),
 });
 export type DeliveryMessage = z.infer<typeof DeliveryMessageSchema>;
 
