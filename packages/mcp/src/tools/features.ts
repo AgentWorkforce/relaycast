@@ -49,6 +49,10 @@ function safeFilename(name: string): string {
  * characters, which would upload different bytes than the caller sent.
  */
 function decodeBase64Strict(value: string): Buffer {
+  // Refuse oversized input before allocating: 4 encoded chars per 3 bytes.
+  if (value.length > Math.ceil(MAX_FILE_BYTES / 3) * 4 + 1024) {
+    throw new Error(`content_base64 exceeds the ${MAX_FILE_BYTES}-byte limit.`);
+  }
   const compact = value.replace(/\s+/g, '');
   const bytes = Buffer.from(compact, 'base64');
   const valid = /^[A-Za-z0-9+/]*={0,2}$/.test(compact)
@@ -260,8 +264,8 @@ export function registerFeatureTools(
     description: localFiles
       ? 'Upload a file to the workspace and get a file ID to pass as `attachments` to message.post, message.dm.send or message.dm.send_group. '
         + 'Pass a local `path`, or `content_base64` with `filename`: the tool stores the bytes and completes the upload, so the returned `id` is ready to attach. '
-        + 'With only `filename`, `content_type` and `size_bytes` it returns a signed `upload_url`: PUT the bytes there, then call message.file.complete before attaching.'
-      : 'Request an upload for a file: returns a signed `upload_url` and file `id`. PUT the bytes to `upload_url`, then call message.file.complete; the completed `id` can be passed as `attachments` to message.post, message.dm.send or message.dm.send_group.',
+        + 'With only `filename`, `content_type` and `size_bytes` it returns a signed `uploadUrl`: PUT the bytes there, then call message.file.complete before attaching.'
+      : 'Request an upload for a file: returns a signed `uploadUrl` and file `id`. PUT the bytes to `uploadUrl`, then call message.file.complete; the completed `id` can be passed as `attachments` to message.post, message.dm.send or message.dm.send_group.',
     inputSchema: {
       // Byte uploads make this process PUT to a server-supplied URL, so they
       // exist only when the server runs locally next to the agent (stdio).
@@ -299,6 +303,10 @@ export function registerFeatureTools(
           throw new Error(`Cannot upload ${filePath}: ${info.size} bytes exceeds the ${MAX_FILE_BYTES}-byte limit.`);
         }
         bytes = await readFile(filePath);
+        // The file may have grown since stat.
+        if (bytes.byteLength > MAX_FILE_BYTES) {
+          throw new Error(`Cannot upload ${filePath}: ${bytes.byteLength} bytes exceeds the ${MAX_FILE_BYTES}-byte limit.`);
+        }
         name = filename ?? path.basename(filePath);
       } else {
         if (!filename) throw new Error('filename is required with content_base64.');

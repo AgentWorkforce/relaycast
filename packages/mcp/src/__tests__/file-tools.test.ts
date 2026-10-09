@@ -248,6 +248,11 @@ describe('file tools', () => {
     });
 
     expect(errorText(result)).toContain('not a completed upload');
+    const duplicate = await client.callTool({
+      name: 'message.dm.send_group',
+      arguments: { participants: ['a', 'b'], text: 'see screenshot', attachments: ['f1', 'f1'] },
+    });
+    expect(errorText(duplicate)).toContain('unique');
     expect(agentClient.dms.createGroup).not.toHaveBeenCalled();
   });
 
@@ -268,6 +273,11 @@ describe('file tools', () => {
       arguments: { filename: 'shot.png', content_base64: 'iVBOR!!w0KGgo=' },
     });
     expect(errorText(corrupt)).toContain('not valid base64');
+    const oversized = await client.callTool({
+      name: 'message.file.upload',
+      arguments: { filename: 'big.bin', content_base64: 'A'.repeat(36 * 1024 * 1024) },
+    });
+    expect(errorText(oversized)).toContain('byte limit');
     expect(agentClient.files.upload).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });

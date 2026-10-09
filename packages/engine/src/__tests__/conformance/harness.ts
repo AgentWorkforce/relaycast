@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, vi } from 'vitest';
 import { BackgroundTasks } from '../backgroundTasks.js';
 import { DurableEventQueue } from '../../adapters/node/event-queue.js';
@@ -59,9 +62,12 @@ export function makeNodeStack(options?: {
     return tasks.track(poll.call(this));
   };
   let runtime: NodeRuntime;
+  // Blobs go to a per-stack temp dir that close() removes, not the checkout.
+  const fileDir = mkdtempSync(join(tmpdir(), 'relaycast-conformance-files-'));
   try {
     runtime = createNodeRuntime({
       dbPath: ':memory:',
+      fileDir,
       baseUrl: 'http://localhost:0',
       migrate: true,
       config: {
@@ -100,6 +106,7 @@ export function makeNodeStack(options?: {
           runtime.close();
         } finally {
           stacks.delete(stack);
+          rmSync(fileDir, { recursive: true, force: true });
         }
       }
     })(),

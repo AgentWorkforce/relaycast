@@ -180,6 +180,9 @@ export function registerMessagingTools(
     const client = getAgentClient(workspaceRefFromArgs({ workspace_id, workspace_alias }), asIdentity);
     // Check attachments before creating the group: a bad file id would fail the
     // first message after the conversation exists, stranding it.
+    if (attachments && new Set(attachments).size !== attachments.length) {
+      throw new Error('Attachment ids must be unique; nothing was sent.');
+    }
     for (const fileId of attachments ?? []) {
       const file = await client.files.get(fileId);
       if (file.status !== 'complete') {
