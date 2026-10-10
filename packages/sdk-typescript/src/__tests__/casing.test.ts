@@ -102,4 +102,20 @@ describe('casing transforms', () => {
     expect(decamelizeKeys({ durationMs: 5 })).toEqual({ duration_ms: 5 });
     expect(camelizeKeys({ created_at: 'x' })).toEqual({ createdAt: 'x' });
   });
+
+  it('decamelizeKeys throws instead of letting one casing silently clobber the other', () => {
+    // Regression: `{ auto_join_general, autoJoinGeneral }` used to collide into
+    // a single wire key with the last-enumerated one winning silently, so
+    // which value "worked" depended on object literal order rather than being
+    // flagged as an error.
+    expect(() => decamelizeKeys({ name: 'Bot', autoJoinGeneral: false, auto_join_general: true }))
+      .toThrow(/Ambiguous request fields/);
+    expect(() => decamelizeKeys({ name: 'Bot', auto_join_general: true, autoJoinGeneral: false }))
+      .toThrow(/Ambiguous request fields/);
+  });
+
+  it('decamelizeKeys accepts either casing alone', () => {
+    expect(decamelizeKeys({ name: 'Bot', autoJoinGeneral: true })).toEqual({ name: 'Bot', auto_join_general: true });
+    expect(decamelizeKeys({ name: 'Bot', auto_join_general: true })).toEqual({ name: 'Bot', auto_join_general: true });
+  });
 });
