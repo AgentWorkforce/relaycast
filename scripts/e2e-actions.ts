@@ -7,9 +7,12 @@
  *
  *   handler agent  ──register──▶  POST /v1/actions  (ownership enforced)
  *   caller agent   ──invoke────▶  POST /v1/actions/:name/invoke  → { invocation_id, status: 'invoked' }
- *                                  (handler receives `action.invoked` over WS)
+ *                                  (`action.invoked` arrives on the workspace observer stream)
  *   handler agent  ──complete──▶  POST /v1/actions/:name/invocations/:id/complete { output }
- *                                  (caller receives `action.completed` over WS)
+ *                                  (`action.completed` arrives on the workspace observer stream)
+ *
+ * The handler's direct node stays connected so invoke can dispatch. That socket
+ * is not the event wait; action events are read from `/v1/ws`.
  *   caller agent   ──poll──────▶  GET  /v1/actions/:name/invocations/:id  → status: 'completed'
  *
  * Usage:
@@ -18,9 +21,9 @@
  */
 
 import WebSocket from 'ws';
+import { actionWaitObserverCreateBody, actionWaitWsUrl } from './action-wait-ws.js';
 
 const BASE = (process.argv.slice(2).find((a) => !a.startsWith('--')) ?? 'http://localhost:8787').replace(/\/+$/, '');
-const WS_BASE = BASE.replace(/^http/, 'ws');
 
 let passed = 0;
 let failed = 0;
@@ -61,13 +64,64 @@ async function req(
   return { status: res.status, json };
 }
 
-/** Open an agent WebSocket that records events and can wait for a given type. */
-function openAgentWs(token: string): {
+/**
+ * Keep a handler invocable. Direct-node registration is the live connection
+ * invoke checks; it does not replace the workspace observer wait.
+ */
+function connectDirectNode(node: { node_id: string; node_name: string; token: string }): Promise<{ close: () => void }> {
+  const wsBase = BASE.replace(/^http/, 'ws');
+  const ws = new WebSocket(`${wsBase}/v1/node/ws?token=${encodeURIComponent(node.token)}`);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      ws.close();
+      reject(new Error('timeout waiting for direct node.register reply'));
+    }, 5000);
+    const fail = (err: unknown) => {
+      clearTimeout(timer);
+      ws.close();
+      reject(err instanceof Error ? err : new Error(String(err)));
+    };
+    ws.on('error', fail);
+    ws.on('message', (d) => {
+      let frame: { type?: string; ok?: boolean };
+      try {
+        frame = JSON.parse(d.toString());
+      } catch (err) {
+        fail(err);
+        return;
+      }
+      if (frame.type !== 'reply') return;
+      clearTimeout(timer);
+      if (frame.ok !== true) {
+        ws.close();
+        reject(new Error(`direct node.register failed: ${d.toString()}`));
+        return;
+      }
+      resolve({ close: () => ws.close() });
+    });
+    ws.on('open', () => {
+      ws.send(JSON.stringify({
+        v: 1,
+        id: `e2e-direct-${Date.now()}`,
+        type: 'node.register',
+        node_id: node.node_id,
+        name: node.node_name,
+        capabilities: [],
+        max_agents: 1,
+        tags: ['implicit', 'direct'],
+        version: 'e2e-actions',
+      }));
+    });
+  });
+}
+
+/** Open the workspace observer stream and wait for action events on it. */
+function openObserverWs(observerToken: string): {
   ready: Promise<void>;
   waitFor: (type: string, timeoutMs?: number) => Promise<any>;
   close: () => void;
 } {
-  const ws = new WebSocket(`${WS_BASE}/v1/ws?token=${token}`);
+  const ws = new WebSocket(actionWaitWsUrl(BASE, observerToken));
   const events: any[] = [];
   const waiters: Array<{ type: string; resolve: (e: any) => void }> = [];
   ws.on('message', (d) => {
@@ -127,9 +181,21 @@ async function main(): Promise<void> {
   const caller = await mkAgent('requester');
   console.log(`  workspace=${wsName} handler=${handler.name} caller=${caller.name}\n`);
 
-  const handlerWs = openAgentWs(handler.token);
-  const callerWs = openAgentWs(caller.token);
-  await Promise.all([handlerWs.ready, callerWs.ready]);
+  const observerRes = await req('POST', '/v1/observer-tokens', {
+    token: workspaceKey,
+    body: actionWaitObserverCreateBody('actions-e2e'),
+  });
+  if (observerRes.status !== 201 || typeof observerRes.json?.data?.token !== 'string') {
+    throw new Error(`create observer token failed: ${observerRes.status}`);
+  }
+  const observerWs = openObserverWs(observerRes.json.data.token);
+  await observerWs.ready;
+
+  const nodeRes = await req('POST', '/v1/agent/node-token', { token: handler.token });
+  if (nodeRes.status !== 200 || typeof nodeRes.json?.data?.token !== 'string') {
+    throw new Error(`mint handler node token failed: ${nodeRes.status}`);
+  }
+  const handlerNode = await connectDirectNode(nodeRes.json.data);
 
   let invocationId = '';
 
@@ -185,7 +251,7 @@ async function main(): Promise<void> {
 
   // ── 5. Handler receives action.invoked over WS ──
   await test('Handler receives action.invoked over WebSocket', async () => {
-    const e = await handlerWs.waitFor('action.invoked');
+    const e = await observerWs.waitFor('action.invoked');
     const data = e.data ?? e;
     if (data.action_name !== 'deploy') throw new Error('wrong action in event');
   });
@@ -202,7 +268,7 @@ async function main(): Promise<void> {
 
   // ── 7. Caller receives action.completed over WS ──
   await test('Caller receives action.completed over WebSocket', async () => {
-    const e = await callerWs.waitFor('action.completed');
+    const e = await observerWs.waitFor('action.completed');
     const data = e.data ?? e;
     if (data.action_name !== 'deploy') throw new Error('wrong action in completion event');
   });
@@ -223,8 +289,8 @@ async function main(): Promise<void> {
     if (after.status !== 404) throw new Error(`expected 404 after delete, got ${after.status}`);
   });
 
-  handlerWs.close();
-  callerWs.close();
+  observerWs.close();
+  handlerNode.close();
 
   console.log(`\n  \x1b[1m${passed}\x1b[0m passed, ${failed > 0 ? `\x1b[31m\x1b[1m${failed}\x1b[0m` : failed} failed\n`);
   process.exit(failed > 0 ? 1 : 0);
