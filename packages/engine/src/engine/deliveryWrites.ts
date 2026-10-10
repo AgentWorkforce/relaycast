@@ -14,6 +14,7 @@ import {
   type DeliveryAudience,
   type WorkspaceDeliveryPolicy,
 } from './workspaceDeliveryPolicy.js';
+import { isRelayConnectProbePullSql } from './connectDelivery.js';
 
 type DeliveryMode = 'immediate' | 'next-tool-call';
 type ChannelDeliveryReason = 'message' | 'mention' | 'thread-reply';
@@ -106,6 +107,25 @@ function nextDeliverySeqSql() {
   // deliverySeq is normally >= deliveryAckSeq. Including the cursor keeps a
   // future/stale cumulative ACK from making the next allocation replay-hidden.
   return sql<number>`MAX(${agents.deliverySeq}, ${agents.deliveryAckSeq}) + 1`;
+}
+
+/**
+ * Snapshot the durable route for a new delivery. Relay Connect credentials are
+ * registered through the ordinary agent endpoint, which also creates a
+ * synthetic direct node. Their metadata marker overrides that incidental node:
+ * the desktop probe owns delivery through GET /deliveries.
+ */
+function deliveryRouteSql() {
+  const probePull = isRelayConnectProbePullSql(agents.metadata);
+  const nodeId = sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`;
+  return {
+    locationType: sql<string>`CASE WHEN ${probePull} THEN 'self_connected' WHEN ${agentNodeBindings.nodeId} IS NOT NULL THEN 'via_node' ELSE ${agents.locationType} END`,
+    locationNodeId: sql<string | null>`CASE WHEN ${probePull} THEN NULL ELSE ${nodeId} END`,
+    routeNodeId: sql<string | null>`CASE WHEN ${probePull} THEN NULL ELSE ${nodeId} END`,
+    routeNodeKind: sql<string | null>`CASE WHEN ${probePull} THEN NULL ELSE ${nodes.kind} END`,
+    routeNodeRole: sql<string | null>`CASE WHEN ${probePull} THEN NULL ELSE ${nodes.role} END`,
+    deliveryAdapter: sql<string | null>`CASE WHEN ${probePull} THEN NULL ELSE ${nodes.deliveryAdapter} END`,
+  };
 }
 
 /** Test live mailbox depth with indexed branches capped at the admission limit. */
@@ -207,12 +227,7 @@ export function buildChannelDeliveryWrite(
           // same agent row to this value. Allocation and high-water advancement
           // therefore happen in one SQLite statement on every adapter.
           seq: nextDeliverySeqSql(),
-          locationType: sql<string>`CASE WHEN ${agentNodeBindings.nodeId} IS NOT NULL THEN 'via_node' ELSE ${agents.locationType} END`,
-          locationNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
-          routeNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
-          routeNodeKind: nodes.kind,
-          routeNodeRole: nodes.role,
-          deliveryAdapter: nodes.deliveryAdapter,
+          ...deliveryRouteSql(),
           dispatchAttempts: sql<number>`0`,
           nextAttemptAt: sql<null>`null`,
           lastDispatchError: sql<null>`null`,
@@ -285,12 +300,7 @@ export function buildGroupDmDeliveryWrite(
           deadline: sql<null>`null`,
           status,
           seq: nextDeliverySeqSql(),
-          locationType: sql<string>`CASE WHEN ${agentNodeBindings.nodeId} IS NOT NULL THEN 'via_node' ELSE ${agents.locationType} END`,
-          locationNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
-          routeNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
-          routeNodeKind: nodes.kind,
-          routeNodeRole: nodes.role,
-          deliveryAdapter: nodes.deliveryAdapter,
+          ...deliveryRouteSql(),
           dispatchAttempts: sql<number>`0`,
           nextAttemptAt: sql<null>`null`,
           lastDispatchError: sql<null>`null`,
@@ -364,12 +374,7 @@ export function buildDirectDeliveryWrite(
           deadline: sql<null>`null`,
           status,
           seq: nextDeliverySeqSql(),
-          locationType: sql<string>`CASE WHEN ${agentNodeBindings.nodeId} IS NOT NULL THEN 'via_node' ELSE ${agents.locationType} END`,
-          locationNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
-          routeNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
-          routeNodeKind: nodes.kind,
-          routeNodeRole: nodes.role,
-          deliveryAdapter: nodes.deliveryAdapter,
+          ...deliveryRouteSql(),
           dispatchAttempts: sql<number>`0`,
           nextAttemptAt: sql<null>`null`,
           lastDispatchError: sql<null>`null`,

@@ -15,6 +15,7 @@ import { queryInChunks } from '../lib/queryChunks.js';
 import { isProviderAgentDeliveryReady, type EngineDb, type EngineDeps } from '../ports/index.js';
 import { fanoutToAgents } from './fanout.js';
 import { publishEvent, publishEventsToAgents } from '../engine/eventDispatch.js';
+import { isRelayConnectProbePullMetadata } from '../engine/connectDelivery.js';
 type HonoContext = Context<AppEnv>;
 type RoutingEngine = EngineRuntime | EngineDeps;
 type RoutingContext = {
@@ -31,6 +32,7 @@ type DeliveryTarget = {
   deliveryAdapter: string | null;
   deliveryConfig: Record<string, unknown> | null;
   providerName?: string;
+  probePull?: boolean;
 };
 
 const DISPATCH_RETRY_DELAY_MS = 30_000;
@@ -89,6 +91,7 @@ async function resolveLiveLocations(
       deliveryAdapter: nodes.deliveryAdapter,
       deliveryConfig: nodes.deliveryConfig,
       providerName: agents.providerName,
+      metadata: agents.metadata,
     })
     .from(agentNodeBindings)
     .innerJoin(agents, and(
@@ -107,6 +110,19 @@ async function resolveLiveLocations(
   const byAgent = new Map<string, DeliveryTarget>();
   for (const binding of bindings) {
     if (byAgent.has(binding.agentId)) continue;
+    if (isRelayConnectProbePullMetadata(binding.metadata)) {
+      byAgent.set(binding.agentId, {
+        locationType: 'self_connected',
+        locationNodeId: null,
+        nodeKind: null,
+        nodeRole: null,
+        deliveryAdapter: null,
+        deliveryConfig: null,
+        providerName: binding.providerName,
+        probePull: true,
+      });
+      continue;
+    }
     byAgent.set(binding.agentId, {
       locationType: 'via_node',
       locationNodeId: binding.nodeId,
@@ -128,6 +144,7 @@ async function resolveLiveLocations(
       deliveryAdapter: nodes.deliveryAdapter,
       deliveryConfig: nodes.deliveryConfig,
       providerName: agents.providerName,
+      metadata: agents.metadata,
     })
     .from(agents)
     .leftJoin(nodes, eq(agents.locationNodeId, nodes.id))
@@ -135,6 +152,19 @@ async function resolveLiveLocations(
 
   for (const row of fallbackRows) {
     if (byAgent.has(row.id)) continue;
+    if (isRelayConnectProbePullMetadata(row.metadata)) {
+      byAgent.set(row.id, {
+        locationType: 'self_connected',
+        locationNodeId: null,
+        nodeKind: null,
+        nodeRole: null,
+        deliveryAdapter: null,
+        deliveryConfig: null,
+        providerName: row.providerName,
+        probePull: true,
+      });
+      continue;
+    }
     byAgent.set(row.id, {
       locationType: row.locationType,
       locationNodeId: row.locationNodeId,
@@ -206,6 +236,34 @@ async function recordDispatchRetry(
       ...(opts.incrementAttempts ? { dispatchAttempts: sql`coalesce(${deliveryRows.dispatchAttempts}, 0) + 1` } : {}),
       lastDispatchError: error,
       nextAttemptAt: new Date(Date.now() + DISPATCH_RETRY_DELAY_MS),
+      updatedAt: new Date(),
+    })
+    .where(and(
+      eq(deliveryRows.workspaceId, ctx.workspaceId),
+      eq(deliveryRows.id, deliveryId),
+      eq(deliveryRows.status, 'queued'),
+    ));
+}
+
+/**
+ * Remove a stale node snapshot without erasing the failed node attempt. The
+ * queued row remains visible to GET /deliveries, where the Connect probe owns
+ * acknowledgment and local handoff.
+ */
+async function normalizeProbePullDelivery(
+  ctx: RoutingContext,
+  deliveryId: string,
+): Promise<void> {
+  await ctx.db
+    .update(deliveryRows)
+    .set({
+      locationType: 'self_connected',
+      locationNodeId: null,
+      routeNodeId: null,
+      routeNodeKind: null,
+      routeNodeRole: null,
+      deliveryAdapter: null,
+      nextAttemptAt: null,
       updatedAt: new Date(),
     })
     .where(and(
@@ -372,9 +430,11 @@ async function dispatchHttpPush(args: {
  * - `deferred`: the row stayed queued and was stamped for a later retry (a
  *   readiness skip or a failed live send). An ordered ws redrive stops its
  *   agent's backlog here so a later seq never outruns this one.
+ * - `probe_pull`: the row stayed queued but its stale node snapshot was removed;
+ *   an ordered redrive can continue normalizing the rest of this pull mailbox.
  * - `noop`: no realtime target remained (legacy/unbound row); nothing to do.
  */
-type DeliveryDispatchOutcome = 'delivered' | 'deferred' | 'noop';
+type DeliveryDispatchOutcome = 'delivered' | 'deferred' | 'probe_pull' | 'noop';
 
 async function routeOneDeliveryOutcome(
   ctx: RoutingContext,
@@ -386,6 +446,10 @@ async function routeOneDeliveryOutcome(
 ): Promise<DeliveryDispatchOutcome> {
   const recordedTarget = recordedTargets.get(delivery.id);
   const liveLocation = liveLocations.get(delivery.agentId);
+  if (liveLocation?.probePull) {
+    await normalizeProbePullDelivery(ctx, delivery.id);
+    return 'probe_pull';
+  }
   const target = recordedTarget ?? liveLocation;
   const locationType = target?.locationType ?? delivery.locationType;
   const locationNodeId = target?.locationNodeId ?? delivery.locationNodeId;
@@ -530,7 +594,7 @@ async function redriveWsBacklogForAgent(
       event.eventType,
       event.eventData,
     );
-    if (outcome !== 'delivered') break;
+    if (outcome !== 'delivered' && outcome !== 'probe_pull') break;
   }
 }
 

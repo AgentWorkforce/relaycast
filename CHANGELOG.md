@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Relay Connect participants stay on the desktop probe's pull delivery path even when their standard registration creates, claims, or reconnects a WebSocket node; previously the incidental node route could dispatch or replay over the socket and leave misleading node routing metadata on the queued delivery.
 
 ## [9.2.0] - 2026-10-09
 
