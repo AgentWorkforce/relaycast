@@ -409,6 +409,7 @@ export async function listAgents(db: Db, workspaceId: string, status?: string) {
     capabilities: a.capabilities ?? null,
     created_at: a.createdAt.toISOString(),
     last_seen: a.lastSeen.toISOString(),
+    spawned_by: a.spawnedBy ?? null,
     metadata: a.metadata,
   }));
 }
@@ -494,6 +495,7 @@ export async function getAgentByName(db: Db, workspaceId: string, name: string) 
     capabilities: agent.capabilities ?? null,
     created_at: agent.createdAt.toISOString(),
     last_seen: agent.lastSeen.toISOString(),
+    spawned_by: agent.spawnedBy ?? null,
     metadata: agent.metadata,
     channels: memberships.map((m) => ({
       id: m.channelId,
@@ -612,6 +614,7 @@ export async function updateAgentById(
     capabilities: updated.capabilities ?? null,
     created_at: updated.createdAt.toISOString(),
     last_seen: updated.lastSeen.toISOString(),
+    spawned_by: updated.spawnedBy ?? null,
     metadata: updated.metadata,
   };
 }
@@ -665,6 +668,7 @@ export async function claimLegacyAgentIdentity(
     capabilities: updated.capabilities ?? null,
     created_at: updated.createdAt.toISOString(),
     last_seen: updated.lastSeen.toISOString(),
+    spawned_by: updated.spawnedBy ?? null,
     metadata: updated.metadata,
   };
 }
