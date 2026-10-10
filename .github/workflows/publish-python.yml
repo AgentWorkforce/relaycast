@@ -175,7 +175,7 @@ jobs:
       # A rejected main update leaves that tag on the uploaded commit.
       - name: Tag published commit
         id: tag
-        if: github.ref == 'refs/heads/main' && github.event.inputs.dry_run != 'true'
+        if: github.ref == 'refs/heads/main' && github.event.inputs.dry_run != 'true' && steps.publish.outcome == 'success'
         working-directory: ${{ github.workspace }}
         env:
           NEW_VERSION: ${{ steps.bump.outputs.new_version }}

@@ -412,7 +412,9 @@ describe("python publish workflow contract", () => {
     const tagAt = workflow.indexOf("python-publish-record.mjs tag");
     const branchAt = workflow.indexOf("python-publish-record.mjs push-main");
     const summaryAt = workflow.indexOf("python-publish-record.mjs summary");
+    const publishGate = workflow.indexOf("steps.publish.outcome == 'success'");
     assert.ok(tagAt > 0 && branchAt > tagAt && summaryAt > branchAt);
+    assert.ok(publishGate > 0 && publishGate < tagAt);
     assert.doesNotMatch(workflow, /git rebase/);
     assert.doesNotMatch(workflow, /HEAD:main/);
     assert.doesNotMatch(workflow, /Published to PyPI and created tag/);
