@@ -10,6 +10,7 @@ import type {
 } from '../../ports/realtime.js';
 import type { ObserverToken } from '../../ports/auth.js';
 import { and, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
+import { exclusiveClaimWrite, retryAfterAtMatches } from '../../engine/invocationClaim.js';
 import type { EngineDb } from '../../ports/database.js';
 import {
   actions,
@@ -425,23 +426,35 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       return false;
     }
     // The socket owner commits the exact action generation, delivery route,
-    // and accepted attempt in one CAS before handing off the frame. Only a
-    // still-pending row can win, so a second scheduler does not send. Deleting
+    // and accepted attempt in one CAS before handing off the frame. The claim
+    // matches the observed status, deadline, and attempt count, so a
+    // dispatched timeout retry can win and a second scheduler cannot. Deleting
     // the action immediately after this point may clear action_id via the FK,
     // but cannot make cleanup fail or reroute work that the handler owns.
+    const claimStatus = authorization.claimStatus ?? 'pending';
+    const observedRetryAfterAt = authorization.observedRetryAfterAt ?? null;
+    const observedDispatchAttempts = authorization.observedDispatchAttempts ?? 0;
+    const pendingClaim = authorization.pending === true;
+    const claimWrite = exclusiveClaimWrite({
+      observedStatus: claimStatus,
+      observedRetryAfterAt,
+      observedDispatchAttempts,
+      nextStatus: pendingClaim ? 'pending' : 'dispatched',
+      nextRetryAfterAt: authorization.retryAfterAt ?? null,
+      incrementAttempts: authorization.recordAttempt,
+    });
     const acceptedAttempt = authorization.recordAttempt
       ? sql`COALESCE(${actionInvocations.dispatchAttempts}, 0) + 1`
       : actionInvocations.dispatchAttempts;
-    const pendingClaim = authorization.pending === true;
     const [accepted] = await this.db
       .update(actionInvocations)
       .set({
         ...(pendingClaim
-          ? { status: 'pending' as const, dispatchedAt: null, retryAfterAt: authorization.retryAfterAt ?? null }
+          ? { status: 'pending' as const, dispatchedAt: null, retryAfterAt: claimWrite.retryAfterAt }
           : {
             status: 'dispatched' as const,
             dispatchedAt: new Date(),
-            retryAfterAt: authorization.retryAfterAt ?? null,
+            retryAfterAt: claimWrite.retryAfterAt,
           }),
         handlerNodeId: sql`COALESCE(${actionInvocations.handlerNodeId}, ${nodeId})`,
         dispatchedNodeId: nodeId,
@@ -459,7 +472,9 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
         eq(actionInvocations.invocationOrigin, 'registered_action'),
         eq(actionInvocations.actionId, authorization.actionId),
         eq(actionInvocations.actionName, message.action),
-        eq(actionInvocations.status, 'pending'),
+        eq(actionInvocations.status, claimStatus),
+        retryAfterAtMatches(observedRetryAfterAt),
+        eq(actionInvocations.dispatchAttempts, observedDispatchAttempts),
         eq(actionInvocations.handlerAgentId, authorization.handlerAgentId),
         eq(actionInvocations.handlerNodeId, nodeId),
         sql`EXISTS (
