@@ -7,11 +7,16 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
+
+### Added
+
+- `EngineConfig.mailbox.offlineExcludeMs` (and the matching per-workspace override) bounds how long a continuously-offline agent keeps receiving new channel/group-DM broadcast deliveries before fanout excludes it; defaults to 24h.
 
 ### Fixed
 
 - Delivery routing treats agents with `metadata.source = "cloud-relay-connect"` as probe-pulled even when normal registration, a later claim, or reconnect replay gives them an active `ws.node.v1` binding. New rows omit node routing, reconnect replay excludes them (including after a mid-replay handoff), and redrive rewrites queued legacy rows to `self_connected` without erasing the prior dispatch attempt or error.
+- `buildChannelDeliveryWrite`/`buildGroupDmDeliveryWrite` no longer insert a new delivery row for a recipient that has been offline past `offlineExcludeMs`, so a handful of dead agents can no longer exhaust a workspace's shared delivery-depth cap across repeated broadcasts. `DeliveryRejectionRecord.reason` gained `recipient_offline` alongside `depth_cap` to report the exclusion.
 
 ## [9.2.0] - 2026-10-09
 

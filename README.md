@@ -1304,6 +1304,14 @@ and `Retry-After: 30`; a required recipient's full mailbox remains `mailbox_full
 (503). Reserves are carved out of the configured cap. Completed idempotent replays
 and operations that create no active delivery rows remain available at capacity.
 
+Channel and group-DM broadcasts never charge a new delivery to a recipient that
+has been continuously offline longer than `EngineConfig.mailbox.offlineExcludeMs`
+(default 24h, configurable globally or per workspace). A dead agent otherwise sits
+under its own per-recipient `depthCap` indefinitely while every subsequent
+broadcast keeps charging it a fresh row, draining the shared workspace cap into
+mailboxes nobody will read. Direct messages still target their explicit recipient
+regardless of offline duration.
+
 Outbound A2A DMs commit accepted egress with their guarded message before transport.
 Keep the same `Idempotency-Key` when retrying a transport failure: the admitted
 message can resume even when capacity is full. Engine adapters must apply migration

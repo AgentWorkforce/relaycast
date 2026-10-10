@@ -11,7 +11,7 @@ import {
   type DeliveryOutcomeRecords,
 } from './deliveryWrites.js';
 import { displayAgentName, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
-import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
+import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS, type MailboxConfig } from './mailboxConfig.js';
 import type { WorkspaceDeliveryPolicy } from './workspaceDeliveryPolicy.js';
 import { fetchAttachmentsBatch, resolveSendAttachments, type AttachmentRow } from './attachments.js';
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
@@ -45,6 +45,7 @@ export async function postMessage(
   const mailbox = options.mailbox ?? {
     ttlMs: DEFAULT_MAILBOX_TTL_MS,
     depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
+    offlineExcludeMs: DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS,
   };
 
   const [attachments, [agent]] = await Promise.all([
@@ -101,6 +102,7 @@ export async function postMessage(
         mode: data.mode === 'steer' ? 'next-tool-call' : 'immediate',
         ttlMs: mailbox.ttlMs,
         depthCap: mailbox.depthCap,
+        offlineExcludeMs: mailbox.offlineExcludeMs,
         mentionHandles: Array.from(mentionedHandles),
         workspacePolicy: options.workspaceDeliveryPolicy,
       }),
@@ -133,6 +135,7 @@ export async function postMessage(
     channelId,
     senderAgentId: agentId,
     mentionHandles: Array.from(mentionedHandles),
+    offlineExcludeMs: mailbox.offlineExcludeMs,
   });
 
   return {

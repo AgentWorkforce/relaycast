@@ -1838,7 +1838,7 @@ describe('durable delivery api', () => {
       channelId,
       alice.agentId,
       { text: 'reroute me' },
-      { mailbox: { ttlMs: 60_000, depthCap: 1_000 } },
+      { mailbox: { ttlMs: 60_000, depthCap: 1_000, offlineExcludeMs: 24 * 60 * 60 * 1000 } },
     );
 
     expect(result._deliveries).toHaveLength(1);
