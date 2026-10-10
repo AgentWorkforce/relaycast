@@ -633,6 +633,7 @@ export interface ConsoleCostStats {
 export type ActivityItem = Camelize<Raw.ActivityItem>;
 export type Agent = Camelize<Raw.Agent>;
 export type AgentListQuery = Camelize<Raw.AgentListQuery>;
+export type AgentExitedEvent = Camelize<Raw.AgentExitedEvent>;
 export type AgentStatusActiveEvent = Camelize<Raw.AgentStatusActiveEvent>;
 export type AgentStatusBlockedEvent = Camelize<Raw.AgentStatusBlockedEvent>;
 export type AgentStatusChangedEvent = Camelize<Raw.AgentStatusChangedEvent>;
@@ -688,6 +689,8 @@ export type MemberLeftEvent = Camelize<Raw.MemberLeftEvent>;
 export type ChannelMutedEvent = Camelize<Raw.ChannelMutedEvent>;
 export type ChannelUnmutedEvent = Camelize<Raw.ChannelUnmutedEvent>;
 export type MuteChannelResponse = Camelize<Raw.MuteChannelResponse>;
+export type NodeStatusOnlineEvent = Camelize<Raw.NodeStatusOnlineEvent>;
+export type NodeStatusOfflineEvent = Camelize<Raw.NodeStatusOfflineEvent>;
 export type MessageBlock = Camelize<Raw.MessageBlock>;
 export type MessageCreatedEvent = Camelize<Raw.MessageCreatedEvent>;
 export type MessageListQuery = Camelize<Raw.MessageListQuery>;

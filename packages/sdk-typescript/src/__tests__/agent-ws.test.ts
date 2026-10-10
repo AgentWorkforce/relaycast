@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentClient, type AgentClientOptions } from '../agent.js';
 import { stableRelaycastEventId } from '../event-id.js';
 import { HttpClient } from '../client.js';
+import type { AgentExitedEvent, NodeStatusOfflineEvent, NodeStatusOnlineEvent } from '../types.js';
 
 class MockWebSocket {
   static readonly OPEN = 1;
@@ -358,6 +359,66 @@ describe('AgentClient WebSocket integration', () => {
     expect(handler).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'channel.created' }),
     );
+  });
+
+  it('on.agentExited camelizes a real captured agent.exited frame', async () => {
+    const agent = createAgent();
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+
+    let received: AgentExitedEvent | undefined;
+    agent.on.agentExited((event) => {
+      received = event;
+    });
+
+    // Real wire shape: the engine's wsTransform.ts emits snake_case fields
+    // matching AgentExitedEventSchema in @relaycast/types.
+    ws.simulateMessage({
+      type: 'agent.exited',
+      agent_id: 'agt_01J7FLEET000000000000101',
+      agent_name: 'claude-worker-7',
+      node_id: 'node_1',
+      invocation_id: null,
+      reason: 'deregistered',
+    });
+
+    expect(received).toEqual({
+      type: 'agent.exited',
+      agentId: 'agt_01J7FLEET000000000000101',
+      agentName: 'claude-worker-7',
+      nodeId: 'node_1',
+      invocationId: null,
+      reason: 'deregistered',
+    });
+  });
+
+  it('on.nodeOnline/on.nodeOffline camelize real captured node.status frames', async () => {
+    const agent = createAgent();
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+
+    let online: NodeStatusOnlineEvent | undefined;
+    let offline: NodeStatusOfflineEvent | undefined;
+    agent.on.nodeOnline((event) => { online = event; });
+    agent.on.nodeOffline((event) => { offline = event; });
+
+    ws.simulateMessage({ type: 'node.status.online', node_id: 'node_1', node_name: 'builder-1' });
+    ws.simulateMessage({
+      type: 'node.status.offline',
+      node_id: 'node_1',
+      node_name: 'builder-1',
+      reason: 'liveness_timeout',
+    });
+
+    expect(online).toEqual({ type: 'node.status.online', nodeId: 'node_1', nodeName: 'builder-1' });
+    expect(offline).toEqual({
+      type: 'node.status.offline',
+      nodeId: 'node_1',
+      nodeName: 'builder-1',
+      reason: 'liveness_timeout',
+    });
   });
 
   // --- subscribe / unsubscribe proxy ---

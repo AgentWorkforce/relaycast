@@ -12,6 +12,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Fixed
 
 - `agent.on.*` no longer throws when registered before `connect()`; handlers attach immediately and fire once the socket opens.
+- `agent.exited`, `node.status.online`, and `node.status.offline` WebSocket events now have camelCase SDK types (`AgentExitedEvent`, `NodeStatusOnlineEvent`, `NodeStatusOfflineEvent`) and `on.agentExited`/`on.nodeOnline`/`on.nodeOffline` handlers. Previously these events had no SDK type at all, so consumers reached for the snake_case raw type exported by `@relaycast/types` — which type-checked but silently read `undefined` against the camelized payload the client actually delivers.
 
 ## [9.1.0] - 2026-10-08
 
