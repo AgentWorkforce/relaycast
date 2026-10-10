@@ -12,6 +12,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Fixed
 
 - A message trigger cannot invoke builtin `release`.
+- Overlapping dispatch of a pending spawn sends one frame and keeps one node capacity reservation.
 
 ## [9.2.0] - 2026-10-09
 

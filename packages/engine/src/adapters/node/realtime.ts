@@ -425,22 +425,29 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       return false;
     }
     // The socket owner commits the exact action generation, delivery route,
-    // and accepted attempt in one CAS before handing off the frame. Deleting
+    // and accepted attempt in one CAS before handing off the frame. Only a
+    // still-pending row can win, so a second scheduler does not send. Deleting
     // the action immediately after this point may clear action_id via the FK,
     // but cannot make cleanup fail or reroute work that the handler owns.
     const acceptedAttempt = authorization.recordAttempt
       ? sql`COALESCE(${actionInvocations.dispatchAttempts}, 0) + 1`
       : actionInvocations.dispatchAttempts;
+    const pendingClaim = authorization.pending === true;
     const [accepted] = await this.db
       .update(actionInvocations)
       .set({
-        status: 'dispatched',
+        ...(pendingClaim
+          ? { status: 'pending' as const, dispatchedAt: null, retryAfterAt: authorization.retryAfterAt ?? null }
+          : {
+            status: 'dispatched' as const,
+            dispatchedAt: new Date(),
+            retryAfterAt: authorization.retryAfterAt ?? null,
+          }),
         handlerNodeId: sql`COALESCE(${actionInvocations.handlerNodeId}, ${nodeId})`,
         dispatchedNodeId: nodeId,
         dispatchedProvider: providerName,
-        dispatchedAt: new Date(),
-        retryAfterAt: null,
         providerAcceptedAttempt: acceptedAttempt,
+        spawnReservedAt: authorization.reservationHeld ? new Date() : null,
         ...(authorization.recordAttempt ? {
           attemptedNodeIds: sql`json_insert(COALESCE(${actionInvocations.attemptedNodeIds}, '[]'), '$[#]', ${nodeId})`,
           dispatchAttempts: acceptedAttempt,
@@ -452,7 +459,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
         eq(actionInvocations.invocationOrigin, 'registered_action'),
         eq(actionInvocations.actionId, authorization.actionId),
         eq(actionInvocations.actionName, message.action),
-        inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked']),
+        eq(actionInvocations.status, 'pending'),
         eq(actionInvocations.handlerAgentId, authorization.handlerAgentId),
         eq(actionInvocations.handlerNodeId, nodeId),
         sql`EXISTS (
