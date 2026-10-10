@@ -1,6 +1,6 @@
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 import { AGENT_TOKEN_HASH_PATTERN, AgentTypeSchema, CliTypeSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { requireWorkspaceKey, requireAuth, requireAgentToken, requireSender, requireWorkspaceRead } from '../middleware/auth.js';
@@ -191,6 +191,41 @@ async function identityTargetByName(db: EngineDb, workspaceId: string, name: str
 
 function agentNotFound(c: Parameters<typeof jsonNotFound>[0], name: string) {
   return jsonNotFound(c, 'agent_not_found', `Agent "${name}" not found`);
+}
+
+/**
+ * The live agent id behind `name`, or a 403 when an agent token may not manage
+ * it. The id is what the write must use: a released tombstone frees the name,
+ * so authorizing by name and looking the name up again can hit a replacement.
+ * A missing or already-released name returns a null id and the route answers
+ * not-found. Workspace keys and node tokens are not restricted here.
+ */
+async function authorizeLiveAgentTarget(
+  c: Context<AppEnv>,
+  name: string,
+  options: { allowSelf: boolean },
+): Promise<{ response: Response } | { agentId: string | null }> {
+  const [target] = await c.get('db')
+    .select({ id: agents.id, spawnedBy: agents.spawnedBy })
+    .from(agents)
+    .where(and(
+      eq(agents.workspaceId, c.get('workspace').id),
+      eq(agents.name, name),
+      ne(agents.status, agentEngine.RELEASED_AGENT_STATUS),
+    ));
+  if (!target) return { agentId: null };
+  const caller = c.get('agent');
+  if (caller && target.spawnedBy !== caller.id && !(options.allowSelf && target.id === caller.id)) {
+    return {
+      response: jsonError(
+        c,
+        'agent_not_spawned_by_caller',
+        `Agent "${name}" was not spawned by this agent; managing it requires a workspace key`,
+        403,
+      ),
+    };
+  }
+  return { agentId: target.id };
 }
 
 /** Fan an agent status change out to the workspace stream, presence-observing nodes, and webhooks. */
@@ -564,7 +599,7 @@ agentRoutes.post(
   },
 );
 
-// GET /v1/agents - list agents
+// GET /v1/agents - list agents (workspace key, agent token, or scoped observer token)
 const AGENT_NAME_LOOKUP_MAX = 100;
 
 /**
@@ -593,7 +628,7 @@ const agentListQuerySchema = z.object({
 
 agentRoutes.get(
   '/agents',
-  requireWorkspaceRead('agents:read', { allowAgent: false, allowNode: false }),
+  requireWorkspaceRead('agents:read', { allowNode: false }),
   rateLimit,
   async (c) => {
     try {
@@ -627,10 +662,10 @@ agentRoutes.get(
   },
 );
 
-// GET /v1/agents/:name - get agent by name
+// GET /v1/agents/:name - get agent by name (workspace key, agent token, or scoped observer token)
 agentRoutes.get(
   '/agents/:name',
-  requireWorkspaceRead('agents:read', { allowAgent: false, allowNode: false }),
+  requireWorkspaceRead('agents:read', { allowNode: false }),
   rateLimit,
   async (c) => {
     try {
@@ -797,17 +832,19 @@ agentRoutes.patch(
   },
 );
 
-// DELETE /v1/agents/:name - delete agent
+// DELETE /v1/agents/:name - delete agent (an agent token may delete only agents it spawned)
 agentRoutes.delete(
   '/agents/:name',
-  requireWorkspaceKey,
+  requireAuth,
   rateLimit,
   async (c) => {
     try {
       const db = c.get('db');
       const workspace = c.get('workspace');
       const name = c.req.param('name');
-      const deleted = await agentEngine.deleteAgent(db, workspace.id, name);
+      const auth = await authorizeLiveAgentTarget(c, name, { allowSelf: false });
+      if ('response' in auth) return auth.response;
+      const deleted = await agentEngine.deleteAgent(db, workspace.id, name, auth.agentId ?? undefined);
       if (!deleted) {
         return agentNotFound(c, name);
       }
@@ -1051,7 +1088,8 @@ agentRoutes.get(
   },
 );
 
-// POST /v1/agents/release - request a node to release an agent
+// POST /v1/agents/release - request a node to release an agent (an agent token
+// may release itself or agents it spawned)
 agentRoutes.post(
   '/agents/release',
   requireAuth,
@@ -1067,12 +1105,17 @@ agentRoutes.post(
         return parsed.response;
       }
       const { name, reason, delete_agent, expected_token_hash } = parsed.data;
+      const auth = await authorizeLiveAgentTarget(c, name, { allowSelf: true });
+      if ('response' in auth) return auth.response;
 
       const input = {
         name,
         reason: reason ?? null,
         delete_agent: delete_agent === true,
         ...(expected_token_hash ? { expected_token_hash } : {}),
+        // Bind the write to the row just authorized. Dispatch looks this id up
+        // again; a same-name replacement does not match it.
+        ...(auth.agentId ? { expected_agent_id: auth.agentId } : {}),
       };
       const result = await actionEngine.dispatchAgentRelease(
         db,
@@ -1138,6 +1181,9 @@ agentRoutes.post(
       if (callerAgent?.id === parsed.data.expected_agent_id && parsed.data.delete_agent === true) {
         return jsonError(c, 'agent_self_release_requires_workspace_key', 'Self-release with delete_agent requires a workspace or node credential', 400);
       }
+      // Ownership is enforced inside dispatch, after the stored exact-release
+      // result is replayed. Checking the live name here would 403 a retry once
+      // that name belongs to someone else.
 
       const result = await actionEngine.dispatchAgentRelease(
         db,

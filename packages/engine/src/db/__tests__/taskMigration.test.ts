@@ -45,6 +45,7 @@ it('upgrades existing actions and results additively, preserving rows and every 
       '0079_credential_upgrades.sql',
       '0080_nodes_context_reachable_index.sql',
       '0082_pending_events_settled_retention.sql',
+      '0083_agent_spawned_by.sql',
     ]);
     for (const table of before) {
       const columns = db.pragma(`table_info(${table.name})`) as { name: string }[];

@@ -84,6 +84,7 @@ describe('message triggers cannot invoke builtin release', () => {
     const ws = await createWorkspace(stack.app, 'action-release-still');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'action-victim');
+    await stack.runtime.deps.db.update(agents).set({ spawnedBy: caller.agentId }).where(eq(agents.id, target.agentId));
 
     const response = await stack.app.request('/v1/actions/release/invoke', {
       method: 'POST',

@@ -520,6 +520,7 @@ export async function listAgents(
         capabilities: agents.capabilities,
         createdAt: agents.createdAt,
         lastSeen: agents.lastSeen,
+        spawnedBy: agents.spawnedBy,
         // Installed desktop clients need provider/host/session metadata. Keep
         // it by default; lean callers avoid reading or decoding the JSON blob.
         metadata: options.includeMetadata === false
@@ -546,6 +547,7 @@ export async function listAgents(
     capabilities: a.capabilities ?? null,
     created_at: a.createdAt.toISOString(),
     last_seen: a.lastSeen.toISOString(),
+    spawned_by: a.spawnedBy ?? null,
     metadata: a.metadata,
   })).filter(a => (!requestedStatus || requestedStatus === 'all' || a.status === requestedStatus)
     && !(nodeLivenessAuthority(db) && (!requestedStatus || requestedStatus === 'all')
@@ -611,6 +613,7 @@ export async function getAgentByName(db: Db, workspaceId: string, name: string) 
     capabilities: agent.capabilities ?? null,
     created_at: agent.createdAt.toISOString(),
     last_seen: agent.lastSeen.toISOString(),
+    spawned_by: agent.spawnedBy ?? null,
     metadata: agent.metadata,
     // The node whose authenticated socket registered this agent; set once by
     // the server and never patchable, unlike metadata.fleet. An agent
@@ -731,6 +734,7 @@ export async function updateAgentById(
     capabilities: updated.capabilities ?? null,
     created_at: updated.createdAt.toISOString(),
     last_seen: updated.lastSeen.toISOString(),
+    spawned_by: updated.spawnedBy ?? null,
     metadata: updated.metadata,
   };
 }
@@ -784,15 +788,24 @@ export async function claimLegacyAgentIdentity(
     capabilities: updated.capabilities ?? null,
     created_at: updated.createdAt.toISOString(),
     last_seen: updated.lastSeen.toISOString(),
+    spawned_by: updated.spawnedBy ?? null,
     metadata: updated.metadata,
   };
 }
 
-export async function deleteAgent(db: Db, workspaceId: string, name: string) {
+export async function deleteAgent(db: Db, workspaceId: string, name: string, expectedAgentId?: string) {
+  // Name plus the authorized id. A tombstone frees the name; selecting by name
+  // alone would tombstone whoever registered the replacement.
+  const liveIdentity = and(
+    eq(agents.workspaceId, workspaceId),
+    eq(agents.name, name),
+    ne(agents.status, RELEASED_AGENT_STATUS),
+    ...(expectedAgentId ? [eq(agents.id, expectedAgentId)] : []),
+  );
   const [agent] = await db
     .select()
     .from(agents)
-    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, name)));
+    .where(liveIdentity);
 
   if (!agent) return false;
 
@@ -840,7 +853,11 @@ export async function deleteAgent(db: Db, workspaceId: string, name: string) {
           },
         })})`,
       })
-      .where(eq(agents.id, agent.id)));
+      .where(and(
+        eq(agents.id, agent.id),
+        eq(agents.name, name),
+        ne(agents.status, RELEASED_AGENT_STATUS),
+      )));
     // `channel_members` and `dm_participants` cascade on DELETE; an UPDATE does
     // not fire that cascade, so a released agent would stay a delivery target.
     writes.push(writeDb.delete(channelMembers).where(eq(channelMembers.agentId, agent.id)).returning({ channelId: channelMembers.channelId }));

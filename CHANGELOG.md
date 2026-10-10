@@ -18,6 +18,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
+- Agent tokens can read the roster (`GET /v1/agents`, `GET /v1/agents/:name`) and the fleet, and can release or delete agents they spawned (`spawned_by`), including builtin `POST /v1/actions/release/invoke`. Release and delete are pinned to the authorized agent id. An exact-release retry replays the stored result for that key and `expected_agent_id` when the name has been reused. Workspace keys stay unrestricted, and an agent may still release itself.
 - Prevent stalled webhook delivery attempts from overwriting a newer attempt’s status or retry deadline after their lease is reclaimed.
 
 - A sender can follow its message. `POST /v1/dm` answers with `delivery: { id, status, expires_at } | null` and `POST /v1/channels/:name/messages` with `deliveries: [{ id, agent_id, status, expires_at }]` (first 50, plus `deliveries_truncated`). The sender then receives `delivery.delivered` when a row reaches the recipient's socket or push endpoint and the new `delivery.acked` when the recipient acks it (REST ack, node cumulative ack, or `http_push` `on_2xx` / `response`), each with the recipient's `agent_id` / `agent_name`, `status` and `at`. `GET /v1/messages/:id/deliveries` lists every recipient's delivery and read state (`read_at`) for a message the caller sent; a workspace key or an admitted observer reads any message. Recipient-side events are unchanged.

@@ -845,6 +845,12 @@ export const ACTOR_MIGRATIONS: readonly (readonly [string, readonly string[]])[]
     [
       "CREATE INDEX IF NOT EXISTS idx_pending_events_settled_retention\n  ON pending_events(status, completed_at, id)"
     ]
+  ],
+  [
+    "0083_agent_spawned_by.sql",
+    [
+      "ALTER TABLE agents ADD COLUMN spawned_by TEXT"
+    ]
   ]
 ];
 

@@ -185,6 +185,9 @@ export const agents = sqliteTable(
     // Offline settlement uses this instead of second-resolution timestamps so
     // a same-second re-registration cannot be mistaken for pre-claim state.
     nodeLivenessRevision: integer('node_liveness_revision').notNull().default(0),
+    // Id of the agent whose spawn invocation created this one (migration 0083).
+    // Grants that agent release/delete rights over it; NULL when unowned.
+    spawnedBy: text('spawned_by'),
   },
   (table) => [
     uniqueIndex('agents_workspace_name_unique').on(table.workspaceId, table.name),

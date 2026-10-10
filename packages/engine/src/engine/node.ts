@@ -2479,6 +2479,47 @@ export async function listNodeAgents(db: Db, workspaceId: string, nodeName: stri
   return rows.map(serializeBinding);
 }
 
+/**
+ * The agent that invoked the spawn this registration answers.
+ * Only an open, unused reservation counts — the same status, `spawn_reserved_at`,
+ * node, provider, action, and input-name bar as `reserveNodeAgentSlotStatement` —
+ * and no agent row, including a released tombstone, already stores this
+ * invocation id. Release does not close the spawn row, so a historical
+ * invocation must not attribute the next agent that reuses the name.
+ * NULL when the spawn came from a workspace key or node, or is not correlated.
+ */
+async function spawnInvocationCaller(
+  db: Db,
+  workspaceId: string,
+  registration: { invocationId?: string; nodeId: string; providerName: string; agentName: string },
+): Promise<string | null> {
+  if (!registration.invocationId) return null;
+  const [row] = await db
+    .select({ callerId: actionInvocations.callerId })
+    .from(actionInvocations)
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.id, registration.invocationId),
+      inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked']),
+      isNotNull(actionInvocations.spawnReservedAt),
+      eq(actionInvocations.dispatchedNodeId, registration.nodeId),
+      eq(actionInvocations.dispatchedProvider, registration.providerName),
+      or(
+        eq(actionInvocations.actionName, 'spawn'),
+        sql`${actionInvocations.actionName} LIKE 'spawn:%'`,
+      ),
+      sql`json_extract(${actionInvocations.input}, '$.name') = ${registration.agentName}`,
+      notExists(db
+        .select({ id: agents.id })
+        .from(agents)
+        .where(and(
+          eq(agents.workspaceId, workspaceId),
+          sql`json_extract(${agents.metadata}, '$.fleet.invocation_id') = ${registration.invocationId}`,
+        ))),
+    ));
+  return row?.callerId ?? null;
+}
+
 export async function registerAgentViaNode(
   db: Db,
   workspaceId: string,
@@ -2598,6 +2639,12 @@ export async function registerAgentViaNode(
     }
     const [generalChannel] = channelRows;
 
+    const spawnedBy = await spawnInvocationCaller(tx, workspaceId, {
+      invocationId: message.invocation_id,
+      nodeId,
+      providerName,
+      agentName: message.name,
+    });
     const token = await issueCredential(db, 'agent', workspaceId);
     const tokenHash = await sha256Hex(token);
     const now = new Date().toISOString();
@@ -2659,6 +2706,7 @@ export async function registerAgentViaNode(
             originNodeId: nodeId,
             resumable: message.resumable ?? false,
             sessionRef: message.session_ref ?? null,
+            spawnedBy,
           })
           .onConflictDoNothing({ target: [agents.workspaceId, agents.name] })
           .returning(),
