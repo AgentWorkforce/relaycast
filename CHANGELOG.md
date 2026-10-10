@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Python publish tags the uploaded commit before it updates main, and the job summary reports each step from its own outcome.
 
 ## [9.2.0] - 2026-10-09
 

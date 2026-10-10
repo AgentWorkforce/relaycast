@@ -165,31 +165,35 @@ jobs:
         run: uvx twine check dist/*
 
       - name: Publish to PyPI
+        id: publish
         if: github.ref == 'refs/heads/main' && github.event.inputs.dry_run != 'true'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: packages/sdk-python/dist
 
-      - name: Commit and tag
+      # Record the uploaded commit on its tag before updating main.
+      # A rejected main update leaves that tag on the uploaded commit.
+      - name: Tag published commit
+        id: tag
         if: github.ref == 'refs/heads/main' && github.event.inputs.dry_run != 'true'
         working-directory: ${{ github.workspace }}
-        run: |
-          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
+        env:
+          NEW_VERSION: ${{ steps.bump.outputs.new_version }}
+        run: node scripts/python-publish-record.mjs tag
 
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
-
-          git add packages/sdk-python/pyproject.toml packages/sdk-python/uv.lock packages/sdk-python/src/relay_sdk/client.py
-          if ! git diff --staged --quiet; then
-            git commit -m "chore(sdk-python): v${NEW_VERSION}"
-            git push origin HEAD:main
-          fi
-
-          git tag -a "sdk-python-v${NEW_VERSION}" -m "sdk-python v${NEW_VERSION}"
-          git push origin "sdk-python-v${NEW_VERSION}"
+      - name: Update main
+        id: branch
+        if: github.ref == 'refs/heads/main' && github.event.inputs.dry_run != 'true' && steps.tag.outcome == 'success'
+        working-directory: ${{ github.workspace }}
+        run: node scripts/python-publish-record.mjs push-main
 
       - name: Create GitHub Release
-        if: github.ref == 'refs/heads/main' && github.event.inputs.dry_run != 'true'
+        id: release
+        if: |
+          !cancelled() &&
+          github.ref == 'refs/heads/main' &&
+          github.event.inputs.dry_run != 'true' &&
+          steps.tag.outcome == 'success'
         uses: softprops/action-gh-release@v1
         with:
           tag_name: sdk-python-v${{ steps.bump.outputs.new_version }}
@@ -207,16 +211,13 @@ jobs:
 
       - name: Summary
         if: always()
-        run: |
-          echo "## Python SDK Publish Summary" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Version**: \`${{ steps.bump.outputs.new_version }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Dry Run**: \`${{ github.event.inputs.dry_run }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
-            echo "Dry run completed. Built and checked dist, but did not publish or tag." >> "$GITHUB_STEP_SUMMARY"
-          elif [ "${{ github.ref }}" != "refs/heads/main" ]; then
-            echo "Build and checks completed on a non-main ref; publish, tag, and release were skipped." >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "Published to PyPI and created tag \`sdk-python-v${{ steps.bump.outputs.new_version }}\`." >> "$GITHUB_STEP_SUMMARY"
-          fi
+        working-directory: ${{ github.workspace }}
+        env:
+          PUBLISH_VERSION: ${{ steps.bump.outputs.new_version }}
+          PUBLISH_DRY_RUN: ${{ github.event.inputs.dry_run }}
+          PUBLISH_REF: ${{ github.ref }}
+          PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
+          TAG_OUTCOME: ${{ steps.tag.outcome }}
+          BRANCH_OUTCOME: ${{ steps.branch.outcome }}
+          RELEASE_OUTCOME: ${{ steps.release.outcome }}
+        run: node scripts/python-publish-record.mjs summary >> "$GITHUB_STEP_SUMMARY"
