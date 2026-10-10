@@ -641,7 +641,23 @@ export class RelayCast {
     emitCompatibilityTelemetry('agents.registerOrRotate.deprecated', {
       replacement: 'agents.register or agents.recover',
     });
-    return this.registerAgent(data);
+    try {
+      return await this.registerAgent(data);
+    } catch (err) {
+      // Pre-9.1 callers relied on this method silently rotating the token of
+      // an existing name. It is now a fail-closed alias of `register` (an
+      // unproven caller can no longer take over an existing identity), so a
+      // collision needs to point callers at the real replacement instead of
+      // just repeating the server's generic "already exists" message.
+      if (err instanceof RelayError && err.code === 'name_conflict') {
+        throw new RelayError(
+          err.code,
+          `${err.message} "registerOrRotate" no longer rotates an existing agent's token; it is a fail-closed alias of "register". Use "agents.recover()" to resume an identity you previously registered, or choose a different name.`,
+          { statusCode: err.statusCode, retryable: err.retryable, rawCode: err.rawCode, cause: err },
+        );
+      }
+      throw err;
+    }
   }
 
   async resolveIdentity(): Promise<ResolvedIdentity> {

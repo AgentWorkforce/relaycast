@@ -9,6 +9,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- `agents.registerOrRotate()` (and `registerOrRotate()`) now throw an error that names `agents.recover()` as the replacement on a name conflict, instead of just repeating the server's generic "already exists" message. It remains a fail-closed alias of `register` — it does not rotate an existing agent's token — since that silent-takeover behavior was intentionally removed for identity-spoofing safety; callers that relied on the old rotation semantics should migrate to `register` + `recover`.
+- `decamelizeKeys()` throws when a request object mixes both casings of the same field (e.g. `autoJoinGeneral` and `auto_join_general`) instead of letting whichever key enumerates last silently win.
+
 ## [9.1.0] - 2026-10-08
 
 ### Added
