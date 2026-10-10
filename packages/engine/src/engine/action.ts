@@ -1909,6 +1909,12 @@ export async function invokeAction(
     /** Resolve plain node-scoped actions too (message triggers bind by name
      * without a node); the resolved row is dispatched node-addressed. */
     includeNodeScoped?: boolean;
+    /**
+     * Builtin `release` runs only when the caller sets this. It is not an HTTP
+     * field. `POST /v1/actions/:name/invoke` is the only caller that sets it;
+     * message triggers must not.
+     */
+    authorizeBuiltinRelease?: boolean;
   } = {},
 ) {
   const action = await fetchAction(db, workspaceId, actionName, options.includeNodeScoped);
@@ -1961,7 +1967,10 @@ export async function invokeAction(
     });
   }
 
-  if (!action && actionName === 'release') {
+  // Destructive roster mutation. The input shape is not the guard: a payload
+  // that already carries `name` and `delete_agent` still does not release
+  // unless this caller set `authorizeBuiltinRelease`.
+  if (!action && actionName === 'release' && options.authorizeBuiltinRelease) {
     return dispatchRelease({
       db,
       registry: options.nodeConnections,
