@@ -2343,6 +2343,7 @@ export async function reconcileInventory(
       spawnReservedAt: actionInvocations.spawnReservedAt,
       attemptedNodeIds: actionInvocations.attemptedNodeIds,
       dispatchAttempts: actionInvocations.dispatchAttempts,
+      retryAfterAt: actionInvocations.retryAfterAt,
     })
     .from(actionInvocations)
     .where(and(

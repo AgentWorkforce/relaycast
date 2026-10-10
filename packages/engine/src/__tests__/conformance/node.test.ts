@@ -1,4 +1,3 @@
-import { invokeWithConcurrentReplay } from './invocationReplay.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq, sql } from 'drizzle-orm';
 import { drainNodeInvocations, sweepTimedOutInvocations } from '../../index.js';
@@ -17,6 +16,7 @@ import { handleNodeControlMessage } from '../../node-control.js';
 import type { NodeConnectionRegistry } from '../../ports/realtime.js';
 import type { EngineDb, TransactionCapability } from '../../ports/database.js';
 import { sha256Hex } from '../../lib/crypto.js';
+import { waitForSignal } from '../../../../../scripts/test-support/signals.js';
 
 function capability(name: string, kind?: string, metadata?: Record<string, unknown>) {
   return { name, ...(kind ? { kind } : {}), ...(metadata ? { metadata } : {}) };
@@ -2410,7 +2410,7 @@ describe('node adapter conformance', () => {
       expect(node.reservedAgents).toBe(1);
     });
 
-    it('waits for durable spawn dispatch state before answering a concurrent replay', async () => {
+    it('answers a concurrent spawn replay from the claim recorded before the frame', async () => {
       const ws = await createWorkspace(stack.app, 'fleet-spawn-dispatch-race-ws');
       const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
       const alpha = await enrollAndAttachNode(ws, {
@@ -2445,7 +2445,13 @@ describe('node adapter conformance', () => {
         body: JSON.stringify({ input: { cli: 'claude', name: 'worker', task: 'one' } }),
       });
 
-      const [fresh, replay] = await invokeWithConcurrentReplay(invoke, frameSentPromise, resumeSend);
+      const freshPromise = invoke();
+      await frameSentPromise;
+      // The pending claim is durable before sendToProvider returns, so the
+      // replay answers while the winning send is still paused.
+      const replay = await waitForSignal(invoke(), 'spawn replay from pre-send claim');
+      resumeSend();
+      const fresh = await freshPromise;
       expect([fresh.status, replay.status]).toEqual([201, 201]);
       expect(replay.headers.get('Idempotency-Replayed')).toBe('true');
       const [freshBody, replayBody] = await Promise.all([
