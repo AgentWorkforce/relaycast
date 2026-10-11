@@ -256,6 +256,14 @@ describe('registration tools', () => {
     expect(mockRelay.agents.list).toHaveBeenCalledWith({ status: 'online' });
   });
 
+  it('list_agents exposes stale history and lean projection without changing the array result', async () => {
+    session.workspaceKey = 'rk_live_test';
+    mockRelay.agents.list.mockResolvedValue([{ name: 'bot1', metadata: {} }]);
+    const result = await client.callTool({ name: 'agent.list', arguments: { status: 'all', include_stale: true, include_metadata: false } });
+    expect(mockRelay.agents.list).toHaveBeenCalledWith({ status: 'all', includeStale: true, includeMetadata: false });
+    expect(JSON.parse((result.content as any)[0].text)).toEqual([{ name: 'bot1', metadata: {} }]);
+  });
+
   // Multi-workspace tools
 
   it('list_workspaces returns empty when no workspaces joined', async () => {

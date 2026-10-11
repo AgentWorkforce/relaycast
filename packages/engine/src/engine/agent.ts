@@ -368,7 +368,14 @@ export async function registerAgent(
   };
 }
 
-export async function listAgents(db: Db, workspaceId: string, status?: string) {
+export const AGENT_ROSTER_RECENCY_MS = 7 * 24 * 60 * 60 * 1000;
+
+export async function listAgents(
+  db: Db,
+  workspaceId: string,
+  status?: string,
+  options: { includeStale?: boolean; includeMetadata?: boolean } = {},
+) {
   // Filtering and serialization must use the same instant even if the SELECT
   // crosses a TTL boundary. Presence is derived; roster reads never sweep.
   const now = Date.now();
@@ -389,9 +396,29 @@ export async function listAgents(db: Db, workspaceId: string, status?: string) {
   } else if (requestedStatus && requestedStatus !== 'all') {
     conditions.push(eq(agents.status, requestedStatus));
   }
+  if ((!requestedStatus || requestedStatus === 'all') && !options.includeStale) {
+    conditions.push(sql`${agents.lastSeen} >= ${(now - AGENT_ROSTER_RECENCY_MS) / 1_000}`);
+  }
 
   const rows = await db
-    .select({ agent: agents, node: addressNodeSelection })
+    .select({
+      agent: {
+        id: agents.id,
+        name: agents.name,
+        type: agents.type,
+        status: agents.status,
+        persona: agents.persona,
+        capabilities: agents.capabilities,
+        createdAt: agents.createdAt,
+        lastSeen: agents.lastSeen,
+        // Installed desktop clients need provider/host/session metadata. Keep
+        // it by default; lean callers avoid reading or decoding the JSON blob.
+        metadata: options.includeMetadata === false
+          ? sql<Record<string, unknown>>`'{}'`.mapWith(agents.metadata)
+          : agents.metadata,
+      },
+      node: addressNodeSelection,
+    })
     .from(agents)
     .leftJoin(nodes, eq(nodes.id, agents.locationNodeId))
     // Released rows are tombstones retained only to keep history attributable;

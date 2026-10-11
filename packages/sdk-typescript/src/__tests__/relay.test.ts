@@ -521,6 +521,16 @@ describe('RelayCast', () => {
       expect(url).toBe('https://cast.agentrelay.com/v1/agents?status=active');
     });
 
+    it('list() preserves false values and maps roster controls to wire flags', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      mockFetch.mockImplementation(() => mockResponse([]));
+      await relay.agents.list({ status: 'all', includeStale: true, includeMetadata: false });
+      expect(mockFetch.mock.calls[0]![0]).toBe('https://cast.agentrelay.com/v1/agents?status=all&include_stale=1&include_metadata=0');
+      await relay.agents.list({ includeStale: false, includeMetadata: true });
+      expect(mockFetch.mock.calls[1]![0]).toBe('https://cast.agentrelay.com/v1/agents?include_stale=0&include_metadata=1');
+    });
+
     it('get() calls GET /v1/agents/:name with URL encoding', async () => {
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });

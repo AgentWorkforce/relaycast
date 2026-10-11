@@ -72,7 +72,9 @@ export const UpdateAgentRequestSchema = z.object({
 export type UpdateAgentRequest = z.infer<typeof UpdateAgentRequestSchema>;
 
 export const AgentListQuerySchema = z.object({
-  status: z.union([AgentStatusSchema, z.literal('all')]).optional(),
+  status: z.enum(['online', 'offline', 'away', 'active', 'idle', 'blocked', 'waiting', 'all']).optional(),
+  include_stale: z.boolean().optional(),
+  include_metadata: z.boolean().optional(),
 });
 export type AgentListQuery = z.infer<typeof AgentListQuerySchema>;
 

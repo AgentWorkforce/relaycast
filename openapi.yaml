@@ -2462,6 +2462,11 @@ paths:
         active or legacy online rows are returned as offline. Reads do not write
         to the database; durable cleanup runs separately. Status filters are
         applied in SQL against derived presence, with online aliasing active.
+        The default roster and status=all include only unreleased agents whose
+        last_seen is within seven days. include_stale=1 restores the historical
+        roster; explicit status filters are not limited by this window.
+        Metadata is included by default for desktop compatibility;
+        include_metadata=0 returns metadata={} without reading its stored blob.
         Observer tokens require `agents:read`.
       tags:
         - Agents
@@ -2474,6 +2479,20 @@ paths:
           schema:
             type: string
             enum: [active, idle, blocked, waiting, offline, online, all]
+        - name: include_stale
+          in: query
+          description: Include older identities in the default/all roster.
+          schema:
+            type: string
+            enum: ['0', '1']
+            default: '0'
+        - name: include_metadata
+          in: query
+          description: Return agent metadata; 0 returns an empty object.
+          schema:
+            type: string
+            enum: ['0', '1']
+            default: '1'
       responses:
         '200':
           description: List of agents

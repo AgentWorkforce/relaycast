@@ -562,6 +562,12 @@ agentRoutes.post(
 );
 
 // GET /v1/agents - list agents
+const agentListQuerySchema = z.object({
+  status: z.string().optional(),
+  include_stale: z.enum(['0', '1']).transform(value => value === '1').optional(),
+  include_metadata: z.enum(['0', '1']).transform(value => value === '1').optional(),
+});
+
 agentRoutes.get(
   '/agents',
   requireWorkspaceRead('agents:read', { allowAgent: false, allowNode: false }),
@@ -570,9 +576,13 @@ agentRoutes.get(
     try {
       const db = c.get('db');
       const workspace = c.get('workspace');
-      const status = c.req.query('status');
+      const query = parseQueryParams(c, agentListQuerySchema, 'Invalid agent list query');
+      if (!query.ok) return query.response;
       const observer = getObserverTokenFromContext(c);
-      const agents = (await agentEngine.listAgents(db, workspace.id, status))
+      const agents = (await agentEngine.listAgents(db, workspace.id, query.data.status, {
+        includeStale: query.data.include_stale,
+        includeMetadata: query.data.include_metadata,
+      }))
         .filter((agent) => observerAllowsAgent(observer, agent.id));
       return jsonOk(c, agents);
     } catch (err: unknown) {
