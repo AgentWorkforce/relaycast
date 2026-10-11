@@ -16,11 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Minor]
+## [Unreleased - Major]
 
 ### Changed
 
-- Default agent rosters show the last seven days, with stale-history and lean metadata options exposed through HTTP, TypeScript, and MCP.
+- Default and `status=all` agent rosters now show only agents seen within seven days. Use `include_stale=1` for historical discovery; `include_metadata=0` returns a lean roster. Metadata and the array response remain available by default.
 
 ### Fixed
 

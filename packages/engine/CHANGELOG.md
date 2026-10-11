@@ -7,11 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Minor]
+## [Unreleased - Major]
 
 ### Changed
 
-- Default agent rosters show the last seven days, with stale-history and lean metadata options exposed through HTTP, TypeScript, and MCP.
+- `GET /v1/agents` without a status or with `status=all` now defaults to a seven-day `last_seen` window. `include_stale=1` opts out (default `0`); `include_metadata=0` skips stored metadata (default `1`). Explicit status filters and agent detail reads retain historical access; responses remain arrays.
 
 ### Fixed
 

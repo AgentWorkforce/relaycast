@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
-- Default agent rosters show the last seven days, with stale-history and lean metadata options exposed through HTTP, TypeScript, and MCP.
+- `AgentListQuerySchema` accepts `status: online | offline | away | active | idle | blocked | waiting | all` and optional boolean `include_stale` / `include_metadata` fields. HTTP encodes those flags as `0` or `1`; omitted flags use recent discovery and include metadata.
 
 ## [9.2.0] - 2026-10-09
 
