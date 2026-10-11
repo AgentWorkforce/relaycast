@@ -104,8 +104,8 @@ describe('Relay workspace methods', () => {
     ]);
 
     expect(mockFetch.mock.calls.map(([url]) => url)).toEqual([
-      'https://cast.agentrelay.com/v1/dm/conversations/all?limit=90',
-      'https://cast.agentrelay.com/v1/dm/conversations/all?limit=90&cursor=dm_1',
+      'https://cast.agentrelay.com/v1/dm/conversations/all?limit=500',
+      'https://cast.agentrelay.com/v1/dm/conversations/all?limit=500&cursor=dm_1',
     ]);
     expect(mockFetch.mock.calls.every(([, init]) => init.method === 'GET')).toBe(true);
   });
@@ -119,6 +119,38 @@ describe('Relay workspace methods', () => {
 
     await expect(relay.allDmConversations()).rejects.toThrow('pagination did not advance');
     expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('allDmConversations() bounds a 5,268-conversation workspace to 11 requests', async () => {
+    const { RelayCast } = await import('../relay.js');
+    const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+    const total = 5_268;
+    mockFetch.mockImplementation((url: string) => {
+      const requestUrl = new URL(url);
+      const cursor = requestUrl.searchParams.get('cursor');
+      const start = cursor ? Number(cursor.slice('dm_'.length)) : 0;
+      const end = Math.min(start + 500, total);
+      const data = Array.from({ length: end - start }, (_, offset) => {
+        const ordinal = start + offset + 1;
+        return {
+          id: `dm_${ordinal}`,
+          channel_id: `channel_${ordinal}`,
+          type: 'dm',
+          participants: ['alice', `peer_${ordinal}`],
+          last_message: null,
+          message_count: 1,
+        };
+      });
+      const next = end < total ? `dm_${end}` : null;
+      return mockResponse(data, true, 200, { next, has_more: next !== null });
+    });
+
+    const conversations = await relay.allDmConversations();
+
+    expect(conversations).toHaveLength(total);
+    expect(new Set(conversations.map(({ id }) => id)).size).toBe(total);
+    expect(mockFetch).toHaveBeenCalledTimes(11);
+    expect(mockFetch.mock.calls.every(([url]) => new URL(url).searchParams.get('limit') === '500')).toBe(true);
   });
 
   it('dmMessages() camelizes DM message fields', async () => {

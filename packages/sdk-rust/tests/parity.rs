@@ -1528,7 +1528,7 @@ async fn all_dm_conversations_aggregates_bounded_pages() {
 
     Mock::given(method("GET"))
         .and(path("/v1/dm/conversations/all"))
-        .and(query_param("limit", "90"))
+        .and(query_param("limit", "500"))
         .and(query_param_is_missing("cursor"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "ok": true,
@@ -1543,7 +1543,7 @@ async fn all_dm_conversations_aggregates_bounded_pages() {
         .await;
     Mock::given(method("GET"))
         .and(path("/v1/dm/conversations/all"))
-        .and(query_param("limit", "90"))
+        .and(query_param("limit", "500"))
         .and(query_param("cursor", "conv_1"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "ok": true,
@@ -1578,7 +1578,7 @@ async fn all_dm_conversations_rejects_a_repeated_cursor() {
 
     Mock::given(method("GET"))
         .and(path("/v1/dm/conversations/all"))
-        .and(query_param("limit", "90"))
+        .and(query_param("limit", "500"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "ok": true,
             "data": [],

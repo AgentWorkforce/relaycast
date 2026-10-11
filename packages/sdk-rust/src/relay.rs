@@ -963,7 +963,7 @@ impl RelayCast {
         let mut seen_cursors = std::collections::HashSet::new();
 
         loop {
-            let mut query = vec![("limit", "90")];
+            let mut query = vec![("limit", "500")];
             if let Some(next) = cursor.as_deref() {
                 query.push(("cursor", next));
             }

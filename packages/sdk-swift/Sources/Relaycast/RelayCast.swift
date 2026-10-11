@@ -342,7 +342,7 @@ public final class RelayCast: @unchecked Sendable {
         var seenCursors: Set<String> = []
 
         while true {
-            var query = ["limit": "90"]
+            var query = ["limit": "500"]
             if let cursor { query["cursor"] = cursor }
             let page: (data: [WorkspaceDMConversation], cursor: Cursor?) = try await client.getWithCursor(
                 "/v1/dm/conversations/all",

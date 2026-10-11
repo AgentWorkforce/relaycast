@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { messages, observerTokens } from '../../db/schema.js';
+import { messages, observerTokens, workspaces } from '../../db/schema.js';
 import { dmFilteredCountConversationChunkSize, dmMessagePageLimit } from '../../engine/dmAll.js';
 import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
 
@@ -55,8 +55,12 @@ describe('Relay Connect observer capability', () => {
 
   it('lists more DM conversations than one D1 statement can bind, for the workspace and an observer', async () => {
     const room = await createWorkspace(stack.app, 'connect-many-dms');
+    await stack.runtime.deps.db
+      .update(workspaces)
+      .set({ plan: 'enterprise' })
+      .where(eq(workspaces.id, room.workspaceId));
     const alice = await registerAgent(stack.app, room.workspaceKey, 'alice');
-    const peers = Array.from({ length: 105 }, (_, index) => `peer-${String(index).padStart(3, '0')}`);
+    const peers = Array.from({ length: 505 }, (_, index) => `peer-${String(index).padStart(3, '0')}`);
     const conversationIds: string[] = [];
     for (const peer of peers) {
       await registerAgent(stack.app, room.workspaceKey, peer);
@@ -100,7 +104,7 @@ describe('Relay Connect observer capability', () => {
       workspaceListingSql.push(source);
       return prepare(source);
     }) as typeof sqlite.prepare;
-    const firstPage = await stack.app.request('/v1/dm/conversations/all?limit=90', {
+    const firstPage = await stack.app.request('/v1/dm/conversations/all?limit=500', {
       headers: { authorization: `Bearer ${room.workspaceKey}` },
     });
     expect(firstPage.status).toBe(200);
@@ -108,7 +112,7 @@ describe('Relay Connect observer capability', () => {
       data: Array<{ id: string; participants: string[]; message_count: number; last_message: { text: string } | null }>;
       cursor: { next: string; has_more: boolean };
     };
-    expect(firstPageBody.data).toHaveLength(90);
+    expect(firstPageBody.data).toHaveLength(500);
     expect(firstPageBody.cursor).toEqual({
       next: firstPageBody.data.at(-1)?.id,
       has_more: true,
@@ -118,7 +122,9 @@ describe('Relay Connect observer capability', () => {
       || source.includes('from "dm_participants"')
       || source.includes('from "messages"')
     ));
-    expect(firstPageListingQueries).toHaveLength(5);
+    // One page selector plus four enrichment lookups, each internally split
+    // into six D1-safe chunks for 500 conversations.
+    expect(firstPageListingQueries).toHaveLength(25);
 
     sqlite.prepare = prepare as typeof sqlite.prepare;
     const secondPage = await stack.app.request(
@@ -135,6 +141,15 @@ describe('Relay Connect observer capability', () => {
     expect(new Set([...firstPageBody.data, ...secondPageBody.data].map(({ id }) => id))).toEqual(
       new Set(conversationIds),
     );
+
+    const blankLimitResponse = await stack.app.request('/v1/dm/conversations/all?limit=', {
+      headers: { authorization: `Bearer ${room.workspaceKey}` },
+    });
+    expect(blankLimitResponse.status).toBe(200);
+    await expect(blankLimitResponse.json()).resolves.toMatchObject({
+      data: expect.arrayContaining(firstPageBody.data.map(({ id }) => expect.objectContaining({ id }))),
+      cursor: { has_more: true },
+    });
 
     const observerResponse = await stack.app.request('/v1/dm/conversations/all?limit=100', {
       headers: { authorization: `Bearer ${observer.token}` },

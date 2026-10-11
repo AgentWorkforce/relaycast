@@ -528,7 +528,11 @@ workspaceRoutes.get('/dm/conversations/all', requireWorkspaceRead('dms:read', { 
     const scopedConversationIds = observer
       ? (filters?.include_dms ? filters.dm_conversation_ids : [])
       : undefined;
-    const paginated = pagination.limit !== undefined || pagination.cursor !== undefined;
+    // Raw key presence opts workspace callers into pagination. In particular,
+    // `?limit=` is the existing query helper's spelling for "use the default";
+    // it must not fall through to the legacy unbounded response.
+    const paginated = !observer
+      && (c.req.query('limit') !== undefined || c.req.query('cursor') !== undefined);
     const page = paginated
       ? await dmAllEngine.listDmConversationsPage(db, workspace.id, pagination)
       : null;

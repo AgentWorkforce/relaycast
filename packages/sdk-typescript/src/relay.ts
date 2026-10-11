@@ -1146,7 +1146,7 @@ export class RelayCast {
     while (true) {
       const page = await this.client.getEnvelope<WorkspaceDmConversation[]>(
         '/v1/dm/conversations/all',
-        { limit: '90', ...(cursor ? { cursor } : {}) },
+        { limit: '500', ...(cursor ? { cursor } : {}) },
         { schema: WorkspaceDmConversationSchema.array() },
       );
       conversations.push(...page.data);

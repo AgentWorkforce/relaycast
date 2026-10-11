@@ -769,7 +769,7 @@ final class RelaycastTests: XCTestCase {
             case "/v1/dm/conversations/all":
                 let components = try XCTUnwrap(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false))
                 let query = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
-                XCTAssertEqual(query["limit"], "90")
+                XCTAssertEqual(query["limit"], "500")
                 let isSecondPage = query["cursor"] == "dm_1"
                 let nextCursor: Any = isSecondPage ? NSNull() : "dm_1"
                 return jsonResponse([

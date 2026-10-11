@@ -13,7 +13,7 @@ import { publicMessageMetadata } from './messageMetadata.js';
 
 type Db = ReturnType<typeof getDb>;
 
-export const DM_CONVERSATION_PAGE_MAX_LIMIT = D1_SAFE_IN_QUERY_CHUNK_SIZE;
+export const DM_CONVERSATION_PAGE_MAX_LIMIT = 500;
 
 interface DmConversationRow {
   id: string;

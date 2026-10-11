@@ -4527,11 +4527,11 @@ paths:
       parameters:
         - name: limit
           in: query
-          description: Enables bounded pagination. Defaults to and cannot exceed 90.
+          description: Enables bounded pagination. A blank value uses the 500-item default; non-blank values cannot exceed 500.
           schema:
             type: integer
             minimum: 1
-            maximum: 90
+            maximum: 500
         - name: cursor
           in: query
           description: Conversation id returned in the previous response cursor.
