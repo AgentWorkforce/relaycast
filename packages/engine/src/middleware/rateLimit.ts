@@ -13,7 +13,7 @@ const checkApiCallPlanLimit = checkPlanLimit('api_calls');
 
 // Per-route rate limit multipliers (fraction of the global per-minute limit).
 // POST endpoints get tighter limits, GET endpoints get looser.
-const ROUTE_MULTIPLIERS: Record<string, number> = {
+export const ROUTE_MULTIPLIERS: Record<string, number> = {
   'POST:/channels/*/messages': 0.5, // message send: half the global limit
   'POST:/dm': 0.5,
   'POST:/dm/group': 0.3,
@@ -28,15 +28,34 @@ const ROUTE_MULTIPLIERS: Record<string, number> = {
   // every attempt lands in the same saturated bucket. Its own bucket keeps
   // identity reachable while the data plane is at its ceiling.
   'GET:/workspace': 1.0,
+  // The same starvation, one layer down. Resolving an agent identity is the
+  // control-plane read that registration depends on: arelay.to's registry calls
+  // GET /v1/agent to confirm which workspace a delivery credential belongs to,
+  // and Cloud calls GET /v1/agents/<name> to find the answer address it already
+  // reserved. Neither is data-plane traffic, but in the shared `global` bucket
+  // both compete with every message and DM the workspace sends, so a workspace
+  // busy enough to be worth onboarding is exactly the one that cannot onboard.
+  // A 429 here does not surface as a throttle either: the callers translate it
+  // into "could not verify delivery identity", which reads like a broken
+  // credential rather than a limit that clears on its own.
+  'GET:/agent': 1.0,
+  'GET:/agents/*': 1.0,
+  'GET:/agents': 0.5,
 };
 
-function getRouteKey(method: string, path: string): string | null {
+export function getRouteKey(method: string, path: string): string | null {
   // Normalize path: /v1/channels/foo/messages -> /channels/*/messages
   const normalized = path
     .replace(/^\/v1/, '')
     .replace(/\/[a-zA-Z0-9_-]+\/messages/, '/*/messages')
     .replace(/\/[a-zA-Z0-9_-]+\/reactions/, '/*/reactions')
-    .replace(/\/[a-zA-Z0-9_-]+\/replies/, '/*/replies');
+    .replace(/\/[a-zA-Z0-9_-]+\/replies/, '/*/replies')
+    // A single agent lookup collapses to one key so the bucket is per route,
+    // not per agent name -- otherwise every name gets its own full allowance
+    // and the limit means nothing. `presence` is excluded because it is a
+    // distinct route with its own, tighter multiplier above; collapsing it here
+    // would silently widen it from 0.3 to 1.0.
+    .replace(/^\/agents\/(?!presence$)[a-zA-Z0-9_-]+$/, '/agents/*');
   const key = `${method}:${normalized}`;
   return ROUTE_MULTIPLIERS[key] !== undefined ? key : null;
 }
