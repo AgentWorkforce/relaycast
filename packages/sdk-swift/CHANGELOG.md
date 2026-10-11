@@ -4,7 +4,9 @@ All notable changes to `relaycast-swift` will be documented in this file.
 
 See the [root changelog](../../CHANGELOG.md) for cross-package release highlights.
 
-## [Unreleased - Patch]
+## [Unreleased]
+
+## [10.0.2] - 2026-10-11
 
 ### Fixed
 
