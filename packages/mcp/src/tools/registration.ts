@@ -355,22 +355,29 @@ export function registerRegistrationTools(
     {
       title: 'List Agents',
       description:
-        'Retrieve all agents registered in the current workspace. Returns each agent\'s name, type, persona, and online/offline status. Use the optional status filter to find only agents that are currently connected or disconnected.',
+        'Retrieve agents registered in the current workspace. The default/all roster includes agents seen within seven days; include_stale retrieves older identities. Use include_metadata=false for a lean roster or a status filter for connection status.',
       inputSchema: {
         status: z
-          .enum(['online', 'offline'])
+          .enum(['online', 'offline', 'all'])
           .optional()
           .describe('Filter agents by connection status: "online" for currently connected agents, "offline" for disconnected ones'),
+        include_stale: z.boolean().optional().describe('Include identities last seen more than seven days ago in the default/all roster'),
+        include_metadata: z.boolean().optional().describe('Include agent metadata (default true); false returns metadata={} without loading the stored blob'),
       },
       outputSchema: {
         agents: z.array(z.object({}).passthrough()).describe('Array of registered agent objects with name, type, persona, and status'),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    async ({ status }) => {
+    async ({ status, include_stale, include_metadata }) => {
       requireWorkspaceKey(getSession());
       const relay = getRelay();
-      const agents = await relay.agents.list(status ? { status } : undefined);
+      const query = {
+        ...(status !== undefined ? { status } : {}),
+        ...(include_stale !== undefined ? { includeStale: include_stale } : {}),
+        ...(include_metadata !== undefined ? { includeMetadata: include_metadata } : {}),
+      };
+      const agents = await relay.agents.list(Object.keys(query).length ? query : undefined);
       return {
         content: [{ type: 'text', text: JSON.stringify(agents, null, 2) }],
         structuredContent: { agents: agents as unknown as Record<string, unknown>[] },

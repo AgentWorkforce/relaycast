@@ -7,11 +7,16 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Patch]
+## [Unreleased - Major]
+
+### Changed
+
+- `GET /v1/agents` without a status or with `status=all` now defaults to a seven-day `last_seen` window. `include_stale=1` opts out (default `0`); `include_metadata=0` skips stored metadata (default `1`). Explicit status filters and agent detail reads retain historical access; responses remain arrays.
 
 ### Fixed
 
 - Thread reply pagination uses the existing thread index while preserving workspace filtering and decoded fields.
+
 
 ## [9.2.0] - 2026-10-09
 

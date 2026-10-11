@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Changed
+
+- `AgentListQuerySchema` accepts `status: online | offline | away | active | idle | blocked | waiting | all` and optional boolean `include_stale` / `include_metadata` fields. HTTP encodes those flags as `0` or `1`; omitted flags use recent discovery and include metadata.
 
 ## [9.2.0] - 2026-10-09
 

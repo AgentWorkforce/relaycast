@@ -857,6 +857,8 @@ export class RelayCast {
     list: (query?: AgentListQuery): Promise<Agent[]> => {
       const params: Record<string, string> = {};
       if (query?.status) params.status = query.status;
+      if (query?.includeStale !== undefined) params.include_stale = query.includeStale ? '1' : '0';
+      if (query?.includeMetadata !== undefined) params.include_metadata = query.includeMetadata ? '1' : '0';
       return this.client.get('/v1/agents', params);
     },
     get: (name: string): Promise<Agent> =>

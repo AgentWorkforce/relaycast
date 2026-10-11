@@ -99,6 +99,14 @@ five minutes appear `offline`. Roster status filters run in SQL against that
 derived presence; `status=online` aliases `active`. Durable stale-status cleanup
 runs separately from reads.
 
+The default roster (including `status=all`) contains unreleased agents seen in
+the last seven days. Use `include_stale=1` for older identities; explicit status
+filters retain their existing scope, and lookup by name remains available.
+Metadata stays included for desktop compatibility. Set `include_metadata=0` to
+return `metadata: {}` without loading the stored JSON. The response remains an
+array. TypeScript callers use `agents.list({ includeStale: true,
+includeMetadata: false })`; MCP `agent.list` accepts the snake_case options.
+
 Workspace administrators can preview bounded registry reclamation with
 `POST /v1/agents/retention` (`retention_days: 30` by default). Physical deletion
 requires explicit `delete: true`; live/recent agents, every node association,
