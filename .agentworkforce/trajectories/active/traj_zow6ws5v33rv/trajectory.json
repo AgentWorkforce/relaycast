@@ -1,0 +1,46 @@
+{
+  "id": "traj_zow6ws5v33rv",
+  "version": 1,
+  "task": {
+    "title": "Relaycast D1 robustness: index the global stale-online-node scan"
+  },
+  "status": "active",
+  "startedAt": "2026-10-11T19:46:42.581Z",
+  "agents": [
+    {
+      "name": "devin-relaycast-robust",
+      "role": "lead",
+      "joinedAt": "2026-10-11T19:46:42.589Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_xjn68dkbmi6p",
+      "title": "Initial work",
+      "agentName": "devin-relaycast-robust",
+      "startedAt": "2026-10-11T19:46:42.589Z",
+      "events": [
+        {
+          "ts": 1791748002858,
+          "type": "decision",
+          "content": "Partial covering index over online nodes only: Partial covering index over online nodes only",
+          "raw": {
+            "question": "Partial covering index over online nodes only",
+            "chosen": "Partial covering index over online nodes only",
+            "alternatives": [],
+            "reasoning": "reconcileStaleOnlineNodes runs a global (no workspace) status='online' + lapsed-heartbeat scan; every nodes index leads with workspace_id so prod full-scans ~24k rows per tick. Index (last_heartbeat_at, workspace_id, id) WHERE status='online' makes it a covering index scan of the live set only. The OR predicate keeps it a scan-of-index rather than a seek; at partial cardinality that is fine. Numbered 0069 assuming #523's 0068 lands first."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "98d05865d06c0d31c72c1e0a5049162e006fe0e0",
+    "endRef": "98d05865d06c0d31c72c1e0a5049162e006fe0e0"
+  }
+}
