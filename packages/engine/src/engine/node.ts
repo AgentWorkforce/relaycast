@@ -26,7 +26,7 @@ import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { acceptTaskInvocation, completeTaskInvocation } from './taskInvocation.js';
 import { runAtomic, runAtomicWrites } from '../ports/database.js';
-import type { AtomicWrite, EngineDb } from '../ports/database.js';
+import type { AtomicWrite, BatchCapability, EngineDb } from '../ports/database.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { generateId } from './snowflake.js';
 import { assertRegistrableAgentName } from './agent.js';
@@ -1159,20 +1159,6 @@ export async function sweepOfflineNodes(
   return swept;
 }
 
-async function autoJoinGeneral(db: Db, workspaceId: string, agentId: string) {
-  const [generalChannel] = await db
-    .select()
-    .from(channels)
-    .where(and(eq(channels.workspaceId, workspaceId), eq(channels.name, 'general')));
-  if (generalChannel) {
-    await db.insert(channelMembers).values({
-      channelId: generalChannel.id,
-      agentId,
-      role: 'member',
-    }).onConflictDoNothing();
-  }
-}
-
 interface AgentNodeBindingOpts {
   sessionRef?: string | null;
   priority?: number;
@@ -1288,12 +1274,19 @@ interface SpawnReservationClaim {
   agentName: string;
 }
 
-async function reserveNodeAgentSlot(
+/**
+ * The capacity-admission statement (at most one reserved slot). Built, not
+ * executed, so a caller that owns the whole registration can commit it in the
+ * same atomic unit as the identity insert the reservation is for — on D1 the
+ * batch is what keeps a name-conflict retry from first paying for a leaked
+ * slot increment and its compensating release.
+ */
+function reserveNodeAgentSlotStatement(
   db: Db,
   workspaceId: string,
   node: NodeRow,
   claim?: SpawnReservationClaim,
-): Promise<void> {
+) {
   const reservationCorrelation = claim?.invocationId
     ? eq(actionInvocations.id, claim.invocationId)
     : claim
@@ -1319,7 +1312,7 @@ async function reserveNodeAgentSlot(
           AND json_extract(${actionInvocations.input}, '$.name') = ${claim.agentName}
       )`
     : sql`0`;
-  const [reserved] = await db
+  return db
     .update(nodes)
     .set({
       activeAgents: sql`${nodes.activeAgents} + 1`,
@@ -1337,12 +1330,26 @@ async function reserveNodeAgentSlot(
       ),
     ))
     .returning({ id: nodes.id });
+}
+
+async function reserveNodeAgentSlot(
+  db: Db,
+  workspaceId: string,
+  node: NodeRow,
+  claim?: SpawnReservationClaim,
+): Promise<void> {
+  const [reserved] = await reserveNodeAgentSlotStatement(db, workspaceId, node, claim);
   if (!reserved) {
     throw codedError(`Node "${node.name}" is at capacity`, 'node_capacity_exceeded', 409);
   }
 }
 
-async function rejectMigrationCanceledSpawnRegistration(
+/**
+ * The migration-tombstone read for a pending registration. Built, not
+ * executed: registration batches it with the rest of its read phase so the
+ * whole phase costs one D1 request.
+ */
+function canceledSpawnTombstoneQuery(
   db: Db,
   workspaceId: string,
   registration: {
@@ -1351,7 +1358,7 @@ async function rejectMigrationCanceledSpawnRegistration(
     providerName: string;
     agentName: string;
   },
-): Promise<void> {
+) {
   // Provider ownership added in migration 0030 is intentionally NULL for
   // legacy rows whose multi-provider owner could not be inferred. Treat that
   // unknown owner conservatively as matching any provider on the exact node
@@ -1373,7 +1380,7 @@ async function rejectMigrationCanceledSpawnRegistration(
       providerCorrelation,
       sql`json_extract(${actionInvocations.input}, '$.name') = ${registration.agentName}`,
     );
-  const [canceled] = await db
+  return db
     .select({ id: actionInvocations.id })
     .from(actionInvocations)
     .where(and(
@@ -1387,17 +1394,6 @@ async function rejectMigrationCanceledSpawnRegistration(
         sql`${actionInvocations.actionName} LIKE 'spawn:%'`,
       ),
     ));
-  if (canceled) {
-    // An ID-less legacy registration cannot distinguish a stale canceled
-    // worker from a newer reservation for the same tuple. Fail closed until
-    // the replacement echoes its invocation id; otherwise the stale process
-    // can consume the replacement generation's capacity and identity.
-    throw codedError(
-      `Spawn invocation "${canceled.id}" was canceled during migration`,
-      'spawn_invocation_canceled',
-      409,
-    );
-  }
 }
 
 /**
@@ -1875,28 +1871,98 @@ export async function registerAgentViaNode(
   options: { deliveryCursorSupported?: boolean } = {},
 ): Promise<AgentRegisterReplyData> {
   assertRegistrableAgentName(message.name);
+  const wantsAutoJoin = message.auto_join_general !== false;
   const registered = await runAtomic(db, async (tx) => {
-    await rejectMigrationCanceledSpawnRegistration(tx, workspaceId, {
-      invocationId: message.invocation_id,
-      nodeId,
-      providerName,
-      agentName: message.name,
-    });
-    const [node] = await tx
-      .select()
-      .from(nodes)
-      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
-    if (!node) throw codedError(`Node "${nodeId}" not found`, 'node_not_found', 404);
-    const cursorHandshake = (options.deliveryCursorSupported ?? true)
-      && await providerAdvertisesDeliveryCursor(tx, workspaceId, nodeId, providerName);
+    // Every awaited statement is a separate D1 round-trip — and this path runs
+    // under the node-control liveness deadline whose misses surface as
+    // `d1_pressure`. The reads have no interdependencies and the writes split
+    // into an admission pair (slot reserve + identity insert) and a landing
+    // set (membership + bindings), so on a batch-capable handle each group
+    // ships as one atomic `batch` call. Inside an interactive transaction
+    // (Node adapters) the tx handle exposes no batch, and the same groups run
+    // sequentially — with results still pushed into the sinks as they land,
+    // so the catch below compensates exactly the writes that committed, no
+    // more and no less.
+    const hasBatch = typeof (tx as EngineDb & Partial<BatchCapability>).batch === 'function';
+    const runStatements = async (
+      statements: readonly AtomicWrite[],
+      sink: unknown[],
+    ): Promise<unknown[]> => {
+      if (hasBatch) {
+        const results = await runAtomicWrites(tx, statements);
+        // A batch is all-or-nothing: populate the sink only once it has
+        // committed every statement.
+        sink.push(...results);
+        return results;
+      }
+      for (const statement of statements) sink.push(await statement);
+      return sink;
+    };
 
+    const [
+      canceledRows,
+      nodeRows,
+      providerRows,
+      existingRows,
+      channelRows,
+    ] = await runStatements([
+      canceledSpawnTombstoneQuery(tx, workspaceId, {
+        invocationId: message.invocation_id,
+        nodeId,
+        providerName,
+        agentName: message.name,
+      }),
+      tx
+        .select()
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId))),
+      tx
+        .select({ capabilities: nodeProviders.capabilities })
+        .from(nodeProviders)
+        .where(and(
+          eq(nodeProviders.workspaceId, workspaceId),
+          eq(nodeProviders.nodeId, nodeId),
+          eq(nodeProviders.name, providerName),
+        )),
+      tx
+        .select({ id: agents.id })
+        .from(agents)
+        .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, message.name))),
+      tx
+        .select()
+        .from(channels)
+        .where(and(eq(channels.workspaceId, workspaceId), eq(channels.name, 'general'))),
+    ], []) as [
+      { id: string }[],
+      NodeRow[],
+      { capabilities: FleetCapability[] | null }[],
+      { id: string }[],
+      (typeof channels.$inferSelect)[],
+    ];
+
+    const [canceled] = canceledRows;
+    if (canceled) {
+      // An ID-less legacy registration cannot distinguish a stale canceled
+      // worker from a newer reservation for the same tuple. Fail closed until
+      // the replacement echoes its invocation id; otherwise the stale process
+      // can consume the replacement generation's capacity and identity.
+      throw codedError(
+        `Spawn invocation "${canceled.id}" was canceled during migration`,
+        'spawn_invocation_canceled',
+        409,
+      );
+    }
+    const [node] = nodeRows;
+    if (!node) throw codedError(`Node "${nodeId}" not found`, 'node_not_found', 404);
+    const [provider] = providerRows;
+    const cursorHandshake = (options.deliveryCursorSupported ?? true)
+      && (provider?.capabilities?.some(
+        (capability) => capability.name === FLEET_DELIVERY_CURSOR_CAPABILITY,
+      ) ?? false);
     // Preserve the established identity conflict even when this node is full.
     // A concurrent create after this read is still caught by the unique insert
     // below, whose reserved slot is then compensated in the catch path.
-    const [existing] = await tx
-      .select({ id: agents.id })
-      .from(agents)
-      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, message.name)));
+    const [existing] = existingRows;
     if (existing) {
       throw codedError(
         `Agent "${message.name}" already exists; use agent.recover with proof of the immutable id`,
@@ -1904,47 +1970,53 @@ export async function registerAgentViaNode(
         409,
       );
     }
+    const [generalChannel] = channelRows;
 
     const token = `at_live_${randomHex(16)}`;
     const tokenHash = await sha256Hex(token);
     const now = new Date().toISOString();
     const agentId = generateId();
-    let reservedTargetSlot = false;
-    let createdAgent = false;
+    const admissionResults: unknown[] = [];
 
-    // D1 has no interactive transaction, so acquire capacity before the first
-    // durable agent or membership write. Any later failure compensates both
-    // the exact new identity and the slot rather than leaving a ghost agent.
-    await reserveNodeAgentSlot(tx, workspaceId, node, {
-      invocationId: message.invocation_id,
-      providerName,
-      agentName: message.name,
-    });
-    reservedTargetSlot = true;
+    // D1 has no interactive transaction, so the slot and the identity commit
+    // as one batch; any later failure compensates whichever of them landed
+    // rather than leaving a ghost agent or a leaked slot.
     try {
-      const [result] = await tx
-        .insert(agents)
-        .values({
-          id: agentId,
-          workspaceId,
-          name: message.name,
-          handle: `@${message.name}`,
-          type: 'agent',
-          tokenHash,
-          status: 'active',
-          persona: null,
-          metadata: { fleet: { node_id: nodeId, invocation_id: message.invocation_id ?? null, registered_at: now } },
-          locationType: 'via_node',
-          locationNodeId: nodeId,
+      await runStatements([
+        reserveNodeAgentSlotStatement(tx, workspaceId, node, {
+          invocationId: message.invocation_id,
           providerName,
-          originNodeId: nodeId,
-          resumable: message.resumable ?? false,
-          sessionRef: message.session_ref ?? null,
-        })
-        .onConflictDoNothing({ target: [agents.workspaceId, agents.name] })
-        .returning();
+          agentName: message.name,
+        }),
+        tx
+          .insert(agents)
+          .values({
+            id: agentId,
+            workspaceId,
+            name: message.name,
+            handle: `@${message.name}`,
+            type: 'agent',
+            tokenHash,
+            status: 'active',
+            persona: null,
+            metadata: { fleet: { node_id: nodeId, invocation_id: message.invocation_id ?? null, registered_at: now } },
+            locationType: 'via_node',
+            locationNodeId: nodeId,
+            providerName,
+            originNodeId: nodeId,
+            resumable: message.resumable ?? false,
+            sessionRef: message.session_ref ?? null,
+          })
+          .onConflictDoNothing({ target: [agents.workspaceId, agents.name] })
+          .returning(),
+      ], admissionResults);
 
-      if (!result) {
+      const [reserved] = (admissionResults[0] ?? []) as { id: string }[];
+      const [agent] = (admissionResults[1] ?? []) as AgentRow[];
+      if (!reserved) {
+        throw codedError(`Node "${node.name}" is at capacity`, 'node_capacity_exceeded', 409);
+      }
+      if (!agent) {
         throw codedError(
           `Agent "${message.name}" already exists; use agent.recover with proof of the immutable id`,
           'agent_already_exists',
@@ -1952,34 +2024,43 @@ export async function registerAgentViaNode(
         );
       }
 
-      createdAgent = true;
-      if (message.auto_join_general !== false) await autoJoinGeneral(tx, workspaceId, result.id);
-      await upsertAgentNodeBinding(tx, workspaceId, result, nodeId, {
-        sessionRef: message.session_ref ?? null,
-        deactivateExisting: true,
-      });
+      await runStatements([
+        ...(wantsAutoJoin && generalChannel
+          ? [tx
+            .insert(channelMembers)
+            .values({
+              channelId: generalChannel.id,
+              agentId,
+              role: 'member',
+            })
+            .onConflictDoNothing()]
+          : []),
+        ...agentNodeBindingWrites(tx, workspaceId, { id: agentId, locationNodeId: nodeId }, nodeId, {
+          sessionRef: message.session_ref ?? null,
+          deactivateExisting: true,
+        }),
+      ], []);
       return {
-        agent_id: result.id,
-        name: result.name,
+        agent_id: agent.id,
+        name: agent.name,
         token,
-        ...(cursorHandshake ? { delivery_ack_seq: result.deliveryAckSeq } : {}),
+        ...(cursorHandshake ? { delivery_ack_seq: agent.deliveryAckSeq } : {}),
       };
     } catch (err) {
-      try {
-        if (createdAgent) {
-          await tx
-            .delete(agents)
-            .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId)));
-        }
-      } finally {
-        if (reservedTargetSlot) {
-          await releaseNodeAgentSlots(tx, workspaceId, [nodeId]);
-        }
+      const compensations: AtomicWrite[] = [];
+      if ((admissionResults[1] as AgentRow[] | undefined)?.[0]) {
+        compensations.push(tx
+          .delete(agents)
+          .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId))));
       }
+      if ((admissionResults[0] as { id: string }[] | undefined)?.[0]) {
+        compensations.push(...releaseNodeAgentSlotWrites(tx, workspaceId, [nodeId]));
+      }
+      if (compensations.length > 0) await runStatements(compensations, []);
       throw err;
     }
   });
-  if (message.auto_join_general !== false) await invalidateChannelCache(workspaceId, 'general');
+  if (wantsAutoJoin) await invalidateChannelCache(workspaceId, 'general');
   return registered;
 }
 
