@@ -140,3 +140,12 @@ export function parseRetryAfterMs(value: string | null | undefined, now = Date.n
   const date = Date.parse(trimmed);
   return Number.isFinite(date) && date > now ? date - now : null;
 }
+
+/**
+ * The engine answers 404 `dm_conversation_not_found` when one conversation is
+ * no longer visible to the observer (its filter was narrowed between listing
+ * and reading). The capability is still valid for the others.
+ */
+export function isConnectConversationGone(error: unknown): boolean {
+  return (error as { rawCode?: unknown } | null)?.rawCode === 'dm_conversation_not_found';
+}

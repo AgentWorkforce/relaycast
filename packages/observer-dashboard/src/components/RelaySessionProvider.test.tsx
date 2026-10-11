@@ -84,6 +84,24 @@ describe('RelaySessionProvider (Connect)', () => {
     expect(screen.getByText('room')).toBeTruthy();
   });
 
+  it('aborts a retry login that is in flight when the provider unmounts', async () => {
+    let retrySignal: AbortSignal | undefined;
+    fetchMock
+      .mockResolvedValueOnce(json(503, { success: false, error: 'Unable to validate API key' }))
+      .mockImplementationOnce((_url: string, init: RequestInit) => {
+        retrySignal = init.signal ?? undefined;
+        return new Promise<Response>(() => undefined);
+      });
+    open();
+    await flush();
+    await flush(2_000);
+    expect(logins()).toHaveLength(2);
+    expect(retrySignal?.aborted).toBe(false);
+    cleanup();
+    // The stale POST is cancelled, so its Set-Cookie cannot replace a newer session.
+    expect(retrySignal?.aborted).toBe(true);
+  });
+
   it('does not schedule a retry for an open that fails after unmount', async () => {
     let failLogin!: (response: Response) => void;
     fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { failLogin = resolve; }));

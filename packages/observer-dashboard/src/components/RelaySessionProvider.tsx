@@ -44,12 +44,16 @@ export function RelaySessionProvider({
   // An open that fails after unmount must not schedule a retry: it would later
   // re-send the captured capability and could overwrite a newer session's cookies.
   const mounted = useRef(true);
+  // Aborts the login/session request in flight, so a response that lands after
+  // unmount (or after another identity started) cannot apply its cookies.
+  const inFlight = useRef<AbortController | null>(null);
 
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
       window.clearTimeout(retryTimer.current);
+      inFlight.current?.abort();
     };
   }, []);
   const requestSeq = useRef(0);
@@ -89,6 +93,7 @@ export function RelaySessionProvider({
     // The capability lives only in this closure once stripped from the URL, so
     // retries re-run the login here instead of asking for a reload.
     window.clearTimeout(retryTimer.current);
+    inFlight.current?.abort();
     let attempt = 0;
     const failTemporarily = (retryAfterMs?: number | null) => {
       if (seq !== requestSeq.current || !mounted.current) return;
@@ -110,6 +115,8 @@ export function RelaySessionProvider({
     };
 
     async function initSession() {
+      const controller = new AbortController();
+      inFlight.current = controller;
       try {
         if (
           mode === 'connect' &&
@@ -132,8 +139,9 @@ export function RelaySessionProvider({
         if (keyParam?.startsWith('rk_live_') || keyParam?.startsWith('ot_live_')) {
           const result = await login(
             keyParam,
-            mode === 'connect' ? { connectObserverId: observerIdParam! } : undefined,
+            mode === 'connect' ? { connectObserverId: observerIdParam!, signal: controller.signal } : undefined,
           );
+          if (controller.signal.aborted) return;
           if (seq !== requestSeq.current) return;
           if (!result.ok) {
             if (mode === 'connect') {
@@ -146,8 +154,8 @@ export function RelaySessionProvider({
           }
         }
 
-        const res = await fetch('/observer/api/auth/session');
-        if (seq !== requestSeq.current) return;
+        const res = await fetch('/observer/api/auth/session', { signal: controller.signal });
+        if (seq !== requestSeq.current || controller.signal.aborted) return;
 
         if (!res.ok) {
           if (mode === 'connect') {
@@ -187,7 +195,7 @@ export function RelaySessionProvider({
           router.replace('/login');
         }
       } catch {
-        if (seq !== requestSeq.current) return;
+        if (seq !== requestSeq.current || controller.signal.aborted) return;
         if (mode === 'connect') {
           failTemporarily();
           return;

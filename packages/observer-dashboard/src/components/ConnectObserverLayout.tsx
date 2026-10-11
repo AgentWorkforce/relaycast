@@ -9,6 +9,7 @@ import {
   connectObserverExpiryDelay,
   connectObserverRetryDelay,
   formatUtcTimestamp,
+  isConnectConversationGone,
   loadConnectConversationMessages,
   sanitizeConnectObserverText,
   type ConnectObservedMessage,
@@ -61,7 +62,19 @@ export function ConnectObserverLayout() {
       // messages newer than the remembered snowflake are requested.
       for (const conversation of conversations) {
         const previousNewest = newestByConversation.current.get(conversation.id);
-        const page = await loadConnectConversationMessages(relay, conversation, previousNewest);
+        let page: ConnectObservedMessage[];
+        try {
+          page = await loadConnectConversationMessages(relay, conversation, previousNewest);
+        } catch (error) {
+          if (!isConnectConversationGone(error)) throw error;
+          // Access to this one conversation was narrowed: drop what it showed
+          // and keep observing the rest.
+          newestByConversation.current.delete(conversation.id);
+          for (const [id, message] of messageCache.current) {
+            if (message.conversationId === conversation.id) messageCache.current.delete(id);
+          }
+          continue;
+        }
         for (const message of page) messageCache.current.set(message.id, message);
         const newest = page.reduce<string | undefined>(
           (candidate, message) => (candidate === undefined || message.id > candidate ? message.id : candidate),

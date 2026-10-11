@@ -15,7 +15,7 @@ export async function setAuth(apiKey: string, options?: { connectObserverId?: st
  */
 export async function login(
   apiKey: string,
-  options?: { connectObserverId?: string },
+  options?: { connectObserverId?: string; signal?: AbortSignal },
 ): Promise<{ ok: true } | { ok: false; failure: ConnectObserverFailure; retryAfterMs?: number | null }> {
   let res: Response;
   try {
@@ -26,6 +26,7 @@ export async function login(
         apiKey,
         ...(options?.connectObserverId ? { connectObserverId: options.connectObserverId } : {}),
       }),
+      signal: options?.signal,
     });
   } catch {
     return { ok: false, failure: 'temporary' };

@@ -104,6 +104,22 @@ describe('ConnectObserverLayout', () => {
     expect(relay.allDmConversations).toHaveBeenCalledTimes(1);
   });
 
+  it('skips a conversation the observer can no longer see, and keeps the link and other conversations', async () => {
+    const gone = { id: 'dm_2', participants: ['carol', 'dave'] };
+    relay.allDmConversations.mockResolvedValue([conversation, gone]);
+    relay.dmMessagePage.mockImplementation(async (conversationId: string) => {
+      if (conversationId === 'dm_2') throw Object.assign(failure(404), { rawCode: 'dm_conversation_not_found' });
+      return { messages: [message], nextBefore: null, exhausted: true };
+    });
+    render(<ConnectObserverLayout />);
+    await flush();
+    expect(screen.getByText('Canberra')).toBeTruthy();
+    expect(screen.queryByText('Observer link unavailable')).toBeNull();
+    // Still observing: the live poll keeps reading.
+    await flush(15_000);
+    expect(relay.allDmConversations).toHaveBeenCalledTimes(2);
+  });
+
   it('keeps loaded history visible during a temporary failure', async () => {
     relay.allDmConversations.mockResolvedValueOnce([conversation]).mockRejectedValue(failure(429));
     render(<ConnectObserverLayout />);
