@@ -51,9 +51,14 @@ export function getRouteKey(method: string, path: string): string | null {
   // Normalize path: /v1/channels/foo/messages -> /channels/*/messages
   const normalized = path
     .replace(/^\/v1/, '')
-    .replace(/\/[a-zA-Z0-9_-]+\/messages/, '/*/messages')
-    .replace(/\/[a-zA-Z0-9_-]+\/reactions/, '/*/reactions')
-    .replace(/\/[a-zA-Z0-9_-]+\/replies/, '/*/replies')
+    // Anchored to the routes they actually describe. Unanchored, they matched
+    // ANY `/<segment>/messages`, so an agent legitimately named `messages`
+    // turned `/agents/messages` into `/*/messages` -- an unmapped key -- and
+    // the identity read fell back to `global`, which is the starvation this
+    // whole change exists to prevent. Same for `reactions` and `replies`.
+    .replace(/^\/channels\/[^/]+\/messages/, '/channels/*/messages')
+    .replace(/^\/messages\/[^/]+\/reactions/, '/messages/*/reactions')
+    .replace(/^\/messages\/[^/]+\/replies/, '/messages/*/replies')
     // A single agent lookup collapses to one key so the bucket is per route,
     // not per agent name -- otherwise every name gets its own full allowance
     // and the limit means nothing.

@@ -23,6 +23,11 @@ describe('rate limit route buckets', () => {
     // rejects only the reserved release marker, and encodeURIComponent leaves
     // a period alone. A character whitelist left these in `global` -- starved
     // by the very traffic the bucket exists to separate them from.
+    // Review caught these too: `messages`, `reactions` and `replies` are valid
+    // agent names, and the unanchored rewrites claimed them first.
+    for (const name of ['messages', 'reactions', 'replies']) {
+      expect(getRouteKey('GET', `/v1/agents/${name}`)).toBe('GET:/agents/*');
+    }
     for (const name of ['build.bot', 'team.alpha.bot', 'agent%20one', 'ops@site', 'a+b', 'ünïcode']) {
       expect(getRouteKey('GET', `/v1/agents/${name}`)).toBe('GET:/agents/*');
     }
