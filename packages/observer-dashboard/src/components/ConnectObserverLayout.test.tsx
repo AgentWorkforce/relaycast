@@ -60,6 +60,20 @@ describe('ConnectObserverLayout', () => {
     });
   }
 
+  it('holds the live poll until a longer Retry-After retry runs', async () => {
+    relay.allDmConversations
+      .mockRejectedValueOnce(Object.assign(failure(429), { retryAfterMs: 60_000 }))
+      .mockResolvedValue([conversation]);
+    render(<ConnectObserverLayout />);
+    await flush();
+    // The 15s poll ticks three times inside the server's 60s wait without reading.
+    await flush(59_000);
+    expect(relay.allDmConversations).toHaveBeenCalledTimes(1);
+    await flush(1_000);
+    expect(relay.allDmConversations).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('Canberra')).toBeTruthy();
+  });
+
   it('stops after the retry budget, stays paused, and retries again only on request', async () => {
     relay.allDmConversations.mockRejectedValue(failure(503));
     render(<ConnectObserverLayout />);

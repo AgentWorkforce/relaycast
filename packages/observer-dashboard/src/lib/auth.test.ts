@@ -19,6 +19,11 @@ describe('login', () => {
     expect(await login('ot_live_x')).toEqual({ ok: false, failure: 'temporary' });
   });
 
+  it('treats a 2xx without success: true (e.g. a truncated body) as temporary, not revoked', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"succ', { status: 200 })));
+    expect(await login('ot_live_x')).toEqual({ ok: false, failure: 'temporary' });
+  });
+
   it('succeeds only on success: true', async () => {
     vi.stubGlobal('fetch', respond(200, { success: true }));
     expect(await login('ot_live_x')).toEqual({ ok: true });

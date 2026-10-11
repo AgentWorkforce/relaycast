@@ -37,11 +37,14 @@ export function ConnectObserverLayout() {
   const pausedAfterFailures = useRef(false);
   // A rejected capability stays rejected: stop polling instead of re-sending it.
   const revoked = useRef(false);
+  // While a backoff retry is scheduled, the live poll and realtime events wait
+  // for it, so a longer Retry-After is honoured and the budget is not spent early.
+  const retryPending = useRef(false);
 
   useEffect(() => () => window.clearTimeout(retryTimer.current), []);
 
   const refresh = useCallback(async () => {
-    if (expired || refreshInFlight.current || pausedAfterFailures.current || revoked.current) return;
+    if (expired || refreshInFlight.current || pausedAfterFailures.current || revoked.current || retryPending.current) return;
     refreshInFlight.current = true;
     try {
       const conversations = await relay.allDmConversations();
@@ -70,6 +73,7 @@ export function ConnectObserverLayout() {
     } catch (error) {
       if (classifyConnectObserverError(error) === 'revoked') {
         revoked.current = true;
+        retryPending.current = false;
         window.clearTimeout(retryTimer.current);
         setUnavailable(true);
       } else {
@@ -79,7 +83,13 @@ export function ConnectObserverLayout() {
         pausedAfterFailures.current = delay === null;
         setTemporary({ retrying: delay !== null });
         window.clearTimeout(retryTimer.current);
-        if (delay !== null) retryTimer.current = window.setTimeout(() => void refreshRef.current(), delay);
+        retryPending.current = delay !== null;
+        if (delay !== null) {
+          retryTimer.current = window.setTimeout(() => {
+            retryPending.current = false;
+            void refreshRef.current();
+          }, delay);
+        }
       }
     } finally {
       setLoading(false);
@@ -91,6 +101,7 @@ export function ConnectObserverLayout() {
 
   const retryNow = useCallback(() => {
     window.clearTimeout(retryTimer.current);
+    retryPending.current = false;
     retryAttempt.current = 0;
     pausedAfterFailures.current = false;
     setTemporary({ retrying: true });

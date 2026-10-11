@@ -32,7 +32,8 @@ export async function login(
   }
   const data = await res.json().catch(() => null) as { success?: unknown } | null;
   if (res.ok && data?.success === true) return { ok: true };
-  return { ok: false, failure: res.ok ? 'revoked' : classifyConnectObserverStatus(res.status) };
+  // A 2xx without `success: true` (e.g. a truncated body) proves no rejection.
+  return { ok: false, failure: res.ok ? 'temporary' : classifyConnectObserverStatus(res.status) };
 }
 
 /**
