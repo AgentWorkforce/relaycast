@@ -7,6 +7,7 @@ import { login } from '../lib/auth';
 import { resetActivityIfWorkspaceChanged } from '../lib/activity-store';
 import {
   classifyConnectObserverStatus,
+  connectObserverExpiryDelay,
   connectObserverIdentity,
   connectObserverRetryDelay,
   connectObserverUrlWithoutCapability,
@@ -47,6 +48,10 @@ export function RelaySessionProvider({
   // Aborts the login/session request in flight, so a response that lands after
   // unmount (or after another identity started) cannot apply its cookies.
   const inFlight = useRef<AbortController | null>(null);
+  // The capability captured from the link, kept until the open settles: a
+  // Strict Mode effect replay (or remount) that aborted an unfinished open
+  // must be able to restart it after the URL was scrubbed.
+  const capturedCapability = useRef<string | null>(null);
 
   useEffect(() => {
     mounted.current = true;
@@ -63,8 +68,11 @@ export function RelaySessionProvider({
   useEffect(() => {
     const observerIdParam = searchParams.get('observer_id');
     const fragmentKey = mode === 'connect' ? new URLSearchParams(window.location.hash.slice(1)).get('key') : null;
-    const keyParam = searchParams.get('key') ?? fragmentKey;
+    const urlKey = searchParams.get('key') ?? fragmentKey;
     const expiresAt = searchParams.get('expires_at');
+    const resumesAbortedOpen = mode === 'connect' && !urlKey && Boolean(inFlight.current?.signal.aborted)
+      && connectIdentity.current === connectObserverIdentity(observerIdParam, expiresAt);
+    const keyParam = urlKey ?? (resumesAbortedOpen ? capturedCapability.current : null);
     const priorMode = previousMode.current;
     previousMode.current = mode;
     if (
@@ -77,6 +85,7 @@ export function RelaySessionProvider({
       connectIdentity.current = connectObserverIdentity(observerIdParam, expiresAt);
     }
     const seq = ++requestSeq.current;
+    if (mode === 'connect') capturedCapability.current = keyParam;
     if (mode === 'connect' && keyParam) {
       // Capture the capability above, then remove it before any asynchronous
       // validation so success, rejection, expiry, and network failure all
@@ -178,6 +187,7 @@ export function RelaySessionProvider({
           // mounts, so switching keys never hydrates stale cross-workspace events.
           resetActivityIfWorkspaceChanged(data.apiKey);
           setTemporaryFailure(null);
+          capturedCapability.current = null;
           setSession({
             apiKey: data.apiKey,
             agentToken: data.agentToken,
@@ -210,9 +220,32 @@ export function RelaySessionProvider({
     initSession();
   }, [mode, router, searchParams]);
 
+  // A link that expires while temporary retries are paused must say so; the
+  // expiry check inside the open only runs when a retry does.
+  useEffect(() => {
+    const expiresAt = searchParams.get('expires_at');
+    if (!temporaryFailure || mode !== 'connect' || !expiresAt) return;
+    let timer: number | undefined;
+    const checkExpiry = () => {
+      const delay = connectObserverExpiryDelay(expiresAt);
+      if (delay === null) return;
+      if (delay <= 0) {
+        window.clearTimeout(retryTimer.current);
+        inFlight.current?.abort();
+        setTemporaryFailure(null);
+        setAccessFailure('expired');
+        return;
+      }
+      timer = window.setTimeout(checkExpiry, delay);
+    };
+    checkExpiry();
+    return () => window.clearTimeout(timer);
+  }, [mode, searchParams, temporaryFailure]);
+
   if (accessFailure) {
     return <ConnectObserverAccessState state={accessFailure} />;
   }
+
 
   if (temporaryFailure) {
     return <ConnectObserverTemporaryState retrying={temporaryFailure.retrying} onRetry={() => retryNow.current()} />;

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { StrictMode } from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CONNECT_OBSERVER_MAX_RETRIES } from '../lib/connect-observer';
@@ -100,6 +101,30 @@ describe('RelaySessionProvider (Connect)', () => {
     cleanup();
     // The stale POST is cancelled, so its Set-Cookie cannot replace a newer session.
     expect(retrySignal?.aborted).toBe(true);
+  });
+
+  it('completes the first open under Strict Mode effect replay', async () => {
+    fetchMock.mockImplementation(async (url: string) =>
+      url === '/observer/api/auth/login' ? json(200, { success: true }) : json(200, session));
+    search = new URLSearchParams('observer_id=ot_1&expires_at=2999-01-01T00:00:00Z');
+    window.history.replaceState({}, '', `/observer/connect?${search}#key=${CAPABILITY}`);
+    render(<StrictMode><RelaySessionProvider mode="connect"><p>room</p></RelaySessionProvider></StrictMode>);
+    await flush();
+    expect(screen.getByText('room')).toBeTruthy();
+    expect(window.location.hash).toBe('');
+  });
+
+  it('shows the expired state when the link expires while retries are paused', async () => {
+    fetchMock.mockResolvedValue(json(503, { success: false, error: 'Unable to validate API key' }));
+    const expiresAt = new Date(Date.now() + 15 * 60_000).toISOString();
+    search = new URLSearchParams(`observer_id=ot_1&expires_at=${expiresAt}`);
+    window.history.replaceState({}, '', `/observer/connect?${search}#key=${CAPABILITY}`);
+    render(<RelaySessionProvider mode="connect"><p>room</p></RelaySessionProvider>);
+    await flush();
+    await flush(2 * 60_000);
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    await flush(14 * 60_000);
+    expect(screen.getByText('This Relay Connect has expired')).toBeTruthy();
   });
 
   it('does not schedule a retry for an open that fails after unmount', async () => {
