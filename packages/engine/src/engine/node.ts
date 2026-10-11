@@ -25,7 +25,7 @@ import { actionInvocations, agents, agentNodeBindings, channelMembers, channels,
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { acceptTaskInvocation, completeTaskInvocation } from './taskInvocation.js';
-import { runAtomic, runAtomicWrites } from '../ports/database.js';
+import { databaseConstraintKind, runAtomic, runAtomicWrites } from '../ports/database.js';
 import type { AtomicWrite, BatchCapability, EngineDb } from '../ports/database.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { generateId } from './snowflake.js';
@@ -1277,9 +1277,17 @@ interface SpawnReservationClaim {
 /**
  * The capacity-admission statement (at most one reserved slot). Built, not
  * executed, so a caller that owns the whole registration can commit it in the
- * same atomic unit as the identity insert the reservation is for — on D1 the
- * batch is what keeps a name-conflict retry from first paying for a leaked
- * slot increment and its compensating release.
+ * same atomic unit as the identity insert the reservation is for.
+ *
+ * A refused admission must *fail*, not merely match no rows: batched
+ * statements cannot inspect each other's results, so a soft refusal lets the
+ * insert in the same unit commit a ghost agent until a compensating delete
+ * lands (and in that window a same-named registration reads a false
+ * `agent_already_exists`). Writing NULL into `active_agents` when the
+ * capacity predicate fails makes the refusal a statement error that aborts
+ * the whole atomic group on every adapter — the same NOT NULL sentinel the
+ * workspace growth guards use. `databaseConstraintKind` reports it as
+ * 'node_capacity'.
  */
 function reserveNodeAgentSlotStatement(
   db: Db,
@@ -1315,32 +1323,39 @@ function reserveNodeAgentSlotStatement(
   return db
     .update(nodes)
     .set({
-      activeAgents: sql`${nodes.activeAgents} + 1`,
-    })
-    .where(and(
-      eq(nodes.workspaceId, workspaceId),
-      eq(nodes.id, node.id),
-      or(
+      activeAgents: sql`CASE WHEN ${or(
         eq(nodes.maxAgents, 0),
         and(ownsSpawnReservation, sql`${nodes.activeAgents} < ${nodes.maxAgents}`),
         and(
           sql`NOT (${ownsSpawnReservation})`,
           sql`${nodes.activeAgents} + ${nodes.reservedAgents} < ${nodes.maxAgents}`,
         ),
-      ),
+      )} THEN ${nodes.activeAgents} + 1 ELSE NULL END`,
+    })
+    .where(and(
+      eq(nodes.workspaceId, workspaceId),
+      eq(nodes.id, node.id),
     ))
     .returning({ id: nodes.id });
 }
 
+/** Translate the admission sentinel (and the node-row-gone empty update) into the capacity refusal callers expect. */
 async function reserveNodeAgentSlot(
   db: Db,
   workspaceId: string,
   node: NodeRow,
   claim?: SpawnReservationClaim,
 ): Promise<void> {
-  const [reserved] = await reserveNodeAgentSlotStatement(db, workspaceId, node, claim);
-  if (!reserved) {
-    throw codedError(`Node "${node.name}" is at capacity`, 'node_capacity_exceeded', 409);
+  try {
+    const [reserved] = await reserveNodeAgentSlotStatement(db, workspaceId, node, claim);
+    if (!reserved) {
+      throw codedError(`Node "${node.name}" is at capacity`, 'node_capacity_exceeded', 409);
+    }
+  } catch (err) {
+    if (databaseConstraintKind(err) === 'node_capacity') {
+      throw codedError(`Node "${node.name}" is at capacity`, 'node_capacity_exceeded', 409);
+    }
+    throw err;
   }
 }
 
@@ -2047,6 +2062,12 @@ export async function registerAgentViaNode(
         ...(cursorHandshake ? { delivery_ack_seq: agent.deliveryAckSeq } : {}),
       };
     } catch (err) {
+      // The reserve statement writes NULL into active_agents on a refused
+      // admission, aborting the group before the identity insert can run —
+      // nothing landed, so there is nothing to compensate.
+      if (databaseConstraintKind(err) === 'node_capacity') {
+        throw codedError(`Node "${node.name}" is at capacity`, 'node_capacity_exceeded', 409);
+      }
       const compensations: AtomicWrite[] = [];
       if ((admissionResults[1] as AgentRow[] | undefined)?.[0]) {
         compensations.push(tx
