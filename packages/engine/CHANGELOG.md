@@ -15,6 +15,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - `GET /v1/dm/conversations/all` supports opt-in cursor pages of at most 500 conversations, internally chunked below D1's bind limit, while preserving the legacy unpaginated and observer response contracts.
 - `GET /v1/dm/conversations/all` applies an observer's conversation allowlist before participant and message enrichment, keeping narrowly scoped links fast in large workspaces.
+- `agent.register`'s cancelled-spawn tombstone check seeks a new composite index on `action_invocations` (`idx_action_invocations_spawn_canceled`, `workspace_id` + `dispatched_node_id`) instead of the whole `status = 'failed'` bucket — measured ~216k rows / ~1.8s per registration on hosted production, enough to breach the node liveness deadline and surface `d1_pressure` on every spawn.
 
 ## [10.0.1] - 2026-10-11
 

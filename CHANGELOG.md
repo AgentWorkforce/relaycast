@@ -25,6 +25,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 - Official SDK workspace-wide DM listing uses bounded cursor pages internally while preserving its complete-array return value; legacy unpaginated HTTP callers and scoped observer links retain their existing full-list behavior.
 - Conversation-scoped observer links load only their allowed direct messages instead of enriching every DM in the workspace first.
 - Relay Connect observer pages refresh only the affected conversation after a realtime DM and reconcile the full scoped list every five minutes, avoiding a full conversation-list read on every event or 15-second tick.
+- Agent registration through a node no longer scans the full failed-invocation history on every `agent.register`, removing the ~2s read that tipped hosted node-control frames into `d1_pressure` timeouts on large workspaces.
 
 ## [10.0.1] - 2026-10-11
 
