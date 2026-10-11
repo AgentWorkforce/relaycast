@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
+
+### Added
+
+- `sweepUnreachableDeliveries` / `deadLetterUnreachableDeliveryBatch`: scheduled drain that dead-letters active deliveries routed (`location_node_id`) to `ws` nodes offline past a grace window (default 30m), emitting `delivery.failed` (`reason: 'node_unreachable'`) sender notices per batch — frees workspace delivery-depth capacity held by mail that can never dispatch, without waiting out the full TTL. `http_push`/`poll` routes and never-connected nodes are untouched.
 
 ### Fixed
 

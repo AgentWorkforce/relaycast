@@ -86,7 +86,7 @@ export { runA2aHealthChecks } from './engine/a2a-health.js';
 // `sweepDueHttpPushDeliveries` is a deprecated alias kept for hosts (relaycast-
 // cloud) that still import the old name.
 export { sweepDueNodeDeliveries, sweepDueHttpPushDeliveries } from './routes/deliveryRouting.js';
-export { sweepExpiredDeliveries } from './routes/deliveryRouting.js';
+export { sweepExpiredDeliveries, sweepUnreachableDeliveries } from './routes/deliveryRouting.js';
 export { deliverPendingToNode } from './engine/delivery.js';
 export { handleNodeReconnect } from './node-reconnect.js';
 export { handleAgentDisconnect } from './agent-disconnect.js';

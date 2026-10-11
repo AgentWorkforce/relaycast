@@ -1,7 +1,7 @@
 import { parseMessageMentions } from './mentions.js';
-import { eq, and, not, asc, isNull, inArray, notInArray, lte, gt, sql, getTableColumns, type SQL } from 'drizzle-orm';
+import { eq, and, asc, exists, isNull, isNotNull, inArray, lt, ne, not, notInArray, lte, gt, sql, getTableColumns, type SQL } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { deliveries, messages, agents, readReceipts, channelMembers, channels, dmConversations } from '../db/schema.js';
+import { deliveries, messages, agents, nodes, readReceipts, channelMembers, channels, dmConversations } from '../db/schema.js';
 import type { DeliveryStatus } from '@relaycast/types';
 import { runAtomic } from '../ports/database.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
@@ -492,7 +492,7 @@ export interface DeliveryFailureNotice {
   target_agent_id: string;
   target_agent_name: string;
   seq: number;
-  reason: 'ttl_expired';
+  reason: 'ttl_expired' | 'node_unreachable';
   error: string;
   retryable: false;
 }
@@ -577,6 +577,114 @@ export async function expireDueDeliveries(
   now: Date = new Date(),
 ): Promise<DeliveryFailureNotice[]> {
   return (await expireDueDeliveryBatch(db, workspaceId, now)).notices;
+}
+
+/**
+ * Nodes that have been offline past this window are treated as permanently
+ * unreachable for delivery purposes: their queued mail can never dispatch, and
+ * every minute it lingers it consumes the workspace delivery-depth cap.
+ * Well under the delivery TTL (minutes, not seconds) so a routine node
+ * restart or deploy never burns queued mail.
+ */
+export const UNREACHABLE_NODE_GRACE_MS = 30 * 60 * 1000;
+
+/**
+ * Dead-letter one bounded batch of deliveries routed to a node that has been
+ * offline past {@link UNREACHABLE_NODE_GRACE_MS}. Mirrors
+ * {@link expireDueDeliveryBatch} — same transition, same sender notices — but
+ * the trigger is reachability rather than TTL: a delivery whose
+ * `location_node_id` node cannot come back inside the row's useful life only
+ * serves to pin the workspace depth cap until expiry.
+ *
+ * One bounded join read then a guarded update. Driving the scan from
+ * deliveries joined to nodes (rather than a fixed page of stale node ids)
+ * means a crowd of delivery-free stale nodes cannot starve later nodes that
+ * still hold mail; ordering oldest-heartbeat-first drains the longest-dead
+ * targets first.
+ *
+ * Eligibility is deliberately narrow:
+ * - `kind = 'ws'` only. `http_push`/`poll` nodes have no socket liveness
+ *   contract — `offline` + a stale heartbeat is their normal resting state —
+ *   and their mail dispatches via the host-driven redrive sweep or next poll.
+ * - `last_heartbeat_at IS NOT NULL` — a node that has never connected may
+ *   simply be mid-startup; its deliveries keep the ordinary TTL path.
+ * - The UPDATE rechecks node staleness inside the statement via a correlated
+ *   EXISTS, so a node that reconnects between the read and the write keeps
+ *   its mail.
+ */
+export async function deadLetterUnreachableDeliveryBatch(
+  db: Db,
+  workspaceId: string | undefined,
+  offlineGraceMs: number = UNREACHABLE_NODE_GRACE_MS,
+  now: Date = new Date(),
+): Promise<ExpiredDeliveryBatch> {
+  const graceMs = Number.isFinite(offlineGraceMs) && offlineGraceMs > 0
+    ? offlineGraceMs
+    : UNREACHABLE_NODE_GRACE_MS;
+  const staleBefore = new Date(now.getTime() - graceMs);
+  const staleNodePredicate = and(
+    eq(nodes.id, deliveries.locationNodeId),
+    eq(nodes.kind, 'ws'),
+    ne(nodes.status, 'online'),
+    isNotNull(nodes.lastHeartbeatAt),
+    lt(nodes.lastHeartbeatAt, staleBefore),
+  );
+
+  const due = await db
+    .select({
+      delivery: deliveries,
+      senderAgentId: messages.agentId,
+      targetAgentName: agents.name,
+    })
+    .from(deliveries)
+    .innerJoin(nodes, staleNodePredicate)
+    .innerJoin(messages, eq(deliveries.messageId, messages.id))
+    .innerJoin(agents, eq(deliveries.agentId, agents.id))
+    .where(and(
+      workspaceId ? eq(deliveries.workspaceId, workspaceId) : undefined,
+      // Literal statuses, as in expireDueDeliveryBatch: parameterizing them
+      // hides the predicate from SQLite's partial-index selection.
+      sql`${deliveries.status} IN ('queued', 'delivered')`,
+    ))
+    .orderBy(asc(nodes.lastHeartbeatAt), asc(deliveries.expiresAt), asc(deliveries.id))
+    .limit(DELIVERY_EXPIRY_BATCH_SIZE);
+
+  if (due.length === 0) return { expiredCount: 0, notices: [] };
+
+  const ids = due.map((row) => row.delivery.id);
+  const updated = await db
+    .update(deliveries)
+    .set({
+      status: 'dead_lettered',
+      error: 'target node unreachable',
+      retryable: false,
+      deadLetteredAt: now,
+      updatedAt: now,
+    })
+    .where(and(
+      workspaceId ? eq(deliveries.workspaceId, workspaceId) : undefined,
+      inArray(deliveries.id, ids),
+      notInArray(deliveries.status, ['acked', 'dead_lettered', 'failed']),
+      exists(db.select({ id: nodes.id }).from(nodes).where(staleNodePredicate)),
+    ))
+    .returning({ id: deliveries.id });
+  const updatedIds = new Set(updated.map((row) => row.id));
+
+  const notices = due
+    .filter((row) => row.senderAgentId && updatedIds.has(row.delivery.id))
+    .map((row) => ({
+      workspace_id: row.delivery.workspaceId,
+      delivery_id: row.delivery.id,
+      message_id: row.delivery.messageId,
+      sender_agent_id: row.senderAgentId,
+      target_agent_id: row.delivery.agentId,
+      target_agent_name: row.targetAgentName,
+      seq: row.delivery.seq,
+      reason: 'node_unreachable' as const,
+      error: 'target node unreachable',
+      retryable: false as const,
+    }));
+  return { expiredCount: updated.length, notices };
 }
 
 function wireMode(mode: string): 'wait' | 'steer' {
