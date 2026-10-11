@@ -20,6 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
+- Agent identity lookups keep their own rate-limit allowance instead of competing with the workspace's message traffic, so a busy workspace can still register and verify agents.
 - A handle whose delivery identity was previously released can be registered again instead of being refused permanently.
 
 ## [10.0.3] - 2026-10-11

@@ -11,6 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `GET /v1/agent` and `GET /v1/agents/<name>` have dedicated rate-limit buckets instead of sharing the workspace-wide `global` bucket; `GET /v1/agents/presence` keeps its tighter allowance and the roster listing is unchanged.
 - `registerAgent` reclaims a recovery verifier left enrolled by its own released tombstone, scoped to the same workspace and agent name; a verifier held by a live identity or a different name is still refused with `agent_recovery_proof_conflict`. Registration writes now require atomic execution.
 
 ## [10.0.2] - 2026-10-11
