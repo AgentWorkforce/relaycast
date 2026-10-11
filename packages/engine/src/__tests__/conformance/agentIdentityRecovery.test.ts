@@ -169,6 +169,44 @@ describe('explicit agent identity recovery', () => {
     expect((await authenticate(await responseToken(recovered))).status).toBe(200);
   });
 
+  it('lets a released name be registered again with the same derived verifier', async () => {
+    // Release tombstones the agent but keeps its credential enrolled, and the
+    // verifier is globally unique. A caller deriving the verifier from stable
+    // inputs -- workspace, owner, agent name -- re-presents the same value on
+    // every attempt, so without reclaim a released name is unregisterable
+    // forever and no retry can clear it.
+    const workspace = await createWorkspace(stack.app, 'released-verifier-workspace');
+    const verifierHash = 'c'.repeat(64);
+    const register = () => stack.app.request('/v1/agents', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${workspace.workspaceKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ name: 'recycled-name', recovery_proof_hash: verifierHash }),
+    });
+
+    expect((await register()).status).toBe(201);
+
+    const released = await stack.app.request('/v1/agents/recycled-name', {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${workspace.workspaceKey}` },
+    });
+    expect(released.status).toBe(204);
+
+    // Before the reclaim this was a permanent 409.
+    const again = await register();
+    expect(again.status).toBe(201);
+
+    // The reclaim must take exactly one credential, not leave a duplicate or
+    // strand the tombstone's row: the new identity owns the verifier now.
+    const rows = await stack.runtime.deps.db
+      .select()
+      .from(agentRecoveryCredentials)
+      .where(eq(agentRecoveryCredentials.verifierHash, verifierHash));
+    expect(rows).toHaveLength(1);
+  });
+
   it('reports verifier reuse accurately and rejects cross-workspace credential rows', async () => {
     const firstWorkspace = await createWorkspace(stack.app, 'proof-owner-workspace');
     const secondWorkspace = await createWorkspace(stack.app, 'proof-attacker-workspace');
