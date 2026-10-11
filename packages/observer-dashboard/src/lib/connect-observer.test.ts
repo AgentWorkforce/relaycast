@@ -164,7 +164,11 @@ describe('Connect observer failure classification', () => {
     expect(Array.from({ length: CONNECT_OBSERVER_MAX_RETRIES + 1 }, (_, attempt) => connectObserverRetryDelay(attempt)))
       .toEqual([2_000, 4_000, 8_000, 16_000, 30_000, null]);
     expect(connectObserverRetryDelay(0, 20_000)).toBe(20_000);
-    expect(connectObserverRetryDelay(0, 10 * 60_000)).toBe(60_000);
+    // A quota reset days away is kept, not truncated to a minute.
+    expect(connectObserverRetryDelay(0, 10 * 60_000)).toBe(10 * 60_000);
+    expect(connectObserverRetryDelay(0, 3 * 86_400_000)).toBe(3 * 86_400_000);
+    // Past the browser timer range it fires at the limit and reads a fresh Retry-After.
+    expect(connectObserverRetryDelay(0, 40 * 86_400_000)).toBe(2_147_000_000);
   });
 });
 

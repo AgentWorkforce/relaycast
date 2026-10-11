@@ -114,14 +114,16 @@ const CONNECT_OBSERVER_RETRY_MAX_MS = 30_000;
 
 /**
  * Delay before automatic retry `attempt` (0-based): 2s, 4s, 8s, 16s, 30s, or
- * the server's Retry-After when it is longer (capped). Null once retries are
- * spent, so a busy workspace is not polled indefinitely.
+ * the server's Retry-After when it is longer. A quota reset can be days away,
+ * so the server's deadline is kept, limited only by the browser timer range
+ * (a later retry just reads a fresh Retry-After). Null once retries are spent,
+ * so a busy workspace is not polled indefinitely.
  */
 export function connectObserverRetryDelay(attempt: number, retryAfterMs?: number | null): number | null {
   if (attempt >= CONNECT_OBSERVER_MAX_RETRIES) return null;
   const backoff = Math.min(CONNECT_OBSERVER_RETRY_BASE_MS * 2 ** attempt, CONNECT_OBSERVER_RETRY_MAX_MS);
   const serverDelay = typeof retryAfterMs === 'number' && Number.isFinite(retryAfterMs) && retryAfterMs > 0
-    ? Math.min(retryAfterMs, CONNECT_OBSERVER_RETRY_MAX_MS * 2)
+    ? Math.min(retryAfterMs, MAX_BROWSER_TIMEOUT_MS)
     : 0;
   return Math.max(backoff, serverDelay);
 }
