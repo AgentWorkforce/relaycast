@@ -5,6 +5,7 @@ import {
   observerBindingMatches,
   pickRememberedEngine,
   resolveRelayServerCandidatesFromRequest,
+  retryAfterHeader,
   selectEngineForKey,
 } from '../../../../lib/relay-server';
 
@@ -35,14 +36,17 @@ export async function GET(request: NextRequest) {
 
   const candidates = resolveRelayServerCandidatesFromRequest(request);
   const remembered = pickRememberedEngine(cookieStore.get(ENGINE_COOKIE_NAME)?.value, candidates);
-  const { baseUrl, rejectedAny, inconclusiveAny, observerTokenId } = await selectEngineForKey(
+  const { baseUrl, rejectedAny, inconclusiveAny, observerTokenId, retryAfterMs } = await selectEngineForKey(
     orderByRemembered(candidates, remembered),
     apiKey,
   );
 
   if (!baseUrl) {
     if (!rejectedAny || inconclusiveAny) {
-      return NextResponse.json({ authenticated: false, error: 'Unable to validate session' }, { status: 503 });
+      return NextResponse.json(
+        { authenticated: false, error: 'Unable to validate session' },
+        { status: 503, headers: retryAfterHeader(retryAfterMs) },
+      );
     }
 
     return NextResponse.json({ authenticated: false }, { status: 401 });

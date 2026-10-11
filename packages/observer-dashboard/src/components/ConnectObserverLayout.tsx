@@ -5,12 +5,16 @@ import { useSearchParams } from 'next/navigation';
 import { useEvent, useRelay } from '@relaycast/react';
 import { MessageSquareText, ShieldCheck } from 'lucide-react';
 import {
+  classifyConnectObserverError,
   connectObserverExpiryDelay,
+  connectObserverRetryDelay,
   formatUtcTimestamp,
+  isConnectConversationGone,
   loadConnectConversationMessages,
   sanitizeConnectObserverText,
   type ConnectObservedMessage,
 } from '../lib/connect-observer';
+import { ConnectObserverTemporaryState } from './ConnectObserverTemporaryState';
 
 const REFRESH_INTERVAL_MS = 15_000;
 
@@ -25,9 +29,31 @@ export function ConnectObserverLayout() {
   const messageCache = useRef(new Map<string, ConnectObservedMessage>());
   const newestByConversation = useRef(new Map<string, string>());
   const refreshInFlight = useRef(false);
+  // Temporary failures (rate limit, outage, network) retry with bounded
+  // backoff; once spent, polling pauses until the viewer asks again.
+  const [temporary, setTemporary] = useState<{ retrying: boolean } | null>(null);
+  const hasLoadedHistory = useRef(false);
+  const retryAttempt = useRef(0);
+  const retryTimer = useRef<number | undefined>(undefined);
+  const pausedAfterFailures = useRef(false);
+  // A rejected capability stays rejected: stop polling instead of re-sending it.
+  const revoked = useRef(false);
+  // While a backoff retry is scheduled, the live poll and realtime events wait
+  // for it, so a longer Retry-After is honoured and the budget is not spent early.
+  const retryPending = useRef(false);
+
+  // A read that fails after unmount must not schedule a retry.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      window.clearTimeout(retryTimer.current);
+    };
+  }, []);
 
   const refresh = useCallback(async () => {
-    if (expired || refreshInFlight.current) return;
+    if (expired || refreshInFlight.current || pausedAfterFailures.current || revoked.current || retryPending.current) return;
     refreshInFlight.current = true;
     try {
       const conversations = await relay.allDmConversations();
@@ -36,7 +62,19 @@ export function ConnectObserverLayout() {
       // messages newer than the remembered snowflake are requested.
       for (const conversation of conversations) {
         const previousNewest = newestByConversation.current.get(conversation.id);
-        const page = await loadConnectConversationMessages(relay, conversation, previousNewest);
+        let page: ConnectObservedMessage[];
+        try {
+          page = await loadConnectConversationMessages(relay, conversation, previousNewest);
+        } catch (error) {
+          if (!isConnectConversationGone(error)) throw error;
+          // Access to this one conversation was narrowed: drop what it showed
+          // and keep observing the rest.
+          newestByConversation.current.delete(conversation.id);
+          for (const [id, message] of messageCache.current) {
+            if (message.conversationId === conversation.id) messageCache.current.delete(id);
+          }
+          continue;
+        }
         for (const message of page) messageCache.current.set(message.id, message);
         const newest = page.reduce<string | undefined>(
           (candidate, message) => (candidate === undefined || message.id > candidate ? message.id : candidate),
@@ -49,14 +87,48 @@ export function ConnectObserverLayout() {
           (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id),
         ),
       );
+      hasLoadedHistory.current = true;
+      retryAttempt.current = 0;
+      setTemporary(null);
       setUnavailable(false);
-    } catch {
-      setUnavailable(true);
+    } catch (error) {
+      if (!mounted.current) return;
+      if (classifyConnectObserverError(error) === 'revoked') {
+        revoked.current = true;
+        retryPending.current = false;
+        window.clearTimeout(retryTimer.current);
+        setUnavailable(true);
+      } else {
+        const retryAfterMs = (error as { retryAfterMs?: unknown } | null)?.retryAfterMs;
+        const delay = connectObserverRetryDelay(retryAttempt.current, typeof retryAfterMs === 'number' ? retryAfterMs : null);
+        retryAttempt.current += 1;
+        pausedAfterFailures.current = delay === null;
+        setTemporary({ retrying: delay !== null });
+        window.clearTimeout(retryTimer.current);
+        retryPending.current = delay !== null;
+        if (delay !== null) {
+          retryTimer.current = window.setTimeout(() => {
+            retryPending.current = false;
+            if (mounted.current) void refreshRef.current();
+          }, delay);
+        }
+      }
     } finally {
       setLoading(false);
       refreshInFlight.current = false;
     }
   }, [expired, relay]);
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
+
+  const retryNow = useCallback(() => {
+    window.clearTimeout(retryTimer.current);
+    retryPending.current = false;
+    retryAttempt.current = 0;
+    pausedAfterFailures.current = false;
+    setTemporary({ retrying: true });
+    void refresh();
+  }, [refresh]);
 
   useEffect(() => {
     void refresh();
@@ -90,6 +162,10 @@ export function ConnectObserverLayout() {
 
   if (expired) return <TerminalState expired />;
   if (unavailable) return <TerminalState expired={false} />;
+  // Before any history loaded, a temporary failure must not look like an empty room.
+  if (temporary && !hasLoadedHistory.current) {
+    return <ConnectObserverTemporaryState retrying={temporary.retrying} onRetry={retryNow} />;
+  }
 
   return (
     <main className="brand-grid min-h-screen p-3 sm:p-6">
@@ -118,6 +194,16 @@ export function ConnectObserverLayout() {
               {messages.length} {messages.length === 1 ? 'message' : 'messages'}
             </span>
           </div>
+          {temporary ? (
+            <div role="status" className="flex items-center gap-3 border-b border-[var(--border-default)] px-5 py-2 text-xs text-[var(--text-muted)]">
+              {temporary.retrying ? 'Agent Relay is busy. Retrying to load new messages…' : 'Agent Relay is busy. New messages are paused.'}
+              {temporary.retrying ? null : (
+                <button type="button" onClick={retryNow} className="ml-auto font-semibold text-[var(--brand-primary)]">
+                  Try again
+                </button>
+              )}
+            </div>
+          ) : null}
           <div className="min-h-0 flex-1 overflow-y-auto bg-[color-mix(in_srgb,var(--surface-strong)_72%,transparent)] p-3 sm:p-5">
             {loading ? (
               <StateText>Loading room messages…</StateText>
