@@ -21,6 +21,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Fixed
 
 - Conversation-scoped observer links load only their allowed direct messages instead of enriching every DM in the workspace first.
+- Relay Connect observer pages refresh only the affected conversation after a realtime DM and reconcile the full scoped list every five minutes, avoiding a full conversation-list read on every event or 15-second tick.
 
 ## [10.0.1] - 2026-10-11
 
