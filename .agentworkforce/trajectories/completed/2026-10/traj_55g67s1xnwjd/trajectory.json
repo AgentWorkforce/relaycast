@@ -4,7 +4,7 @@
   "task": {
     "title": "Dead-letter deliveries routed to long-offline nodes (frees workspace depth cap)"
   },
-  "status": "active",
+  "status": "completed",
   "startedAt": "2026-10-11T23:04:51.105Z",
   "agents": [],
   "chapters": [],
@@ -15,5 +15,6 @@
   "_trace": {
     "startRef": "13a8dca240b1bc547b3d57fac2f7d404895f25dd",
     "endRef": "13a8dca240b1bc547b3d57fac2f7d404895f25dd"
-  }
+  },
+  "completedAt": "2026-10-11T23:15:00Z"
 }
