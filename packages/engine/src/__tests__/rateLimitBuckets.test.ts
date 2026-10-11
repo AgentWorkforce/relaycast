@@ -19,6 +19,13 @@ describe('rate limit route buckets', () => {
     // every name a full allowance and the limit would mean nothing.
     expect(getRouteKey('GET', '/v1/agents/arelay-answerer')).toBe('GET:/agents/*');
     expect(getRouteKey('GET', '/v1/agents/some-other-agent')).toBe('GET:/agents/*');
+    // Review caught this: agent names are arbitrary strings, registration
+    // rejects only the reserved release marker, and encodeURIComponent leaves
+    // a period alone. A character whitelist left these in `global` -- starved
+    // by the very traffic the bucket exists to separate them from.
+    for (const name of ['build.bot', 'team.alpha.bot', 'agent%20one', 'ops@site', 'a+b', 'ünïcode']) {
+      expect(getRouteKey('GET', `/v1/agents/${name}`)).toBe('GET:/agents/*');
+    }
   });
 
   it('keeps presence on its own tighter multiplier', () => {

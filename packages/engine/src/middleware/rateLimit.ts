@@ -56,10 +56,20 @@ export function getRouteKey(method: string, path: string): string | null {
     .replace(/\/[a-zA-Z0-9_-]+\/replies/, '/*/replies')
     // A single agent lookup collapses to one key so the bucket is per route,
     // not per agent name -- otherwise every name gets its own full allowance
-    // and the limit means nothing. `presence` is excluded because it is a
-    // distinct route with its own, tighter multiplier above; collapsing it here
-    // would silently widen it from 0.3 to 1.0.
-    .replace(/^\/agents\/(?!presence$)[a-zA-Z0-9_-]+$/, '/agents/*');
+    // and the limit means nothing.
+    //
+    // Matches the route's `:name` segment, NOT a character whitelist. Agent
+    // names are arbitrary strings: registration rejects only the reserved
+    // release marker, so `build.bot` is valid, and `encodeURIComponent` leaves
+    // a period unencoded. An ASCII whitelist therefore left punctuated names
+    // falling through to `global` -- starved by exactly the traffic this
+    // exists to separate them from, and only for some names, which is worse
+    // than not separating them at all.
+    //
+    // `presence` is excluded because it is a distinct route with its own,
+    // tighter multiplier above; collapsing it here would silently widen it
+    // from 0.3 to 1.0.
+    .replace(/^\/agents\/(?!presence$)[^/]+$/, '/agents/*');
   const key = `${method}:${normalized}`;
   return ROUTE_MULTIPLIERS[key] !== undefined ? key : null;
 }
