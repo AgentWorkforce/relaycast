@@ -3,13 +3,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { RelayProvider } from '@relaycast/react';
-import { setAuth } from '../lib/auth';
+import { login } from '../lib/auth';
 import { resetActivityIfWorkspaceChanged } from '../lib/activity-store';
 import {
+  classifyConnectObserverStatus,
   connectObserverIdentity,
+  connectObserverRetryDelay,
   connectObserverUrlWithoutCapability,
   shouldInitializeConnectObserver,
 } from '../lib/connect-observer';
+import { ConnectObserverTemporaryState } from './ConnectObserverTemporaryState';
 
 interface Session {
   apiKey: string;
@@ -30,6 +33,15 @@ export function RelaySessionProvider({
   const [session, setSession] = useState<Session | null>(null);
   const [checking, setChecking] = useState(true);
   const [accessFailure, setAccessFailure] = useState<'expired' | 'unavailable' | null>(null);
+  // A Connect open that failed for a temporary reason (rate limit, outage,
+  // network): retried in this tab with bounded backoff, never shown as revoked.
+  const [temporaryFailure, setTemporaryFailure] = useState<{ retrying: boolean } | null>(null);
+  const retryNow = useRef<() => void>(() => undefined);
+  // Not cleared by the effect's cleanup: stripping the capability re-runs the
+  // effect for the same identity, which must not cancel a pending retry.
+  const retryTimer = useRef<number | undefined>(undefined);
+
+  useEffect(() => () => window.clearTimeout(retryTimer.current), []);
   const requestSeq = useRef(0);
   const connectIdentity = useRef<string | null>(null);
   const previousMode = useRef<'workspace' | 'connect' | null>(null);
@@ -62,6 +74,26 @@ export function RelaySessionProvider({
     setChecking(true);
     setSession(null);
     setAccessFailure(null);
+    setTemporaryFailure(null);
+
+    // The capability lives only in this closure once stripped from the URL, so
+    // retries re-run the login here instead of asking for a reload.
+    window.clearTimeout(retryTimer.current);
+    let attempt = 0;
+    const failTemporarily = () => {
+      if (seq !== requestSeq.current) return;
+      const delay = connectObserverRetryDelay(attempt);
+      attempt += 1;
+      setTemporaryFailure({ retrying: delay !== null });
+      if (delay !== null) retryTimer.current = window.setTimeout(() => void initSession(), delay);
+    };
+    retryNow.current = () => {
+      window.clearTimeout(retryTimer.current);
+      attempt = 0;
+      setTemporaryFailure(null);
+      setChecking(true);
+      void initSession();
+    };
 
     async function initSession() {
       try {
@@ -84,14 +116,15 @@ export function RelaySessionProvider({
           return;
         }
         if (keyParam?.startsWith('rk_live_') || keyParam?.startsWith('ot_live_')) {
-          const success = await setAuth(
+          const result = await login(
             keyParam,
             mode === 'connect' ? { connectObserverId: observerIdParam! } : undefined,
           );
           if (seq !== requestSeq.current) return;
-          if (!success) {
+          if (!result.ok) {
             if (mode === 'connect') {
-              setAccessFailure('unavailable');
+              if (result.failure === 'temporary') failTemporarily();
+              else setAccessFailure('unavailable');
               return;
             }
             router.replace('/login');
@@ -104,7 +137,8 @@ export function RelaySessionProvider({
 
         if (!res.ok) {
           if (mode === 'connect') {
-            setAccessFailure('unavailable');
+            if (classifyConnectObserverStatus(res.status) === 'temporary') failTemporarily();
+            else setAccessFailure('unavailable');
             return;
           }
           router.replace('/login');
@@ -121,6 +155,7 @@ export function RelaySessionProvider({
           // Drop another workspace's cached activity before this dashboard
           // mounts, so switching keys never hydrates stale cross-workspace events.
           resetActivityIfWorkspaceChanged(data.apiKey);
+          setTemporaryFailure(null);
           setSession({
             apiKey: data.apiKey,
             agentToken: data.agentToken,
@@ -140,7 +175,7 @@ export function RelaySessionProvider({
       } catch {
         if (seq !== requestSeq.current) return;
         if (mode === 'connect') {
-          setAccessFailure('unavailable');
+          failTemporarily();
           return;
         }
         router.replace('/login');
@@ -155,6 +190,10 @@ export function RelaySessionProvider({
 
   if (accessFailure) {
     return <ConnectObserverAccessState state={accessFailure} />;
+  }
+
+  if (temporaryFailure) {
+    return <ConnectObserverTemporaryState retrying={temporaryFailure.retrying} onRetry={() => retryNow.current()} />;
   }
 
   if (checking || !session) {

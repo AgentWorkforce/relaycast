@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  CONNECT_OBSERVER_MAX_RETRIES,
+  classifyConnectObserverError,
+  classifyConnectObserverStatus,
   connectObserverExpiryDelay,
+  connectObserverRetryDelay,
   connectObserverIdentity,
   connectObserverUrlWithoutCapability,
   formatUtcTimestamp,
@@ -140,5 +144,25 @@ describe('Relay Connect observer presentation', () => {
       limit: 100,
       before: '0000000000000000100',
     });
+  });
+});
+
+describe('Connect observer failure classification', () => {
+  it('treats only rejected or unknown capabilities as revoked', () => {
+    for (const status of [400, 401, 403, 404]) expect(classifyConnectObserverStatus(status)).toBe('revoked');
+    for (const status of [429, 500, 502, 503, 504, null, undefined]) expect(classifyConnectObserverStatus(status)).toBe('temporary');
+  });
+
+  it('reads the status from an SDK error, and calls a status-less error temporary', () => {
+    expect(classifyConnectObserverError(Object.assign(new Error('x'), { statusCode: 403 }))).toBe('revoked');
+    expect(classifyConnectObserverError(Object.assign(new Error('x'), { statusCode: 429 }))).toBe('temporary');
+    expect(classifyConnectObserverError(new TypeError('Failed to fetch'))).toBe('temporary');
+  });
+
+  it('backs off 2s to 30s, honours a longer Retry-After, and stops after the retry budget', () => {
+    expect(Array.from({ length: CONNECT_OBSERVER_MAX_RETRIES + 1 }, (_, attempt) => connectObserverRetryDelay(attempt)))
+      .toEqual([2_000, 4_000, 8_000, 16_000, 30_000, null]);
+    expect(connectObserverRetryDelay(0, 20_000)).toBe(20_000);
+    expect(connectObserverRetryDelay(0, 10 * 60_000)).toBe(60_000);
   });
 });
