@@ -41,7 +41,15 @@ export function ConnectObserverLayout() {
   // for it, so a longer Retry-After is honoured and the budget is not spent early.
   const retryPending = useRef(false);
 
-  useEffect(() => () => window.clearTimeout(retryTimer.current), []);
+  // A read that fails after unmount must not schedule a retry.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      window.clearTimeout(retryTimer.current);
+    };
+  }, []);
 
   const refresh = useCallback(async () => {
     if (expired || refreshInFlight.current || pausedAfterFailures.current || revoked.current || retryPending.current) return;
@@ -71,6 +79,7 @@ export function ConnectObserverLayout() {
       setTemporary(null);
       setUnavailable(false);
     } catch (error) {
+      if (!mounted.current) return;
       if (classifyConnectObserverError(error) === 'revoked') {
         revoked.current = true;
         retryPending.current = false;
@@ -87,7 +96,7 @@ export function ConnectObserverLayout() {
         if (delay !== null) {
           retryTimer.current = window.setTimeout(() => {
             retryPending.current = false;
-            void refreshRef.current();
+            if (mounted.current) void refreshRef.current();
           }, delay);
         }
       }

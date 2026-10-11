@@ -93,6 +93,17 @@ describe('ConnectObserverLayout', () => {
     expect(screen.getByText('Canberra')).toBeTruthy();
   });
 
+  it('does not schedule a retry for a read that fails after unmount', async () => {
+    let failRead!: (error: Error) => void;
+    relay.allDmConversations.mockImplementationOnce(() => new Promise((_, reject) => { failRead = reject; }));
+    render(<ConnectObserverLayout />);
+    await flush();
+    cleanup();
+    failRead(failure(503));
+    await flush(10 * 60_000);
+    expect(relay.allDmConversations).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps loaded history visible during a temporary failure', async () => {
     relay.allDmConversations.mockResolvedValueOnce([conversation]).mockRejectedValue(failure(429));
     render(<ConnectObserverLayout />);
