@@ -55,6 +55,7 @@ async function insertNode(
   ws: string,
   status: string,
   lastHeartbeatAt: Date | null,
+  kind: string = 'ws',
 ): Promise<string> {
   const n = ++seq;
   const id = `node_${n}`;
@@ -63,6 +64,7 @@ async function insertNode(
     workspaceId: ws,
     name: `node${n}`,
     tokenHash: `ntok_${n}`,
+    kind,
     status,
     lastHeartbeatAt,
   });
@@ -168,5 +170,41 @@ describe('deadLetterUnreachableDeliveryBatch', () => {
     const batch = await deadLetterUnreachableDeliveryBatch(db, base.ws, UNREACHABLE_NODE_GRACE_MS, now);
     expect(batch.expiredCount).toBe(0);
     expect((await deliveryStatus(db, ackedId)).status).toBe('acked');
+  });
+
+  it('leaves deliveries on http_push and poll nodes alone — no socket liveness contract', async () => {
+    const { db } = openDb();
+    const base = await seed(db);
+    const now = new Date();
+    const stale = new Date(now.getTime() - UNREACHABLE_NODE_GRACE_MS - 60_000);
+    const pushNode = await insertNode(db, base.ws, 'offline', stale, 'http_push');
+    const pollNode = await insertNode(db, base.ws, 'offline', stale, 'poll');
+
+    const kept = [
+      await insertQueuedDelivery(db, base, pushNode),
+      await insertQueuedDelivery(db, base, pollNode),
+    ];
+
+    const batch = await deadLetterUnreachableDeliveryBatch(db, base.ws, UNREACHABLE_NODE_GRACE_MS, now);
+    expect(batch.expiredCount).toBe(0);
+    for (const id of kept) {
+      expect((await deliveryStatus(db, id)).status).toBe('queued');
+    }
+  });
+
+  it('drains past a crowd of delivery-free stale nodes', async () => {
+    const { db } = openDb();
+    const base = await seed(db);
+    const now = new Date();
+    // Well over the old fixed node page (90): these would have hidden node_m.
+    for (let i = 0; i < 100; i++) {
+      await insertNode(db, base.ws, 'offline', new Date(now.getTime() - UNREACHABLE_NODE_GRACE_MS - 120_000));
+    }
+    const mailNode = await insertNode(db, base.ws, 'offline', new Date(now.getTime() - UNREACHABLE_NODE_GRACE_MS - 60_000));
+    const deliveryId = await insertQueuedDelivery(db, base, mailNode);
+
+    const batch = await deadLetterUnreachableDeliveryBatch(db, base.ws, UNREACHABLE_NODE_GRACE_MS, now);
+    expect(batch.expiredCount).toBe(1);
+    expect((await deliveryStatus(db, deliveryId)).status).toBe('dead_lettered');
   });
 });

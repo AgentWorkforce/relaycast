@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `sweepUnreachableDeliveries` / `deadLetterUnreachableDeliveryBatch`: scheduled drain that dead-letters active deliveries routed (`location_node_id`) to nodes offline past a grace window (default 30m), emitting `delivery.failed` (`reason: 'node_unreachable'`) sender notices per batch — frees workspace delivery-depth capacity held by mail that can never dispatch, without waiting out the full TTL.
+- `sweepUnreachableDeliveries` / `deadLetterUnreachableDeliveryBatch`: scheduled drain that dead-letters active deliveries routed (`location_node_id`) to `ws` nodes offline past a grace window (default 30m), emitting `delivery.failed` (`reason: 'node_unreachable'`) sender notices per batch — frees workspace delivery-depth capacity held by mail that can never dispatch, without waiting out the full TTL. `http_push`/`poll` routes and never-connected nodes are untouched.
 
 ### Fixed
 
