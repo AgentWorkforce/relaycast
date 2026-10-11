@@ -663,6 +663,39 @@ export async function sweepExpiredDeliveries(
   return expiredCount;
 }
 
+/** Same per-invocation bound as the TTL sweep; see `sweepExpiredDeliveries`. */
+export const UNREACHABLE_DELIVERY_MAX_BATCHES = DELIVERY_EXPIRY_MAX_BATCHES;
+
+/**
+ * Scheduled unreachable-target drain. Dead-letters active deliveries whose
+ * routing node has been offline past `offlineGraceMs`, flushing every batch's
+ * `delivery.failed` notices before the next transition so an interrupted run
+ * cannot strand dead-lettered rows whose senders were never told.
+ */
+export async function sweepUnreachableDeliveries(
+  engine: EngineDeps,
+  opts: { workspaceId?: string; offlineGraceMs?: number; now?: Date; maxBatches?: number } = {},
+): Promise<number> {
+  const now = opts.now ?? new Date();
+  const requestedMaxBatches = opts.maxBatches ?? UNREACHABLE_DELIVERY_MAX_BATCHES;
+  const maxBatches = Number.isFinite(requestedMaxBatches)
+    ? Math.min(Math.max(Math.floor(requestedMaxBatches), 1), UNREACHABLE_DELIVERY_MAX_BATCHES)
+    : UNREACHABLE_DELIVERY_MAX_BATCHES;
+  let expiredCount = 0;
+  for (let batchNumber = 0; batchNumber < maxBatches; batchNumber++) {
+    const batch = await deliveryEngine.deadLetterUnreachableDeliveryBatch(
+      engine.db,
+      opts.workspaceId,
+      opts.offlineGraceMs,
+      now,
+    );
+    expiredCount += batch.expiredCount;
+    await notifyDeliveryFailures(engine, batch.notices);
+    if (batch.expiredCount < deliveryEngine.DELIVERY_EXPIRY_BATCH_SIZE) break;
+  }
+  return expiredCount;
+}
+
 export async function notifyDeliveryRejections(
   c: HonoContext,
   senderAgentId: string,

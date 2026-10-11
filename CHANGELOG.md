@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
+
+### Added
+
+- Scheduled `sweepUnreachableDeliveries` drain: dead-letters active deliveries routed to nodes offline past a 30m grace window (`delivery.failed` reason `node_unreachable`), so undeliverable mail stops consuming workspace delivery-depth capacity ahead of its TTL.
 
 ### Fixed
 

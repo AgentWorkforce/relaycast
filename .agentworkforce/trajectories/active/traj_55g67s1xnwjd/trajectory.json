@@ -1,0 +1,19 @@
+{
+  "id": "traj_55g67s1xnwjd",
+  "version": 1,
+  "task": {
+    "title": "Dead-letter deliveries routed to long-offline nodes (frees workspace depth cap)"
+  },
+  "status": "active",
+  "startedAt": "2026-10-11T23:04:51.105Z",
+  "agents": [],
+  "chapters": [],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "13a8dca240b1bc547b3d57fac2f7d404895f25dd",
+    "endRef": "13a8dca240b1bc547b3d57fac2f7d404895f25dd"
+  }
+}
