@@ -42,42 +42,44 @@ export async function listAllDmConversations(db: Db, workspaceId: string): Promi
   const conversationIds = conversations.map((convo) => convo.id);
   const channelIds = conversations.map((convo) => convo.channelId);
 
-  const participantRows = await db
+  // A workspace can hold more DM conversations than D1 binds in one statement
+  // (100 parameters), so every IN lookup below runs in D1-safe chunks.
+  // Grouping by channel within a chunk is complete: one channel's rows never
+  // span chunks.
+  const participantRows = await queryInChunks(conversationIds, (chunk) => db
     .select({
       conversationId: dmParticipants.conversationId,
       agentName: agents.name,
     })
     .from(dmParticipants)
     .innerJoin(agents, eq(dmParticipants.agentId, agents.id))
-    .where(inArray(dmParticipants.conversationId, conversationIds));
+    .where(inArray(dmParticipants.conversationId, chunk)));
 
-  const messageCounts = await db
+  const messageCounts = await queryInChunks(channelIds, (chunk) => db
     .select({ channelId: messages.channelId, count: sql<number>`count(*)` })
     .from(messages)
-    .where(inArray(messages.channelId, channelIds))
-    .groupBy(messages.channelId);
+    .where(inArray(messages.channelId, chunk))
+    .groupBy(messages.channelId));
 
-  const latestMessageIds = await db
+  const latestMessageIds = await queryInChunks(channelIds, (chunk) => db
     .select({ channelId: messages.channelId, lastId: sql<string>`max(${messages.id})` })
     .from(messages)
-    .where(inArray(messages.channelId, channelIds))
-    .groupBy(messages.channelId);
+    .where(inArray(messages.channelId, chunk))
+    .groupBy(messages.channelId));
 
   const lastIds = latestMessageIds.map((row) => row.lastId).filter(Boolean);
-  const latestMessages = lastIds.length > 0
-    ? await db
-      .select({
-        id: messages.id,
-        channelId: messages.channelId,
-        body: messages.body,
-        createdAt: messages.createdAt,
-        agentId: messages.agentId,
-        agentName: agents.name,
-      })
-      .from(messages)
-      .innerJoin(agents, eq(messages.agentId, agents.id))
-      .where(inArray(messages.id, lastIds))
-    : [];
+  const latestMessages = await queryInChunks(lastIds, (chunk) => db
+    .select({
+      id: messages.id,
+      channelId: messages.channelId,
+      body: messages.body,
+      createdAt: messages.createdAt,
+      agentId: messages.agentId,
+      agentName: agents.name,
+    })
+    .from(messages)
+    .innerJoin(agents, eq(messages.agentId, agents.id))
+    .where(inArray(messages.id, chunk)));
 
   const participantsByConversation = new Map<string, string[]>();
   for (const row of participantRows) {

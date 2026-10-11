@@ -53,6 +53,45 @@ describe('Relay Connect observer capability', () => {
   });
   afterEach(() => stack.close());
 
+  it('lists more DM conversations than one D1 statement can bind, for the workspace and an observer', async () => {
+    const room = await createWorkspace(stack.app, 'connect-many-dms');
+    const alice = await registerAgent(stack.app, room.workspaceKey, 'alice');
+    const peers = Array.from({ length: 105 }, (_, index) => `peer-${String(index).padStart(3, '0')}`);
+    for (const peer of peers) {
+      await registerAgent(stack.app, room.workspaceKey, peer);
+      await sendDm(stack, alice.token, peer, `hello ${peer}`);
+    }
+    const observer = await mintConnectObserver(stack, room.workspaceKey, 'connect-many-dms-observer');
+
+    // Emulate D1's 100-bound-parameter ceiling against the SQL Drizzle emits.
+    const sqlite = stack.runtime.handle.sqlite;
+    const prepare = sqlite.prepare.bind(sqlite);
+    sqlite.prepare = ((source: string) => {
+      const parameterCount = (source.match(/\?/g) ?? []).length;
+      if (parameterCount > 100) {
+        throw new Error(`D1_ERROR: too many SQL variables at offset 100 (${parameterCount})`);
+      }
+      return prepare(source);
+    }) as typeof sqlite.prepare;
+
+    for (const credential of [room.workspaceKey, observer.token]) {
+      const response = await stack.app.request('/v1/dm/conversations/all', {
+        headers: { authorization: `Bearer ${credential}` },
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        data: Array<{ participants: string[]; message_count: number; last_message: { text: string } | null }>;
+      };
+      expect(body.data).toHaveLength(peers.length);
+      for (const conversation of body.data) {
+        const peer = conversation.participants.find((name) => name !== 'alice')!;
+        expect(conversation.participants).toContain('alice');
+        expect(conversation.message_count).toBe(1);
+        expect(conversation.last_message?.text).toBe(`hello ${peer}`);
+      }
+    }
+  });
+
   it('opens one room, reads historical and new DMs, and fails closed for writes, other rooms, expiry, revocation, and room deletion', async () => {
     expect(dmMessagePageLimit(101)).toBe(100);
     const eightAgentConversationChunk = dmFilteredCountConversationChunkSize(8);
