@@ -15,8 +15,11 @@ afterEach(() => { for (const handle of handles.splice(0)) handle.sqlite.close();
  * Only rows with `error = 'invocation_origin_unavailable'` can match — a few
  * thousand rows in production — but the query used to seek the whole
  * `status = 'failed'` bucket (~216k rows, ~1.8s per registration on prod).
- * This fixture puts enough failed invocations around the tombstone that the
- * scan is unmistakable in the query plan.
+ * A partial index on the tombstone predicates cannot be proven under bound
+ * parameters (the 0065 lesson), so the index is a non-partial composite on
+ * (workspace_id, dispatched_node_id). This fixture puts enough failed
+ * invocations around the tombstone that the scan is unmistakable in the
+ * query plan.
  */
 function fixture({ tombstones = 0, failedRows = 5_000 } = {}) {
   const handle = getSqliteDb(':memory:');
