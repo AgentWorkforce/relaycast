@@ -2095,8 +2095,40 @@ export async function registerAgentViaNode(
           // Probe inconclusive — fall through and surface the original error.
         }
         if (landed) {
-          await runStatements(landingWrites(), []);
-          return registeredReply(landed);
+          try {
+            await runStatements(landingWrites(), []);
+            return registeredReply(landed);
+          } catch (landingErr) {
+            // The replayed landing can hit the same lost-reply ambiguity —
+            // a committed landing leaves this agent's binding active on the
+            // node, so probe it before deciding the outcome.
+            let bound = false;
+            try {
+              const [row] = await retryD1Write(() => db
+                .select({ id: agentNodeBindings.id })
+                .from(agentNodeBindings)
+                .where(and(
+                  eq(agentNodeBindings.workspaceId, workspaceId),
+                  eq(agentNodeBindings.agentId, agentId),
+                  eq(agentNodeBindings.nodeId, nodeId),
+                  eq(agentNodeBindings.status, 'active'),
+                ))
+                .limit(1), 3);
+              bound = !!row;
+            } catch {
+              // Probe inconclusive — treat as not landed and roll back.
+            }
+            if (bound) return registeredReply(landed);
+            // Landing never committed: roll the admitted identity back so a
+            // retry registers cleanly instead of meeting agent_already_exists.
+            await runStatements([
+              tx
+                .delete(agents)
+                .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId))),
+              ...releaseNodeAgentSlotWrites(tx, workspaceId, [nodeId]),
+            ], []);
+            throw landingErr;
+          }
         }
       }
       const compensations: AtomicWrite[] = [];

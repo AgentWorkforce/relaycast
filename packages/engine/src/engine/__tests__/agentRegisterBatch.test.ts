@@ -25,7 +25,10 @@ interface BatchRecordingDb {
   batches: number[];
 }
 
-function fixture(nodeSql = '', opts: { dropResponseAfterBatch?: number } = {}) {
+function fixture(
+  nodeSql = '',
+  opts: { dropResponseAfterBatch?: number | number[]; failBeforeBatch?: number } = {},
+) {
   const handle = getSqliteDb(':memory:');
   handles.push(handle);
   runMigrations(handle);
@@ -51,11 +54,18 @@ function fixture(nodeSql = '', opts: { dropResponseAfterBatch?: number } = {}) {
   const db = Object.assign(base, {
     batch: async (statements: readonly PromiseLike<unknown>[]) => {
       const batchIndex = batches.push(statements.length);
+      // A batch that fails before running applies nothing.
+      if (batchIndex === opts.failBeforeBatch) {
+        throw new Error('D1_ERROR: D1 DB is overloaded. Requests queued for too long');
+      }
       const results: unknown[] = [];
       for (const statement of statements) results.push(await statement);
       // Model D1's ambiguous commit: the batch applied, but the reply was
       // dropped before reaching the caller.
-      if (batchIndex === opts.dropResponseAfterBatch) {
+      const dropped = Array.isArray(opts.dropResponseAfterBatch)
+        ? opts.dropResponseAfterBatch
+        : [opts.dropResponseAfterBatch];
+      if (dropped.includes(batchIndex)) {
         throw new Error('D1_ERROR: Network connection lost');
       }
       return results;
@@ -140,5 +150,32 @@ describe('agent.register statement batching', () => {
     expect(binding.status).toBe('active');
     const node = f.sqlite.prepare('SELECT active_agents FROM nodes WHERE id = ?').get('node1') as { active_agents: number };
     expect(node.active_agents).toBe(1);
+  });
+
+  it('still returns the agent when the recovery landing reply is also lost', async () => {
+    // Admission commits-and-drops (batch 2), then the recovery's landing
+    // replay commits-and-drops too (batch 3). The binding probe must see the
+    // committed landing and return the agent rather than rolling it back.
+    const f = fixture('', { dropResponseAfterBatch: [2, 3] });
+    const reply = await register(f.db);
+    expect(reply.agent_id).toBeTruthy();
+    const binding = f.sqlite.prepare('SELECT status FROM agent_node_bindings WHERE agent_id = ? AND node_id = ?')
+      .get(reply.agent_id, 'node1') as { status: string };
+    expect(binding.status).toBe('active');
+    const node = f.sqlite.prepare('SELECT active_agents FROM nodes WHERE id = ?').get('node1') as { active_agents: number };
+    expect(node.active_agents).toBe(1);
+  });
+
+  it('rolls back a committed admission when recovery landing never lands', async () => {
+    // Admission commits-and-drops (batch 2), then the recovery's landing
+    // batch fails before running (batch 3). With no binding present the
+    // registration must roll the admitted identity back so a retry does not
+    // meet a stranded agent_already_exists.
+    const f = fixture('', { dropResponseAfterBatch: 2, failBeforeBatch: 3 });
+    await expect(register(f.db)).rejects.toThrow();
+    const agents = f.sqlite.prepare('SELECT COUNT(*) AS n FROM agents WHERE workspace_id = ?').get('ws') as { n: number };
+    expect(agents.n).toBe(0);
+    const node = f.sqlite.prepare('SELECT active_agents FROM nodes WHERE id = ?').get('node1') as { active_agents: number };
+    expect(node.active_agents).toBe(0);
   });
 });
