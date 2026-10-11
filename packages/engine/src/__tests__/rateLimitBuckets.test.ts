@@ -31,7 +31,10 @@ describe('rate limit route buckets', () => {
   });
 
   it('leaves the roster and the write routes where they were', () => {
-    expect(getRouteKey('GET', '/v1/agents')).toBe('GET:/agents');
+    // The roster is the data-plane traffic this protects the identity reads
+    // FROM, and rateLimitContract's regression fixture saturates `global` with
+    // it. Keying it would change what that test exhausts.
+    expect(getRouteKey('GET', '/v1/agents')).toBeNull();
     // Unchanged: these have no GET key and must keep falling to `global`.
     expect(getRouteKey('POST', '/v1/agents/retention')).toBeNull();
     expect(getRouteKey('POST', '/v1/agents/some-agent/recover')).toBeNull();

@@ -38,9 +38,13 @@ export const ROUTE_MULTIPLIERS: Record<string, number> = {
   // A 429 here does not surface as a throttle either: the callers translate it
   // into "could not verify delivery identity", which reads like a broken
   // credential rather than a limit that clears on its own.
+  //
+  // The roster read, GET /v1/agents, deliberately stays in `global`. It is the
+  // ordinary workspace-wide traffic this protects the two reads above FROM,
+  // and rateLimitContract's regression test uses it as exactly that -- giving
+  // it its own bucket would change what that fixture saturates.
   'GET:/agent': 1.0,
   'GET:/agents/*': 1.0,
-  'GET:/agents': 0.5,
 };
 
 export function getRouteKey(method: string, path: string): string | null {
