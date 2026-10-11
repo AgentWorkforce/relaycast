@@ -204,18 +204,20 @@ export async function getThread(
 
   const replies = await db
     .select({
-      id: messages.id,
-      channelId: messages.channelId,
-      agentId: messages.agentId,
+      id: sql`${messages.id}`.mapWith(messages.id),
+      channelId: sql`${messages.channelId}`.mapWith(messages.channelId),
+      agentId: sql`${messages.agentId}`.mapWith(messages.agentId),
       agentName: agents.name,
-      threadId: messages.threadId,
-      body: messages.body,
-      blocks: messages.blocks,
-      metadata: messages.metadata,
-      hasAttachments: messages.hasAttachments,
-      createdAt: messages.createdAt,
+      threadId: sql`${messages.threadId}`.mapWith(messages.threadId),
+      body: sql`${messages.body}`.mapWith(messages.body),
+      blocks: sql`${messages.blocks}`.mapWith(messages.blocks),
+      metadata: sql`${messages.metadata}`.mapWith(messages.metadata),
+      hasAttachments: sql`${messages.hasAttachments}`.mapWith(messages.hasAttachments),
+      createdAt: sql`${messages.createdAt}`.mapWith(messages.createdAt),
     })
-    .from(messages)
+    // SQLite can otherwise prefer the workspace/id index and scan unrelated
+    // history. This existing index seeks the thread and supports id pagination.
+    .from(sql`${messages} INDEXED BY idx_messages_thread`)
     .leftJoin(agents, eq(messages.agentId, agents.id))
     .where(and(...conditions))
     .orderBy(sql`${messages.id} ASC`)
