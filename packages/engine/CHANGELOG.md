@@ -13,6 +13,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Default agent rosters show the last seven days, with stale-history and lean metadata options exposed through HTTP, TypeScript, and MCP.
 
+### Fixed
+
+- Thread reply pagination uses the existing thread index while preserving workspace filtering and decoded fields.
+
+
 ## [9.2.0] - 2026-10-09
 
 ### Added

@@ -22,6 +22,11 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Default agent rosters show the last seven days, with stale-history and lean metadata options exposed through HTTP, TypeScript, and MCP.
 
+### Fixed
+
+- Thread reads seek the requested thread instead of scanning retained workspace history.
+
+
 ## [9.2.0] - 2026-10-09
 
 ### Added
