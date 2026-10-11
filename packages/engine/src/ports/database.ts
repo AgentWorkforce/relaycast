@@ -187,7 +187,7 @@ export async function runAtomicWrites(
 /** Normalize atomic admission sentinels across SQLite adapters (D1 wraps the message).
  * Keep driver-specific error decoding at this port boundary; engine callers use a stable kind.
  */
-export type DatabaseConstraintKind = 'mailbox_capacity' | 'workspace_delivery_capacity' | 'a2a_registration_changed' | 'address_changed';
+export type DatabaseConstraintKind = 'mailbox_capacity' | 'workspace_delivery_capacity' | 'a2a_registration_changed' | 'address_changed' | 'node_capacity';
 
 export function databaseConstraintKind(error: unknown): DatabaseConstraintKind | undefined {
   const seen = new Set<unknown>();
@@ -206,6 +206,11 @@ export function databaseConstraintKind(error: unknown): DatabaseConstraintKind |
     if (/NOT NULL constraint failed: deliveries\.status/i.test(message)) return 'workspace_delivery_capacity';
     // Addressed DM admission: the recipient left the addressed node before commit.
     if (/NOT NULL constraint failed: messages\.body/i.test(message)) return 'address_changed';
+    // Agent-slot admission: the reserve statement writes NULL into
+    // nodes.active_agents when the capacity predicate fails, so a refused
+    // registration aborts its whole atomic group instead of committing an
+    // agent row whose slot was never granted.
+    if (/NOT NULL constraint failed: nodes\.active_agents/i.test(message)) return 'node_capacity';
     cause = record.cause;
   }
   return undefined;
