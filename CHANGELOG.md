@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Agent identity lookups keep their own rate-limit allowance instead of competing with the workspace's message traffic, so a busy workspace can still register and verify agents.
 
 ## [10.0.2] - 2026-10-11
 
