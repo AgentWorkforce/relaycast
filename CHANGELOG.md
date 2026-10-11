@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Conversation-scoped observer links load only their allowed direct messages instead of enriching every DM in the workspace first.
 
 ## [10.0.1] - 2026-10-11
 

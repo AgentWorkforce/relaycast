@@ -23,8 +23,19 @@ export function dmFilteredCountConversationChunkSize(agentFilterCount: number): 
   return Math.max(1, D1_SAFE_IN_QUERY_CHUNK_SIZE - Math.min(agentFilterCount, DM_COUNT_AGENT_CHUNK_SIZE));
 }
 
-export async function listAllDmConversations(db: Db, workspaceId: string): Promise<WorkspaceDmConversation[]> {
-  const conversations = await db
+export async function listAllDmConversations(
+  db: Db,
+  workspaceId: string,
+  opts: { conversationIds?: string[] } = {},
+): Promise<WorkspaceDmConversation[]> {
+  const scopedConversationIds = opts.conversationIds === undefined
+    ? undefined
+    : [...new Set(opts.conversationIds)];
+  if (scopedConversationIds?.length === 0) {
+    return [];
+  }
+
+  const selectConversations = (conversationIds?: string[]) => db
     .select({
       id: dmConversations.id,
       dmType: dmConversations.dmType,
@@ -33,7 +44,18 @@ export async function listAllDmConversations(db: Db, workspaceId: string): Promi
       createdAt: dmConversations.createdAt,
     })
     .from(dmConversations)
-    .where(eq(dmConversations.workspaceId, workspaceId));
+    .where(and(
+      eq(dmConversations.workspaceId, workspaceId),
+      ...(conversationIds ? [inArray(dmConversations.id, conversationIds)] : []),
+    ));
+
+  // Observer capabilities commonly expose only one conversation in a large
+  // workspace. Apply that scope before any participant/message enrichment so
+  // unauthorized conversations are never loaded. Chunk high-cardinality
+  // capabilities to retain D1's bound-parameter safety.
+  const conversations = scopedConversationIds
+    ? await queryInChunks(scopedConversationIds, selectConversations)
+    : await selectConversations();
 
   if (conversations.length === 0) {
     return [];

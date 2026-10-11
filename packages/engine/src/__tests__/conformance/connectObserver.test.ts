@@ -8,7 +8,7 @@ async function mintConnectObserver(
   stack: TestStack,
   workspaceKey: string,
   name: string,
-  filters: { include_dms: true; agent_ids?: string[] } = { include_dms: true },
+  filters: { include_dms: true; agent_ids?: string[]; dm_conversation_ids?: string[] } = { include_dms: true },
 ) {
   const response = await stack.app.request('/v1/observer-tokens', {
     method: 'POST',
@@ -57,11 +57,24 @@ describe('Relay Connect observer capability', () => {
     const room = await createWorkspace(stack.app, 'connect-many-dms');
     const alice = await registerAgent(stack.app, room.workspaceKey, 'alice');
     const peers = Array.from({ length: 105 }, (_, index) => `peer-${String(index).padStart(3, '0')}`);
+    const conversationIds: string[] = [];
     for (const peer of peers) {
       await registerAgent(stack.app, room.workspaceKey, peer);
-      await sendDm(stack, alice.token, peer, `hello ${peer}`);
+      const dm = await sendDm(stack, alice.token, peer, `hello ${peer}`);
+      conversationIds.push(dm.data.conversation_id);
     }
-    const observer = await mintConnectObserver(stack, room.workspaceKey, 'connect-many-dms-observer');
+    const observer = await mintConnectObserver(
+      stack,
+      room.workspaceKey,
+      'connect-many-dms-observer',
+      { include_dms: true, dm_conversation_ids: conversationIds },
+    );
+    const scopedObserver = await mintConnectObserver(
+      stack,
+      room.workspaceKey,
+      'connect-one-dm-observer',
+      { include_dms: true, dm_conversation_ids: [conversationIds[0]!] },
+    );
 
     // Emulate D1's 100-bound-parameter ceiling against the SQL Drizzle emits.
     const sqlite = stack.runtime.handle.sqlite;
@@ -90,6 +103,40 @@ describe('Relay Connect observer capability', () => {
         expect(conversation.last_message?.text).toBe(`hello ${peer}`);
       }
     }
+
+    const preparedSql: string[] = [];
+    sqlite.prepare = ((source: string) => {
+      preparedSql.push(source);
+      return prepare(source);
+    }) as typeof sqlite.prepare;
+    let scopedResponse: Response;
+    try {
+      scopedResponse = await stack.app.request('/v1/dm/conversations/all', {
+        headers: { authorization: `Bearer ${scopedObserver.token}` },
+      });
+    } finally {
+      sqlite.prepare = prepare as typeof sqlite.prepare;
+    }
+    expect(scopedResponse.status).toBe(200);
+    const scopedBody = (await scopedResponse.json()) as {
+      data: Array<{ id: string; participants: string[]; message_count: number; last_message: { text: string } | null }>;
+    };
+    expect(scopedBody.data).toEqual([
+      expect.objectContaining({
+        id: conversationIds[0],
+        participants: ['alice', peers[0]],
+        message_count: 1,
+        last_message: expect.objectContaining({ text: `hello ${peers[0]}` }),
+      }),
+    ]);
+
+    const dmListingQueries = preparedSql.filter((source) => (
+      source.includes('from "dm_conversations"')
+      || source.includes('from "dm_participants"')
+      || source.includes('from "messages"')
+    ));
+    expect(dmListingQueries).toHaveLength(5);
+    expect(dmListingQueries[0]).toContain('"dm_conversations"."id" in (?)');
   });
 
   it('opens one room, reads historical and new DMs, and fails closed for writes, other rooms, expiry, revocation, and room deletion', async () => {

@@ -505,9 +505,16 @@ workspaceRoutes.get('/dm/conversations/all', requireWorkspaceRead('dms:read', { 
     const db = c.get('db');
     const workspace = c.get('workspace');
     const observer = getObserverTokenFromContext(c);
-    const allowedConversations = (await dmAllEngine.listAllDmConversations(db, workspace.id))
-      .filter((conversation) => observerAllowsConversation(observer, conversation.id));
     const filters = observer ? normalizeObserverFilters(observer.filters) : null;
+    const scopedConversationIds = observer
+      ? (filters?.include_dms ? filters.dm_conversation_ids : [])
+      : undefined;
+    const allowedConversations = (await dmAllEngine.listAllDmConversations(
+      db,
+      workspace.id,
+      { conversationIds: scopedConversationIds },
+    ))
+      .filter((conversation) => observerAllowsConversation(observer, conversation.id));
     const filtersMessages = Boolean(filters?.agent_ids?.length || filters?.created_after);
     const filteredCounts = observer && filtersMessages
       ? await dmAllEngine.countDmMessagesForWorkspaceConversations(
