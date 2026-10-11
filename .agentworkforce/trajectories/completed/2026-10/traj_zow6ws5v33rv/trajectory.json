@@ -4,8 +4,9 @@
   "task": {
     "title": "Relaycast D1 robustness: index the global stale-online-node scan"
   },
-  "status": "active",
+  "status": "completed",
   "startedAt": "2026-10-11T19:46:42.581Z",
+  "completedAt": "2026-10-11T20:04:44.959Z",
   "agents": [
     {
       "name": "devin-relaycast-robust",
@@ -19,6 +20,7 @@
       "title": "Initial work",
       "agentName": "devin-relaycast-robust",
       "startedAt": "2026-10-11T19:46:42.589Z",
+      "endedAt": "2026-10-11T20:04:44.959Z",
       "events": [
         {
           "ts": 1791748002858,
@@ -35,12 +37,29 @@
       ]
     }
   ],
-  "commits": [],
-  "filesChanged": [],
+  "retrospective": {
+    "summary": "Added partial covering index idx_nodes_stale_online (status='online', leading last_heartbeat_at) so the global stale-node reconcile sweeps only online rows by heartbeat instead of the full nodes table.",
+    "approach": "Standard approach",
+    "confidence": 0.85
+  },
+  "commits": [
+    "b9df951a"
+  ],
+  "filesChanged": [
+    ".agentworkforce/trajectories/active/traj_zow6ws5v33rv/trajectory.json",
+    ".agentworkforce/trajectories/completed/2026-10/traj_8xat4ug6944x/summary.md",
+    ".agentworkforce/trajectories/completed/2026-10/traj_8xat4ug6944x/trajectory.json",
+    "CHANGELOG.md",
+    "packages/engine/CHANGELOG.md",
+    "packages/engine/src/db/__tests__/taskMigration.test.ts",
+    "packages/engine/src/db/migrations/0069_nodes_online_liveness_index.sql",
+    "packages/engine/src/engine/__tests__/staleOnlineIndex.test.ts"
+  ],
   "projectId": "AgentWorkforce/relaycast",
   "tags": [],
   "_trace": {
     "startRef": "98d05865d06c0d31c72c1e0a5049162e006fe0e0",
-    "endRef": "98d05865d06c0d31c72c1e0a5049162e006fe0e0"
+    "endRef": "b9df951a205ae3902658ccd518a1b436cde069a1",
+    "traceId": "e37b6125-ae8e-494c-9320-7eba0a7c818d"
   }
 }
