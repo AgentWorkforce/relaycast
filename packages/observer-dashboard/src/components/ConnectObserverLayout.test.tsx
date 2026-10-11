@@ -1,21 +1,38 @@
 // @vitest-environment jsdom
+import React from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CONNECT_OBSERVER_MAX_RETRIES } from '../lib/connect-observer';
+
+Object.assign(globalThis, { React });
 
 const relay = {
   allDmConversations: vi.fn(),
   dmMessagePage: vi.fn(),
 };
+const eventHandlers = new Map<string, (event: Record<string, unknown>) => void>();
 
-vi.mock('@relaycast/react', () => ({ useRelay: () => relay, useEvent: () => undefined }));
-vi.mock('next/navigation', () => ({ useSearchParams: () => new URLSearchParams('expires_at=2999-01-01T00:00:00Z') }));
+vi.mock('@relaycast/react', () => ({
+  useRelay: () => relay,
+  useEvent: (eventType: string, handler: (event: Record<string, unknown>) => void) => {
+    eventHandlers.set(eventType, handler);
+  },
+}));
+vi.mock('next/navigation', () => ({
+  useSearchParams: () => new URLSearchParams('expires_at=2999-01-01T00:00:00Z'),
+}));
 
 const { ConnectObserverLayout } = await import('./ConnectObserverLayout');
 
 const failure = (statusCode: number) => Object.assign(new Error(`HTTP ${statusCode}`), { statusCode });
 const conversation = { id: 'dm_1', participants: ['alice', 'bob'] };
-const message = { id: '100', agentName: 'alice', text: 'Canberra', createdAt: '2026-10-11T00:04:32Z' };
+const message = {
+  id: '100',
+  agentName: 'alice',
+  text: 'Canberra',
+  createdAt: '2026-10-11T00:04:32Z',
+};
+const RECONCILIATION_INTERVAL_MS = 5 * 60_000;
 
 async function flush(ms = 0) {
   await act(async () => {
@@ -26,9 +43,14 @@ async function flush(ms = 0) {
 describe('ConnectObserverLayout', () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    eventHandlers.clear();
     relay.allDmConversations.mockReset();
     relay.dmMessagePage.mockReset();
-    relay.dmMessagePage.mockResolvedValue({ messages: [message], nextBefore: null, exhausted: true });
+    relay.dmMessagePage.mockResolvedValue({
+      messages: [message],
+      nextBefore: null,
+      exhausted: true,
+    });
   });
   afterEach(() => {
     cleanup();
@@ -61,12 +83,10 @@ describe('ConnectObserverLayout', () => {
   }
 
   it('holds the live poll until a longer Retry-After retry runs', async () => {
-    relay.allDmConversations
-      .mockRejectedValueOnce(Object.assign(failure(429), { retryAfterMs: 60_000 }))
-      .mockResolvedValue([conversation]);
+    relay.allDmConversations.mockRejectedValueOnce(Object.assign(failure(429), { retryAfterMs: 60_000 })).mockResolvedValue([conversation]);
     render(<ConnectObserverLayout />);
     await flush();
-    // The 15s poll ticks three times inside the server's 60s wait without reading.
+    // No reconciliation or retry runs before the server's 60s wait.
     await flush(59_000);
     expect(relay.allDmConversations).toHaveBeenCalledTimes(1);
     await flush(1_000);
@@ -82,7 +102,7 @@ describe('ConnectObserverLayout', () => {
     await flush(60_000);
     expect(relay.allDmConversations).toHaveBeenCalledTimes(1 + CONNECT_OBSERVER_MAX_RETRIES);
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
-    // Neither backoff nor the 15s live poll keeps hitting a busy workspace.
+    // Neither backoff nor reconciliation keeps hitting a busy workspace.
     await flush(5 * 60_000);
     expect(relay.allDmConversations).toHaveBeenCalledTimes(1 + CONNECT_OBSERVER_MAX_RETRIES);
 
@@ -95,7 +115,12 @@ describe('ConnectObserverLayout', () => {
 
   it('does not schedule a retry for a read that fails after unmount', async () => {
     let failRead!: (error: Error) => void;
-    relay.allDmConversations.mockImplementationOnce(() => new Promise((_, reject) => { failRead = reject; }));
+    relay.allDmConversations.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          failRead = reject;
+        }),
+    );
     render(<ConnectObserverLayout />);
     await flush();
     cleanup();
@@ -108,15 +133,18 @@ describe('ConnectObserverLayout', () => {
     const gone = { id: 'dm_2', participants: ['carol', 'dave'] };
     relay.allDmConversations.mockResolvedValue([conversation, gone]);
     relay.dmMessagePage.mockImplementation(async (conversationId: string) => {
-      if (conversationId === 'dm_2') throw Object.assign(failure(404), { rawCode: 'dm_conversation_not_found' });
+      if (conversationId === 'dm_2')
+        throw Object.assign(failure(404), {
+          rawCode: 'dm_conversation_not_found',
+        });
       return { messages: [message], nextBefore: null, exhausted: true };
     });
     render(<ConnectObserverLayout />);
     await flush();
     expect(screen.getByText('Canberra')).toBeTruthy();
     expect(screen.queryByText('Observer link unavailable')).toBeNull();
-    // Still observing: the live poll keeps reading.
-    await flush(15_000);
+    // Still observing: periodic reconciliation keeps reading.
+    await flush(RECONCILIATION_INTERVAL_MS);
     expect(relay.allDmConversations).toHaveBeenCalledTimes(2);
   });
 
@@ -125,9 +153,145 @@ describe('ConnectObserverLayout', () => {
     render(<ConnectObserverLayout />);
     await flush();
     expect(screen.getByText('Canberra')).toBeTruthy();
-    await flush(15_000);
+    await flush(RECONCILIATION_INTERVAL_MS);
     expect(screen.getByText('Canberra')).toBeTruthy();
     expect(screen.getByRole('status').textContent).toContain('Agent Relay is busy');
     expect(screen.queryByText('Observer link unavailable')).toBeNull();
+  });
+
+  for (const eventType of ['dm.received', 'group_dm.received']) {
+    it(`fetches only ${eventType} conversation messages after the cached cursor`, async () => {
+      const liveMessage = {
+        id: '101',
+        agentName: 'bob',
+        text: 'Darwin',
+        createdAt: '2026-10-11T00:04:33Z',
+      };
+      relay.allDmConversations.mockResolvedValue([conversation]);
+      relay.dmMessagePage
+        .mockResolvedValueOnce({
+          messages: [message],
+          nextBefore: null,
+          exhausted: true,
+        })
+        .mockResolvedValueOnce({
+          messages: [liveMessage],
+          nextBefore: null,
+          exhausted: true,
+        });
+      render(<ConnectObserverLayout />);
+      await flush();
+
+      await act(async () => {
+        eventHandlers.get(eventType)?.({
+          type: eventType,
+          conversationId: conversation.id,
+        });
+        await Promise.resolve();
+      });
+
+      expect(relay.allDmConversations).toHaveBeenCalledTimes(1);
+      expect(relay.dmMessagePage).toHaveBeenCalledTimes(2);
+      expect(relay.dmMessagePage).toHaveBeenLastCalledWith(conversation.id, {
+        limit: 100,
+        after: message.id,
+      });
+      expect(screen.getByText('Darwin')).toBeTruthy();
+    });
+  }
+
+  it('retries an incremental event read without reloading the conversation list', async () => {
+    const liveMessage = {
+      id: '101',
+      agentName: 'bob',
+      text: 'Darwin',
+      createdAt: '2026-10-11T00:04:33Z',
+    };
+    relay.allDmConversations.mockResolvedValue([conversation]);
+    relay.dmMessagePage
+      .mockResolvedValueOnce({
+        messages: [message],
+        nextBefore: null,
+        exhausted: true,
+      })
+      .mockRejectedValueOnce(failure(503))
+      .mockResolvedValueOnce({
+        messages: [liveMessage],
+        nextBefore: null,
+        exhausted: true,
+      });
+    render(<ConnectObserverLayout />);
+    await flush();
+
+    await act(async () => {
+      eventHandlers.get('dm.received')?.({
+        type: 'dm.received',
+        conversationId: conversation.id,
+      });
+      await Promise.resolve();
+    });
+    expect(screen.getByRole('status').textContent).toContain('Agent Relay is busy');
+
+    await flush(2_000);
+    expect(relay.allDmConversations).toHaveBeenCalledTimes(1);
+    expect(relay.dmMessagePage).toHaveBeenLastCalledWith(conversation.id, {
+      limit: 100,
+      after: message.id,
+    });
+    expect(screen.getByText('Darwin')).toBeTruthy();
+  });
+
+  it('keeps a due reconciliation queued behind an incremental read', async () => {
+    let finishIncrementalRead!: (page: { messages: (typeof message)[]; nextBefore: null; exhausted: true }) => void;
+    relay.allDmConversations.mockResolvedValue([conversation]);
+    relay.dmMessagePage
+      .mockResolvedValueOnce({
+        messages: [message],
+        nextBefore: null,
+        exhausted: true,
+      })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishIncrementalRead = resolve;
+          }),
+      )
+      .mockResolvedValue({ messages: [], nextBefore: null, exhausted: true });
+    render(<ConnectObserverLayout />);
+    await flush();
+
+    await act(async () => {
+      eventHandlers.get('dm.received')?.({
+        type: 'dm.received',
+        conversationId: conversation.id,
+      });
+      await Promise.resolve();
+    });
+    await flush(RECONCILIATION_INTERVAL_MS);
+    expect(relay.allDmConversations).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      finishIncrementalRead({ messages: [], nextBefore: null, exhausted: true });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(relay.allDmConversations).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not reconcile on a 15-second tick and eventually reconciles after five minutes', async () => {
+    relay.allDmConversations.mockResolvedValue([conversation]);
+    render(<ConnectObserverLayout />);
+    await flush();
+    expect(relay.allDmConversations).toHaveBeenCalledTimes(1);
+
+    await flush(15_000);
+    expect(relay.allDmConversations).toHaveBeenCalledTimes(1);
+
+    await flush(RECONCILIATION_INTERVAL_MS - 15_000);
+    expect(relay.allDmConversations).toHaveBeenCalledTimes(2);
+    expect(relay.dmMessagePage).toHaveBeenLastCalledWith(conversation.id, {
+      limit: 100,
+      after: message.id,
+    });
   });
 });
