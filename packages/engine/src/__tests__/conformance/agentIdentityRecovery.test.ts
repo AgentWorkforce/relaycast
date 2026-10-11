@@ -169,6 +169,44 @@ describe('explicit agent identity recovery', () => {
     expect((await authenticate(await responseToken(recovered))).status).toBe(200);
   });
 
+  it('never takes a verifier from a LIVE identity in the same workspace', async () => {
+    // The guard that matters. Reclaim only applies to a tombstoned holder; if
+    // it ever applied to a live one it would hand that agent's recovery
+    // authority to whoever registered next. The existing reuse test is
+    // cross-workspace, where the workspace scope alone would block it, so this
+    // one is deliberately SAME-workspace: it fails if the released check is
+    // dropped while every other test still passes.
+    const workspace = await createWorkspace(stack.app, 'live-verifier-workspace');
+    const verifierHash = 'd'.repeat(64);
+    const register = (name: string) => stack.app.request('/v1/agents', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${workspace.workspaceKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ name, recovery_proof_hash: verifierHash }),
+    });
+
+    const live = await register('live-holder');
+    expect(live.status).toBe(201);
+    const liveAgent = await live.json() as { data: { id: string } };
+
+    const stolen = await register('would-be-thief');
+    expect(stolen.status).toBe(409);
+    await expect(stolen.json()).resolves.toMatchObject({
+      error: { code: 'agent_recovery_proof_conflict' },
+    });
+
+    // The holder keeps its credential: refusing the request is not enough if
+    // the row was already deleted on the way to refusing it.
+    const rows = await stack.runtime.deps.db
+      .select()
+      .from(agentRecoveryCredentials)
+      .where(eq(agentRecoveryCredentials.verifierHash, verifierHash));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.agentId).toBe(liveAgent.data.id);
+  });
+
   it('lets a released name be registered again with the same derived verifier', async () => {
     // Release tombstones the agent but keeps its credential enrolled, and the
     // verifier is globally unique. A caller deriving the verifier from stable
