@@ -200,6 +200,54 @@ export async function removeProvider(db: Db, workspaceId: string, nodeId: string
     ));
 }
 
+/** `task` execution is only meaningful on a dispatchable action capability. */
+export function assertActionTaskMode(capabilities: FleetCapability[]): void {
+  if (capabilities.some((cap) => cap.execution_mode === 'task' && capabilityKind(cap) !== 'action')) {
+    throw codedError('Task execution mode requires an action capability', 'invalid_task_capability', 400);
+  }
+}
+
+/**
+ * Whether the provider's materialized action set is already in the state
+ * `materializeProviderActions` would produce for `actionCaps` — same names,
+ * all active, matching queue/execution modes. One indexed read that lets an
+ * unchanged heartbeat skip re-materialization while still self-healing
+ * drift the capability set cannot see (a row deleted out-of-band, a flag
+ * flip). `is_global` is deliberately not compared: its expected value is
+ * derived from cross-node lookups materialize performs, and the resolver
+ * already prefers agent-hosted rows over a stale global alias.
+ */
+export async function providerActionsMaterialized(
+  db: Db,
+  workspaceId: string,
+  nodeId: string,
+  providerName: string,
+  actionCaps: FleetCapability[],
+): Promise<boolean> {
+  const rows = await db
+    .select({
+      name: actions.name,
+      isActive: actions.isActive,
+      queue: actions.queue,
+      executionMode: actions.executionMode,
+    })
+    .from(actions)
+    .where(and(
+      eq(actions.workspaceId, workspaceId),
+      eq(actions.handlerNodeId, nodeId),
+      eq(actions.handlerProvider, providerName),
+    ));
+  if (rows.length !== actionCaps.length) return false;
+  const expected = new Map(actionCaps.map((cap) => [cap.name, cap]));
+  return rows.every((row) => {
+    const cap = expected.get(row.name);
+    return cap !== undefined
+      && row.isActive
+      && row.queue === (cap.queue === true)
+      && row.executionMode === (cap.execution_mode ?? 'short');
+  });
+}
+
 /**
  * Materialize a provider's `action`-kind capabilities into node-scoped action
  * rows, fully replacing this provider's previous set. `capacity` entries are
@@ -215,9 +263,7 @@ export async function materializeProviderActions(
   capabilities: FleetCapability[],
 ): Promise<void> {
   const actionCaps = capabilities.filter((cap) => capabilityKind(cap) === 'action');
-  if (capabilities.some((cap) => cap.execution_mode === 'task' && capabilityKind(cap) !== 'action')) {
-    throw codedError('Task execution mode requires an action capability', 'invalid_task_capability', 400);
-  }
+  assertActionTaskMode(capabilities);
   const keepNames = actionCaps.map((cap) => cap.name);
 
   // Prune actions this provider previously materialized that it no longer offers.
@@ -320,8 +366,8 @@ export async function recomputeNodeAggregate(
   db: Db,
   workspaceId: string,
   nodeId: string,
-  extra: { version?: string; machineId?: string | null } = {},
-): Promise<void> {
+  extra: { version?: string; machineId?: string | null; provenLiveAt?: Date } = {},
+): Promise<typeof nodes.$inferSelect | undefined> {
   const providers = await listProviders(db, workspaceId, nodeId);
   const online = providers.filter((p) => p.status === 'online');
 
@@ -364,6 +410,15 @@ export async function recomputeNodeAggregate(
   };
   if (extra.version !== undefined) update.version = extra.version;
   if (extra.machineId !== undefined && extra.machineId !== null) update.machineId = extra.machineId;
+  // provenLiveAt folds into this UPDATE so it lands in the same statement that
+  // refreshes the aggregate's lastHeartbeatAt: the column means "a heartbeat
+  // frame arrived" and must not be overwritten by a derived provider value.
+  if (extra.provenLiveAt !== undefined) update.provenLiveAt = extra.provenLiveAt;
 
-  await db.update(nodes).set(update).where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+  const [updated] = await db
+    .update(nodes)
+    .set(update)
+    .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)))
+    .returning();
+  return updated;
 }
