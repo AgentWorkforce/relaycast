@@ -28,6 +28,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 - Relay Connect observer pages refresh only the affected conversation after a realtime DM and reconcile the full scoped list every five minutes, avoiding a full conversation-list read on every event or 15-second tick.
 - Agent registration through a node no longer scans the full failed-invocation history on every `agent.register`, removing the ~2s read that tipped hosted node-control frames into `d1_pressure` timeouts on large workspaces.
 - The hosted maintenance sweep that reconciles stale online nodes no longer full-scans the node table every tick, removing a recurring ~24k-row read from the liveness path.
+- Node heartbeats no longer re-materialize identical action manifests and no longer write the provider row twice per beat, cutting the steady-state statement count on the hosted node liveness path by more than half.
 
 ## [10.0.1] - 2026-10-11
 
