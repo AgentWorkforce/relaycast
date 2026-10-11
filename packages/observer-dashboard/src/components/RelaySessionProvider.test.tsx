@@ -70,6 +70,17 @@ describe('RelaySessionProvider (Connect)', () => {
     expect(screen.getByText('room')).toBeTruthy();
   });
 
+  it('does not schedule a retry for an open that fails after unmount', async () => {
+    let failLogin!: (response: Response) => void;
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { failLogin = resolve; }));
+    open();
+    await flush();
+    cleanup();
+    failLogin(json(503, { success: false, error: 'Unable to validate API key' }));
+    await flush(10 * 60_000);
+    expect(logins()).toHaveLength(1);
+  });
+
   it('stops retrying after the budget and retries again only on request', async () => {
     fetchMock.mockResolvedValue(json(503, { success: false, error: 'Unable to validate API key' }));
     open();

@@ -40,8 +40,17 @@ export function RelaySessionProvider({
   // Not cleared by the effect's cleanup: stripping the capability re-runs the
   // effect for the same identity, which must not cancel a pending retry.
   const retryTimer = useRef<number | undefined>(undefined);
+  // An open that fails after unmount must not schedule a retry: it would later
+  // re-send the captured capability and could overwrite a newer session's cookies.
+  const mounted = useRef(true);
 
-  useEffect(() => () => window.clearTimeout(retryTimer.current), []);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      window.clearTimeout(retryTimer.current);
+    };
+  }, []);
   const requestSeq = useRef(0);
   const connectIdentity = useRef<string | null>(null);
   const previousMode = useRef<'workspace' | 'connect' | null>(null);
@@ -81,11 +90,15 @@ export function RelaySessionProvider({
     window.clearTimeout(retryTimer.current);
     let attempt = 0;
     const failTemporarily = () => {
-      if (seq !== requestSeq.current) return;
+      if (seq !== requestSeq.current || !mounted.current) return;
       const delay = connectObserverRetryDelay(attempt);
       attempt += 1;
       setTemporaryFailure({ retrying: delay !== null });
-      if (delay !== null) retryTimer.current = window.setTimeout(() => void initSession(), delay);
+      if (delay !== null) {
+        retryTimer.current = window.setTimeout(() => {
+          if (mounted.current) void initSession();
+        }, delay);
+      }
     };
     retryNow.current = () => {
       window.clearTimeout(retryTimer.current);
