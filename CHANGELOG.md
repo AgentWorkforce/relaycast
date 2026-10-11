@@ -16,7 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Major]
+## [Unreleased]
+
+## [10.0.0] - 2026-10-11
 
 ### Changed
 
@@ -25,7 +27,6 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Fixed
 
 - Thread reads seek the requested thread instead of scanning retained workspace history.
-
 
 ## [9.2.0] - 2026-10-09
 
@@ -702,7 +703,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v9.2.0...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v10.0.0...HEAD
+[10.0.0]: https://github.com/AgentWorkforce/relaycast/compare/v9.2.0...v10.0.0
 [9.2.0]: https://github.com/AgentWorkforce/relaycast/compare/v9.1.0...v9.2.0
 [9.1.0]: https://github.com/AgentWorkforce/relaycast/compare/v9.0.0...v9.1.0
 [9.0.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.16.0...v9.0.0
