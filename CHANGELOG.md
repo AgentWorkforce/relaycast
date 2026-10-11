@@ -20,6 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
+- Registering a name that was previously released now succeeds instead of failing permanently. Release keeps the released identity's recovery verifier enrolled, and that verifier is globally unique, so a caller deriving it from stable inputs re-presented the same value on every attempt and was refused forever. A registration now reclaims the verifier left behind by its OWN released name; a verifier held by a live identity, by a different name, or by another workspace is still refused.
 - Official SDK workspace-wide DM listing uses bounded cursor pages internally while preserving its complete-array return value; legacy unpaginated HTTP callers and scoped observer links retain their existing full-list behavior.
 - Conversation-scoped observer links load only their allowed direct messages instead of enriching every DM in the workspace first.
 - Relay Connect observer pages refresh only the affected conversation after a realtime DM and reconcile the full scoped list every five minutes, avoiding a full conversation-list read on every event or 15-second tick.

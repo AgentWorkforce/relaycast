@@ -11,6 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `registerAgent` reclaims a recovery verifier left enrolled by its own released tombstone instead of failing `agent_recovery_proof_conflict` forever. The reclaim is scoped to the registering workspace, to released holders only, and to the same agent name, and the released check is a subquery inside the delete so a holder recovered back to live is never taken. Registration writes now require atomic execution, since a sequential handle could orphan the first insert before the verifier conflict and strand the retry.
 - `GET /v1/dm/conversations/all` supports opt-in cursor pages of at most 500 conversations, internally chunked below D1's bind limit, while preserving the legacy unpaginated and observer response contracts.
 - `GET /v1/dm/conversations/all` applies an observer's conversation allowlist before participant and message enrichment, keeping narrowly scoped links fast in large workspaces.
 

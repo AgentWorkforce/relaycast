@@ -335,7 +335,12 @@ export async function registerAgent(
         updatedAt: now,
       }));
       return writes;
-    });
+      // Sequential execution would apply the node and agent inserts before the
+      // credential insert raises the verifier conflict, so the reclaim retry
+      // would then fail on the name it just orphaned. The writes were always
+      // meant to be one unit; the retry is what makes a partial apply
+      // observable, so it is required rather than assumed.
+    }, { requireAtomic: true });
     [agent] = results[1] as (typeof agents.$inferSelect)[];
   } catch (insertErr: unknown) {
     if (isRecoveryVerifierConstraintError(insertErr)) {
@@ -369,6 +374,13 @@ export async function registerAgent(
                   eq(agents.id, agentRecoveryCredentials.agentId),
                   eq(agents.workspaceId, agentRecoveryCredentials.workspaceId),
                   eq(agents.status, RELEASED_AGENT_STATUS),
+                  // And it must be THIS name's own tombstone. Workspace plus
+                  // released status is not enough: it would let any new name in
+                  // the workspace take a different agent's verifier and inherit
+                  // recovery authority backed by that agent's proof. Reclaiming
+                  // `foo` must only ever consume what `foo` left behind, which
+                  // is the only case this feature exists for.
+                  eq(agents.name, sql`${data.name} || ${RELEASED_NAME_MARKER} || ${agents.id}`),
                 )),
             ),
           ))

@@ -169,6 +169,40 @@ describe('explicit agent identity recovery', () => {
     expect((await authenticate(await responseToken(recovered))).status).toBe(200);
   });
 
+  it('only reclaims the tombstone belonging to the SAME name', async () => {
+    // Review caught this: workspace + released status alone would let any new
+    // name in the workspace consume a different agent's verifier and inherit
+    // recovery authority backed by that agent's proof. Reclaiming `foo` must
+    // only ever consume what `foo` left behind.
+    const workspace = await createWorkspace(stack.app, 'cross-name-reclaim-workspace');
+    const verifierHash = 'e'.repeat(64);
+    const register = (name: string) => stack.app.request('/v1/agents', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${workspace.workspaceKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ name, recovery_proof_hash: verifierHash }),
+    });
+
+    expect((await register('original-name')).status).toBe(201);
+    expect((await stack.app.request('/v1/agents/original-name', {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${workspace.workspaceKey}` },
+    })).status).toBe(204);
+
+    // A DIFFERENT name must not inherit the tombstone's verifier.
+    const other = await register('unrelated-name');
+    expect(other.status).toBe(409);
+    await expect(other.json()).resolves.toMatchObject({
+      error: { code: 'agent_recovery_proof_conflict' },
+    });
+
+    // ...and the tombstone's credential is still there, so the rightful name
+    // can still reclaim it afterwards.
+    expect((await register('original-name')).status).toBe(201);
+  });
+
   it('never takes a verifier from a LIVE identity in the same workspace', async () => {
     // The guard that matters. Reclaim only applies to a tombstoned holder; if
     // it ever applied to a live one it would hand that agent's recovery
