@@ -17,9 +17,10 @@ Indexed the cancelled-spawn tombstone check on agent.register: non-partial compo
 
 ## Key Decisions
 
-### Partial index on action_invocations for the cancelled-spawn tombstone check
-- **Chose:** Partial index on action_invocations for the cancelled-spawn tombstone check
+### Partial index on action_invocations for the cancelled-spawn tombstone check (superseded)
+- **Chose (initial, superseded):** Partial index on action_invocations for the cancelled-spawn tombstone check
 - **Reasoning:** agent.register scans the whole status='failed' bucket (~216k rows, ~1.8s on prod D1) looking for tombstones that all carry error='invocation_origin_unavailable' (~2.9k rows). A partial index on (workspace_id, dispatched_node_id) WHERE status='failed' AND error='invocation_origin_unavailable' lets SQLite seek only matchable rows; predicates imply the partial WHERE clause so no INDEXED BY hint is needed.
+- **Superseded in review:** SQLite cannot prove the partial-index WHERE clause when status and error arrive as bound parameters (the same limitation migration 0065 documents), so the planner would ignore it. The delivered index is the non-partial composite (workspace_id, dispatched_node_id) — a ~10-row equality seek that also serves the spawn-reservation EXISTS.
 
 ---
 
