@@ -12,6 +12,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Fixed
 
 - `GET /v1/agent` and `GET /v1/agents/<name>` have dedicated rate-limit buckets instead of sharing the workspace-wide `global` bucket; `GET /v1/agents/presence` keeps its tighter allowance and the roster listing is unchanged.
+- `registerAgent` reclaims a recovery verifier left enrolled by its own released tombstone, scoped to the same workspace and agent name; a verifier held by a live identity or a different name is still refused with `agent_recovery_proof_conflict`. Registration writes now require atomic execution.
 
 ## [10.0.2] - 2026-10-11
 
@@ -22,6 +23,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `GET /v1/dm/conversations/all` applies an observer's conversation allowlist before participant and message enrichment, keeping narrowly scoped links fast in large workspaces.
 - `agent.register`'s cancelled-spawn tombstone check seeks a new composite index on `action_invocations` (`idx_action_invocations_spawn_canceled`, `workspace_id` + `dispatched_node_id`) instead of the whole `status = 'failed'` bucket — measured ~216k rows / ~1.8s per registration on hosted production, enough to breach the node liveness deadline and surface `d1_pressure` on every spawn.
 - The hosted stale-online-node reconcile scan (`status = 'online'` with no workspace predicate) now seeks a new partial covering index (`idx_nodes_online_liveness`) instead of full-scanning `nodes` on every maintenance tick.
+- `node.heartbeat` carrying an unchanged capability snapshot now issues a single provider write (folding upsert + liveness signal), skips `materializeProviderActions` behind a one-read drift check so out-of-band action deletions still self-heal, and folds `proven_live_at` into the aggregate node update — ~15 sequential statements per beat down to ~6 on the node liveness hot path that was breaching the 5s deadline into `d1_pressure`.
 
 ## [10.0.1] - 2026-10-11
 

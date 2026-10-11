@@ -21,6 +21,21 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Fixed
 
 - Agent identity lookups keep their own rate-limit allowance instead of competing with the workspace's message traffic, so a busy workspace can still register and verify agents.
+- A handle whose delivery identity was previously released can be registered again instead of being refused permanently.
+
+## [10.0.3] - 2026-10-11
+
+### Fixed
+
+- Roll back recovered admission when replayed landing fails
+- Recover committed admission after a lost batch response
+- Make refused agent-slot admission abort the atomic group
+- Batch agent.register statement groups on D1
+- Compare is_global in the heartbeat drift check
+- Slim the node.heartbeat statement count
+- Index the global stale-online-node reconcile scan
+- Make the tombstone index provable under bound parameters
+- Index cancelled-spawn tombstone check on agent.register
 
 ## [10.0.2] - 2026-10-11
 
@@ -32,6 +47,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 - Relay Connect observer pages refresh only the affected conversation after a realtime DM and reconcile the full scoped list every five minutes, avoiding a full conversation-list read on every event or 15-second tick.
 - Agent registration through a node no longer scans the full failed-invocation history on every `agent.register`, removing the ~2s read that tipped hosted node-control frames into `d1_pressure` timeouts on large workspaces.
 - The hosted maintenance sweep that reconciles stale online nodes no longer full-scans the node table every tick, removing a recurring ~24k-row read from the liveness path.
+- Node heartbeats no longer re-materialize identical action manifests and no longer write the provider row twice per beat, cutting the steady-state statement count on the hosted node liveness path by more than half.
 
 ## [10.0.1] - 2026-10-11
 
@@ -725,7 +741,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v10.0.2...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v10.0.3...HEAD
+[10.0.3]: https://github.com/AgentWorkforce/relaycast/compare/v10.0.2...v10.0.3
 [10.0.2]: https://github.com/AgentWorkforce/relaycast/compare/v10.0.1...v10.0.2
 [10.0.1]: https://github.com/AgentWorkforce/relaycast/compare/v10.0.0...v10.0.1
 [10.0.0]: https://github.com/AgentWorkforce/relaycast/compare/v9.2.0...v10.0.0
