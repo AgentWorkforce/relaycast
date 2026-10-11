@@ -1,4 +1,4 @@
-import { eq, and, gt, lt, ne, sql, inArray, type SQL } from 'drizzle-orm';
+import { eq, and, exists, gt, lt, ne, sql, inArray, type SQL } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { agents, agentNodeBindings, agentRecoveryCredentials, channels, channelMembers, dmParticipants, actions, deliveries, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
@@ -217,6 +217,12 @@ export async function registerAgent(
     recoveryProofHash?: string;
     workUnitId?: string;
   },
+  /**
+   * Internal. Set only by the verifier-reclaim retry below, so that retry can
+   * never recurse more than once: the second attempt refuses the conflict
+   * rather than reclaiming again.
+   */
+  afterVerifierReclaim = false,
 ) {
   assertRegistrableAgentName(data.name);
   if (!hasValidRegistrationIdentity(data.metadata)) {
@@ -329,10 +335,60 @@ export async function registerAgent(
         updatedAt: now,
       }));
       return writes;
-    });
+      // Sequential execution would apply the node and agent inserts before the
+      // credential insert raises the verifier conflict, so the reclaim retry
+      // would then fail on the name it just orphaned. The writes were always
+      // meant to be one unit; the retry is what makes a partial apply
+      // observable, so it is required rather than assumed.
+    }, { requireAtomic: true });
     [agent] = results[1] as (typeof agents.$inferSelect)[];
   } catch (insertErr: unknown) {
     if (isRecoveryVerifierConstraintError(insertErr)) {
+      // The verifier is globally unique, and a caller deriving it
+      // deterministically from stable inputs presents the SAME value every
+      // time. Release tombstones an agent but leaves its credential enrolled,
+      // so once a name is released its owner can never register it again: each
+      // retry re-presents a verifier held by the tombstone and 409s forever.
+      // No client backoff clears that, and the holder is an identity that can
+      // never be recovered -- its name carries the reserved released marker,
+      // and recovery requires a name match.
+      //
+      // A conflict against a RELEASED holder is therefore residue, not a
+      // conflict. Drop it and let the registration proceed. A conflict against
+      // a LIVE identity is still refused, because reclaiming then would hand
+      // one agent's recovery authority to another.
+      const verifier = data.recoveryProofHash;
+      if (!afterVerifierReclaim && verifier) {
+        const reclaimed = await db
+          .delete(agentRecoveryCredentials)
+          .where(and(
+            eq(agentRecoveryCredentials.workspaceId, workspaceId),
+            eq(agentRecoveryCredentials.verifierHash, verifier),
+            // A subquery, not a prior read: between a read and this delete the
+            // holder could be recovered back to live, and the one thing this
+            // must never do is take a live identity's verifier.
+            exists(
+              db.select({ one: sql`1` })
+                .from(agents)
+                .where(and(
+                  eq(agents.id, agentRecoveryCredentials.agentId),
+                  eq(agents.workspaceId, agentRecoveryCredentials.workspaceId),
+                  eq(agents.status, RELEASED_AGENT_STATUS),
+                  // And it must be THIS name's own tombstone. Workspace plus
+                  // released status is not enough: it would let any new name in
+                  // the workspace take a different agent's verifier and inherit
+                  // recovery authority backed by that agent's proof. Reclaiming
+                  // `foo` must only ever consume what `foo` left behind, which
+                  // is the only case this feature exists for.
+                  eq(agents.name, sql`${data.name} || ${RELEASED_NAME_MARKER} || ${agents.id}`),
+                )),
+            ),
+          ))
+          .returning({ id: agentRecoveryCredentials.id });
+        // Retry once. The flag makes a second conflict terminal, so a verifier
+        // contended by two concurrent registrations cannot loop.
+        if (reclaimed.length > 0) return registerAgent(db, workspaceId, data, true);
+      }
       throw codedError(
         'Agent recovery proof verifier is already enrolled to another identity',
         'agent_recovery_proof_conflict',

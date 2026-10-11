@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- A handle whose delivery identity was previously released can be registered again instead of being refused permanently.
 
 ## [10.0.3] - 2026-10-11
 
