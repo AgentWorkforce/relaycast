@@ -1,4 +1,4 @@
-import { and, eq, notInArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, notInArray, or, sql } from 'drizzle-orm';
 import type { FleetCapability, FleetCapabilityKind } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import { actions, nodeProviders, nodes } from '../db/schema.js';
@@ -210,12 +210,12 @@ export function assertActionTaskMode(capabilities: FleetCapability[]): void {
 /**
  * Whether the provider's materialized action set is already in the state
  * `materializeProviderActions` would produce for `actionCaps` — same names,
- * all active, matching queue/execution modes. One indexed read that lets an
- * unchanged heartbeat skip re-materialization while still self-healing
- * drift the capability set cannot see (a row deleted out-of-band, a flag
- * flip). `is_global` is deliberately not compared: its expected value is
- * derived from cross-node lookups materialize performs, and the resolver
- * already prefers agent-hosted rows over a stale global alias.
+ * all active, matching queue/execution modes and the global-alias claim the
+ * materializer would compute. Two indexed reads let an unchanged heartbeat
+ * skip re-materialization while still self-healing drift the capability set
+ * cannot see: a row deleted out-of-band, a flag flip, or a global alias that
+ * became claimable (the agent-hosted action that shadowed it was deleted,
+ * or the node that owned the alias released it).
  */
 export async function providerActionsMaterialized(
   db: Db,
@@ -228,6 +228,7 @@ export async function providerActionsMaterialized(
     .select({
       name: actions.name,
       isActive: actions.isActive,
+      isGlobal: actions.isGlobal,
       queue: actions.queue,
       executionMode: actions.executionMode,
     })
@@ -238,13 +239,37 @@ export async function providerActionsMaterialized(
       eq(actions.handlerProvider, providerName),
     ));
   if (rows.length !== actionCaps.length) return false;
+
+  // For the default provider the materializer derives `is_global` from rows
+  // outside this provider's own set: an agent-hosted action of the same name
+  // (handler_node_id IS NULL) or a global alias owned by another node both
+  // keep the node row non-global. Mirror that derivation so its drift — an
+  // alias that became claimable since the last materialize — is detected
+  // rather than skipped.
+  const isDefault = providerName === DEFAULT_PROVIDER_NAME;
+  let globalBlockedByName = new Set<string>();
+  if (isDefault && actionCaps.length > 0) {
+    const blockers = await db
+      .select({ name: actions.name, handlerNodeId: actions.handlerNodeId })
+      .from(actions)
+      .where(and(
+        eq(actions.workspaceId, workspaceId),
+        inArray(actions.name, actionCaps.map((cap) => cap.name)),
+        or(isNull(actions.handlerNodeId), eq(actions.isGlobal, true)),
+      ));
+    globalBlockedByName = new Set(
+      blockers.filter((row) => row.handlerNodeId !== nodeId).map((row) => row.name),
+    );
+  }
+
   const expected = new Map(actionCaps.map((cap) => [cap.name, cap]));
   return rows.every((row) => {
     const cap = expected.get(row.name);
     return cap !== undefined
       && row.isActive
       && row.queue === (cap.queue === true)
-      && row.executionMode === (cap.execution_mode ?? 'short');
+      && row.executionMode === (cap.execution_mode ?? 'short')
+      && row.isGlobal === (isDefault ? !globalBlockedByName.has(row.name) : cap.global === true);
   });
 }
 

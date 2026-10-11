@@ -99,6 +99,42 @@ describe('node.heartbeat with an unchanged roster snapshot', () => {
     expect(acts.map((a) => a.name)).toEqual(['echo']);
   });
 
+  it('reclaims the global alias when the agent-hosted action that shadowed it disappears', async () => {
+    const f = fixture();
+    // The synthetic `default` provider keeps its node-scoped 'echo' non-global
+    // while an agent-hosted action of the same name owns the workspace alias.
+    f.sqlite.exec(`
+      INSERT INTO node_providers(
+          id,workspace_id,node_id,name,instance_id,capabilities,max_agents,
+          active_agents,status,version,last_heartbeat_at,created_at)
+        VALUES ('prov-default','ws','node1','default','inst-d',
+          '[{"name":"beep"}]',4,0,'online','v1',1000,1000);
+      INSERT INTO actions(id,workspace_id,name,description,handler_agent_id,handler_node_id,handler_provider,is_global)
+        VALUES ('agent-beep','ws','beep','Agent beep',NULL,NULL,NULL,0),
+               ('node-beep','ws','beep','Node beep',NULL,'node1','default',0);
+    `);
+    const beat = () =>
+      heartbeatNode(f.db, 'ws', 'node1', 'default', {
+        type: 'node.heartbeat',
+        active_agents: 0,
+        handlers_live: true,
+        capabilities: [{ name: 'beep' }],
+        max_agents: 4,
+      });
+    // While the agent-hosted action exists, the fallback stays non-global and
+    // the unchanged snapshot does not re-materialize.
+    await beat();
+    const shadowed = f.sqlite.prepare('SELECT is_global FROM actions WHERE id = ?').get('node-beep') as { is_global: number };
+    expect(shadowed.is_global).toBe(0);
+    // Once the agent-hosted row disappears, the next unchanged heartbeat must
+    // detect the stale is_global and re-materialize — otherwise the workspace
+    // alias stays unreachable until a roster change.
+    f.sqlite.prepare('DELETE FROM actions WHERE id = ?').run('agent-beep');
+    await beat();
+    const reclaimed = f.sqlite.prepare('SELECT is_global FROM actions WHERE id = ?').get('node-beep') as { is_global: number };
+    expect(reclaimed.is_global).toBe(1);
+  });
+
   it('still rejects a task-mode capability on a non-action kind', async () => {
     const f = fixture();
     await expect(
