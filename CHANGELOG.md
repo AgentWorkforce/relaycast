@@ -20,7 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
-- Relay Connect observer links no longer show "invalid, revoked" when the workspace is rate-limited or Relaycast is briefly unavailable. The page says it is temporarily unavailable, retries with bounded backoff in the same tab, and offers "Try again". Only a rejected link (401/403) shows as revoked.
+- Relay Connect observer links no longer show "invalid, revoked" when the workspace is rate-limited or Relaycast is briefly unavailable. The page says it is temporarily unavailable, retries with bounded backoff in the same tab, and offers "Try again". Only a link the engine rejects or no longer recognises (400/401/403/404) shows as revoked.
 
 ## [10.0.0] - 2026-10-11
 

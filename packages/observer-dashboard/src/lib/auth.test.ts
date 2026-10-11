@@ -9,19 +9,24 @@ describe('login', () => {
 
   it('reports a rejected capability as revoked', async () => {
     vi.stubGlobal('fetch', respond(401, { success: false, error: 'Invalid API key' }));
-    expect(await login('ot_live_x', { connectObserverId: 'ot_1' })).toEqual({ ok: false, failure: 'revoked' });
+    expect(await login('ot_live_x', { connectObserverId: 'ot_1' })).toEqual({ ok: false, failure: 'revoked', retryAfterMs: null });
   });
 
   it('reports an engine that could not validate the capability (rate limit, outage) as temporary', async () => {
     vi.stubGlobal('fetch', respond(503, { success: false, error: 'Unable to validate API key' }));
-    expect(await login('ot_live_x', { connectObserverId: 'ot_1' })).toEqual({ ok: false, failure: 'temporary' });
+    expect(await login('ot_live_x', { connectObserverId: 'ot_1' })).toEqual({ ok: false, failure: 'temporary', retryAfterMs: null });
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
     expect(await login('ot_live_x')).toEqual({ ok: false, failure: 'temporary' });
   });
 
+  it('passes the route\'s Retry-After to the caller', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ success: false }), { status: 503, headers: { 'Retry-After': '45' } })));
+    expect(await login('ot_live_x')).toEqual({ ok: false, failure: 'temporary', retryAfterMs: 45_000 });
+  });
+
   it('treats a 2xx without success: true (e.g. a truncated body) as temporary, not revoked', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{"succ', { status: 200 })));
-    expect(await login('ot_live_x')).toEqual({ ok: false, failure: 'temporary' });
+    expect(await login('ot_live_x')).toMatchObject({ ok: false, failure: 'temporary' });
   });
 
   it('succeeds only on success: true', async () => {

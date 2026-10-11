@@ -5,6 +5,7 @@ import {
   classifyConnectObserverStatus,
   connectObserverExpiryDelay,
   connectObserverRetryDelay,
+  parseRetryAfterMs,
   connectObserverIdentity,
   connectObserverUrlWithoutCapability,
   formatUtcTimestamp,
@@ -164,5 +165,14 @@ describe('Connect observer failure classification', () => {
       .toEqual([2_000, 4_000, 8_000, 16_000, 30_000, null]);
     expect(connectObserverRetryDelay(0, 20_000)).toBe(20_000);
     expect(connectObserverRetryDelay(0, 10 * 60_000)).toBe(60_000);
+  });
+});
+
+describe('parseRetryAfterMs', () => {
+  it('reads delta-seconds and future HTTP dates, and ignores the rest', () => {
+    const now = Date.parse('2026-10-11T00:00:00Z');
+    expect(parseRetryAfterMs('45', now)).toBe(45_000);
+    expect(parseRetryAfterMs('Sun, 11 Oct 2026 00:01:00 GMT', now)).toBe(60_000);
+    for (const value of [null, '', '0', 'soon', 'Sat, 10 Oct 2026 23:59:00 GMT']) expect(parseRetryAfterMs(value, now)).toBeNull();
   });
 });

@@ -70,6 +70,20 @@ describe('RelaySessionProvider (Connect)', () => {
     expect(screen.getByText('room')).toBeTruthy();
   });
 
+  it('waits for the Retry-After the login route passes on before retrying', async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({ success: false }), { status: 503, headers: { 'Retry-After': '45' } }))
+      .mockImplementation(async (url: string) =>
+        url === '/observer/api/auth/login' ? json(200, { success: true }) : json(200, session));
+    open();
+    await flush();
+    await flush(44_000);
+    expect(logins()).toHaveLength(1);
+    await flush(1_000);
+    expect(logins()).toHaveLength(2);
+    expect(screen.getByText('room')).toBeTruthy();
+  });
+
   it('does not schedule a retry for an open that fails after unmount', async () => {
     let failLogin!: (response: Response) => void;
     fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { failLogin = resolve; }));

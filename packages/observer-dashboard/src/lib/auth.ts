@@ -1,4 +1,4 @@
-import { classifyConnectObserverStatus, type ConnectObserverFailure } from './connect-observer';
+import { classifyConnectObserverStatus, parseRetryAfterMs, type ConnectObserverFailure } from './connect-observer';
 
 /**
  * Authenticate via server-side endpoint which sets httpOnly cookies.
@@ -16,7 +16,7 @@ export async function setAuth(apiKey: string, options?: { connectObserverId?: st
 export async function login(
   apiKey: string,
   options?: { connectObserverId?: string },
-): Promise<{ ok: true } | { ok: false; failure: ConnectObserverFailure }> {
+): Promise<{ ok: true } | { ok: false; failure: ConnectObserverFailure; retryAfterMs?: number | null }> {
   let res: Response;
   try {
     res = await fetch('/observer/api/auth/login', {
@@ -33,7 +33,11 @@ export async function login(
   const data = await res.json().catch(() => null) as { success?: unknown } | null;
   if (res.ok && data?.success === true) return { ok: true };
   // A 2xx without `success: true` (e.g. a truncated body) proves no rejection.
-  return { ok: false, failure: res.ok ? 'temporary' : classifyConnectObserverStatus(res.status) };
+  return {
+    ok: false,
+    failure: res.ok ? 'temporary' : classifyConnectObserverStatus(res.status),
+    retryAfterMs: parseRetryAfterMs(res.headers.get('retry-after')),
+  };
 }
 
 /**

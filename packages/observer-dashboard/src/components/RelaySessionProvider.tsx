@@ -10,6 +10,7 @@ import {
   connectObserverIdentity,
   connectObserverRetryDelay,
   connectObserverUrlWithoutCapability,
+  parseRetryAfterMs,
   shouldInitializeConnectObserver,
 } from '../lib/connect-observer';
 import { ConnectObserverTemporaryState } from './ConnectObserverTemporaryState';
@@ -89,9 +90,9 @@ export function RelaySessionProvider({
     // retries re-run the login here instead of asking for a reload.
     window.clearTimeout(retryTimer.current);
     let attempt = 0;
-    const failTemporarily = () => {
+    const failTemporarily = (retryAfterMs?: number | null) => {
       if (seq !== requestSeq.current || !mounted.current) return;
-      const delay = connectObserverRetryDelay(attempt);
+      const delay = connectObserverRetryDelay(attempt, retryAfterMs);
       attempt += 1;
       setTemporaryFailure({ retrying: delay !== null });
       if (delay !== null) {
@@ -136,7 +137,7 @@ export function RelaySessionProvider({
           if (seq !== requestSeq.current) return;
           if (!result.ok) {
             if (mode === 'connect') {
-              if (result.failure === 'temporary') failTemporarily();
+              if (result.failure === 'temporary') failTemporarily(result.retryAfterMs);
               else setAccessFailure('unavailable');
               return;
             }
@@ -150,7 +151,7 @@ export function RelaySessionProvider({
 
         if (!res.ok) {
           if (mode === 'connect') {
-            if (classifyConnectObserverStatus(res.status) === 'temporary') failTemporarily();
+            if (classifyConnectObserverStatus(res.status) === 'temporary') failTemporarily(parseRetryAfterMs(res.headers.get('retry-after')));
             else setAccessFailure('unavailable');
             return;
           }

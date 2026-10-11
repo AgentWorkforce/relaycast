@@ -125,3 +125,18 @@ export function connectObserverRetryDelay(attempt: number, retryAfterMs?: number
     : 0;
   return Math.max(backoff, serverDelay);
 }
+
+/**
+ * A `Retry-After` header as milliseconds: delta-seconds or an HTTP date.
+ * Null when absent, malformed or not in the future.
+ */
+export function parseRetryAfterMs(value: string | null | undefined, now = Date.now()): number | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) {
+    const ms = Number(trimmed) * 1000;
+    return ms > 0 ? ms : null;
+  }
+  const date = Date.parse(trimmed);
+  return Number.isFinite(date) && date > now ? date - now : null;
+}
