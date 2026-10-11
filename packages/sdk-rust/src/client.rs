@@ -278,14 +278,14 @@ impl HttpClient {
     }
 
     /// Make a request to the API.
-    pub async fn request<T: DeserializeOwned>(
+    async fn request_with_cursor<T: DeserializeOwned>(
         &self,
         method: Method,
         path: &str,
         body: Option<impl Serialize>,
         query: Option<&[(&str, &str)]>,
         options: Option<RequestOptions>,
-    ) -> Result<T> {
+    ) -> Result<(T, Option<crate::types::Cursor>)> {
         let url = format!("{}{}", self.base_url, path);
         let options = options.unwrap_or_default();
         let last_attempt = RETRY_BACKOFFS_MS.len() - 1;
@@ -324,7 +324,7 @@ impl HttpClient {
             if status == 204 {
                 // Return default value for T (works for () and Option<T>)
                 let empty_json = serde_json::from_str("null")?;
-                return Ok(empty_json);
+                return Ok((empty_json, None));
             }
 
             let bytes = response.bytes().await?;
@@ -373,12 +373,27 @@ impl HttpClient {
                 });
             }
 
-            return json.data.ok_or_else(|| {
+            let data = json.data.ok_or_else(|| {
                 RelayError::InvalidResponse("Response missing data field".to_string())
-            });
+            })?;
+            return Ok((data, json.cursor));
         }
 
         unreachable!("the retry loop always returns on its final attempt")
+    }
+
+    /// Make a request to the API and return only its data payload.
+    pub async fn request<T: DeserializeOwned>(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<impl Serialize>,
+        query: Option<&[(&str, &str)]>,
+        options: Option<RequestOptions>,
+    ) -> Result<T> {
+        self.request_with_cursor(method, path, body, query, options)
+            .await
+            .map(|(data, _cursor)| data)
     }
 
     fn build_request(&self, method: Method, url: &str, options: &RequestOptions) -> RequestBuilder {
@@ -418,6 +433,16 @@ impl HttpClient {
         options: Option<RequestOptions>,
     ) -> Result<T> {
         self.request::<T>(Method::GET, path, None::<()>, query, options)
+            .await
+    }
+
+    pub(crate) async fn get_with_cursor<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        query: Option<&[(&str, &str)]>,
+        options: Option<RequestOptions>,
+    ) -> Result<(T, Option<crate::types::Cursor>)> {
+        self.request_with_cursor::<T>(Method::GET, path, None::<()>, query, options)
             .await
     }
 

@@ -3,7 +3,12 @@ import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { createMiddleware } from 'hono/factory';
 import { z } from 'zod';
-import { CreateWorkspaceRequestSchema, UpdateWorkspaceRequestSchema } from '@relaycast/types';
+import {
+  ApiSuccessSchema,
+  CreateWorkspaceRequestSchema,
+  UpdateWorkspaceRequestSchema,
+  WorkspaceDmConversationSchema,
+} from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { requireAgentToken, requireWorkspaceKey, requireWorkspaceRead } from '../middleware/auth.js';
 import { authenticateUnexpired } from '../auth/workspaceExpiry.js';
@@ -55,6 +60,12 @@ const updateWorkspaceSchema = UpdateWorkspaceRequestSchema;
 const activityQuerySchema = z.object({
   limit: positiveIntQueryParam({ defaultValue: 20, max: 500 }),
 });
+
+const dmConversationListQuerySchema = z.object({
+  limit: positiveIntQueryParam({ max: dmAllEngine.DM_CONVERSATION_PAGE_MAX_LIMIT }),
+  cursor: z.string().min(1).optional(),
+});
+const dmConversationPageResponseSchema = ApiSuccessSchema(z.array(WorkspaceDmConversationSchema));
 
 const workspaceEventsQuerySchema = z.object({
   since: z.preprocess(
@@ -505,15 +516,30 @@ workspaceRoutes.get('/dm/conversations/all', requireWorkspaceRead('dms:read', { 
     const db = c.get('db');
     const workspace = c.get('workspace');
     const observer = getObserverTokenFromContext(c);
+    let pagination: z.infer<typeof dmConversationListQuerySchema> = { limit: undefined };
+    if (!observer) {
+      const parsed = parseQueryParams(c, dmConversationListQuerySchema, 'Invalid DM conversation list query');
+      if (!parsed.ok) {
+        return parsed.response;
+      }
+      pagination = parsed.data;
+    }
     const filters = observer ? normalizeObserverFilters(observer.filters) : null;
     const scopedConversationIds = observer
       ? (filters?.include_dms ? filters.dm_conversation_ids : [])
       : undefined;
-    const allowedConversations = (await dmAllEngine.listAllDmConversations(
-      db,
-      workspace.id,
-      { conversationIds: scopedConversationIds },
-    ))
+    // Raw key presence opts workspace callers into pagination. In particular,
+    // `?limit=` is the existing query helper's spelling for "use the default";
+    // it must not fall through to the legacy unbounded response.
+    const paginated = !observer
+      && (c.req.query('limit') !== undefined || c.req.query('cursor') !== undefined);
+    const page = paginated
+      ? await dmAllEngine.listDmConversationsPage(db, workspace.id, pagination)
+      : null;
+    const listedConversations = page?.conversations ?? await dmAllEngine.listAllDmConversations(
+      db, workspace.id, { conversationIds: scopedConversationIds },
+    );
+    const allowedConversations = listedConversations
       .filter((conversation) => observerAllowsConversation(observer, conversation.id));
     const filtersMessages = Boolean(filters?.agent_ids?.length || filters?.created_after);
     const filteredCounts = observer && filtersMessages
@@ -537,6 +563,16 @@ workspaceRoutes.get('/dm/conversations/all', requireWorkspaceRead('dms:read', { 
         message_count: filteredCounts.get(conversation.id) ?? 0,
       };
     });
+    if (page) {
+      return c.json(dmConversationPageResponseSchema.parse({
+        ok: true as const,
+        data: conversations,
+        cursor: {
+          next: page.nextCursor,
+          has_more: page.nextCursor !== null,
+        },
+      }));
+    }
     return jsonOk(c, conversations);
   } catch (err: unknown) {
     return errorResponse(c, err);

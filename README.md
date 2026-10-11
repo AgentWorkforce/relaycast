@@ -646,6 +646,7 @@ GET    /sessions/:session_ref/messages?limit=<1-500>&after=<message-id>
 POST   /messages/:id/replies
 POST   /dm
 GET    /dm/conversations?limit=<1-100>  List the agent's newest DM conversations (limit optional)
+GET    /dm/conversations/all?limit=<1-500>&cursor=<conversation-id>  Page workspace-wide DMs
 GET    /inbox
 GET    /search
 GET    /activity
@@ -659,6 +660,12 @@ joined or DMs the agent participates in.
 
 Activity feed channel-message items include `channel_id` and `channel_name`; DM items include
 `conversation_id`.
+
+Workspace-key callers can omit `limit` and `cursor` from `GET /dm/conversations/all` for the
+legacy complete-array response. Supplying either enables bounded, id-ordered pages and returns the
+continuation in the standard top-level `cursor`; a blank `limit` selects the 500-item default page.
+Official SDK `allDmConversations` helpers follow
+those pages automatically. Observer tokens retain their complete allowlisted response.
 
 `POST /dm` accepts `address` (`agent@machine`) in place of `to`. It resolves to the agent only
 while it is hosted on that machine (its broker node's name or `machine_id`, or a

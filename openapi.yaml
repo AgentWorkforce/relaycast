@@ -1741,6 +1741,15 @@ components:
           enum: [true]
         data:
           type: object
+        cursor:
+          type: object
+          required: [next, has_more]
+          properties:
+            next:
+              type: string
+              nullable: true
+            has_more:
+              type: boolean
 
     ErrorResponse:
       type: object
@@ -4503,12 +4512,32 @@ paths:
   /dm/conversations/all:
     get:
       summary: List all workspace DM conversations
-      description: Workspace-admin view of all DM conversations. Observer tokens require `dms:read` and DM filters.
+      description: >
+        Workspace-admin view of DM conversations. Without pagination parameters,
+        the legacy response includes every conversation. Supplying `limit` or
+        `cursor` enables stable, bounded pages and returns the continuation in
+        the standard top-level response cursor. Observer tokens require
+        `dms:read`, retain their full allowlisted response, and ignore these
+        workspace pagination parameters.
       tags:
         - Direct Messages
       security:
         - workspaceKey: []
         - observerToken: []
+      parameters:
+        - name: limit
+          in: query
+          description: Enables bounded pagination. A blank value uses the 500-item default; non-blank values cannot exceed 500.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+        - name: cursor
+          in: query
+          description: Conversation id returned in the previous response cursor.
+          schema:
+            type: string
+            minLength: 1
       responses:
         '200':
           description: Workspace DM conversations
