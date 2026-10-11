@@ -26,6 +26,7 @@ import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { acceptTaskInvocation, completeTaskInvocation } from './taskInvocation.js';
 import { databaseConstraintKind, runAtomic, runAtomicWrites } from '../ports/database.js';
+import { retryD1Write } from '../lib/d1Retry.js';
 import type { AtomicWrite, BatchCapability, EngineDb } from '../ports/database.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { generateId } from './snowflake.js';
@@ -1993,6 +1994,33 @@ export async function registerAgentViaNode(
     const agentId = generateId();
     const admissionResults: unknown[] = [];
 
+    // Landing writes are all idempotent (conflict-ignore inserts, upserted
+    // binding, guarded retirement), so the ambiguous-commit recovery below can
+    // safely replay them when the admission group committed but its response
+    // was lost.
+    const landingWrites = (): AtomicWrite[] => [
+      ...(wantsAutoJoin && generalChannel
+        ? [tx
+          .insert(channelMembers)
+          .values({
+            channelId: generalChannel.id,
+            agentId,
+            role: 'member',
+          })
+          .onConflictDoNothing()]
+        : []),
+      ...agentNodeBindingWrites(tx, workspaceId, { id: agentId, locationNodeId: nodeId }, nodeId, {
+        sessionRef: message.session_ref ?? null,
+        deactivateExisting: true,
+      }),
+    ];
+    const registeredReply = (agent: AgentRow) => ({
+      agent_id: agent.id,
+      name: agent.name,
+      token,
+      ...(cursorHandshake ? { delivery_ack_seq: agent.deliveryAckSeq } : {}),
+    });
+
     // D1 has no interactive transaction, so the slot and the identity commit
     // as one batch; any later failure compensates whichever of them landed
     // rather than leaving a ghost agent or a leaked slot.
@@ -2039,34 +2067,37 @@ export async function registerAgentViaNode(
         );
       }
 
-      await runStatements([
-        ...(wantsAutoJoin && generalChannel
-          ? [tx
-            .insert(channelMembers)
-            .values({
-              channelId: generalChannel.id,
-              agentId,
-              role: 'member',
-            })
-            .onConflictDoNothing()]
-          : []),
-        ...agentNodeBindingWrites(tx, workspaceId, { id: agentId, locationNodeId: nodeId }, nodeId, {
-          sessionRef: message.session_ref ?? null,
-          deactivateExisting: true,
-        }),
-      ], []);
-      return {
-        agent_id: agent.id,
-        name: agent.name,
-        token,
-        ...(cursorHandshake ? { delivery_ack_seq: agent.deliveryAckSeq } : {}),
-      };
+      await runStatements(landingWrites(), []);
+      return registeredReply(agent);
     } catch (err) {
       // The reserve statement writes NULL into active_agents on a refused
       // admission, aborting the group before the identity insert can run —
       // nothing landed, so there is nothing to compensate.
       if (databaseConstraintKind(err) === 'node_capacity') {
         throw codedError(`Node "${node.name}" is at capacity`, 'node_capacity_exceeded', 409);
+      }
+      // A batch is all-or-nothing, but its response is not: D1 can commit the
+      // admission group and then drop the reply, leaving the sink empty while
+      // the slot and identity are durable. A row bearing this freshly
+      // generated id can only have come from our own insert, so probe for it
+      // (with bounded transient retries) before deciding nothing landed —
+      // otherwise the committed agent strands the name behind a permanent
+      // agent_already_exists while leaking the slot it holds.
+      if (admissionResults.length === 0) {
+        let landed: AgentRow | undefined;
+        try {
+          [landed] = await retryD1Write(() => db
+            .select()
+            .from(agents)
+            .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId)))
+            .limit(1), 3) as AgentRow[];
+        } catch {
+          // Probe inconclusive — fall through and surface the original error.
+        }
+        if (landed) {
+          await runStatements(landingWrites(), []);
+          return registeredReply(landed);
+        }
       }
       const compensations: AtomicWrite[] = [];
       if ((admissionResults[1] as AgentRow[] | undefined)?.[0]) {

@@ -25,7 +25,7 @@ interface BatchRecordingDb {
   batches: number[];
 }
 
-function fixture(nodeSql = '') {
+function fixture(nodeSql = '', opts: { dropResponseAfterBatch?: number } = {}) {
   const handle = getSqliteDb(':memory:');
   handles.push(handle);
   runMigrations(handle);
@@ -50,9 +50,14 @@ function fixture(nodeSql = '') {
   const batches: number[] = [];
   const db = Object.assign(base, {
     batch: async (statements: readonly PromiseLike<unknown>[]) => {
-      batches.push(statements.length);
+      const batchIndex = batches.push(statements.length);
       const results: unknown[] = [];
       for (const statement of statements) results.push(await statement);
+      // Model D1's ambiguous commit: the batch applied, but the reply was
+      // dropped before reaching the caller.
+      if (batchIndex === opts.dropResponseAfterBatch) {
+        throw new Error('D1_ERROR: Network connection lost');
+      }
       return results;
     },
   }) as unknown as EngineDb;
@@ -116,5 +121,24 @@ describe('agent.register statement batching', () => {
     await register(f.db, { auto_join_general: false });
     const member = f.sqlite.prepare('SELECT COUNT(*) AS n FROM channel_members WHERE channel_id = ?').get('chan-general') as { n: number };
     expect(member.n).toBe(0);
+  });
+
+  it('recovers a committed admission whose batch response was lost', async () => {
+    // D1 can commit a batch and then drop its reply. The admission group
+    // (batch 2) applies the slot reserve and the identity insert, then the
+    // response is lost — registration must probe the generated id, finish
+    // landing, and return the token instead of erroring and stranding the
+    // agent behind a permanent agent_already_exists.
+    const f = fixture('', { dropResponseAfterBatch: 2 });
+    const reply = await register(f.db);
+    expect(reply.agent_id).toBeTruthy();
+    const agent = f.sqlite.prepare('SELECT id, location_node_id FROM agents WHERE workspace_id = ? AND name = ?')
+      .get('ws', 'agent-a') as { id: string; location_node_id: string };
+    expect(agent.id).toBe(reply.agent_id);
+    const binding = f.sqlite.prepare('SELECT status FROM agent_node_bindings WHERE agent_id = ? AND node_id = ?')
+      .get(agent.id, 'node1') as { status: string };
+    expect(binding.status).toBe('active');
+    const node = f.sqlite.prepare('SELECT active_agents FROM nodes WHERE id = ?').get('node1') as { active_agents: number };
+    expect(node.active_agents).toBe(1);
   });
 });
