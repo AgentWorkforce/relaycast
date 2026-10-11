@@ -767,16 +767,25 @@ final class RelaycastTests: XCTestCase {
         MockURLProtocol.handler = { request in
             switch request.url?.path {
             case "/v1/dm/conversations/all":
+                let components = try XCTUnwrap(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false))
+                let query = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+                XCTAssertEqual(query["limit"], "90")
+                let isSecondPage = query["cursor"] == "dm_1"
+                let nextCursor: Any = isSecondPage ? NSNull() : "dm_1"
                 return jsonResponse([
                     "ok": true,
                     "data": [[
-                        "id": "dm_1",
-                        "channel_id": "ch_dm_1",
+                        "id": isSecondPage ? "dm_2" : "dm_1",
+                        "channel_id": isSecondPage ? "ch_dm_2" : "ch_dm_1",
                         "type": "dm",
-                        "participants": ["alice", "bob"],
+                        "participants": isSecondPage ? ["alice", "carol"] : ["alice", "bob"],
                         "last_message": ["text": "hi", "agent_name": "alice", "created_at": "2026-06-06T00:00:00Z"],
                         "message_count": 3
-                    ]]
+                    ]],
+                    "cursor": [
+                        "next": nextCursor,
+                        "has_more": !isSecondPage
+                    ]
                 ])
             case "/v1/dm/conversations/dm_1/messages":
                 let components = try XCTUnwrap(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false))
@@ -798,13 +807,42 @@ final class RelaycastTests: XCTestCase {
         }
 
         let conversations = try await relay.allDMConversations()
-        XCTAssertEqual(conversations.count, 1)
+        XCTAssertEqual(conversations.count, 2)
         XCTAssertEqual(conversations[0].participants, ["alice", "bob"])
+        XCTAssertEqual(conversations[1].participants, ["alice", "carol"])
         XCTAssertEqual(conversations[0].messageCount, 3)
 
         let messages = try await relay.dmMessages(conversationID: "dm_1", options: WorkspaceDMMessagesOptions(limit: 10))
         XCTAssertEqual(messages.count, 1)
         XCTAssertEqual(messages[0].agentName, "alice")
+    }
+
+    func testAllDMConversationsRejectsRepeatedCursor() async throws {
+        let relay = try RelayCast(
+            options: RelayCastOptions(apiKey: "rk_test", baseURL: "https://relay.test", retryPolicy: RetryPolicy(maxRetries: 0)),
+            session: makeMockSession()
+        )
+        var requestCount = 0
+        MockURLProtocol.handler = { request in
+            requestCount += 1
+            XCTAssertEqual(request.url?.path, "/v1/dm/conversations/all")
+            return jsonResponse([
+                "ok": true,
+                "data": [],
+                "cursor": ["next": "dm_repeat", "has_more": true]
+            ])
+        }
+
+        do {
+            _ = try await relay.allDMConversations()
+            XCTFail("Expected repeated cursor rejection")
+        } catch let error as RelayError {
+            guard case .invalidResponse(let message, _) = error else {
+                return XCTFail("Expected invalidResponse, got \(error)")
+            }
+            XCTAssertTrue(message.contains("pagination did not advance"))
+        }
+        XCTAssertEqual(requestCount, 2)
     }
 
     func testActivityFeed() async throws {

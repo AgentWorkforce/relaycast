@@ -958,9 +958,43 @@ impl RelayCast {
 
     /// Get all DM conversations in the workspace.
     pub async fn all_dm_conversations(&self) -> Result<Vec<WorkspaceDmConversation>> {
-        self.client
-            .get("/v1/dm/conversations/all", None, None)
-            .await
+        let mut conversations = Vec::new();
+        let mut cursor: Option<String> = None;
+        let mut seen_cursors = std::collections::HashSet::new();
+
+        loop {
+            let mut query = vec![("limit", "90")];
+            if let Some(next) = cursor.as_deref() {
+                query.push(("cursor", next));
+            }
+            let (mut page, page_cursor) = self
+                .client
+                .get_with_cursor::<Vec<WorkspaceDmConversation>>(
+                    "/v1/dm/conversations/all",
+                    Some(query.as_slice()),
+                    None,
+                )
+                .await?;
+            conversations.append(&mut page);
+
+            let Some(page_cursor) = page_cursor else {
+                return Ok(conversations);
+            };
+            if !page_cursor.has_more {
+                return Ok(conversations);
+            }
+            let next = page_cursor.next.ok_or_else(|| {
+                RelayError::InvalidResponse(
+                    "DM conversation pagination did not provide a next cursor".to_string(),
+                )
+            })?;
+            if !seen_cursors.insert(next.clone()) {
+                return Err(RelayError::InvalidResponse(
+                    "DM conversation pagination did not advance".to_string(),
+                ));
+            }
+            cursor = Some(next);
+        }
     }
 
     /// Resolve participants for a workspace DM conversation.

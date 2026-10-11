@@ -3,11 +3,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
-function mockResponse(data: unknown, apiOk = true, status = 200) {
+function mockResponse(
+  data: unknown,
+  apiOk = true,
+  status = 200,
+  cursor?: { next: string | null; has_more: boolean },
+) {
   return Promise.resolve({
     ok: true,
     status,
-    json: () => Promise.resolve(apiOk ? { ok: true, data } : { ok: false, error: data }),
+    json: () => Promise.resolve(apiOk ? { ok: true, data, ...(cursor ? { cursor } : {}) } : { ok: false, error: data }),
   });
 }
 
@@ -72,16 +77,48 @@ describe('Relay workspace methods', () => {
     expect(url).toBe('https://cast.agentrelay.com/v1/activity?limit=5');
   });
 
-  it('allDmConversations() calls GET /v1/dm/conversations/all', async () => {
+  it('allDmConversations() uses bounded pages and aggregates the legacy full result', async () => {
     const { RelayCast } = await import('../relay.js');
     const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
-    mockFetch.mockImplementation(() => mockResponse([]));
-    await relay.allDmConversations();
+    const first = [{
+      id: 'dm_1', channel_id: 'channel_1', type: 'dm', participants: ['alice', 'bob'],
+      last_message: null, message_count: 1,
+    }];
+    const second = [{
+      id: 'dm_2', channel_id: 'channel_2', type: 'dm', participants: ['alice', 'carol'],
+      last_message: null, message_count: 1,
+    }];
+    mockFetch
+      .mockImplementationOnce(() => mockResponse(first, true, 200, { next: 'dm_1', has_more: true }))
+      .mockImplementationOnce(() => mockResponse(second, true, 200, { next: null, has_more: false }));
+    await expect(relay.allDmConversations()).resolves.toEqual([
+      {
+        id: 'dm_1', channelId: 'channel_1', type: 'dm', participants: ['alice', 'bob'],
+        lastMessage: null, messageCount: 1,
+      },
+      {
+        id: 'dm_2', channelId: 'channel_2', type: 'dm', participants: ['alice', 'carol'],
+        lastMessage: null, messageCount: 1,
+      },
+    ]);
 
-    const [url, init] = mockFetch.mock.calls[0]!;
-    expect(url).toBe('https://cast.agentrelay.com/v1/dm/conversations/all');
-    expect(init.method).toBe('GET');
+    expect(mockFetch.mock.calls.map(([url]) => url)).toEqual([
+      'https://cast.agentrelay.com/v1/dm/conversations/all?limit=90',
+      'https://cast.agentrelay.com/v1/dm/conversations/all?limit=90&cursor=dm_1',
+    ]);
+    expect(mockFetch.mock.calls.every(([, init]) => init.method === 'GET')).toBe(true);
+  });
+
+  it('allDmConversations() rejects a repeated pagination cursor', async () => {
+    const { RelayCast } = await import('../relay.js');
+    const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+    mockFetch.mockImplementation(() => (
+      mockResponse([], true, 200, { next: 'dm_repeat', has_more: true })
+    ));
+
+    await expect(relay.allDmConversations()).rejects.toThrow('pagination did not advance');
+    expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
   it('dmMessages() camelizes DM message fields', async () => {

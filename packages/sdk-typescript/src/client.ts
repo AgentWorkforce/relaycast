@@ -56,6 +56,14 @@ export interface RequestOptions {
   retry?: boolean;
 }
 
+export interface ResponseEnvelope<T> {
+  data: T;
+  cursor?: {
+    next: string | null;
+    hasMore: boolean;
+  };
+}
+
 export interface RetryPolicy {
   maxRetries: number;
   backoffMs: number;
@@ -257,13 +265,13 @@ export class HttpClient {
     ));
   }
 
-  async request<T>(
+  async requestEnvelope<T>(
     method: string,
     path: string,
     body?: unknown,
     query?: Record<string, string>,
     options?: RequestOptions,
-  ): Promise<Camelize<T>> {
+  ): Promise<ResponseEnvelope<Camelize<T>>> {
     const url = new URL(path, this._baseUrl);
     if (query) {
       for (const [k, v] of Object.entries(query)) {
@@ -327,7 +335,7 @@ export class HttpClient {
 
       // 204 No Content — return undefined (used by DELETE endpoints)
       if (res.status === 204) {
-        return undefined as Camelize<T>;
+        return { data: undefined as Camelize<T> };
       }
 
       let json: unknown;
@@ -359,8 +367,36 @@ export class HttpClient {
       const data = envelope.data.data;
 
       const parsedData = options?.schema ? options.schema.parse(data) : data;
-      return camelizeKeys(parsedData) as Camelize<T>;
+      return {
+        data: camelizeKeys(parsedData) as Camelize<T>,
+        ...(envelope.data.cursor
+          ? {
+            cursor: {
+              next: envelope.data.cursor.next,
+              hasMore: envelope.data.cursor.has_more,
+            },
+          }
+          : {}),
+      };
     }
+  }
+
+  async request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    query?: Record<string, string>,
+    options?: RequestOptions,
+  ): Promise<Camelize<T>> {
+    return (await this.requestEnvelope<T>(method, path, body, query, options)).data;
+  }
+
+  getEnvelope<T>(
+    path: string,
+    query?: Record<string, string>,
+    options?: RequestOptions,
+  ): Promise<ResponseEnvelope<Camelize<T>>> {
+    return this.requestEnvelope<T>('GET', path, undefined, query, options);
   }
 
   get<T>(path: string, query?: Record<string, string>, options?: RequestOptions): Promise<Camelize<T>> {

@@ -87,21 +87,70 @@ describe('Relay Connect observer capability', () => {
       return prepare(source);
     }) as typeof sqlite.prepare;
 
-    for (const credential of [room.workspaceKey, observer.token]) {
-      const response = await stack.app.request('/v1/dm/conversations/all', {
-        headers: { authorization: `Bearer ${credential}` },
-      });
-      expect(response.status).toBe(200);
-      const body = (await response.json()) as {
-        data: Array<{ participants: string[]; message_count: number; last_message: { text: string } | null }>;
-      };
-      expect(body.data).toHaveLength(peers.length);
-      for (const conversation of body.data) {
-        const peer = conversation.participants.find((name) => name !== 'alice')!;
-        expect(conversation.participants).toContain('alice');
-        expect(conversation.message_count).toBe(1);
-        expect(conversation.last_message?.text).toBe(`hello ${peer}`);
-      }
+    const legacyResponse = await stack.app.request('/v1/dm/conversations/all', {
+      headers: { authorization: `Bearer ${room.workspaceKey}` },
+    });
+    expect(legacyResponse.status).toBe(200);
+    const legacyBody = (await legacyResponse.json()) as { data: Array<{ id: string }>; cursor?: unknown };
+    expect(legacyBody.data).toHaveLength(peers.length);
+    expect(legacyBody.cursor).toBeUndefined();
+
+    const workspaceListingSql: string[] = [];
+    sqlite.prepare = ((source: string) => {
+      workspaceListingSql.push(source);
+      return prepare(source);
+    }) as typeof sqlite.prepare;
+    const firstPage = await stack.app.request('/v1/dm/conversations/all?limit=90', {
+      headers: { authorization: `Bearer ${room.workspaceKey}` },
+    });
+    expect(firstPage.status).toBe(200);
+    const firstPageBody = (await firstPage.json()) as {
+      data: Array<{ id: string; participants: string[]; message_count: number; last_message: { text: string } | null }>;
+      cursor: { next: string; has_more: boolean };
+    };
+    expect(firstPageBody.data).toHaveLength(90);
+    expect(firstPageBody.cursor).toEqual({
+      next: firstPageBody.data.at(-1)?.id,
+      has_more: true,
+    });
+    const firstPageListingQueries = workspaceListingSql.filter((source) => (
+      source.includes('from "dm_conversations"')
+      || source.includes('from "dm_participants"')
+      || source.includes('from "messages"')
+    ));
+    expect(firstPageListingQueries).toHaveLength(5);
+
+    sqlite.prepare = prepare as typeof sqlite.prepare;
+    const secondPage = await stack.app.request(
+      `/v1/dm/conversations/all?cursor=${encodeURIComponent(firstPageBody.cursor.next)}`,
+      { headers: { authorization: `Bearer ${room.workspaceKey}` } },
+    );
+    expect(secondPage.status).toBe(200);
+    const secondPageBody = (await secondPage.json()) as {
+      data: Array<{ id: string; participants: string[]; message_count: number; last_message: { text: string } | null }>;
+      cursor: { next: string | null; has_more: boolean };
+    };
+    expect(secondPageBody.data).toHaveLength(peers.length - firstPageBody.data.length);
+    expect(secondPageBody.cursor).toEqual({ next: null, has_more: false });
+    expect(new Set([...firstPageBody.data, ...secondPageBody.data].map(({ id }) => id))).toEqual(
+      new Set(conversationIds),
+    );
+
+    const observerResponse = await stack.app.request('/v1/dm/conversations/all?limit=100', {
+      headers: { authorization: `Bearer ${observer.token}` },
+    });
+    expect(observerResponse.status).toBe(200);
+    const observerBody = (await observerResponse.json()) as {
+      data: Array<{ participants: string[]; message_count: number; last_message: { text: string } | null }>;
+      cursor?: unknown;
+    };
+    expect(observerBody.data).toHaveLength(peers.length);
+    expect(observerBody.cursor).toBeUndefined();
+    for (const conversation of observerBody.data) {
+      const peer = conversation.participants.find((name) => name !== 'alice')!;
+      expect(conversation.participants).toContain('alice');
+      expect(conversation.message_count).toBe(1);
+      expect(conversation.last_message?.text).toBe(`hello ${peer}`);
     }
 
     const preparedSql: string[] = [];

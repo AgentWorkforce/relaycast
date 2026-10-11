@@ -4,7 +4,11 @@ All notable changes to `relaycast-swift` will be documented in this file.
 
 See the [root changelog](../../CHANGELOG.md) for cross-package release highlights.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- `allDMConversations()` follows bounded server cursors and still returns the complete conversation array, with a malformed-cursor progress guard.
 
 ## [9.0.0] - 2026-10-06
 

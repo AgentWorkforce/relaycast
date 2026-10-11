@@ -337,7 +337,27 @@ public final class RelayCast: @unchecked Sendable {
     }
 
     public func allDMConversations() async throws -> [WorkspaceDMConversation] {
-        try await client.get("/v1/dm/conversations/all")
+        var conversations: [WorkspaceDMConversation] = []
+        var cursor: String?
+        var seenCursors: Set<String> = []
+
+        while true {
+            var query = ["limit": "90"]
+            if let cursor { query["cursor"] = cursor }
+            let page: (data: [WorkspaceDMConversation], cursor: Cursor?) = try await client.getWithCursor(
+                "/v1/dm/conversations/all",
+                query: query
+            )
+            conversations.append(contentsOf: page.data)
+            guard page.cursor?.hasMore == true else { return conversations }
+            guard let next = page.cursor?.next, !next.isEmpty else {
+                throw RelayError.invalidResponse("DM conversation pagination did not provide a next cursor", statusCode: nil)
+            }
+            guard seenCursors.insert(next).inserted else {
+                throw RelayError.invalidResponse("DM conversation pagination did not advance", statusCode: nil)
+            }
+            cursor = next
+        }
     }
 
     public func dmMessages(conversationID: String, options: WorkspaceDMMessagesOptions = WorkspaceDMMessagesOptions()) async throws -> [WorkspaceDMMessage] {

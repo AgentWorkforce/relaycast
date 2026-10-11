@@ -11,6 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `GET /v1/dm/conversations/all` supports opt-in cursor pages of at most 90 conversations, bounding each page's D1 enrichment work while preserving the legacy unpaginated and observer response contracts.
 - `GET /v1/dm/conversations/all` applies an observer's conversation allowlist before participant and message enrichment, keeping narrowly scoped links fast in large workspaces.
 
 ## [10.0.1] - 2026-10-11

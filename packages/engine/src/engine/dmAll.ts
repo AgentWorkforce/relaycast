@@ -13,6 +13,21 @@ import { publicMessageMetadata } from './messageMetadata.js';
 
 type Db = ReturnType<typeof getDb>;
 
+export const DM_CONVERSATION_PAGE_MAX_LIMIT = D1_SAFE_IN_QUERY_CHUNK_SIZE;
+
+interface DmConversationRow {
+  id: string;
+  dmType: string;
+  name: string | null;
+  channelId: string;
+  createdAt: Date;
+}
+
+export interface DmConversationPage {
+  conversations: WorkspaceDmConversation[];
+  nextCursor: string | null;
+}
+
 export function dmMessagePageLimit(limit?: number): number {
   return Math.min(Math.max(limit || 50, 1), 100);
 }
@@ -57,6 +72,46 @@ export async function listAllDmConversations(
     ? await queryInChunks(scopedConversationIds, selectConversations)
     : await selectConversations();
 
+  return enrichDmConversations(db, conversations);
+}
+
+export async function listDmConversationsPage(
+  db: Db,
+  workspaceId: string,
+  opts: { limit?: number; cursor?: string } = {},
+): Promise<DmConversationPage> {
+  const limit = Math.min(
+    Math.max(opts.limit ?? DM_CONVERSATION_PAGE_MAX_LIMIT, 1),
+    DM_CONVERSATION_PAGE_MAX_LIMIT,
+  );
+  const rows = await db
+    .select({
+      id: dmConversations.id,
+      dmType: dmConversations.dmType,
+      name: dmConversations.name,
+      channelId: dmConversations.channelId,
+      createdAt: dmConversations.createdAt,
+    })
+    .from(dmConversations)
+    .where(and(
+      eq(dmConversations.workspaceId, workspaceId),
+      ...(opts.cursor ? [gt(dmConversations.id, opts.cursor)] : []),
+    ))
+    .orderBy(dmConversations.id)
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const conversations = rows.slice(0, limit);
+  return {
+    conversations: await enrichDmConversations(db, conversations),
+    nextCursor: hasMore ? conversations.at(-1)?.id ?? null : null,
+  };
+}
+
+async function enrichDmConversations(
+  db: Db,
+  conversations: DmConversationRow[],
+): Promise<WorkspaceDmConversation[]> {
   if (conversations.length === 0) {
     return [];
   }

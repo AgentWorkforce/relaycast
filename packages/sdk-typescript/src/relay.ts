@@ -128,6 +128,7 @@ import {
   ApiResponseSchema,
   CreateWorkspaceResponseSchema,
   SessionMessagesResultSchema,
+  WorkspaceDmConversationSchema,
   WorkspaceLookupSchema,
 } from '@relaycast/types';
 import { ZodError } from 'zod';
@@ -1137,8 +1138,30 @@ export class RelayCast {
     return this.client.get('/v1/activity', params);
   };
 
-  allDmConversations = (): Promise<WorkspaceDmConversation[]> =>
-    this.client.get('/v1/dm/conversations/all');
+  allDmConversations = async (): Promise<WorkspaceDmConversation[]> => {
+    const conversations: WorkspaceDmConversation[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+
+    while (true) {
+      const page = await this.client.getEnvelope<WorkspaceDmConversation[]>(
+        '/v1/dm/conversations/all',
+        { limit: '90', ...(cursor ? { cursor } : {}) },
+        { schema: WorkspaceDmConversationSchema.array() },
+      );
+      conversations.push(...page.data);
+      if (!page.cursor?.hasMore) return conversations;
+
+      const next = page.cursor.next;
+      if (!next || seenCursors.has(next)) {
+        throw new RelayError('transport_error', 'DM conversation pagination did not advance', {
+          retryable: false,
+        });
+      }
+      seenCursors.add(next);
+      cursor = next;
+    }
+  };
 
   dmMessages = async (conversationId: string, opts?: { limit?: number; before?: string; after?: string }): Promise<DmMessage[]> => {
     const query: Record<string, string> = {};
