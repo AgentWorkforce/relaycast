@@ -1,0 +1,46 @@
+{
+  "id": "traj_l5s4zd2yjb1l",
+  "version": 1,
+  "task": {
+    "title": "Relaycast D1 robustness: fix hot registration/liveness queries"
+  },
+  "status": "active",
+  "startedAt": "2026-10-11T19:30:49.660Z",
+  "agents": [
+    {
+      "name": "devin-relaycast-robust",
+      "role": "lead",
+      "joinedAt": "2026-10-11T19:30:49.667Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_75vnlqyad6xs",
+      "title": "Initial work",
+      "agentName": "devin-relaycast-robust",
+      "startedAt": "2026-10-11T19:30:49.667Z",
+      "events": [
+        {
+          "ts": 1791747052582,
+          "type": "decision",
+          "content": "Partial index on action_invocations for the cancelled-spawn tombstone check: Partial index on action_invocations for the cancelled-spawn tombstone check",
+          "raw": {
+            "question": "Partial index on action_invocations for the cancelled-spawn tombstone check",
+            "chosen": "Partial index on action_invocations for the cancelled-spawn tombstone check",
+            "alternatives": [],
+            "reasoning": "agent.register scans the whole status='failed' bucket (~216k rows, ~1.8s on prod D1) looking for tombstones that all carry error='invocation_origin_unavailable' (~2.9k rows). A partial index on (workspace_id, dispatched_node_id) WHERE status='failed' AND error='invocation_origin_unavailable' lets SQLite seek only matchable rows; predicates imply the partial WHERE clause so no INDEXED BY hint is needed."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "b3c4a0ef3f068cf8c136091fc2234d901c0d0ed4",
+    "endRef": "b3c4a0ef3f068cf8c136091fc2234d901c0d0ed4"
+  }
+}
