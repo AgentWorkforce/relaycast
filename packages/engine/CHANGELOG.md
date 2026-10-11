@@ -7,13 +7,16 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- `registerAgent` reclaims a recovery verifier left enrolled by its own released tombstone, scoped to the same workspace and agent name; a verifier held by a live identity or a different name is still refused with `agent_recovery_proof_conflict`. Registration writes now require atomic execution.
 
 ## [10.0.2] - 2026-10-11
 
 ### Fixed
 
-- `registerAgent` reclaims a recovery verifier left enrolled by its own released tombstone, scoped to the same workspace and agent name; a verifier held by a live identity or a different name is still refused with `agent_recovery_proof_conflict`. Registration writes now require atomic execution.
 - `agent.register` now groups its reads and writes into batched statement sets on batch-capable handles (D1), cutting roughly eleven sequential round-trips to three — reads, slot-reserve + identity insert, membership + bindings — under the node-control liveness deadline.
 - `GET /v1/dm/conversations/all` supports opt-in cursor pages of at most 500 conversations, internally chunked below D1's bind limit, while preserving the legacy unpaginated and observer response contracts.
 - `GET /v1/dm/conversations/all` applies an observer's conversation allowlist before participant and message enrichment, keeping narrowly scoped links fast in large workspaces.
