@@ -18,6 +18,20 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased]
 
+## [10.0.3] - 2026-10-11
+
+### Fixed
+
+- Roll back recovered admission when replayed landing fails
+- Recover committed admission after a lost batch response
+- Make refused agent-slot admission abort the atomic group
+- Batch agent.register statement groups on D1
+- Compare is_global in the heartbeat drift check
+- Slim the node.heartbeat statement count
+- Index the global stale-online-node reconcile scan
+- Make the tombstone index provable under bound parameters
+- Index cancelled-spawn tombstone check on agent.register
+
 ## [10.0.2] - 2026-10-11
 
 ### Fixed
@@ -722,7 +736,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v10.0.2...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v10.0.3...HEAD
+[10.0.3]: https://github.com/AgentWorkforce/relaycast/compare/v10.0.2...v10.0.3
 [10.0.2]: https://github.com/AgentWorkforce/relaycast/compare/v10.0.1...v10.0.2
 [10.0.1]: https://github.com/AgentWorkforce/relaycast/compare/v10.0.0...v10.0.1
 [10.0.0]: https://github.com/AgentWorkforce/relaycast/compare/v9.2.0...v10.0.0

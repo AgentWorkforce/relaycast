@@ -1,6 +1,6 @@
 {
   "name": "@relaycast/sdk",
-  "version": "10.0.2",
+  "version": "10.0.3",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -29,7 +29,7 @@
     "test:types": "tsc -p tsconfig.workspace-types.json"
   },
   "dependencies": {
-    "@relaycast/types": "10.0.2",
+    "@relaycast/types": "10.0.3",
     "zod": "^4.3.6"
   },
   "devDependencies": {
