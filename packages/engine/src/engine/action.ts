@@ -2334,7 +2334,28 @@ async function completeReleaseNodeInvocation(
       AND ${actionInvocations.dispatchedProvider} = ${providerName}
       AND ${actionInvocations.status} = 'completed'
   )`;
-  const releaseCanApply = sql`(${generationStillCurrent}) AND (${activeBindingStillCurrent})`;
+  // A relay broker queues `agent.deregister` ahead of the release result on
+  // its one control channel, so the binding this release targets is usually
+  // already inactive when the result lands. Accept that, as long as the agent
+  // was bound to this node and has not since been bound to any other node
+  // than its own implicit direct node (where deregistration re-homes it).
+  const boundOnlyHere = sql`(
+    EXISTS (
+      SELECT 1 FROM ${agentNodeBindings}
+      WHERE ${agentNodeBindings.workspaceId} = ${workspaceId}
+        AND ${agentNodeBindings.agentId} = ${agent.id}
+        AND ${agentNodeBindings.nodeId} = ${nodeId}
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM ${agentNodeBindings}
+      WHERE ${agentNodeBindings.workspaceId} = ${workspaceId}
+        AND ${agentNodeBindings.agentId} = ${agent.id}
+        AND ${agentNodeBindings.status} = 'active'
+        AND ${agentNodeBindings.nodeId} <> ${nodeId}
+        AND ${agentNodeBindings.nodeId} <> ${`node_direct_${agent.id}`}
+    )
+  )`;
+  const releaseCanApply = sql`(${generationStillCurrent}) AND (${boundOnlyHere})`;
   const releasedName = releasedAgentName(agent.name, agent.id);
   const releasedTokenHash = await sha256Hex(`released:${agent.id}:${randomHex(16)}`);
   let successIndex = -1;
