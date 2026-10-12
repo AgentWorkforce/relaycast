@@ -11,6 +11,12 @@ export {
   // hand-rolls them.
   handleProviderDisconnect,
   markNodeOffline,
+  // Split offline transition for a socket owner that must not hold control
+  // admission across the multi-statement teardown: `claimNodeOffline` is the
+  // single-statement fenced CAS, `settleNodeOffline` the claim-scoped tail
+  // that can run after admission is released.
+  claimNodeOffline,
+  settleNodeOffline,
   type HandleNodeControlMessageArgs,
   type NodeSocketLike,
 } from './engine/node.js';

@@ -1040,6 +1040,114 @@ export async function heartbeatNode(
   return updated ? publicNode(updated) : null;
 }
 
+/**
+ * Flip a node's row offline in ONE conditional UPDATE — the only part of an
+ * offline transition a caller must serialize against reconnects. `expected`
+ * carries the heartbeat the caller's stale-read observed: any heartbeat or
+ * registration that landed since rewrote `last_heartbeat_at`, the CAS misses,
+ * and the caller must abandon the transition rather than clobber the live
+ * node. Returns the claimed row's name plus the claim instant — the bound the
+ * settle tail scopes its writes to — or undefined when the claim was lost.
+ */
+export async function claimNodeOffline(
+  db: Db,
+  workspaceId: string,
+  nodeId: string,
+  expected: { lastHeartbeatAt: Date | null },
+): Promise<{ name: string; claimAt: Date } | undefined> {
+  const claimAt = new Date();
+  const [claimed] = await db
+    .update(nodes)
+    .set({
+      status: 'offline',
+      handlersLive: false,
+      load: 0,
+      loadReported: false,
+      activeAgents: 0,
+      lastHeartbeatAt: new Date(),
+    })
+    .where(and(
+      eq(nodes.workspaceId, workspaceId),
+      eq(nodes.id, nodeId),
+      eq(nodes.status, 'online'),
+      expected.lastHeartbeatAt === null
+        ? isNull(nodes.lastHeartbeatAt)
+        : eq(nodes.lastHeartbeatAt, expected.lastHeartbeatAt),
+    ))
+    .returning({ name: nodes.name });
+  return claimed ? { name: claimed.name, claimAt } : undefined;
+}
+
+/**
+ * The resumable tail of an offline transition: provider/agent liveness loss,
+ * invocation rescheduling, and the durable event. Safe to run after the
+ * node's claim row is released and concurrently with a reconnect, because
+ * every write is claim-scoped — `claimAt` bounds the transition to rows whose
+ * liveness evidence predates the claim second, so a provider or agent that
+ * refreshed after it is never clobbered. Callers that cannot interleave
+ * (in-process serialized paths) omit `claimAt` for the legacy unconditional
+ * sweep.
+ */
+export async function settleNodeOffline(
+  db: Db,
+  registry: NodeConnectionRegistry,
+  workspaceId: string,
+  nodeId: string,
+  opts: {
+    claimAt?: Date;
+    before?: { status: string; name: string };
+    deps?: InvocationCompletionDeps;
+    reason?: NodeOfflineReason;
+  } = {},
+) {
+  const claimAt = opts.claimAt;
+  // Provider capability sets persist (offline nodes still show their manifest);
+  // only their liveness flips. Zero activeAgents too, so a later
+  // recomputeNodeAggregate never resurrects a dropped provider's agent count.
+  await db
+    .update(nodeProviders)
+    .set({ status: 'offline', handlersLive: false, load: 0, loadReported: false, activeAgents: 0, lastHeartbeatAt: new Date() })
+    .where(and(
+      eq(nodeProviders.workspaceId, workspaceId),
+      eq(nodeProviders.nodeId, nodeId),
+      // A provider that re-registered or heartbeat provably after the claim
+      // wins: it showed liveness the stale-read could not see. Same-second
+      // evidence is not provably newer — heartbeat columns are second-granular
+      // and the node CAS already arbitrated concurrent liveness — so it is
+      // torn down with the rest of the roster.
+      ...(claimAt ? [or(
+        ne(nodeProviders.status, 'online'),
+        lte(nodeProviders.lastHeartbeatAt, claimAt),
+      )!] : []),
+    ));
+
+  await db
+    .update(agents)
+    .set({ ...agentLivenessLoss(), lastSeen: new Date() })
+    .where(and(
+      eq(agents.workspaceId, workspaceId),
+      ne(agents.status, 'offline'),
+      ne(agents.status, RELEASED_AGENT_STATUS),
+      eq(agents.locationType, 'via_node'),
+      eq(agents.locationNodeId, nodeId),
+      // An agent registered through a reconnect provably after the claim
+      // refreshed last_seen past it; taking it offline would strand a live
+      // spawn. Same-second evidence is torn down — see the provider clause.
+      ...(claimAt ? [lte(agents.lastSeen, claimAt)] : []),
+    ));
+
+  await rescheduleInvocationsForLostNode(db, registry, workspaceId, nodeId);
+
+  if (opts.deps && opts.before && opts.before.status === 'online') {
+    await emitNodeStatusEffects(opts.deps, workspaceId, {
+      status: 'offline',
+      nodeId,
+      nodeName: opts.before.name,
+      reason: opts.reason,
+    });
+  }
+}
+
 export async function markNodeOffline(
   db: Db,
   registry: NodeConnectionRegistry,
@@ -1067,35 +1175,11 @@ export async function markNodeOffline(
     })
     .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
 
-  // Provider capability sets persist (offline nodes still show their manifest);
-  // only their liveness flips. Zero activeAgents too, so a later
-  // recomputeNodeAggregate never resurrects a dropped provider's agent count.
-  await db
-    .update(nodeProviders)
-    .set({ status: 'offline', handlersLive: false, load: 0, loadReported: false, activeAgents: 0, lastHeartbeatAt: new Date() })
-    .where(and(eq(nodeProviders.workspaceId, workspaceId), eq(nodeProviders.nodeId, nodeId)));
-
-  await db
-    .update(agents)
-    .set({ ...agentLivenessLoss(), lastSeen: new Date() })
-    .where(and(
-      eq(agents.workspaceId, workspaceId),
-      ne(agents.status, 'offline'),
-      ne(agents.status, RELEASED_AGENT_STATUS),
-      eq(agents.locationType, 'via_node'),
-      eq(agents.locationNodeId, nodeId),
-    ));
-
-  await rescheduleInvocationsForLostNode(db, registry, workspaceId, nodeId);
-
-  if (effects?.deps && before && before.status === 'online') {
-    await emitNodeStatusEffects(effects.deps, workspaceId, {
-      status: 'offline',
-      nodeId,
-      nodeName: before.name,
-      reason: effects.reason,
-    });
-  }
+  await settleNodeOffline(db, registry, workspaceId, nodeId, {
+    before,
+    deps: effects?.deps,
+    reason: effects?.reason,
+  });
 }
 
 /**

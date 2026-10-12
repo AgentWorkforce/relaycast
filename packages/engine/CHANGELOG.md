@@ -11,6 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- `claimNodeOffline` / `settleNodeOffline` split the node-offline transition into a one-statement CAS claim and a claim-scoped tail, so a socket owner can release control admission right after the node row flips. `markNodeOffline` is unchanged for serialized callers.
 - Implicit direct-node `node.heartbeat` renews its bound agent’s durable roster and presence, acknowledging request IDs with `data.agent_presence` and `agent_id` only after success. The Node adapter wires this automatically; external node-control adapters can opt in with the optional `presence` port.
 
 ### Fixed
