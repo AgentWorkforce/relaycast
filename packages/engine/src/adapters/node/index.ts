@@ -143,6 +143,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
       ).catch(() => {});
     },
   });
+  realtime.setPresenceTracker(presence);
   const rateLimiter = new InProcessRateLimiter();
   const kv = new InProcessKeyValueStore();
   const fileStorage = new LocalFileStorage(

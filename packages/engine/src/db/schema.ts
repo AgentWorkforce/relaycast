@@ -146,6 +146,8 @@ export const agents = sqliteTable(
     // Migration 0056 backfills historical rows from last_seen and its SQLite
     // trigger advances this value for every later status/liveness write.
     statusUpdatedAt: integer('status_updated_at', { mode: 'timestamp' }),
+    // Only liveness transitions populate this; explicit status writes clear it.
+    statusBeforeLivenessLoss: text('status_before_liveness_loss'),
   },
   (table) => [
     uniqueIndex('agents_workspace_name_unique').on(table.workspaceId, table.name),

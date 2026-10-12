@@ -830,10 +830,26 @@ export async function deleteAgent(db: Db, workspaceId: string, name: string) {
   return true;
 }
 
+/** Refresh transport activity, restoring only a status lost to liveness. */
+export function agentLivenessRefresh() {
+  return {
+    lastSeen: new Date(),
+    status: sql<string>`CASE WHEN ${agents.status} = 'offline'
+      THEN COALESCE(${agents.statusBeforeLivenessLoss}, ${agents.status})
+      ELSE ${agents.status} END`,
+    statusBeforeLivenessLoss: null,
+  };
+}
+
+/** Save the pre-loss work state; callers must exclude already-offline/tombstone rows. */
+export function agentLivenessLoss() {
+  return { status: 'offline', statusBeforeLivenessLoss: sql<string>`${agents.status}` };
+}
+
 export async function touchLastSeen(db: Db, agentId: string): Promise<void> {
   await db
     .update(agents)
-    .set({ lastSeen: new Date(), status: 'active' })
+    .set(agentLivenessRefresh())
     // Auth schedules this without awaiting it, so a heartbeat racing a release
     // can land after the tombstone and flip the row back to `active` — reviving
     // a released agent as a live roster member. A tombstone is terminal.
@@ -863,7 +879,7 @@ export async function sweepStaleAgents(db: Db, workspaceId?: string): Promise<nu
 
   const result = await db
     .update(agents)
-    .set({ status: 'offline' })
+    .set(agentLivenessLoss())
     // Sweep both 'active' and legacy 'online' agents during the transition period
     .where(stale)
     .returning({ id: agents.id });

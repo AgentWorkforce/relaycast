@@ -16,7 +16,15 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Direct-node WebSocket heartbeats can maintain agent presence without REST heartbeats, with correlated acknowledgements for safe client fallback.
+
+### Fixed
+
+- Presence heartbeats preserve reported work states; expiry and node disconnect recovery restore only the state lost to liveness, without erasing an explicit offline report.
 
 ## [10.1.1] - 2026-10-12
 
