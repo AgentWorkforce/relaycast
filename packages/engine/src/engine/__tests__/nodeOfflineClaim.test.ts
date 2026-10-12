@@ -79,23 +79,25 @@ describe('claimNodeOffline', () => {
 describe('settleNodeOffline', () => {
   it('marks pre-claim agents and providers offline while sparing post-claim liveness', async () => {
     const f = fixture();
-    const claimAt = seconds(2000);
+    // Liveness evidence is expressed relative to the real claim instant the
+    // CAS stamps into last_heartbeat_at.
+    const nowSec = Math.floor(Date.now() / 1000);
     // A reconnect-registered agent and a re-heartbeated provider both carry
     // liveness newer than the claim; the stale rows keep pre-claim evidence.
-    f.sqlite.prepare(`UPDATE agents SET last_seen = 3000 WHERE id = 'ag1'`).run();
+    f.sqlite.prepare(`UPDATE agents SET last_seen = ${nowSec + 120} WHERE id = 'ag1'`).run();
     f.sqlite.exec(`
       INSERT INTO agents(id,workspace_id,name,token_hash,status,location_type,location_node_id,last_seen)
-        VALUES ('ag3','ws','stale-agent','tok3','active','via_node','node1',1500),
-               ('ag4','ws','same-second-agent','tok4','active','via_node','node1',2000);
-      UPDATE node_providers SET last_heartbeat_at = 3000 WHERE id = 'prov1';
+        VALUES ('ag3','ws','stale-agent','tok3','active','via_node','node1',${nowSec - 120}),
+               ('ag4','ws','same-second-agent','tok4','active','via_node','node1',${nowSec});
+      UPDATE node_providers SET last_heartbeat_at = ${nowSec + 120} WHERE id = 'prov1';
       INSERT INTO node_providers(
           id,workspace_id,node_id,name,instance_id,capabilities,max_agents,
           active_agents,status,version,last_heartbeat_at,created_at)
-        VALUES ('prov2','ws','node1','extra','inst-2','[]',4,0,'online','v1',1500,1500);
+        VALUES ('prov2','ws','node1','extra','inst-2','[]',4,0,'online','v1',${nowSec - 120},${nowSec - 120});
     `);
-    await claimNodeOffline(f.db, 'ws', 'node1', { lastHeartbeatAt: seconds(1000) });
+    const claim = await claimNodeOffline(f.db, 'ws', 'node1', { lastHeartbeatAt: seconds(1000) });
     await settleNodeOffline(f.db, registry, 'ws', 'node1', {
-      claimAt,
+      claimAt: claim!.claimAt,
       before: { status: 'online', name: 'stale-node' },
     });
     const agents = f.sqlite.prepare('SELECT id, status FROM agents ORDER BY id').all() as { id: string; status: string }[];
@@ -117,18 +119,48 @@ describe('settleNodeOffline', () => {
 
   it('is resumable: a retry with the same claim scope still converges stragglers', async () => {
     const f = fixture();
-    const claimAt = seconds(2000);
-    await claimNodeOffline(f.db, 'ws', 'node1', { lastHeartbeatAt: seconds(1000) });
-    await settleNodeOffline(f.db, registry, 'ws', 'node1', { claimAt, before: { status: 'online', name: 'stale-node' } });
+    const staleSec = Math.floor(Date.now() / 1000) - 120;
+    const claim = await claimNodeOffline(f.db, 'ws', 'node1', { lastHeartbeatAt: seconds(1000) });
+    await settleNodeOffline(f.db, registry, 'ws', 'node1', { claimAt: claim!.claimAt, before: { status: 'online', name: 'stale-node' } });
     // A straggler appearing later with pre-claim evidence (e.g. a row restored
     // by a racing replica) is still inside the claim scope on retry.
     f.sqlite.exec(`
       INSERT INTO agents(id,workspace_id,name,token_hash,status,location_type,location_node_id,last_seen)
-        VALUES ('ag4','ws','late-agent','tok4','active','via_node','node1',1500);
+        VALUES ('ag4','ws','late-agent','tok4','active','via_node','node1',${staleSec});
     `);
-    await settleNodeOffline(f.db, registry, 'ws', 'node1', { claimAt });
+    await settleNodeOffline(f.db, registry, 'ws', 'node1', { claimAt: claim!.claimAt });
     const row = f.sqlite.prepare('SELECT status FROM agents WHERE id = ?').get('ag4') as { status: string };
     expect(row.status).toBe('offline');
+  });
+
+  it('is a no-op when the node reconnected after the claim', async () => {
+    const f = fixture();
+    const claim = await claimNodeOffline(f.db, 'ws', 'node1', { lastHeartbeatAt: seconds(1000) });
+    // A reconnect's registration/heartbeat flips the row online again — the
+    // stale claim's tail must not tear down the new liveness epoch.
+    f.sqlite.prepare(`UPDATE nodes SET status = 'online', last_heartbeat_at = ${Math.floor(Date.now() / 1000) + 120} WHERE id = 'node1'`).run();
+    await settleNodeOffline(f.db, registry, 'ws', 'node1', {
+      claimAt: claim!.claimAt,
+      before: { status: 'online', name: 'stale-node' },
+    });
+    const agents = f.sqlite.prepare('SELECT id, status FROM agents ORDER BY id').all() as { id: string; status: string }[];
+    expect(agents).toEqual([
+      { id: 'ag1', status: 'active' },
+      { id: 'ag2', status: 'released' },
+    ]);
+    const providers = f.sqlite.prepare('SELECT id, status FROM node_providers ORDER BY id').all() as { id: string; status: string }[];
+    expect(providers).toEqual([{ id: 'prov1', status: 'online' }]);
+  });
+
+  it('is a no-op when a newer liveness write moved the heartbeat past the claim', async () => {
+    const f = fixture();
+    const claim = await claimNodeOffline(f.db, 'ws', 'node1', { lastHeartbeatAt: seconds(1000) });
+    // The node stayed offline but a newer heartbeat landed (e.g. a racing
+    // transition wrote past the claim) — the claim epoch is no longer current.
+    f.sqlite.prepare(`UPDATE nodes SET last_heartbeat_at = ${Math.floor(Date.now() / 1000) + 120} WHERE id = 'node1'`).run();
+    await settleNodeOffline(f.db, registry, 'ws', 'node1', { claimAt: claim!.claimAt });
+    const row = f.sqlite.prepare('SELECT status FROM agents WHERE id = ?').get('ag1') as { status: string };
+    expect(row.status).toBe('active');
   });
 });
 

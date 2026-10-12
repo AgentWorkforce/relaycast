@@ -1064,7 +1064,12 @@ export async function claimNodeOffline(
       load: 0,
       loadReported: false,
       activeAgents: 0,
-      lastHeartbeatAt: new Date(),
+      // The written heartbeat IS the claim epoch: settle tails and later
+      // transitions detect a post-claim liveness write by observing a
+      // `last_heartbeat_at` newer than `claimAt`, so both values must be the
+      // same instant (second-granular column — two `new Date()` calls could
+      // straddle a boundary).
+      lastHeartbeatAt: claimAt,
     })
     .where(and(
       eq(nodes.workspaceId, workspaceId),
@@ -1087,6 +1092,15 @@ export async function claimNodeOffline(
  * refreshed after it is never clobbered. Callers that cannot interleave
  * (in-process serialized paths) omit `claimAt` for the legacy unconditional
  * sweep.
+ *
+ * When `claimAt` is given the tail first verifies the claimed epoch is still
+ * current: the node row must still read `offline` with `last_heartbeat_at` at
+ * or before the claim instant. A reconnect flips `status` back to `online`;
+ * a post-claim heartbeat or a newer offline write moves `last_heartbeat_at`
+ * past it. Either way the tail is a no-op — teardown, rescheduling, and the
+ * `node.status.offline` event would otherwise clobber or contradict the newer
+ * liveness epoch (a reconnect emits `node.status.online`, so an unguarded
+ * tail could still append `offline` last).
  */
 export async function settleNodeOffline(
   db: Db,
@@ -1101,6 +1115,19 @@ export async function settleNodeOffline(
   } = {},
 ) {
   const claimAt = opts.claimAt;
+  if (claimAt) {
+    const [current] = await db
+      .select({ status: nodes.status, lastHeartbeatAt: nodes.lastHeartbeatAt })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+    if (
+      !current
+      || current.status !== 'offline'
+      || (current.lastHeartbeatAt !== null && current.lastHeartbeatAt.getTime() > claimAt.getTime())
+    ) {
+      return;
+    }
+  }
   // Provider capability sets persist (offline nodes still show their manifest);
   // only their liveness flips. Zero activeAgents too, so a later
   // recomputeNodeAggregate never resurrects a dropped provider's agent count.
@@ -1136,7 +1163,7 @@ export async function settleNodeOffline(
       ...(claimAt ? [lte(agents.lastSeen, claimAt)] : []),
     ));
 
-  await rescheduleInvocationsForLostNode(db, registry, workspaceId, nodeId);
+  await rescheduleInvocationsForLostNode(db, registry, workspaceId, nodeId, { claimAt });
 
   if (opts.deps && opts.before && opts.before.status === 'online') {
     await emitNodeStatusEffects(opts.deps, workspaceId, {

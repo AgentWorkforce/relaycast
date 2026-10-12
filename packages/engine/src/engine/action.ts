@@ -3528,6 +3528,7 @@ export async function rescheduleInvocationsForLostNode(
   registry: NodeConnectionRegistry,
   workspaceId: string,
   nodeId: string,
+  opts: { claimAt?: Date } = {},
 ) {
   const rows = await db
     .select()
@@ -3536,6 +3537,14 @@ export async function rescheduleInvocationsForLostNode(
       eq(actionInvocations.workspaceId, workspaceId),
       eq(actionInvocations.dispatchedNodeId, nodeId),
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      // A claim-scoped tail must not yank work dispatched after the claim —
+      // the node may have reconnected and taken new invocations that belong
+      // to its new liveness epoch. Rows with no dispatch stamp predate the
+      // claim by construction.
+      ...(opts.claimAt ? [or(
+        isNull(actionInvocations.dispatchedAt),
+        lte(actionInvocations.dispatchedAt, opts.claimAt),
+      )!] : []),
     ));
 
   let rescheduled = 0;
