@@ -1100,7 +1100,9 @@ export async function claimNodeOffline(
  * past it. Either way the tail is a no-op — teardown, rescheduling, and the
  * `node.status.offline` event would otherwise clobber or contradict the newer
  * liveness epoch (a reconnect emits `node.status.online`, so an unguarded
- * tail could still append `offline` last).
+ * tail could still append `offline` last). Returns whether the tail ran, so
+ * callers holding epoch-scoped side effects (e.g. closing the lapsed socket
+ * set) can skip them when the node already recovered.
  */
 export async function settleNodeOffline(
   db: Db,
@@ -1113,7 +1115,7 @@ export async function settleNodeOffline(
     deps?: InvocationCompletionDeps;
     reason?: NodeOfflineReason;
   } = {},
-) {
+): Promise<boolean> {
   const claimAt = opts.claimAt;
   if (claimAt) {
     const [current] = await db
@@ -1125,7 +1127,7 @@ export async function settleNodeOffline(
       || current.status !== 'offline'
       || (current.lastHeartbeatAt !== null && current.lastHeartbeatAt.getTime() > claimAt.getTime())
     ) {
-      return;
+      return false;
     }
   }
   // Provider capability sets persist (offline nodes still show their manifest);
@@ -1173,6 +1175,7 @@ export async function settleNodeOffline(
       reason: opts.reason,
     });
   }
+  return true;
 }
 
 export async function markNodeOffline(
