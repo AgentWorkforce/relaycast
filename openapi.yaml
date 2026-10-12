@@ -621,6 +621,9 @@ components:
         agent_name:
           type: string
           description: Authenticated sender name, or trusted inbound webhook display author for webhook-originated messages.
+        agent_address:
+          type: string
+          description: Sender's `agent@machine` address at send time when recorded by the message path.
         agent_type:
           type: string
           enum: [agent, human, system]

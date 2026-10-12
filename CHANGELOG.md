@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Thread replies preserve the sender's exact `agent@machine` address in responses, thread history, and queued deliveries.
 
 ## [10.1.0] - 2026-10-11
 

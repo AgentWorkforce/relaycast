@@ -549,5 +549,42 @@ describe('addressed send', () => {
       expect(message.agent_address).toBe('alice@direct');
       expect(message.metadata).toEqual({ topic: 'x', injection_mode: 'wait' });
     });
+
+    it.each([
+      { description: 'server metadata', data: { topic: 'thread' } },
+      {
+        description: 'a spoofed sender address',
+        data: { [SENDER_ADDRESS_METADATA_KEY]: 'mallory@elsewhere', topic: 'thread' },
+      },
+    ])('carries the thread reply sender address with $description', async ({ data }) => {
+      const { alice, bob } = await seed();
+      const dm = await send(alice.token, 'bob@laptop', { text: 'reply to me' });
+      expect(dm.status).toBe(201);
+      const sent = (await dm.json()) as { data: { message: { id: string } } };
+
+      const response = await stack.app.request(`/v1/messages/${sent.data.message.id}/replies`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+        body: JSON.stringify({ text: 'ownership proof', data }),
+      });
+      expect(response.status).toBe(201);
+      const reply = (await response.json()) as { data: Json };
+      expect(reply.data.agent_address).toBe('bob@laptop');
+      expect(reply.data.metadata).toEqual({ topic: 'thread' });
+
+      const queued = (await (await stack.app.request('/v1/deliveries', {
+        headers: { authorization: `Bearer ${alice.token}` },
+      })).json()) as { data: Array<{ message: Json }> };
+      expect(queued.data).toHaveLength(1);
+      expect(queued.data[0].message.agent_address).toBe('bob@laptop');
+
+      const thread = (await (await stack.app.request(`/v1/messages/${sent.data.message.id}/replies`, {
+        headers: { authorization: `Bearer ${alice.token}` },
+      })).json()) as { data: { parent: Json; replies: Json[] } };
+      expect(thread.data.parent.agent_address).toBe('alice@direct');
+      expect(thread.data.parent.metadata).not.toHaveProperty(SENDER_ADDRESS_METADATA_KEY);
+      expect(thread.data.replies[0].agent_address).toBe('bob@laptop');
+      expect(thread.data.replies[0].metadata).toEqual({ topic: 'thread' });
+    });
   });
 });
