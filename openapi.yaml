@@ -5452,7 +5452,24 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SuccessResponse'
+                type: object
+                required: [ok, data]
+                properties:
+                  ok:
+                    type: boolean
+                    enum: [true]
+                  data:
+                    type: object
+                    required: [id, name, workspace_id]
+                    properties:
+                      id:
+                        type: string
+                        description: The node's id (as `origin_node_id` reports it).
+                      name:
+                        type: string
+                        description: The node's name; `GET /nodes/{name}` reads it.
+                      workspace_id:
+                        type: string
         '401':
           description: Missing, invalid or non-node token
           content:
