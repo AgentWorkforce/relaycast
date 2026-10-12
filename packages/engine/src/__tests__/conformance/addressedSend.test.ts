@@ -557,20 +557,21 @@ describe('addressed send', () => {
         data: { [SENDER_ADDRESS_METADATA_KEY]: 'mallory@elsewhere', topic: 'thread' },
       },
     ])('carries the thread reply sender address with $description', async ({ data }) => {
-      const { alice, bob } = await seed();
+      const { ws, alice, bob } = await seed();
       const dm = await send(alice.token, 'bob@laptop', { text: 'reply to me' });
       expect(dm.status).toBe(201);
       const sent = (await dm.json()) as { data: { message: { id: string } } };
+      const sessionRef = 'thread-reply-sender-address';
 
       const response = await stack.app.request(`/v1/messages/${sent.data.message.id}/replies`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
-        body: JSON.stringify({ text: 'ownership proof', data }),
+        body: JSON.stringify({ text: 'ownership proof', data: { ...data, session_ref: sessionRef } }),
       });
       expect(response.status).toBe(201);
       const reply = (await response.json()) as { data: Json };
       expect(reply.data.agent_address).toBe('bob@laptop');
-      expect(reply.data.metadata).toEqual({ topic: 'thread' });
+      expect(reply.data.metadata).toEqual({ topic: 'thread', session_ref: sessionRef });
 
       const queued = (await (await stack.app.request('/v1/deliveries', {
         headers: { authorization: `Bearer ${alice.token}` },
@@ -584,7 +585,29 @@ describe('addressed send', () => {
       expect(thread.data.parent.agent_address).toBe('alice@direct');
       expect(thread.data.parent.metadata).not.toHaveProperty(SENDER_ADDRESS_METADATA_KEY);
       expect(thread.data.replies[0].agent_address).toBe('bob@laptop');
-      expect(thread.data.replies[0].metadata).toEqual({ topic: 'thread' });
+      expect(thread.data.replies[0].metadata).toEqual({ topic: 'thread', session_ref: sessionRef });
+
+      const read = await stack.app.request(`/v1/messages/${reply.data.id}`, {
+        headers: { authorization: `Bearer ${alice.token}` },
+      });
+      expect(read.status).toBe(200);
+      const message = (await read.json()) as { data: Json };
+      expect(message.data.agent_address).toBe('bob@laptop');
+      expect(message.data.metadata).not.toHaveProperty(SENDER_ADDRESS_METADATA_KEY);
+
+      const session = await stack.app.request(`/v1/sessions/${sessionRef}/messages`, {
+        headers: { authorization: `Bearer ${ws.workspaceKey}` },
+      });
+      expect(session.status).toBe(200);
+      const sessionBody = (await session.json()) as { data: { messages: Json[] } };
+      expect(sessionBody.data.messages).toEqual([
+        expect.objectContaining({
+          id: reply.data.id,
+          agent_address: 'bob@laptop',
+          text: 'ownership proof',
+        }),
+      ]);
+      expect(sessionBody.data.messages[0]?.metadata).not.toHaveProperty(SENDER_ADDRESS_METADATA_KEY);
     });
   });
 });

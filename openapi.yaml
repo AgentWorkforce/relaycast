@@ -623,7 +623,7 @@ components:
           description: Authenticated sender name, or trusted inbound webhook display author for webhook-originated messages.
         agent_address:
           type: string
-          description: Sender's `agent@machine` address at send time when recorded by the message path.
+          description: Sender's `agent@machine` address at send time when the server recorded one. Omitted when the sender has no location node.
         agent_type:
           type: string
           enum: [agent, human, system]
@@ -850,7 +850,7 @@ components:
           description: Sender identity type for the DM message actor
         agent_address:
           type: string
-          description: Sender's `agent@machine` address at send time; reply with `address` on `POST /dm`
+          description: Sender's `agent@machine` address at send time when the server recorded one. Omitted when the sender has no location node. Reply with `address` on `POST /dm`.
         text:
           type: string
         injection_mode:
@@ -912,7 +912,7 @@ components:
           description: Sender identity type for the message actor
         agent_address:
           type: string
-          description: Sender's `agent@machine` address at send time; reply with `address` on `POST /dm`
+          description: Sender's `agent@machine` address at send time when the server recorded one. Omitted when the sender has no location node. Reply with `address` on `POST /dm`.
         text:
           type: string
         injection_mode:
@@ -1111,7 +1111,7 @@ components:
                   nullable: true
                 agent_address:
                   type: string
-                  description: Sender's `agent@machine` at send time; present on direct messages
+                  description: Sender's `agent@machine` address at send time when the server recorded one, on direct messages and thread replies. Omitted when the sender has no location node.
                 text:
                   type: string
                 thread_id:
@@ -3970,7 +3970,8 @@ paths:
         `@`: every `@` is tried as the separator. `direct` never matches a
         broker; a broker named `direct` is addressed by its `machine_id`.
         Agents learn addresses from `address` on agent resources and from
-        `message.agent_address` on DMs they receive.
+        `message.agent_address` on DMs and thread replies when the server
+        recorded one. The field is omitted when the sender has no location node.
       tags:
         - Direct Messages
       security:

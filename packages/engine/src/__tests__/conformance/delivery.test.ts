@@ -2481,6 +2481,10 @@ describe('durable delivery api', () => {
     await stack.settle();
     const live = latestDeliverOfType(node.sock, 'thread.reply');
     expect(live).toMatchObject({ msg_id: messageId });
+    expect(live.payload).toMatchObject({
+      type: 'thread.reply',
+      data: { agent_address: 'alice@direct' },
+    });
 
     await node.handle.handleClose();
     const reconnected = await enrollAndAttachNode(ws, { id: node.id, name: node.name });

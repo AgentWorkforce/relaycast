@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- `POST /v1/messages/:id/replies`, thread reads, and reply deliveries expose the server-resolved sender `agent_address` without leaking its internal metadata key.
+- `POST /v1/messages/:id/replies`, thread reads, `GET /v1/messages/:id`, session reads, queued deliveries, and replayed `thread.reply` frames expose the server-resolved sender `agent_address` without leaking its internal metadata key. Observer `thread.reply` events keep that address on `message`. The field is omitted when the sender has no location node.
 
 ## [10.1.0] - 2026-10-11
 

@@ -675,8 +675,9 @@ uses the broker's `machine_id` when its name contains `@` or is `direct`.
 and returns the resulting address at registration. A cloud sandbox is a broker node, so a sandboxed
 agent's address uses the sandbox's node name; once the sandbox is torn down the agent has no address
 (`address: null`) until it is hosted again. Agents expose their address as `address` on agent
-resources, and each DM and thread reply carries the sender's as `agent_address`, so a recipient can
-reply on it. A stale address returns `404 address_not_found`, including when the agent moves while the send
+resources. A DM or thread reply includes `agent_address` when the server recorded the sender's
+`agent@machine` address, and omits it when the sender has no location node, so a recipient can
+reply on a recorded address. A stale address returns `404 address_not_found`, including when the agent moves while the send
 is in flight; a malformed one returns `400 invalid_address`. Names may contain `@`: each `@` is
 tried as the separator, and an address that reads as two different agents returns
 `400 ambiguous_address`. An idempotent retry replays even if the agent has moved; reusing the key
