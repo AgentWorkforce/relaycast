@@ -16,6 +16,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Fixed
 
 - Presence heartbeats preserve reported work states; expiry and node disconnect recovery restore only the state lost to liveness, without erasing an explicit offline report.
+- A capability-free `node.heartbeat` no longer pre-reads the provider row or the provider list: the provider write reads `max_agents` in place and the node aggregate folds into one correlated UPDATE, so a steady beat is two writes total.
 
 ## [10.1.1] - 2026-10-12
 

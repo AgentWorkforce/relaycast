@@ -142,20 +142,21 @@ export async function heartbeatProvider(
   name: string,
   data: { load?: number | null; loadReported?: boolean; activeAgents: number; handlersLive: boolean },
 ): Promise<void> {
-  const provider = await getProvider(db, workspaceId, nodeId, name);
   // Every released provider sent placeholder zeroes. Only the additive
-  // load_reported signal can turn a numeric value into a measurement.
-  const reportedLoad = provider !== null
-    && provider.maxAgents > 0
-    && data.loadReported === true
-    && typeof data.load === 'number'
-    ? data.load
-    : undefined;
+  // load_reported signal can turn a numeric value into a measurement — and
+  // even then only on a capacity-bounded provider. max_agents is read in
+  // place inside the UPDATE instead of pre-reading the whole provider row,
+  // keeping a steady heartbeat to a single statement.
+  const measured = data.loadReported === true && typeof data.load === 'number';
   await db
     .update(nodeProviders)
     .set({
-      load: reportedLoad ?? 0,
-      loadReported: reportedLoad !== undefined,
+      load: measured
+        ? sql`CASE WHEN ${nodeProviders.maxAgents} > 0 THEN ${data.load} ELSE 0 END`
+        : 0,
+      loadReported: measured
+        ? sql`CASE WHEN ${nodeProviders.maxAgents} > 0 THEN 1 ELSE 0 END`
+        : false,
       activeAgents: data.activeAgents,
       handlersLive: data.handlersLive,
       status: 'online',
@@ -380,6 +381,52 @@ export async function materializeProviderActions(
       });
     }
   }
+}
+
+/**
+ * Refresh a broker node's aggregate columns in ONE UPDATE when the beat cannot
+ * have changed the provider manifest (a heartbeat with no `capabilities`
+ * field). `capabilities` is the union of provider manifests, so it is left
+ * untouched here and the other derived columns fold into correlated
+ * subqueries — replacing the listProviders read + UPDATE pair
+ * `recomputeNodeAggregate` needs for the general case. The subqueries observe
+ * provider rows atomically with the write, so this is strictly more atomic
+ * than the read-then-write form on a handle without interactive transactions.
+ */
+export async function refreshNodeAggregate(
+  db: Db,
+  workspaceId: string,
+  nodeId: string,
+  extra: { version?: string; provenLiveAt?: Date } = {},
+): Promise<typeof nodes.$inferSelect | undefined> {
+  const onNode = and(eq(nodeProviders.workspaceId, workspaceId), eq(nodeProviders.nodeId, nodeId));
+  const online = and(onNode, eq(nodeProviders.status, 'online'));
+  // A single unbounded provider makes the aggregate node unbounded — the 0
+  // sentinel must never be summed into a finite cap.
+  const anyUnbounded = sql`EXISTS(SELECT 1 FROM ${nodeProviders} WHERE ${onNode} AND ${nodeProviders.maxAgents} = 0)`;
+  // Load is only a measurement when EVERY provider measured it.
+  const allReported = sql`(SELECT count(*) FROM ${nodeProviders} WHERE ${onNode}) > 0 AND NOT EXISTS(SELECT 1 FROM ${nodeProviders} WHERE ${onNode} AND ${nodeProviders.loadReported} = 0)`;
+  const [updated] = await db
+    .update(nodes)
+    .set({
+      maxAgents: sql`CASE WHEN ${anyUnbounded} THEN 0 ELSE COALESCE((SELECT sum(${nodeProviders.maxAgents}) FROM ${nodeProviders} WHERE ${onNode}), 0) END`,
+      activeAgents: sql`COALESCE((SELECT sum(${nodeProviders.activeAgents}) FROM ${nodeProviders} WHERE ${onNode}), 0)`,
+      loadReported: sql`CASE WHEN ${allReported} THEN 1 ELSE 0 END`,
+      load: sql`CASE WHEN ${allReported} THEN COALESCE((SELECT max(${nodeProviders.load}) FROM ${nodeProviders} WHERE ${onNode}), 0) ELSE 0 END`,
+      handlersLive: sql`EXISTS(SELECT 1 FROM ${nodeProviders} WHERE ${online} AND ${nodeProviders.handlersLive} = 1)`,
+      status: sql`CASE WHEN EXISTS(SELECT 1 FROM ${nodeProviders} WHERE ${online}) THEN 'online' ELSE 'offline' END`,
+      // Node liveness mirrors ONLINE providers only: an offline provider's
+      // disconnect timestamp is fresh and must not keep a stale node "live".
+      // last_heartbeat_at stores unix seconds (drizzle `timestamp` mode).
+      lastHeartbeatAt: sql`COALESCE((SELECT max(${nodeProviders.lastHeartbeatAt}) FROM ${nodeProviders} WHERE ${online}), ${Math.floor(Date.now() / 1000)})`,
+      ...(extra.version !== undefined ? { version: extra.version } : {}),
+      // provenLiveAt rides this UPDATE so "a heartbeat frame arrived" lands in
+      // the same statement that refreshes the derived lastHeartbeatAt.
+      ...(extra.provenLiveAt !== undefined ? { provenLiveAt: extra.provenLiveAt } : {}),
+    })
+    .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)))
+    .returning();
+  return updated;
 }
 
 /**

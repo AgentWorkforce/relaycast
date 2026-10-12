@@ -44,6 +44,7 @@ import {
   materializeProviderActions,
   providerActionsMaterialized,
   recomputeNodeAggregate,
+  refreshNodeAggregate,
   removeProvider,
   upsertProvider,
 } from './nodeProvider.js';
@@ -910,6 +911,10 @@ export async function heartbeatNode(
   nodeId: string,
   providerName: string,
   message: FleetNodeHeartbeatMessage,
+  // A caller that already read the node row may pass it to skip the role
+  // probe: `null` means "the row was missing", an object supplies its role.
+  // `undefined` keeps the historical own-read behavior.
+  priorNode?: { role: string | null } | null,
 ) {
   // A heartbeat is provider-scoped by connection. It may carry the provider's
   // roster snapshot so the engine can refresh the descriptor between (or in the
@@ -920,10 +925,12 @@ export async function heartbeatNode(
     throw codedError('node_id does not match the authenticated node token', 'node_id_mismatch', 403);
   }
 
-  const [nodeState] = await db
-    .select({ role: nodes.role })
-    .from(nodes)
-    .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+  const nodeState = priorNode === undefined
+    ? (await db
+      .select({ role: nodes.role })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId))))[0]
+    : priorNode;
   if (!nodeState) return null;
 
   if (nodeState.role === 'direct') {
@@ -1031,10 +1038,18 @@ export async function heartbeatNode(
     // ordering the separate stamp used to guarantee: the aggregate derives
     // lastHeartbeatAt from provider rows, which registration also writes,
     // whereas this column is only ever set by an arriving frame.
-    updated = await recomputeNodeAggregate(tx, workspaceId, nodeId, {
-      ...(message.version !== undefined ? { version: message.version } : {}),
-      provenLiveAt: now,
-    });
+    // A capability-free beat cannot change the manifest union, so it takes the
+    // single-statement aggregate path; only a beat carrying `capabilities`
+    // pays the provider-listing recompute.
+    updated = message.capabilities === undefined
+      ? await refreshNodeAggregate(tx, workspaceId, nodeId, {
+        ...(message.version !== undefined ? { version: message.version } : {}),
+        provenLiveAt: now,
+      })
+      : await recomputeNodeAggregate(tx, workspaceId, nodeId, {
+        ...(message.version !== undefined ? { version: message.version } : {}),
+        provenLiveAt: now,
+      });
   });
 
   return updated ? publicNode(updated) : null;
@@ -2970,6 +2985,7 @@ async function readHeartbeatDrainState(
     db
       .select({
         status: nodes.status,
+        role: nodes.role,
         handlersLive: nodes.handlersLive,
         maxAgents: nodes.maxAgents,
         activeAgents: nodes.activeAgents,
@@ -3203,7 +3219,14 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           args.nodeId,
           frameProviderName,
         );
-        const beat = await heartbeatNode(args.db, args.workspaceId, args.nodeId, frameProviderName, message);
+        const beat = await heartbeatNode(
+          args.db,
+          args.workspaceId,
+          args.nodeId,
+          frameProviderName,
+          message,
+          prior.node ?? null,
+        );
         // The node row is already persisted, so emit the durable online
         // transition before draining: a drainNode rejection must not skip the
         // node.status.online event. Isolated so its own failure can't either.
