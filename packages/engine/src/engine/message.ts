@@ -10,6 +10,7 @@ import {
   fetchChannelDeliveryOutcomes,
   type DeliveryOutcomeRecords,
 } from './deliveryWrites.js';
+import { senderAddressField } from './address.js';
 import { displayAgentName, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
 import type { WorkspaceDeliveryPolicy } from './workspaceDeliveryPolicy.js';
@@ -263,6 +264,7 @@ export async function getMessages(
     channel_id: row.channelId,
     agent_id: row.agentId,
     agent_name: displayAgentName(row.metadata, row.agentName),
+    ...senderAddressField(row.metadata),
     text: row.body,
     blocks: (row.blocks as unknown[] | null) || null,
     metadata: publicMessageMetadata(row.metadata),
@@ -324,6 +326,7 @@ export async function getMessage(db: Db, workspaceId: string, messageId: string)
     channel_id: row.channelId,
     agent_id: row.agentId,
     agent_name: displayAgentName(row.metadata, row.agentName),
+    ...senderAddressField(row.metadata),
     text: row.body,
     blocks: (row.blocks as unknown[] | null) || null,
     metadata: publicMessageMetadata(row.metadata),

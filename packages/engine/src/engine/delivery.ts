@@ -767,6 +767,7 @@ function buildRoutableDeliveryEvent(
         channel_name: row.channelName,
         agent_id: row.senderAgentId,
         agent_name: senderName,
+        ...senderAddressField(row.metadata as Record<string, unknown> | null),
         thread_id: row.threadId,
         text: row.body,
         blocks: (row.blocks as unknown[] | null) || null,
