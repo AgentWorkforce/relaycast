@@ -578,6 +578,10 @@ export async function getAgentByName(db: Db, workspaceId: string, name: string) 
     created_at: agent.createdAt.toISOString(),
     last_seen: agent.lastSeen.toISOString(),
     metadata: agent.metadata,
+    // The node whose authenticated socket registered this agent; set once by
+    // the server and never patchable, unlike metadata.fleet. An agent
+    // registered over HTTP gets its own direct node here.
+    origin_node_id: agent.originNodeId ?? null,
     channels: memberships.map((m) => ({
       id: m.channelId,
       name: m.channelName,
