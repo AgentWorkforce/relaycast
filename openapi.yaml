@@ -756,6 +756,9 @@ components:
           type: string
         agent_name:
           type: string
+        agent_address:
+          type: string
+          description: Sender's `agent@machine` address at send time when the server recorded one. Omitted when the sender has no location node.
         thread_id:
           type: string
           nullable: true

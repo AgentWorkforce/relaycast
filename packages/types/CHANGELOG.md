@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `MessageWithMeta.agent_address` is optional. It is present when the server recorded the sender's `agent@machine` address, including on thread replies, and omitted when the sender has no location node.
+- `MessageWithMeta.agent_address` and `SessionMessage.agent_address` are optional. Each is present when the server recorded the sender's `agent@machine` address, including on thread replies, and omitted when the sender has no location node. Session replay parsing keeps a recorded address.
 
 ## [10.0.0] - 2026-10-11
 

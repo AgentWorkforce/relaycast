@@ -609,5 +609,25 @@ describe('addressed send', () => {
       ]);
       expect(sessionBody.data.messages[0]?.metadata).not.toHaveProperty(SENDER_ADDRESS_METADATA_KEY);
     });
+
+    it('omits the sender address for an unhosted thread reply', async () => {
+      const { alice, bob } = await seed();
+      const parentResponse = await send(alice.token, 'bob@laptop', { text: 'reply to me' });
+      expect(parentResponse.status).toBe(201);
+      const parent = (await parentResponse.json()) as { data: { message: { id: string } } };
+
+      await stack.runtime.deps.db.update(agents)
+        .set({ locationNodeId: null })
+        .where(eq(agents.id, bob.agentId));
+
+      const response = await stack.app.request(`/v1/messages/${parent.data.message.id}/replies`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+        body: JSON.stringify({ text: 'from nowhere' }),
+      });
+      expect(response.status).toBe(201);
+      const reply = (await response.json()) as { data: Json };
+      expect(reply.data).not.toHaveProperty('agent_address');
+    });
   });
 });

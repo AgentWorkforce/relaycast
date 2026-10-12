@@ -171,6 +171,8 @@ export const SessionMessageSchema = z.object({
   conversation_id: z.string().nullable(),
   agent_id: z.string(),
   agent_name: z.string(),
+  /** Sender's `agent@machine` address at send time when the server recorded one. Omitted when the sender has no location node. */
+  agent_address: z.string().optional(),
   thread_id: z.string().nullable(),
   text: z.string(),
   blocks: z.array(MessageBlockSchema).nullable(),
