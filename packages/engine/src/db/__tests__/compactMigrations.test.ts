@@ -50,8 +50,9 @@ function snapshot(handle: SqliteDbHandle) {
       // 0056 adds a conservative reconciliation witness and backfills it from
       // the existing last_seen value. Exclude that additive bookkeeping field
       // so this regression continues to compare all pre-existing user data.
+      // 0070 adds a nullable liveness-recovery marker without backfilling it.
       if (name === 'agents') {
-        const { status_updated_at: _statusUpdatedAt, ...existing } = row as Record<string, unknown>;
+        const { status_updated_at: _statusUpdatedAt, status_before_liveness_loss: _livenessStatus, ...existing } = row as Record<string, unknown>;
         return JSON.stringify(existing);
       }
       // 0063 adds only bounded node-rotation recovery metadata. Exclude those
@@ -175,6 +176,8 @@ describe('compact maintenance migration path', () => {
     const beforeConstraints = constraints(handle);
     expect(runMigrations(handle).applied).toEqual(files.filter(name => name >= replacement));
     const after = snapshot(handle);
+    expect(handle.sqlite.prepare('SELECT status_before_liveness_loss FROM agents').all())
+      .toEqual([{ status_before_liveness_loss: null }]);
     // Remote-DM and direct-idempotency migrations add empty tables; every
     // pre-existing row and table must remain.
     expect(after.filter(([name]) => ![

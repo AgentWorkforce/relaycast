@@ -114,6 +114,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
 
   private presence: PresenceTracker | undefined;
 
+  /** Wire the HTTP presence tracker into direct-node heartbeat acknowledgements. */
   setPresenceTracker(presence: PresenceTracker): void {
     this.presence = presence;
   }

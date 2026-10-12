@@ -632,7 +632,12 @@ Realtime transport:
   agent's roster activity and presence. Include an `id` to receive
   `{ "v": 1, "id": "<request-id>", "type": "reply", "ok": true,
   "data": { "agent_presence": true, "agent_id": "<bound-agent-id>" } }`
-  after the renewal succeeds. Correlate fresh acknowledgements before omitting
+  after the renewal succeeds. Heartbeats preserve reported work states (`idle`,
+  `blocked`, `waiting`, and explicit `offline`). Liveness sweeps/disconnects
+  remember the prior state so activity can restore it; a later explicit status
+  write supersedes recovery. Existing offline rows without that provenance
+  remain offline until an explicit status update or registration.
+  Correlate fresh acknowledgements before omitting
   REST heartbeats; a live node socket alone does not establish agent presence.
   Missing acknowledgements (including older servers) require REST fallback.
   Broker heartbeats do not certify the presence of their hosted agents.

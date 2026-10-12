@@ -31,7 +31,7 @@ import type { AtomicWrite, BatchCapability, EngineDb } from '../ports/database.j
 import type { PresenceTracker } from '../ports/presence.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { generateId } from './snowflake.js';
-import { assertRegistrableAgentName, RELEASED_AGENT_STATUS } from './agent.js';
+import { assertRegistrableAgentName, agentLivenessLoss, agentLivenessRefresh, RELEASED_AGENT_STATUS } from './agent.js';
 import { rotateAgentIdentity } from './agentIdentity.js';
 import { isNodeLive, isReusableForMachineMatch, nodeHasCapacity, NODE_LIVENESS_TTL_MS } from './placement.js';
 import {
@@ -1077,9 +1077,11 @@ export async function markNodeOffline(
 
   await db
     .update(agents)
-    .set({ status: 'offline', lastSeen: new Date() })
+    .set({ ...agentLivenessLoss(), lastSeen: new Date() })
     .where(and(
       eq(agents.workspaceId, workspaceId),
+      ne(agents.status, 'offline'),
+      ne(agents.status, RELEASED_AGENT_STATUS),
       eq(agents.locationType, 'via_node'),
       eq(agents.locationNodeId, nodeId),
     ));
@@ -1121,9 +1123,11 @@ export async function handleProviderDisconnect(
     await markProviderOffline(db, workspaceId, nodeId, providerName);
     await db
       .update(agents)
-      .set({ status: 'offline', lastSeen: new Date() })
+      .set({ ...agentLivenessLoss(), lastSeen: new Date() })
       .where(and(
         eq(agents.workspaceId, workspaceId),
+        ne(agents.status, 'offline'),
+        ne(agents.status, RELEASED_AGENT_STATUS),
         eq(agents.locationType, 'via_node'),
         eq(agents.locationNodeId, nodeId),
         eq(agents.providerName, providerName),
@@ -3049,6 +3053,7 @@ function sendControl(socket: NodeSocketLike | undefined, payload: Record<string,
   }
 }
 
+/** Validate and serialize an authenticated node frame, replying only after its effects. */
 export async function handleNodeControlMessage(args: HandleNodeControlMessageArgs) {
   let message: FleetBrokerToRelaycastMessage;
   try {
@@ -3223,7 +3228,7 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           // being revived between a binding check and its last_seen update.
           const [agent] = await args.db
             .update(agents)
-            .set({ lastSeen: new Date(), status: 'active' })
+            .set(agentLivenessRefresh())
             .where(and(
               eq(agents.id, args.nodeId.slice('node_direct_'.length)),
               eq(agents.workspaceId, args.workspaceId),

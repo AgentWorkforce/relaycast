@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { AGENT_LIVENESS_TTL_MS, sweepStaleAgents } from '../../engine/agent.js';
+import { AGENT_LIVENESS_TTL_MS, sweepStaleAgents, touchLastSeen, updateAgent } from '../../engine/agent.js';
+import { markNodeOffline } from '../../engine/node.js';
+import { applyStatusEventEffect, recordSessionEvent, type SessionEventType } from '../../engine/sessionEvent.js';
 import { agents, agentNodeBindings, nodes } from '../../db/schema.js';
 import { attachDirectNodeSocket, createWorkspace, makeNodeStack, registerAgent } from './harness.js';
 
@@ -57,6 +59,71 @@ describe('direct-node WebSocket presence', () => {
     expect(response.status).toBe(200);
     const body = await response.json() as { data: Array<{ id: string }> };
     expect(body.data.map((row) => row.id)).toContain(agent.agentId);
+  });
+
+  it.each(['idle', 'blocked', 'waiting', 'offline'])(
+    'preserves explicit %s status while renewing presence and last_seen', async (status) => {
+      const { stack, ws, agent, beat, ack } = await setup();
+      const db = stack.runtime.handle.db;
+      // Old last_seen must not turn an explicit offline report into expiry.
+      await db.update(agents).set({ lastSeen: new Date(0) }).where(eq(agents.id, agent.agentId));
+      const { event } = await recordSessionEvent(db, ws.workspaceId, agent.agentId, {
+        type: `status.${status}` as SessionEventType, payload: {},
+      });
+      await applyStatusEventEffect(db, ws.workspaceId, agent.agentId, event.id, status);
+      await beat();
+      expect(ack()).toMatchObject({ ok: true, data: { agent_presence: true } });
+      const [row] = await db.select().from(agents).where(eq(agents.id, agent.agentId));
+      expect(row.status).toBe(status);
+      await touchLastSeen(db, agent.agentId); // REST fallback must preserve it too.
+      const [afterRest] = await db.select().from(agents).where(eq(agents.id, agent.agentId));
+      expect(afterRest.status).toBe(status);
+      expect(row.lastSeen.getTime()).toBeGreaterThan(Date.now() - 2_000);
+      const response = await stack.app.request(`/v1/agents?status=${status}`, {
+        headers: { authorization: `Bearer ${ws.workspaceKey}` },
+      });
+      const body = await response.json() as { data: Array<{ id: string }> };
+      expect(body.data.map((row) => row.id)).toContain(agent.agentId);
+    },
+  );
+
+  it('preserves an explicit offline report after the expiry sweep already marked the agent offline', async () => {
+    const { stack, ws, agent, beat } = await setup();
+    const db = stack.runtime.handle.db;
+    await db.update(agents).set({ lastSeen: new Date(0) }).where(eq(agents.id, agent.agentId));
+    await sweepStaleAgents(db, ws.workspaceId);
+    const { event } = await recordSessionEvent(db, ws.workspaceId, agent.agentId, { type: 'status.offline', payload: {} });
+    await applyStatusEventEffect(db, ws.workspaceId, agent.agentId, event.id, 'offline');
+    await beat();
+    const [row] = await db.select().from(agents).where(eq(agents.id, agent.agentId));
+    expect(row.status).toBe('offline');
+  });
+
+  it('restores the work state after a node disconnect without erasing blocked status', async () => {
+    const { stack, ws, agent, handle } = await setup();
+    const db = stack.runtime.handle.db;
+    const { event } = await recordSessionEvent(db, ws.workspaceId, agent.agentId, { type: 'status.blocked', payload: {} });
+    await applyStatusEventEffect(db, ws.workspaceId, agent.agentId, event.id, 'blocked');
+    await handle.handleClose();
+    const [offline] = await db.select().from(agents).where(eq(agents.id, agent.agentId));
+    expect(offline.status).toBe('offline');
+    await markNodeOffline(db, stack.runtime.realtime, ws.workspaceId, `node_direct_${agent.agentId}`);
+    const reconnected = await attachDirectNodeSocket(stack, ws.workspaceId, agent);
+    await reconnected.handle.handleMessage(JSON.stringify({ v: 1, id: 'back', type: 'node.heartbeat', active_agents: 1, handlers_live: false }));
+    const [row] = await db.select().from(agents).where(eq(agents.id, agent.agentId));
+    expect(row.status).toBe('blocked');
+  });
+
+  it('treats an explicit offline update as authoritative even after expiry, without relying on session events', async () => {
+    const { stack, ws, agent, beat } = await setup();
+    const db = stack.runtime.handle.db;
+    await db.update(agents).set({ lastSeen: new Date(0) }).where(eq(agents.id, agent.agentId));
+    await sweepStaleAgents(db, ws.workspaceId);
+    await updateAgent(db, ws.workspaceId, agent.name, { status: 'offline' });
+    await beat();
+    const [row] = await db.select().from(agents).where(eq(agents.id, agent.agentId));
+    expect(row.status).toBe('offline');
+    expect(row.statusBeforeLivenessLoss).toBeNull();
   });
 
   it('acknowledges only after presence succeeds and never acknowledges a failed refresh', async () => {

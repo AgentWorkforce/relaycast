@@ -2385,7 +2385,11 @@ paths:
         agent's durable roster activity and presence. A heartbeat with an `id`
         receives a correlated `reply` with `ok: true` and
         `data: { agent_presence: true, agent_id: "<bound-agent-id>" }` only after
-        renewal succeeds. Clients may omit REST heartbeats while fresh matching
+        renewal succeeds. Heartbeats preserve explicit work states; only a status
+        replaced by a recorded liveness loss is restored. A later explicit status
+        write, including offline-to-offline, supersedes automatic recovery.
+        Existing offline rows without liveness provenance remain offline.
+        Clients may omit REST heartbeats while fresh matching
         acknowledgements arrive; absent acknowledgements require REST fallback.
         Broker heartbeats do not renew hosted agents' presence. External node
         adapters must pass the HTTP PresenceTracker to node control to enable

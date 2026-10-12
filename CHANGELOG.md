@@ -22,6 +22,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Direct-node WebSocket heartbeats can maintain agent presence without REST heartbeats, with correlated acknowledgements for safe client fallback.
 
+### Fixed
+
+- Presence heartbeats preserve reported work states; expiry and node disconnect recovery restore only the state lost to liveness, without erasing an explicit offline report.
+
 ## [10.1.1] - 2026-10-12
 
 ### Fixed

@@ -13,6 +13,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Implicit direct-node `node.heartbeat` renews its bound agent’s durable roster and presence, acknowledging request IDs with `data.agent_presence` and `agent_id` only after success. The Node adapter wires this automatically; external node-control adapters can opt in with the optional `presence` port.
 
+### Fixed
+
+- Presence heartbeats preserve reported work states; expiry and node disconnect recovery restore only the state lost to liveness, without erasing an explicit offline report.
+
 ## [10.1.1] - 2026-10-12
 
 ### Fixed
