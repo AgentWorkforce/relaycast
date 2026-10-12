@@ -19,6 +19,7 @@ import {
   WorkspaceDeliveryCapacityError,
   type WorkspaceDeliveryPolicy,
 } from './workspaceDeliveryPolicy.js';
+import { queryInChunks } from '../lib/queryChunks.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -1110,7 +1111,13 @@ async function replayPendingToNode(
 
   // Resolve the small node roster first. A delivery-first join lets SQLite
   // choose the workspace/status index and scan millions of retained rows.
-  const recipients = await db.select({
+  // A scoped replay must bound the roster read the same way: agents are never
+  // unlinked from location_node_id, so released/offline identities accumulate
+  // on a busy node — filtering `wantedIds` in JS here read every retained row
+  // (≈6.5k on production) for every single-agent register/recover replay.
+  // Push the scope into the primary-key IN list instead; the set is deduped and
+  // chunked to stay under D1's bound-parameter cap.
+  const rosterQuery = (ids?: string[]) => db.select({
     id: agents.id, name: agents.name, providerName: agents.providerName,
     ackSeq: agents.deliveryAckSeq,
   }).from(agents).where(and(
@@ -1118,7 +1125,13 @@ async function replayPendingToNode(
     eq(agents.locationType, 'via_node'),
     eq(agents.locationNodeId, nodeId),
     scope.providerName === undefined ? undefined : eq(agents.providerName, scope.providerName),
-  )).orderBy(asc(agents.name));
+    ids === undefined ? undefined : inArray(agents.id, ids),
+  ));
+  const scopedIds = wantedIds ? [...wantedIds].sort() : undefined;
+  const recipients = scopedIds === undefined
+    ? await rosterQuery().orderBy(asc(agents.name))
+    : (await queryInChunks(scopedIds, chunk => rosterQuery(chunk)))
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 
   let delivered = 0;
   for (const recipient of recipients) {

@@ -110,4 +110,25 @@ describe('mainline replay scope and handoff guards', () => {
     expect(f.frames.map(frame => frame.seq)).toEqual([1]);
   });
 
+  it('bounds the roster read to the scoped agent ids instead of scanning the node', async () => {
+    const f = fixture(0, 1);
+    // Retained identities accumulate on a node's location_node_id forever. A
+    // scoped replay (agent.register / agent.recover) must not read them all.
+    f.sqlite.exec(`
+      INSERT INTO nodes(id,workspace_id,name,token_hash) VALUES ('other-node','ws','other-node','nk');
+      INSERT INTO agents(id,workspace_id,name,token_hash,location_type,location_node_id,provider_name,status)
+        VALUES ('released-peer','ws','released-peer','k1','via_node','node','provider','released'),
+               ('offline-peer','ws','offline-peer','k2','via_node','node','provider','offline'),
+               ('other-node-agent','ws','other-node-agent','k3','via_node','other-node','provider','active')
+    `);
+    expect(await deliverPendingToNode(f.db, f.registry, 'ws', 'node', { agentIds: ['agent'] })).toBe(1);
+    const roster = f.queries.find(q => q.sql.includes('from "agents"'));
+    expect(roster).toBeDefined();
+    expect(roster!.sql).toContain('in (');
+    expect(roster!.params).toContain('agent');
+    expect(roster!.params).not.toContain('released-peer');
+    expect(roster!.params).not.toContain('offline-peer');
+    expect(f.frames.map(frame => frame.seq)).toEqual([1]);
+  });
+
 });
