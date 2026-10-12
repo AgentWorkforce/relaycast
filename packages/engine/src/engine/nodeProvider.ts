@@ -386,12 +386,18 @@ export async function materializeProviderActions(
 /**
  * Refresh a broker node's aggregate columns in ONE UPDATE when the beat cannot
  * have changed the provider manifest (a heartbeat with no `capabilities`
- * field). `capabilities` is the union of provider manifests, so it is left
- * untouched here and the other derived columns fold into correlated
- * subqueries — replacing the listProviders read + UPDATE pair
- * `recomputeNodeAggregate` needs for the general case. The subqueries observe
- * provider rows atomically with the write, so this is strictly more atomic
- * than the read-then-write form on a handle without interactive transactions.
+ * field). The derived columns fold into correlated subqueries — replacing the
+ * listProviders read + UPDATE pair `recomputeNodeAggregate` needs for the
+ * general case. The subqueries observe provider rows atomically with the
+ * write, so this is strictly more atomic than the read-then-write form on a
+ * handle without interactive transactions.
+ *
+ * `capabilities` still refreshes for provider-backed nodes: REST enrollment
+ * can write the node manifest directly, and without the union refresh a
+ * drifted value persisted until the next capabilities-carrying frame. The
+ * union is recomputed in-database (json_each over the provider manifests,
+ * deduped by capability name like `recomputeNodeAggregate`); a provider-less
+ * node keeps its enrolled manifest — it has no rows to derive from.
  */
 export async function refreshNodeAggregate(
   db: Db,
@@ -415,6 +421,18 @@ export async function refreshNodeAggregate(
       load: sql`CASE WHEN ${allReported} THEN COALESCE((SELECT max(${nodeProviders.load}) FROM ${nodeProviders} WHERE ${onNode}), 0) ELSE 0 END`,
       handlersLive: sql`EXISTS(SELECT 1 FROM ${nodeProviders} WHERE ${online} AND ${nodeProviders.handlersLive} = 1)`,
       status: sql`CASE WHEN EXISTS(SELECT 1 FROM ${nodeProviders} WHERE ${online}) THEN 'online' ELSE 'offline' END`,
+      // The union manifest recomputes in-database so a manifest written out of
+      // band (e.g. REST enrollment on a provider-backed node) cannot drift from
+      // provider truth indefinitely. Provider-less nodes keep their manifest —
+      // there are no rows to derive one from.
+      capabilities: sql`CASE WHEN EXISTS(SELECT 1 FROM ${nodeProviders} WHERE ${onNode}) THEN COALESCE((
+        SELECT json_group_array(json(value)) FROM (
+          SELECT je.value AS value
+          FROM ${nodeProviders} np, json_each(COALESCE(np.capabilities, '[]')) je
+          WHERE np.workspace_id = ${workspaceId} AND np.node_id = ${nodeId}
+          GROUP BY json_extract(je.value, '$.name')
+        )
+      ), '[]') ELSE ${nodes.capabilities} END`,
       // Node liveness mirrors ONLINE providers only: an offline provider's
       // disconnect timestamp is fresh and must not keep a stale node "live".
       // last_heartbeat_at stores unix seconds (drizzle `timestamp` mode).

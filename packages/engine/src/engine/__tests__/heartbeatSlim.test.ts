@@ -178,6 +178,29 @@ describe('node.heartbeat without a capabilities snapshot', () => {
     });
   });
 
+  it('refreshes the capabilities union on a capability-free beat', async () => {
+    const f = fixture();
+    // REST enrollment can write nodes.capabilities directly; without the
+    // union refresh a value drifted from the provider manifest persisted
+    // indefinitely under the single-statement aggregate.
+    f.sqlite.prepare(`UPDATE nodes SET capabilities = '[{"name":"stale"}]' WHERE id = ?`).run('node1');
+    const node = await steadyBeat(f);
+    const names = (node?.capabilities ?? []).map((cap) => cap.name).sort();
+    expect(names).toEqual(['echo', 'spawn']);
+    const row = f.sqlite.prepare('SELECT capabilities FROM nodes WHERE id = ?').get('node1') as { capabilities: string };
+    expect(JSON.parse(row.capabilities).map((cap: { name: string }) => cap.name).sort()).toEqual(['echo', 'spawn']);
+  });
+
+  it('keeps the enrolled manifest on a provider-less node', async () => {
+    const f = fixture();
+    f.sqlite.prepare('DELETE FROM node_providers WHERE id = ?').run('prov1');
+    f.sqlite.prepare(`UPDATE nodes SET capabilities = '[{"name":"enrolled"}]' WHERE id = ?`).run('node1');
+    const node = await steadyBeat(f);
+    // No provider rows to derive a union from — the enrolled manifest is the
+    // node's only capability record and must not be erased.
+    expect(node?.capabilities?.map((cap) => cap.name)).toEqual(['enrolled']);
+  });
+
   it('does not count load on a capacity-unbounded provider', async () => {
     const f = fixture();
     f.sqlite.prepare('UPDATE node_providers SET max_agents = 0 WHERE id = ?').run('prov1');
