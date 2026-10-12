@@ -28,9 +28,10 @@ import { acceptTaskInvocation, completeTaskInvocation } from './taskInvocation.j
 import { databaseConstraintKind, runAtomic, runAtomicWrites } from '../ports/database.js';
 import { retryD1Write } from '../lib/d1Retry.js';
 import type { AtomicWrite, BatchCapability, EngineDb } from '../ports/database.js';
+import type { PresenceTracker } from '../ports/presence.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { generateId } from './snowflake.js';
-import { assertRegistrableAgentName } from './agent.js';
+import { assertRegistrableAgentName, RELEASED_AGENT_STATUS } from './agent.js';
 import { rotateAgentIdentity } from './agentIdentity.js';
 import { isNodeLive, isReusableForMachineMatch, nodeHasCapacity, NODE_LIVENESS_TTL_MS } from './placement.js';
 import {
@@ -74,6 +75,8 @@ export interface HandleNodeControlMessageArgs {
   db: EngineDb;
   registry: NodeConnectionRegistry;
   completionDeps?: InvocationCompletionDeps;
+  /** Enables acknowledged agent presence for implicit direct-node heartbeats. */
+  presence?: PresenceTracker;
   workspaceId: string;
   nodeId: string;
   socket?: NodeSocketLike;
@@ -3206,6 +3209,44 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           // retry-delayed rows in this one bounded pass so a transition just
           // before retryAfterAt cannot strand work until another reconnect.
           await args.registry.drainNode(args.workspaceId, args.nodeId, { includeDeferred: true });
+        }
+        // Node liveness alone says nothing about agent presence. Refresh only
+        // the active identity actually bound to this authenticated implicit
+        // direct node, never an agent named by the client or a broker roster.
+        // A closed/unregistered registry connection cannot certify presence.
+        if (args.presence && beat?.role === 'direct' && args.nodeId.startsWith('node_direct_') && (
+          !args.connectionId
+          || args.registry.providerNameForConnection?.(args.connectionId) === frameProviderName
+        )) {
+          // Renew the durable roster as well as the ephemeral presence port.
+          // A single conditional write prevents a released/moved identity from
+          // being revived between a binding check and its last_seen update.
+          const [agent] = await args.db
+            .update(agents)
+            .set({ lastSeen: new Date(), status: 'active' })
+            .where(and(
+              eq(agents.id, args.nodeId.slice('node_direct_'.length)),
+              eq(agents.workspaceId, args.workspaceId),
+              eq(agents.locationNodeId, args.nodeId),
+              ne(agents.status, RELEASED_AGENT_STATUS),
+              eq(agents.providerName, frameProviderName),
+              exists(args.db.select({ id: agentNodeBindings.id }).from(agentNodeBindings).where(and(
+                eq(agentNodeBindings.workspaceId, args.workspaceId),
+                eq(agentNodeBindings.agentId, agents.id),
+                eq(agentNodeBindings.nodeId, args.nodeId),
+                eq(agentNodeBindings.status, 'active'),
+              ))),
+            ))
+            .returning({ id: agents.id, name: agents.name });
+          if (agent) {
+            await args.presence.heartbeat(args.workspaceId, agent.id, agent.name);
+            if (message.id) {
+              sendControl(args.socket, {
+                v: 1, id: message.id, type: 'reply', ok: true,
+                data: { agent_presence: true, agent_id: agent.id },
+              });
+            }
+          }
         }
         return;
       }

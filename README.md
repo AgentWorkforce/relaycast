@@ -628,6 +628,14 @@ Realtime transport:
 
 - `/v1/ws` is the workspace observer stream and requires an observer token with `stream:read`.
 - `/v1/node/ws` is the node control/delivery stream and requires a node token.
+- On an implicit direct-node connection, `node.heartbeat` also renews the bound
+  agent's roster activity and presence. Include an `id` to receive
+  `{ "v": 1, "id": "<request-id>", "type": "reply", "ok": true,
+  "data": { "agent_presence": true, "agent_id": "<bound-agent-id>" } }`
+  after the renewal succeeds. Correlate fresh acknowledgements before omitting
+  REST heartbeats; a live node socket alone does not establish agent presence.
+  Missing acknowledgements (including older servers) require REST fallback.
+  Broker heartbeats do not certify the presence of their hosted agents.
 - Agent SDKs use `at_live_*` for REST, mint a direct `nt_live_*` token, and receive message deliveries as node `deliver` frames plus targeted status/context events as node `context.update` frames.
 - Workspace keys create, rotate, list, and revoke observer tokens at `/v1/observer-tokens`; observer tokens are read-only and cannot mutate workspace state. Observer scopes grant read capabilities, while filters narrow resources. DM content requires both `dms:read` and `filters.include_dms: true`. Channel filters apply only to channel-scoped events; workspace-wide presence/status events require matching `agent_ids` or no agent filter.
 - `file.uploaded` stream events are emitted when the upload completes, before any message attachment exists, so observer filtering for that event is limited to `files:read`, `agent_ids`, `event_types`, and `created_after`. Channel and DM visibility are enforced when files are read through REST or as message attachments.
@@ -969,6 +977,10 @@ from `@relaycast/engine/agent-disconnect` before presence cleanup. By default it
 presence-only for node-hosted agents (the node binding is left intact so the
 still-running session keeps its deliveries); pass `{ deregister: true }` to follow the
 full `agent.deregister` teardown path that re-homes the agent to its direct node.
+
+Pass the same `PresenceTracker` used by HTTP as
+`presence` in the node-control arguments to enable direct-node presence
+acknowledgements; adapters omitting it retain their existing heartbeat behavior.
 
 The authenticated `node.register` acknowledgement may include
 `registration_contract: "relay:node-registration-v1"`. This is authored by the

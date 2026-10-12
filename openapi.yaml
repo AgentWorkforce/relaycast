@@ -2381,6 +2381,15 @@ paths:
         Mint a node token for the authenticated agent's implicit direct node.
         Agent SDKs use this token to connect to `/v1/node/ws`; agent tokens do
         not open realtime WebSockets directly.
+        On an implicit direct-node socket, `node.heartbeat` renews the bound
+        agent's durable roster activity and presence. A heartbeat with an `id`
+        receives a correlated `reply` with `ok: true` and
+        `data: { agent_presence: true, agent_id: "<bound-agent-id>" }` only after
+        renewal succeeds. Clients may omit REST heartbeats while fresh matching
+        acknowledgements arrive; absent acknowledgements require REST fallback.
+        Broker heartbeats do not renew hosted agents' presence. External node
+        adapters must pass the HTTP PresenceTracker to node control to enable
+        these acknowledgements.
       tags:
         - Agents
         - Nodes

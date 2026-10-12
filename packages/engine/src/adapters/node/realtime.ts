@@ -8,6 +8,7 @@ import type {
   UpgradeArgs,
   NodeUpgradeArgs,
 } from '../../ports/realtime.js';
+import type { PresenceTracker } from '../../ports/presence.js';
 import type { ObserverToken } from '../../ports/auth.js';
 import { and, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { EngineDb } from '../../ports/database.js';
@@ -110,6 +111,12 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
   private connectionSeq = 0;
 
   constructor(private readonly db: EngineDb) {}
+
+  private presence: PresenceTracker | undefined;
+
+  setPresenceTracker(presence: PresenceTracker): void {
+    this.presence = presence;
+  }
 
   setNodeCompletionDeps(deps: InvocationCompletionDeps): void {
     this.nodeCompletionDeps = deps;
@@ -828,6 +835,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
           db: this.db,
           registry: this,
           completionDeps: this.nodeCompletionDeps,
+          presence: this.presence,
           workspaceId,
           nodeId,
           socket,
