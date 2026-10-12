@@ -1098,6 +1098,25 @@ export function deliverPendingToNode(
   return promise;
 }
 
+// SQLite's `ORDER BY name` is BINARY collation — UTF-8 byte order. JS string
+// comparison is UTF-16 code-unit order, which diverges once a name leaves the
+// BMP (a non-BMP name like `🚀` encodes to a surrogate pair whose first code
+// unit sorts below `Ｚ`, while its UTF-8 leading byte sorts above). The scoped
+// path merges chunks in JS, so it must reproduce the same ordering the
+// unscoped `ORDER BY` used or replay frames go out in a different order.
+const utf8BinaryOrder = (() => {
+  const encoder = new TextEncoder();
+  return (a: string, b: string): number => {
+    const x = encoder.encode(a);
+    const y = encoder.encode(b);
+    const n = Math.min(x.length, y.length);
+    for (let i = 0; i < n; i++) {
+      if (x[i] !== y[i]) return x[i]! - y[i]!;
+    }
+    return x.length - y.length;
+  };
+})();
+
 /** Drain a finite per-agent high-water mark in ordered, readiness-checked pages. */
 async function replayPendingToNode(
   db: Db,
@@ -1131,7 +1150,7 @@ async function replayPendingToNode(
   const recipients = scopedIds === undefined
     ? await rosterQuery().orderBy(asc(agents.name))
     : (await queryInChunks(scopedIds, chunk => rosterQuery(chunk)))
-      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+      .sort((a, b) => utf8BinaryOrder(a.name, b.name));
 
   let delivered = 0;
   for (const recipient of recipients) {
