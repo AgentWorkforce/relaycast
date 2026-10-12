@@ -22,6 +22,11 @@ export const AgentSchema = z.object({
   status: AgentStatusSchema,
   persona: z.string().nullable(),
   metadata: z.record(z.string(), z.unknown()),
+  /**
+   * The node whose authenticated connection registered this agent, set once by
+   * the server and not patchable (unlike `metadata.fleet`). Agent detail only.
+   */
+  origin_node_id: z.string().nullable().optional(),
   last_seen: z.string(),
   created_at: z.string().optional(),
   channels: z.array(z.object({

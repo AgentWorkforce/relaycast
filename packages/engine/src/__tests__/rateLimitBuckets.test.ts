@@ -14,6 +14,12 @@ describe('rate limit route buckets', () => {
     expect(getRouteKey('GET', '/v1/agent')).toBe('GET:/agent');
   });
 
+  it('gives the node-token self lookup its own bucket', () => {
+    // Cloud calls this to verify a node token when a person claims a node.
+    // Starved by data-plane traffic, a claim in a busy workspace cannot verify.
+    expect(getRouteKey('GET', '/v1/node/me')).toBe('GET:/node/me');
+  });
+
   it('collapses a single-agent lookup to one key, not one per agent name', () => {
     // Cloud looks up the answer address it reserved. Keying per name would give
     // every name a full allowance and the limit would mean nothing.

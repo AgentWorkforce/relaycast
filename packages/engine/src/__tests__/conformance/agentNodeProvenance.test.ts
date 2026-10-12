@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { AgentSchema } from '@relaycast/types';
 import { makeNodeStack, createWorkspace, FakeSocket, type TestStack } from './harness.js';
 
 // A service holding the workspace key (Cloud) must be able to tell which node
@@ -37,6 +38,8 @@ describe('agent node provenance', () => {
     const spawned = socket.ofType('reply').find((frame) => frame.id === 'spawn') as { data: { agent_id: string } };
     const detail = await (await read('/v1/agents/fleet-worker', ws.workspaceKey)).json() as { data: Record<string, unknown> };
     expect(detail.data).toMatchObject({ id: spawned.data.agent_id, origin_node_id: 'prov-node' });
+    // The shared schema carries it, so SDK consumers can read it.
+    expect(AgentSchema.shape.origin_node_id.parse(detail.data.origin_node_id)).toBe('prov-node');
 
     // Rewriting the fleet metadata with the workspace key does not move it.
     const patched = await read('/v1/agents/fleet-worker', ws.workspaceKey, { method: 'PATCH', body: JSON.stringify({ metadata: { fleet: { node_id: 'other-node' } } }) });
