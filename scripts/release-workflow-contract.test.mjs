@@ -17,6 +17,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import { PUBLISHED_PACKAGE_DIRS } from "./release-contract.mjs";
+import { refreshWorkspaceLock } from "./refresh-workspace-lock.mjs";
 import {
   assertPublishedIntegrity,
   assertReleaseMetadata,
@@ -151,16 +152,10 @@ function bumpFixtureVersion(root, version, dockerIntegrities) {
   }
   const rootLockPath = path.join(root, "package-lock.json");
   const rootLock = JSON.parse(readFileSync(rootLockPath, "utf8"));
-  for (const [key, entry] of Object.entries(rootLock.packages ?? {})) {
-    if (!/^packages\/[^/]+$/.test(key)) continue;
-    entry.version = version;
-    for (const type of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
-      for (const name of Object.keys(entry[type] ?? {})) {
-        if (name.startsWith("@relaycast/")) entry[type][name] = version;
-      }
-    }
-  }
-  writeFileSync(rootLockPath, `${JSON.stringify(rootLock, null, 2)}\n`);
+  writeFileSync(
+    rootLockPath,
+    `${JSON.stringify(refreshWorkspaceLock(rootLock, version), null, 2)}\n`,
+  );
   writeFileSync(path.join(root, "packages/sdk-typescript/src/version.ts"), `export const SDK_VERSION = ${JSON.stringify(version)} as const;\n`);
   writeFileSync(path.join(root, "packages/cli/src/version.ts"), `export const CLI_VERSION = ${JSON.stringify(version)} as const;\n`);
 
@@ -544,6 +539,19 @@ describe("publish workflow safety contract", () => {
     const verify = jobBlock("verify-publish");
     assert.match(verify, /release-provenance\.mjs published/);
     assert.match(verify, /dist\.integrity/);
+  });
+
+  it("refreshes workspace lock metadata without npm re-resolution", () => {
+    const build = jobBlock("build");
+    const refreshStart = build.indexOf("- name: Refresh lockfile after version bump");
+    const nextStep = build.indexOf("\n      - name:", refreshStart + 1);
+    assert.ok(refreshStart !== -1, "workspace lock refresh step not found");
+    assert.ok(nextStep > refreshStart, "workspace lock refresh step has no following step");
+    const refresh = build.slice(refreshStart, nextStep);
+    assert.match(refresh, /refresh-workspace-lock\.mjs/);
+    assert.match(refresh, /--version "\$NEW_VERSION"/);
+    assert.match(refresh, /steps\.bump\.outputs\.new_version/);
+    assert.doesNotMatch(refresh, /npm (?:install|update) --package-lock-only/);
   });
 
   it("refreshes the Docker engine lock entry instead of trusting its placeholder version", () => {

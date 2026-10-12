@@ -12,6 +12,7 @@ import {
   provenanceDigest,
   readReleaseProvenance,
 } from "./release-provenance.mjs";
+import { refreshWorkspaceLock } from "./refresh-workspace-lock.mjs";
 
 const DOCKER_PACKAGE_NAMES = [
   "@relaycast/a2a",
@@ -103,11 +104,7 @@ function updateLockPackageEntry(entry, version) {
 }
 
 function expectedRootLock(source, version) {
-  const lock = JSON.parse(source);
-  for (const [key, entry] of Object.entries(lock.packages ?? {})) {
-    if (packageLockEntryIsWorkspace(key)) updateLockPackageEntry(entry, version);
-  }
-  return lock;
+  return refreshWorkspaceLock(JSON.parse(source), version);
 }
 
 function assertLockDiffIsReleaseOnly(source, actual, version, { docker, packageIntegrities }) {
