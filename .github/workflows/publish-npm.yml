@@ -251,10 +251,13 @@ jobs:
           NODE
 
       - name: Refresh lockfile after version bump
-        # Preserve the resolved dependency graph and update only the workspace
-        # metadata. Re-resolving from an empty lockfile can trip npm/arborist's
-        # `edgesOut` failure after every workspace version changes at once.
-        run: npm install --package-lock-only --ignore-scripts
+        # Project the lockstep version into workspace entries only. npm install
+        # --package-lock-only rewrites unrelated metadata; npm 11.19.1 drops
+        # `peer` on lightningcss platform packages and exact release validation
+        # rejects that diff.
+        env:
+          NEW_VERSION: ${{ steps.bump.outputs.new_version }}
+        run: node scripts/refresh-workspace-lock.mjs --version "$NEW_VERSION"
 
       - name: Validate release version, changelog, and generated-source parity
         env:
