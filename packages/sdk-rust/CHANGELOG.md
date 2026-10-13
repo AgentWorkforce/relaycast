@@ -34,6 +34,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
+- `AgentRegistrationClient::invalidate_cached_registration_if_token_hash()` atomically removes only the cached credential generation whose SHA-256 hash matches, preserving concurrent same-name replacement registrations.
 - `RelayCast::create_node_with_current_token` sends current-node proof for authorized rotation or modification of an established node without placing the credential in the JSON body. `create_node_with_rotation_recovery` also sends a caller-retained idempotency key for lost-response recovery, and `CreateNodeRequest` now exposes optional `machine_id`.
 - `WorkspaceBootstrapOptions::with_origin(client, version)` and `RelayCast::lookup_workspace_with_options(WorkspaceLookupOptions)` identify products on anonymous workspace creation and lookup; legacy calls retain SDK defaults.
 
