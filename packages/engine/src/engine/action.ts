@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNotNull, isNull, lt, lte, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, like, lt, lte, or, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { actions, actionInvocations, agents, agentNodeBindings, channelMembers, dmParticipants, nodes } from '../db/schema.js';
 import { waitForPendingInvocationRetry } from './invocationRetry.js';
@@ -1810,6 +1810,12 @@ async function dispatchSpawn(args: {
     pending: placement.queued,
     reservationHeld: !placement.queued,
   });
+  // Placement reserved capacity for an attempt that never landed. Return it so
+  // the drain that re-dispatches this row on the node's next register can
+  // reserve its own without double-counting the node.
+  if (!dispatched.accepted && !placement.queued) {
+    await releaseNodeCapacity(args.db, args.workspaceId, nodeId);
+  }
   return spawnResult(invocation, nodeId, dispatched);
 }
 
@@ -3245,6 +3251,25 @@ async function targetAgentForInvocation(
   };
 }
 
+/**
+ * The node a native spawn was placed on when its first `action.invoke` send
+ * failed. A send can fail on a live node — the provider socket is between
+ * reconnects, or the node's owner rejects the send under pressure — and Cloud
+ * keeps no per-node frame queue, so such a row records no dispatch attempt and
+ * no `dispatchedNodeId`. Its placement survives only in the invocation's
+ * immutable `handlerNodeId` snapshot; without this, no drain ever matches it and
+ * it sits `pending` until the never-dispatched sweep expires it.
+ */
+function unsentNativeSpawnNode(row: {
+  actionId: string | null;
+  actionName: string;
+  dispatchedNodeId: string | null;
+  placedNodeId: string | null;
+}): string | null {
+  if (row.actionId !== null || row.dispatchedNodeId !== null) return null;
+  return isSpawnInvocation(row.actionName) ? row.placedNodeId : null;
+}
+
 export async function drainNodeInvocations(
   db: Db,
   registry: NodeConnectionRegistry,
@@ -3266,6 +3291,7 @@ export async function drainNodeInvocations(
       spawnReservedAt: actionInvocations.spawnReservedAt,
       dispatchedNodeId: actionInvocations.dispatchedNodeId,
       dispatchedProvider: actionInvocations.dispatchedProvider,
+      placedNodeId: actionInvocations.handlerNodeId,
       handlerNodeId: actions.handlerNodeId,
       handlerProvider: actions.handlerProvider,
       handlerAgentId: agents.id,
@@ -3287,6 +3313,14 @@ export async function drainNodeInvocations(
         eq(actionInvocations.dispatchedNodeId, nodeId),
         eq(actions.handlerNodeId, nodeId),
         and(eq(agents.locationType, 'via_node'), eq(agents.locationNodeId, nodeId)),
+        // A native spawn whose first send failed: placement chose this node and
+        // snapshotted it, but no attempt landed, so no other column names it.
+        and(
+          isNull(actionInvocations.actionId),
+          isNull(actionInvocations.dispatchedNodeId),
+          eq(actionInvocations.handlerNodeId, nodeId),
+          or(eq(actionInvocations.actionName, 'spawn'), like(actionInvocations.actionName, 'spawn:%')),
+        ),
       ),
     ))
     .orderBy(asc(actionInvocations.createdAt));
@@ -3303,7 +3337,10 @@ export async function drainNodeInvocations(
       && row.handlerAgentNodeId
       ? { id: row.handlerAgentId, name: row.handlerAgentName, nodeId: row.handlerAgentNodeId }
       : null;
-    const targetNodeId = targetAgent?.nodeId ?? row.handlerNodeId ?? row.dispatchedNodeId;
+    const targetNodeId = targetAgent?.nodeId
+      ?? row.handlerNodeId
+      ?? row.dispatchedNodeId
+      ?? unsentNativeSpawnNode(row);
     if (targetNodeId !== nodeId) continue;
 
     const input = recordInput(row.input);

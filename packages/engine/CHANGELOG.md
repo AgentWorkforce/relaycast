@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- A native spawn placed on a live node whose first `action.invoke` send failed (the provider socket was between reconnects, or its owner rejected the send) is now re-dispatched by the node's next register/drain instead of sitting `pending` with no `dispatched_node_id` until the 72-hour never-dispatched sweep. `drainNodeInvocations` now matches such rows by the invocation's placed `handler_node_id`, and placement returns the capacity it reserved for the unsent attempt so the drain does not double-count the node.
+
 ## [10.3.0] - 2026-10-13
 
 ### Added

@@ -2312,6 +2312,138 @@ describe('node adapter conformance', () => {
       expect(node.reservedAgents ?? 0).toBeGreaterThanOrEqual(1);
     });
 
+    it('re-dispatches a targeted spawn whose first send failed on a live node when the node next registers', async () => {
+      // Cloud keeps no per-node frame queue: a send that lands while the
+      // provider socket is between reconnects returns false. The node is still
+      // live in the DB, so placement reserved capacity and the verify gate
+      // passed, but no attempt was recorded and no dispatchedNodeId was set.
+      const ws = await createWorkspace(stack.app, 'fleet-spawn-unsent-redrain-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha',
+        name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0,
+        maxAgents: 2,
+      });
+
+      const nodeConnections = stack.runtime.deps.nodeConnections!;
+      const originalSend = nodeConnections.sendToProvider.bind(nodeConnections);
+      let dropNextSpawn = true;
+      vi.spyOn(nodeConnections, 'sendToProvider').mockImplementation(async (...args) => {
+        if (dropNextSpawn && args[3].type === 'action.invoke' && args[3].action.startsWith('spawn')) {
+          dropNextSpawn = false;
+          return false;
+        }
+        return originalSend(...args);
+      });
+
+      const spawn = await stack.app.request('/v1/actions/spawn/invoke', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${caller.token}`,
+          'Idempotency-Key': 'spawn-unsent-redrain',
+        },
+        body: JSON.stringify({
+          input: { cli: 'claude', name: 'worker-unsent', task: 'hi', target_node: 'alpha', verify_ready: true },
+        }),
+      });
+      expect(spawn.status).toBe(201);
+      const ack = (await spawn.json() as { data: Record<string, unknown> }).data;
+      expect(ack).toMatchObject({ status: 'pending', dispatched_node_id: null, handler_node_id: 'node_alpha' });
+      const invocationId = ack.invocation_id as string;
+      expect(alpha.sock.ofType('action.invoke')).toHaveLength(0);
+
+      const db = stack.runtime.handle.db;
+      const readInvocation = () => db
+        .select()
+        .from(actionInvocations)
+        .where(eq(actionInvocations.id, invocationId))
+        .then((rows) => rows[0]);
+      const readReserved = () => db
+        .select({ reservedAgents: nodes.reservedAgents })
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')))
+        .then((rows) => rows[0].reservedAgents ?? 0);
+
+      const unsent = await readInvocation();
+      expect(unsent).toMatchObject({
+        status: 'pending',
+        actionId: null,
+        handlerNodeId: 'node_alpha',
+        dispatchedNodeId: null,
+        dispatchAttempts: 0,
+      });
+      // The reservation placement took for the attempt that never landed is
+      // returned, so the drain below can take its own without double-counting.
+      expect(await readReserved()).toBe(0);
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'reg-after-unsent',
+        type: 'node.register',
+        name: 'alpha',
+        node_id: 'node_alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        max_agents: 2,
+        tags: ['test'],
+        version: 'test-node',
+        resume_cursor: null,
+      }));
+
+      expect(alpha.sock.ofType('action.invoke')).toEqual([
+        expect.objectContaining({ invocation_id: invocationId, action: 'spawn:claude' }),
+      ]);
+      const dispatched = await readInvocation();
+      expect(dispatched).toMatchObject({
+        status: 'dispatched',
+        dispatchedNodeId: 'node_alpha',
+        dispatchAttempts: 1,
+      });
+      expect(dispatched.spawnReservedAt).toBeInstanceOf(Date);
+      expect(await readReserved()).toBe(1);
+    });
+
+    it('does not drain an unsent spawn to a node other than the one it was placed on', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-spawn-unsent-other-node-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha',
+        name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0,
+      });
+      const beta = await enrollAndAttachNode(ws, {
+        id: 'node_beta',
+        name: 'beta',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0,
+      });
+
+      const db = stack.runtime.handle.db;
+      await db.insert(actionInvocations).values({
+        id: 'inv_spawn_unsent_alpha',
+        workspaceId: ws.workspaceId,
+        actionName: 'spawn',
+        callerId: caller.agentId,
+        callerName: caller.name,
+        handlerNodeId: 'node_alpha',
+        input: { cli: 'claude', name: 'worker-placed-alpha', task: 'hi' },
+        status: 'pending',
+      });
+
+      beta.sock.received.length = 0;
+      expect(await drainNodeInvocations(db, stack.runtime.realtime, ws.workspaceId, 'node_beta')).toBe(0);
+      expect(beta.sock.ofType('action.invoke')).toHaveLength(0);
+
+      alpha.sock.received.length = 0;
+      expect(await drainNodeInvocations(db, stack.runtime.realtime, ws.workspaceId, 'node_alpha')).toBe(1);
+      expect(alpha.sock.ofType('action.invoke')).toEqual([
+        expect.objectContaining({ invocation_id: 'inv_spawn_unsent_alpha' }),
+      ]);
+    });
+
     it('reserves spawn capacity atomically across concurrent invocations', async () => {
       const ws = await createWorkspace(stack.app, 'fleet-node-capacity-ws');
       const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
