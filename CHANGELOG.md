@@ -26,6 +26,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Node liveness reconciliation releases control admission after one fenced claim while preserving same-second reconnects and their newly dispatched work.
 - Presence heartbeats preserve reported work states; expiry and node disconnect recovery restore only the state lost to liveness, without erasing an explicit offline report.
+- Capability-free node heartbeats now write the provider and node rows in two statements instead of a read-then-write chain, lowering steady-state D1 pressure on the hosted node liveness path.
 
 ## [10.1.1] - 2026-10-12
 
