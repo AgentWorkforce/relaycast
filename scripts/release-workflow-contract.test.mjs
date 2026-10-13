@@ -562,6 +562,16 @@ describe("publish workflow safety contract", () => {
     assert.doesNotMatch(refresh, /npm (?:install|update) --package-lock-only/);
   });
 
+  it("restores source peer metadata after npm refreshes the release lockfile", () => {
+    const build = jobBlock("build");
+    const refresh = build.indexOf("npm install --package-lock-only --ignore-scripts");
+    const restore = build.indexOf("restore-release-lock-metadata.mjs", refresh);
+    const validate = build.indexOf("Validate release version, changelog, and generated-source parity");
+    assert.ok(refresh !== -1, "workspace lock refresh not found");
+    assert.ok(restore > refresh, "peer metadata restore must follow npm's lock refresh");
+    assert.ok(validate > restore, "release validation must follow metadata restoration");
+  });
+
   it("reuses a matching tagged tree on rerun and tags before reconciling main", () => {
     const createRelease = jobBlock("create-release");
     // Rebasing a release commit after packages have already been published
