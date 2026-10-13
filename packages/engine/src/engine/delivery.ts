@@ -19,6 +19,7 @@ import {
   WorkspaceDeliveryCapacityError,
   type WorkspaceDeliveryPolicy,
 } from './workspaceDeliveryPolicy.js';
+import { queryInChunks } from '../lib/queryChunks.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -1097,6 +1098,25 @@ export function deliverPendingToNode(
   return promise;
 }
 
+// SQLite's `ORDER BY name` is BINARY collation — UTF-8 byte order. JS string
+// comparison is UTF-16 code-unit order, which diverges once a name leaves the
+// BMP (a non-BMP name like `🚀` encodes to a surrogate pair whose first code
+// unit sorts below `Ｚ`, while its UTF-8 leading byte sorts above). The scoped
+// path merges chunks in JS, so it must reproduce the same ordering the
+// unscoped `ORDER BY` used or replay frames go out in a different order.
+const utf8BinaryOrder = (() => {
+  const encoder = new TextEncoder();
+  return (a: string, b: string): number => {
+    const x = encoder.encode(a);
+    const y = encoder.encode(b);
+    const n = Math.min(x.length, y.length);
+    for (let i = 0; i < n; i++) {
+      if (x[i] !== y[i]) return x[i]! - y[i]!;
+    }
+    return x.length - y.length;
+  };
+})();
+
 /** Drain a finite per-agent high-water mark in ordered, readiness-checked pages. */
 async function replayPendingToNode(
   db: Db,
@@ -1110,7 +1130,13 @@ async function replayPendingToNode(
 
   // Resolve the small node roster first. A delivery-first join lets SQLite
   // choose the workspace/status index and scan millions of retained rows.
-  const recipients = await db.select({
+  // A scoped replay must bound the roster read the same way: agents are never
+  // unlinked from location_node_id, so released/offline identities accumulate
+  // on a busy node — filtering `wantedIds` in JS here read every retained row
+  // (≈6.5k on production) for every single-agent register/recover replay.
+  // Push the scope into the primary-key IN list instead; the set is deduped and
+  // chunked to stay under D1's bound-parameter cap.
+  const rosterQuery = (ids?: string[]) => db.select({
     id: agents.id, name: agents.name, providerName: agents.providerName,
     ackSeq: agents.deliveryAckSeq,
   }).from(agents).where(and(
@@ -1118,7 +1144,13 @@ async function replayPendingToNode(
     eq(agents.locationType, 'via_node'),
     eq(agents.locationNodeId, nodeId),
     scope.providerName === undefined ? undefined : eq(agents.providerName, scope.providerName),
-  )).orderBy(asc(agents.name));
+    ids === undefined ? undefined : inArray(agents.id, ids),
+  ));
+  const scopedIds = wantedIds ? [...wantedIds].sort() : undefined;
+  const recipients = scopedIds === undefined
+    ? await rosterQuery().orderBy(asc(agents.name))
+    : (await queryInChunks(scopedIds, chunk => rosterQuery(chunk)))
+      .sort((a, b) => utf8BinaryOrder(a.name, b.name));
 
   let delivered = 0;
   for (const recipient of recipients) {
