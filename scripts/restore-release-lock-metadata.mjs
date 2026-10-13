@@ -25,6 +25,19 @@ for (const [key, entry] of Object.entries(refreshed.packages ?? {})) {
     delete entry.peer;
     restored += 1;
   }
+
+  // JSON key order is part of the exact release-tree contract. Assigning a
+  // stripped field above appends it, so project every surviving refreshed
+  // value through the source entry's key order, then retain any genuinely new
+  // npm fields at the end for the validator to assess normally.
+  refreshed.packages[key] = Object.fromEntries([
+    ...Object.keys(sourceEntry)
+      .filter((field) => Object.hasOwn(entry, field))
+      .map((field) => [field, entry[field]]),
+    ...Object.keys(entry)
+      .filter((field) => !Object.hasOwn(sourceEntry, field))
+      .map((field) => [field, entry[field]]),
+  ]);
 }
 
 writeFileSync(lockPath, `${JSON.stringify(refreshed, null, 2)}\n`);
