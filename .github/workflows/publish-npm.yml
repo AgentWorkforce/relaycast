@@ -253,8 +253,12 @@ jobs:
       - name: Refresh lockfile after version bump
         # Preserve the resolved dependency graph and update only the workspace
         # metadata. Re-resolving from an empty lockfile can trip npm/arborist's
-        # `edgesOut` failure after every workspace version changes at once.
-        run: npm install --package-lock-only --ignore-scripts
+        # `edgesOut` failure after every workspace version changes at once. npm
+        # may also rewrite peer markers on optional platform packages; restore
+        # those source-tree facts so the release commit stays version-only.
+        run: |
+          npm install --package-lock-only --ignore-scripts
+          node scripts/restore-release-lock-metadata.mjs
 
       - name: Validate release version, changelog, and generated-source parity
         env:
