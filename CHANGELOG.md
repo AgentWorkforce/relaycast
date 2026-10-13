@@ -16,11 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
 
 ### Fixed
 
-- A node holding many open built-in releases no longer has its `inventory.sync` rejected with `d1_pressure` on every reconnect. Inventory and the timeout sweep skip a lookup that could never match for each release.
+- A node with many unfinished releases no longer has every `inventory.sync` rejected with `d1_pressure`, so it stops reconnecting in a loop.
 
 ## [10.3.0] - 2026-10-13
 

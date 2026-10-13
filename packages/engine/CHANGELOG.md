@@ -7,11 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
 
 ### Fixed
 
-- `rescheduleNodeInvocation` returns `false` for a dispatched built-in release without reading D1. It previously ran `targetAgentForInvocation`, whose inner join on `action_id` cannot match a release, once per open release. A node with 164 such rows spent its 5s liveness deadline in `inventory.sync` on those reads and never got a reply.
+- Rescheduling a dispatched built-in release no longer reads D1, so `inventory.sync` and the timeout sweep stay within the node liveness deadline however many open releases a node holds.
 
 ## [10.3.0] - 2026-10-13
 
