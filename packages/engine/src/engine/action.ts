@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, lt, lte, or, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { actions, actionInvocations, agents, agentNodeBindings, channelMembers, dmParticipants, nodes } from '../db/schema.js';
 import { waitForPendingInvocationRetry } from './invocationRetry.js';
@@ -3528,7 +3528,7 @@ export async function rescheduleInvocationsForLostNode(
   registry: NodeConnectionRegistry,
   workspaceId: string,
   nodeId: string,
-  opts: { claimAt?: Date } = {},
+  opts: { claimRevision?: number } = {},
 ) {
   const rows = await db
     .select()
@@ -3537,14 +3537,12 @@ export async function rescheduleInvocationsForLostNode(
       eq(actionInvocations.workspaceId, workspaceId),
       eq(actionInvocations.dispatchedNodeId, nodeId),
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
-      // A claim-scoped tail must not yank work dispatched after the claim —
-      // the node may have reconnected and taken new invocations that belong
-      // to its new liveness epoch. Rows with no dispatch stamp predate the
-      // claim by construction.
-      ...(opts.claimAt ? [or(
-        isNull(actionInvocations.dispatchedAt),
-        lte(actionInvocations.dispatchedAt, opts.claimAt),
-      )!] : []),
+      // The dispatch trigger stamps the accepting node generation. A reconnect
+      // can dispatch new work while settlement runs, including in the same
+      // timestamp second; only attempts older than this claim are recoverable.
+      ...(opts.claimRevision !== undefined
+        ? [lt(actionInvocations.nodeLivenessRevision, opts.claimRevision)]
+        : []),
     ));
 
   let rescheduled = 0;

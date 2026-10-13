@@ -1053,9 +1053,27 @@ export async function claimNodeOffline(
   db: Db,
   workspaceId: string,
   nodeId: string,
-  expected: { lastHeartbeatAt: Date | null },
-): Promise<{ name: string; claimAt: Date } | undefined> {
+  expected: { lastHeartbeatAt: Date | null; livenessRevision: number },
+): Promise<{ name: string; claimAt: Date; claimRevision: number } | undefined> {
   const claimAt = new Date();
+  const nextRevision = sql<number>`MAX(
+    ${nodes.livenessRevision},
+    COALESCE((
+      SELECT MAX(np.liveness_revision)
+      FROM node_providers np
+      WHERE np.workspace_id = ${workspaceId} AND np.node_id = ${nodeId}
+    ), 0),
+    COALESCE((
+      SELECT MAX(a.node_liveness_revision)
+      FROM agents a
+      WHERE a.workspace_id = ${workspaceId} AND a.location_node_id = ${nodeId}
+    ), 0),
+    COALESCE((
+      SELECT MAX(ai.node_liveness_revision)
+      FROM action_invocations ai
+      WHERE ai.workspace_id = ${workspaceId} AND ai.dispatched_node_id = ${nodeId}
+    ), 0)
+  ) + 1`;
   const [claimed] = await db
     .update(nodes)
     .set({
@@ -1070,39 +1088,33 @@ export async function claimNodeOffline(
       // same instant (second-granular column — two `new Date()` calls could
       // straddle a boundary).
       lastHeartbeatAt: claimAt,
+      // This is the durable claim boundary. Triggers stamp every later child
+      // liveness mutation above it, including writes in the same wall-clock
+      // second, so the settle tail never relies on timestamp ordering.
+      livenessRevision: nextRevision,
     })
     .where(and(
       eq(nodes.workspaceId, workspaceId),
       eq(nodes.id, nodeId),
       eq(nodes.status, 'online'),
+      eq(nodes.livenessRevision, expected.livenessRevision),
       expected.lastHeartbeatAt === null
         ? isNull(nodes.lastHeartbeatAt)
         : eq(nodes.lastHeartbeatAt, expected.lastHeartbeatAt),
     ))
-    .returning({ name: nodes.name });
-  return claimed ? { name: claimed.name, claimAt } : undefined;
+    .returning({ name: nodes.name, claimRevision: nodes.livenessRevision });
+  return claimed ? { name: claimed.name, claimAt, claimRevision: claimed.claimRevision } : undefined;
 }
 
 /**
  * The resumable tail of an offline transition: provider/agent liveness loss,
  * invocation rescheduling, and the durable event. Safe to run after the
  * node's claim row is released and concurrently with a reconnect, because
- * every write is claim-scoped — `claimAt` bounds the transition to rows whose
- * liveness evidence predates the claim second, so a provider or agent that
- * refreshed after it is never clobbered. Callers that cannot interleave
- * (in-process serialized paths) omit `claimAt` for the legacy unconditional
- * sweep.
- *
- * When `claimAt` is given the tail first verifies the claimed epoch is still
- * current: the node row must still read `offline` with `last_heartbeat_at` at
- * or before the claim instant. A reconnect flips `status` back to `online`;
- * a post-claim heartbeat or a newer offline write moves `last_heartbeat_at`
- * past it. Either way the tail is a no-op — teardown, rescheduling, and the
- * `node.status.offline` event would otherwise clobber or contradict the newer
- * liveness epoch (a reconnect emits `node.status.online`, so an unguarded
- * tail could still append `offline` last). Returns whether the tail ran, so
- * callers holding epoch-scoped side effects (e.g. closing the lapsed socket
- * set) can skip them when the node already recovered.
+ * every write is claim-scoped — `claimRevision` bounds the transition to rows
+ * stamped before the claim, so a provider, hosted agent, or invocation changed
+ * after it is never clobbered even when both writes share a timestamp second.
+ * Callers that cannot interleave (in-process serialized paths) omit the claim
+ * fields for the legacy unconditional sweep.
  */
 export async function settleNodeOffline(
   db: Db,
@@ -1111,25 +1123,13 @@ export async function settleNodeOffline(
   nodeId: string,
   opts: {
     claimAt?: Date;
+    claimRevision?: number;
     before?: { status: string; name: string };
     deps?: InvocationCompletionDeps;
     reason?: NodeOfflineReason;
   } = {},
 ): Promise<boolean> {
-  const claimAt = opts.claimAt;
-  if (claimAt) {
-    const [current] = await db
-      .select({ status: nodes.status, lastHeartbeatAt: nodes.lastHeartbeatAt })
-      .from(nodes)
-      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
-    if (
-      !current
-      || current.status !== 'offline'
-      || (current.lastHeartbeatAt !== null && current.lastHeartbeatAt.getTime() > claimAt.getTime())
-    ) {
-      return false;
-    }
-  }
+  const claimRevision = opts.claimRevision;
   // Provider capability sets persist (offline nodes still show their manifest);
   // only their liveness flips. Zero activeAgents too, so a later
   // recomputeNodeAggregate never resurrects a dropped provider's agent count.
@@ -1139,15 +1139,9 @@ export async function settleNodeOffline(
     .where(and(
       eq(nodeProviders.workspaceId, workspaceId),
       eq(nodeProviders.nodeId, nodeId),
-      // A provider that re-registered or heartbeat provably after the claim
-      // wins: it showed liveness the stale-read could not see. Same-second
-      // evidence is not provably newer — heartbeat columns are second-granular
-      // and the node CAS already arbitrated concurrent liveness — so it is
-      // torn down with the rest of the roster.
-      ...(claimAt ? [or(
-        ne(nodeProviders.status, 'online'),
-        lte(nodeProviders.lastHeartbeatAt, claimAt),
-      )!] : []),
+      ...(claimRevision !== undefined
+        ? [lt(nodeProviders.livenessRevision, claimRevision)]
+        : []),
     ));
 
   await db
@@ -1159,13 +1153,12 @@ export async function settleNodeOffline(
       ne(agents.status, RELEASED_AGENT_STATUS),
       eq(agents.locationType, 'via_node'),
       eq(agents.locationNodeId, nodeId),
-      // An agent registered through a reconnect provably after the claim
-      // refreshed last_seen past it; taking it offline would strand a live
-      // spawn. Same-second evidence is torn down — see the provider clause.
-      ...(claimAt ? [lte(agents.lastSeen, claimAt)] : []),
+      ...(claimRevision !== undefined
+        ? [lt(agents.nodeLivenessRevision, claimRevision)]
+        : []),
     ));
 
-  await rescheduleInvocationsForLostNode(db, registry, workspaceId, nodeId, { claimAt });
+  await rescheduleInvocationsForLostNode(db, registry, workspaceId, nodeId, { claimRevision });
 
   if (opts.deps && opts.before && opts.before.status === 'online') {
     await emitNodeStatusEffects(opts.deps, workspaceId, {
@@ -1173,6 +1166,7 @@ export async function settleNodeOffline(
       nodeId,
       nodeName: opts.before.name,
       reason: opts.reason,
+      ...(claimRevision !== undefined ? { claimRevision } : {}),
     });
   }
   return true;

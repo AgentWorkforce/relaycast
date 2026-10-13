@@ -148,6 +148,10 @@ export const agents = sqliteTable(
     statusUpdatedAt: integer('status_updated_at', { mode: 'timestamp' }),
     // Only liveness transitions populate this; explicit status writes clear it.
     statusBeforeLivenessLoss: text('status_before_liveness_loss'),
+    // Monotonic boundary copied from the hosting node's liveness generation.
+    // Offline settlement uses this instead of second-resolution timestamps so
+    // a same-second re-registration cannot be mistaken for pre-claim state.
+    nodeLivenessRevision: integer('node_liveness_revision').notNull().default(0),
   },
   (table) => [
     uniqueIndex('agents_workspace_name_unique').on(table.workspaceId, table.name),
@@ -277,6 +281,10 @@ export const nodes = sqliteTable(
     // enrollment re-issues this row's token. This is the only column that means
     // "this node proved it was alive", and the machine_id reuse gate reads it.
     provenLiveAt: integer('proven_live_at', { mode: 'timestamp' }),
+    // Advanced by every node liveness write and explicitly by an offline
+    // claim. Child provider/agent/invocation rows are stamped relative to this
+    // generation so the asynchronous settle tail has a precise boundary.
+    livenessRevision: integer('liveness_revision').notNull().default(0),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   },
   (table) => [
@@ -325,6 +333,7 @@ export const nodeProviders = sqliteTable(
     status: text('status').notNull().default('offline'),
     version: text('version').notNull().default('unknown'),
     lastHeartbeatAt: integer('last_heartbeat_at', { mode: 'timestamp' }),
+    livenessRevision: integer('liveness_revision').notNull().default(0),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   },
   (table) => [
@@ -1137,6 +1146,9 @@ export const actionInvocations = sqliteTable(
     durationMs: integer('duration_ms'),
     dispatchedNodeId: text('dispatched_node_id').references(() => nodes.id, { onDelete: 'set null' }),
     dispatchedAt: integer('dispatched_at', { mode: 'timestamp' }),
+    // Generation of the node liveness epoch that accepted this dispatch.
+    // A lost-node settle only reschedules attempts older than its claim.
+    nodeLivenessRevision: integer('node_liveness_revision').notNull().default(0),
     // Dispatch-attempt generation accepted atomically by the socket owner.
     // Unlike action_id, this survives capability pruning without granting a
     // later retry generation the previous attempt's acceptance.
