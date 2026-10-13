@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- Rescheduling a dispatched built-in release no longer reads D1, so `inventory.sync` and the timeout sweep stay within the node liveness deadline however many open releases a node holds.
+- Rescheduling a dispatched built-in release no longer issues a D1 read, so `inventory.sync` and the timeout sweep no longer spend one D1 round trip per open release on a node.
 
 ## [10.3.0] - 2026-10-13
 
