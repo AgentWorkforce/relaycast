@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Rescheduling a dispatched built-in release no longer issues a D1 read, so `inventory.sync` and the timeout sweep no longer spend one D1 round trip per open release on a node.
 
 ## [10.3.1] - 2026-10-13
 
