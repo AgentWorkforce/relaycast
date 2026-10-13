@@ -148,6 +148,10 @@ export const agents = sqliteTable(
     statusUpdatedAt: integer('status_updated_at', { mode: 'timestamp' }),
     // Only liveness transitions populate this; explicit status writes clear it.
     statusBeforeLivenessLoss: text('status_before_liveness_loss'),
+    // Monotonic boundary copied from the hosting node's liveness generation.
+    // Offline settlement uses this instead of second-resolution timestamps so
+    // a same-second re-registration cannot be mistaken for pre-claim state.
+    nodeLivenessRevision: integer('node_liveness_revision').notNull().default(0),
   },
   (table) => [
     uniqueIndex('agents_workspace_name_unique').on(table.workspaceId, table.name),
@@ -158,6 +162,9 @@ export const agents = sqliteTable(
       .where(sql`${table.status} <> 'released'`),
     index('idx_agents_location_node_fk').on(table.locationNodeId)
       .where(sql`${table.locationNodeId} IS NOT NULL`),
+    index('idx_agents_location_node_liveness_revision')
+      .on(table.workspaceId, table.locationNodeId, table.nodeLivenessRevision)
+      .where(sql`${table.locationType} = 'via_node' AND ${table.locationNodeId} IS NOT NULL AND ${table.status} NOT IN ('offline', 'released')`),
     index('idx_agents_origin_node_fk').on(table.originNodeId)
       .where(sql`${table.originNodeId} IS NOT NULL`),
     index('idx_agents_token').on(table.tokenHash),
@@ -277,6 +284,10 @@ export const nodes = sqliteTable(
     // enrollment re-issues this row's token. This is the only column that means
     // "this node proved it was alive", and the machine_id reuse gate reads it.
     provenLiveAt: integer('proven_live_at', { mode: 'timestamp' }),
+    // Advanced by every node liveness write and explicitly by an offline
+    // claim. Child provider/agent/invocation rows are stamped relative to this
+    // generation so the asynchronous settle tail has a precise boundary.
+    livenessRevision: integer('liveness_revision').notNull().default(0),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   },
   (table) => [
@@ -325,11 +336,14 @@ export const nodeProviders = sqliteTable(
     status: text('status').notNull().default('offline'),
     version: text('version').notNull().default('unknown'),
     lastHeartbeatAt: integer('last_heartbeat_at', { mode: 'timestamp' }),
+    livenessRevision: integer('liveness_revision').notNull().default(0),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   },
   (table) => [
     uniqueIndex('node_providers_node_name_unique').on(table.workspaceId, table.nodeId, table.name),
     index('idx_node_providers_node').on(table.workspaceId, table.nodeId),
+    index('idx_node_providers_liveness_revision')
+      .on(table.workspaceId, table.nodeId, table.livenessRevision),
     index('idx_node_providers_node_fk').on(table.nodeId),
   ],
 );
@@ -1137,6 +1151,9 @@ export const actionInvocations = sqliteTable(
     durationMs: integer('duration_ms'),
     dispatchedNodeId: text('dispatched_node_id').references(() => nodes.id, { onDelete: 'set null' }),
     dispatchedAt: integer('dispatched_at', { mode: 'timestamp' }),
+    // Generation of the node liveness epoch that accepted this dispatch.
+    // A lost-node settle only reschedules attempts older than its claim.
+    nodeLivenessRevision: integer('node_liveness_revision').notNull().default(0),
     // Dispatch-attempt generation accepted atomically by the socket owner.
     // Unlike action_id, this survives capability pruning without granting a
     // later retry generation the previous attempt's acceptance.
@@ -1160,6 +1177,9 @@ export const actionInvocations = sqliteTable(
     index('idx_action_invocations_action').on(table.actionId, table.createdAt),
     index('idx_action_invocations_caller').on(table.callerId, table.createdAt),
     index('idx_action_invocations_dispatched_node').on(table.dispatchedNodeId, table.createdAt),
+    index('idx_action_invocations_dispatched_node_liveness_revision')
+      .on(table.workspaceId, table.dispatchedNodeId, table.nodeLivenessRevision)
+      .where(sql`${table.dispatchedNodeId} IS NOT NULL AND ${table.status} IN ('pending', 'dispatched', 'invoked')`),
     index('idx_action_invocations_pending_workspace')
       .on(table.workspaceId, table.createdAt)
       .where(sql`${table.status} = 'pending'`),

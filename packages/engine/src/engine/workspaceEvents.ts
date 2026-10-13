@@ -1,4 +1,5 @@
 import { and, asc, eq, gt, sql } from 'drizzle-orm';
+import type { SQL } from 'drizzle-orm';
 import { workspaceEvents } from '../db/schema.js';
 import type { EngineDb } from '../ports/database.js';
 
@@ -252,6 +253,55 @@ export async function appendAndPublishWorkspaceEvent(
   } catch (err) {
     onPublishError?.(err);
   }
+}
+
+/**
+ * Append and publish only when a database predicate is still true at the
+ * insertion point. The predicate and INSERT are one statement, so a competing
+ * state transition either follows the appended event or wins and suppresses
+ * it; there is no check-then-publish window.
+ */
+export async function appendAndPublishWorkspaceEventWhen(
+  deps: { db: EngineDb; realtime: WorkspaceStreamPublisher },
+  workspaceId: string,
+  input: WorkspaceEventInput,
+  predicate: SQL,
+  onPublishError?: (err: unknown) => void,
+): Promise<boolean> {
+  let seq: number;
+  try {
+    const rows = await deps.db.all<{ seq: number }>(sql`
+      INSERT INTO workspace_events (workspace_id, seq, type, channel_id, payload)
+      SELECT
+        ${workspaceId},
+        ${nextSeqSql(workspaceId)},
+        ${input.type},
+        ${input.channelId ?? null},
+        ${JSON.stringify(input.payload)}
+      WHERE ${predicate}
+      RETURNING seq
+    `);
+    const row = rows?.[0];
+    if (!row) return false;
+    seq = row.seq;
+  } catch (err) {
+    console.warn('[workspace.events] guarded append failed', {
+      workspace_id: workspaceId,
+      event_type: input.type,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
+
+  try {
+    await deps.realtime.publishToWorkspaceStream({
+      workspaceId,
+      event: { ...input.payload, seq },
+    });
+  } catch (err) {
+    onPublishError?.(err);
+  }
+  return true;
 }
 
 /** Batch form used by bounded maintenance jobs to stay under D1 query limits. */
