@@ -241,6 +241,45 @@ describe('settleNodeOffline', () => {
     });
   });
 
+  it('does not let a deleted-action snapshot fail a post-claim dispatch', async () => {
+    const f = fixture();
+    f.sqlite.prepare(`
+      UPDATE action_invocations
+      SET invocation_origin = 'registered_action', action_id = NULL
+      WHERE id = 'inv1'
+    `).run();
+    const [stale] = await f.db
+      .select()
+      .from(schema.actionInvocations)
+      .where(eq(schema.actionInvocations.id, 'inv1'));
+    const claim = await claimNodeOffline(f.db, 'ws', 'node1', staleExpected(f));
+    f.sqlite.prepare(`
+      UPDATE action_invocations
+      SET status = 'dispatched', dispatched_node_id = 'node1', dispatched_at = ?
+      WHERE id = 'inv1'
+    `).run(Math.floor(claim!.claimAt.getTime() / 1000));
+
+    expect(await rescheduleNodeInvocation(f.db, registry, stale!, {
+      expectedNodeLivenessRevision: stale!.nodeLivenessRevision,
+    })).toBe(false);
+
+    const winner = f.sqlite.prepare(`
+      SELECT status, error, dispatched_node_id, node_liveness_revision
+      FROM action_invocations WHERE id = 'inv1'
+    `).get() as {
+      status: string;
+      error: string | null;
+      dispatched_node_id: string | null;
+      node_liveness_revision: number;
+    };
+    expect(winner).toEqual({
+      status: 'dispatched',
+      error: null,
+      dispatched_node_id: 'node1',
+      node_liveness_revision: claim!.claimRevision + 1,
+    });
+  });
+
   it('suppresses the stale offline event when a reconnect wins first', async () => {
     const f = fixture();
     const claim = await claimNodeOffline(f.db, 'ws', 'node1', staleExpected(f));

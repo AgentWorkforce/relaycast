@@ -922,6 +922,7 @@ async function failOpenInvocationRows(
   workspaceId: string,
   invocationIds: string[],
   error: string,
+  expectedNodeLivenessRevision?: number,
 ): Promise<InvocationRow[]> {
   if (invocationIds.length === 0) return [];
   // Capture reservation state before the update clears spawnReservedAt.
@@ -937,6 +938,9 @@ async function failOpenInvocationRows(
       eq(actionInvocations.workspaceId, workspaceId),
       inArray(actionInvocations.id, invocationIds),
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      ...(expectedNodeLivenessRevision !== undefined
+        ? [eq(actionInvocations.nodeLivenessRevision, expectedNodeLivenessRevision)]
+        : []),
     ));
   const failed = await db
     .update(actionInvocations)
@@ -945,6 +949,9 @@ async function failOpenInvocationRows(
       eq(actionInvocations.workspaceId, workspaceId),
       inArray(actionInvocations.id, invocationIds),
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      ...(expectedNodeLivenessRevision !== undefined
+        ? [eq(actionInvocations.nodeLivenessRevision, expectedNodeLivenessRevision)]
+        : []),
     ))
     .returning();
   const failedIds = new Set(failed.map((row) => row.id));
@@ -3405,7 +3412,13 @@ export async function rescheduleNodeInvocation(
     return false;
   }
   if (isDeletedRegisteredActionInvocation(invocation)) {
-    await failOpenInvocationRows(db, invocation.workspaceId, [invocation.id], 'action_deleted');
+    await failOpenInvocationRows(
+      db,
+      invocation.workspaceId,
+      [invocation.id],
+      'action_deleted',
+      opts.expectedNodeLivenessRevision,
+    );
     return false;
   }
   // Only release capacity the invocation actually holds. A shadowed spawn
