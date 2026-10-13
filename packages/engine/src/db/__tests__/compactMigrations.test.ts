@@ -50,8 +50,14 @@ function snapshot(handle: SqliteDbHandle) {
       // 0056 adds a conservative reconciliation witness and backfills it from
       // the existing last_seen value. Exclude that additive bookkeeping field
       // so this regression continues to compare all pre-existing user data.
+      // 0070 adds a nullable liveness-recovery marker without backfilling it.
       if (name === 'agents') {
-        const { status_updated_at: _statusUpdatedAt, ...existing } = row as Record<string, unknown>;
+        const {
+          status_updated_at: _statusUpdatedAt,
+          status_before_liveness_loss: _livenessStatus,
+          node_liveness_revision: _nodeLivenessRevision,
+          ...existing
+        } = row as Record<string, unknown>;
         return JSON.stringify(existing);
       }
       // 0063 adds only bounded node-rotation recovery metadata. Exclude those
@@ -64,6 +70,7 @@ function snapshot(handle: SqliteDbHandle) {
           previous_token_expires_at: _previousTokenExpiresAt,
           rotation_idempotency_key_hash: _rotationIdempotencyKeyHash,
           rotation_request_digest: _rotationRequestDigest,
+          liveness_revision: _livenessRevision,
           ...existing
         } = row as Record<string, unknown>;
         return JSON.stringify(existing);
@@ -120,7 +127,12 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
         table = { ...table, sql: table.sql.replace(", execution_mode TEXT NOT NULL DEFAULT 'short'", '') };
       }
       if (table.name === 'action_invocations') {
-        table = { ...table, sql: table.sql.replace(', task_state TEXT', '') };
+        table = {
+          ...table,
+          sql: table.sql
+            .replace(', task_state TEXT', '')
+            .replace(', node_liveness_revision INTEGER NOT NULL DEFAULT 0', ''),
+        };
       }
       if (table.name === 'event_subscriptions') {
         table = { ...table, sql: table.sql.replace(", signature_scheme TEXT NOT NULL DEFAULT 'legacy'", '') };
@@ -141,7 +153,14 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
             .replace(', previous_token_hash TEXT DEFAULT NULL', '')
             .replace(', previous_token_expires_at INTEGER DEFAULT NULL', '')
             .replace(', rotation_idempotency_key_hash TEXT DEFAULT NULL', '')
-            .replace(', rotation_request_digest TEXT DEFAULT NULL', ''),
+            .replace(', rotation_request_digest TEXT DEFAULT NULL', '')
+            .replace(', liveness_revision INTEGER NOT NULL DEFAULT 0', ''),
+        };
+      }
+      if (table.name === 'node_providers') {
+        table = {
+          ...table,
+          sql: table.sql.replace(', liveness_revision INTEGER NOT NULL DEFAULT 0', ''),
         };
       }
       return {
@@ -175,6 +194,8 @@ describe('compact maintenance migration path', () => {
     const beforeConstraints = constraints(handle);
     expect(runMigrations(handle).applied).toEqual(files.filter(name => name >= replacement));
     const after = snapshot(handle);
+    expect(handle.sqlite.prepare('SELECT status_before_liveness_loss FROM agents').all())
+      .toEqual([{ status_before_liveness_loss: null }]);
     // Remote-DM and direct-idempotency migrations add empty tables; every
     // pre-existing row and table must remain.
     expect(after.filter(([name]) => ![

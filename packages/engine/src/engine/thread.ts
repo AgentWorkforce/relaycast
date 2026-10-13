@@ -1,6 +1,6 @@
 import { eq, and, sql, lt, gt } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { messages, channels, agents, dmConversations } from '../db/schema.js';
+import { messages, channels, agents, dmConversations, nodes } from '../db/schema.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { generateId } from './snowflake.js';
 import {
@@ -15,6 +15,12 @@ import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig }
 import type { WorkspaceDeliveryPolicy } from './workspaceDeliveryPolicy.js';
 import { codedError } from '../lib/httpError.js';
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
+import {
+  addressNodeSelection,
+  formatAgentAddress,
+  SENDER_ADDRESS_METADATA_KEY,
+  senderAddressField,
+} from './address.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -45,8 +51,18 @@ export async function postReply(
     .from(dmConversations)
     .where(eq(dmConversations.channelId, parent.channelId));
 
+  const [agent] = await db
+    .select({ name: agents.name, node: addressNodeSelection })
+    .from(agents)
+    .leftJoin(nodes, eq(nodes.id, agents.locationNodeId))
+    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId)));
+  const senderAddress = agent?.name ? formatAgentAddress(agent.name, agent.node) : null;
+
   const replyId = generateId();
-  const metadata = sanitizeUserMessageMetadata(data.data);
+  const metadata = {
+    ...sanitizeUserMessageMetadata(data.data),
+    ...(senderAddress ? { [SENDER_ADDRESS_METADATA_KEY]: senderAddress } : {}),
+  };
   const sessionRef = requireSessionRefFromMetadata(metadata);
   const createdAt = new Date();
   const mentionPattern = /(?:^|\s)@([\w-]+)/g;
@@ -58,8 +74,6 @@ export async function postReply(
     ttlMs: DEFAULT_MAILBOX_TTL_MS,
     depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
   };
-
-  const [agent] = await db.select({ name: agents.name }).from(agents).where(eq(agents.id, agentId));
 
   // Durable writes run as one atomic unit when the adapter supports it; fanout
   // stays in routes. Delivery recipients are derived by the insert-select
@@ -141,6 +155,7 @@ export async function postReply(
     ...(dmConversation ? { conversation_id: dmConversation.id } : {}),
     agent_id: reply.agentId,
     agent_name: agent?.name || 'unknown',
+    ...senderAddressField(reply.metadata),
     thread_id: reply.threadId,
     text: reply.body,
     blocks: (reply.blocks as unknown[] | null) || null,
@@ -229,6 +244,7 @@ export async function getThread(
       channel_id: parent.channelId,
       agent_id: parent.agentId,
       agent_name: displayAgentName(parent.metadata, parent.agentName),
+      ...senderAddressField(parent.metadata),
       text: parent.body,
       blocks: (parent.blocks as unknown[] | null) || null,
       metadata: publicMessageMetadata(parent.metadata),
@@ -242,6 +258,7 @@ export async function getThread(
       channel_id: r.channelId,
       agent_id: r.agentId,
       agent_name: displayAgentName(r.metadata, r.agentName),
+      ...senderAddressField(r.metadata),
       thread_id: r.threadId,
       text: r.body,
       blocks: (r.blocks as unknown[] | null) || null,

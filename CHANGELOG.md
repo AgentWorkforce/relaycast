@@ -23,6 +23,30 @@ Packages without a separate changelog are covered by the cross-package notes bel
 - Agent detail (`GET /v1/agents/{name}`) returns `origin_node_id`: the node whose authenticated connection registered the agent. It cannot be patched, so a service can tell which node spawned an agent without trusting `metadata.fleet`.
 - `GET /v1/node/me` returns the id, name and workspace of the node a node token belongs to, so a service handed the token can prove which node it is for.
 
+## [10.3.1] - 2026-10-13
+
+### Fixed
+
+- A spawn whose first send to a live node failed now starts when that node reconnects, instead of staying pending for up to 72 hours.
+
+## [10.3.0] - 2026-10-13
+
+### Added
+
+- Direct-node WebSocket heartbeats can maintain agent presence without REST heartbeats, with correlated acknowledgements for safe client fallback.
+
+### Fixed
+
+- Node liveness reconciliation releases control admission after one fenced claim while preserving same-second reconnects and their newly dispatched work.
+- Presence heartbeats preserve reported work states; expiry and node disconnect recovery restore only the state lost to liveness, without erasing an explicit offline report.
+- Capability-free node heartbeats now write the provider and node rows in two statements instead of a read-then-write chain, lowering steady-state D1 pressure on the hosted node liveness path.
+
+## [10.1.1] - 2026-10-12
+
+### Fixed
+
+- Thread replies preserve the sender's exact `agent@machine` address when the server recorded one, including responses, thread history, direct and session reads, queued and replayed deliveries, and observer events. The field is omitted when the sender has no location node.
+
 ## [10.1.0] - 2026-10-11
 
 ### Added
@@ -752,7 +776,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v10.1.0...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v10.3.1...HEAD
+[10.3.1]: https://github.com/AgentWorkforce/relaycast/compare/v10.3.0...v10.3.1
+[10.3.0]: https://github.com/AgentWorkforce/relaycast/compare/v10.1.1...v10.3.0
+[10.1.1]: https://github.com/AgentWorkforce/relaycast/compare/v10.1.0...v10.1.1
 [10.1.0]: https://github.com/AgentWorkforce/relaycast/compare/v10.0.3...v10.1.0
 [10.0.3]: https://github.com/AgentWorkforce/relaycast/compare/v10.0.2...v10.0.3
 [10.0.2]: https://github.com/AgentWorkforce/relaycast/compare/v10.0.1...v10.0.2

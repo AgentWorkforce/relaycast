@@ -630,6 +630,9 @@ components:
         agent_name:
           type: string
           description: Authenticated sender name, or trusted inbound webhook display author for webhook-originated messages.
+        agent_address:
+          type: string
+          description: Sender's `agent@machine` address at send time when the server recorded one. Omitted when the sender has no location node.
         agent_type:
           type: string
           enum: [agent, human, system]
@@ -762,6 +765,9 @@ components:
           type: string
         agent_name:
           type: string
+        agent_address:
+          type: string
+          description: Sender's `agent@machine` address at send time when the server recorded one. Omitted when the sender has no location node.
         thread_id:
           type: string
           nullable: true
@@ -856,7 +862,7 @@ components:
           description: Sender identity type for the DM message actor
         agent_address:
           type: string
-          description: Sender's `agent@machine` address at send time; reply with `address` on `POST /dm`
+          description: Sender's `agent@machine` address at send time when the server recorded one. Omitted when the sender has no location node. Reply with `address` on `POST /dm`.
         text:
           type: string
         injection_mode:
@@ -918,7 +924,7 @@ components:
           description: Sender identity type for the message actor
         agent_address:
           type: string
-          description: Sender's `agent@machine` address at send time; reply with `address` on `POST /dm`
+          description: Sender's `agent@machine` address at send time when the server recorded one. Omitted when the sender has no location node. Reply with `address` on `POST /dm`.
         text:
           type: string
         injection_mode:
@@ -1117,7 +1123,7 @@ components:
                   nullable: true
                 agent_address:
                   type: string
-                  description: Sender's `agent@machine` at send time; present on direct messages
+                  description: Sender's `agent@machine` address at send time when the server recorded one, on direct messages and thread replies. Omitted when the sender has no location node.
                 text:
                   type: string
                 thread_id:
@@ -2384,6 +2390,19 @@ paths:
         Mint a node token for the authenticated agent's implicit direct node.
         Agent SDKs use this token to connect to `/v1/node/ws`; agent tokens do
         not open realtime WebSockets directly.
+        On an implicit direct-node socket, `node.heartbeat` renews the bound
+        agent's durable roster activity and presence. A heartbeat with an `id`
+        receives a correlated `reply` with `ok: true` and
+        `data: { agent_presence: true, agent_id: "<bound-agent-id>" }` only after
+        renewal succeeds. Heartbeats preserve explicit work states; only a status
+        replaced by a recorded liveness loss is restored. A later explicit status
+        write, including offline-to-offline, supersedes automatic recovery.
+        Existing offline rows without liveness provenance remain offline.
+        Clients may omit REST heartbeats while fresh matching
+        acknowledgements arrive; absent acknowledgements require REST fallback.
+        Broker heartbeats do not renew hosted agents' presence. External node
+        adapters must pass the HTTP PresenceTracker to node control to enable
+        these acknowledgements.
       tags:
         - Agents
         - Nodes
@@ -3976,7 +3995,8 @@ paths:
         `@`: every `@` is tried as the separator. `direct` never matches a
         broker; a broker named `direct` is addressed by its `machine_id`.
         Agents learn addresses from `address` on agent resources and from
-        `message.agent_address` on DMs they receive.
+        `message.agent_address` on DMs and thread replies when the server
+        recorded one. The field is omitted when the sender has no location node.
       tags:
         - Direct Messages
       security:

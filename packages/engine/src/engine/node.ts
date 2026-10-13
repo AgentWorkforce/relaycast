@@ -28,9 +28,10 @@ import { acceptTaskInvocation, completeTaskInvocation } from './taskInvocation.j
 import { databaseConstraintKind, runAtomic, runAtomicWrites } from '../ports/database.js';
 import { retryD1Write } from '../lib/d1Retry.js';
 import type { AtomicWrite, BatchCapability, EngineDb } from '../ports/database.js';
+import type { PresenceTracker } from '../ports/presence.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { generateId } from './snowflake.js';
-import { assertRegistrableAgentName } from './agent.js';
+import { assertRegistrableAgentName, agentLivenessLoss, agentLivenessRefresh, RELEASED_AGENT_STATUS } from './agent.js';
 import { rotateAgentIdentity } from './agentIdentity.js';
 import { isNodeLive, isReusableForMachineMatch, nodeHasCapacity, NODE_LIVENESS_TTL_MS } from './placement.js';
 import {
@@ -43,6 +44,7 @@ import {
   materializeProviderActions,
   providerActionsMaterialized,
   recomputeNodeAggregate,
+  refreshNodeAggregate,
   removeProvider,
   upsertProvider,
 } from './nodeProvider.js';
@@ -74,6 +76,8 @@ export interface HandleNodeControlMessageArgs {
   db: EngineDb;
   registry: NodeConnectionRegistry;
   completionDeps?: InvocationCompletionDeps;
+  /** Enables acknowledged agent presence for implicit direct-node heartbeats. */
+  presence?: PresenceTracker;
   workspaceId: string;
   nodeId: string;
   socket?: NodeSocketLike;
@@ -907,6 +911,10 @@ export async function heartbeatNode(
   nodeId: string,
   providerName: string,
   message: FleetNodeHeartbeatMessage,
+  // A caller that already read the node row may pass it to skip the role
+  // probe: `null` means "the row was missing", an object supplies its role.
+  // `undefined` keeps the historical own-read behavior.
+  priorNode?: { role: string | null } | null,
 ) {
   // A heartbeat is provider-scoped by connection. It may carry the provider's
   // roster snapshot so the engine can refresh the descriptor between (or in the
@@ -917,10 +925,12 @@ export async function heartbeatNode(
     throw codedError('node_id does not match the authenticated node token', 'node_id_mismatch', 403);
   }
 
-  const [nodeState] = await db
-    .select({ role: nodes.role })
-    .from(nodes)
-    .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+  const nodeState = priorNode === undefined
+    ? (await db
+      .select({ role: nodes.role })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId))))[0]
+    : priorNode;
   if (!nodeState) return null;
 
   if (nodeState.role === 'direct') {
@@ -1028,13 +1038,156 @@ export async function heartbeatNode(
     // ordering the separate stamp used to guarantee: the aggregate derives
     // lastHeartbeatAt from provider rows, which registration also writes,
     // whereas this column is only ever set by an arriving frame.
-    updated = await recomputeNodeAggregate(tx, workspaceId, nodeId, {
-      ...(message.version !== undefined ? { version: message.version } : {}),
-      provenLiveAt: now,
-    });
+    // A capability-free beat cannot change the manifest union, so it takes the
+    // single-statement aggregate path; only a beat carrying `capabilities`
+    // pays the provider-listing recompute.
+    updated = message.capabilities === undefined
+      ? await refreshNodeAggregate(tx, workspaceId, nodeId, {
+        ...(message.version !== undefined ? { version: message.version } : {}),
+        provenLiveAt: now,
+      })
+      : await recomputeNodeAggregate(tx, workspaceId, nodeId, {
+        ...(message.version !== undefined ? { version: message.version } : {}),
+        provenLiveAt: now,
+      });
   });
 
   return updated ? publicNode(updated) : null;
+}
+
+/**
+ * Flip a node's row offline in ONE conditional UPDATE — the only part of an
+ * offline transition a caller must serialize against reconnects. `expected`
+ * carries the heartbeat the caller's stale-read observed: any heartbeat or
+ * registration that landed since rewrote `last_heartbeat_at`, the CAS misses,
+ * and the caller must abandon the transition rather than clobber the live
+ * node. Returns the claimed row's name, timestamp, and monotonic revision; the
+ * revision is the bound the settle tail scopes its writes to. Returns undefined
+ * when the claim was lost.
+ */
+export async function claimNodeOffline(
+  db: Db,
+  workspaceId: string,
+  nodeId: string,
+  expected: { lastHeartbeatAt: Date | null; livenessRevision: number },
+): Promise<{ name: string; claimAt: Date; claimRevision: number } | undefined> {
+  const claimAt = new Date();
+  const nextRevision = sql<number>`MAX(
+    ${nodes.livenessRevision},
+    COALESCE((
+      SELECT MAX(np.liveness_revision)
+      FROM node_providers np
+      WHERE np.workspace_id = ${workspaceId} AND np.node_id = ${nodeId}
+    ), 0),
+    COALESCE((
+      SELECT MAX(a.node_liveness_revision)
+      FROM agents a
+      WHERE a.workspace_id = ${workspaceId} AND a.location_node_id = ${nodeId}
+        AND a.location_type = 'via_node'
+        AND a.status NOT IN ('offline', 'released')
+    ), 0),
+    COALESCE((
+      SELECT MAX(ai.node_liveness_revision)
+      FROM action_invocations ai
+      WHERE ai.workspace_id = ${workspaceId} AND ai.dispatched_node_id = ${nodeId}
+        AND ai.status IN ('pending', 'dispatched', 'invoked')
+    ), 0)
+  ) + 1`;
+  const [claimed] = await db
+    .update(nodes)
+    .set({
+      status: 'offline',
+      handlersLive: false,
+      load: 0,
+      loadReported: false,
+      activeAgents: 0,
+      // The written heartbeat IS the claim epoch: settle tails and later
+      // transitions detect a post-claim liveness write by observing a
+      // `last_heartbeat_at` newer than `claimAt`, so both values must be the
+      // same instant (second-granular column — two `new Date()` calls could
+      // straddle a boundary).
+      lastHeartbeatAt: claimAt,
+      // This is the durable claim boundary. Triggers stamp every later child
+      // liveness mutation above it, including writes in the same wall-clock
+      // second, so the settle tail never relies on timestamp ordering.
+      livenessRevision: nextRevision,
+    })
+    .where(and(
+      eq(nodes.workspaceId, workspaceId),
+      eq(nodes.id, nodeId),
+      eq(nodes.status, 'online'),
+      eq(nodes.livenessRevision, expected.livenessRevision),
+      expected.lastHeartbeatAt === null
+        ? isNull(nodes.lastHeartbeatAt)
+        : eq(nodes.lastHeartbeatAt, expected.lastHeartbeatAt),
+    ))
+    .returning({ name: nodes.name, claimRevision: nodes.livenessRevision });
+  return claimed ? { name: claimed.name, claimAt, claimRevision: claimed.claimRevision } : undefined;
+}
+
+/**
+ * The resumable tail of an offline transition: provider/agent liveness loss,
+ * invocation rescheduling, and the durable event. Safe to run after the
+ * node's claim row is released and concurrently with a reconnect, because
+ * every write is claim-scoped — `claimRevision` bounds the transition to rows
+ * stamped before the claim, so a provider, hosted agent, or invocation changed
+ * after it is never clobbered even when both writes share a timestamp second.
+ * Callers that cannot interleave (in-process serialized paths) omit the claim
+ * fields for the legacy unconditional sweep.
+ */
+export async function settleNodeOffline(
+  db: Db,
+  registry: NodeConnectionRegistry,
+  workspaceId: string,
+  nodeId: string,
+  opts: {
+    claimRevision?: number;
+    before?: { status: string; name: string };
+    deps?: InvocationCompletionDeps;
+    reason?: NodeOfflineReason;
+  } = {},
+): Promise<boolean> {
+  const claimRevision = opts.claimRevision;
+  // Provider capability sets persist (offline nodes still show their manifest);
+  // only their liveness flips. Zero activeAgents too, so a later
+  // recomputeNodeAggregate never resurrects a dropped provider's agent count.
+  await db
+    .update(nodeProviders)
+    .set({ status: 'offline', handlersLive: false, load: 0, loadReported: false, activeAgents: 0, lastHeartbeatAt: new Date() })
+    .where(and(
+      eq(nodeProviders.workspaceId, workspaceId),
+      eq(nodeProviders.nodeId, nodeId),
+      ...(claimRevision !== undefined
+        ? [lt(nodeProviders.livenessRevision, claimRevision)]
+        : []),
+    ));
+
+  await db
+    .update(agents)
+    .set({ ...agentLivenessLoss(), lastSeen: new Date() })
+    .where(and(
+      eq(agents.workspaceId, workspaceId),
+      ne(agents.status, 'offline'),
+      ne(agents.status, RELEASED_AGENT_STATUS),
+      eq(agents.locationType, 'via_node'),
+      eq(agents.locationNodeId, nodeId),
+      ...(claimRevision !== undefined
+        ? [lt(agents.nodeLivenessRevision, claimRevision)]
+        : []),
+    ));
+
+  await rescheduleInvocationsForLostNode(db, registry, workspaceId, nodeId, { claimRevision });
+
+  if (opts.deps && opts.before && opts.before.status === 'online') {
+    await emitNodeStatusEffects(opts.deps, workspaceId, {
+      status: 'offline',
+      nodeId,
+      nodeName: opts.before.name,
+      reason: opts.reason,
+      ...(claimRevision !== undefined ? { claimRevision } : {}),
+    });
+  }
+  return true;
 }
 
 export async function markNodeOffline(
@@ -1064,33 +1217,11 @@ export async function markNodeOffline(
     })
     .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
 
-  // Provider capability sets persist (offline nodes still show their manifest);
-  // only their liveness flips. Zero activeAgents too, so a later
-  // recomputeNodeAggregate never resurrects a dropped provider's agent count.
-  await db
-    .update(nodeProviders)
-    .set({ status: 'offline', handlersLive: false, load: 0, loadReported: false, activeAgents: 0, lastHeartbeatAt: new Date() })
-    .where(and(eq(nodeProviders.workspaceId, workspaceId), eq(nodeProviders.nodeId, nodeId)));
-
-  await db
-    .update(agents)
-    .set({ status: 'offline', lastSeen: new Date() })
-    .where(and(
-      eq(agents.workspaceId, workspaceId),
-      eq(agents.locationType, 'via_node'),
-      eq(agents.locationNodeId, nodeId),
-    ));
-
-  await rescheduleInvocationsForLostNode(db, registry, workspaceId, nodeId);
-
-  if (effects?.deps && before && before.status === 'online') {
-    await emitNodeStatusEffects(effects.deps, workspaceId, {
-      status: 'offline',
-      nodeId,
-      nodeName: before.name,
-      reason: effects.reason,
-    });
-  }
+  await settleNodeOffline(db, registry, workspaceId, nodeId, {
+    before,
+    deps: effects?.deps,
+    reason: effects?.reason,
+  });
 }
 
 /**
@@ -1118,9 +1249,11 @@ export async function handleProviderDisconnect(
     await markProviderOffline(db, workspaceId, nodeId, providerName);
     await db
       .update(agents)
-      .set({ status: 'offline', lastSeen: new Date() })
+      .set({ ...agentLivenessLoss(), lastSeen: new Date() })
       .where(and(
         eq(agents.workspaceId, workspaceId),
+        ne(agents.status, 'offline'),
+        ne(agents.status, RELEASED_AGENT_STATUS),
         eq(agents.locationType, 'via_node'),
         eq(agents.locationNodeId, nodeId),
         eq(agents.providerName, providerName),
@@ -2963,6 +3096,7 @@ async function readHeartbeatDrainState(
     db
       .select({
         status: nodes.status,
+        role: nodes.role,
         handlersLive: nodes.handlersLive,
         maxAgents: nodes.maxAgents,
         activeAgents: nodes.activeAgents,
@@ -3046,6 +3180,7 @@ function sendControl(socket: NodeSocketLike | undefined, payload: Record<string,
   }
 }
 
+/** Validate and serialize an authenticated node frame, replying only after its effects. */
 export async function handleNodeControlMessage(args: HandleNodeControlMessageArgs) {
   let message: FleetBrokerToRelaycastMessage;
   try {
@@ -3195,7 +3330,14 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           args.nodeId,
           frameProviderName,
         );
-        const beat = await heartbeatNode(args.db, args.workspaceId, args.nodeId, frameProviderName, message);
+        const beat = await heartbeatNode(
+          args.db,
+          args.workspaceId,
+          args.nodeId,
+          frameProviderName,
+          message,
+          prior.node ?? null,
+        );
         // The node row is already persisted, so emit the durable online
         // transition before draining: a drainNode rejection must not skip the
         // node.status.online event. Isolated so its own failure can't either.
@@ -3206,6 +3348,44 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           // retry-delayed rows in this one bounded pass so a transition just
           // before retryAfterAt cannot strand work until another reconnect.
           await args.registry.drainNode(args.workspaceId, args.nodeId, { includeDeferred: true });
+        }
+        // Node liveness alone says nothing about agent presence. Refresh only
+        // the active identity actually bound to this authenticated implicit
+        // direct node, never an agent named by the client or a broker roster.
+        // A closed/unregistered registry connection cannot certify presence.
+        if (args.presence && beat?.role === 'direct' && args.nodeId.startsWith('node_direct_') && (
+          !args.connectionId
+          || args.registry.providerNameForConnection?.(args.connectionId) === frameProviderName
+        )) {
+          // Renew the durable roster as well as the ephemeral presence port.
+          // A single conditional write prevents a released/moved identity from
+          // being revived between a binding check and its last_seen update.
+          const [agent] = await args.db
+            .update(agents)
+            .set(agentLivenessRefresh())
+            .where(and(
+              eq(agents.id, args.nodeId.slice('node_direct_'.length)),
+              eq(agents.workspaceId, args.workspaceId),
+              eq(agents.locationNodeId, args.nodeId),
+              ne(agents.status, RELEASED_AGENT_STATUS),
+              eq(agents.providerName, frameProviderName),
+              exists(args.db.select({ id: agentNodeBindings.id }).from(agentNodeBindings).where(and(
+                eq(agentNodeBindings.workspaceId, args.workspaceId),
+                eq(agentNodeBindings.agentId, agents.id),
+                eq(agentNodeBindings.nodeId, args.nodeId),
+                eq(agentNodeBindings.status, 'active'),
+              ))),
+            ))
+            .returning({ id: agents.id, name: agents.name });
+          if (agent) {
+            await args.presence.heartbeat(args.workspaceId, agent.id, agent.name);
+            if (message.id) {
+              sendControl(args.socket, {
+                v: 1, id: message.id, type: 'reply', ok: true,
+                data: { agent_presence: true, agent_id: agent.id },
+              });
+            }
+          }
         }
         return;
       }

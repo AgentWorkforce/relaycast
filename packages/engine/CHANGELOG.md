@@ -13,6 +13,30 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - `origin_node_id` on agent detail responses and `GET /v1/node/me` for node tokens.
 
+## [10.3.1] - 2026-10-13
+
+### Fixed
+
+- A native spawn whose first `action.invoke` send failed is re-dispatched by its placed node's next register or drain instead of waiting for the 72-hour never-dispatched sweep. The row becomes drainable only once the send has settled unsent, and one drain claims it, so a reconnect cannot send it twice or double-count node capacity.
+
+## [10.3.0] - 2026-10-13
+
+### Added
+
+- `claimNodeOffline` / `settleNodeOffline` split the node-offline transition into a one-statement, revision-fenced claim and a resumable tail, so socket owners can release control admission immediately without same-second reconnects losing agents, providers, or newly dispatched work. `markNodeOffline` is unchanged for serialized callers.
+- Implicit direct-node `node.heartbeat` renews its bound agent’s durable roster and presence, acknowledging request IDs with `data.agent_presence` and `agent_id` only after success. The Node adapter wires this automatically; external node-control adapters can opt in with the optional `presence` port.
+
+### Fixed
+
+- Presence heartbeats preserve reported work states; expiry and node disconnect recovery restore only the state lost to liveness, without erasing an explicit offline report.
+- A capability-free `node.heartbeat` no longer pre-reads the provider row or the provider list: the provider write reads `max_agents` in place and the node aggregate folds into one correlated UPDATE, so a steady beat is two writes total.
+
+## [10.1.1] - 2026-10-12
+
+### Fixed
+
+- `POST /v1/messages/:id/replies`, thread reads, `GET /v1/messages/:id`, session reads, queued deliveries, and replayed `thread.reply` frames expose the server-resolved sender `agent_address` without leaking its internal metadata key. Observer `thread.reply` events keep that address on `message`. The field is omitted when the sender has no location node.
+
 ## [10.1.0] - 2026-10-11
 
 ### Added
