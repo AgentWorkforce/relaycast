@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- `rescheduleNodeInvocation` returns `false` for a dispatched built-in release without reading D1. It previously ran `targetAgentForInvocation`, whose inner join on `action_id` cannot match a release, once per open release. A node with 164 such rows spent its 5s liveness deadline in `inventory.sync` on those reads and never got a reply.
+
 ## [10.3.0] - 2026-10-13
 
 ### Added

@@ -18,6 +18,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased]
 
+### Fixed
+
+- A node holding many open built-in releases no longer has its `inventory.sync` rejected with `d1_pressure` on every reconnect. Inventory and the timeout sweep skip a lookup that could never match for each release.
+
 ## [10.3.0] - 2026-10-13
 
 ### Added

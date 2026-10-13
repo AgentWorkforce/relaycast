@@ -3451,6 +3451,15 @@ export async function rescheduleNodeInvocation(
       return false;
     }
   }
+  // A built-in release that has been dispatched cannot be rescheduled, and
+  // cannot become bindable: only bindInvocationToRegisteredNodeAction sets an
+  // actionId, and it requires dispatch_attempts = 0, which never decreases. So
+  // the lookup below would read nothing. Skip it — inventory.sync and the
+  // timeout sweep walk every open release on a node, and one read each spent a
+  // node's whole liveness deadline before inventory could reply.
+  if (isBuiltinReleaseInvocation(invocation) && invocation.actionId === null && invocation.dispatchAttempts > 0) {
+    return false;
+  }
   const targetAgent = await targetAgentForInvocation(db, invocation);
   if (targetAgent) {
     const dispatched = await dispatchNodeInvocation({
