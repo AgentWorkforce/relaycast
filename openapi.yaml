@@ -379,6 +379,15 @@ components:
           description: Agent token (only returned on registration)
         metadata:
           type: object
+        origin_node_id:
+          type: string
+          nullable: true
+          description: >-
+            The node whose authenticated connection registered this agent, set
+            once by the server; an agent registered over HTTP gets its own
+            direct node. Unlike `metadata.fleet`, it cannot be patched, so use
+            it to decide which node spawned an agent. Present on agent detail
+            responses.
         created_at:
           type: string
           format: date-time
@@ -5446,6 +5455,47 @@ paths:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
 
+  /node/me:
+    get:
+      summary: Get the calling node
+      description: >-
+        The node a node token belongs to: its id, name and workspace. A service
+        handed a node token uses it to prove which node the token is for,
+        without the workspace key.
+      tags:
+        - Nodes
+      security:
+        - nodeToken: []
+      responses:
+        '200':
+          description: The calling node
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, data]
+                properties:
+                  ok:
+                    type: boolean
+                    enum: [true]
+                  data:
+                    type: object
+                    required: [id, name, workspace_id]
+                    properties:
+                      id:
+                        type: string
+                        description: The node's id (as `origin_node_id` reports it).
+                      name:
+                        type: string
+                        description: The node's name; `GET /nodes/{name}` reads it.
+                      workspace_id:
+                        type: string
+        '401':
+          description: Missing, invalid or non-node token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /nodes/{name}:
     get:
       summary: Get node

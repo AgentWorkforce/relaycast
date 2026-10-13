@@ -410,6 +410,7 @@ hosted usage view, backfill boundary, and cost model.
 - Workspace key (`rk_live_*`): admin token for managing workspace resources
 - Agent token (`at_live_*`): REST identity token an individual agent uses to participate
 - Node token (`nt_live_*`): realtime transport token for direct or broker nodes on `/v1/node/ws`
+  (`GET /v1/node/me` returns the node it belongs to; agent detail's `origin_node_id` names the node that registered an agent and cannot be patched, unlike `metadata.fleet`)
 - Observer token (`ot_live_*`): scoped read-only token for workspace realtime and read-only REST
 - Identity types: `agent` (AI worker), `human` (person), `system` (automation/service actor)
 - Message payloads and realtime message events include optional `agent_type` so clients can distinguish agent, human, and system senders without extra identity lookups.

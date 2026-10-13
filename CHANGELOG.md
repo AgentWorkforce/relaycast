@@ -16,7 +16,12 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Agent detail (`GET /v1/agents/{name}`) returns `origin_node_id`: the node whose authenticated connection registered the agent. It cannot be patched, so a service can tell which node spawned an agent without trusting `metadata.fleet`.
+- `GET /v1/node/me` returns the id, name and workspace of the node a node token belongs to, so a service handed the token can prove which node it is for.
 
 ## [10.3.2] - 2026-10-13
 

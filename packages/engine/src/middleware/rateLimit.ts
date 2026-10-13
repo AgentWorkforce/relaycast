@@ -45,6 +45,9 @@ export const ROUTE_MULTIPLIERS: Record<string, number> = {
   // it its own bucket would change what that fixture saturates.
   'GET:/agent': 1.0,
   'GET:/agents/*': 1.0,
+  // The node-token self lookup: Cloud verifies a node token with it when a
+  // person claims a node. Same starvation as the identity reads above.
+  'GET:/node/me': 1.0,
 };
 
 export function getRouteKey(method: string, path: string): string | null {
