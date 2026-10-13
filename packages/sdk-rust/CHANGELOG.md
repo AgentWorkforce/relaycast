@@ -12,6 +12,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
+- `AgentRegistrationClient::invalidate_cached_registration_if_token_hash()` atomically removes only the cached credential generation whose SHA-256 hash matches, preserving concurrent same-name replacement registrations.
 - `all_dm_conversations()` follows bounded server cursors and still returns the complete conversation vector, with a malformed-cursor progress guard.
 - Workspace reads and updates accept current engine responses that omit the private API key hash.
 
