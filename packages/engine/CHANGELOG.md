@@ -11,6 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- A native spawn whose first `action.invoke` send failed is re-dispatched by its placed node's next register or drain instead of waiting for the 72-hour never-dispatched sweep. The row becomes drainable only once the send has settled unsent, and one drain claims it, so a reconnect cannot send it twice or double-count node capacity.
 - Rescheduling a dispatched built-in release no longer issues a D1 read, so `inventory.sync` and the timeout sweep no longer spend one D1 round trip per open release on a node.
 
 ## [10.3.0] - 2026-10-13

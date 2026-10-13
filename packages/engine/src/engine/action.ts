@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNotNull, isNull, lt, lte, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, like, lt, lte, or, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { actions, actionInvocations, agents, agentNodeBindings, channelMembers, dmParticipants, nodes } from '../db/schema.js';
 import { waitForPendingInvocationRetry } from './invocationRetry.js';
@@ -1810,6 +1810,16 @@ async function dispatchSpawn(args: {
     pending: placement.queued,
     reservationHeld: !placement.queued,
   });
+  // Placement reserved capacity for an attempt that never landed. Return it
+  // first, then mark the row unsent: only the mark makes it drainable, so a
+  // drain never sees it while this send is in flight or still holding the
+  // reservation.
+  if (!dispatched.accepted && !placement.queued) {
+    await releaseNodeCapacity(args.db, args.workspaceId, nodeId);
+  }
+  if (!dispatched.sent) {
+    await markUnsentNativeSpawn(args.db, args.workspaceId, invocation.id, nodeId);
+  }
   return spawnResult(invocation, nodeId, dispatched);
 }
 
@@ -3245,6 +3255,68 @@ async function targetAgentForInvocation(
   };
 }
 
+/**
+ * A native spawn whose first `action.invoke` send failed. A send can fail on a
+ * live node — the provider socket is between reconnects, or the node's owner
+ * rejects the send under pressure — and Cloud keeps no per-node frame queue, so
+ * such a row records no dispatch attempt and no `dispatchedNodeId`. Its
+ * placement survives only in the immutable `handlerNodeId` snapshot.
+ *
+ * `handlerUnreachableSince` marks the send as settled-unsent. The same
+ * snapshot exists while a first send is still in flight, so the mark, not the
+ * snapshot, is what lets a drain re-send. Built-in spawns have no action row,
+ * so the agent-handler reachability sweep (which joins on one) never reads it.
+ */
+function unsentNativeSpawnOn(workspaceId: string, invocationId: string | null, nodeId: string | null) {
+  return and(
+    eq(actionInvocations.workspaceId, workspaceId),
+    ...(invocationId ? [eq(actionInvocations.id, invocationId)] : []),
+    eq(actionInvocations.status, 'pending'),
+    isNull(actionInvocations.actionId),
+    isNull(actionInvocations.dispatchedNodeId),
+    eq(actionInvocations.dispatchAttempts, 0),
+    ...(nodeId ? [eq(actionInvocations.handlerNodeId, nodeId)] : []),
+    or(eq(actionInvocations.actionName, 'spawn'), like(actionInvocations.actionName, 'spawn:%')),
+  );
+}
+
+async function markUnsentNativeSpawn(db: Db, workspaceId: string, invocationId: string, nodeId: string) {
+  await db
+    .update(actionInvocations)
+    .set({ handlerUnreachableSince: new Date() })
+    .where(unsentNativeSpawnOn(workspaceId, invocationId, nodeId));
+}
+
+/** One drain wins the re-send; a loser, or a send still in flight, sees no mark. */
+async function claimUnsentNativeSpawn(db: Db, workspaceId: string, invocationId: string): Promise<boolean> {
+  const [claimed] = await db
+    .update(actionInvocations)
+    .set({ handlerUnreachableSince: null })
+    .where(and(
+      unsentNativeSpawnOn(workspaceId, invocationId, null),
+      isNotNull(actionInvocations.handlerUnreachableSince),
+    ))
+    .returning({ id: actionInvocations.id });
+  return !!claimed;
+}
+
+/** `registry`, calling `onSend` before any provider send starts. */
+function observeSends(registry: NodeConnectionRegistry, onSend: () => void): NodeConnectionRegistry {
+  return new Proxy(registry, {
+    get(target, key) {
+      const value: unknown = Reflect.get(target, key, target);
+      if (typeof value !== 'function') return value;
+      if (key === 'sendToProvider' || key === 'sendAuthorizedActionToProvider') {
+        return (...args: unknown[]) => {
+          onSend();
+          return Reflect.apply(value, target, args);
+        };
+      }
+      return value.bind(target);
+    },
+  });
+}
+
 export async function drainNodeInvocations(
   db: Db,
   registry: NodeConnectionRegistry,
@@ -3266,6 +3338,7 @@ export async function drainNodeInvocations(
       spawnReservedAt: actionInvocations.spawnReservedAt,
       dispatchedNodeId: actionInvocations.dispatchedNodeId,
       dispatchedProvider: actionInvocations.dispatchedProvider,
+      placedNodeId: actionInvocations.handlerNodeId,
       handlerNodeId: actions.handlerNodeId,
       handlerProvider: actions.handlerProvider,
       handlerAgentId: agents.id,
@@ -3287,6 +3360,12 @@ export async function drainNodeInvocations(
         eq(actionInvocations.dispatchedNodeId, nodeId),
         eq(actions.handlerNodeId, nodeId),
         and(eq(agents.locationType, 'via_node'), eq(agents.locationNodeId, nodeId)),
+        // A native spawn whose first send failed on this node: no attempt
+        // landed, so no other column names it.
+        and(
+          unsentNativeSpawnOn(workspaceId, null, nodeId),
+          isNotNull(actionInvocations.handlerUnreachableSince),
+        ),
       ),
     ))
     .orderBy(asc(actionInvocations.createdAt));
@@ -3303,7 +3382,13 @@ export async function drainNodeInvocations(
       && row.handlerAgentNodeId
       ? { id: row.handlerAgentId, name: row.handlerAgentName, nodeId: row.handlerAgentNodeId }
       : null;
-    const targetNodeId = targetAgent?.nodeId ?? row.handlerNodeId ?? row.dispatchedNodeId;
+    // Only the unsent-spawn branch above matches a row with no action and no
+    // dispatched node; its placed node is the target.
+    const unsentSpawn = row.actionId === null && row.dispatchedNodeId === null;
+    const targetNodeId = targetAgent?.nodeId
+      ?? row.handlerNodeId
+      ?? row.dispatchedNodeId
+      ?? (unsentSpawn ? row.placedNodeId : null);
     if (targetNodeId !== nodeId) continue;
 
     const input = recordInput(row.input);
@@ -3331,6 +3416,16 @@ export async function drainNodeInvocations(
     // handlers are not live. A missing provider row is a legacy single-socket
     // node, for which connection state remains the available liveness signal.
     if (!(await isHandlerConnectionLive(db, registry, workspaceId, nodeId, providerName))) continue;
+    // Claim before reserving, so concurrent drains cannot both reserve and send.
+    if (unsentSpawn && !await claimUnsentNativeSpawn(db, workspaceId, row.id)) continue;
+    // A definitely-unsent outcome below restores the mark, after returning
+    // any reservation this drain took. Whether a send started separates a
+    // pre-send throw (unsent) from a throw with an unknown outcome.
+    const remarkUnsent = () => unsentSpawn
+      ? markUnsentNativeSpawn(db, workspaceId, row.id, nodeId)
+      : Promise.resolve();
+    let sendStarted = false;
+    const sendRegistry = unsentSpawn ? observeSends(registry, () => { sendStarted = true; }) : registry;
 
     let reservedForDrain = false;
     try {
@@ -3338,6 +3433,7 @@ export async function drainNodeInvocations(
       if (nativeSpawn && !reservationHeld) {
         const reserved = await reserveNodeCapacity(db, workspaceId, nodeId);
         if (!reserved) {
+          await remarkUnsent();
           const [node] = await db
             .select({
               status: nodes.status,
@@ -3364,7 +3460,7 @@ export async function drainNodeInvocations(
 
       const dispatched = await dispatchNodeInvocation({
         db,
-        registry,
+        registry: sendRegistry,
         workspaceId,
         invocationId: row.id,
         nodeId,
@@ -3383,12 +3479,18 @@ export async function drainNodeInvocations(
         drained++;
       } else if (reservedForDrain) {
         await releaseNodeCapacity(db, workspaceId, nodeId);
+        reservedForDrain = false;
       }
+      if (!dispatched.sent) await remarkUnsent();
     } catch {
       if (reservedForDrain) {
         await releaseNodeCapacity(db, workspaceId, nodeId).catch(() => {});
       }
       // Leave the invocation pending; a later drain or timeout sweep can retry.
+      // A throw before any send leaves the spawn unsent, so it is re-marked. A
+      // throw once a send started is an unknown outcome, so the spawn stays
+      // unmarked and only the never-dispatched sweep ends it.
+      if (!sendStarted) await remarkUnsent().catch(() => {});
     }
   }
   return drained;

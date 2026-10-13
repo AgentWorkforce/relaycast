@@ -20,6 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
+- A spawn whose first send to a live node failed now starts when that node reconnects, instead of staying pending for up to 72 hours.
 - A node with many unfinished releases no longer has every `inventory.sync` rejected with `d1_pressure`, so it stops reconnecting in a loop.
 
 ## [10.3.0] - 2026-10-13
