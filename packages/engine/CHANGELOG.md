@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- A native spawn whose first `action.invoke` send failed is re-dispatched by its placed node's next register or drain instead of waiting for the 72-hour never-dispatched sweep. The row becomes drainable only once the send has settled unsent, and one drain claims it, so a reconnect cannot send it twice or double-count node capacity.
 
 ## [10.3.0] - 2026-10-13
 
