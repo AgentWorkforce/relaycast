@@ -2429,6 +2429,7 @@ describe('node adapter conformance', () => {
         callerId: caller.agentId,
         callerName: caller.name,
         handlerNodeId: 'node_alpha',
+        handlerUnreachableSince: new Date(),
         input: { cli: 'claude', name: 'worker-placed-alpha', task: 'hi' },
         status: 'pending',
       });
@@ -2442,6 +2443,117 @@ describe('node adapter conformance', () => {
       expect(alpha.sock.ofType('action.invoke')).toEqual([
         expect.objectContaining({ invocation_id: 'inv_spawn_unsent_alpha' }),
       ]);
+    });
+
+    it('does not re-send a spawn while its first send is still in flight', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-spawn-inflight-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha',
+        name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0,
+        maxAgents: 2,
+      });
+      const db = stack.runtime.handle.db;
+      const nodeConnections = stack.runtime.deps.nodeConnections!;
+      const originalSend = nodeConnections.sendToProvider.bind(nodeConnections);
+      let firstSend = true;
+      let drainedDuringSend: number | undefined;
+      vi.spyOn(nodeConnections, 'sendToProvider').mockImplementation(async (...args) => {
+        if (firstSend && args[3].type === 'action.invoke' && args[3].action.startsWith('spawn')) {
+          firstSend = false;
+          // A register drain lands while the first send has not returned. Any
+          // send it makes goes to the real socket.
+          drainedDuringSend = await drainNodeInvocations(
+            db, stack.runtime.realtime, ws.workspaceId, 'node_alpha', { includeDeferred: true },
+          );
+          return false;
+        }
+        return originalSend(...args);
+      });
+
+      const spawn = await stack.app.request('/v1/actions/spawn/invoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: { cli: 'claude', name: 'worker-inflight', task: 'hi', target_node: 'alpha' } }),
+      });
+      expect(spawn.status).toBe(201);
+      expect(drainedDuringSend).toBe(0);
+      expect(alpha.sock.ofType('action.invoke')).toHaveLength(0);
+      const invocationId = (await spawn.json() as { data: { invocation_id: string } }).data.invocation_id;
+      const [row] = await db.select().from(actionInvocations).where(eq(actionInvocations.id, invocationId));
+      // Only now, after the send settled unsent, is the row drainable.
+      expect(row.handlerUnreachableSince).toBeInstanceOf(Date);
+    });
+
+    it('lets exactly one of two concurrent drains re-send an unsent spawn', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-spawn-unsent-concurrent-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha',
+        name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0,
+        maxAgents: 2,
+      });
+      const db = stack.runtime.handle.db;
+      await db.insert(actionInvocations).values({
+        id: 'inv_spawn_unsent_concurrent',
+        workspaceId: ws.workspaceId,
+        actionName: 'spawn',
+        callerId: caller.agentId,
+        callerName: caller.name,
+        handlerNodeId: 'node_alpha',
+        handlerUnreachableSince: new Date(),
+        input: { cli: 'claude', name: 'worker-concurrent', task: 'hi' },
+        status: 'pending',
+      });
+
+      alpha.sock.received.length = 0;
+      const drained = await Promise.all([
+        drainNodeInvocations(db, stack.runtime.realtime, ws.workspaceId, 'node_alpha', { includeDeferred: true }),
+        drainNodeInvocations(db, stack.runtime.realtime, ws.workspaceId, 'node_alpha', { includeDeferred: true }),
+      ]);
+      expect(drained[0] + drained[1]).toBe(1);
+      expect(alpha.sock.ofType('action.invoke')).toHaveLength(1);
+      const [node] = await db
+        .select({ reservedAgents: nodes.reservedAgents })
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')));
+      expect(node.reservedAgents ?? 0).toBe(1);
+    });
+
+    it('does not drain a spawn that already recorded an attempt by its placed node', async () => {
+      // A rescheduler can leave an attempted spawn pending with no
+      // dispatched node. Its placed node must not bypass the attempted-node
+      // exclusion and receive it again.
+      const ws = await createWorkspace(stack.app, 'fleet-spawn-attempted-placed-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha',
+        name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0,
+      });
+      const db = stack.runtime.handle.db;
+      await db.insert(actionInvocations).values({
+        id: 'inv_spawn_attempted_alpha',
+        workspaceId: ws.workspaceId,
+        actionName: 'spawn',
+        callerId: caller.agentId,
+        callerName: caller.name,
+        handlerNodeId: 'node_alpha',
+        handlerUnreachableSince: new Date(),
+        attemptedNodeIds: ['node_alpha'],
+        dispatchAttempts: 1,
+        input: { cli: 'claude', name: 'worker-attempted', task: 'hi' },
+        status: 'pending',
+      });
+
+      alpha.sock.received.length = 0;
+      expect(await drainNodeInvocations(db, stack.runtime.realtime, ws.workspaceId, 'node_alpha', { includeDeferred: true })).toBe(0);
+      expect(alpha.sock.ofType('action.invoke')).toHaveLength(0);
     });
 
     it('reserves spawn capacity atomically across concurrent invocations', async () => {
