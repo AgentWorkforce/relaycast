@@ -463,6 +463,9 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
         inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked']),
         eq(actionInvocations.handlerAgentId, authorization.handlerAgentId),
         eq(actionInvocations.handlerNodeId, nodeId),
+        ...(authorization.expectedNodeLivenessRevision !== undefined
+          ? [eq(actionInvocations.nodeLivenessRevision, authorization.expectedNodeLivenessRevision)]
+          : []),
         sql`EXISTS (
           SELECT 1 FROM ${actions}
           INNER JOIN ${agents}

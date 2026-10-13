@@ -8,6 +8,21 @@ ALTER TABLE node_providers ADD COLUMN liveness_revision INTEGER NOT NULL DEFAULT
 ALTER TABLE agents ADD COLUMN node_liveness_revision INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE action_invocations ADD COLUMN node_liveness_revision INTEGER NOT NULL DEFAULT 0;
 
+-- The offline claim takes one MAX across each child collection to choose a
+-- boundary above every pre-claim row. Cover those lookups without adding work
+-- to the heartbeat hot path.
+CREATE INDEX idx_node_providers_liveness_revision
+  ON node_providers(workspace_id, node_id, liveness_revision);
+CREATE INDEX idx_agents_location_node_liveness_revision
+  ON agents(workspace_id, location_node_id, node_liveness_revision)
+  WHERE location_type = 'via_node'
+    AND location_node_id IS NOT NULL
+    AND status NOT IN ('offline', 'released');
+CREATE INDEX idx_action_invocations_dispatched_node_liveness_revision
+  ON action_invocations(workspace_id, dispatched_node_id, node_liveness_revision)
+  WHERE dispatched_node_id IS NOT NULL
+    AND status IN ('pending', 'dispatched', 'invoked');
+
 -- Normal node heartbeat/register writes advance the parent generation. An
 -- offline claim sets liveness_revision itself, so the WHEN clause preserves
 -- that explicitly chosen boundary instead of incrementing it again.
@@ -17,24 +32,7 @@ FOR EACH ROW
 WHEN NEW.liveness_revision = OLD.liveness_revision
 BEGIN
   UPDATE nodes
-  SET liveness_revision = MAX(
-    OLD.liveness_revision + 1,
-    COALESCE((
-      SELECT MAX(liveness_revision)
-      FROM node_providers
-      WHERE workspace_id = NEW.workspace_id AND node_id = NEW.id
-    ), 0),
-    COALESCE((
-      SELECT MAX(node_liveness_revision)
-      FROM agents
-      WHERE workspace_id = NEW.workspace_id AND location_node_id = NEW.id
-    ), 0),
-    COALESCE((
-      SELECT MAX(node_liveness_revision)
-      FROM action_invocations
-      WHERE workspace_id = NEW.workspace_id AND dispatched_node_id = NEW.id
-    ), 0)
-  )
+  SET liveness_revision = OLD.liveness_revision + 1
   WHERE id = NEW.id;
 END;
 

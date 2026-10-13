@@ -162,6 +162,9 @@ export const agents = sqliteTable(
       .where(sql`${table.status} <> 'released'`),
     index('idx_agents_location_node_fk').on(table.locationNodeId)
       .where(sql`${table.locationNodeId} IS NOT NULL`),
+    index('idx_agents_location_node_liveness_revision')
+      .on(table.workspaceId, table.locationNodeId, table.nodeLivenessRevision)
+      .where(sql`${table.locationType} = 'via_node' AND ${table.locationNodeId} IS NOT NULL AND ${table.status} NOT IN ('offline', 'released')`),
     index('idx_agents_origin_node_fk').on(table.originNodeId)
       .where(sql`${table.originNodeId} IS NOT NULL`),
     index('idx_agents_token').on(table.tokenHash),
@@ -339,6 +342,8 @@ export const nodeProviders = sqliteTable(
   (table) => [
     uniqueIndex('node_providers_node_name_unique').on(table.workspaceId, table.nodeId, table.name),
     index('idx_node_providers_node').on(table.workspaceId, table.nodeId),
+    index('idx_node_providers_liveness_revision')
+      .on(table.workspaceId, table.nodeId, table.livenessRevision),
     index('idx_node_providers_node_fk').on(table.nodeId),
   ],
 );
@@ -1172,6 +1177,9 @@ export const actionInvocations = sqliteTable(
     index('idx_action_invocations_action').on(table.actionId, table.createdAt),
     index('idx_action_invocations_caller').on(table.callerId, table.createdAt),
     index('idx_action_invocations_dispatched_node').on(table.dispatchedNodeId, table.createdAt),
+    index('idx_action_invocations_dispatched_node_liveness_revision')
+      .on(table.workspaceId, table.dispatchedNodeId, table.nodeLivenessRevision)
+      .where(sql`${table.dispatchedNodeId} IS NOT NULL AND ${table.status} IN ('pending', 'dispatched', 'invoked')`),
     index('idx_action_invocations_pending_workspace')
       .on(table.workspaceId, table.createdAt)
       .where(sql`${table.status} = 'pending'`),

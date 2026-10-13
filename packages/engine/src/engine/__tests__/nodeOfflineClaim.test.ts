@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { eq } from 'drizzle-orm';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
 import * as schema from '../../db/schema.js';
 import type { EngineDb } from '../../ports/database.js';
 import type { NodeConnectionRegistry } from '../../ports/realtime.js';
 import { claimNodeOffline, markNodeOffline, settleNodeOffline } from '../node.js';
+import { rescheduleNodeInvocation } from '../action.js';
 
 const handles: SqliteDbHandle[] = [];
 afterEach(() => { for (const handle of handles.splice(0)) handle.sqlite.close(); });
@@ -126,7 +128,6 @@ describe('settleNodeOffline', () => {
       id,workspace_id,action_name,status,dispatched_node_id,dispatched_at,dispatch_attempts)
       VALUES ('inv2','ws','echo','dispatched','node1',?,1)`).run(claimSec);
     await settleNodeOffline(f.db, registry, 'ws', 'node1', {
-      claimAt: claim!.claimAt,
       claimRevision: claim!.claimRevision,
       before: { status: 'online', name: 'stale-node' },
     });
@@ -158,7 +159,6 @@ describe('settleNodeOffline', () => {
     const staleSec = Math.floor(Date.now() / 1000) - 120;
     const claim = await claimNodeOffline(f.db, 'ws', 'node1', staleExpected(f));
     await settleNodeOffline(f.db, registry, 'ws', 'node1', {
-      claimAt: claim!.claimAt,
       claimRevision: claim!.claimRevision,
       before: { status: 'online', name: 'stale-node' },
     });
@@ -170,7 +170,6 @@ describe('settleNodeOffline', () => {
       UPDATE agents SET node_liveness_revision = 0 WHERE id = 'ag4';
     `);
     await settleNodeOffline(f.db, registry, 'ws', 'node1', {
-      claimAt: claim!.claimAt,
       claimRevision: claim!.claimRevision,
     });
     const row = f.sqlite.prepare('SELECT status FROM agents WHERE id = ?').get('ag4') as { status: string };
@@ -195,7 +194,6 @@ describe('settleNodeOffline', () => {
     f.sqlite.prepare('UPDATE nodes SET status = ?, last_heartbeat_at = ? WHERE id = ?')
       .run('online', sameSecond, 'node1');
     await settleNodeOffline(f.db, registry, 'ws', 'node1', {
-      claimAt: claim!.claimAt,
       claimRevision: claim!.claimRevision,
       before: { status: 'online', name: 'stale-node' },
     });
@@ -212,6 +210,37 @@ describe('settleNodeOffline', () => {
     ]);
   });
 
+  it('does not let a selected pre-claim rescheduler overwrite a post-claim dispatch', async () => {
+    const f = fixture();
+    const [stale] = await f.db
+      .select()
+      .from(schema.actionInvocations)
+      .where(eq(schema.actionInvocations.id, 'inv1'));
+    const claim = await claimNodeOffline(f.db, 'ws', 'node1', staleExpected(f));
+    // A new dispatch wins after the lost-node scan selected the old row. Its
+    // trigger-stamped revision is above the claim boundary even when the wall
+    // clock shares the same SQLite second.
+    f.sqlite.prepare(`
+      UPDATE action_invocations
+      SET status = 'dispatched', dispatched_node_id = 'node1', dispatched_at = ?
+      WHERE id = 'inv1'
+    `).run(Math.floor(claim!.claimAt.getTime() / 1000));
+
+    expect(await rescheduleNodeInvocation(f.db, registry, stale!, {
+      expectedNodeLivenessRevision: stale!.nodeLivenessRevision,
+    })).toBe(false);
+
+    const winner = f.sqlite.prepare(`
+      SELECT status, dispatched_node_id, node_liveness_revision
+      FROM action_invocations WHERE id = 'inv1'
+    `).get() as { status: string; dispatched_node_id: string | null; node_liveness_revision: number };
+    expect(winner).toEqual({
+      status: 'dispatched',
+      dispatched_node_id: 'node1',
+      node_liveness_revision: claim!.claimRevision + 1,
+    });
+  });
+
   it('suppresses the stale offline event when a reconnect wins first', async () => {
     const f = fixture();
     const claim = await claimNodeOffline(f.db, 'ws', 'node1', staleExpected(f));
@@ -219,7 +248,6 @@ describe('settleNodeOffline', () => {
       .run('online', Math.floor(claim!.claimAt.getTime() / 1000), 'node1');
     const published: unknown[] = [];
     await settleNodeOffline(f.db, registry, 'ws', 'node1', {
-      claimAt: claim!.claimAt,
       claimRevision: claim!.claimRevision,
       before: { status: 'online', name: 'stale-node' },
       reason: 'liveness_timeout',

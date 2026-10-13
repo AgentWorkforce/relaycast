@@ -1046,8 +1046,9 @@ export async function heartbeatNode(
  * carries the heartbeat the caller's stale-read observed: any heartbeat or
  * registration that landed since rewrote `last_heartbeat_at`, the CAS misses,
  * and the caller must abandon the transition rather than clobber the live
- * node. Returns the claimed row's name plus the claim instant — the bound the
- * settle tail scopes its writes to — or undefined when the claim was lost.
+ * node. Returns the claimed row's name, timestamp, and monotonic revision; the
+ * revision is the bound the settle tail scopes its writes to. Returns undefined
+ * when the claim was lost.
  */
 export async function claimNodeOffline(
   db: Db,
@@ -1067,11 +1068,14 @@ export async function claimNodeOffline(
       SELECT MAX(a.node_liveness_revision)
       FROM agents a
       WHERE a.workspace_id = ${workspaceId} AND a.location_node_id = ${nodeId}
+        AND a.location_type = 'via_node'
+        AND a.status NOT IN ('offline', 'released')
     ), 0),
     COALESCE((
       SELECT MAX(ai.node_liveness_revision)
       FROM action_invocations ai
       WHERE ai.workspace_id = ${workspaceId} AND ai.dispatched_node_id = ${nodeId}
+        AND ai.status IN ('pending', 'dispatched', 'invoked')
     ), 0)
   ) + 1`;
   const [claimed] = await db
@@ -1122,7 +1126,6 @@ export async function settleNodeOffline(
   workspaceId: string,
   nodeId: string,
   opts: {
-    claimAt?: Date;
     claimRevision?: number;
     before?: { status: string; name: string };
     deps?: InvocationCompletionDeps;
