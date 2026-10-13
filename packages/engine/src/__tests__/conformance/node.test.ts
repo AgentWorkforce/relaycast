@@ -2524,6 +2524,92 @@ describe('node adapter conformance', () => {
       expect(node.reservedAgents ?? 0).toBe(1);
     });
 
+    describe('unsent spawn drain failures', () => {
+      async function setupMarkedSpawn(wsName: string, id: string) {
+        const ws = await createWorkspace(stack.app, wsName);
+        const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+        const alpha = await enrollAndAttachNode(ws, {
+          id: 'node_alpha',
+          name: 'alpha',
+          capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+          load: 0,
+          maxAgents: 3,
+        });
+        const db = stack.runtime.handle.db;
+        await db.insert(actionInvocations).values({
+          id,
+          workspaceId: ws.workspaceId,
+          actionName: 'spawn',
+          callerId: caller.agentId,
+          callerName: caller.name,
+          handlerNodeId: 'node_alpha',
+          handlerUnreachableSince: new Date(),
+          input: { cli: 'claude', name: `worker-${id}`, task: 'hi' },
+          status: 'pending',
+        });
+        alpha.sock.received.length = 0;
+        const readRow = () => db.select().from(actionInvocations).where(eq(actionInvocations.id, id)).then((rows) => rows[0]);
+        const readReserved = () => db
+          .select({ reservedAgents: nodes.reservedAgents })
+          .from(nodes)
+          .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')))
+          .then((rows) => rows[0].reservedAgents ?? 0);
+        return { ws, alpha, db, readRow, readReserved };
+      }
+
+      /** The real database, with `update(table)` failing when `fail(table, n)` says so. */
+      function failingUpdates(db: EngineDb, fail: (table: unknown, call: number) => boolean): EngineDb {
+        let calls = 0;
+        return new Proxy(db, {
+          get(target, key) {
+            const value = Reflect.get(target, key, target);
+            if (key !== 'update' || typeof value !== 'function') return typeof value === 'function' ? value.bind(target) : value;
+            return (table: unknown) => {
+              calls += 1;
+              if (fail(table, calls)) throw new Error('injected update failure');
+              return value.call(target, table);
+            };
+          },
+        }) as EngineDb;
+      }
+
+      it('re-marks a claimed spawn when the drain throws before any send', async () => {
+        const { ws, alpha, db, readRow } = await setupMarkedSpawn('fleet-spawn-presend-throw-ws', 'inv_presend_throw');
+        // reserveNodeCapacity is the drain's first nodes update.
+        const broken = failingUpdates(db as unknown as EngineDb, (table) => table === nodes);
+        expect(await drainNodeInvocations(broken as never, stack.runtime.realtime, ws.workspaceId, 'node_alpha', { includeDeferred: true })).toBe(0);
+        expect(alpha.sock.ofType('action.invoke')).toHaveLength(0);
+        expect((await readRow()).handlerUnreachableSince).toBeInstanceOf(Date);
+
+        expect(await drainNodeInvocations(db, stack.runtime.realtime, ws.workspaceId, 'node_alpha', { includeDeferred: true })).toBe(1);
+        expect(alpha.sock.ofType('action.invoke')).toHaveLength(1);
+      });
+
+      it('leaves a claimed spawn unmarked when the send itself throws', async () => {
+        const { ws, alpha, readRow, db } = await setupMarkedSpawn('fleet-spawn-send-throw-ws', 'inv_send_throw');
+        const send = vi.spyOn(stack.runtime.realtime, 'sendToProvider').mockRejectedValueOnce(new Error('socket owner unreachable'));
+        expect(await drainNodeInvocations(db, stack.runtime.realtime, ws.workspaceId, 'node_alpha', { includeDeferred: true })).toBe(0);
+        expect(send).toHaveBeenCalledTimes(1);
+        expect(alpha.sock.ofType('action.invoke')).toHaveLength(0);
+        // The outcome is unknown, so no later drain may send it again.
+        expect((await readRow()).handlerUnreachableSince).toBeNull();
+      });
+
+      it('releases the drain reservation once when restoring the mark fails', async () => {
+        const { ws, db, readReserved } = await setupMarkedSpawn('fleet-spawn-remark-throw-ws', 'inv_remark_throw');
+        // Another spawn already holds a slot on this node.
+        await db.update(nodes).set({ reservedAgents: 1 }).where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')));
+        const send = vi.spyOn(stack.runtime.realtime, 'sendToProvider').mockResolvedValueOnce(false);
+        // actionInvocations updates in order: claim, handler snapshot, re-mark.
+        let invocationUpdates = 0;
+        const broken = failingUpdates(db as unknown as EngineDb, (table) => table === actionInvocations && ++invocationUpdates === 3);
+        expect(await drainNodeInvocations(broken as never, stack.runtime.realtime, ws.workspaceId, 'node_alpha', { includeDeferred: true })).toBe(0);
+        expect(send).toHaveBeenCalledTimes(1);
+        expect(invocationUpdates).toBe(3);
+        expect(await readReserved()).toBe(1);
+      });
+    });
+
     it('does not drain a spawn that already recorded an attempt by its placed node', async () => {
       // A rescheduler can leave an attempted spawn pending with no
       // dispatched node. Its placed node must not bypass the attempted-node

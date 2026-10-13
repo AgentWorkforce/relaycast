@@ -3300,6 +3300,23 @@ async function claimUnsentNativeSpawn(db: Db, workspaceId: string, invocationId:
   return !!claimed;
 }
 
+/** `registry`, calling `onSend` before any provider send starts. */
+function observeSends(registry: NodeConnectionRegistry, onSend: () => void): NodeConnectionRegistry {
+  return new Proxy(registry, {
+    get(target, key) {
+      const value: unknown = Reflect.get(target, key, target);
+      if (typeof value !== 'function') return value;
+      if (key === 'sendToProvider' || key === 'sendAuthorizedActionToProvider') {
+        return (...args: unknown[]) => {
+          onSend();
+          return Reflect.apply(value, target, args);
+        };
+      }
+      return value.bind(target);
+    },
+  });
+}
+
 export async function drainNodeInvocations(
   db: Db,
   registry: NodeConnectionRegistry,
@@ -3402,10 +3419,13 @@ export async function drainNodeInvocations(
     // Claim before reserving, so concurrent drains cannot both reserve and send.
     if (unsentSpawn && !await claimUnsentNativeSpawn(db, workspaceId, row.id)) continue;
     // A definitely-unsent outcome below restores the mark, after returning
-    // any reservation this drain took.
+    // any reservation this drain took. Whether a send started separates a
+    // pre-send throw (unsent) from a throw with an unknown outcome.
     const remarkUnsent = () => unsentSpawn
       ? markUnsentNativeSpawn(db, workspaceId, row.id, nodeId)
       : Promise.resolve();
+    let sendStarted = false;
+    const sendRegistry = unsentSpawn ? observeSends(registry, () => { sendStarted = true; }) : registry;
 
     let reservedForDrain = false;
     try {
@@ -3440,7 +3460,7 @@ export async function drainNodeInvocations(
 
       const dispatched = await dispatchNodeInvocation({
         db,
-        registry,
+        registry: sendRegistry,
         workspaceId,
         invocationId: row.id,
         nodeId,
@@ -3459,6 +3479,7 @@ export async function drainNodeInvocations(
         drained++;
       } else if (reservedForDrain) {
         await releaseNodeCapacity(db, workspaceId, nodeId);
+        reservedForDrain = false;
       }
       if (!dispatched.sent) await remarkUnsent();
     } catch {
@@ -3466,8 +3487,10 @@ export async function drainNodeInvocations(
         await releaseNodeCapacity(db, workspaceId, nodeId).catch(() => {});
       }
       // Leave the invocation pending; a later drain or timeout sweep can retry.
-      // A claimed spawn stays unmarked: a throw after the send is an unknown
-      // outcome, not an unsent one, so only the never-dispatched sweep ends it.
+      // A throw before any send leaves the spawn unsent, so it is re-marked. A
+      // throw once a send started is an unknown outcome, so the spawn stays
+      // unmarked and only the never-dispatched sweep ends it.
+      if (!sendStarted) await remarkUnsent().catch(() => {});
     }
   }
   return drained;
