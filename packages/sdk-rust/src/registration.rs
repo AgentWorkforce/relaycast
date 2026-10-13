@@ -242,7 +242,7 @@ impl AgentRegistrationClient {
         expected_token_hash: &str,
     ) -> bool {
         let trimmed = agent_name.trim();
-        let expected = expected_token_hash.trim();
+        let expected = expected_token_hash.trim().to_ascii_lowercase();
         if trimmed.is_empty() || expected.is_empty() {
             return false;
         }
@@ -632,7 +632,8 @@ mod tests {
         );
         assert!(client.registration_block_remaining("worker-a").is_some());
 
-        let owned_hash = format!("{:x}", Sha256::digest(b"owned-token"));
+        // Hex case does not matter: an uppercase hash of the owned token matches.
+        let owned_hash = format!("{:X}", Sha256::digest(b"owned-token"));
         assert!(client.invalidate_cached_registration_if_token_hash("worker-a", &owned_hash,));
         assert_eq!(client.cached_agent_token("worker-a"), None);
         assert_eq!(client.registration_block_remaining("worker-a"), None);
