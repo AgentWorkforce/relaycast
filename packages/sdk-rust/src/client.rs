@@ -373,9 +373,15 @@ impl HttpClient {
                 });
             }
 
-            let data = json.data.ok_or_else(|| {
-                RelayError::InvalidResponse("Response missing data field".to_string())
-            })?;
+            // Acknowledgement routes answer `{ "ok": true, "data": null }`, which
+            // serde reads as no data. Accept it wherever T itself admits null
+            // (`Value`, `()`, `Option<_>`), as the 204 path above does.
+            let data = match json.data {
+                Some(data) => data,
+                None => serde_json::from_value(serde_json::Value::Null).map_err(|_| {
+                    RelayError::InvalidResponse("Response missing data field".to_string())
+                })?,
+            };
             return Ok((data, json.cursor));
         }
 

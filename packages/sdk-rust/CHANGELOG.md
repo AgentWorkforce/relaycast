@@ -12,6 +12,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
+- Acknowledgement responses `{ "ok": true, "data": null }` succeed for calls whose result admits null (`Value`, `()`, `Option<_>`), so `AgentClient::heartbeat()` no longer reports "Response missing data field" after the server refreshed presence. Typed payloads still reject null data.
 - `all_dm_conversations()` follows bounded server cursors and still returns the complete conversation vector, with a malformed-cursor progress guard.
 - Workspace reads and updates accept current engine responses that omit the private API key hash.
 
