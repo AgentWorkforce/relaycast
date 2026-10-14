@@ -21,6 +21,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Changed
 
 - Spawn attempts now fail with structured capacity or availability errors when the selected node cannot accept them; offline attempts are no longer queued or moved to another node.
+- Spawns already queued before this release no longer start when their node reconnects, possibly hours later: they fail with the same structured error and return any capacity they held, at the node's next reconnect or, while it stays offline, on the next timeout sweep.
 
 ## [10.4.0] - 2026-10-13
 

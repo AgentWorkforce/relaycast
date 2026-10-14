@@ -72,7 +72,6 @@ export const PENDING_INVOCATION_MAX_AGE_MS = 72 * 60 * 60 * 1000;
  */
 export const NEVER_DISPATCHED_SWEEP_GRACE_MS = 5_000;
 const ACTION_RETRY_BACKOFF_MS = 5_000;
-const NODE_DRAIN_REQUEUE_RETRY_MS = 5_000;
 
 export interface SweepTimedOutInvocationsOptions {
   timeoutMs?: number;
@@ -3340,6 +3339,107 @@ function observeSends(registry: NodeConnectionRegistry, onSend: () => void): Nod
   });
 }
 
+/**
+ * Fail a native spawn that the retired queue-and-drain behaviour left
+ * `pending` on a node, with the same structured error a lost-node spawn gets:
+ * `spawn_target_offline` while its node is not live, otherwise
+ * `spawn_target_unavailable`. The update re-checks the row's pending shape, and
+ * only the call that wins it returns the slot the row still holds, so drains
+ * and sweeps racing on one row release its reservation exactly once.
+ *
+ * @returns the failed row when this call failed it.
+ */
+async function failQueuedNativeSpawn(
+  db: Db,
+  workspaceId: string,
+  row: Pick<InvocationRow, 'id' | 'actionName' | 'input' | 'dispatchedNodeId' | 'spawnReservedAt'> & {
+    placedNodeId: string | null;
+  },
+): Promise<InvocationRow | null> {
+  const input = recordInput(row.input);
+  const capability = dispatchActionNameForInvocation(row.actionName, input);
+  const nodeId = row.dispatchedNodeId ?? row.placedNodeId;
+  const [node] = nodeId
+    ? await db.select().from(nodes).where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)))
+    : [];
+  const code = node && !isNodeLive(node) ? 'spawn_target_offline' : 'spawn_target_unavailable';
+  const failure = spawnPlacementError(code, node ?? nodeId ?? 'unassigned', capability);
+  const [failed] = await db
+    .update(actionInvocations)
+    .set({ status: 'failed', error: failure.code, output: failure.errorDetails, completedAt: new Date(), spawnReservedAt: null })
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.id, row.id),
+      eq(actionInvocations.status, 'pending'),
+      row.dispatchedNodeId
+        ? eq(actionInvocations.dispatchedNodeId, row.dispatchedNodeId)
+        : isNull(actionInvocations.dispatchedNodeId),
+      row.spawnReservedAt
+        ? isNotNull(actionInvocations.spawnReservedAt)
+        : isNull(actionInvocations.spawnReservedAt),
+    ))
+    .returning();
+  if (failed && row.dispatchedNodeId && row.spawnReservedAt) {
+    await releaseNodeCapacity(db, workspaceId, row.dispatchedNodeId);
+  }
+  return failed ?? null;
+}
+
+/**
+ * Fail queued native spawns whose node is not live, so a spawn queued before
+ * spawns stopped being queued ends even if its node never reconnects. Rows
+ * with a retry delay are left to the timeout sweep's reschedule pass, which
+ * fails a spawn once the delay passes, and a live node's rows to its drain.
+ * A spawn still being dispatched is never selected: it has no dispatched node
+ * and no unsent mark until its attempt is recorded.
+ */
+async function failQueuedNativeSpawnsOnLostNodes(
+  db: Db,
+  completionDeps?: InvocationCompletionDeps,
+): Promise<void> {
+  const rows = await db
+    .select({
+      id: actionInvocations.id,
+      workspaceId: actionInvocations.workspaceId,
+      actionName: actionInvocations.actionName,
+      input: actionInvocations.input,
+      dispatchedNodeId: actionInvocations.dispatchedNodeId,
+      spawnReservedAt: actionInvocations.spawnReservedAt,
+      placedNodeId: actionInvocations.handlerNodeId,
+    })
+    .from(actionInvocations)
+    .where(and(
+      eq(actionInvocations.status, 'pending'),
+      isNull(actionInvocations.actionId),
+      isNull(actionInvocations.retryAfterAt),
+      or(eq(actionInvocations.actionName, 'spawn'), like(actionInvocations.actionName, 'spawn:%')),
+      or(
+        isNotNull(actionInvocations.dispatchedNodeId),
+        and(isNotNull(actionInvocations.handlerNodeId), isNotNull(actionInvocations.handlerUnreachableSince)),
+      ),
+    ));
+
+  for (const row of rows) {
+    try {
+      const nodeId = row.dispatchedNodeId ?? row.placedNodeId!;
+      const [node] = await db
+        .select({ status: nodes.status, lastHeartbeatAt: nodes.lastHeartbeatAt })
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, row.workspaceId), eq(nodes.id, nodeId)));
+      if (node && isNodeLive(node)) continue;
+      // A shadow registered on the node takes the spawn when the node returns.
+      const capability = dispatchActionNameForInvocation(row.actionName, recordInput(row.input));
+      if ((await fetchNodeAction(db, row.workspaceId, nodeId, capability))?.handlerProvider) continue;
+      const failed = await failQueuedNativeSpawn(db, row.workspaceId, row);
+      if (failed && completionDeps) {
+        await emitFailedInvocationEffects(completionDeps, row.workspaceId, [failed]);
+      }
+    } catch {
+      // Leave the invocation for the next sweep.
+    }
+  }
+}
+
 export async function drainNodeInvocations(
   db: Db,
   registry: NodeConnectionRegistry,
@@ -3415,72 +3515,50 @@ export async function drainNodeInvocations(
     if (targetNodeId !== nodeId) continue;
 
     const input = recordInput(row.input);
-    // Resolve the target provider so the offline queue drains per provider. A
-    // spawn with a registered shadow re-dispatches to the shadow (no capacity
-    // reservation); otherwise native capacity handles it.
+    // A spawn with a registered `spawn:<harness>` shadow re-dispatches to the
+    // shadow's provider like any registered action.
     let shadowProvider: string | null = null;
     if (isSpawnInvocation(row.actionName)) {
       const shadow = await fetchNodeAction(db, workspaceId, nodeId, dispatchActionNameForInvocation(row.actionName, input));
       shadowProvider = shadow?.handlerProvider ?? null;
+      // Spawns are never queued. A native spawn still pending here was queued
+      // before that policy (for an offline node, behind a retry delay, or
+      // after a failed first send), so it fails now with a structured error
+      // instead of starting on this node, whether or not the node can take
+      // work. A spawn still being dispatched is never selected: it has no
+      // dispatched node and no unsent mark until its attempt is recorded.
+      if (!shadowProvider) {
+        await failQueuedNativeSpawn(db, workspaceId, row).catch(() => null);
+        continue;
+      }
     }
+    // Resolve the target provider so the offline queue drains per provider.
     const providerName = targetAgent
       ? row.handlerAgentProvider ?? DEFAULT_PROVIDER_NAME
       : row.handlerNodeId
         ? row.handlerProvider ?? DEFAULT_PROVIDER_NAME
         : isBuiltinReleaseInvocation(row)
           ? row.dispatchedProvider ?? DEFAULT_PROVIDER_NAME
-          : shadowProvider
-            ?? (isSpawnInvocation(row.actionName)
-              ? (await capacityProviderName(db, workspaceId, nodeId, dispatchActionNameForInvocation(row.actionName, input))) ?? DEFAULT_PROVIDER_NAME
-              : DEFAULT_PROVIDER_NAME);
-    const nativeSpawn = isSpawnInvocation(row.actionName) && !shadowProvider;
+          : shadowProvider ?? DEFAULT_PROVIDER_NAME;
 
     // Skip draining to a provider that is disconnected or whose heartbeat says
     // handlers are not live. A missing provider row is a legacy single-socket
     // node, for which connection state remains the available liveness signal.
     if (!(await isHandlerConnectionLive(db, registry, workspaceId, nodeId, providerName))) continue;
-    // Claim before reserving, so concurrent drains cannot both reserve and send.
+    // A spawn marked unsent whose node now registers a `spawn:<harness>`
+    // shadow goes to that shadow. Claim it first so concurrent drains cannot
+    // both send it.
     if (unsentSpawn && !await claimUnsentNativeSpawn(db, workspaceId, row.id)) continue;
-    // A definitely-unsent outcome below restores the mark, after returning
-    // any reservation this drain took. Whether a send started separates a
-    // pre-send throw (unsent) from a throw with an unknown outcome.
+    // A definitely-unsent outcome below restores the mark. Whether a send
+    // started separates a pre-send throw (unsent) from a throw with an unknown
+    // outcome.
     const remarkUnsent = () => unsentSpawn
       ? markUnsentNativeSpawn(db, workspaceId, row.id, nodeId)
       : Promise.resolve();
     let sendStarted = false;
     const sendRegistry = unsentSpawn ? observeSends(registry, () => { sendStarted = true; }) : registry;
 
-    let reservedForDrain = false;
     try {
-      let reservationHeld = nativeSpawn && !!row.spawnReservedAt;
-      if (nativeSpawn && !reservationHeld) {
-        const reserved = await reserveNodeCapacity(db, workspaceId, nodeId);
-        if (!reserved) {
-          await remarkUnsent();
-          const [node] = await db
-            .select({
-              status: nodes.status,
-              handlersLive: nodes.handlersLive,
-              lastHeartbeatAt: nodes.lastHeartbeatAt,
-            })
-            .from(nodes)
-            .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
-          if (node && isNodeLive(node) && node.handlersLive) {
-            await db
-              .update(actionInvocations)
-              .set({ retryAfterAt: new Date(Date.now() + NODE_DRAIN_REQUEUE_RETRY_MS) })
-              .where(and(
-                eq(actionInvocations.workspaceId, workspaceId),
-                eq(actionInvocations.id, row.id),
-                eq(actionInvocations.status, 'pending'),
-              ));
-          }
-          continue;
-        }
-        reservationHeld = true;
-        reservedForDrain = true;
-      }
-
       const dispatched = await dispatchNodeInvocation({
         db,
         registry: sendRegistry,
@@ -3495,20 +3573,12 @@ export async function drainNodeInvocations(
         expectedActionId: row.actionId,
         invocationOrigin: row.invocationOrigin,
         retryAfterAt: new Date(Date.now() + ACTION_DISPATCH_TIMEOUT_MS),
-        reservationHeld,
+        reservationHeld: false,
         skipIncrementAttempts: row.dispatchedNodeId === nodeId,
       });
-      if (dispatched.accepted) {
-        drained++;
-      } else if (reservedForDrain) {
-        await releaseNodeCapacity(db, workspaceId, nodeId);
-        reservedForDrain = false;
-      }
+      if (dispatched.accepted) drained++;
       if (!dispatched.sent) await remarkUnsent();
     } catch {
-      if (reservedForDrain) {
-        await releaseNodeCapacity(db, workspaceId, nodeId).catch(() => {});
-      }
       // Leave the invocation pending; a later drain or timeout sweep can retry.
       // A throw before any send leaves the spawn unsent, so it is re-marked. A
       // throw once a send started is an unknown outcome, so the spawn stays
@@ -4172,6 +4242,7 @@ export async function sweepTimedOutInvocations(
     sweepOpts.neverDispatchedSweepGraceMs ?? NEVER_DISPATCHED_SWEEP_GRACE_MS,
     sweepOpts.completionDeps,
   );
+  await failQueuedNativeSpawnsOnLostNodes(db, sweepOpts.completionDeps);
   const now = new Date();
   const cutoff = new Date(Date.now() - timeoutMs);
   const rows = await db

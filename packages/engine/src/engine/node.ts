@@ -3318,8 +3318,8 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
         // node.status.online event. Isolated so its own failure can't either.
         await emitNodeOnlineTransition(args.completionDeps, args.workspaceId, priorStatus, registered.node)
           .catch((err) => console.error('[node.status] online event emission failed', err));
-        // Node is now marked online: flush any queued action.invoke frames so
-        // spawns queued while it was offline can reserve capacity and dispatch.
+        // Node is now marked online: flush any queued action.invoke frames.
+        // Spawns queued while it was offline fail here instead of starting.
         // Reconnect makes deferred work dispatchable too; bypass a retry delay
         // that may have been armed only because the prior socket was unavailable.
         await args.registry.drainNode(args.workspaceId, args.nodeId, { includeDeferred: true });
