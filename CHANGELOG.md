@@ -241,6 +241,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 - Rust SDK: `AgentClient::heartbeat()` and other acknowledgement calls answered `{ "ok": true, "data": null }` no longer fail with "Response missing data field" after the server applied them.
 - Rust SDK success responses must include `data`; an explicit null acknowledgement remains valid, while a missing payload is rejected.
 
+### Added
+
+- `GET /v1/deliveries/by-message/{messageId}` proves one still-pending delivery to the calling agent token and returns its server-derived sender id. Unknown, foreign, acknowledged, and expired messages share a 404.
+
 ## [10.4.0] - 2026-10-13
 
 ### Added
