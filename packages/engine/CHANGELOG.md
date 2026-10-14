@@ -19,6 +19,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Changed
 
 - Spawn placement fails at once with a structured capacity or availability error instead of queueing, retrying, or rerouting the attempt, and returns the reservation that attempt held.
+- `drainNodeInvocations` and `sweepTimedOutInvocations` fail native spawns left pending by the old queue instead of sending them, and release a held reservation once.
 - `node.heartbeat` re-materializes a provider's actions when its action-kind capabilities change or its persisted actions no longer match them; capacity changes (the broker's live-agent roster) do not prune and rewrite action rows.
 - `node.heartbeat` updates the node aggregate, name and version in one statement (`refreshNodeAggregate`) and reads the drain state in one statement.
 - `settleNodeOffline` scans only the agents routed through the settling node.
