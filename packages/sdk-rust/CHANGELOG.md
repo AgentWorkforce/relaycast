@@ -12,6 +12,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
+- Successful heartbeat and other no-payload HTTP responses accept `data: null` instead of reporting "Response missing data field"; missing payload fields and invalid typed payloads still fail.
 - `all_dm_conversations()` follows bounded server cursors and still returns the complete conversation vector, with a malformed-cursor progress guard.
 - Workspace reads and updates accept current engine responses that omit the private API key hash.
 

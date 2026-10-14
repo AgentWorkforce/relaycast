@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- The Rust SDK accepts successful heartbeat responses with null data, preventing false "Response missing data field" errors.
 
 ## [10.4.0] - 2026-10-13
 
