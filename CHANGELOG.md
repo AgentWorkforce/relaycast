@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Major]
+
+### Changed
+
+- Spawn attempts now fail with structured capacity or availability errors when the selected node cannot accept them; offline attempts are no longer queued or moved to another node.
 
 ## [10.4.0] - 2026-10-13
 

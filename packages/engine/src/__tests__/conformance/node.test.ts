@@ -511,6 +511,49 @@ describe('node adapter conformance', () => {
       return { sock, handle };
     }
 
+    it('gates structured spawn errors on a server-authored register reply contract', async () => {
+      const ws = await createWorkspace(stack.app, 'spawn-error-contract');
+      const enabled = await enrollAndAttachNode(ws, {
+        id: 'spawn_error_contract_enabled',
+        name: 'spawn-error-enabled',
+        capabilities: [capability('relay:spawn-error-details-v1', 'capacity')],
+      });
+      expect(enabled.sock.ofType('reply')[0]).toMatchObject({
+        data: {
+          accepted_capabilities: [expect.objectContaining({
+            name: 'relay:spawn-error-details-v1',
+            kind: 'capacity',
+            accepted: true,
+          })],
+          spawn_error_details_contract: 'relay:spawn-error-details-v1',
+        },
+      });
+
+      const legacy = await enrollAndAttachNode(ws, {
+        id: 'spawn_error_contract_legacy',
+        name: 'spawn-error-legacy',
+        capabilities: [capability('spawn:claude', 'capacity')],
+      });
+      expect(legacy.sock.ofType('reply')[0]).toMatchObject({ data: expect.any(Object) });
+      expect((legacy.sock.ofType('reply')[0] as { data: Record<string, unknown> }).data)
+        .not.toHaveProperty('spawn_error_details_contract');
+    });
+
+    it('does not move an explicit spawn to another node when its harness is missing', async () => {
+      const ws = await createWorkspace(stack.app, 'spawn-exact-harness');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      await enrollAndAttachNode(ws, { id: 'node_alpha', name: 'alpha', capabilities: [capability('spawn:codex', 'capacity')], load: 0 });
+      const beta = await enrollAndAttachNode(ws, { id: 'node_beta', name: 'beta', capabilities: [capability('spawn:claude', 'capacity')], load: 0 });
+      const response = await stack.app.request('/v1/actions/spawn/invoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: { cli: 'claude', name: 'exact-worker', target_node: 'alpha' } }),
+      });
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ error: { code: 'spawn_harness_unavailable', node: 'alpha', harness: 'claude' } });
+      expect(beta.sock.ofType('action.invoke')).toHaveLength(0);
+    });
+
     it('an explicit spawn target is not shadowed by a legacy global node alias', async () => {
       const ws = await createWorkspace(stack.app, 'explicit-spawn-target');
       const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
@@ -561,9 +604,9 @@ describe('node adapter conformance', () => {
         body: JSON.stringify({ input: { cli: 'claude', name: 'offline-worker', target_node: 'beta', verify_ready: true } }),
       });
       expect(unavailable.status).toBe(503);
-      expect(await unavailable.json()).toMatchObject({ error: { code: 'spawn_target_unavailable' } });
+      expect(await unavailable.json()).toMatchObject({ error: { code: 'spawn_target_offline', node: 'beta' } });
       const claims = await stack.runtime.handle.db.select().from(actionInvocations).where(eq(actionInvocations.workspaceId, ws.workspaceId));
-      expect(claims.find(row => (row.input as {name?: string})?.name === 'offline-worker')?.status).toBe('failed');
+      expect(claims.find(row => (row.input as {name?: string})?.name === 'offline-worker')).toBeUndefined();
 
     }, 20_000);
 
@@ -999,7 +1042,7 @@ describe('node adapter conformance', () => {
         type: 'node.register',
         name: 'legacy-adapter-broker',
         node_id: 'legacy_adapter_broker',
-        capabilities: [capability('relay:delivery-cursor-v1', 'capacity')],
+        capabilities: [capability('relay:delivery-cursor-v1', 'capacity'), capability('relay:spawn-error-details-v1', 'capacity')],
         max_agents: 4,
         tags: ['control'],
         version: 'control-v1',
@@ -1007,13 +1050,15 @@ describe('node adapter conformance', () => {
       });
       expect(sock.ofType('reply').at(-1)).toMatchObject({
         data: {
-          accepted_capabilities: [expect.objectContaining({
+          accepted_capabilities: expect.arrayContaining([expect.objectContaining({
             name: 'relay:delivery-cursor-v1',
             accepted: false,
             reason: 'delivery_readiness_unsupported',
-          })],
+          })]),
         },
       });
+      expect((sock.ofType('reply').at(-1) as { data: Record<string, unknown> }).data)
+        .not.toHaveProperty('spawn_error_details_contract');
 
       await send({
         v: 1,
@@ -2232,177 +2277,104 @@ describe('node adapter conformance', () => {
       expect(invocation.attemptedNodeIds).toEqual(['node_alpha']);
     });
 
-    it('drains a queued spawn once the node registers without delaying the register-time drain', async () => {
-      const ws = await createWorkspace(stack.app, 'fleet-spawn-drain-ws');
+    it('rejects a targeted offline spawn without reserving or queueing it', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-spawn-offline-ws');
       const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
-
       const alpha = await enrollAndAttachNode(ws, {
-        id: 'node_alpha',
-        name: 'alpha',
+        id: 'node_alpha', name: 'alpha',
         capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
         load: 0,
       });
-
-      // Take alpha offline so a targeted spawn can only queue (not dispatch).
       await alpha.handle.handleClose();
-
       const spawn = await stack.app.request('/v1/actions/spawn/invoke', {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
-        body: JSON.stringify({ input: { cli: 'claude', name: 'worker-drain', task: 'hi', target_node: 'alpha' } }),
+        body: JSON.stringify({ input: { cli: 'claude', name: 'worker-offline', task: 'hi', target_node: 'alpha' } }),
+      });
+      expect(spawn.status).toBe(503);
+      expect(await spawn.json()).toMatchObject({ error: { code: 'spawn_target_offline', node: 'alpha',
+        harness: 'claude', retryable: true } });
+      const db = stack.runtime.handle.db;
+      expect(await db.select().from(actionInvocations).where(eq(actionInvocations.workspaceId, ws.workspaceId))).toEqual([]);
+      const [node] = await db.select().from(nodes).where(eq(nodes.id, 'node_alpha'));
+      expect(node.reservedAgents ?? 0).toBe(0);
+    });
+
+    it('ends a dispatched spawn when its node goes offline and releases the held slot', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-spawn-lost-node-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha', name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0, maxAgents: 2,
+      });
+      const spawn = await stack.app.request('/v1/actions/spawn/invoke', {
+        method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: { cli: 'claude', name: 'worker-lost', target_node: 'alpha' } }),
       });
       expect(spawn.status).toBe(201);
       const invocationId = (await spawn.json() as { data: { invocation_id: string } }).data.invocation_id;
-
       const db = stack.runtime.handle.db;
-      const queued = await db
-        .select()
-        .from(actionInvocations)
-        .where(eq(actionInvocations.id, invocationId))
-        .then((rows) => rows[0]);
-      expect(queued).toMatchObject({ status: 'pending', dispatchedNodeId: 'node_alpha' });
-      expect(queued.spawnReservedAt).toBeNull();
-
-      // Reconnect the socket but DO NOT register yet: the node is still offline,
-      // so the drain can't reserve spawn capacity. It must keep the frame queued
-      // without arming retry_after_at so node.register can drain immediately.
-      const alphaSock = new FakeSocket();
-      const alphaHandle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, 'node_alpha', alphaSock);
-      await stack.settle();
-      expect(alphaSock.ofType('action.invoke')).toHaveLength(0);
-      const stillQueued = await db
-        .select()
-        .from(actionInvocations)
-        .where(eq(actionInvocations.id, invocationId))
-        .then((rows) => rows[0]);
-      expect(stillQueued.status).toBe('pending');
-      expect(stillQueued.spawnReservedAt).toBeNull();
-      expect(stillQueued.retryAfterAt).toBeNull();
-
-      // Register → node is marked online and the post-register drain reserves
-      // capacity and dispatches the queued spawn with the same invocation id.
-      await alphaHandle.handleMessage(JSON.stringify({
-        v: 1,
-        id: 'reg-reconnect',
-        type: 'node.register',
-        name: 'alpha',
-        node_id: 'node_alpha',
-        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
-        max_agents: 4,
-        tags: ['test'],
-        version: 'test-node',
-        resume_cursor: null,
-      }));
-
-      expect(alphaSock.ofType('action.invoke').at(-1)).toMatchObject({ invocation_id: invocationId, action: 'spawn:claude' });
-      const dispatched = await db
-        .select()
-        .from(actionInvocations)
-        .where(eq(actionInvocations.id, invocationId))
-        .then((rows) => rows[0]);
-      expect(dispatched.status).toBe('dispatched');
-      expect(dispatched.dispatchedAt).toBeInstanceOf(Date);
-      expect(dispatched.spawnReservedAt).toBeInstanceOf(Date);
-
-      const node = await db
-        .select()
-        .from(nodes)
-        .where(eq(nodes.id, 'node_alpha'))
-        .then((rows) => rows[0]);
-      expect(node.reservedAgents ?? 0).toBeGreaterThanOrEqual(1);
+      const readReserved = async () => (await db.select({ reservedAgents: nodes.reservedAgents }).from(nodes)
+        .where(eq(nodes.id, 'node_alpha')))[0].reservedAgents ?? 0;
+      expect(await readReserved()).toBe(1);
+      await alpha.handle.handleClose();
+      const status = await stack.app.request(`/v1/actions/spawn/invocations/${invocationId}`, {
+        headers: { authorization: `Bearer ${caller.token}` },
+      });
+      expect(await status.json()).toMatchObject({ data: { status: 'failed', error: 'spawn_target_offline',
+        error_details: { code: 'spawn_target_offline', node: 'alpha', harness: 'claude', retryable: true } } });
+      expect(await readReserved()).toBe(0);
     });
 
-    it('re-dispatches a targeted spawn whose first send failed on a live node when the node next registers', async () => {
-      // Cloud keeps no per-node frame queue: a send that lands while the
-      // provider socket is between reconnects returns false. The node is still
-      // live in the DB, so placement reserved capacity and the verify gate
-      // passed, but no attempt was recorded and no dispatchedNodeId was set.
-      const ws = await createWorkspace(stack.app, 'fleet-spawn-unsent-redrain-ws');
+    it('preserves a node-reported structured capacity error and releases its reservation', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-spawn-result-error-ws');
       const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
       const alpha = await enrollAndAttachNode(ws, {
-        id: 'node_alpha',
-        name: 'alpha',
+        id: 'node_alpha', name: 'alpha',
         capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
-        load: 0,
-        maxAgents: 2,
+        load: 0, maxAgents: 2,
       });
+      const spawn = await stack.app.request('/v1/actions/spawn/invoke', {
+        method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: { cli: 'claude', name: 'worker-full', target_node: 'alpha' } }),
+      });
+      const invocationId = (await spawn.json() as { data: { invocation_id: string } }).data.invocation_id;
+      const details = { code: 'spawn_capacity_exceeded', message: 'Node "alpha" is at capacity', node: 'alpha',
+        harness: 'claude', active: 2, reserved: 0, max: 2, observed_at: '2026-10-14T00:00:00.000Z', retryable: true };
+      await alpha.handle.handleMessage(JSON.stringify({ v: 1, type: 'action.result', invocation_id: invocationId,
+        error: details.code, error_details: details }));
+      const status = await stack.app.request(`/v1/actions/spawn/invocations/${invocationId}`, {
+        headers: { authorization: `Bearer ${caller.token}` },
+      });
+      expect(await status.json()).toMatchObject({ data: { status: 'failed', error: details.code, error_details: details } });
+      const [node] = await stack.runtime.handle.db.select().from(nodes).where(eq(nodes.id, 'node_alpha'));
+      expect(node.reservedAgents ?? 0).toBe(0);
+    });
 
+    it('fails a targeted spawn whose first send cannot reach the provider and releases its reservation', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-spawn-unsent-fails-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha', name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0, maxAgents: 2,
+      });
       const nodeConnections = stack.runtime.deps.nodeConnections!;
-      const originalSend = nodeConnections.sendToProvider.bind(nodeConnections);
-      let dropNextSpawn = true;
-      vi.spyOn(nodeConnections, 'sendToProvider').mockImplementation(async (...args) => {
-        if (dropNextSpawn && args[3].type === 'action.invoke' && args[3].action.startsWith('spawn')) {
-          dropNextSpawn = false;
-          return false;
-        }
-        return originalSend(...args);
-      });
-
+      vi.spyOn(nodeConnections, 'sendToProvider').mockImplementationOnce(async () => false);
       const spawn = await stack.app.request('/v1/actions/spawn/invoke', {
         method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${caller.token}`,
-          'Idempotency-Key': 'spawn-unsent-redrain',
-        },
-        body: JSON.stringify({
-          input: { cli: 'claude', name: 'worker-unsent', task: 'hi', target_node: 'alpha', verify_ready: true },
-        }),
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}`,
+          'Idempotency-Key': 'spawn-unsent-terminal' },
+        body: JSON.stringify({ input: { cli: 'claude', name: 'worker-unsent', task: 'hi',
+          target_node: 'alpha', verify_ready: true } }),
       });
-      expect(spawn.status).toBe(201);
-      const ack = (await spawn.json() as { data: Record<string, unknown> }).data;
-      expect(ack).toMatchObject({ status: 'pending', dispatched_node_id: null, handler_node_id: 'node_alpha' });
-      const invocationId = ack.invocation_id as string;
+      expect(spawn.status).toBe(503);
+      expect(await spawn.json()).toMatchObject({ error: { code: 'spawn_target_unavailable',
+        node: 'alpha', harness: 'claude', retryable: true } });
+      const [node] = await stack.runtime.handle.db.select().from(nodes).where(eq(nodes.id, 'node_alpha'));
+      expect(node.reservedAgents ?? 0).toBe(0);
       expect(alpha.sock.ofType('action.invoke')).toHaveLength(0);
-
-      const db = stack.runtime.handle.db;
-      const readInvocation = () => db
-        .select()
-        .from(actionInvocations)
-        .where(eq(actionInvocations.id, invocationId))
-        .then((rows) => rows[0]);
-      const readReserved = () => db
-        .select({ reservedAgents: nodes.reservedAgents })
-        .from(nodes)
-        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')))
-        .then((rows) => rows[0].reservedAgents ?? 0);
-
-      const unsent = await readInvocation();
-      expect(unsent).toMatchObject({
-        status: 'pending',
-        actionId: null,
-        handlerNodeId: 'node_alpha',
-        dispatchedNodeId: null,
-        dispatchAttempts: 0,
-      });
-      // The reservation placement took for the attempt that never landed is
-      // returned, so the drain below can take its own without double-counting.
-      expect(await readReserved()).toBe(0);
-
-      await alpha.handle.handleMessage(JSON.stringify({
-        v: 1,
-        id: 'reg-after-unsent',
-        type: 'node.register',
-        name: 'alpha',
-        node_id: 'node_alpha',
-        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
-        max_agents: 2,
-        tags: ['test'],
-        version: 'test-node',
-        resume_cursor: null,
-      }));
-
-      expect(alpha.sock.ofType('action.invoke')).toEqual([
-        expect.objectContaining({ invocation_id: invocationId, action: 'spawn:claude' }),
-      ]);
-      const dispatched = await readInvocation();
-      expect(dispatched).toMatchObject({
-        status: 'dispatched',
-        dispatchedNodeId: 'node_alpha',
-        dispatchAttempts: 1,
-      });
-      expect(dispatched.spawnReservedAt).toBeInstanceOf(Date);
-      expect(await readReserved()).toBe(1);
     });
 
     it('does not drain an unsent spawn to a node other than the one it was placed on', async () => {
@@ -2478,13 +2450,12 @@ describe('node adapter conformance', () => {
         headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
         body: JSON.stringify({ input: { cli: 'claude', name: 'worker-inflight', task: 'hi', target_node: 'alpha' } }),
       });
-      expect(spawn.status).toBe(201);
+      expect(spawn.status).toBe(503);
       expect(drainedDuringSend).toBe(0);
       expect(alpha.sock.ofType('action.invoke')).toHaveLength(0);
-      const invocationId = (await spawn.json() as { data: { invocation_id: string } }).data.invocation_id;
-      const [row] = await db.select().from(actionInvocations).where(eq(actionInvocations.id, invocationId));
-      // Only now, after the send settled unsent, is the row drainable.
-      expect(row.handlerUnreachableSince).toBeInstanceOf(Date);
+      expect(await spawn.json()).toMatchObject({ error: { code: 'spawn_target_unavailable' } });
+      const [row] = await db.select().from(actionInvocations).where(eq(actionInvocations.workspaceId, ws.workspaceId));
+      expect(row.status).toBe('failed');
     });
 
     it('lets exactly one of two concurrent drains re-send an unsent spawn', async () => {
@@ -2797,8 +2768,7 @@ describe('node adapter conformance', () => {
         maxAgents: 2,
       });
       // Keep native capacity live, but make the shadow action's owning provider
-      // unavailable. Placement can therefore snapshot node_alpha before the
-      // shadow dispatch terminally fails.
+      // unavailable. The provider gate fails before publishing a target.
       await stack.runtime.handle.db
         .update(actions)
         .set({ handlerProvider: 'offline-shadow-provider' })
@@ -2821,8 +2791,8 @@ describe('node adapter conformance', () => {
       const first = await invoke();
       const replay = await invoke();
       expect([first.status, replay.status]).toEqual([503, 503]);
-      expect((await first.json() as { error: { code: string } }).error.code).toBe('handler_unavailable');
-      expect((await replay.json() as { error: { code: string } }).error.code).toBe('handler_unavailable');
+      expect((await first.json() as { error: { code: string } }).error.code).toBe('spawn_target_unavailable');
+      expect((await replay.json() as { error: { code: string } }).error.code).toBe('spawn_target_unavailable');
       const [stored] = await stack.runtime.handle.db
         .select({
           status: actionInvocations.status,
@@ -2834,7 +2804,7 @@ describe('node adapter conformance', () => {
           eq(actionInvocations.workspaceId, ws.workspaceId),
           eq(actionInvocations.actionName, 'spawn'),
         ));
-      expect(stored).toEqual({ status: 'failed', handlerNodeId: 'node_alpha', dispatchedNodeId: null });
+      expect(stored).toEqual({ status: 'failed', handlerNodeId: null, dispatchedNodeId: null });
       expect(alpha.sock.ofType('action.invoke').filter((event) => event.action.startsWith('spawn'))).toHaveLength(0);
     });
 
@@ -2869,7 +2839,7 @@ describe('node adapter conformance', () => {
 
       const first = await invoke();
       expect(first.status).toBe(503);
-      expect((await first.json() as { error: { code: string } }).error.code).toBe('handler_unavailable');
+      expect((await first.json() as { error: { code: string } }).error.code).toBe('spawn_target_unavailable');
       const afterFailure = await stack.runtime.handle.db
         .select({
           status: actionInvocations.status,
