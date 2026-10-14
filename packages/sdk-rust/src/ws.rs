@@ -178,8 +178,7 @@ impl WsClient {
     pub fn new(options: WsClientOptions) -> Self {
         // Single source of truth for HTTP(S)->WS(S) normalization (trims
         // whitespace + trailing slashes); see `ws_base_from_http` in lib.rs.
-        let base_url =
-            ws_base_from_http(options.base_url.as_deref().unwrap_or(DEFAULT_BASE_URL));
+        let base_url = ws_base_from_http(options.base_url.as_deref().unwrap_or(DEFAULT_BASE_URL));
 
         let (event_tx, _) = broadcast::channel(1024);
         let (raw_event_tx, _) = broadcast::channel(1024);
@@ -689,7 +688,10 @@ fn normalize_node_deliver(value: serde_json::Value) -> Option<serde_json::Value>
     }
 
     let mut event = data_obj.clone();
-    event.insert("type".to_string(), serde_json::Value::String(event_type.to_string()));
+    event.insert(
+        "type".to_string(),
+        serde_json::Value::String(event_type.to_string()),
+    );
     Some(serde_json::Value::Object(event))
 }
 

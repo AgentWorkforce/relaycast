@@ -80,10 +80,7 @@ impl std::fmt::Debug for WorkspaceBootstrapOptions {
             .field("origin_client", &self.origin_client)
             .field("origin_version", &self.origin_version)
             .field("provenance", &self.provenance)
-            .field(
-                "metadata",
-                &self.metadata.as_ref().map(|_| "<redacted>"),
-            )
+            .field("metadata", &self.metadata.as_ref().map(|_| "<redacted>"))
             .field(
                 "idempotency_key",
                 &self.idempotency_key.as_ref().map(|_| "<redacted>"),
