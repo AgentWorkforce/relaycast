@@ -4386,6 +4386,69 @@ paths:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
 
+  /workspace/rotate-key:
+    post:
+      summary: Rotate workspace API key
+      description: >-
+        Self-rollover for the authenticated workspace. The response carries the
+        replacement key exactly once — persist it, do not log or print it. The
+        superseded key keeps authenticating for `grace_seconds` (default 60) so
+        peers and in-flight callers survive the cutover; `grace_seconds: 0` is
+        the compromise mode and kills the old key immediately. The route is
+        opt-in (`allowWorkspaceKeyRotation` in engine config) and off by
+        default; deployments where a control plane owns the canonical key leave
+        it unset and see `workspace_key_rotation_disabled`.
+      tags:
+        - Workspaces
+      security:
+        - workspaceKey: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                grace_seconds:
+                  type: integer
+                  minimum: 0
+                  maximum: 3600
+                  description: >-
+                    Seconds the superseded key remains authenticatable.
+                    Defaults to 60.
+      responses:
+        '200':
+          description: Workspace key rotated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      workspace_id:
+                        type: string
+                      api_key:
+                        type: string
+                        description: >-
+                          The replacement workspace key, revealed exactly once.
+                      previous_key_expires_at:
+                        type: string
+                        format: date-time
+                        nullable: true
+        '401':
+          description: Authentication required
+        '403':
+          description: Workspace key rotation is disabled on this deployment
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/Throttled'
+
   /workspace/system-prompt:
     get:
       summary: Get workspace system prompt

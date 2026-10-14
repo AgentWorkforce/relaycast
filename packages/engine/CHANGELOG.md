@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- `POST /v1/workspace/rotate-key` rotates the authenticated workspace's API key with a bounded `grace_seconds` continuity window for the superseded key (`0` for immediate compromise cutoff). Migration `0073_workspace_key_rotation.sql` adds the `previous_api_key_hash`/`previous_api_key_expires_at` grace slot and the `api_key_generation` ordering fence. `EngineConfig.allowWorkspaceKeyRotation` opts in (default off, so hosted deployments where a control plane owns the canonical key can never serve it).
+
 ## [10.4.0] - 2026-10-13
 
 ### Added

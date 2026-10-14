@@ -129,6 +129,18 @@ export interface EngineConfig {
    */
   workspaceBootstrapProofRequired?: boolean;
   /**
+   * Opt-in for the self-serve `POST /v1/workspace/rotate-key` route. Defaults
+   * to disabled: the route mints a live workspace credential, so a deployment
+   * must explicitly allow it. Hosted deployments — where the canonical key is
+   * owned by an external control plane and this store only holds a pushed
+   * copy — must leave it unset: a key minted here would be unknown to the
+   * canonical store, and that store's repair path would clobber or resurrect
+   * credentials. Such deployments rotate through the control plane's own
+   * authorized flow, which pushes the result over the internal key-update
+   * channel.
+   */
+  allowWorkspaceKeyRotation?: boolean;
+  /**
    * Optional egress proxy for http_push node delivery. When set, nodes that
    * register with `delivery.use_proxy: true` have their webhook POST routed
    * through this forwarder instead of hitting the destination directly — the

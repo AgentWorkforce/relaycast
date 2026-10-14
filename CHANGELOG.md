@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
+
+### Added
+
+- `POST /v1/workspace/rotate-key` self-serve workspace-key rotation: the superseded key keeps a bounded `grace_seconds` continuity window (`0` for immediate compromise cutoff), agent/node/observer tokens and sessions are untouched, and deployments whose canonical key is externally managed refuse the route. The TypeScript SDK exposes it as `relay.workspace.rotateKey()`.
 
 ### Fixed
 

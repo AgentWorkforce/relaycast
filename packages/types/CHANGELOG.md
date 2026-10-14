@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- `RotateWorkspaceKeyRequest` / `RotateWorkspaceKeyResponse` wire schemas and the `relaycast_server_workspace_key_rotated` telemetry event.
+
 ## [10.4.0] - 2026-10-13
 
 ### Added
