@@ -11,7 +11,7 @@ import {
   releasedAgentName,
 } from './agent.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
-import { codedError } from '../lib/httpError.js';
+import { codedError, codedSpawnError } from '../lib/httpError.js';
 import { D1_SAFE_IN_QUERY_CHUNK_SIZE } from '../lib/queryChunks.js';
 import { toFleetWireJson } from './deliveryWire.js';
 import {
@@ -23,9 +23,9 @@ import {
 import type { NodeConnectionRegistry, NodeDrainOptions } from '../ports/realtime.js';
 import { runAtomic, runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { exclusiveClaimWrite, retryAfterAtMatches, type InvocationClaimStatus } from './invocationClaim.js';
-import { claimSpawnNode, chooseNodeForAction, releaseNodeCapacity, reserveNodeCapacity } from './placement.js';
+import { claimSpawnNode, chooseNodeForAction, releaseNodeCapacity, reserveNodeCapacity, spawnPlacementError } from './placement.js';
 import { DEFAULT_PROVIDER_NAME, capacityProviderName, getProvider } from './nodeProvider.js';
-import { AGENT_TOKEN_HASH_PATTERN } from '@relaycast/types';
+import { AGENT_TOKEN_HASH_PATTERN, FleetSpawnErrorDetailsSchema, type FleetSpawnErrorDetails } from '@relaycast/types';
 import { createTaskState, expireTaskInvocation, expireTaskInvocations, taskExecution } from './taskInvocation.js';
 import { withEngineOperation } from '../lib/engineDiagnostics.js';
 
@@ -724,6 +724,8 @@ async function waitForInvocationReplayOutcome(
     }
     if (!OPEN_INVOCATION_STATUSES.some((status) => status === current.status)) {
       if (current.status === 'failed') {
+        const details = FleetSpawnErrorDetailsSchema.safeParse(current.output);
+        if (details.success) throw codedSpawnError(details.data);
         const errorCode = current.error ?? 'handler_unavailable';
         throw codedError(
           'Action invocation failed before provider dispatch completed',
@@ -897,10 +899,11 @@ async function failNeverDispatchedInvocation(
   workspaceId: string,
   invocationId: string,
   error: string,
+  errorDetails?: FleetSpawnErrorDetails,
 ): Promise<boolean> {
   const failed = await db
     .update(actionInvocations)
-    .set({ status: 'failed', error, completedAt: new Date(), spawnReservedAt: null })
+    .set({ status: 'failed', error, output: errorDetails ?? null, completedAt: new Date(), spawnReservedAt: null })
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
       eq(actionInvocations.id, invocationId),
@@ -1781,10 +1784,13 @@ async function dispatchSpawn(args: {
   const nodeId = placement.node.id;
   const shadow = args.bypassShadow ? null : await fetchNodeAction(args.db, args.workspaceId, nodeId, capability);
   const capProvider = (await capacityProviderName(args.db, args.workspaceId, nodeId, capability)) ?? DEFAULT_PROVIDER_NAME;
-  if (input.verify_ready === true && (placement.queued || !await isNodeProviderLive(args.db, args.registry, args.workspaceId, nodeId, shadow?.handlerProvider ?? capProvider))) {
-    await failNeverDispatchedInvocation(args.db, args.workspaceId, invocation.id, 'spawn_target_unavailable');
-    if (!placement.queued) await releaseNodeCapacity(args.db, args.workspaceId, nodeId);
-    throw codedError('Verified spawn target is not connected and ready to accept work; retry when it is available', 'spawn_target_unavailable', 503);
+  if (!await isNodeProviderLive(args.db, args.registry, args.workspaceId, nodeId, shadow?.handlerProvider ?? capProvider)) {
+    const failure = spawnPlacementError('spawn_target_unavailable', placement.node, capability);
+    if (!await failNeverDispatchedInvocation(args.db, args.workspaceId, invocation.id, failure.code!, failure.errorDetails)) {
+      throw codedError('Spawn dispatch state changed while checking provider readiness', 'idempotency_unavailable', 503);
+    }
+    await releaseNodeCapacity(args.db, args.workspaceId, nodeId);
+    throw failure;
   }
   // Placement and the durable idempotency claim are separate writes on D1.
   // Publish the selected response target immediately; a concurrent replay in
@@ -1818,14 +1824,29 @@ async function dispatchSpawn(args: {
           providerName: shadow.handlerProvider,
           action: capability,
           input,
-          queue: shadow.queue,
+          queue: false,
           actionId: shadow.id,
           expectedActionId: shadow.id,
           invocationOrigin: 'registered_action',
         });
         if (dispatched.settled) {
+          if (dispatched.settled.status === 'failed' && dispatched.settled.error === 'handler_unavailable') {
+            const failure = spawnPlacementError('spawn_target_unavailable', placement.node, capability);
+            await args.db.update(actionInvocations)
+              .set({ error: failure.code, output: failure.errorDetails })
+              .where(and(eq(actionInvocations.workspaceId, args.workspaceId), eq(actionInvocations.id, invocation.id),
+                eq(actionInvocations.status, 'failed'), eq(actionInvocations.error, 'handler_unavailable')));
+            throw failure;
+          }
           const settled = await waitForInvocationReplayOutcome(args.db, args.workspaceId, dispatched.settled);
           return invocationAck(settled, { actionName: 'spawn', handlerNodeId: nodeId });
+        }
+        if (!dispatched.accepted) {
+          const failure = spawnPlacementError('spawn_target_unavailable', placement.node, capability);
+          if (!await failNeverDispatchedInvocation(args.db, args.workspaceId, invocation.id, failure.code!, failure.errorDetails)) {
+            throw codedError('Spawn dispatch state changed before rejection', 'idempotency_unavailable', 503);
+          }
+          throw failure;
         }
         return spawnResult(invocation, nodeId, dispatched);
       }
@@ -1849,16 +1870,46 @@ async function dispatchSpawn(args: {
     pending: placement.queued,
     reservationHeld: !placement.queued,
   });
-  // Placement reserved capacity for an attempt that never landed. Return it
-  // first, then mark the row unsent: only the mark makes it drainable, so a
-  // drain never sees it while this send is in flight or still holding the
-  // reservation. A thrown send has an unknown outcome, so it is not marked
-  // and only the never-dispatched sweep ends it.
+  // A send that did not establish a dispatch ends this attempt. Do not mark
+  // the row unsent: that queues a retry onto the same node. Claim-before-send
+  // restores a refused send to a never-dispatched row and clears its marker,
+  // so this caller releases that one slot. A restore that did not commit
+  // leaves the marker set; failing the row clears it and releases once.
+  // An unknown send outcome is not queued and is not failed here — the frame
+  // may have left — so the result or the never-dispatched sweep settles it.
+  if (!dispatched.accepted && !dispatched.sendOutcomeUnknown) {
+    const failure = spawnPlacementError(dispatched.sent ? 'capacity_changed' : 'spawn_target_unavailable', placement.node, capability);
+    if (dispatched.reservationStillHeld) {
+      const [failed] = await args.db
+        .update(actionInvocations)
+        .set({
+          status: 'failed',
+          error: failure.code,
+          output: failure.errorDetails,
+          completedAt: new Date(),
+          spawnReservedAt: null,
+        })
+        .where(and(
+          eq(actionInvocations.workspaceId, args.workspaceId),
+          eq(actionInvocations.id, invocation.id),
+          inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+          isNotNull(actionInvocations.spawnReservedAt),
+        ))
+        .returning({ id: actionInvocations.id });
+      if (!failed) {
+        throw codedError('Spawn dispatch state changed before rejection', 'idempotency_unavailable', 503);
+      }
+      await releaseNodeCapacity(args.db, args.workspaceId, nodeId);
+      throw failure;
+    }
+    if (!await failNeverDispatchedInvocation(args.db, args.workspaceId, invocation.id, failure.code!, failure.errorDetails)) {
+      throw codedError('Spawn dispatch state changed before rejection', 'idempotency_unavailable', 503);
+    }
+    if (!placement.queued) await releaseNodeCapacity(args.db, args.workspaceId, nodeId);
+    throw failure;
+  }
   if (!dispatched.accepted && !placement.queued && !dispatched.reservationStillHeld) {
     await releaseNodeCapacity(args.db, args.workspaceId, nodeId);
-  }
-  if (!dispatched.sent && !dispatched.sendOutcomeUnknown) {
-    await markUnsentNativeSpawn(args.db, args.workspaceId, invocation.id, nodeId);
   }
   return spawnResult(invocation, nodeId, dispatched);
 }
@@ -2322,15 +2373,17 @@ export async function invokeAction(
 }
 
 function publicInvocation(row: InvocationRow) {
+  const spawnError = row.error ? FleetSpawnErrorDetailsSchema.safeParse(row.output) : null;
   return {
     invocation_id: row.id,
     action_name: row.actionName,
     caller_id: row.callerId,
     caller_name: row.callerName,
     input: row.input,
-    output: row.output,
+    output: spawnError?.success ? null : row.output,
     status: row.status,
     error: row.error,
+    ...(spawnError?.success ? { error_details: spawnError.data } : {}),
     duration_ms: row.durationMs,
     dispatched_node_id: row.dispatchedNodeId,
     dispatched_at: row.dispatchedAt?.toISOString() ?? null,
@@ -3820,12 +3873,26 @@ export async function rescheduleNodeInvocation(
     );
     return false;
   }
-  // Only release capacity the invocation actually holds. A shadowed spawn
-  // dropped its native reservation at dispatch (spawnReservedAt is null), so it
-  // must not release capacity that now belongs to another spawn. Clear the
-  // marker once so overlapping retries release that one hold, not every hold
-  // on the node.
-  if (invocation.dispatchedNodeId && isSpawnInvocation(invocation.actionName) && invocation.spawnReservedAt) {
+  // A spawn is never retried, queued, or moved to another node. Fail this
+  // attempt and return the one slot it holds. The reservation token is cleared
+  // and released together, so a stale rescheduler whose token no longer matches
+  // releases nothing; a failed release puts the token back.
+  if (isSpawnInvocation(invocation.actionName)) {
+    const input = recordInput(invocation.input);
+    const capability = dispatchActionNameForInvocation(invocation.actionName, input);
+    const [node] = invocation.dispatchedNodeId
+      ? await db.select().from(nodes).where(and(
+          eq(nodes.workspaceId, invocation.workspaceId),
+          eq(nodes.id, invocation.dispatchedNodeId),
+        ))
+      : [];
+    const offline = node ? !(await nodeLive(db, node)) : false;
+    const code = offline ? 'spawn_target_offline' : 'spawn_target_unavailable';
+    const failure = spawnPlacementError(
+      code,
+      node ?? (typeof input.target_node === 'string' ? input.target_node : 'unassigned'),
+      capability,
+    );
     const heldAt = invocation.spawnReservedAt;
     const nodeId = invocation.dispatchedNodeId;
     const holdWhere = and(
@@ -3838,49 +3905,35 @@ export async function rescheduleNodeInvocation(
         ? [eq(actionInvocations.nodeLivenessRevision, opts.expectedNodeLivenessRevision)]
         : []),
     );
-    try {
-      // Clear the marker and decrement together. A transaction rolls both
-      // back when the counter update throws. A handle without one can commit
-      // the clear first; the catch puts that marker back.
-      await runAtomic(db, async (tx) => {
-        const [releasedHold] = await tx
+    if (heldAt && nodeId) {
+      try {
+        await runAtomic(db, async (tx) => {
+          const [releasedHold] = await tx
+            .update(actionInvocations)
+            .set({ spawnReservedAt: null })
+            .where(and(holdWhere, eq(actionInvocations.spawnReservedAt, heldAt)))
+            .returning({ id: actionInvocations.id });
+          if (releasedHold) await releaseNodeCapacity(tx, invocation.workspaceId, nodeId);
+        });
+      } catch (error) {
+        await db
           .update(actionInvocations)
-          .set({ spawnReservedAt: null })
-          .where(and(holdWhere, eq(actionInvocations.spawnReservedAt, heldAt)))
-          .returning({ id: actionInvocations.id });
-        if (releasedHold) await releaseNodeCapacity(tx, invocation.workspaceId, nodeId);
-      });
-    } catch (error) {
-      await db
-        .update(actionInvocations)
-        .set({ spawnReservedAt: heldAt })
-        .where(and(holdWhere, isNull(actionInvocations.spawnReservedAt)));
-      throw error;
+          .set({ spawnReservedAt: heldAt })
+          .where(and(holdWhere, isNull(actionInvocations.spawnReservedAt)));
+        throw error;
+      }
     }
-  }
-  // A shadowed spawn stays pinned to its node: while a `spawn:<harness>` shadow
-  // is registered there, native capacity for that harness is unreachable — even
-  // across a node loss — so it never falls through to generic placement (which
-  // would silently bypass the shadow). It re-drains when the provider returns.
-  if (invocation.dispatchedNodeId && isSpawnInvocation(invocation.actionName)) {
-    const capability = dispatchActionNameForInvocation(invocation.actionName, recordInput(invocation.input));
-    const shadow = await fetchNodeAction(db, invocation.workspaceId, invocation.dispatchedNodeId, capability);
-    if (shadow) {
-      const [reset] = await db
-        .update(actionInvocations)
-        .set({ status: 'pending', dispatchedAt: null, spawnReservedAt: null, retryAfterAt: null })
-        .where(and(
-          eq(actionInvocations.workspaceId, invocation.workspaceId),
-          eq(actionInvocations.id, invocation.id),
-          inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
-          ...(opts.expectedNodeLivenessRevision !== undefined
-            ? [eq(actionInvocations.nodeLivenessRevision, opts.expectedNodeLivenessRevision)]
-            : []),
-        ))
-        .returning({ id: actionInvocations.id });
-      if (!reset) return false;
-      return false;
-    }
+    await db
+      .update(actionInvocations)
+      .set({
+        status: 'failed',
+        error: failure.code,
+        output: failure.errorDetails,
+        completedAt: new Date(),
+        spawnReservedAt: null,
+      })
+      .where(holdWhere);
+    return false;
   }
   // A built-in release that has been dispatched cannot be rescheduled, and
   // cannot become bindable: only bindInvocationToRegisteredNodeAction sets an
@@ -4131,6 +4184,12 @@ export async function rescheduleInvocationsForLostNode(
         rescheduled++;
       }
     } catch {
+      if (isSpawnInvocation(invocation.actionName)) {
+        // A transient settlement failure must leave the original claim intact
+        // for the next sweep. Never turn a lost-node spawn into a queued or
+        // reroutable attempt, or clear its reservation without releasing it.
+        continue;
+      }
       // Keep the invocation pending; another heartbeat/sweep can retry.
       await db
         .update(actionInvocations)
@@ -4299,6 +4358,7 @@ export async function completeNodeInvocation(
   data: {
     output?: unknown;
     error?: string;
+    error_details?: FleetSpawnErrorDetails;
   },
   deps?: InvocationCompletionDeps,
 ) {
@@ -4342,17 +4402,27 @@ export async function completeNodeInvocation(
     return null;
   }
 
+  const nativeSpawnFailure = data.error === 'handler_unavailable' && isSpawnInvocation(existing.actionName);
+  let spawnFailure: ReturnType<typeof spawnPlacementError> | null = null;
+  if (nativeSpawnFailure) {
+    const [node] = await db.select().from(nodes).where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+    const input = recordInput(existing.input);
+    const harness = typeof input.cli === 'string' ? `spawn:${input.cli}` : existing.actionName;
+    spawnFailure = spawnPlacementError('spawn_target_unavailable', node ?? nodeId, harness);
+  }
   if (data.error === 'handler_unavailable') {
     await db
       .update(nodes)
       .set({ handlersLive: false })
       .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
-    try {
-      if (await rescheduleNodeInvocation(db, registry, existing, { retryAfterAt: nextRetryAfter(existing.dispatchAttempts + 1) })) {
-        return null;
+    if (!nativeSpawnFailure) {
+      try {
+        if (await rescheduleNodeInvocation(db, registry, existing, { retryAfterAt: nextRetryAfter(existing.dispatchAttempts + 1) })) {
+          return null;
+        }
+      } catch {
+        // Fall through and fail the invocation if no eligible node exists.
       }
-    } catch {
-      // Fall through and fail the invocation if no eligible node exists.
     }
   }
 
@@ -4371,8 +4441,8 @@ export async function completeNodeInvocation(
   const [updated] = await db
     .update(actionInvocations)
     .set({
-      output: data.output ?? null,
-      error: data.error ?? null,
+      output: data.error_details ?? spawnFailure?.errorDetails ?? data.output ?? null,
+      error: spawnFailure?.code ?? data.error ?? null,
       status: data.error ? 'failed' : 'completed',
       completedAt: new Date(),
       spawnReservedAt: null,

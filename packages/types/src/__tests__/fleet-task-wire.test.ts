@@ -21,6 +21,14 @@ describe('opt-in fleet task protocol', () => {
     expect(FleetActionResultMessageSchema.safeParse({ ...final, accounting: { tokens: -1 } }).success).toBe(false);
     expect(FleetActionResultMessageSchema.safeParse({ ...final, error: 'mixed output and error' }).success).toBe(false);
   });
+  it('accepts structured spawn failures only when their code matches the legacy error string', () => {
+    const error_details = { code: 'spawn_capacity_exceeded', message: 'Node "alpha" is at capacity', node: 'alpha',
+      harness: 'codex', active: 2, reserved: 1, max: 3, observed_at: '2026-10-14T00:00:00.000Z', retryable: true };
+    const result = { v: 1, type: 'action.result', invocation_id: 'spawn-1', error: error_details.code, error_details };
+    expect(FleetActionResultMessageSchema.safeParse(result).success).toBe(true);
+    expect(FleetActionResultMessageSchema.safeParse({ ...result, error: 'handler_unavailable' }).success).toBe(false);
+    expect(FleetActionResultMessageSchema.safeParse({ ...result, error_details: { ...error_details, reserved: -1 } }).success).toBe(false);
+  });
   it('validates opt-in capability and immutable bounded correlation without rewriting identifiers', () => {
     expect(FleetCapabilitySchema.safeParse({ name: 'task.run', kind: 'action', execution_mode: 'task' }).success).toBe(true);
     expect(FleetCapabilitySchema.safeParse({ name: 'task.run', execution_mode: 'invented' }).success).toBe(false);
