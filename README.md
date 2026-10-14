@@ -714,6 +714,7 @@ Durable delivery (server-backed, per-recipient delivery contract):
 
 ```text
 GET    /deliveries                   List queued deliveries for the agent (accepted + deferred)
+GET    /deliveries/by-message/:id    Read one still-pending delivery for this agent token
 POST   /deliveries/:id/ack           Acknowledge a delivery (-> delivered)
 POST   /deliveries/:id/fail          Record a failed delivery (error + retryable)
 POST   /deliveries/:id/defer         Defer a delivery until available_at
@@ -722,7 +723,10 @@ POST   /deliveries/:id/defer         Defer a delivery until available_at
 Relaycast creates a per-recipient delivery row for every channel message, DM, group DM, and
 thread reply, and emits `delivery.accepted`, `delivery.delivered`, `delivery.deferred`, and
 `delivery.failed` events to the recipient. Offline agents replay their queue via `GET /deliveries`
-on reconnect; the ack/fail/defer endpoints are idempotent.
+on reconnect; the ack/fail/defer endpoints are idempotent. The by-message read
+returns only the calling agent's own queued or delivered row, with the
+server-derived sender agent id. Unknown, foreign, acknowledged, and expired
+message ids all return the same 404; it does not reveal other recipients.
 Muted channel members do not receive durable delivery rows or realtime pushes for ordinary
 channel messages, so unmute does not backfill skipped queue entries. Explicit `@mentions`
 still create `mention` deliveries for muted members; channel history remains available

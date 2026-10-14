@@ -18,6 +18,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased]
 
+### Added
+
+- `GET /v1/deliveries/by-message/{messageId}` proves one still-pending delivery to the calling agent token and returns its server-derived sender id. Unknown, foreign, acknowledged, and expired messages share a 404.
+
 ## [10.4.0] - 2026-10-13
 
 ### Added

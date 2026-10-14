@@ -76,6 +76,74 @@ describe('durable delivery api', () => {
     return ((await res.json()) as { data: Array<Record<string, unknown>> }).data;
   }
 
+  async function pendingByMessage(token: string, messageId: string) {
+    return stack.app.request(`/v1/deliveries/by-message/${encodeURIComponent(messageId)}`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+  }
+
+  it('proves only the recipient token has a pending delivery for a message', async () => {
+    const { ws, alice, bob, messageId } = await seed();
+    const own = await pendingByMessage(bob.token, messageId);
+    expect(own.status).toBe(200);
+    expect((await own.json()).data).toMatchObject({ message_id: messageId,
+      sender_agent_id: alice.agentId, workspace_id: ws.workspaceId });
+    for (const [token, id] of [[alice.token, messageId], [bob.token, 'unknown-message']]) {
+      const denied = await pendingByMessage(token, id);
+      expect(denied.status).toBe(404);
+      expect((await denied.json()).error.code).toBe('delivery_not_found');
+    }
+    const [item] = await listDeliveries(bob.token);
+    await stack.app.request(`/v1/deliveries/${item.id}/ack`, {
+      method: 'POST', headers: { authorization: `Bearer ${bob.token}` },
+    });
+    const acked = await pendingByMessage(bob.token, messageId);
+    expect(acked.status).toBe(404);
+    expect((await acked.json()).error.code).toBe('delivery_not_found');
+  });
+
+  it('returns the same 404 for an expired and cross-workspace delivery', async () => {
+    const { ws, bob, messageId } = await seed();
+    await stack.runtime.deps.db.update(deliveries).set({ expiresAt: new Date(1) })
+      .where(and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.messageId, messageId)));
+    const expired = await pendingByMessage(bob.token, messageId);
+    expect(expired.status).toBe(404);
+    expect((await expired.json()).error.code).toBe('delivery_not_found');
+
+    const other = await createWorkspace(stack.app, 'other-delivery-ws');
+    const remote = await registerAgent(stack.app, other.workspaceKey, 'remote');
+    const foreign = await pendingByMessage(remote.token, messageId);
+    expect(foreign.status).toBe(404);
+    expect((await foreign.json()).error.code).toBe('delivery_not_found');
+  });
+
+  it('finds a pending message beyond the first 200 queue entries', async () => {
+    const { ws, alice, bob, messageId } = await seed();
+    const [seedMessage] = await stack.runtime.deps.db.select({ channelId: messages.channelId })
+      .from(messages).where(eq(messages.id, messageId));
+    // Insert in small chunks to keep SQLite/D1 parameter counts bounded. The
+    // route is what this test exercises; posting 201 times would hit send rate limits.
+    for (let start = 0; start < 201; start += 40) {
+      const indexes = Array.from({ length: Math.min(40, 201 - start) }, (_, offset) => start + offset);
+      await stack.runtime.deps.db.insert(messages).values(indexes.map(i => ({
+        id: `page-message-${String(i).padStart(3, '0')}`, workspaceId: ws.workspaceId,
+        channelId: seedMessage.channelId, agentId: alice.agentId, body: `queue message ${i}`,
+      })));
+      await stack.runtime.deps.db.insert(deliveries).values(indexes.map(i => ({
+        id: `zz-page-delivery-${String(i).padStart(3, '0')}`, workspaceId: ws.workspaceId,
+        messageId: `page-message-${String(i).padStart(3, '0')}`, agentId: bob.agentId,
+        status: 'queued', seq: i + 2,
+      })));
+    }
+    const lastId = 'page-message-200';
+    expect((await listDeliveries(bob.token, '?limit=200')).some(item =>
+      (item.message as { id?: string } | undefined)?.id === lastId)).toBe(false);
+    const found = await pendingByMessage(bob.token, lastId);
+    expect(found.status).toBe(200);
+    expect((await found.json()).data).toMatchObject({ message_id: lastId,
+      sender_agent_id: alice.agentId, workspace_id: ws.workspaceId });
+  });
+
   async function waitForAssertion(assertion: () => void | Promise<void>) {
     await stack.settle();
     await assertion();

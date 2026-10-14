@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Agent-token `GET /v1/deliveries/by-message/{messageId}` resolves one pending delivery without the inbox page limit and reveals no other recipient's delivery.
+
 ## [10.4.0] - 2026-10-13
 
 ### Added

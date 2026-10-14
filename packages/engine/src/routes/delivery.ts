@@ -42,6 +42,24 @@ deliveryRoutes.get(
   },
 );
 
+// GET /v1/deliveries/by-message/:messageId - pending delivery proof for this
+// exact recipient. An acked, expired, foreign, or absent message is the same 404.
+deliveryRoutes.get(
+  '/deliveries/by-message/:messageId',
+  requireAgentToken,
+  rateLimit,
+  async (c) => {
+    try {
+      const result = await deliveryEngine.pendingDeliveryForMessage(
+        c.get('db'), c.get('workspace').id, c.get('agent')!.id, c.req.param('messageId'),
+      );
+      return result ? jsonOk(c, result) : jsonNotFound(c, 'delivery_not_found', 'Delivery not found');
+    } catch (err: unknown) {
+      return errorResponse(c, err);
+    }
+  },
+);
+
 // POST /v1/deliveries/:id/ack - idempotently mark a delivery acked.
 deliveryRoutes.post(
   '/deliveries/:id/ack',
