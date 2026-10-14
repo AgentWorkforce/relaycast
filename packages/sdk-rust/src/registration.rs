@@ -1056,14 +1056,8 @@ mod invalid_response_classification {
     /// The client already knew the response was malformed.
     #[test]
     fn a_known_malformed_response_is_invalid_response() {
-        let error = classify_registration_failure(
-            "probe",
-            RelayError::InvalidResponse("body was not JSON".into()),
-        );
-        assert!(matches!(
-            error,
-            AgentRegistrationError::InvalidResponse { .. }
-        ));
+        let error = classify_registration_failure("probe", RelayError::InvalidResponse("body was not JSON".into()));
+        assert!(matches!(error, AgentRegistrationError::InvalidResponse { .. }));
     }
 
     /// A reqwest error stays Transport — the decode kind included. In this
@@ -1075,10 +1069,7 @@ mod invalid_response_classification {
     fn a_reqwest_error_stays_transport_and_retryable() {
         // A reqwest error is not constructible directly; a failed request to an
         // unroutable address yields a real one.
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let http_error = rt
             .block_on(reqwest::Client::new().get("http://127.0.0.1:1/").send())
             .expect_err("connecting to port 1 must fail");
@@ -1094,23 +1085,13 @@ mod invalid_response_classification {
     /// names the endpoint it was talking to.
     #[test]
     fn transport_detail_names_the_endpoint() {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let http_error = rt
-            .block_on(
-                reqwest::Client::new()
-                    .get("http://127.0.0.1:1/v1/agents")
-                    .send(),
-            )
+            .block_on(reqwest::Client::new().get("http://127.0.0.1:1/v1/agents").send())
             .expect_err("connecting to port 1 must fail");
         let error = classify_registration_failure("probe", RelayError::Http(http_error));
         let rendered = error.to_string();
-        assert!(
-            rendered.contains("127.0.0.1:1/v1/agents"),
-            "url missing from {rendered}"
-        );
+        assert!(rendered.contains("127.0.0.1:1/v1/agents"), "url missing from {rendered}");
     }
 
     /// Retrying cannot fix an unusable answer, and registration may already
@@ -1151,13 +1132,7 @@ mod invalid_response_classification {
         }
         .to_string();
         assert!(rendered.contains("503"), "status missing from {rendered}");
-        assert!(
-            rendered.contains("cast.agentrelay.com/v1/agents"),
-            "url missing from {rendered}"
-        );
-        assert!(
-            rendered.contains("expected value"),
-            "cause missing from {rendered}"
-        );
+        assert!(rendered.contains("cast.agentrelay.com/v1/agents"), "url missing from {rendered}");
+        assert!(rendered.contains("expected value"), "cause missing from {rendered}");
     }
 }

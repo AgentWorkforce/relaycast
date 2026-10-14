@@ -1085,10 +1085,7 @@ impl RelayCast {
             .header("X-SDK-Version", SDK_VERSION)
             .header(
                 "X-Relaycast-Origin-Client",
-                options
-                    .origin_client
-                    .as_deref()
-                    .unwrap_or(DEFAULT_ORIGIN_CLIENT),
+                options.origin_client.as_deref().unwrap_or(DEFAULT_ORIGIN_CLIENT),
             )
             .header(
                 "X-Relaycast-Origin-Version",

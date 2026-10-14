@@ -100,10 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             WsEvent::MessageReacted(e) => {
                 let action = e.action.as_deref().unwrap_or("added");
-                println!(
-                    "👍 Reaction {}: {} on message {}",
-                    action, e.emoji, e.message_id
-                );
+                println!("👍 Reaction {}: {} on message {}", action, e.emoji, e.message_id);
             }
             WsEvent::AgentStatusActive(e) => {
                 println!("🟢 Agent active: {}", e.agent.name);
