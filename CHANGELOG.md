@@ -20,7 +20,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
-- The Rust SDK accepts successful heartbeat responses with null data, preventing false "Response missing data field" errors.
+- Rust SDK: `AgentClient::heartbeat()` and other acknowledgement calls answered `{ "ok": true, "data": null }` no longer fail with "Response missing data field" after the server applied them.
+- Rust SDK success responses must include `data`; an explicit null acknowledgement remains valid, while a missing payload is rejected.
 
 ## [10.4.0] - 2026-10-13
 
