@@ -272,7 +272,11 @@ export function explainInvocation(input: ExplainInvocationInput): string {
   ));
   const awaitingReadiness = input.status === 'dispatched' && holdIndex > dispatchIndex;
   const refusalIndex = lastIndexOf(events, (event) => event.type === 'result_refused');
-  const laterResultIndex = lastIndexOf(events, (event) => event.type === 'result_received' || event.type === 'result_rejected');
+  // A refusal is current only until a later result, dispatch or requeue supersedes it.
+  const laterResultIndex = lastIndexOf(events, (event) => (
+    event.type === 'result_received' || event.type === 'result_rejected'
+    || event.type === 'dispatched' || event.type === 'queued' || event.type === 'requeued'
+  ));
   const refusal = refusalIndex > laterResultIndex ? events[refusalIndex] : undefined;
   const refusalText = refusal
     ? `its result was refused ${refusal.reason === 'd1_pressure' ? 'under database pressure' : `(${refusal.reason ?? 'unknown reason'})`}`
