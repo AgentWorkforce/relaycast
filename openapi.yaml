@@ -590,6 +590,14 @@ components:
             after its agent registered. result_received: after_requeue for
             a spawn result accepted from its last node after a requeue.
             completed: inventory_sync when the node's inventory confirmed it.
+            result_refused: d1_pressure when the result could not be applied
+            under database pressure (the node is told to resend it). failed:
+            no_live_provider when no live provider could take the work. A
+            dispatched event from drain carries drain; a queued event may
+            carry node_not_ready or capacity_unavailable; send_failed may
+            carry drain_error. agent_registered: recovered for an agent.recover.
+            agent_exited: the agent.exited reason (e.g. released,
+            missing_from_inventory).
         detail:
           type: string
           description: Detail for reason, e.g. liveness_timeout, disconnected or deregistered for node_lost.
