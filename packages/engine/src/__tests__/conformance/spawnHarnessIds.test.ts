@@ -59,7 +59,7 @@ describe('spawn harness ids', () => {
     expect(cursorNode.ofType('action.invoke')).toHaveLength(1);
   });
 
-  it.each(['Cursor', 'cursor_ai', 'spawn:cursor', '-cursor', 'cur sor', '', 'a'.repeat(33)])(
+  it.each(['Cursor', 'cursor_ai', 'spawn:cursor', '-cursor', 'cur sor', 'cursor\n', '', 'a'.repeat(33)])(
     'refuses a malformed harness id %j before dispatch',
     async (cli) => {
       const ws = await createWorkspace(stack.app, 'spawn-harness-ids-bad');
