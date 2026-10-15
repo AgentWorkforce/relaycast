@@ -144,7 +144,7 @@ components:
     agentToken:
       type: http
       scheme: bearer
-      description: Agent token (at_live_* or at_test_*)
+      description: Agent token (at_live_* or at_test_*). Newly issued tokens expire after 15 minutes; rotate before token_expires_at. Legacy tokens remain without an expiry until staged migration.
     nodeToken:
       type: http
       scheme: bearer
@@ -377,6 +377,10 @@ components:
         token:
           type: string
           description: Agent token (only returned on registration)
+        token_expires_at:
+          type: string
+          format: date-time
+          description: Expiry of a newly issued agent token. Legacy registration responses may omit it.
         metadata:
           type: object
         origin_node_id:
@@ -505,7 +509,7 @@ components:
 
     AgentIdentityRecovery:
       type: object
-      required: [agent_id, name, token, audit_id]
+      required: [agent_id, name, token, token_expires_at, audit_id]
       properties:
         agent_id:
           type: string
@@ -513,6 +517,9 @@ components:
           type: string
         token:
           type: string
+        token_expires_at:
+          type: string
+          format: date-time
         audit_id:
           type: string
 
@@ -4367,7 +4374,10 @@ paths:
       description: >-
         Self-rollover for the exact authenticated agent. A workspace key cannot
         use this endpoint; owners use the audited takeover or revoke-token
-        operations.
+        operations. Newly issued agent tokens expire after 15 minutes and the
+        response includes token_expires_at. Rotate before expiry; an expired
+        token cannot self-roll over. The previous token's 60-second grace never
+        extends beyond its own expiry.
       tags:
         - Agents
       security:

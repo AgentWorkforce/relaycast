@@ -187,6 +187,7 @@ export type WorkspaceDmConversation = z.infer<typeof WorkspaceDmConversationSche
 export const TokenRotateResponseSchema = z.object({
   name: z.string(),
   token: z.string(),
+  token_expires_at: z.string().datetime().optional(),
 });
 export type TokenRotateResponse = z.infer<typeof TokenRotateResponseSchema>;
 

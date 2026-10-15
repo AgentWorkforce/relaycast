@@ -1,0 +1,57 @@
+{
+  "id": "traj_qnictjkwz49o",
+  "version": 1,
+  "task": {
+    "title": "Bound Relaycast agent tokens with expiry and staged rotation",
+    "source": {
+      "system": "plain",
+      "id": "relayauth-shortlived"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-10-15T08:11:59.079Z",
+  "completedAt": "2026-10-15T08:27:16.163Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-10-15T08:12:03.344Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_36pqz0dhshg7",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-10-15T08:12:03.344Z",
+      "endedAt": "2026-10-15T08:27:16.163Z",
+      "events": [
+        {
+          "ts": 1792051923351,
+          "type": "decision",
+          "content": "Keep legacy agent-token expiry NULL until holders have a rotation path: Keep legacy agent-token expiry NULL until holders have a rotation path",
+          "raw": {
+            "question": "Keep legacy agent-token expiry NULL until holders have a rotation path",
+            "chosen": "Keep legacy agent-token expiry NULL until holders have a rotation path",
+            "alternatives": [],
+            "reasoning": "Immediate backfill would invalidate existing static clients after 15 minutes; the draft stays undeployable until the broker and SDK rotation rollout is reviewed."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Added a staged 15-minute Relaycast agent-token expiry with auth enforcement, bounded rotation grace, migration, API expiry metadata, and rollout gates",
+    "approach": "Standard approach",
+    "confidence": 0.85
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "4d9ea1fa44cf2fc6f802d6322afb75e0196d9d42",
+    "endRef": "4d9ea1fa44cf2fc6f802d6322afb75e0196d9d42"
+  }
+}

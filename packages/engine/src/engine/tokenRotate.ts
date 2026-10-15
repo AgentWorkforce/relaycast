@@ -3,6 +3,7 @@ import type { getDb } from '../db/index.js';
 import { agents } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
+import { agentTokenExpiresAt } from '../auth/agentTokenExpiry.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -29,7 +30,9 @@ export async function rotateAgentToken(db: Db, workspaceId: string, agentName: s
 
   const newToken = `at_live_${randomHex(16)}`;
   const newTokenHash = await sha256Hex(newToken);
-  const graceExpiresAtSeconds = Math.floor((Date.now() + AGENT_TOKEN_GRACE_MS) / 1000);
+  const now = new Date();
+  const expiresAt = agentTokenExpiresAt(now);
+  const graceExpiresAtSeconds = Math.floor((now.getTime() + AGENT_TOKEN_GRACE_MS) / 1000);
 
   // SQLite evaluates every SET expression against the row's pre-update values
   // before writing any of them. That is what makes the current→previous
@@ -42,13 +45,16 @@ export async function rotateAgentToken(db: Db, workspaceId: string, agentName: s
     .update(agents)
     .set({
       previousTokenHash: sql`${agents.tokenHash}`,
-      previousTokenExpiresAt: sql`${graceExpiresAtSeconds}`,
+      // Never revive an already-expired current token during the grace handoff.
+      previousTokenExpiresAt: sql`min(coalesce(${agents.tokenExpiresAt}, ${graceExpiresAtSeconds}), ${graceExpiresAtSeconds})`,
       tokenHash: newTokenHash,
+      tokenExpiresAt: expiresAt,
     })
     .where(eq(agents.id, existing.id));
 
   return {
     name: agentName,
     token: newToken,
+    token_expires_at: expiresAt.toISOString(),
   };
 }

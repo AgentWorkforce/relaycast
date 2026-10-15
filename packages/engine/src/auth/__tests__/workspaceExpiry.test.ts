@@ -4,7 +4,7 @@ import {
   authenticateUnexpired,
   isWorkspaceExpired,
 } from '../workspaceExpiry.js';
-import type { AuthProvider, AuthResult, Workspace } from '../../ports/auth.js';
+import type { Agent, AuthProvider, AuthResult, Workspace } from '../../ports/auth.js';
 import type { EngineDb } from '../../ports/database.js';
 
 const now = new Date('2026-10-01T08:20:00.000Z');
@@ -50,5 +50,16 @@ describe('authenticateUnexpired', () => {
   it('preserves the provider rejection rather than relabelling it', async () => {
     const denied: AuthResult = { ok: false, status: 401, code: 'agent_token_invalid', message: 'nope' };
     expect(await authenticateUnexpired(providerReturning(denied), args)).toBe(denied);
+  });
+
+  it('rejects an expired agent credential admitted by an injected provider', async () => {
+    const admitted: AuthResult = {
+      ok: true,
+      workspace: workspace(null),
+      agent: { tokenExpiresAt: new Date(Date.now() - 1_000) } as Agent,
+    };
+    expect(await authenticateUnexpired(providerReturning(admitted), args)).toMatchObject({
+      ok: false, status: 401, code: 'agent_token_invalid',
+    });
   });
 });

@@ -416,6 +416,7 @@ export const AgentRegisterReplyDataSchema = z
   .object({
     agent_id: z.string(),
     token: z.string(),
+    token_expires_at: z.string().datetime().optional(),
     name: z.string().optional(),
     // Returned only to nodes that advertise FLEET_DELIVERY_CURSOR_CAPABILITY.
     delivery_ack_seq: z.number().int().nonnegative().optional(),

@@ -56,6 +56,7 @@ function snapshot(handle: SqliteDbHandle) {
           status_updated_at: _statusUpdatedAt,
           status_before_liveness_loss: _livenessStatus,
           node_liveness_revision: _nodeLivenessRevision,
+          token_expires_at: _tokenExpiresAt,
           ...existing
         } = row as Record<string, unknown>;
         return JSON.stringify(existing);
@@ -254,6 +255,9 @@ describe('compact maintenance migration path', () => {
       expect.objectContaining({ unique: 1, origin: 'pk' }),
       expect.objectContaining({ name: 'idx_direct_dm_idempotency_workspace_created' }),
       expect.objectContaining({ name: 'idx_direct_dm_idempotency_retention' }),
+    ]));
+    expect(handle.sqlite.pragma('table_info(agents)')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'token_expires_at', notnull: 0 }),
     ]));
     expect(handle.sqlite.pragma('table_info(nodes)')).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'previous_token_hash', notnull: 0 }),
