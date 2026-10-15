@@ -260,7 +260,7 @@ export function explainInvocation(input: ExplainInvocationInput): string {
   const lastDispatch = lastOf(events, (event) => event.type === 'dispatched' || event.type === 'queued');
   const started = lastOf(events, (event) => event.type === 'started' && event.reason !== 'awaiting_readiness');
   const awaitingReadiness = input.status === 'dispatched'
-    && events.at(-1)?.type === 'started' && events.at(-1)?.reason === 'awaiting_readiness';
+    && events.some((event) => event.type === 'started' && event.reason === 'awaiting_readiness');
   const rejection = lastRejection
     ? rejectionText(lastRejection, { lastRequeue, nodeName, currentNodeId: input.dispatchedNodeId })
     : null;

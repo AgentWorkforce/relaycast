@@ -3634,6 +3634,24 @@ export interface RescheduleNodeInvocationOptions {
   completionDeps?: InvocationCompletionDeps;
 }
 
+/**
+ * The event for an invocation leaving its node. It names the node and provider
+ * connection of the dispatch it left, which is what lets that exact connection
+ * still deliver a late spawn result.
+ */
+export function requeueEvent(
+  invocation: Pick<InvocationRow, 'dispatchedNodeId' | 'dispatchedProvider'>,
+  reason?: ActionInvocationRequeueReason,
+  detail?: string,
+) {
+  return invocationEvent('requeued', {
+    node_id: invocation.dispatchedNodeId,
+    ...(invocation.dispatchedProvider ? { provider: invocation.dispatchedProvider } : {}),
+    reason,
+    detail,
+  });
+}
+
 function lastAttemptedNodeId(invocation: Pick<InvocationRow, 'attemptedNodeIds' | 'dispatchedNodeId'>): string | null {
   const attempted = normalizeAttemptedNodeIds(invocation.attemptedNodeIds);
   return invocation.dispatchedNodeId ?? attempted.at(-1) ?? null;
@@ -3744,7 +3762,10 @@ async function holdVerifiedSpawnForReadiness(
   // it could hide this dispatch from a concurrent lost-node settle. The sweep
   // re-evaluates the hold each pass until the window closes; only the first
   // pass records the event, and the events column advances no revision.
-  const holding = sql`json_extract(COALESCE(${actionInvocations.events}, '[]'), '$[#-1].reason') = 'awaiting_readiness'`;
+  const holding = sql`EXISTS (
+    SELECT 1 FROM json_each(COALESCE(${actionInvocations.events}, '[]'))
+    WHERE json_extract(value, '$.type') = 'started' AND json_extract(value, '$.reason') = 'awaiting_readiness'
+  )`;
   const [held] = await db
     .update(actionInvocations)
     .set({
@@ -3800,12 +3821,7 @@ export async function rescheduleNodeInvocation(
   // write as whichever transition actually happens next (re-dispatch, queue,
   // pending reset or failure), so a lost race never leaves a false requeue.
   const leadingEvents: LeadingEvents = invocation.dispatchedNodeId && !isBuiltinReleaseInvocation(invocation)
-    ? [invocationEvent('requeued', {
-      node_id: invocation.dispatchedNodeId,
-      ...(invocation.dispatchedProvider ? { provider: invocation.dispatchedProvider } : {}),
-      reason: opts.reason,
-      detail: opts.reasonDetail,
-    })]
+    ? [requeueEvent(invocation, opts.reason, opts.reasonDetail)]
     : [];
   // Only release capacity the invocation actually holds. A shadowed spawn
   // dropped its native reservation at dispatch (spawnReservedAt is null), so it
@@ -4076,6 +4092,7 @@ export async function rescheduleInvocationsForLostNode(
           dispatchedAt: null,
           spawnReservedAt: null,
           retryAfterAt: nextRetryAfter(invocation.dispatchAttempts + 1),
+          events: appendInvocationEvents(requeueEvent(invocation, 'node_lost', opts.offlineReason)),
         })
         .where(and(
           eq(actionInvocations.workspaceId, invocation.workspaceId),
