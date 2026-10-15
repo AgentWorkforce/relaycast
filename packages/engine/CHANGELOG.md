@@ -14,6 +14,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Spawn placement reserves capacity atomically and returns structured terminal errors for unavailable, offline, full, or lost nodes instead of queueing or rerouting attempts.
 - `drainNodeInvocations` fails native spawns left pending by the old queue (offline-queued, retry-delayed, or unsent) with `spawn_target_offline` or `spawn_target_unavailable` instead of sending them, releasing any held reservation once; `sweepTimedOutInvocations` does the same for such spawns whose node is not live. Shadowed `spawn:<harness>` spawns and other actions still drain.
 
+## [10.4.1] - 2026-10-15
+
+### Fixed
+
+- Newly initialized webhooks use the delivery pass's clock for their first due time, avoiding spurious retry failures when insertion crosses a clock tick.
+
 ## [10.4.0] - 2026-10-13
 
 ### Added

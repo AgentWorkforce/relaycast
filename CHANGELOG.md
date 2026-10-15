@@ -23,6 +23,14 @@ Packages without a separate changelog are covered by the cross-package notes bel
 - Spawn attempts now fail with structured capacity or availability errors when the selected node cannot accept them; offline attempts are no longer queued or moved to another node.
 - Spawns already queued before this release no longer start when their node reconnects, possibly hours later: they fail with the same structured error and return any capacity they held, at the node's next reconnect or, while it stays offline, on the next timeout sweep.
 
+## [10.4.1] - 2026-10-15
+
+### Fixed
+
+- Newly initialized webhooks remain immediately due when database work crosses a clock tick, avoiding a spurious retry failure before the first delivery attempt.
+- Rust SDK: `AgentClient::heartbeat()` and other acknowledgement calls answered `{ "ok": true, "data": null }` no longer fail with "Response missing data field" after the server applied them.
+- Rust SDK success responses must include `data`; an explicit null acknowledgement remains valid, while a missing payload is rejected.
+
 ## [10.4.0] - 2026-10-13
 
 ### Added
@@ -789,7 +797,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v10.4.0...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v10.4.1...HEAD
+[10.4.1]: https://github.com/AgentWorkforce/relaycast/compare/v10.4.0...v10.4.1
 [10.4.0]: https://github.com/AgentWorkforce/relaycast/compare/v10.3.2...v10.4.0
 [10.3.2]: https://github.com/AgentWorkforce/relaycast/compare/v10.3.1...v10.3.2
 [10.3.1]: https://github.com/AgentWorkforce/relaycast/compare/v10.3.0...v10.3.1
