@@ -36,10 +36,7 @@ function isTruthy(value: string | undefined): boolean {
   return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
 }
 
-function telemetryEnabled(state: TelemetryState, apiKey: string): boolean {
-  // No key configured (e.g. forks, local dev, CI) → silently no-op. Same code
-  // path as the explicit DO_NOT_TRACK / RELAYCAST_TELEMETRY_DISABLED opt-outs.
-  if (!apiKey.trim()) return false;
+function telemetryConsentEnabled(state: TelemetryState): boolean {
   if (isTruthy(process.env.DO_NOT_TRACK) || isTruthy(process.env.RELAYCAST_TELEMETRY_DISABLED)) {
     return false;
   }
@@ -204,7 +201,8 @@ async function postJson(
 
 export function createMcpTelemetry(version = 'unknown', options: McpTelemetryOptions = {}): McpTelemetry {
   let state = loadState();
-  let wasEnabled: boolean | undefined;
+  let hadConsent: boolean | undefined;
+  let rotationPending = false;
   let localGeneration: string | undefined;
   const sessionId = randomUUID();
   const pending = new Set<Promise<void>>();
@@ -215,15 +213,25 @@ export function createMcpTelemetry(version = 'unknown', options: McpTelemetryOpt
 
   const capture = (event: ClientTelemetryEventName, properties: Record<string, unknown> = {}) => {
     const current = loadState(state);
-    const enabled = telemetryEnabled(current, posthogApiKey);
-    if (wasEnabled !== false && !enabled) localGeneration = randomUUID();
+    const consentEnabled = telemetryConsentEnabled(current);
+    if (hadConsent !== false && !consentEnabled) {
+      localGeneration = randomUUID();
+      rotationPending = true;
+    }
     if (localGeneration) current.anonymousId = localGeneration;
-    if (wasEnabled !== false && !enabled) {
-      try { fs.writeFileSync(TELEMETRY_PATH, JSON.stringify(current) + '\n', 'utf8'); } catch { /* best effort */ }
+    if (rotationPending) {
+      try {
+        fs.writeFileSync(TELEMETRY_PATH, JSON.stringify(current) + '\n', 'utf8');
+        rotationPending = false;
+      } catch {
+        // Keep using the fresh in-memory generation and retry on later captures.
+        // A process exit before storage recovers cannot preserve this rotation.
+      }
     }
     state = current;
-    wasEnabled = enabled;
-    if (!enabled) return;
+    hadConsent = consentEnabled;
+    // Missing configuration is not an opt-out and must not rotate identity.
+    if (!consentEnabled || !posthogApiKey.trim()) return;
 
     const parsed = parseTelemetryIngestionEvent({
       event,

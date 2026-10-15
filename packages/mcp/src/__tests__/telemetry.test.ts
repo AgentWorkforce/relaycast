@@ -71,7 +71,7 @@ describe('createMcpTelemetry', () => {
   });
 
   afterEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     capturedBodies.length = 0;
   });
 
@@ -101,6 +101,56 @@ describe('createMcpTelemetry', () => {
     await telemetry.flush();
     expect(capturedBodies).toHaveLength(2);
     expect(JSON.parse(capturedBodies[1]!).distinct_id).not.toBe('before-optout');
+  });
+
+  it('retries failed opt-out rotation persistence before a later instance starts', async () => {
+    let saved = JSON.stringify({ anonymousId: 'before-optout' });
+    vi.mocked(fs.readFileSync).mockImplementation(() => saved);
+    vi.mocked(fs.writeFileSync).mockImplementationOnce(() => { throw new Error('EACCES'); })
+      .mockImplementation((_path, data) => { saved = String(data); });
+    const telemetry = createMcpTelemetry('10.4.0', { posthogApiKey: 'phc_test' });
+    telemetry.capture('relaycast_mcp_server_started');
+    process.env.DO_NOT_TRACK = '1';
+    telemetry.capture('relaycast_mcp_server_started');
+    expect(capturedBodies).toHaveLength(1);
+    delete process.env.DO_NOT_TRACK;
+    telemetry.capture('relaycast_mcp_server_started');
+    const nextInstance = createMcpTelemetry('10.4.0', { posthogApiKey: 'phc_test' });
+    nextInstance.capture('relaycast_mcp_server_started');
+    await Promise.all([telemetry.flush(), nextInstance.flush()]);
+    const ids = capturedBodies.map(body => JSON.parse(body).distinct_id);
+    expect(ids).toHaveLength(3);
+    expect(ids[1]).not.toBe('before-optout');
+    expect(ids[2]).toBe(ids[1]);
+    expect(JSON.parse(saved).anonymousId).toBe(ids[1]);
+  });
+
+  it('keeps a fresh in-memory identity while rotation persistence remains unavailable', async () => {
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ anonymousId: 'stale-disk-id' }));
+    vi.mocked(fs.writeFileSync).mockImplementation(() => { throw new Error('EACCES'); });
+    const telemetry = createMcpTelemetry('10.4.0', { posthogApiKey: 'phc_test' });
+    process.env.DO_NOT_TRACK = '1';
+    telemetry.capture('relaycast_mcp_server_started');
+    delete process.env.DO_NOT_TRACK;
+    telemetry.capture('relaycast_mcp_server_started');
+    telemetry.capture('relaycast_mcp_server_started');
+    await telemetry.flush();
+    const ids = capturedBodies.map(body => JSON.parse(body).distinct_id);
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).not.toBe('stale-disk-id');
+    expect(ids[1]).toBe(ids[0]);
+    expect(fs.writeFileSync).toHaveBeenCalledTimes(3);
+  });
+
+  it('still rotates on explicit opt-out when no API key is configured', () => {
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ anonymousId: 'before-optout' }));
+    process.env.DO_NOT_TRACK = '1';
+    const telemetry = createMcpTelemetry();
+    telemetry.capture('relaycast_mcp_server_started');
+    expect(nodeRequestMock).not.toHaveBeenCalled();
+    expect(fs.writeFileSync).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(vi.mocked(fs.writeFileSync).mock.calls[0]?.[1])).anonymousId)
+      .not.toBe('before-optout');
   });
 
   it('respects opt-out environment variables', async () => {
@@ -212,6 +262,7 @@ describe('createMcpTelemetry', () => {
 
     expect(nodeRequestMock).not.toHaveBeenCalled();
     expect(capturedBodies).toHaveLength(0);
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
   });
 
   it('flush resolves when no events are pending', async () => {

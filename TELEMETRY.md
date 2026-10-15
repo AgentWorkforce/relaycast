@@ -1,6 +1,8 @@
 # Telemetry
 
-Relaycast collects anonymous product telemetry to understand feature usage and reliability.
+Relaycast collects product telemetry to understand feature usage and reliability.
+Standalone clients remain anonymous; the hosted service can attribute events to a
+Cloud account only through a verified private ownership binding.
 
 ## What We Collect
 
@@ -23,7 +25,8 @@ Telemetry is designed to avoid sensitive data:
 
 Telemetry is sent to PostHog.
 
-Default host: `https://us.i.posthog.com`
+Standalone MCP default host: `https://i.agentrelay.com`. No API key is baked in;
+without a configured key, the MCP sends no telemetry.
 
 Host and authentication can be configured through environment settings.
 
@@ -36,41 +39,48 @@ Set either environment variable:
 
 ## Identifiers
 
-Client telemetry uses an anonymous identifier unless `RELAYCAST_TELEMETRY_DISTINCT_ID` sets one.
+Standalone MCP telemetry uses the anonymous identifier in `~/.relay/telemetry.json`
+and always sends `$process_person_profile: false`. Caller-supplied distinct IDs,
+including `RELAYCAST_TELEMETRY_DISTINCT_ID`, cannot select a Cloud person. Events
+include versioned emitter and actor provenance, without email/name writes.
 
-### Server events: person
+The MCP rereads consent on each capture. Explicit opt-out rotates the anonymous
+generation; a missing API key alone does not. If saving a rotation fails, the
+process keeps using its fresh in-memory identity and retries persistence on later
+captures. A process exit before storage becomes writable can lose that rotation;
+persistent cross-process rotation cannot be guaranteed while disk writes fail.
 
-`emitServerEvent` picks each server event's `distinct_id` in this order:
+### Server identity and ownership
 
-1. The acting agent's `metadata.cloud_user_id`. For a human agent this is the human; for any other agent it is the agent's owner.
-2. The caller-declared user (`X-Agent-Relay-User-Id`), then the client id (`X-Agent-Relay-Distinct-Id`).
-3. `relaycast-ws:<workspace_id>`, sent with `$process_person_profile: false`. A workspace is never a person.
+The engine emits personless `relaycast-ws:<workspace_id>` events. Its protected
+`TelemetryEvent.actor` describes the credential-authenticated principal separately
+from event targets and product sender fields:
 
-The acting agent is the agent token's agent. A node token posting a channel message acts as its `from` agent. Context rows from another workspace are ignored.
+- `workspaceId` identifies the authenticated workspace.
+- `agentId` and `senderType` are present for an authenticated agent.
+- `credentialHash` is SHA-256 of the credential actually presented, independent
+  of a custom auth provider's storage format. It is private provenance for the
+  host and must never be forwarded to PostHog.
 
-### Server events: sender
+A node can select a `from` sender for a product message. That does not establish
+possession of that sender's credential or ownership of their Cloud account.
+Public metadata, caller user/distinct-ID headers, and event target IDs cannot
+establish analytics ownership.
 
-Events with an acting agent carry:
+The hosted sink verifies the protected actor against a private, unexpired Cloud
+ownership binding and the current credential generation. Only a matching binding
+selects the exact canonical Cloud user ID and its organization/workspace groups.
+Unmapped, revoked, expired, or superseded credentials remain personless; product
+authentication may still accept an older credential during its grace window.
 
-| Property | Value |
-|---|---|
-| `sender_type` | `human` when `agents.type = 'human'`, else `agent` or `system` |
-| `agent_id` | acting agent id |
-| `agent_name` | acting agent name |
-| `agent_owner_user_id` | owner's `cloud_user_id`, only when the actor is not a human |
+Human activity remains `actor_kind: human`; an agent acting for an owner remains
+`actor_kind: agent`, with separate owner and acting-agent fields. Node/service
+activity must not be promoted to a human based on a message's sender or target.
 
-An event's own `agent_id`/`agent_name` (for example the subject of `relaycast_server_channel_joined`) takes precedence over the sender's.
-
-Send events (`relaycast_server_message_created`, `relaycast_server_thread_reply_created`, `relaycast_server_dm_sent`, `relaycast_server_group_dm_message_sent`) set `$set_once` when the event has a person (never on the workspace fallback):
-
-- `first_human_message_at` when a human sends
-- `first_agent_message_at` when an agent (`sender_type: agent`) with an owner sends
-
-### Server events: groups
-
-`$groups: { organization, workspace }` come from `workspaces.metadata.cloud_org_id` and `workspaces.metadata.cloud_workspace_id`, which cloud writes. Each group is set only when its id is present; with neither, `$groups` is absent. Emitters without an authenticated workspace (inbound webhooks, Relayfile inbound, node sockets) load the workspace row to resolve them.
-
-The engine passes these on `TelemetryEvent` as `groups`, `setOnce` and `processPersonProfile`; the sink maps them to PostHog's `$groups`, `$set_once` and `$process_person_profile`.
+For verified send events, the hosted sink can set `first_human_message_at` or
+`first_agent_message_at` once according to the verified actor kind. Cloud owns
+email/name profile delivery. The engine does not derive person properties or
+Cloud groups from public workspace/agent metadata.
 
 ## Best-Effort Delivery
 

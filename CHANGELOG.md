@@ -21,6 +21,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Fixed
 
 - Resolve hosted analytics ownership from authenticated actor credentials; keep standalone MCP and website events anonymous and personless.
+- Keep MCP anonymous identity stable when an API key is absent, and retry saving opt-out identity rotations after temporary filesystem failures.
 
 ### Changed
 
