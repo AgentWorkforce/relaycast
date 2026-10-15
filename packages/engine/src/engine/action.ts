@@ -3668,7 +3668,9 @@ async function releaseHeldSpawnReservation(
  * For a fallback path about to clear a spawn's dispatch after its reschedule
  * failed: return the slot the dispatch still holds first. Returns false when
  * that could not be done, in which case the caller must leave the dispatch in
- * place so a later reschedule can release it.
+ * place so a later reschedule can release it. Callers also scope the detach
+ * to `spawn_reserved_at IS NULL` on the same node, so a row re-dispatched
+ * (and re-reserved) in between is never detached from its new slot.
  */
 export async function releaseSpawnReservationBeforeDetach(
   db: Db,
@@ -4155,13 +4157,15 @@ export async function rescheduleInvocationsForLostNode(
           retryAfterAt: nextRetryAfter(invocation.dispatchAttempts + 1),
           events: appendInvocationEvents(requeueEvent(invocation, 'node_lost', opts.offlineReason)),
         })
+        // Only the lost node's dispatch, and only once it holds no slot: a row
+        // re-dispatched meanwhile keeps its new dispatch and reservation.
         .where(and(
           eq(actionInvocations.workspaceId, invocation.workspaceId),
           eq(actionInvocations.id, invocation.id),
+          eq(actionInvocations.dispatchedNodeId, nodeId),
+          isNull(actionInvocations.spawnReservedAt),
           inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
-          ...(opts.claimRevision !== undefined
-            ? [eq(actionInvocations.nodeLivenessRevision, invocation.nodeLivenessRevision)]
-            : []),
+          ...revisionGuard,
         ));
     }
   }

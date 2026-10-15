@@ -539,6 +539,35 @@ describe('spawn invocation timeline', () => {
     expect(row).toEqual({ status: 'pending', dispatchedNodeId: null, spawnReservedAt: null });
   });
 
+  it('keeps a lost-node dispatch, slot and all, when its slot cannot be returned yet', async () => {
+    const ws = await createWorkspace(stack.app, 'timeline-detach-keep');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    await attachNode(ws, 'node_alpha', 'alpha');
+    const invocationId = await spawn(caller.token, 'worker-keep');
+    // Both the reschedule's claim and the fallback's claim fail.
+    const restore = injectUpdateFailure(
+      stack.runtime.deps.db, actionInvocations, 'D1_ERROR: D1 DB is overloaded. Too many requests queued', { times: 2 },
+    );
+    try {
+      await rescheduleInvocationsForLostNode(stack.runtime.deps.db, stack.runtime.realtime, ws.workspaceId, 'node_alpha');
+    } finally {
+      restore();
+    }
+    const [row] = await stack.runtime.handle.db
+      .select({ dispatchedNodeId: actionInvocations.dispatchedNodeId, spawnReservedAt: actionInvocations.spawnReservedAt })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(row!.dispatchedNodeId).toBe('node_alpha');
+    expect(row!.spawnReservedAt).not.toBeNull();
+    // A later attempt returns the slot exactly once.
+    await rescheduleInvocationsForLostNode(stack.runtime.deps.db, stack.runtime.realtime, ws.workspaceId, 'node_alpha');
+    const [node] = await stack.runtime.handle.db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(eq(nodes.id, 'node_alpha'));
+    expect(node!.reservedAgents).toBe(0);
+  });
+
   it('lets a socket owner record a result it refused before the engine saw it', async () => {
     const ws = await createWorkspace(stack.app, 'timeline-host-refusal');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');

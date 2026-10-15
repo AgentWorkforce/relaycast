@@ -2892,6 +2892,8 @@ export async function reconcileInventory(
           eq(actionInvocations.id, invocation.id),
           eq(actionInvocations.dispatchedNodeId, nodeId),
           eq(actionInvocations.dispatchedProvider, providerName),
+          // Never detach a dispatch that still holds a slot nothing could then return.
+          isNull(actionInvocations.spawnReservedAt),
           inArray(actionInvocations.status, ['pending', 'dispatched']),
         ));
     }
