@@ -59,7 +59,7 @@ describe('spawn harness ids', () => {
     expect(cursorNode.ofType('action.invoke')).toHaveLength(1);
   });
 
-  it.each(['Cursor', 'cursor_ai', 'spawn:cursor', '-cursor', 'cur sor', 'cursor\n', '', 'a'.repeat(33)])(
+  it.each(['Cursor', 'cursor_ai', 'spawn:cursor', '-cursor', 'cur sor', 'cursor\n', 'codex\n', '', 'a'.repeat(33)])(
     'refuses a malformed harness id %j before dispatch',
     async (cli) => {
       const ws = await createWorkspace(stack.app, 'spawn-harness-ids-bad');
@@ -76,6 +76,12 @@ describe('spawn harness ids', () => {
   it('keeps every built-in harness id and accepts the 32-character limit', () => {
     for (const cli of [...KNOWN_CLI_TYPES, 'cursor', 'copilot', 'devin', 'qwen', 'amp', 'claude-code', 'a'.repeat(32)]) {
       expect(CliTypeSchema.safeParse(cli).success).toBe(true);
+    }
+  });
+
+  it('rejects a trailing newline and other trailing whitespace', () => {
+    for (const cli of ['codex\n', 'codex\r', 'codex\r\n', 'codex ', 'codex\t', 'codex\u2028', 'codex\u2029']) {
+      expect(CliTypeSchema.safeParse(cli).success).toBe(false);
     }
   });
 });

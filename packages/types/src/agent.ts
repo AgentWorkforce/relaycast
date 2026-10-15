@@ -100,8 +100,10 @@ export type KnownCliType = (typeof KNOWN_CLI_TYPES)[number];
  * Shape of a harness id: the `<id>` a node advertises as its `spawn:<id>`
  * capacity (for example `cursor`, `copilot`, `qwen`). Lowercase letters,
  * digits and hyphens, starting with a letter or digit, at most 32 characters.
+ * The trailing lookahead requires the absolute end of the string, so a
+ * trailing newline or other whitespace is rejected.
  */
-export const HARNESS_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$/;
+export const HARNESS_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$(?![\s\S])/;
 export const HARNESS_ID_RULE = 'lowercase letters, digits and hyphens, starting with a letter or digit, at most 32 characters';
 
 /**
