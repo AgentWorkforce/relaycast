@@ -544,4 +544,104 @@ describe('registration tools', () => {
       agentToken: 'tok_def',
     });
   });
+
+  it('rotate_key rotates the key, migrates the session, and never prints the secret', async () => {
+    session.workspaceKey = 'rk_live_test';
+    session.agentToken = 'tok_keep';
+    session.agentName = 'bot1';
+    session.workspaces.set('rk_live_test', {
+      workspaceKey: 'rk_live_test',
+      agentToken: 'tok_keep',
+      agentName: 'bot1',
+      agents: new Map(),
+      workspaceName: 'Test Workspace',
+      wsBridge: null,
+      subscriptions: null,
+      wsInitAttempted: false,
+    });
+    global.fetch = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const path = new URL(url.toString()).pathname;
+      expect(path).toBe('/v1/workspace/rotate-key');
+      const headers = new Headers(init?.headers);
+      expect(headers.get('Authorization')).toBe('Bearer rk_live_test');
+      expect(JSON.parse(String(init?.body))).toEqual({ grace_seconds: 30 });
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          data: {
+            workspace_id: 'ws_1',
+            api_key: 'rk_live_rotated_secret',
+            previous_key_expires_at: '2026-10-15T00:00:30.000Z',
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }) as unknown as typeof global.fetch;
+
+    const result = await client.callTool({
+      name: 'workspace.rotate_key',
+      arguments: { grace_seconds: 30 },
+    });
+
+    const text = (result.content as { text: string }[])[0].text;
+    // The replacement credential must never appear in tool output.
+    expect(text).not.toContain('rk_live_rotated_secret');
+    expect(JSON.stringify(result.structuredContent)).not.toContain(
+      'rk_live_rotated_secret',
+    );
+    expect(result.structuredContent).toMatchObject({
+      rotated: true,
+      workspace_id: 'ws_1',
+      grace_seconds: 30,
+      previous_key_expires_at: '2026-10-15T00:00:30.000Z',
+    });
+
+    // Session persists the replacement and keeps the agent identity.
+    expect(session.workspaceKey).toBe('rk_live_rotated_secret');
+    expect(session.agentToken).toBe('tok_keep');
+    expect(session.agentName).toBe('bot1');
+    const saved = session.workspaces.get('rk_live_rotated_secret');
+    expect(saved?.agentToken).toBe('tok_keep');
+    expect(saved?.workspaceName).toBe('Test Workspace');
+    // The superseded key's saved context is gone.
+    expect(session.workspaces.has('rk_live_test')).toBe(false);
+  });
+
+  it('rotate_key fails without a configured workspace key', async () => {
+    const result = await client.callTool({
+      name: 'workspace.rotate_key',
+      arguments: {},
+    });
+    expect(result.isError).toBe(true);
+    expect((result.content as { text: string }[])[0].text).toContain(
+      'Workspace key not configured',
+    );
+  });
+
+  it('rotate_key surfaces the disabled-deployment error', async () => {
+    session.workspaceKey = 'rk_live_test';
+    global.fetch = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          ok: false,
+          error: {
+            code: 'workspace_key_rotation_disabled',
+            message: 'rotation disabled',
+          },
+        }),
+        { status: 403, headers: { 'content-type': 'application/json' } },
+      ),
+    ) as unknown as typeof global.fetch;
+
+    const result = await client.callTool({
+      name: 'workspace.rotate_key',
+      arguments: {},
+    });
+    expect(result.isError).toBe(true);
+    expect((result.content as { text: string }[])[0].text).toContain(
+      'workspace_key_rotation_disabled',
+    );
+    // Session still holds the unchanged key.
+    expect(session.workspaceKey).toBe('rk_live_test');
+  });
 });
