@@ -1318,11 +1318,12 @@ Explicit `target_node` on built-in spawn honors fleet placement even when a
 legacy workspace-global node action named `spawn` exists; its caller allowlist
 continues to apply. A dispatch acknowledgement does not establish harness readiness.
 
-Spawn is not limited to a fixed set of harnesses: `POST /v1/agents/spawn` with `cli: "cursor"`
-places the agent on a node that advertises `spawn:cursor`, and the same holds for any harness id a
-node advertises (`claude`, `codex`, `copilot`, `devin`, `qwen`, `amp`, ...). `cli` must be lowercase
-letters, digits and hyphens, starting with a letter or digit, at most 32 characters; anything else
-is a `400` before dispatch.
+Spawn is not limited to a fixed set of harnesses. When no legacy workspace-global node action named
+`spawn` exists, `POST /v1/agents/spawn` with `cli: "cursor"` places the agent on a node that
+advertises `spawn:cursor`, and the same holds for any harness id a node advertises (`claude`,
+`codex`, `copilot`, `devin`, `qwen`, `amp`, ...). When such a legacy global `spawn` action exists,
+this endpoint invokes that action instead. `cli` must be lowercase letters, digits and hyphens,
+starting with a letter or digit, at most 32 characters; anything else is a `400` before dispatch.
 
 Verified spawn (`verify_ready: true`) fails with `spawn_target_unavailable` when the selected provider lacks a live handler heartbeat or connected socket. Unverified legacy requests retain queue behavior. Relayfile ingress preserves authenticated `providerEventType` and `resourceRef` as `provider_event_type` and `resource_ref` in message metadata, alongside the provider record. Generic file events do not imply PR, CI, or review semantics. Cloud sync envelopes are unwrapped to expose their provider payload in message metadata and formatting; this does not promote payload fields into authenticated event semantics.
 
