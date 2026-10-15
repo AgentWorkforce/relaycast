@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { eq } from 'drizzle-orm';
+import { agents } from '../../db/schema.js';
+import { rotateAgentToken } from '../../engine/tokenRotate.js';
 import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
 
 /**
@@ -122,5 +125,42 @@ describe('authenticated agent token rollover concurrency', () => {
     expect((await rotate(workspace.workspaceKey, incumbent.name)).status).toBe(401);
     expect((await rotate(stranger.token, incumbent.name)).status).toBe(403);
     expect((await authenticate(incumbent.token)).status).toBe(200);
+  });
+
+  it('rejects an expired agent token and reports a bounded new expiry', async () => {
+    const workspace = await createWorkspace(stack.app, 'short-lived-expiry');
+    const initial = await registerAgent(stack.app, workspace.workspaceKey, 'short-lived');
+    const [row] = await stack.runtime.deps.db.select().from(agents).where(eq(agents.name, initial.name));
+    expect(row?.tokenExpiresAt).toBeInstanceOf(Date);
+    const remaining = row!.tokenExpiresAt!.getTime() - Date.now();
+    expect(remaining).toBeGreaterThan(0);
+    expect(remaining).toBeLessThanOrEqual(15 * 60_000);
+
+    await stack.runtime.deps.db.update(agents)
+      .set({ tokenExpiresAt: new Date(Date.now() - 1_000) })
+      .where(eq(agents.id, row!.id));
+    expect((await authenticate(initial.token)).status).toBe(401);
+    expect((await rotate(initial.token, initial.name)).status).toBe(401);
+
+    // Migration leaves existing credentials without a deadline until the
+    // holder can rotate; expiry enforcement must not cut those clients off.
+    await stack.runtime.deps.db.update(agents)
+      .set({ tokenExpiresAt: null })
+      .where(eq(agents.id, row!.id));
+    expect((await authenticate(initial.token)).status).toBe(200);
+  });
+
+  it('does not revive an expired token in the previous-token grace slot', async () => {
+    const workspace = await createWorkspace(stack.app, 'short-lived-grace');
+    const initial = await registerAgent(stack.app, workspace.workspaceKey, 'grace-bound');
+    const [row] = await stack.runtime.deps.db.select().from(agents).where(eq(agents.name, initial.name));
+    await stack.runtime.deps.db.update(agents)
+      .set({ tokenExpiresAt: new Date(Date.now() - 1_000) })
+      .where(eq(agents.id, row!.id));
+
+    const rotated = await rotateAgentToken(stack.runtime.deps.db, workspace.workspaceId, initial.name);
+    expect(Date.parse(rotated.token_expires_at) - Date.now()).toBeLessThanOrEqual(15 * 60_000);
+    expect((await authenticate(initial.token)).status).toBe(401);
+    expect((await authenticate(rotated.token)).status).toBe(200);
   });
 });

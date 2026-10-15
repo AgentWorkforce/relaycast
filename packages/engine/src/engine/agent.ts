@@ -10,6 +10,7 @@ import { directNodeIdForAgent } from './node.js';
 import { addressNodeSelection, formatAgentAddress } from './address.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { AGENT_RECOVERY_PROOF_HASH_PATTERN } from '@relaycast/types';
+import { agentTokenExpiresAt } from '../auth/agentTokenExpiry.js';
 
 export { AGENT_RECOVERY_PROOF_HASH_PATTERN } from '@relaycast/types';
 
@@ -249,6 +250,7 @@ export async function registerAgent(
   const directNodeId = directNodeIdForAgent(agentId);
   const directNodeTokenHash = await sha256Hex(`implicit_direct:${workspaceId}:${agentId}:${randomHex(16)}`);
   const now = new Date();
+  const tokenExpiresAt = agentTokenExpiresAt(now);
 
   const [generalChannel] = await db
     .select()
@@ -293,6 +295,7 @@ export async function registerAgent(
           // on databases migrated before 0013, and SQLite can't ALTER a default.
           status: 'active',
           tokenHash,
+          tokenExpiresAt,
           persona: data.persona ?? null,
           metadata: data.metadata ?? {},
           capabilities: data.capabilities ?? null,
@@ -418,6 +421,7 @@ export async function registerAgent(
     address: `${agent.name}@${directMachineId ?? 'direct'}`,
     handle: agent.handle ?? `@${agent.name}`,
     token,
+    token_expires_at: tokenExpiresAt.toISOString(),
     status: agent.status,
     capabilities: agent.capabilities ?? null,
     created_at: agent.createdAt.toISOString(),

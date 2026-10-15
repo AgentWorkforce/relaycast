@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased - Major]
+
+### Changed
+
+- Newly issued agent REST tokens expire after 15 minutes and expose `token_expires_at`; clients must rotate before expiry. Legacy tokens require a staged rotation before this policy can be deployed.
 
 ### Fixed
 
