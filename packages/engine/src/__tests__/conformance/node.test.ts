@@ -2685,6 +2685,48 @@ describe('node adapter conformance', () => {
       expect(await readReserved()).toBe(0);
     });
 
+    it('returns a registered spawn slot once when its send fails, and never after the row returned it', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-registered-spawn-send-fails-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha',
+        name: 'alpha',
+        capabilities: [capability('spawn:claude', 'action', { agent: 'claude' })],
+        load: 0,
+        maxAgents: 4,
+      });
+      const db = stack.runtime.handle.db;
+      // Another spawn's slot, which must survive both attempts.
+      await db.update(nodes).set({ reservedAgents: 1 })
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')));
+      const readReserved = async () => (await db.select({ reservedAgents: nodes.reservedAgents }).from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha'))))[0].reservedAgents ?? 0;
+      const invoke = (name: string) => stack.app.request('/v1/nodes/alpha/actions/spawn:claude/invoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: { name } }),
+      });
+      const nodeConnections = stack.runtime.deps.nodeConnections!;
+
+      // The send fails: the failed row still carries the recorded slot.
+      vi.spyOn(nodeConnections, 'sendAuthorizedActionToProvider').mockImplementationOnce(async () => false);
+      await invoke('worker-send-failed');
+      expect(await readReserved()).toBe(1);
+
+      // The send reports failure although the frame arrived and the node's
+      // result already returned the slot.
+      const real = nodeConnections.sendAuthorizedActionToProvider!.bind(nodeConnections);
+      vi.spyOn(nodeConnections, 'sendAuthorizedActionToProvider').mockImplementationOnce(async (...args) => {
+        await real(...args);
+        const frame = args[3] as { invocation_id: string };
+        await alpha.handle.handleMessage(JSON.stringify({ v: 1, type: 'action.result', invocation_id: frame.invocation_id,
+          output: { name: 'worker-delivered' } }));
+        return false;
+      });
+      await invoke('worker-delivered');
+      expect(await readReserved()).toBe(1);
+    });
+
     it('returns the placement slot when a sent spawn loses its dispatch record to a concurrent settle', async () => {
       const ws = await createWorkspace(stack.app, 'fleet-spawn-dispatch-cas-lost-ws');
       const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');

@@ -1983,21 +1983,28 @@ async function dispatchRegisteredSpawnAction(args: {
 
 /**
  * Return the slot a registered spawn reserved for a dispatch that was not
- * established. A reservation the dispatch claim never recorded is held only
- * by this request. One a claim recorded stays with the row while the row is
- * open; once the row is settled without releasing it (a failed send), it is
- * returned here, exactly once, by clearing the row's mark.
+ * established. The invocation is new, so until a dispatch claim lands it has
+ * no attempt: a row still at zero attempts never recorded the reservation,
+ * which this request alone holds. Once a claim recorded it (an attempt
+ * exists), the row owns it: an open row keeps it, a completion returns it,
+ * and a settled row that still carries the mark (a failed send) has it
+ * returned here, exactly once, by clearing that mark. A row whose mark is
+ * already gone is never released again.
  */
 async function returnUnownedSpawnReservation(db: Db, workspaceId: string, invocationId: string, nodeId: string) {
   const [row] = await db
-    .select({ status: actionInvocations.status, spawnReservedAt: actionInvocations.spawnReservedAt })
+    .select({
+      status: actionInvocations.status,
+      spawnReservedAt: actionInvocations.spawnReservedAt,
+      dispatchAttempts: actionInvocations.dispatchAttempts,
+    })
     .from(actionInvocations)
     .where(and(eq(actionInvocations.workspaceId, workspaceId), eq(actionInvocations.id, invocationId)));
-  if (!row?.spawnReservedAt) {
+  if (!row || (row.dispatchAttempts === 0 && !row.spawnReservedAt)) {
     await releaseNodeCapacity(db, workspaceId, nodeId);
     return;
   }
-  if (OPEN_INVOCATION_STATUSES.some((status) => status === row.status)) return;
+  if (!row.spawnReservedAt || OPEN_INVOCATION_STATUSES.some((status) => status === row.status)) return;
   const [cleared] = await db
     .update(actionInvocations)
     .set({ spawnReservedAt: null })
