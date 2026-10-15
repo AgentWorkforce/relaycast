@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
-import { AGENT_TOKEN_HASH_PATTERN, AgentTypeSchema, CliTypeSchema } from '@relaycast/types';
+import { AGENT_TOKEN_HASH_PATTERN, AgentTypeSchema, CliTypeSchema, HARNESS_ID_RULE } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { requireWorkspaceKey, requireAuth, requireAgentToken, requireSender, requireWorkspaceRead } from '../middleware/auth.js';
 import {
@@ -801,7 +801,7 @@ agentRoutes.post(
         return hasNameIssue
           ? 'name is required'
           : hasCliIssue
-            ? `cli must be one of: ${CliTypeSchema.options.join(', ')}`
+            ? `cli must be a harness id (${HARNESS_ID_RULE}), such as claude, codex or cursor`
             : hasTaskIssue
               ? 'task is required'
               : 'invalid spawn request';

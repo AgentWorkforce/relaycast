@@ -3020,8 +3020,16 @@ paths:
                   description: Unique name for the new agent
                 cli:
                   type: string
-                  enum: [claude, codex, gemini, aider, goose, opencode, grok]
-                  description: Which AI CLI tool to use
+                  pattern: '^[a-z0-9][a-z0-9-]{0,31}$'
+                  maxLength: 32
+                  example: cursor
+                  description: >-
+                    Harness to spawn, such as claude, codex, gemini, aider, goose,
+                    opencode, grok, cursor, copilot, devin, qwen or amp. Any id a
+                    node advertises as its `spawn:<id>` capacity is accepted:
+                    lowercase letters, digits and hyphens, starting with a letter
+                    or digit, at most 32 characters. Placement targets a node that
+                    advertises `spawn:<cli>`.
                 task:
                   type: string
                   description: The task description for the spawned agent
