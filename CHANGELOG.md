@@ -20,6 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Prevent stalled webhook delivery attempts from overwriting a newer attempt’s status or retry deadline after their lease is reclaimed.
 
+- `GET /v1/deliveries/by-message/{messageId}` proves one still-pending delivery to the calling agent token and returns its server-derived sender id. Unknown, foreign, acknowledged, and expired messages share a 404.
 - A sender can follow its message. `POST /v1/dm` answers with `delivery: { id, status, expires_at } | null` and `POST /v1/channels/:name/messages` with `deliveries: [{ id, agent_id, status, expires_at }]` (first 50, plus `deliveries_truncated`). The sender then receives `delivery.delivered` when a row reaches the recipient's socket or push endpoint and the new `delivery.acked` when the recipient acks it (REST ack, node cumulative ack, or `http_push` `on_2xx` / `response`), each with the recipient's `agent_id` / `agent_name`, `status` and `at`. `GET /v1/messages/:id/deliveries` lists every recipient's delivery and read state (`read_at`) for a message the caller sent; a workspace key or an admitted observer reads any message. Recipient-side events are unchanged.
 - SDKs: TypeScript `agent.messageDeliveries(id)`, `relay.messages.deliveries(id)` and `on.deliveryAcked`. Rust and Swift SDKs do not yet wrap the new route or event.
 - `POST /v1/nodes` accepts a CSPRNG `Idempotency-Key` (32+ characters) on a first enrollment, without `X-Relaycast-Node-Token`. Persist the key before the first request; a retry with the same key and body within 24 hours returns `201` with the node's original token, with no new row and no rotation, so a lost reply no longer strands an orphan node holding the name. A changed body, another key, or no key still gets `409 node_token_proof_required`. TypeScript `nodes.create({...}, { idempotencyKey })` no longer requires `currentToken`.
@@ -240,10 +241,6 @@ Packages without a separate changelog are covered by the cross-package notes bel
 - Newly initialized webhooks remain immediately due when database work crosses a clock tick, avoiding a spurious retry failure before the first delivery attempt.
 - Rust SDK: `AgentClient::heartbeat()` and other acknowledgement calls answered `{ "ok": true, "data": null }` no longer fail with "Response missing data field" after the server applied them.
 - Rust SDK success responses must include `data`; an explicit null acknowledgement remains valid, while a missing payload is rejected.
-
-### Added
-
-- `GET /v1/deliveries/by-message/{messageId}` proves one still-pending delivery to the calling agent token and returns its server-derived sender id. Unknown, foreign, acknowledged, and expired messages share a 404.
 
 ## [10.4.0] - 2026-10-13
 

@@ -11,6 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- Agent-token `GET /v1/deliveries/by-message/{messageId}` resolves one pending delivery without the inbox page limit and reveals no other recipient's delivery.
 - `GET /v1/messages/:id/deliveries`: `{ message_id, deliveries: [{ id, agent_id, agent_name, status, created_at, delivered_at, acked_at, dead_lettered_at, error, read_at }] }`, one read joining `deliveries` to `read_receipts`, creation order, capped at 500 (`MESSAGE_DELIVERIES_MAX`). An agent token must be the message's sender; any other message is `404 message_not_found`. A workspace key reads any message; an observer token is gated like `GET /v1/messages/:id` (`messages:read`, or `dms:read` with `include_dms`, plus filters); node tokens are refused.
 - `POST /v1/dm` responds with `delivery: { id, status, expires_at } | null`; `POST /v1/channels/:name/messages` responds with `deliveries: [{ id, agent_id, status, expires_at }]` capped at 50 (`SENT_DELIVERIES_RESPONSE_MAX`) and `deliveries_truncated`. Idempotent replays carry the same rows. Existing fields are unchanged.
 - Sender-side delivery events through the agent-scoped dispatch path (workspace stream plus the sender's node `context.update`): `delivery.delivered` when `markDeliveriesDelivered` moves a row `queued` -> `delivered` (inline routing, the scheduled redrive, and node reconnect replay), and the new `delivery.acked` from `POST /v1/deliveries/:id/ack`, a node's cumulative `delivery.ack`, and `http_push` `on_2xx` / `response` acks. Payload: `delivery_id`, `message_id`, recipient `agent_id` / `agent_name`, `status`, `at`. Rows with no sender agent and self-addressed rows emit nothing. Every recipient-side emit, including the recipient's `delivery.delivered` on ack, is unchanged. `notifySenderDeliveryReceipts` resolves a whole batch in one chunked read (D1-safe), never one per row; `POST /v1/messages/:id/read` records the read without a `delivery.acked` (`message.read` already reaches the sender).
@@ -312,10 +313,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Fixed
 
 - Newly initialized webhooks use the delivery pass's clock for their first due time, avoiding spurious retry failures when insertion crosses a clock tick.
-
-### Added
-
-- Agent-token `GET /v1/deliveries/by-message/{messageId}` resolves one pending delivery without the inbox page limit and reveals no other recipient's delivery.
 
 ## [10.4.0] - 2026-10-13
 

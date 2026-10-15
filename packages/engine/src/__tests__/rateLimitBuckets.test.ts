@@ -20,6 +20,18 @@ describe('rate limit route buckets', () => {
     expect(getRouteKey('GET', '/v1/node/me')).toBe('GET:/node/me');
   });
 
+  it('gives the pending-delivery proof one bucket of its own', () => {
+    // Cloud calls this before it treats a sender as the owner. In `global` a
+    // busy workspace's sends would starve it, and a 429 fails closed.
+    expect(getRouteKey('GET', '/v1/deliveries/by-message/msg_1')).toBe('GET:/deliveries/by-message/*');
+    expect(getRouteKey('GET', '/v1/deliveries/by-message/msg_2')).toBe('GET:/deliveries/by-message/*');
+    expect(ROUTE_MULTIPLIERS['GET:/deliveries/by-message/*']).toBe(1.0);
+    // The queue itself and the ack stay where they were.
+    expect(getRouteKey('GET', '/v1/deliveries')).toBeNull();
+    expect(getRouteKey('POST', '/v1/deliveries/msg_1/ack')).toBeNull();
+    expect(getRouteKey('GET', '/v1/deliveries/by-message/msg_1/extra')).toBeNull();
+  });
+
   it('collapses a single-agent lookup to one key, not one per agent name', () => {
     // Cloud looks up the answer address it reserved. Keying per name would give
     // every name a full allowance and the limit would mean nothing.
