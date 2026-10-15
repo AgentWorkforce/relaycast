@@ -45,26 +45,30 @@ export function invocationEvent(type: string, fields: InvocationEventFields = {}
  * only the row knows, such as the dispatch attempt number.
  */
 export function appendInvocationEvents(...events: Array<ActionInvocationEvent | SQL>): SQL {
-  let appended: SQL = sql`COALESCE(${actionInvocations.events}, '[]')`;
+  // Trim before appending so each event is bound exactly once: statements that
+  // already carry a D1-sized IN list cannot afford repeated parameters. The
+  // stored array never exceeds the limit, so appending k events overflows it
+  // by at most k; drop that many from index 1 (the first event is kept).
+  const current = sql`COALESCE(${actionInvocations.events}, '[]')`;
+  let trimmed: SQL = current;
+  for (let overflow = 1; overflow <= events.length; overflow++) {
+    const threshold = sql.raw(String(INVOCATION_EVENT_LIMIT - events.length + overflow));
+    const removals = sql.raw(Array.from({ length: overflow }, () => "'$[1]'").join(', '));
+    trimmed = sql`CASE WHEN json_array_length(${current}) >= ${threshold}
+      THEN json_remove(${current}, ${removals}) ELSE ${trimmed} END`;
+  }
+  let appended = trimmed;
   for (const event of events) {
     const value = event instanceof SQL ? event : sql`json(${JSON.stringify(event)})`;
     appended = sql`json_insert(${appended}, '$[#]', ${value})`;
   }
-  // Each append keeps the array at or below the limit, so it can overflow by at
-  // most the number of events added here. Drop that many from index 1.
-  let bounded: SQL = appended;
-  for (let overflow = 1; overflow <= events.length; overflow++) {
-    const removals = sql.join(Array.from({ length: overflow }, () => sql`'$[1]'`), sql`, `);
-    bounded = sql`CASE WHEN json_array_length(${appended}) > ${INVOCATION_EVENT_LIMIT + overflow - 1}
-      THEN json_remove(${appended}, ${removals}) ELSE ${bounded} END`;
-  }
-  return bounded;
+  return appended;
 }
 
 /** A queued/dispatched event whose `attempt` is the row's attempt after this update. */
 export function dispatchAttemptEvent(event: ActionInvocationEvent, incrementsAttempt: boolean): SQL {
   return sql`json_set(json(${JSON.stringify(event)}), '$.attempt',
-    COALESCE(${actionInvocations.dispatchAttempts}, 0) + ${incrementsAttempt ? 1 : 0})`;
+    COALESCE(${actionInvocations.dispatchAttempts}, 0) + ${sql.raw(incrementsAttempt ? '1' : '0')})`;
 }
 
 /**
@@ -76,13 +80,15 @@ export async function recordInvocationEvent(
   db: EngineDb,
   workspaceId: string,
   invocationId: string,
-  event: ActionInvocationEvent,
+  event: ActionInvocationEvent | ActionInvocationEvent[],
   where: SQL[] = [],
 ): Promise<boolean> {
+  const events = Array.isArray(event) ? event : [event];
+  if (events.length === 0) return false;
   try {
     const updated = await db
       .update(actionInvocations)
-      .set({ events: appendInvocationEvents(event) })
+      .set({ events: appendInvocationEvents(...events) })
       .where(and(
         eq(actionInvocations.workspaceId, workspaceId),
         eq(actionInvocations.id, invocationId),

@@ -140,6 +140,21 @@ describe('spawn invocation timeline', () => {
       /^Node alpha launched agent worker-late \(registered .* UTC\), but the invocation was requeued at .* UTC after the node's heartbeat went stale and no result has been accepted since\.$/,
     );
 
+    // Another provider connection on the same node did not receive the work,
+    // so its result is not applied.
+    const impostor = new FakeSocket();
+    const impostorHandle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, 'node_alpha', impostor);
+    await impostorHandle.handleMessage(JSON.stringify({
+      v: 1, id: 'register-impostor', type: 'node.register', name: 'alpha', node_id: 'node_alpha',
+      provider: { name: 'impostor', instance_id: 'impostor-1' },
+      capabilities: [], max_agents: 4, tags: ['test'], version: 'test', resume_cursor: null,
+    }));
+    await impostorHandle.handleMessage(JSON.stringify({
+      v: 1, id: 'impostor-result', type: 'action.result', invocation_id: invocationId, output: { forged: true },
+    }));
+    expect(impostor.ofType('error').at(-1)).toMatchObject({ id: 'impostor-result', code: 'action_result_not_dispatched' });
+    expect((await getInvocation(caller.token, invocationId)).status).toBe('pending');
+
     alpha.sock.received.length = 0;
     await alpha.handle.handleMessage(JSON.stringify({
       v: 1, type: 'action.result', invocation_id: invocationId, output: { agent: 'worker-late' },
@@ -148,9 +163,10 @@ describe('spawn invocation timeline', () => {
     expect(completed.status).toBe('completed');
     expect(completed.output).toEqual({ agent: 'worker-late' });
     expect(types(completed)).toEqual([
-      'created', 'placed', 'dispatched', 'requeued', 'agent_registered', 'result_received', 'completed',
+      'created', 'placed', 'dispatched', 'requeued', 'agent_registered', 'result_rejected', 'result_received', 'completed',
     ]);
-    expect(completed.events[5]).toMatchObject({ reason: 'after_requeue', ok: true, node_id: 'node_alpha' });
+    expect(completed.events[3]).toMatchObject({ provider: 'default' });
+    expect(completed.events[6]).toMatchObject({ reason: 'after_requeue', ok: true, node_id: 'node_alpha' });
     expect(alpha.sock.ofType('error')).toHaveLength(0);
   });
 
@@ -317,6 +333,29 @@ describe('spawn invocation timeline', () => {
     expect(invocation.status).not.toBe('completed');
     expect(types(invocation)).not.toContain('started');
     expect(invocation.events.find((event) => event.type === 'requeued')).toMatchObject({ reason: 'dispatch_timeout' });
+  });
+
+  it('finds an agent recovered under a later spawn invocation', async () => {
+    const ws = await createWorkspace(stack.app, 'timeline-recover');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    const alpha = await attachNode(ws, 'node_alpha', 'alpha');
+    const first = await spawn(caller.token, 'worker-again');
+    await registerSpawnedAgent(alpha, 'worker-again', first);
+    const agentId = (alpha.sock.ofType('reply').at(-1) as { data: { agent_id: string } }).data.agent_id;
+    await alpha.handle.handleMessage(JSON.stringify({
+      v: 1, type: 'action.result', invocation_id: first, output: { agent: 'worker-again' },
+    }));
+
+    const second = await spawn(caller.token, 'worker-again');
+    await alpha.handle.handleMessage(JSON.stringify({
+      v: 1, id: 'recover-1', type: 'agent.recover', name: 'worker-again', expected_agent_id: agentId,
+      invocation_id: second, session_ref: 'pty://worker-again-2', resumable: false,
+    }));
+    expect(alpha.sock.ofType('reply').at(-1)).toMatchObject({ id: 'recover-1', ok: true });
+    const recovered = await getInvocation(caller.token, second);
+    expect(recovered.registered_agent).toMatchObject({ agent_id: agentId, name: 'worker-again', node_id: 'node_alpha' });
+    expect(recovered.events.at(-1)).toMatchObject({ type: 'agent_registered', reason: 'recovered', agent_id: agentId });
+    expect((await getInvocation(caller.token, first)).registered_agent).toBeNull();
   });
 
   it('answers a result for an unknown invocation and records a malformed one', async () => {

@@ -306,6 +306,13 @@ describe('agent-published action lifecycle', () => {
       .where(eq(actionInvocations.id, invocationId));
     expect(row).toMatchObject({ actionId: null, status: 'dispatched', error: null });
     expect(row.providerAcceptedAttempt).toBe(row.dispatchAttempts);
+    // The socket owner recorded this agent-handled dispatch; the timeline shows it.
+    const [timeline] = await stack.runtime.handle.db
+      .select({ events: actionInvocations.events })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(timeline!.events.map((event) => event.type)).toEqual(['created', 'dispatched']);
+    expect(timeline!.events[1]).toMatchObject({ attempt: row.dispatchAttempts, agent_id: oldIdentity.agentId });
     await oldNode.handle.handleMessage(JSON.stringify({
       v: 1,
       type: 'action.result',
