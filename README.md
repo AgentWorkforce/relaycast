@@ -1385,3 +1385,11 @@ targets fail closed with typed 410 responses; terminal intents clear their paylo
 The existing recovery sweep also cleans expired intents. After cleanup, a reused
 key is a fresh request, so stop automatic retries after the 24-hour window.
 See [capacity regression and composition](packages/engine/scripts/CAPACITY-REGRESSION.md).
+
+## Communication policy primitives
+
+[`@relaycast/communication-policy`](packages/communication-policy/README.md) owns
+scoped admission, conversation grants, and delivery decisions. Its portable
+coordinator accepts a storage adapter; installing it does not enable policy on
+existing HTTP or realtime paths. Work-status interpretation belongs to the
+Cloud/desktop product, and History remains an evidence provider.

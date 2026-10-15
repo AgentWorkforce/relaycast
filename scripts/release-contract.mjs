@@ -10,6 +10,7 @@ export const PUBLISHED_PACKAGE_DIRS = [
   "mcp",
   "react",
   "openclaw",
+  "communication-policy",
 ];
 
 const LEVEL_RANK = { Patch: 0, Minor: 1, Major: 2 };
