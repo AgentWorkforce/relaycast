@@ -75,6 +75,34 @@ describe('createMcpTelemetry', () => {
     capturedBodies.length = 0;
   });
 
+  it('ignores claimed person IDs and emits an anonymous personless envelope', async () => {
+    process.env.RELAYCAST_TELEMETRY_DISTINCT_ID = 'forged-cloud-user';
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ anonymousId: 'anon-test' }));
+    const telemetry = createMcpTelemetry('10.4.0', { posthogApiKey: 'phc_test' });
+    telemetry.capture('relaycast_mcp_server_started', { identity_source: 'spoofed', is_authenticated: true });
+    await telemetry.flush();
+    expect(JSON.parse(capturedBodies[0]!)).toMatchObject({ distinct_id: 'anon-test', properties: {
+      $process_person_profile: false, identity_source: 'anonymous', is_authenticated: false, analytics_contract_version: 2,
+    } });
+    expect(capturedBodies[0]).not.toContain('forged-cloud-user');
+  });
+
+  it('reads changed opt-out preferences and rotates the anonymous generation', async () => {
+    let saved = JSON.stringify({ anonymousId: 'before-optout' });
+    vi.mocked(fs.readFileSync).mockImplementation(() => saved);
+    vi.mocked(fs.writeFileSync).mockImplementation((_path, data) => { saved = String(data); });
+    const telemetry = createMcpTelemetry('10.4.0', { posthogApiKey: 'phc_test' });
+    telemetry.capture('relaycast_mcp_server_started');
+    saved = JSON.stringify({ anonymousId: 'before-optout', telemetryDisabled: true });
+    telemetry.capture('relaycast_mcp_server_started');
+    expect(capturedBodies).toHaveLength(1);
+    saved = JSON.stringify({ ...JSON.parse(saved), telemetryDisabled: false });
+    telemetry.capture('relaycast_mcp_server_started');
+    await telemetry.flush();
+    expect(capturedBodies).toHaveLength(2);
+    expect(JSON.parse(capturedBodies[1]!).distinct_id).not.toBe('before-optout');
+  });
+
   it('respects opt-out environment variables', async () => {
     process.env.DO_NOT_TRACK = '1';
     vi.mocked(fs.readFileSync).mockImplementation(() => {

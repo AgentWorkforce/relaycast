@@ -26,6 +26,7 @@ const telemetry = (() => {
               navigator.msDoNotTrack === '1';
 
   if (dnt) {
+    try { localStorage.removeItem(POSTHOG_DISTINCT_ID_KEY); } catch { /* unavailable */ }
     return {
       enabled: false,
       capture: () => {}, // no-op when DNT is enabled
@@ -50,9 +51,15 @@ const telemetry = (() => {
   const rawHost =
     window.POSTHOG_HOST || window.RELAYCAST_POSTHOG_HOST || getMetaContent('relaycast-posthog-host');
   const host = (rawHost || POSTHOG_DEFAULT_HOST).replace(/\/$/, '');
-  const distinctId = getOrCreateDistinctId();
+  let distinctId = getOrCreateDistinctId();
 
   const capture = (event, properties = {}) => {
+    if (navigator.doNotTrack === '1' || navigator.doNotTrack === 'yes' || window.doNotTrack === '1' || navigator.msDoNotTrack === '1') {
+      try { localStorage.removeItem(POSTHOG_DISTINCT_ID_KEY); } catch { /* unavailable */ }
+      distinctId = null;
+      return;
+    }
+    distinctId ??= getOrCreateDistinctId();
     const payload = {
       api_key: posthogKey,
       event,
@@ -63,6 +70,13 @@ const telemetry = (() => {
         path: window.location.pathname,
         hostname: window.location.hostname,
         ...properties,
+        $process_person_profile: false,
+        $geoip_disable: true,
+        analytics_contract_version: 2,
+        emitter: 'relaycast-site',
+        identity_source: 'anonymous',
+        actor_kind: 'human',
+        is_authenticated: false,
       },
     };
 

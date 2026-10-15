@@ -15,7 +15,7 @@ describe('server telemetry attribution without workspace auth', () => {
   beforeEach(() => { stack = makeNodeStack({ ttlMs: 60_000 }); });
   afterEach(() => stack.close());
 
-  it('groups an inbound webhook event by the workspace cloud ids', async () => {
+  it('keeps public workspace metadata out of webhook analytics groups', async () => {
     const ws = await createWorkspace(stack.app, 'telemetry-webhook-groups');
     await stack.runtime.deps.db
       .update(workspaces)
@@ -45,7 +45,7 @@ describe('server telemetry attribution without workspace auth', () => {
     expect(triggered).toMatchObject({
       distinctId: `relaycast-ws:${ws.workspaceId}`,
       processPersonProfile: false,
-      groups: { organization: 'org_1', workspace: 'cws_1' },
     });
+    expect(triggered?.groups).toBeUndefined();
   });
 });

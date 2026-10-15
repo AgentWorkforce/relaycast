@@ -116,7 +116,7 @@ messageRoutes.post(
           return jsonError(c, 'from_required', 'A node token must set "from" (an agent name in the node workspace)', 400);
         }
         const [fromAgent] = await db
-          .select({ id: agents.id, name: agents.name, type: agents.type, metadata: agents.metadata })
+          .select({ id: agents.id, name: agents.name, type: agents.type, metadata: agents.metadata, tokenHash: agents.tokenHash, workspaceId: agents.workspaceId })
           .from(agents)
           .where(and(eq(agents.workspaceId, workspace.id), eq(agents.name, from)));
         if (!fromAgent) {

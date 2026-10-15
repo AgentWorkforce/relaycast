@@ -1,10 +1,7 @@
 import type { Context } from "hono";
 import {
-  TELEMETRY_CLOUD_ID_MAX_LENGTH,
   type ServerTelemetryEventName,
   type ServerTelemetryRequiredProperty,
-  type TelemetryGroups,
-  type TelemetryPersonSetOnce,
   type TelemetrySenderProperties,
   type TelemetrySenderType,
 } from "@relaycast/types";
@@ -65,7 +62,7 @@ export function normalizeRoutePathForTelemetry(value: string): string {
 export type TelemetryActor = Pick<
   typeof agents.$inferSelect,
   "id" | "name" | "type" | "metadata"
->;
+> & Partial<Pick<typeof agents.$inferSelect, "tokenHash" | "workspaceId">>;
 
 export type TelemetryWorkspace = Pick<
   typeof workspaces.$inferSelect,
@@ -108,28 +105,14 @@ export async function loadTelemetryWorkspace(
   }
 }
 
-/** Sends whose first occurrence is stamped on the person via `$set_once`. */
 const SEND_EVENTS: ReadonlySet<ServerTelemetryEventName> = new Set([
-  "relaycast_server_message_created",
-  "relaycast_server_thread_reply_created",
-  "relaycast_server_dm_sent",
-  "relaycast_server_group_dm_message_sent",
+  'relaycast_server_message_created', 'relaycast_server_thread_reply_created',
+  'relaycast_server_dm_sent', 'relaycast_server_group_dm_message_sent',
 ]);
 
-/** Distinct id for events with no person; a workspace is never a person. */
+/** Distinct id for events with no verified person. */
 export function workspaceTelemetryDistinctId(workspaceId: string): string {
   return `relaycast-ws:${workspaceId}`;
-}
-
-function cloudId(
-  metadata: Record<string, unknown> | null | undefined,
-  key: string,
-): string | undefined {
-  const value = metadata?.[key];
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  if (!trimmed || trimmed.length > TELEMETRY_CLOUD_ID_MAX_LENGTH) return undefined;
-  return trimmed;
 }
 
 function senderType(type: string): TelemetrySenderType {
@@ -138,41 +121,8 @@ function senderType(type: string): TelemetrySenderType {
   return "agent";
 }
 
-function senderProperties(
-  actor: TelemetryActor,
-  cloudUserId: string | undefined,
-): TelemetrySenderProperties {
-  const type = senderType(actor.type);
-  return {
-    sender_type: type,
-    agent_id: actor.id,
-    agent_name: actor.name,
-    ...(type !== "human" && cloudUserId ? { agent_owner_user_id: cloudUserId } : {}),
-  };
-}
-
-function workspaceGroups(
-  workspace: TelemetryWorkspace | undefined,
-): TelemetryGroups | undefined {
-  const organization = cloudId(workspace?.metadata, "cloud_org_id");
-  const cloudWorkspace = cloudId(workspace?.metadata, "cloud_workspace_id");
-  if (!organization && !cloudWorkspace) return undefined;
-  return {
-    ...(organization ? { organization } : {}),
-    ...(cloudWorkspace ? { workspace: cloudWorkspace } : {}),
-  };
-}
-
-function firstSendSetOnce(
-  sender: TelemetrySenderProperties,
-): TelemetryPersonSetOnce {
-  const now = new Date().toISOString();
-  if (sender.sender_type === "human") return { first_human_message_at: now };
-  // An agent send counts toward a person only when an owner is known; system
-  // actors are not the person's agents.
-  return sender.sender_type === "agent" && sender.agent_owner_user_id
-    ? { first_agent_message_at: now }
-    : {};
+function senderProperties(actor: TelemetryActor): TelemetrySenderProperties {
+  return { sender_type: senderType(actor.type), agent_id: actor.id, agent_name: actor.name };
 }
 
 /**
@@ -180,10 +130,8 @@ function firstSendSetOnce(
  * {@link TelemetrySink}. Self-host's default sink is a no-op; cloud injects
  * PostHog. The sink owns batching/background-flush, so this returns immediately.
  *
- * The person is the acting agent's `metadata.cloud_user_id` (a human, or the
- * owner of an agent), else the caller-declared user/client id, else the
- * workspace with person processing off. The workspace's cloud org and
- * workspace ids become PostHog groups.
+ * Public metadata and headers are correlation hints. The host can resolve a
+ * person only from the protected actor context and its own ownership binding.
  */
 export function emitServerEvent<E extends ServerTelemetryEventName>(
   c: Context<AppEnv>,
@@ -215,48 +163,51 @@ export function emitServerEvent<E extends ServerTelemetryEventName>(
   // Context rows belong to the authenticated token; an event about another
   // workspace (e.g. one just created) must not inherit them.
   const contextAgent = c.get("agent");
-  const contextWorkspace = c.get("workspace");
   const actingAgent =
     attribution.actor ??
     (contextAgent?.workspaceId === workspaceId ? contextAgent : undefined);
-  const workspace =
-    attribution.workspace ??
-    (contextWorkspace?.id === workspaceId ? contextWorkspace : undefined);
 
-  const cloudUserId = actingAgent
-    ? cloudId(actingAgent.metadata, "cloud_user_id")
-    : undefined;
-  const sender = actingAgent
-    ? senderProperties(actingAgent, cloudUserId)
-    : undefined;
-  // `client_distinct_id` is already the user id when the CLI is signed in; the
-  // explicit user header covers callers that send only one of the two.
-  const personId = cloudUserId ?? actor.actor_user_id ?? clientDistinctId;
-  const groups = workspaceGroups(workspace);
-  const setOnce =
-    personId && sender && SEND_EVENTS.has(event)
-      ? firstSendSetOnce(sender)
-      : {};
+
+  const sender = actingAgent ? senderProperties(actingAgent) : undefined;
+  // Do not derive a person or group from editable metadata or raw headers.
+  // The host verifies this actor's immutable credential generation separately.
+  const scopedActor = actingAgent && (!actingAgent.workspaceId || actingAgent.workspaceId === workspaceId)
+    ? actingAgent : undefined;
 
   c.get("engine").telemetry.capture({
     name: event,
-    distinctId: personId ?? workspaceTelemetryDistinctId(workspaceId),
-    ...(personId ? {} : { processPersonProfile: false }),
-    ...(groups ? { groups } : {}),
-    ...(Object.keys(setOnce).length > 0 ? { setOnce } : {}),
+    distinctId: workspaceTelemetryDistinctId(workspaceId),
+    processPersonProfile: false,
+    ...(scopedActor && scopedActor.type !== 'system' && SEND_EVENTS.has(event) ? {
+      setOnce: scopedActor.type === 'human'
+        ? { first_human_message_at: new Date().toISOString() }
+        : { first_agent_message_at: new Date().toISOString() },
+    } : {}),
+    actor: {
+      workspaceId,
+      ...(scopedActor ? {
+        agentId: scopedActor.id,
+        credentialHash: scopedActor.tokenHash,
+        senderType: senderType(scopedActor.type),
+      } : {}),
+    },
     properties: {
       app: "relaycast-server",
       surface: "cloud",
       // Early, so the sink's 64-property cap can never truncate it away.
       workspace_id: workspaceId,
       ...(clientDistinctId ? { client_distinct_id: clientDistinctId } : {}),
-      is_authenticated: Boolean(actor.actor_user_id),
       ...actor,
       ...sender,
       origin_actor: originActor,
       origin_client: origin.origin_client,
       origin_version: origin.origin_version,
       ...normalizedProperties,
+      analytics_contract_version: 2,
+      emitter: 'relaycast-engine',
+      identity_source: 'unverified',
+      actor_kind: scopedActor?.type === 'system' ? 'service' : sender?.sender_type ?? 'service',
+      is_authenticated: false,
     },
   });
 }

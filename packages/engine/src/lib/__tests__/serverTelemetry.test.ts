@@ -23,6 +23,7 @@ function agentRow(overrides: Partial<Agent> = {}): Agent {
     name: 'alice',
     type: 'agent',
     metadata: {},
+    tokenHash: 'a'.repeat(64),
     ...overrides,
   } as Agent;
 }
@@ -91,13 +92,13 @@ describe('emitServerEvent attribution', () => {
     expect(sanitized.workspace_id).toBe(WORKSPACE_ID);
   });
 
-  it('attributes a human sender to their cloud user', async () => {
+  it('keeps a human personless until the host verifies ownership', async () => {
     const event = await emit({
       agent: agentRow({ type: 'human', name: 'will', metadata: { cloud_user_id: 'user_will' } }),
     });
 
-    expect(event.distinctId).toBe('user_will');
-    expect(event.processPersonProfile).toBeUndefined();
+    expect(event.distinctId).toBe(`relaycast-ws:${WORKSPACE_ID}`);
+    expect(event.processPersonProfile).toBe(false);
     expect(event.properties).toMatchObject({
       sender_type: 'human',
       agent_id: 'agent_1',
@@ -107,62 +108,61 @@ describe('emitServerEvent attribution', () => {
     expect(event.setOnce).toEqual({ first_human_message_at: expect.any(String) });
   });
 
-  it('attributes an owned agent to its owner', async () => {
+  it('does not trust public owner metadata', async () => {
     const event = await emit({
       agent: agentRow({ metadata: { cloud_user_id: 'user_owner' } }),
     });
 
-    expect(event.distinctId).toBe('user_owner');
+    expect(event.distinctId).toBe(`relaycast-ws:${WORKSPACE_ID}`);
     expect(event.properties).toMatchObject({
       sender_type: 'agent',
       agent_id: 'agent_1',
       agent_name: 'alice',
-      agent_owner_user_id: 'user_owner',
     });
     expect(event.setOnce).toEqual({ first_agent_message_at: expect.any(String) });
   });
 
-  it('prefers the acting agent owner over the client distinct id', async () => {
+  it('keeps client IDs as hints without selecting a person', async () => {
     const event = await emit({
       agent: agentRow({ metadata: { cloud_user_id: 'user_owner' } }),
       headers: { 'X-Agent-Relay-Distinct-Id': 'anon_cli' },
     });
 
-    expect(event.distinctId).toBe('user_owner');
+    expect(event.distinctId).toBe(`relaycast-ws:${WORKSPACE_ID}`);
     expect(event.properties.client_distinct_id).toBe('anon_cli');
   });
 
-  it('prefers the acting agent owner over the declared user', async () => {
+  it('never treats declared user headers as authenticated', async () => {
     const event = await emit({
       agent: agentRow({ metadata: { cloud_user_id: 'user_owner' } }),
       headers: { 'X-Agent-Relay-User-Id': 'user_header' },
     });
 
-    expect(event.distinctId).toBe('user_owner');
-    expect(event.properties).toMatchObject({ actor_user_id: 'user_header', is_authenticated: true });
+    expect(event.distinctId).toBe(`relaycast-ws:${WORKSPACE_ID}`);
+    expect(event.properties).toMatchObject({ actor_user_id: 'user_header', is_authenticated: false });
   });
 
-  it('falls back to the declared user over the client distinct id for an unowned agent', async () => {
+  it('keeps unowned agents personless despite user and client claims', async () => {
     const event = await emit({
       agent: agentRow(),
       headers: { 'X-Agent-Relay-User-Id': 'user_header', 'X-Agent-Relay-Distinct-Id': 'anon_cli' },
     });
 
-    expect(event.distinctId).toBe('user_header');
-    expect(event.processPersonProfile).toBeUndefined();
+    expect(event.distinctId).toBe(`relaycast-ws:${WORKSPACE_ID}`);
+    expect(event.processPersonProfile).toBe(false);
   });
 
-  it('falls back to the client distinct id for an unowned agent', async () => {
+  it('keeps unowned agents personless despite client claims', async () => {
     const event = await emit({
       agent: agentRow(),
       headers: { 'X-Agent-Relay-Distinct-Id': 'anon_cli' },
     });
 
-    expect(event.distinctId).toBe('anon_cli');
-    expect(event.processPersonProfile).toBeUndefined();
+    expect(event.distinctId).toBe(`relaycast-ws:${WORKSPACE_ID}`);
+    expect(event.processPersonProfile).toBe(false);
     expect(event.properties.sender_type).toBe('agent');
     expect(event.properties).not.toHaveProperty('agent_owner_user_id');
-    expect(event.setOnce).toBeUndefined();
+    expect(event.setOnce).toEqual({ first_agent_message_at: expect.any(String) });
   });
 
   it('falls back to the workspace with no person profile when nothing identifies a person', async () => {
@@ -170,7 +170,7 @@ describe('emitServerEvent attribution', () => {
 
     expect(event.distinctId).toBe(`relaycast-ws:${WORKSPACE_ID}`);
     expect(event.processPersonProfile).toBe(false);
-    expect(event.setOnce).toBeUndefined();
+    expect(event.setOnce).toEqual({ first_agent_message_at: expect.any(String) });
   });
 
   it('reports a system actor as system without stamping a first agent message', async () => {
@@ -178,10 +178,9 @@ describe('emitServerEvent attribution', () => {
       agent: agentRow({ type: 'system', metadata: { cloud_user_id: 'user_owner' } }),
     });
 
-    expect(event.distinctId).toBe('user_owner');
+    expect(event.distinctId).toBe(`relaycast-ws:${WORKSPACE_ID}`);
     expect(event.properties).toMatchObject({
       sender_type: 'system',
-      agent_owner_user_id: 'user_owner',
     });
     expect(event.setOnce).toBeUndefined();
   });
@@ -193,12 +192,12 @@ describe('emitServerEvent attribution', () => {
     expect(event.properties).not.toHaveProperty('agent_id');
   });
 
-  it('adds organization and workspace groups from workspace metadata', async () => {
+  it('does not create trusted groups from editable workspace metadata', async () => {
     const event = await emit({
       workspace: workspaceRow({ cloud_org_id: 'org_1', cloud_workspace_id: 'cws_1' }),
     });
 
-    expect(event.groups).toEqual({ organization: 'org_1', workspace: 'cws_1' });
+    expect(event.groups).toBeUndefined();
   });
 
   it('leaves groups off when workspace metadata has no cloud ids', async () => {
@@ -230,8 +229,19 @@ describe('emitServerEvent attribution', () => {
       attribution: { actor },
     });
 
-    expect(event.distinctId).toBe('user_from');
+    expect(event.distinctId).toBe(`relaycast-ws:${WORKSPACE_ID}`);
     expect(event.properties).toMatchObject({ agent_id: 'agent_from', sender_type: 'human' });
+  });
+
+  it('preserves the authenticated actor independently from a route target and forged properties', async () => {
+    const event = await emit({ agent: agentRow(), properties: {
+      agent_id: 'different-target', is_authenticated: true, actor_kind: 'human', credentialHash: 'forged',
+    }});
+    expect(event.actor).toEqual({ workspaceId: WORKSPACE_ID, agentId: 'agent_1',
+      credentialHash: 'a'.repeat(64), senderType: 'agent' });
+    expect(event.properties.agent_id).toBe('different-target');
+    expect(event.properties.is_authenticated).toBe(false);
+    expect(event.distinctId).toBe(`relaycast-ws:${WORKSPACE_ID}`);
   });
 
   it('stamps first-send properties only on send events', async () => {
@@ -240,7 +250,7 @@ describe('emitServerEvent attribution', () => {
       agent: agentRow({ type: 'human', metadata: { cloud_user_id: 'user_will' } }),
     });
 
-    expect(event.distinctId).toBe('user_will');
+    expect(event.distinctId).toBe(`relaycast-ws:${WORKSPACE_ID}`);
     expect(event.setOnce).toBeUndefined();
   });
 });

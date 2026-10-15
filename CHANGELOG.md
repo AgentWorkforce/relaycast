@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Resolve hosted analytics ownership from authenticated actor credentials; keep standalone MCP and website events anonymous and personless.
 
 ### Changed
 

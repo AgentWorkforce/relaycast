@@ -11,10 +11,18 @@ import type { TelemetryGroups, TelemetryPersonSetOnce } from '@relaycast/types';
 export interface TelemetryEvent {
   /** Event name, e.g. `relaycast_server_message_posted`. */
   name: string;
+  /** Server-resolved acting principal, separate from event target properties.
+   * Credential hash is internal provenance only: never send it to analytics. */
+  actor?: {
+    workspaceId: string;
+    agentId?: string;
+    credentialHash?: string;
+    senderType?: 'human' | 'agent' | 'system';
+  };
   /** The person the event belongs to, or `relaycast-ws:<workspace_id>` when none is known. */
   distinctId: string;
   properties: Record<string, unknown>;
-  /** PostHog groups (`$groups`); absent when the workspace carries no cloud ids. */
+  /** PostHog groups (`$groups`); the host must verify Cloud ownership before using them. */
   groups?: TelemetryGroups;
   /** Person properties written once (`$set_once`). */
   setOnce?: TelemetryPersonSetOnce;

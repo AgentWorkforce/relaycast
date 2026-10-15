@@ -72,7 +72,7 @@ function getPosthogApiKey(options: McpTelemetryOptions): string {
   );
 }
 
-function loadState(): TelemetryState {
+function loadState(fallback?: TelemetryState): TelemetryState {
   try {
     const raw = fs.readFileSync(TELEMETRY_PATH, 'utf8');
     const parsed: unknown = JSON.parse(raw);
@@ -91,7 +91,7 @@ function loadState(): TelemetryState {
     }
   }
 
-  const state: TelemetryState = { anonymousId: randomUUID() };
+  const state: TelemetryState = fallback ?? { anonymousId: randomUUID() };
   try {
     const dir = path.dirname(TELEMETRY_PATH);
     fs.mkdirSync(dir, { recursive: true });
@@ -203,21 +203,31 @@ async function postJson(
 }
 
 export function createMcpTelemetry(version = 'unknown', options: McpTelemetryOptions = {}): McpTelemetry {
-  const state = loadState();
+  let state = loadState();
+  let wasEnabled: boolean | undefined;
+  let localGeneration: string | undefined;
   const sessionId = randomUUID();
   const pending = new Set<Promise<void>>();
-  const distinctId = process.env.RELAYCAST_TELEMETRY_DISTINCT_ID || state.anonymousId;
   const posthogHost = getPosthogHost(options);
   const posthogApiKey = getPosthogApiKey(options);
   const originClient = options.originClient ?? '@relaycast/mcp';
   const originVersion = options.originVersion ?? version;
 
   const capture = (event: ClientTelemetryEventName, properties: Record<string, unknown> = {}) => {
-    if (!telemetryEnabled(state, posthogApiKey)) return;
+    const current = loadState(state);
+    const enabled = telemetryEnabled(current, posthogApiKey);
+    if (wasEnabled !== false && !enabled) localGeneration = randomUUID();
+    if (localGeneration) current.anonymousId = localGeneration;
+    if (wasEnabled !== false && !enabled) {
+      try { fs.writeFileSync(TELEMETRY_PATH, JSON.stringify(current) + '\n', 'utf8'); } catch { /* best effort */ }
+    }
+    state = current;
+    wasEnabled = enabled;
+    if (!enabled) return;
 
     const parsed = parseTelemetryIngestionEvent({
       event,
-      distinct_id: distinctId,
+      distinct_id: state.anonymousId,
       properties: sanitizeTelemetryProperties({
         surface: 'mcp',
         mcp_version: version,
@@ -237,6 +247,14 @@ export function createMcpTelemetry(version = 'unknown', options: McpTelemetryOpt
         ...parsed.properties,
         origin_client: originClient,
         origin_version: originVersion,
+        $process_person_profile: false,
+        $geoip_disable: true,
+        analytics_contract_version: 2,
+        emitter: 'relaycast-mcp',
+        emitter_version: version,
+        identity_source: 'anonymous',
+        actor_kind: 'agent',
+        is_authenticated: false,
       },
     };
 
