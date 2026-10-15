@@ -590,6 +590,18 @@ describe('explainInvocation', () => {
     ] })).toBe('Dispatched to node beta at 07:35:00 UTC (attempt 2); waiting for the node to report a result.');
   });
 
+  it('stops describing a refused result once the invocation is requeued', () => {
+    expect(explainInvocation({
+      status: 'pending', error: null, actionName: 'spawn', dispatchedNodeId: null, dispatchedAt: null,
+      completedAt: null, retryAfterAt: null, nodeNames: new Map([['node_a', 'alpha']]), registeredAgent: null,
+      events: [
+        { at: '2026-10-15T07:30:00.000Z', type: 'dispatched', node_id: 'node_a', attempt: 1 },
+        { at: '2026-10-15T07:30:05.000Z', type: 'result_refused', node_id: 'node_a', reason: 'd1_pressure' },
+        { at: '2026-10-15T07:30:40.000Z', type: 'requeued', node_id: 'node_a', reason: 'dispatch_timeout' },
+      ],
+    })).toBe('Requeued at 07:30:40 UTC after no result arrived within the dispatch timeout; waiting to be dispatched again.');
+  });
+
   it('describes a never-dispatched spawn', () => {
     expect(explainInvocation({
       status: 'pending', error: null, actionName: 'spawn', dispatchedNodeId: null, dispatchedAt: null,
