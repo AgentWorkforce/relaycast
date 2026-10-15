@@ -3020,7 +3020,7 @@ paths:
                   description: Unique name for the new agent
                 cli:
                   type: string
-                  pattern: '^[a-z0-9][a-z0-9-]{0,31}$'
+                  pattern: '^[a-z0-9][a-z0-9-]{0,31}$(?![\s\S])'
                   maxLength: 32
                   example: cursor
                   description: >-
