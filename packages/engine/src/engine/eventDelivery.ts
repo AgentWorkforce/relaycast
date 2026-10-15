@@ -238,6 +238,7 @@ async function activeTargets(
   }));
 }
 
+/** Snapshot matching subscribers once, making new rows due at the delivery pass's clock. */
 async function initializePersistentDeliveries(
   db: Db,
   eventId: string,

@@ -3,7 +3,7 @@ import { eventSubscriptions, pendingEvents, webhookDeliveries } from '../../db/s
 import { deliverEvent } from '../../engine/eventDelivery.js';
 import { createWorkspace, makeNodeStack } from './harness.js';
 
-it('delivers newly initialized webhooks when database work crosses a clock tick', async () => {
+it.each([0, 499, 500, 999])('delivers newly initialized webhooks across a clock tick at %i ms', async (milliseconds) => {
   const stack = makeNodeStack();
   const workspace = await createWorkspace(stack.app, 'webhook-clock-tick');
   await stack.settle();
@@ -23,7 +23,7 @@ it('delivers newly initialized webhooks when database work crosses a clock tick'
 
   // Model the clock captured at call entry falling in the previous second
   // from SQLite's insert-time unixepoch(). No sleep or timing race is needed.
-  const now = new Date(Date.now() - 1_000);
+  const now = new Date(Math.floor(Date.now() / 1_000) * 1_000 - 1_000 + milliseconds);
   const fetch = vi.fn(async () => new Response(null, { status: 200 }));
   const deliver = () => deliverEvent(
     db, workspace.workspaceId, 'message.created', { text: 'send immediately' },

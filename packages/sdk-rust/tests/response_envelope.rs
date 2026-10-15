@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+/// Serve one response envelope through the real HTTP client on a local mock server.
 async fn client_for(status: u16, body: Value) -> (MockServer, HttpClient) {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

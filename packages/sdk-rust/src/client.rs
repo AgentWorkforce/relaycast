@@ -29,6 +29,7 @@ struct HttpResponse {
     cursor: Option<Cursor>,
 }
 
+/// Preserve a present payload, including null; serde's field default handles absent data.
 fn present_data<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> std::result::Result<Option<serde_json::Value>, D::Error> {
