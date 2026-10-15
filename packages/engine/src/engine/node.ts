@@ -64,10 +64,11 @@ import {
   dispatchCapacitySpawn,
   emitFailedInvocationEffects,
   nodeResultRejectionCode,
+  requeueEvent,
   rescheduleInvocationsForLostNode,
   rescheduleNodeInvocation,
 } from './action.js';
-import { invocationEvent, invocationTouchedNode, recordInvocationEvent } from './invocationEvents.js';
+import { appendInvocationEvents, invocationEvent, invocationTouchedNode, recordInvocationEvent } from './invocationEvents.js';
 import { emitInvocationCompletionEffects, emitAgentExitedEffects, emitNodeStatusEffects, fleetInvocationId } from './invocationCompletion.js';
 import type { InvocationCompletionDeps, NodeOfflineReason } from './invocationCompletion.js';
 import { ackDeliveriesUpToSeq, deliverPendingToNode, type DeliveryReplayDeps } from './delivery.js';
@@ -3442,6 +3443,7 @@ export async function reconcileInventory(
             dispatchedProvider: null,
             dispatchedAt: null,
             retryAfterAt: new Date(Date.now() + 5_000),
+            events: appendInvocationEvents(requeueEvent(invocation, 'inventory_missing')),
           })
           .where(eq(actionInvocations.id, invocation.id));
       }

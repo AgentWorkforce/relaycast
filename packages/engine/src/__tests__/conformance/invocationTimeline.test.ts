@@ -286,15 +286,20 @@ describe('spawn invocation timeline', () => {
     // the spawn is neither completed nor requeued: the dispatch is held.
     await expireDispatch();
     await sweep();
+    expect((await getInvocation(caller.token, invocationId)).explanation)
+      .toMatch(/held past the dispatch timeout while the node waits for the harness to report ready\.$/);
+    // A later event between sweeps must not re-record the hold.
+    await alpha.handle.handleMessage(JSON.stringify({
+      v: 1, id: 'bad-ready', type: 'action.result', invocation_id: invocationId, output: {}, error: 'x',
+    }));
     await expireDispatch();
     await sweep();
     const held = await getInvocation(caller.token, invocationId);
     expect(held.status).toBe('dispatched');
     expect(types(held).filter((type) => type === 'started')).toHaveLength(1);
-    expect(held.events.at(-1)).toMatchObject({ type: 'started', reason: 'awaiting_readiness', agent_name: 'worker-ready' });
+    expect(held.events.find((event) => event.type === 'started')).toMatchObject({ reason: 'awaiting_readiness', agent_name: 'worker-ready' });
     expect(types(held)).not.toContain('requeued');
     expect(alpha.sock.ofType('action.invoke')).toHaveLength(1);
-    expect(held.explanation).toMatch(/held past the dispatch timeout while the node waits for the harness to report ready\.$/);
 
     // The held result is applied normally.
     await alpha.handle.handleMessage(JSON.stringify({
