@@ -393,6 +393,23 @@ describe('spawn invocation timeline', () => {
     expect(alpha.sock.ofType('reply')).toHaveLength(0);
   });
 
+  it('acknowledges a handler_unavailable report that requeued the work as requeued, not applied', async () => {
+    const ws = await createWorkspace(stack.app, 'timeline-ack-requeued');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    const alpha = await attachNode(ws, 'node_alpha', 'alpha');
+    const invocationId = await spawn(caller.token, 'worker-unavailable');
+    await attachNode(ws, 'node_beta', 'beta');
+    await alpha.handle.handleMessage(JSON.stringify({
+      v: 1, id: 'unavailable-1', type: 'action.result', invocation_id: invocationId, error: 'handler_unavailable',
+    }));
+    expect(alpha.sock.ofType('reply').at(-1)).toMatchObject({
+      id: 'unavailable-1', ok: true, data: { invocation_id: invocationId, outcome: 'requeued' },
+    });
+    const invocation = await getInvocation(caller.token, invocationId);
+    expect(invocation.status).toBe('dispatched');
+    expect(invocation.events.find((event) => event.type === 'requeued')).toMatchObject({ reason: 'handler_unavailable' });
+  });
+
   it('retries a result through transient database pressure and applies it', async () => {
     const ws = await createWorkspace(stack.app, 'timeline-pressure-retry');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');

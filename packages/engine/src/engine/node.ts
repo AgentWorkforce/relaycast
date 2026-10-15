@@ -3790,7 +3790,9 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
             ok: true,
             data: {
               invocation_id: message.invocation_id,
-              outcome: outcome.rejection ? 'already_applied' : 'applied',
+              // `requeued`: the report was taken (the node need not resend),
+              // and the invocation moved to another attempt rather than settling.
+              outcome: outcome.rejection ? 'already_applied' : outcome.requeued ? 'requeued' : 'applied',
               ...(outcome.completed ? { status: outcome.completed.status } : {}),
             },
           });

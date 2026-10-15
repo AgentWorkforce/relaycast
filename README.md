@@ -1117,8 +1117,9 @@ terminal `completed`/`failed`. It adds a one-sentence `explanation` and, for a
 spawn, the live `registered_agent`.
 
 A short `action.result` that carries an `id` is always answered with that id: a
-`reply` with `data.outcome` `applied` (or `already_applied` for a resend of a
-result already applied) and the invocation `status`, or an `error` frame. The
+`reply` with `data.outcome` `applied` (`already_applied` for a resend of a
+result already applied, `requeued` when a `handler_unavailable` report moved
+the work to another attempt) and the invocation `status`, or an `error` frame. The
 error code is `action_result_<reason>` when the result was rejected, or
 `d1_pressure` when it could not be applied under database pressure after
 bounded internal retries; then the node should resend it (the message carries
