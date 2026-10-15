@@ -7,7 +7,17 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Major]
+
+### Changed
+
+- Spawn placement reserves capacity atomically and returns structured terminal errors for unavailable, offline, full, or lost nodes instead of queueing or rerouting attempts.
+- `drainNodeInvocations` fails native spawns left pending by the old queue (offline-queued, retry-delayed, or unsent) with `spawn_target_offline` or `spawn_target_unavailable` instead of sending them, releasing any held reservation once; `sweepTimedOutInvocations` does the same for such spawns whose node is not live. Shadowed `spawn:<harness>` spawns and other actions still drain.
+- Whether a pending spawn is native is decided by its recorded provenance, so a native spawn never moves to a `spawn:<harness>` shadow registered after it queued, and a registered spawn action whose action row was pruned after its provider accepted it is not failed as native backlog. Retry-delayed native spawns on an offline node fail on the next sweep instead of after the delay.
+- Registered `spawn` / `spawn:<harness>` actions (node-addressed shadows and legacy workspace-global aliases) are never queued either: an offline, unavailable or full node refuses them with the same structured errors.
+- Generic recovery (the dispatch-timeout sweep, an inventory that does not list the agent yet) keeps a dispatched spawn whose node and provider are still live for up to `SPAWN_LAUNCH_DEADLINE_MS` (120 s) after dispatch before failing it; node loss still fails it at once.
+- A spawn ended by node loss, a reconnect drain or a sweep emits `action.failed`, and `action.failed` events carry `error_details` for structured spawn failures. `drainNodeInvocations` takes optional completion deps for that.
+- A spawn whose dispatch record loses a race with a concurrent settle returns its placement slot and reports the settled outcome instead of `idempotency_unavailable`.
 
 ## [10.4.1] - 2026-10-15
 

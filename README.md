@@ -1318,7 +1318,31 @@ Explicit `target_node` on built-in spawn honors fleet placement even when a
 legacy workspace-global node action named `spawn` exists; its caller allowlist
 continues to apply. A dispatch acknowledgement does not establish harness readiness.
 
-Verified spawn (`verify_ready: true`) fails with `spawn_target_unavailable` when the selected provider lacks a live handler heartbeat or connected socket. Unverified legacy requests retain queue behavior. Relayfile ingress preserves authenticated `providerEventType` and `resourceRef` as `provider_event_type` and `resource_ref` in message metadata, alongside the provider record. Generic file events do not imply PR, CI, or review semantics. Cloud sync envelopes are unwrapped to expose their provider payload in message metadata and formatting; this does not promote payload fields into authenticated event semantics.
+Spawns reserve capacity atomically on the selected node. An offline target,
+unavailable provider, unsupported harness, full node, or reservation race ends
+the attempt with `spawn_target_offline`, `spawn_target_unavailable`,
+`spawn_harness_unavailable`, `spawn_capacity_exceeded`, or `capacity_changed`.
+The structured error includes `node`, `harness`, `active`, `reserved`, `max`,
+`observed_at`, and `retryable`; unknown counts are `null`. Targeted and
+auto-placed spawns are never queued, retried, or rerouted by the engine, and
+neither are registered `spawn` / `spawn:<harness>` actions, whatever their
+queue setting. The caller keeps the task and chooses whether to retry or select
+another node. A dispatched spawn whose node stays live gets up to 120 s to
+launch before a dispatch timeout fails it; a lost node fails it at once, and
+either way the caller receives `action.failed` with the structured error in
+`error_details`.
+A node's `action.result` may carry `error_details` beside the stable string
+`error` code; invocation status preserves both. Nodes advertise
+`{name:"relay:spawn-error-details-v1",kind:"capacity"}` at `node.register`
+and send `error_details` only when the reply contains the server-authored
+`spawn_error_details_contract:"relay:spawn-error-details-v1"` field.
+
+Relayfile ingress preserves authenticated `providerEventType` and `resourceRef`
+as `provider_event_type` and `resource_ref` in message metadata, alongside the
+provider record. Generic file events do not imply PR, CI, or review semantics.
+Cloud sync envelopes are unwrapped to expose their provider payload in message
+metadata and formatting; this does not promote payload fields into authenticated
+event semantics.
 
 Readiness requests do not reroute registered global spawn handlers. Only a nonempty explicit `target_node` selects fleet placement around a legacy node alias; handlers that receive `verify_ready` must honor its completion contract. A deleted recipient leaves its old route memberless so a replacement cannot inherit delivery. Retire or replace the inventoried producer binding and webhook when deleting a subscriber; channel history remains for audit.
 

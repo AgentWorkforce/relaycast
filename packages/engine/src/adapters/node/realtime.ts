@@ -925,7 +925,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     options?: NodeDrainOptions,
   ): Promise<void> {
     if (!this.isNodeConnected(workspaceId, nodeId)) return;
-    await drainNodeInvocations(this.db, this, workspaceId, nodeId, options);
+    await drainNodeInvocations(this.db, this, workspaceId, nodeId, options, this.nodeCompletionDeps);
     // The authoritative re-dispatch is DB-driven; clear the per-provider
     // in-memory buffers now that their frames have been re-sent.
     const nodeKey = this.nodeKey(workspaceId, nodeId);

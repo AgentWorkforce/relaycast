@@ -1,6 +1,7 @@
 import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { jsonError, jsonMalformedBody } from './httpResponse.js';
+import type { FleetSpawnErrorDetails } from '@relaycast/types';
 
 /**
  * Errors thrown inside the engine optionally carry a stable error `code` and an
@@ -13,6 +14,7 @@ export interface CodedError extends Error {
   status?: number;
   diagnostics?: Record<string, unknown>;
   clientSafe?: true;
+  errorDetails?: FleetSpawnErrorDetails;
 }
 
 /**
@@ -35,6 +37,10 @@ export function asCodedError(err: unknown): CodedError {
 /** Build an `Error` carrying a stable `code` and HTTP `status` (no cast at the call site). */
 export function codedError(message: string, code: string, status: number): CodedError {
   return Object.assign(new Error(message), { code, status, clientSafe: true as const });
+}
+
+export function codedSpawnError(details: FleetSpawnErrorDetails): CodedError {
+  return Object.assign(codedError(details.message, details.code, 503), { errorDetails: details });
 }
 
 const SAFE_DIAGNOSTIC_FIELDS = new Set([
@@ -84,6 +90,9 @@ export function errorResponse(c: Context, err: unknown) {
     return jsonMalformedBody(c);
   }
   const status = effectiveHttpStatus(error);
+  if (error.errorDetails) {
+    return c.json({ ok: false as const, error: error.errorDetails }, status as ContentfulStatusCode);
+  }
   return jsonError(
     c,
     error.code || 'internal_error',
