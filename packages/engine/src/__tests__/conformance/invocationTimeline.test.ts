@@ -447,6 +447,26 @@ describe('explainInvocation', () => {
     );
   });
 
+  it('stops describing a readiness hold once a later dispatch supersedes it', () => {
+    const base = {
+      status: 'dispatched', error: null, actionName: 'spawn', dispatchedNodeId: 'node_b',
+      dispatchedAt: '2026-10-15T07:35:00.000Z', completedAt: null, retryAfterAt: null,
+      nodeNames: new Map([['node_a', 'alpha'], ['node_b', 'beta']]), registeredAgent: null,
+    };
+    const hold = { at: '2026-10-15T07:31:00.000Z', type: 'started', node_id: 'node_a', agent_name: 'w', reason: 'awaiting_readiness' };
+    expect(explainInvocation({ ...base, dispatchedNodeId: 'node_a', events: [
+      { at: '2026-10-15T07:30:00.000Z', type: 'dispatched', node_id: 'node_a', attempt: 1 },
+      { at: '2026-10-15T07:30:20.000Z', type: 'agent_registered', node_id: 'node_a', agent_name: 'w' },
+      hold,
+    ] })).toMatch(/held past the dispatch timeout/);
+    expect(explainInvocation({ ...base, events: [
+      { at: '2026-10-15T07:30:00.000Z', type: 'dispatched', node_id: 'node_a', attempt: 1 },
+      hold,
+      { at: '2026-10-15T07:33:00.000Z', type: 'requeued', node_id: 'node_a', reason: 'dispatch_timeout' },
+      { at: '2026-10-15T07:35:00.000Z', type: 'dispatched', node_id: 'node_b', attempt: 2 },
+    ] })).toBe('Dispatched to node beta at 07:35:00 UTC (attempt 2); waiting for the node to report a result.');
+  });
+
   it('describes a never-dispatched spawn', () => {
     expect(explainInvocation({
       status: 'pending', error: null, actionName: 'spawn', dispatchedNodeId: null, dispatchedAt: null,

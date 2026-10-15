@@ -2877,7 +2877,15 @@ export async function reconcileInventory(
           retryAfterAt: new Date(Date.now() + 5_000),
           events: appendInvocationEvents(requeueEvent(invocation, 'inventory_missing')),
         })
-        .where(eq(actionInvocations.id, invocation.id));
+        // Only the dispatch this sync observed: a reschedule that threw after
+        // the row settled or moved must not clear (or vouch for) another one.
+        .where(and(
+          eq(actionInvocations.workspaceId, workspaceId),
+          eq(actionInvocations.id, invocation.id),
+          eq(actionInvocations.dispatchedNodeId, nodeId),
+          eq(actionInvocations.dispatchedProvider, providerName),
+          inArray(actionInvocations.status, ['pending', 'dispatched']),
+        ));
     }
   }
 
