@@ -18,6 +18,8 @@ type CompletionResult = {
   status: string;
   output: unknown;
   error: string | null;
+  /** Structured spawn failure, as `GET .../invocations/:id` reports it. */
+  error_details?: unknown;
 };
 
 function buildEvent(type: string, workspaceId: string, data: Record<string, unknown>) {
@@ -41,6 +43,7 @@ export async function emitInvocationCompletionEffects(
     status: result.status,
     output: result.output,
     error: result.error,
+    ...(result.error_details ? { error_details: result.error_details } : {}),
   };
   const event = buildEvent(eventType, workspaceId, eventPayload);
   const payload = transformForClient(event);

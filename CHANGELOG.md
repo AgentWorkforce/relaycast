@@ -18,8 +18,9 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
-- Spawns are never queued, retried, or moved to another node. A spawn the selected node cannot take fails at once with a structured error (`spawn_capacity_exceeded`, `spawn_target_unavailable`, `spawn_target_offline`, `spawn_harness_unavailable`, or `capacity_changed`) and every reservation that attempt held is returned.
-- Spawns left pending by the old queue fail on the node's next reconnect, or on the timeout sweep while it stays offline, and return any reservation they still hold.
+- Spawns are never queued, retried, or moved to another node. A spawn the selected node cannot take fails at once with a structured error (`spawn_capacity_exceeded`, `spawn_target_unavailable`, `spawn_target_offline`, `spawn_harness_unavailable`, or `capacity_changed`) and every reservation that attempt held is returned. Registered spawn actions, including legacy workspace-global `spawn` aliases, follow the same rule.
+- Spawns left pending by the old queue fail on the node's next reconnect, or on the timeout sweep while it stays offline, and return any reservation they still hold. `action.failed` carries `error_details` for these failures.
+- A dispatched spawn on a node that is still live has 120 seconds to launch before it fails. Node loss still fails it at once.
 - A broker's changing live-agent roster no longer rewrites its action rows on every heartbeat.
 - A heartbeat writes the node aggregate in one statement and reads drain state in one statement.
 - A socket owner can hold the workspace deadline, so heartbeats check it without reading the workspace row.
