@@ -24,6 +24,20 @@ test('website emits anonymous personless events and honors runtime DNT with rota
   assert.notEqual(sent[0].distinct_id, sent[1].distinct_id);
 });
 test('initial DNT erases the previous anonymous generation and sends nothing', () => {
-  const { sandbox, sent, storage } = harness('1'); sandbox.subject.capture('page');
+  const { sandbox, sent, storage } = harness('1');
+  assert.equal(sandbox.subject.enabled, false);
+  assert.equal(storage.size, 0);
+  sandbox.subject.capture('page');
   assert.equal(sent.length, 0); assert.equal(storage.size, 0);
+});
+test('DNT enabled at startup resumes after it is cleared and rotates the anonymous id', () => {
+  const { sandbox, sent, storage } = harness('1');
+  sandbox.navigator.doNotTrack = '0';
+  assert.equal(sandbox.subject.enabled, true);
+  sandbox.subject.capture('page');
+  assert.equal(sent.length, 1);
+  assert.notEqual(sent[0].distinct_id, 'old-anonymous');
+  assert.equal(sent[0].properties.$process_person_profile, false);
+  assert.equal(sent[0].properties.is_authenticated, false);
+  assert.equal(storage.get('relaycast_posthog_distinct_id'), sent[0].distinct_id);
 });
