@@ -333,7 +333,7 @@ Be honest with yourself about what self-host is and isn't:
 
 | | Self-host | Hosted |
 |---|---|---|
-| Billing / plan entitlements | static, effectively unlimited single tier | Stripe-backed per-workspace |
+| Billing / plan entitlements | static `selfhost` tier: unlimited API calls, 30,000 requests/minute | Stripe-backed per-workspace |
 | Multi-tenant admin / org management | — | yes |
 | Horizontal scaling / multi-region | single process | Durable Objects + edge |
 | Managed backups & SLA | you operate the SQLite file + process | managed |
@@ -342,6 +342,13 @@ Be honest with yourself about what self-host is and isn't:
 
 You *can* front self-host with your own SSO/proxy, but the shipped default is plain
 API keys.
+
+`POST /v1/workspaces` persists `plan: selfhost`. The first startup whose
+default is `selfhost` promotes every workspace still stored as `free`, so a
+database created by an older engine gets that tier, and records the decision.
+Later startups do not rewrite `plan`. An embedding host selects `free`, `pro`,
+or `enterprise` with `defaultWorkspacePlan`. A first startup that selects one
+of those tiers leaves existing rows on their stored plan.
 
 ---
 
