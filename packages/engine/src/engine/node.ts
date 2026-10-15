@@ -2404,11 +2404,13 @@ export async function recoverAgentViaNode(
     }
     try {
       const now = new Date().toISOString();
-      const fleetMetadata = sql`json_object(
+      // Patch the nested `metadata.fleet` correlation that registration writes
+      // and spawn lookups read (`fleetInvocationId`), not the metadata root.
+      const fleetMetadata = sql`json_object('fleet', json_object(
         'node_id', ${nodeId},
         'invocation_id', ${message.invocation_id ?? null},
         'registered_at', ${now}
-      )`;
+      ))`;
       const [result] = await tx
         .update(agents)
         .set({
