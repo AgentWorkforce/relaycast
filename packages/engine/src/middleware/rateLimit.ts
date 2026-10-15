@@ -48,6 +48,11 @@ export const ROUTE_MULTIPLIERS: Record<string, number> = {
   // The node-token self lookup: Cloud verifies a node token with it when a
   // person claims a node. Same starvation as the identity reads above.
   'GET:/node/me': 1.0,
+  // The pending-delivery proof: Cloud asks it whether a message is still
+  // waiting for the calling agent before it treats the sender as the owner.
+  // Starved by the workspace's own sends, a 429 here fails closed and reads
+  // still-pending owner mail as a stranger's.
+  'GET:/deliveries/by-message/*': 1.0,
 };
 
 export function getRouteKey(method: string, path: string): string | null {
@@ -77,7 +82,9 @@ export function getRouteKey(method: string, path: string): string | null {
     // `presence` is excluded because it is a distinct route with its own,
     // tighter multiplier above; collapsing it here would silently widen it
     // from 0.3 to 1.0.
-    .replace(/^\/agents\/(?!presence$)[^/]+$/, '/agents/*');
+    .replace(/^\/agents\/(?!presence$)[^/]+$/, '/agents/*')
+    // One key for every message id, for the same reason as the agent lookup.
+    .replace(/^\/deliveries\/by-message\/[^/]+$/, '/deliveries/by-message/*');
   const key = `${method}:${normalized}`;
   return ROUTE_MULTIPLIERS[key] !== undefined ? key : null;
 }
