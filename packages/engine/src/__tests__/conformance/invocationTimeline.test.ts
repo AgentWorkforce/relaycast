@@ -480,11 +480,12 @@ describe('spawn invocation timeline', () => {
     expect(await reserved()).toBe(2);
 
     // handler_unavailable reschedules the spawn, which returns its slot; every
-    // invocation write then fails transiently. Re-running the result would
+    // later invocation write then fails transiently. Re-running the result,
+    // or a later reschedule that trusted the stale reservation marker, would
     // return the other spawn's slot as well.
     alpha.sock.received.length = 0;
     const restore = injectUpdateFailure(
-      stack.runtime.deps.db, actionInvocations, 'D1_ERROR: D1 DB is overloaded. Too many requests queued',
+      stack.runtime.deps.db, actionInvocations, 'D1_ERROR: D1 DB is overloaded. Too many requests queued', { skip: 1 },
     );
     try {
       await alpha.handle.handleMessage(JSON.stringify({
@@ -497,6 +498,15 @@ describe('spawn invocation timeline', () => {
     const error = alpha.sock.ofType('error').at(-1);
     expect(error).toMatchObject({ id: 'unavailable-pressure', ok: false });
     expect(error!.code).not.toBe('d1_pressure');
+
+    // The marker was cleared with the release, so the next timeout reschedule
+    // of the same row does not release a second slot.
+    await stack.runtime.handle.db
+      .update(actionInvocations)
+      .set({ dispatchedAt: new Date(Date.now() - 5 * 60_000) })
+      .where(eq(actionInvocations.id, first));
+    await sweepTimedOutInvocations(stack.runtime.handle.db, stack.runtime.realtime, { neverDispatchedSweepGraceMs: 0 });
+    expect(await reserved()).toBe(1);
   });
 
   it('lets a socket owner record a result it refused before the engine saw it', async () => {
