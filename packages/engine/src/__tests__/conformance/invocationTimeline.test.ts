@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
-import { makeNodeStack, createWorkspace, registerAgent, FakeSocket, type TestStack } from './harness.js';
+import { makeNodeStack, createWorkspace, registerAgent, FakeSocket, injectUpdateFailure, type TestStack } from './harness.js';
 import { actionInvocations, agents, nodes } from '../../db/schema.js';
 import { sweepTimedOutInvocations } from '../../engine/action.js';
 import { sweepOfflineNodes } from '../../engine/node.js';
+import { recordNodeFrameRefused } from '../../node-control.js';
 import {
   INVOCATION_EVENT_LIMIT,
   explainInvocation,
@@ -363,6 +364,111 @@ describe('spawn invocation timeline', () => {
     expect((await getInvocation(caller.token, first)).registered_agent).toBeNull();
   });
 
+  it('acknowledges every correlated result: applied, then already applied on a resend', async () => {
+    const ws = await createWorkspace(stack.app, 'timeline-ack');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    const alpha = await attachNode(ws, 'node_alpha', 'alpha');
+    const invocationId = await spawn(caller.token, 'worker-ack');
+    alpha.sock.received.length = 0;
+    const result = JSON.stringify({
+      v: 1, id: 'result-ack-1', type: 'action.result', invocation_id: invocationId, output: { agent: 'worker-ack' },
+    });
+    await alpha.handle.handleMessage(result);
+    expect(alpha.sock.ofType('reply').at(-1)).toEqual({
+      v: 1, id: 'result-ack-1', type: 'reply', ok: true,
+      data: { invocation_id: invocationId, outcome: 'applied', status: 'completed' },
+    });
+    // The node resends until acknowledged; a resend of an applied result is acknowledged too.
+    await alpha.handle.handleMessage(result);
+    expect(alpha.sock.ofType('reply').at(-1)).toMatchObject({
+      id: 'result-ack-1', ok: true, data: { invocation_id: invocationId, outcome: 'already_applied' },
+    });
+    expect(alpha.sock.ofType('error')).toHaveLength(0);
+    // A result without an id keeps the legacy fire-and-forget behaviour.
+    const second = await spawn(caller.token, 'worker-ack-2');
+    alpha.sock.received.length = 0;
+    await alpha.handle.handleMessage(JSON.stringify({
+      v: 1, type: 'action.result', invocation_id: second, output: {},
+    }));
+    expect(alpha.sock.ofType('reply')).toHaveLength(0);
+  });
+
+  it('retries a result through transient database pressure and applies it', async () => {
+    const ws = await createWorkspace(stack.app, 'timeline-pressure-retry');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    const alpha = await attachNode(ws, 'node_alpha', 'alpha');
+    const invocationId = await spawn(caller.token, 'worker-retry');
+    const restore = injectUpdateFailure(
+      stack.runtime.deps.db, actionInvocations, 'D1_ERROR: D1 DB is overloaded. Requests queued for too long', { times: 1 },
+    );
+    try {
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1, id: 'result-retry-1', type: 'action.result', invocation_id: invocationId, output: { agent: 'worker-retry' },
+      }));
+    } finally {
+      restore();
+    }
+    expect(alpha.sock.ofType('reply').at(-1)).toMatchObject({ id: 'result-retry-1', data: { outcome: 'applied' } });
+    expect((await getInvocation(caller.token, invocationId)).status).toBe('completed');
+  });
+
+  it('refuses a result under sustained database pressure with a retryable, correlated error and records it', async () => {
+    const ws = await createWorkspace(stack.app, 'timeline-pressure');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    const alpha = await attachNode(ws, 'node_alpha', 'alpha');
+    const invocationId = await spawn(caller.token, 'worker-pressure');
+    await registerSpawnedAgent(alpha, 'worker-pressure', invocationId);
+    alpha.sock.received.length = 0;
+    // Every attempt's write fails; the refusal record afterwards gets through.
+    const restore = injectUpdateFailure(
+      stack.runtime.deps.db, actionInvocations, 'D1_ERROR: D1 DB is overloaded. Too many requests queued', { times: 3 },
+    );
+    try {
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1, id: 'result-pressure-1', type: 'action.result', invocation_id: invocationId, output: { agent: 'worker-pressure' },
+      }));
+    } finally {
+      restore();
+    }
+    expect(alpha.sock.ofType('error').at(-1)).toMatchObject({
+      id: 'result-pressure-1', ok: false, code: 'd1_pressure', message: expect.stringContaining('resend it'),
+    });
+    const refused = await getInvocation(caller.token, invocationId);
+    expect(refused.status).toBe('dispatched');
+    expect(refused.events.at(-1)).toMatchObject({ type: 'result_refused', reason: 'd1_pressure', node_id: 'node_alpha' });
+    expect(refused.explanation).toMatch(
+      /^Node alpha launched agent worker-pressure \(registered .* UTC\) but its result was refused under database pressure at .* UTC; waiting for the node to resend it\.$/,
+    );
+
+    // The node resends with the same id and it is applied and acknowledged.
+    await alpha.handle.handleMessage(JSON.stringify({
+      v: 1, id: 'result-pressure-1', type: 'action.result', invocation_id: invocationId, output: { agent: 'worker-pressure' },
+    }));
+    expect(alpha.sock.ofType('reply').at(-1)).toMatchObject({ id: 'result-pressure-1', data: { outcome: 'applied' } });
+    const applied = await getInvocation(caller.token, invocationId);
+    expect(applied.status).toBe('completed');
+    expect(applied.explanation).toMatch(/and it reported success/);
+  });
+
+  it('lets a socket owner record a result it refused before the engine saw it', async () => {
+    const ws = await createWorkspace(stack.app, 'timeline-host-refusal');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    await attachNode(ws, 'node_alpha', 'alpha');
+    const invocationId = await spawn(caller.token, 'worker-host');
+    const raw = JSON.stringify({ v: 1, id: 'r1', type: 'action.result', invocation_id: invocationId, output: {} });
+    expect(await recordNodeFrameRefused({
+      db: stack.runtime.deps.db, workspaceId: ws.workspaceId, nodeId: 'node_alpha', raw, reason: 'd1_pressure',
+    })).toBe(true);
+    // A node never placed on the invocation cannot annotate it.
+    expect(await recordNodeFrameRefused({
+      db: stack.runtime.deps.db, workspaceId: ws.workspaceId, nodeId: 'node_other', raw, reason: 'd1_pressure',
+    })).toBe(false);
+    const invocation = await getInvocation(caller.token, invocationId);
+    expect(invocation.explanation).toMatch(
+      /^Node alpha reported a result but its result was refused under database pressure at .* UTC; waiting for the node to resend it\.$/,
+    );
+  });
+
   it('answers a result for an unknown invocation and records a malformed one', async () => {
     const ws = await createWorkspace(stack.app, 'timeline-invalid');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
@@ -381,7 +487,7 @@ describe('spawn invocation timeline', () => {
     await alpha.handle.handleMessage(JSON.stringify({
       v: 1, id: 'bad-1', type: 'action.result', invocation_id: invocationId, output: {}, error: 'boom',
     }));
-    expect(alpha.sock.ofType('error').at(-1)).toMatchObject({ code: 'invalid_message' });
+    expect(alpha.sock.ofType('error').at(-1)).toMatchObject({ id: 'bad-1', code: 'invalid_message' });
     const invocation = await getInvocation(caller.token, invocationId);
     expect(invocation.status).toBe('dispatched');
     expect(invocation.events.at(-1)).toMatchObject({

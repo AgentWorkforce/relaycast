@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `ActionInvocationSchema`, `ActionInvocationEventSchema` and `ActionInvocationRegisteredAgentSchema` for the invocation GET, with `ACTION_INVOCATION_EVENT_TYPES`, `ACTION_RESULT_REJECTION_REASONS` and `ACTION_INVOCATION_REQUEUE_REASONS`.
+- `ActionInvocationSchema`, `ActionInvocationEventSchema` and `ActionInvocationRegisteredAgentSchema` for the invocation GET, with `ACTION_INVOCATION_EVENT_TYPES` (including `result_refused`), `ACTION_RESULT_REJECTION_REASONS` and `ACTION_INVOCATION_REQUEUE_REASONS`.
 - `DeliveryAckedEventSchema` (`delivery.acked`: `delivery_id`, `message_id`, recipient `agent_id` / `agent_name`, `status: 'acked'`, `at`), in `ServerEventSchema`, `WsClientEventSchema` and `SubscribableEventTypeSchema`. `DeliveryDeliveredEventSchema` gains optional sender-side `agent_id`, `agent_name`, `status`, `at`.
 - `SentDeliverySchema`, `MessageDeliveryReceiptSchema`, `MessageDeliveriesResponseSchema`; `SendDmResponseSchema.delivery` (`{ id, status, expires_at } | null`).
 
