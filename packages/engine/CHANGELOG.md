@@ -13,6 +13,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - `POST /v1/agents/spawn` accepts any harness id a node advertises as `spawn:<id>`; malformed ids return `400` before dispatch.
 
+## [10.4.1] - 2026-10-15
+
+### Fixed
+
+- Newly initialized webhooks use the delivery pass's clock for their first due time, avoiding spurious retry failures when insertion crosses a clock tick.
+
 ## [10.4.0] - 2026-10-13
 
 ### Added
