@@ -4663,6 +4663,8 @@ export interface NodeResultRejection {
 export interface NodeResultOutcome {
   completed: ReturnType<typeof publicInvocation> | null;
   rejection: NodeResultRejection | null;
+  /** The node's handler_unavailable report was taken and the invocation moved to another attempt. */
+  requeued?: boolean;
 }
 
 const REJECTION_MESSAGES: Record<ActionResultRejectionReason, string> = {
@@ -4827,7 +4829,7 @@ export async function applyNodeInvocationResult(
         retryAfterAt: nextRetryAfter(existing.dispatchAttempts + 1),
         reason: 'handler_unavailable',
       })) {
-        return { completed: null, rejection: null };
+        return { completed: null, rejection: null, requeued: true };
       }
     } catch {
       // Fall through and fail the invocation if no eligible node exists.
