@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNotNull, isNull, like, lt, lte, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, like, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { actions, actionInvocations, agents, agentNodeBindings, channelMembers, dmParticipants, nodes } from '../db/schema.js';
 import { waitForPendingInvocationRetry } from './invocationRetry.js';
@@ -25,14 +25,26 @@ import { claimSpawnNode, chooseNodeForAction, isNodeLive, releaseNodeCapacity, r
 import { DEFAULT_PROVIDER_NAME, capacityProviderName, getProvider, isProviderLive } from './nodeProvider.js';
 import { AGENT_TOKEN_HASH_PATTERN } from '@relaycast/types';
 import { createTaskState, expireTaskInvocation, expireTaskInvocations, taskExecution } from './taskInvocation.js';
+import type { ActionInvocationRequeueReason, ActionResultRejectionReason } from '@relaycast/types';
+import {
+  appendInvocationEvents,
+  dispatchAttemptEvent,
+  explainInvocation,
+  invocationEvent,
+  invocationTouchedNode,
+  nodeNamesFor,
+  recordInvocationEvent,
+  registeredAgentForInvocation,
+} from './invocationEvents.js';
 
 type Db = ReturnType<typeof getDb>;
 type ActionRow = typeof actions.$inferSelect;
 type InvocationRow = typeof actionInvocations.$inferSelect;
 type RetryableInvocationRow = Pick<
   InvocationRow,
-  'id' | 'workspaceId' | 'actionId' | 'actionName' | 'invocationOrigin' | 'callerId' | 'input' | 'status' | 'dispatchedNodeId' | 'providerAcceptedAttempt' | 'spawnReservedAt' | 'attemptedNodeIds' | 'dispatchAttempts'
+  'id' | 'workspaceId' | 'actionId' | 'actionName' | 'invocationOrigin' | 'callerId' | 'input' | 'status' | 'dispatchedNodeId' | 'dispatchedProvider' | 'providerAcceptedAttempt' | 'spawnReservedAt' | 'attemptedNodeIds' | 'dispatchAttempts'
 >;
+type LeadingEvents = ReturnType<typeof invocationEvent>[];
 
 const OPEN_INVOCATION_STATUSES = ['pending', 'dispatched', 'invoked'];
 const REPLAYED_INVOCATION = Symbol('replayed-action-invocation');
@@ -609,6 +621,10 @@ async function createInvocation(
       input: data.input ?? {},
       taskState: action?.executionMode === 'task' ? createTaskState(data.input ?? {}) : null,
       status: data.status ?? 'pending',
+      events: [invocationEvent('created', {
+        ...(data.caller_name ? { caller_name: data.caller_name } : {}),
+        ...(isSpawnInvocation(expectedActionName) ? { capability: dispatchActionNameForInvocation(expectedActionName, recordInput(data.input)) } : {}),
+      })],
     })
     .onConflictDoNothing()
     .returning();
@@ -866,10 +882,20 @@ async function failInvocationForUnavailableProvider(
   workspaceId: string,
   invocationId: string,
   expectedNodeLivenessRevision?: number,
+  leadingEvents: LeadingEvents = [],
 ): Promise<void> {
   await db
     .update(actionInvocations)
-    .set({ status: 'failed', error: 'handler_unavailable', completedAt: new Date(), spawnReservedAt: null })
+    .set({
+      status: 'failed',
+      error: 'handler_unavailable',
+      completedAt: new Date(),
+      spawnReservedAt: null,
+      events: appendInvocationEvents(
+        ...leadingEvents,
+        invocationEvent('failed', { error: 'handler_unavailable', reason: 'no_live_provider' }),
+      ),
+    })
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
       eq(actionInvocations.id, invocationId),
@@ -899,7 +925,13 @@ async function failNeverDispatchedInvocation(
 ): Promise<boolean> {
   const failed = await db
     .update(actionInvocations)
-    .set({ status: 'failed', error, completedAt: new Date(), spawnReservedAt: null })
+    .set({
+      status: 'failed',
+      error,
+      completedAt: new Date(),
+      spawnReservedAt: null,
+      events: appendInvocationEvents(invocationEvent('failed', { error })),
+    })
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
       eq(actionInvocations.id, invocationId),
@@ -944,7 +976,13 @@ async function failOpenInvocationRows(
     ));
   const failed = await db
     .update(actionInvocations)
-    .set({ status: 'failed', error, completedAt: new Date(), spawnReservedAt: null })
+    .set({
+      status: 'failed',
+      error,
+      completedAt: new Date(),
+      spawnReservedAt: null,
+      events: appendInvocationEvents(invocationEvent('failed', { error })),
+    })
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
       inArray(actionInvocations.id, invocationIds),
@@ -1046,6 +1084,8 @@ async function dispatchNodeProviderInvocation(args: {
   invocationOrigin: InvocationRow['invocationOrigin'];
   reservationHeld?: boolean;
   expectedNodeLivenessRevision?: number;
+  /** Events recorded in the same write as this dispatch (e.g. the requeue that led to it). */
+  leadingEvents?: LeadingEvents;
 }, options: {
   failIfUnavailable?: boolean;
 } = {}): Promise<{
@@ -1070,6 +1110,7 @@ async function dispatchNodeProviderInvocation(args: {
         args.workspaceId,
         args.invocationId,
         args.expectedNodeLivenessRevision,
+        args.leadingEvents,
       );
       throw codedError(`Provider "${args.providerName}" is offline for action "${args.action}"`, 'handler_unavailable', 503);
     }
@@ -1093,6 +1134,7 @@ async function dispatchNodeProviderInvocation(args: {
           : undefined,
         targetActionId: args.actionId ?? undefined,
         expectedNodeLivenessRevision: args.expectedNodeLivenessRevision,
+        leadingEvents: args.leadingEvents,
       },
     );
     if (!accepted && args.invocationOrigin === 'registered_action') {
@@ -1750,7 +1792,18 @@ async function dispatchSpawn(args: {
   // Placement and the durable idempotency claim are separate writes on D1.
   // Publish the selected response target immediately; a concurrent replay in
   // this narrow interval waits for this snapshot instead of returning null.
-  if (!await snapshotInvocationHandlerNode(args.db, args.workspaceId, invocation.id, nodeId)) {
+  if (!await snapshotInvocationHandlerNode(
+    args.db,
+    args.workspaceId,
+    invocation.id,
+    nodeId,
+    undefined,
+    invocationEvent('placed', {
+      node_id: nodeId,
+      capability,
+      ...(placement.queued ? { reason: 'node_not_ready' } : {}),
+    }),
+  )) {
     if (!placement.queued) await releaseNodeCapacity(args.db, args.workspaceId, nodeId);
     throw codedError('Spawn invocation is no longer available for placement', 'idempotency_unavailable', 503);
   }
@@ -2385,6 +2438,13 @@ async function completeReleaseNodeInvocation(
         error: expectedAgentId ? RELEASE_IDENTITY_MISMATCH_CODE : RELEASE_GENERATION_CONFLICT_CODE,
         completedAt,
         spawnReservedAt: null,
+        events: appendInvocationEvents(
+          invocationEvent('result_received', { node_id: nodeId, provider: providerName, ok: true }),
+          invocationEvent('failed', {
+            node_id: nodeId,
+            error: expectedAgentId ? RELEASE_IDENTITY_MISMATCH_CODE : RELEASE_GENERATION_CONFLICT_CODE,
+          }),
+        ),
       })
       .where(and(
         eq(actionInvocations.workspaceId, workspaceId),
@@ -2447,6 +2507,10 @@ async function completeReleaseNodeInvocation(
         status: 'completed',
         completedAt,
         spawnReservedAt: null,
+        events: appendInvocationEvents(
+          invocationEvent('result_received', { node_id: nodeId, provider: providerName, ok: true }),
+          invocationEvent('completed', { node_id: nodeId, agent_id: agent.id, agent_name: agent.name }),
+        ),
       })
       .where(and(
         eq(actionInvocations.workspaceId, workspaceId),
@@ -2576,6 +2640,7 @@ async function dispatchNodeAttempt(
     targetActionId?: string;
     /** Reject a stale lost-node rescheduler after any newer dispatch mutation. */
     expectedNodeLivenessRevision?: number;
+    leadingEvents?: LeadingEvents;
   },
 ) {
   const stateFields = opts.pending
@@ -2599,6 +2664,10 @@ async function dispatchNodeAttempt(
       spawnReservedAt: opts.reservationHeld ? new Date() : null,
       ...(opts.targetActionId ? { actionId: opts.targetActionId } : {}),
       ...attemptFields,
+      events: appendInvocationEvents(...(opts.leadingEvents ?? []), dispatchAttemptEvent(
+        invocationEvent(opts.pending ? 'queued' : 'dispatched', { node_id: nodeId, provider: opts.providerName }),
+        !opts.skipIncrementAttempts,
+      )),
     })
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
@@ -2668,6 +2737,7 @@ async function claimRegisteredActionHandoff(
     reservationHeld?: boolean;
     skipIncrementAttempts?: boolean;
     expectedNodeLivenessRevision?: number;
+    leadingEvents?: LeadingEvents;
   },
 ): Promise<{ actionId: string; actionName: string; dispatchAttempts: number; taskState: InvocationRow['taskState'] } | null> {
   const claimedActionId = args.targetActionId ?? args.expectedActionId;
@@ -2695,6 +2765,14 @@ async function claimRegisteredActionHandoff(
       spawnReservedAt: args.reservationHeld ? new Date() : null,
       actionId: claimedActionId,
       ...attemptFields,
+      events: appendInvocationEvents(...(args.leadingEvents ?? []), dispatchAttemptEvent(
+        invocationEvent(args.pending ? 'queued' : 'dispatched', {
+          node_id: args.nodeId,
+          provider: args.providerName,
+          capability: args.actionName,
+        }),
+        !args.skipIncrementAttempts,
+      )),
     })
     .where(and(
       eq(actionInvocations.workspaceId, args.workspaceId),
@@ -2781,6 +2859,7 @@ async function settleDeletedRegisteredAction(
       error: 'action_deleted',
       completedAt: new Date(),
       spawnReservedAt: null,
+      events: appendInvocationEvents(invocationEvent('failed', { error: 'action_deleted' })),
     })
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
@@ -2821,7 +2900,15 @@ async function settleRegisteredActionSendFailure(
 ): Promise<InvocationRow | undefined> {
   const [failed] = await db
     .update(actionInvocations)
-    .set({ status: 'failed', error: 'node_dispatch_unavailable', completedAt: new Date() })
+    .set({
+      status: 'failed',
+      error: 'node_dispatch_unavailable',
+      completedAt: new Date(),
+      events: appendInvocationEvents(
+        invocationEvent('send_failed', { node_id: args.nodeId, provider: args.providerName }),
+        invocationEvent('failed', { error: 'node_dispatch_unavailable' }),
+      ),
+    })
     .where(and(
       eq(actionInvocations.workspaceId, args.workspaceId),
       eq(actionInvocations.id, args.invocationId),
@@ -2842,11 +2929,13 @@ async function snapshotInvocationHandlerNode(
   invocationId: string,
   nodeId: string,
   expectedNodeLivenessRevision?: number,
+  placedEvent?: ReturnType<typeof invocationEvent>,
 ): Promise<boolean> {
   const [updated] = await db
     .update(actionInvocations)
     .set({
       handlerNodeId: sql`COALESCE(${actionInvocations.handlerNodeId}, ${nodeId})`,
+      ...(placedEvent ? { events: appendInvocationEvents(placedEvent) } : {}),
     })
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
@@ -2878,7 +2967,13 @@ export async function markDrainedInvocationDispatched(
 ): Promise<boolean> {
   const [updated] = await db
     .update(actionInvocations)
-    .set(dispatchedStateFields({ retryAfterAt: new Date(Date.now() + ACTION_DISPATCH_TIMEOUT_MS) }))
+    .set({
+      ...dispatchedStateFields({ retryAfterAt: new Date(Date.now() + ACTION_DISPATCH_TIMEOUT_MS) }),
+      events: appendInvocationEvents(dispatchAttemptEvent(
+        invocationEvent('dispatched', { node_id: nodeId, reason: 'drain' }),
+        false,
+      )),
+    })
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
       eq(actionInvocations.id, invocationId),
@@ -2911,6 +3006,8 @@ async function dispatchNodeInvocation(args: {
   reservationHeld?: boolean;
   skipIncrementAttempts?: boolean;
   expectedNodeLivenessRevision?: number;
+  /** Events recorded in the same write as this dispatch (e.g. the requeue that led to it). */
+  leadingEvents?: LeadingEvents;
 }): Promise<{
   accepted: boolean;
   pending: boolean;
@@ -3023,6 +3120,7 @@ async function dispatchNodeInvocation(args: {
         reservationHeld: args.reservationHeld,
         skipIncrementAttempts: args.skipIncrementAttempts,
         expectedNodeLivenessRevision: args.expectedNodeLivenessRevision,
+        leadingEvents: args.leadingEvents,
       })
       : null;
     if (!registeredNodeClaim) {
@@ -3144,6 +3242,22 @@ async function dispatchNodeInvocation(args: {
     if (settled && !OPEN_INVOCATION_STATUSES.some((status) => status === settled.status)) {
       return { accepted: false, pending: false, sent: true, settled };
     }
+    // The socket owner's authorization CAS recorded this dispatch outside the
+    // engine. Record it on the timeline now, only while it is still this
+    // node's live dispatch.
+    await recordInvocationEvent(args.db, args.workspaceId, args.invocationId, [
+      ...(args.leadingEvents ?? []),
+      invocationEvent('dispatched', {
+        node_id: args.nodeId,
+        provider: args.providerName,
+        agent_id: args.agent.id,
+        agent_name: args.agent.name,
+        ...(settled ? { attempt: settled.dispatchAttempts } : {}),
+      }),
+    ], [
+      eq(actionInvocations.dispatchedNodeId, args.nodeId),
+      inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+    ]);
     return { accepted: true, pending, sent: true };
   }
 
@@ -3170,6 +3284,7 @@ async function dispatchNodeInvocation(args: {
           ? finalExpectedActionId ?? undefined
           : undefined,
         expectedNodeLivenessRevision: args.expectedNodeLivenessRevision,
+        leadingEvents: args.leadingEvents,
       },
     );
   if (!accepted && args.invocationOrigin === 'registered_action') {
@@ -3280,10 +3395,21 @@ function unsentNativeSpawnOn(workspaceId: string, invocationId: string | null, n
   );
 }
 
-async function markUnsentNativeSpawn(db: Db, workspaceId: string, invocationId: string, nodeId: string) {
+async function markUnsentNativeSpawn(
+  db: Db,
+  workspaceId: string,
+  invocationId: string,
+  nodeId: string,
+  reason?: 'capacity_unavailable' | 'drain_error',
+) {
   await db
     .update(actionInvocations)
-    .set({ handlerUnreachableSince: new Date() })
+    .set({
+      handlerUnreachableSince: new Date(),
+      events: appendInvocationEvents(reason === 'capacity_unavailable'
+        ? invocationEvent('queued', { node_id: nodeId, reason })
+        : invocationEvent('send_failed', { node_id: nodeId, ...(reason ? { reason } : {}) })),
+    })
     .where(unsentNativeSpawnOn(workspaceId, invocationId, nodeId));
 }
 
@@ -3421,8 +3547,8 @@ export async function drainNodeInvocations(
     // A definitely-unsent outcome below restores the mark, after returning
     // any reservation this drain took. Whether a send started separates a
     // pre-send throw (unsent) from a throw with an unknown outcome.
-    const remarkUnsent = () => unsentSpawn
-      ? markUnsentNativeSpawn(db, workspaceId, row.id, nodeId)
+    const remarkUnsent = (reason?: 'capacity_unavailable' | 'drain_error') => unsentSpawn
+      ? markUnsentNativeSpawn(db, workspaceId, row.id, nodeId, reason)
       : Promise.resolve();
     let sendStarted = false;
     const sendRegistry = unsentSpawn ? observeSends(registry, () => { sendStarted = true; }) : registry;
@@ -3433,7 +3559,7 @@ export async function drainNodeInvocations(
       if (nativeSpawn && !reservationHeld) {
         const reserved = await reserveNodeCapacity(db, workspaceId, nodeId);
         if (!reserved) {
-          await remarkUnsent();
+          await remarkUnsent('capacity_unavailable');
           const [node] = await db
             .select({
               status: nodes.status,
@@ -3490,21 +3616,236 @@ export async function drainNodeInvocations(
       // A throw before any send leaves the spawn unsent, so it is re-marked. A
       // throw once a send started is an unknown outcome, so the spawn stays
       // unmarked and only the never-dispatched sweep ends it.
-      if (!sendStarted) await remarkUnsent().catch(() => {});
+      if (!sendStarted) await remarkUnsent('drain_error').catch(() => {});
     }
   }
   return drained;
+}
+
+export interface RescheduleNodeInvocationOptions {
+  allowAttemptedFallback?: boolean;
+  retryAfterAt?: Date | null;
+  expectedNodeLivenessRevision?: number;
+  /** Why the invocation is leaving its node; recorded on its timeline. */
+  reason?: ActionInvocationRequeueReason;
+  /** Further detail for `reason`, e.g. the node-offline cause. */
+  reasonDetail?: string;
+  /** Emits `action.completed` when a spawn settles from its agent's registration. */
+  completionDeps?: InvocationCompletionDeps;
+}
+
+/**
+ * Return a spawn's native capacity slot exactly once. The reservation marker
+ * is cleared by a compare-and-set before the node's counter is decremented,
+ * so another path that read the same marker (a later timeout, a lost-node
+ * settle, a retry after a storage error) finds it gone and releases nothing.
+ * A failure between the two leaks a slot rather than taking another spawn's.
+ */
+async function releaseHeldSpawnReservation(
+  db: Db,
+  workspaceId: string,
+  invocationId: string,
+  nodeId: string,
+  where: SQL[] = [],
+): Promise<boolean> {
+  const [claimed] = await db
+    .update(actionInvocations)
+    .set({ spawnReservedAt: null })
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.id, invocationId),
+      eq(actionInvocations.dispatchedNodeId, nodeId),
+      isNotNull(actionInvocations.spawnReservedAt),
+      ...where,
+    ))
+    .returning({ id: actionInvocations.id });
+  if (!claimed) return false;
+  await releaseNodeCapacity(db, workspaceId, nodeId);
+  return true;
+}
+
+/**
+ * For a fallback path about to clear a spawn's dispatch after its reschedule
+ * failed: return the slot the dispatch still holds first. Returns false when
+ * that could not be done, in which case the caller must leave the dispatch in
+ * place so a later reschedule can release it. Callers also scope the detach
+ * to `spawn_reserved_at IS NULL` on the same node, so a row re-dispatched
+ * (and re-reserved) in between is never detached from its new slot.
+ */
+export async function releaseSpawnReservationBeforeDetach(
+  db: Db,
+  invocation: Pick<InvocationRow, 'id' | 'workspaceId' | 'actionName'>,
+  nodeId: string,
+  where: SQL[] = [],
+): Promise<boolean> {
+  if (!isSpawnInvocation(invocation.actionName)) return true;
+  try {
+    await releaseHeldSpawnReservation(db, invocation.workspaceId, invocation.id, nodeId, where);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The event for an invocation leaving its node. It names the node and provider
+ * connection of the dispatch it left, which is what lets that exact connection
+ * still deliver a late spawn result.
+ */
+export function requeueEvent(
+  invocation: Pick<InvocationRow, 'dispatchedNodeId' | 'dispatchedProvider'>,
+  reason?: ActionInvocationRequeueReason,
+  detail?: string,
+) {
+  return invocationEvent('requeued', {
+    node_id: invocation.dispatchedNodeId,
+    ...(invocation.dispatchedProvider ? { provider: invocation.dispatchedProvider } : {}),
+    reason,
+    detail,
+  });
+}
+
+function lastAttemptedNodeId(invocation: Pick<InvocationRow, 'attemptedNodeIds' | 'dispatchedNodeId'>): string | null {
+  const attempted = normalizeAttemptedNodeIds(invocation.attemptedNodeIds);
+  return invocation.dispatchedNodeId ?? attempted.at(-1) ?? null;
+}
+
+/**
+ * A spawn that is about to be requeued may already have started: the node
+ * launched the agent and the agent registered with this invocation id, but the
+ * node's result has not been applied (it is slow, lost, or was rejected).
+ * Requeueing would launch a second agent under the same name, which cannot
+ * register, and leave the caller waiting for a spawn that did happen. Treat
+ * the registration as the evidence it is, the same way `inventory.sync`
+ * already completes a spawn whose agent it lists, and settle the invocation
+ * as completed with that agent.
+ *
+ * Conservative on purpose: only native or shadowed spawns, only an agent that
+ * is not released, and only when its registration came from a node this
+ * invocation was dispatched to.
+ *
+ * A `verify_ready` spawn is never completed this way: its caller asked for
+ * harness readiness, which registration does not prove, and the node holds
+ * that result until the harness reports ready (up to 90 s), longer than the
+ * 30 s dispatch timeout. While its agent registered recently on the node the
+ * spawn is dispatched to, a dispatch timeout leaves the dispatch in place
+ * instead of requeueing it, so the held result can still be applied; after
+ * {@link VERIFIED_SPAWN_READINESS_HOLD_MS} it is requeued as before.
+ */
+async function settleSpawnFromRegistration(
+  db: Db,
+  invocation: RetryableInvocationRow,
+  opts: RescheduleNodeInvocationOptions,
+): Promise<'settled' | 'held' | null> {
+  if (!isSpawnInvocation(invocation.actionName)) return null;
+  const input = recordInput(invocation.input);
+  const name = typeof input.name === 'string' ? input.name : null;
+  if (!name) return null;
+  if (input.verify_ready === true) {
+    return await holdVerifiedSpawnForReadiness(db, invocation, name, opts) ? 'held' : null;
+  }
+  const agent = await registeredAgentForInvocation(db, invocation.workspaceId, invocation.id, { agentName: name });
+  // Only the node that holds the current (or, once requeued, the latest)
+  // dispatch: a stale registration from an earlier attempt must not settle
+  // work another node is still launching.
+  if (!agent?.node_id || agent.node_id !== lastAttemptedNodeId(invocation)) return null;
+  const [settled] = await db
+    .update(actionInvocations)
+    .set({
+      status: 'completed',
+      output: {
+        agent_id: agent.agent_id,
+        name: agent.name,
+        invocation_id: invocation.id,
+        node_id: agent.node_id,
+        session_ref: agent.session_ref,
+        started_from: 'agent_registration',
+      },
+      error: null,
+      completedAt: new Date(),
+      retryAfterAt: null,
+      events: appendInvocationEvents(invocationEvent('started', {
+        node_id: agent.node_id,
+        agent_id: agent.agent_id,
+        agent_name: agent.name,
+        reason: opts.reason,
+        detail: opts.reasonDetail,
+      })),
+    })
+    .where(and(
+      eq(actionInvocations.workspaceId, invocation.workspaceId),
+      eq(actionInvocations.id, invocation.id),
+      inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      ...(opts.expectedNodeLivenessRevision !== undefined
+        ? [eq(actionInvocations.nodeLivenessRevision, opts.expectedNodeLivenessRevision)]
+        : []),
+    ))
+    .returning();
+  if (!settled) return null;
+  if (settled.dispatchedNodeId) {
+    await releaseHeldSpawnReservation(db, invocation.workspaceId, invocation.id, settled.dispatchedNodeId);
+  }
+  if (opts.completionDeps) {
+    await emitInvocationCompletionEffects(opts.completionDeps, invocation.workspaceId, publicInvocation(settled))
+      .catch(() => {});
+  }
+  return 'settled';
+}
+
+/**
+ * How long after its agent registered a `verify_ready` spawn stays dispatched
+ * through dispatch timeouts: the node's readiness hold (90 s) plus margin.
+ */
+export const VERIFIED_SPAWN_READINESS_HOLD_MS = 120_000;
+
+async function holdVerifiedSpawnForReadiness(
+  db: Db,
+  invocation: RetryableInvocationRow,
+  name: string,
+  opts: RescheduleNodeInvocationOptions,
+): Promise<boolean> {
+  const nodeId = invocation.dispatchedNodeId;
+  if (opts.reason !== 'dispatch_timeout' || invocation.status !== 'dispatched' || !nodeId) return false;
+  const agent = await registeredAgentForInvocation(db, invocation.workspaceId, invocation.id, { agentName: name });
+  if (!agent || agent.node_id !== nodeId) return false;
+  const registeredAt = Date.parse(agent.registered_at ?? '');
+  if (!Number.isFinite(registeredAt) || Date.now() - registeredAt > VERIFIED_SPAWN_READINESS_HOLD_MS) return false;
+  // Leave dispatched_at alone: it is a liveness-revision column, and bumping
+  // it could hide this dispatch from a concurrent lost-node settle. The sweep
+  // re-evaluates the hold each pass until the window closes; only the first
+  // pass records the event, and the events column advances no revision.
+  const holding = sql`EXISTS (
+    SELECT 1 FROM json_each(COALESCE(${actionInvocations.events}, '[]'))
+    WHERE json_extract(value, '$.type') = 'started' AND json_extract(value, '$.reason') = 'awaiting_readiness'
+  )`;
+  const [held] = await db
+    .update(actionInvocations)
+    .set({
+      events: sql`CASE WHEN ${holding} THEN ${actionInvocations.events} ELSE ${appendInvocationEvents(invocationEvent('started', {
+        node_id: nodeId,
+        agent_id: agent.agent_id,
+        agent_name: agent.name,
+        reason: 'awaiting_readiness',
+      }))} END`,
+    })
+    .where(and(
+      eq(actionInvocations.workspaceId, invocation.workspaceId),
+      eq(actionInvocations.id, invocation.id),
+      eq(actionInvocations.status, 'dispatched'),
+      eq(actionInvocations.dispatchedNodeId, nodeId),
+      ...(opts.expectedNodeLivenessRevision !== undefined
+        ? [eq(actionInvocations.nodeLivenessRevision, opts.expectedNodeLivenessRevision)]
+        : []),
+    ))
+    .returning({ id: actionInvocations.id });
+  return !!held;
 }
 
 export async function rescheduleNodeInvocation(
   db: Db,
   registry: NodeConnectionRegistry,
   invocation: RetryableInvocationRow,
-  opts: {
-    allowAttemptedFallback?: boolean;
-    retryAfterAt?: Date | null;
-    expectedNodeLivenessRevision?: number;
-  } = {},
+  opts: RescheduleNodeInvocationOptions = {},
 ) {
   // Once the exact provider accepted this generation, pruning only clears its
   // materialized action FK. It must not make timeout, disconnect, or inventory
@@ -3523,11 +3864,27 @@ export async function rescheduleNodeInvocation(
     );
     return false;
   }
+  // A node that explicitly answered handler_unavailable has given its verdict;
+  // every other path asks whether the spawn already started before relaunching.
+  if (opts.reason !== 'handler_unavailable' && await settleSpawnFromRegistration(db, invocation, opts)) {
+    return false;
+  }
+  // The invocation is leaving its node. The requeue is recorded in the same
+  // write as whichever transition actually happens next (re-dispatch, queue,
+  // pending reset or failure), so a lost race never leaves a false requeue.
+  const leadingEvents: LeadingEvents = invocation.dispatchedNodeId && !isBuiltinReleaseInvocation(invocation)
+    ? [requeueEvent(invocation, opts.reason, opts.reasonDetail)]
+    : [];
   // Only release capacity the invocation actually holds. A shadowed spawn
   // dropped its native reservation at dispatch (spawnReservedAt is null), so it
   // must not release capacity that now belongs to another spawn.
   if (invocation.dispatchedNodeId && isSpawnInvocation(invocation.actionName) && invocation.spawnReservedAt) {
-    await releaseNodeCapacity(db, invocation.workspaceId, invocation.dispatchedNodeId);
+    await releaseHeldSpawnReservation(db, invocation.workspaceId, invocation.id, invocation.dispatchedNodeId, [
+      inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      ...(opts.expectedNodeLivenessRevision !== undefined
+        ? [eq(actionInvocations.nodeLivenessRevision, opts.expectedNodeLivenessRevision)]
+        : []),
+    ]);
   }
   // A shadowed spawn stays pinned to its node: while a `spawn:<harness>` shadow
   // is registered there, native capacity for that harness is unreachable — even
@@ -3539,7 +3896,13 @@ export async function rescheduleNodeInvocation(
     if (shadow) {
       const [reset] = await db
         .update(actionInvocations)
-        .set({ status: 'pending', dispatchedAt: null, spawnReservedAt: null, retryAfterAt: null })
+        .set({
+          status: 'pending',
+          dispatchedAt: null,
+          spawnReservedAt: null,
+          retryAfterAt: null,
+          ...(leadingEvents.length > 0 ? { events: appendInvocationEvents(...leadingEvents) } : {}),
+        })
         .where(and(
           eq(actionInvocations.workspaceId, invocation.workspaceId),
           eq(actionInvocations.id, invocation.id),
@@ -3579,6 +3942,7 @@ export async function rescheduleNodeInvocation(
       invocationOrigin: invocation.invocationOrigin,
       retryAfterAt: opts.retryAfterAt ?? null,
       expectedNodeLivenessRevision: opts.expectedNodeLivenessRevision,
+      leadingEvents,
     });
     return dispatched.accepted;
   }
@@ -3629,6 +3993,7 @@ export async function rescheduleNodeInvocation(
             queue: target.queue,
             reservationHeld: false,
             expectedNodeLivenessRevision: opts.expectedNodeLivenessRevision,
+            leadingEvents,
           }, { failIfUnavailable: false });
           if (dispatched.providerUnavailable) {
             providerRejectedNodeIds.add(placement.node.id);
@@ -3662,6 +4027,7 @@ export async function rescheduleNodeInvocation(
                 : undefined,
               targetActionId: target?.id,
               expectedNodeLivenessRevision: opts.expectedNodeLivenessRevision,
+              leadingEvents,
             },
           );
           if (!accepted && invocation.invocationOrigin === 'registered_action') {
@@ -3688,6 +4054,7 @@ export async function rescheduleNodeInvocation(
           input,
           reservationHeld,
           expectedNodeLivenessRevision: opts.expectedNodeLivenessRevision,
+          leadingEvents,
         });
         return dispatched.accepted;
       } catch {
@@ -3703,6 +4070,7 @@ export async function rescheduleNodeInvocation(
       invocation.workspaceId,
       invocation.id,
       opts.expectedNodeLivenessRevision,
+      leadingEvents,
     );
     return false;
   }
@@ -3716,6 +4084,7 @@ export async function rescheduleNodeInvocation(
       dispatchedAt: null,
       spawnReservedAt: null,
       retryAfterAt: opts.retryAfterAt ?? nextRetryAfter(invocation.dispatchAttempts + 1),
+      ...(leadingEvents.length > 0 ? { events: appendInvocationEvents(...leadingEvents) } : {}),
     })
     .where(and(
       eq(actionInvocations.workspaceId, invocation.workspaceId),
@@ -3733,7 +4102,12 @@ export async function rescheduleInvocationsForLostNode(
   registry: NodeConnectionRegistry,
   workspaceId: string,
   nodeId: string,
-  opts: { claimRevision?: number } = {},
+  opts: {
+    claimRevision?: number;
+    /** Why the node was lost (liveness_timeout, disconnected, deregistered). */
+    offlineReason?: string;
+    completionDeps?: InvocationCompletionDeps;
+  } = {},
 ) {
   const rows = await db
     .select()
@@ -3755,6 +4129,9 @@ export async function rescheduleInvocationsForLostNode(
     try {
       if (await rescheduleNodeInvocation(db, registry, invocation, {
         retryAfterAt: nextRetryAfter(invocation.dispatchAttempts + 1),
+        reason: 'node_lost',
+        reasonDetail: opts.offlineReason,
+        completionDeps: opts.completionDeps,
         ...(opts.claimRevision !== undefined
           ? { expectedNodeLivenessRevision: invocation.nodeLivenessRevision }
           : {}),
@@ -3762,6 +4139,13 @@ export async function rescheduleInvocationsForLostNode(
         rescheduled++;
       }
     } catch {
+      const revisionGuard = opts.claimRevision !== undefined
+        ? [eq(actionInvocations.nodeLivenessRevision, invocation.nodeLivenessRevision)]
+        : [];
+      // Return a slot this dispatch still holds before detaching it from the
+      // node: once dispatched_node_id is cleared nothing could release it. If
+      // that fails too, keep the dispatch for the next sweep to retry.
+      if (!await releaseSpawnReservationBeforeDetach(db, invocation, nodeId, revisionGuard)) continue;
       // Keep the invocation pending; another heartbeat/sweep can retry.
       await db
         .update(actionInvocations)
@@ -3770,16 +4154,18 @@ export async function rescheduleInvocationsForLostNode(
           dispatchedNodeId: null,
           dispatchedProvider: null,
           dispatchedAt: null,
-          spawnReservedAt: null,
           retryAfterAt: nextRetryAfter(invocation.dispatchAttempts + 1),
+          events: appendInvocationEvents(requeueEvent(invocation, 'node_lost', opts.offlineReason)),
         })
+        // Only the lost node's dispatch, and only once it holds no slot: a row
+        // re-dispatched meanwhile keeps its new dispatch and reservation.
         .where(and(
           eq(actionInvocations.workspaceId, invocation.workspaceId),
           eq(actionInvocations.id, invocation.id),
+          eq(actionInvocations.dispatchedNodeId, nodeId),
+          isNull(actionInvocations.spawnReservedAt),
           inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
-          ...(opts.claimRevision !== undefined
-            ? [eq(actionInvocations.nodeLivenessRevision, invocation.nodeLivenessRevision)]
-            : []),
+          ...revisionGuard,
         ));
     }
   }
@@ -3841,6 +4227,14 @@ export async function completeInvocation(
       status,
       durationMs: data.duration_ms ?? null,
       completedAt: new Date(),
+      events: appendInvocationEvents(
+        invocationEvent('result_received', {
+          ok: !data.error,
+          ...(data.error ? { error: data.error } : {}),
+          ...(data.caller_agent_id ? { agent_id: data.caller_agent_id } : {}),
+        }),
+        invocationEvent(status, data.error ? { error: data.error } : {}),
+      ),
     })
     .where(
       and(
@@ -3857,7 +4251,47 @@ export async function completeInvocation(
   return publicInvocation(updated);
 }
 
-export async function completeNodeInvocation(
+export interface NodeResultRejection {
+  reason: ActionResultRejectionReason;
+  /** A rejection that needs no node attention (a repeat of a result already applied). */
+  benign: boolean;
+  message: string;
+}
+
+export interface NodeResultOutcome {
+  completed: ReturnType<typeof publicInvocation> | null;
+  rejection: NodeResultRejection | null;
+  /** The node's handler_unavailable report was taken and the invocation moved to another attempt. */
+  requeued?: boolean;
+}
+
+const REJECTION_MESSAGES: Record<ActionResultRejectionReason, string> = {
+  unknown_invocation: 'no such invocation exists in this workspace',
+  already_settled: 'the invocation had already completed or failed',
+  dispatched_to_other_node: 'the invocation is dispatched to a different node',
+  wrong_provider: 'the invocation was dispatched to a different provider on this node',
+  not_dispatched: 'the invocation was requeued and is not dispatched to any node',
+  state_changed: 'the invocation changed state while the result was being applied',
+  invalid_payload: 'the action.result frame is malformed',
+};
+
+export function nodeResultRejectionMessage(invocationId: string, reason: ActionResultRejectionReason): string {
+  return `action.result for invocation ${invocationId} was not applied: ${REJECTION_MESSAGES[reason]}`;
+}
+
+/** The node-control `error` frame code for a rejected `action.result`. */
+export function nodeResultRejectionCode(reason: ActionResultRejectionReason): string {
+  return `action_result_${reason}`;
+}
+
+/**
+ * Apply a node's result for an invocation and say what happened to it: the
+ * completed invocation, or why the result was not applied. Every outcome is
+ * recorded on the invocation's timeline (a rejection only on an invocation
+ * this node was placed on or dispatched to, so a node cannot annotate
+ * unrelated work).
+ */
+export async function applyNodeInvocationResult(
   db: Db,
   registry: NodeConnectionRegistry,
   workspaceId: string,
@@ -3869,7 +4303,20 @@ export async function completeNodeInvocation(
     error?: string;
   },
   deps?: InvocationCompletionDeps,
-) {
+  options: {
+    source?: 'action.result' | 'inventory_sync';
+    /**
+     * Set once this call reaches a write that is not safe to repeat (capacity
+     * accounting, rescheduling). A caller retrying transient storage errors
+     * must not re-run the call after that point.
+     */
+    progress?: { mutated: boolean };
+  } = {},
+): Promise<NodeResultOutcome> {
+  const source = options.source ?? 'action.result';
+  const markMutated = () => {
+    if (options.progress) options.progress.mutated = true;
+  };
   const [existing] = await db
     .select({
       id: actionInvocations.id,
@@ -3884,6 +4331,7 @@ export async function completeNodeInvocation(
       error: actionInvocations.error,
       durationMs: actionInvocations.durationMs,
       dispatchedNodeId: actionInvocations.dispatchedNodeId,
+      dispatchedProvider: actionInvocations.dispatchedProvider,
       dispatchedAt: actionInvocations.dispatchedAt,
       providerAcceptedAttempt: actionInvocations.providerAcceptedAttempt,
       spawnReservedAt: actionInvocations.spawnReservedAt,
@@ -3891,22 +4339,92 @@ export async function completeNodeInvocation(
       dispatchAttempts: actionInvocations.dispatchAttempts,
       createdAt: actionInvocations.createdAt,
       completedAt: actionInvocations.completedAt,
+      events: actionInvocations.events,
     })
     .from(actionInvocations)
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
       eq(actionInvocations.id, invocationId),
-      eq(actionInvocations.dispatchedProvider, providerName),
     ));
 
-  if (!existing) return null;
+  const resultFields = {
+    node_id: nodeId,
+    provider: providerName,
+    ok: !data.error,
+    ...(data.error ? { error: data.error } : {}),
+  };
+  const reject = async (reason: ActionResultRejectionReason, benign = false): Promise<NodeResultOutcome> => {
+    if (existing && source === 'action.result') {
+      await recordInvocationEvent(
+        db,
+        workspaceId,
+        invocationId,
+        invocationEvent('result_rejected', { ...resultFields, reason }),
+        [invocationTouchedNode(nodeId)],
+      );
+    }
+    return {
+      completed: null,
+      rejection: { reason, benign, message: nodeResultRejectionMessage(invocationId, reason) },
+    };
+  };
 
+  if (!existing) return reject('unknown_invocation');
   if (existing.dispatchedNodeId && existing.dispatchedNodeId !== nodeId) {
-    return null;
+    return reject('dispatched_to_other_node');
   }
-
   if (existing.status === 'completed' || existing.status === 'failed') {
-    return null;
+    // A node repeating a result for work it finished (for example after
+    // inventory.sync already completed the spawn) needs no attention.
+    return reject('already_settled', existing.dispatchedNodeId === nodeId);
+  }
+  if (!existing.dispatchedNodeId) {
+    // The invocation was requeued (dispatch timeout, node loss, inventory) and
+    // has not been dispatched again. A spawn's successful result from the
+    // exact node and provider connection it was last dispatched to (recorded
+    // on its requeue) is the spawn finishing late: apply it rather than launch
+    // the agent a second time. The CAS requires the row to still be
+    // undispatched at the same attempt, so a concurrent re-dispatch wins.
+    const events = Array.isArray(existing.events) ? existing.events : [];
+    const lastRequeue = [...events].reverse().find((event) => event.type === 'requeued');
+    if (
+      source === 'action.result'
+      && !data.error
+      && isSpawnInvocation(existing.actionName)
+      && existing.status === 'pending'
+      && lastAttemptedNodeId(existing) === nodeId
+      && lastRequeue?.node_id === nodeId
+      && lastRequeue.provider === providerName
+    ) {
+      const [late] = await db
+        .update(actionInvocations)
+        .set({
+          output: data.output ?? null,
+          error: null,
+          status: 'completed',
+          completedAt: new Date(),
+          spawnReservedAt: null,
+          retryAfterAt: null,
+          events: appendInvocationEvents(
+            invocationEvent('result_received', { ...resultFields, reason: 'after_requeue' }),
+            invocationEvent('completed', { node_id: nodeId }),
+          ),
+        })
+        .where(and(
+          eq(actionInvocations.workspaceId, workspaceId),
+          eq(actionInvocations.id, invocationId),
+          eq(actionInvocations.status, 'pending'),
+          isNull(actionInvocations.dispatchedNodeId),
+          eq(actionInvocations.dispatchAttempts, existing.dispatchAttempts),
+        ))
+        .returning();
+      if (late) return { completed: publicInvocation(late), rejection: null };
+      return reject('state_changed');
+    }
+    return reject('not_dispatched');
+  }
+  if (existing.dispatchedProvider !== providerName) {
+    return reject('wrong_provider');
   }
 
   if (data.error === 'handler_unavailable') {
@@ -3914,9 +4432,14 @@ export async function completeNodeInvocation(
       .update(nodes)
       .set({ handlersLive: false })
       .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+    // Rescheduling releases capacity and may dispatch elsewhere; never repeat it.
+    markMutated();
     try {
-      if (await rescheduleNodeInvocation(db, registry, existing, { retryAfterAt: nextRetryAfter(existing.dispatchAttempts + 1) })) {
-        return null;
+      if (await rescheduleNodeInvocation(db, registry, existing, {
+        retryAfterAt: nextRetryAfter(existing.dispatchAttempts + 1),
+        reason: 'handler_unavailable',
+      })) {
+        return { completed: null, rejection: null, requeued: true };
       }
     } catch {
       // Fall through and fail the invocation if no eligible node exists.
@@ -3924,7 +4447,8 @@ export async function completeNodeInvocation(
   }
 
   if (!data.error && isBuiltinReleaseInvocation(existing)) {
-    return completeReleaseNodeInvocation(
+    markMutated();
+    const released = await completeReleaseNodeInvocation(
       db,
       workspaceId,
       nodeId,
@@ -3933,16 +4457,23 @@ export async function completeNodeInvocation(
       data,
       deps,
     );
+    return released ? { completed: released, rejection: null } : reject('state_changed');
   }
 
+  const status = data.error ? 'failed' : 'completed';
   const [updated] = await db
     .update(actionInvocations)
     .set({
       output: data.output ?? null,
       error: data.error ?? null,
-      status: data.error ? 'failed' : 'completed',
+      status,
       completedAt: new Date(),
-      spawnReservedAt: null,
+      events: source === 'inventory_sync'
+        ? appendInvocationEvents(invocationEvent('completed', { node_id: nodeId, reason: 'inventory_sync' }))
+        : appendInvocationEvents(
+          invocationEvent('result_received', resultFields),
+          invocationEvent(status, { node_id: nodeId, ...(data.error ? { error: data.error } : {}) }),
+        ),
     })
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
@@ -3956,11 +4487,40 @@ export async function completeNodeInvocation(
   // Release only capacity this invocation actually reserved. A shadowed spawn
   // holds no native reservation (spawnReservedAt is null), so releasing here
   // would decrement capacity owned by another spawn.
-  if (updated && isSpawnInvocation(updated.actionName) && updated.dispatchedNodeId && existing.spawnReservedAt) {
-    await releaseNodeCapacity(db, workspaceId, updated.dispatchedNodeId);
+  if (updated) markMutated();
+  if (updated && isSpawnInvocation(updated.actionName) && updated.dispatchedNodeId && updated.spawnReservedAt) {
+    await releaseHeldSpawnReservation(db, workspaceId, invocationId, updated.dispatchedNodeId);
   }
 
-  return updated ? publicInvocation(updated) : null;
+  return updated ? { completed: publicInvocation(updated), rejection: null } : reject('state_changed');
+}
+
+export async function completeNodeInvocation(
+  db: Db,
+  registry: NodeConnectionRegistry,
+  workspaceId: string,
+  nodeId: string,
+  providerName: string,
+  invocationId: string,
+  data: {
+    output?: unknown;
+    error?: string;
+  },
+  deps?: InvocationCompletionDeps,
+  options: { source?: 'action.result' | 'inventory_sync' } = {},
+) {
+  const outcome = await applyNodeInvocationResult(
+    db,
+    registry,
+    workspaceId,
+    nodeId,
+    providerName,
+    invocationId,
+    data,
+    deps,
+    options,
+  );
+  return outcome.completed;
 }
 
 /**
@@ -4036,6 +4596,12 @@ async function failUnreachableAgentInvocations(
  * and are older than `maxAgeMs` with a distinguishing error so operators can
  * tell a never-dispatched expiry from a handler-that-went-quiet expiry.
  */
+/**
+ * The failing UPDATE binds its own predicates, SET values and timeline event
+ * besides the id list; leave headroom under D1's 100-parameter cap.
+ */
+const NEVER_DISPATCHED_FAIL_CHUNK_SIZE = D1_SAFE_IN_QUERY_CHUNK_SIZE - 10;
+
 async function failNeverDispatchedExpiredInvocations(
   db: Db,
   maxAgeMs: number,
@@ -4073,8 +4639,8 @@ async function failNeverDispatchedExpiredInvocations(
     // Chunk ids so the IN clause stays under D1's 100-bound-parameter cap. A per-
     // chunk try/catch keeps one bad chunk from stalling the whole workspace, so a
     // large stale backlog can actually drain across sweeps.
-    for (let i = 0; i < ids.length; i += D1_SAFE_IN_QUERY_CHUNK_SIZE) {
-      const chunk = ids.slice(i, i + D1_SAFE_IN_QUERY_CHUNK_SIZE);
+    for (let i = 0; i < ids.length; i += NEVER_DISPATCHED_FAIL_CHUNK_SIZE) {
+      const chunk = ids.slice(i, i + NEVER_DISPATCHED_FAIL_CHUNK_SIZE);
       try {
         const failed = await failNeverDispatchedInvocationRows(
           db,
@@ -4111,7 +4677,13 @@ async function failNeverDispatchedInvocationRows(
   if (invocationIds.length === 0) return [];
   return await db
     .update(actionInvocations)
-    .set({ status: 'failed', error, completedAt: new Date(), spawnReservedAt: null })
+    .set({
+      status: 'failed',
+      error,
+      completedAt: new Date(),
+      spawnReservedAt: null,
+      events: appendInvocationEvents(invocationEvent('failed', { error })),
+    })
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
       inArray(actionInvocations.id, invocationIds),
@@ -4167,6 +4739,8 @@ export async function sweepTimedOutInvocations(
       if (await rescheduleNodeInvocation(db, registry, invocation, {
         allowAttemptedFallback: allowFallback,
         retryAfterAt: allowFallback ? null : nextRetryAfter(invocation.dispatchAttempts + 1),
+        reason: allowFallback ? 'retry_due' : 'dispatch_timeout',
+        completionDeps: sweepOpts.completionDeps,
       })) {
         rescheduled++;
       }
@@ -4190,5 +4764,46 @@ export async function getInvocation(db: Db, workspaceId: string, actionName: str
     );
 
   if (!row) return null;
-  return publicInvocation(await expireTaskInvocation(db, row));
+  const current = await expireTaskInvocation(db, row);
+  const events = Array.isArray(current.events) ? current.events : [];
+  const input = recordInput(current.input);
+  const registeredAgent = isSpawnInvocation(current.actionName)
+    ? await registeredAgentForInvocation(db, workspaceId, current.id, {
+      agentName: typeof input.name === 'string' ? input.name : null,
+      agentIds: events.flatMap((event) => (
+        event.type === 'agent_registered' && typeof event.agent_id === 'string' ? [event.agent_id] : []
+      )),
+    })
+    : null;
+  const nodeNames = await nodeNamesFor(db, workspaceId, [
+    ...events.flatMap((event) => (typeof event.node_id === 'string' ? [event.node_id] : [])),
+    ...(current.dispatchedNodeId ? [current.dispatchedNodeId] : []),
+    ...(registeredAgent?.node_id ? [registeredAgent.node_id] : []),
+  ]);
+  const publicAgent = registeredAgent
+    ? {
+      agent_id: registeredAgent.agent_id,
+      name: registeredAgent.name,
+      status: registeredAgent.status,
+      node_id: registeredAgent.node_id,
+      registered_at: registeredAgent.registered_at,
+    }
+    : null;
+  return {
+    ...publicInvocation(current),
+    events,
+    explanation: explainInvocation({
+      status: current.status,
+      error: current.error,
+      actionName: current.actionName,
+      dispatchedNodeId: current.dispatchedNodeId,
+      dispatchedAt: current.dispatchedAt?.toISOString() ?? null,
+      completedAt: current.completedAt?.toISOString() ?? null,
+      retryAfterAt: current.retryAfterAt?.toISOString() ?? null,
+      events,
+      nodeNames,
+      registeredAgent: publicAgent,
+    }),
+    registered_agent: publicAgent,
+  };
 }
