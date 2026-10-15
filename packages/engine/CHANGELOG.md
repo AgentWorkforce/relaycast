@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- Resolve hosted analytics ownership from authenticated actor credentials; keep standalone MCP and website events anonymous and personless.
+- Expose credential-authenticated actor provenance separately from event targets so hosts can verify analytics ownership; fingerprint presented credentials with SHA-256 independently of custom authentication storage. Public metadata cannot identify people.
 
 ## [10.4.1] - 2026-10-15
 

@@ -2,10 +2,11 @@ import { createMiddleware } from 'hono/factory';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { touchLastSeen } from '../engine/agent.js';
 import type { AppEnv } from '../env.js';
-import type { AuthProvider, AuthRequire } from '../ports/auth.js';
+import type { AuthRequire } from '../ports/auth.js';
 import { getAuthTokenKind } from '../auth/tokenKind.js';
 import { authenticateUnexpired } from '../auth/workspaceExpiry.js';
 import { jsonError } from '../lib/httpResponse.js';
+import { sha256Hex } from '../lib/crypto.js';
 import {
   hasAnyObserverScope,
   type ObserverScope,
@@ -22,8 +23,10 @@ function extractToken(authHeader: string | undefined): string | null {
   return authHeader.slice(7);
 }
 
-async function presentedCredentialHash(auth: AuthProvider, token: string): Promise<string | undefined> {
-  try { return await auth.hashToken(token); } catch { return undefined; }
+async function presentedCredentialHash(token: string): Promise<string | undefined> {
+  // AuthProvider.hashToken describes storage, and may return a raw token.
+  // Telemetry provenance always uses its own irreversible SHA-256 digest.
+  try { return await sha256Hex(token); } catch { return undefined; }
 }
 
 function makeAuthMiddleware(require: AuthRequire) {
@@ -40,7 +43,7 @@ function makeAuthMiddleware(require: AuthRequire) {
     }
 
     c.set('workspace', result.workspace);
-    c.set('agentCredentialHash', result.agent ? await presentedCredentialHash(c.get('engine').auth, token) : undefined);
+    c.set('agentCredentialHash', result.agent ? await presentedCredentialHash(token) : undefined);
     if (result.agent) {
       c.set('agent', result.agent);
       // Touch lastSeen (debounced, fire-and-forget)
@@ -114,7 +117,7 @@ export function requireWorkspaceRead(
     }
 
     c.set('workspace', result.workspace);
-    c.set('agentCredentialHash', result.agent ? await presentedCredentialHash(c.get('engine').auth, token) : undefined);
+    c.set('agentCredentialHash', result.agent ? await presentedCredentialHash(token) : undefined);
     if (result.agent) {
       c.set('agent', result.agent);
       if (Date.now() - result.agent.lastSeen.getTime() > LAST_SEEN_DEBOUNCE_MS) {

@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { createEngine } from '../../engine.js';
 import { hashToken } from '../../auth/index.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
@@ -63,6 +65,47 @@ describe('server telemetry attribution without workspace auth', () => {
     const event = capture.mock.calls.map(([value]) => value).find(value => value.name === 'relaycast_server_message_created');
     expect(event?.actor?.credentialHash).toBe(oldHash);
     expect(event?.actor?.credentialHash).not.toBe(newHash);
+  });
+
+  it('never exposes plaintext storage keys through a custom telemetry sink', async () => {
+    const ws = await createWorkspace(stack.app, 'plaintext-provider-telemetry');
+    const created = await stack.app.request('/v1/agents', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ name: 'custom-provider-human', type: 'human' }),
+    });
+    expect(created.status).toBe(201);
+    const human = (await created.json() as { data: { id: string; token: string } }).data;
+    const authenticate = stack.runtime.deps.auth.authenticate.bind(stack.runtime.deps.auth);
+    const plaintextHash = vi.fn(async (token: string) => token);
+    // A valid custom provider may use plaintext storage keys. Authentication
+    // still delegates to the real provider; telemetry must not use storage keys.
+    const events: TelemetryEvent[] = [];
+    const app = createEngine({
+      ...stack.runtime.deps,
+      auth: { authenticate, hashToken: plaintextHash },
+      telemetry: {
+        capture: (event) => { events.push(event); },
+        captureException: vi.fn(),
+      },
+    });
+    const headers = { 'content-type': 'application/json', authorization: `Bearer ${human.token}` };
+    const sent = await app.request('/v1/channels/general/messages', {
+      method: 'POST', headers, body: JSON.stringify({ text: 'fingerprint regression' }),
+    });
+    expect(sent.status).toBe(201);
+    const read = await app.request('/v1/search?q=fingerprint', { headers });
+    expect(read.status).toBe(200);
+    await stack.settle();
+    const expectedDigest = createHash('sha256').update(human.token).digest('hex');
+    for (const name of ['relaycast_server_message_created', 'relaycast_server_search_executed']) {
+      expect(events.find(event => event.name === name)?.actor).toEqual({
+        workspaceId: ws.workspaceId, agentId: human.id,
+        credentialHash: expectedDigest, senderType: 'human',
+      });
+    }
+    expect(JSON.stringify(events)).not.toContain(human.token);
+    expect(plaintextHash).not.toHaveBeenCalled();
   });
 
   it('keeps public workspace metadata out of webhook analytics groups', async () => {
