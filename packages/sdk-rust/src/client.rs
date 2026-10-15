@@ -366,6 +366,7 @@ impl HttpClient {
                             request_id,
                             attempts,
                             retry_after_ms,
+                            details: None,
                         });
                     }
                     return Err(err.into());
@@ -384,6 +385,10 @@ impl HttpClient {
                     tokio::time::sleep(Duration::from_millis(admission_delay_ms)).await;
                     continue;
                 }
+                // Keep the whole body: servers attach metadata beyond
+                // code/message (e.g. plan and upgrade_available on admission
+                // 429s) that callers need to make their own decisions.
+                let details = serde_json::from_slice::<serde_json::Value>(&bytes).ok();
                 return Err(RelayError::Api {
                     code: error.code,
                     message: error.message,
@@ -391,6 +396,7 @@ impl HttpClient {
                     request_id,
                     attempts,
                     retry_after_ms,
+                    details,
                 });
             }
 

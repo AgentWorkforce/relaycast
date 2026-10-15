@@ -366,6 +366,7 @@ impl AgentRegistrationClient {
                 request_id,
                 attempts,
                 retry_after_ms,
+                ..
             }) => {
                 let cooldown = registration_cooldown_duration(retry_after_ms);
                 let retry_after_secs = cooldown.as_secs();
