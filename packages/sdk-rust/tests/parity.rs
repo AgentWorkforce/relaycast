@@ -978,7 +978,9 @@ async fn agent_heartbeat_uses_presence_endpoint() {
 
     Mock::given(method("POST"))
         .and(path("/v1/agents/heartbeat"))
-        .respond_with(ok(json!({})))
+        .and(header("authorization", "Bearer at_live_test"))
+        .and(body_json(json!({})))
+        .respond_with(ok(json!(null)))
         .expect(1)
         .mount(&server)
         .await;
