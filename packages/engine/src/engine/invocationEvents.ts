@@ -237,11 +237,16 @@ export interface ExplainInvocationInput {
   registeredAgent: ActionInvocationRegisteredAgent | null;
 }
 
-function lastOf(events: ActionInvocationEvent[], predicate: (event: ActionInvocationEvent) => boolean) {
+function lastIndexOf(events: ActionInvocationEvent[], predicate: (event: ActionInvocationEvent) => boolean) {
   for (let index = events.length - 1; index >= 0; index--) {
-    if (predicate(events[index]!)) return events[index];
+    if (predicate(events[index]!)) return index;
   }
-  return undefined;
+  return -1;
+}
+
+function lastOf(events: ActionInvocationEvent[], predicate: (event: ActionInvocationEvent) => boolean) {
+  const index = lastIndexOf(events, predicate);
+  return index >= 0 ? events[index] : undefined;
 }
 
 /** One human sentence describing what happened to an invocation. */
@@ -259,8 +264,13 @@ export function explainInvocation(input: ExplainInvocationInput): string {
   const lastRejection = lastOf(events, (event) => event.type === 'result_rejected' && event.reason !== 'already_settled');
   const lastDispatch = lastOf(events, (event) => event.type === 'dispatched' || event.type === 'queued');
   const started = lastOf(events, (event) => event.type === 'started' && event.reason !== 'awaiting_readiness');
-  const awaitingReadiness = input.status === 'dispatched'
-    && events.some((event) => event.type === 'started' && event.reason === 'awaiting_readiness');
+  // A readiness hold describes the current dispatch only if no later dispatch
+  // or requeue superseded it.
+  const holdIndex = lastIndexOf(events, (event) => event.type === 'started' && event.reason === 'awaiting_readiness');
+  const dispatchIndex = lastIndexOf(events, (event) => (
+    event.type === 'dispatched' || event.type === 'queued' || event.type === 'requeued'
+  ));
+  const awaitingReadiness = input.status === 'dispatched' && holdIndex > dispatchIndex;
   const rejection = lastRejection
     ? rejectionText(lastRejection, { lastRequeue, nodeName, currentNodeId: input.dispatchedNodeId })
     : null;
