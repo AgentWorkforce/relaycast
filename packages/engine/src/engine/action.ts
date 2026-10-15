@@ -4238,9 +4238,20 @@ export async function applyNodeInvocationResult(
     error?: string;
   },
   deps?: InvocationCompletionDeps,
-  options: { source?: 'action.result' | 'inventory_sync' } = {},
+  options: {
+    source?: 'action.result' | 'inventory_sync';
+    /**
+     * Set once this call reaches a write that is not safe to repeat (capacity
+     * accounting, rescheduling). A caller retrying transient storage errors
+     * must not re-run the call after that point.
+     */
+    progress?: { mutated: boolean };
+  } = {},
 ): Promise<NodeResultOutcome> {
   const source = options.source ?? 'action.result';
+  const markMutated = () => {
+    if (options.progress) options.progress.mutated = true;
+  };
   const [existing] = await db
     .select({
       id: actionInvocations.id,
@@ -4356,6 +4367,8 @@ export async function applyNodeInvocationResult(
       .update(nodes)
       .set({ handlersLive: false })
       .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+    // Rescheduling releases capacity and may dispatch elsewhere; never repeat it.
+    markMutated();
     try {
       if (await rescheduleNodeInvocation(db, registry, existing, {
         retryAfterAt: nextRetryAfter(existing.dispatchAttempts + 1),
@@ -4369,6 +4382,7 @@ export async function applyNodeInvocationResult(
   }
 
   if (!data.error && isBuiltinReleaseInvocation(existing)) {
+    markMutated();
     const released = await completeReleaseNodeInvocation(
       db,
       workspaceId,
@@ -4409,6 +4423,7 @@ export async function applyNodeInvocationResult(
   // Release only capacity this invocation actually reserved. A shadowed spawn
   // holds no native reservation (spawnReservedAt is null), so releasing here
   // would decrement capacity owned by another spawn.
+  if (updated) markMutated();
   if (updated && isSpawnInvocation(updated.actionName) && updated.dispatchedNodeId && existing.spawnReservedAt) {
     await releaseNodeCapacity(db, workspaceId, updated.dispatchedNodeId);
   }

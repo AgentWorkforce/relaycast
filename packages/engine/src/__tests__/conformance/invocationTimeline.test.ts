@@ -467,6 +467,38 @@ describe('spawn invocation timeline', () => {
     expect(applied.explanation).toMatch(/and it reported success/);
   });
 
+  it('does not re-run a result after it released capacity, even on a transient storage error', async () => {
+    const ws = await createWorkspace(stack.app, 'timeline-no-double-release');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    const alpha = await attachNode(ws, 'node_alpha', 'alpha');
+    const first = await spawn(caller.token, 'worker-release-1');
+    await spawn(caller.token, 'worker-release-2');
+    const reserved = async () => (await stack.runtime.handle.db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(eq(nodes.id, 'node_alpha')))[0]!.reservedAgents;
+    expect(await reserved()).toBe(2);
+
+    // handler_unavailable reschedules the spawn, which returns its slot; every
+    // invocation write then fails transiently. Re-running the result would
+    // return the other spawn's slot as well.
+    alpha.sock.received.length = 0;
+    const restore = injectUpdateFailure(
+      stack.runtime.deps.db, actionInvocations, 'D1_ERROR: D1 DB is overloaded. Too many requests queued',
+    );
+    try {
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1, id: 'unavailable-pressure', type: 'action.result', invocation_id: first, error: 'handler_unavailable',
+      }));
+    } finally {
+      restore();
+    }
+    expect(await reserved()).toBe(1);
+    const error = alpha.sock.ofType('error').at(-1);
+    expect(error).toMatchObject({ id: 'unavailable-pressure', ok: false });
+    expect(error!.code).not.toBe('d1_pressure');
+  });
+
   it('lets a socket owner record a result it refused before the engine saw it', async () => {
     const ws = await createWorkspace(stack.app, 'timeline-host-refusal');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');

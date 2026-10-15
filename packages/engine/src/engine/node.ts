@@ -26,7 +26,7 @@ import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { acceptTaskInvocation, completeTaskInvocation } from './taskInvocation.js';
 import { databaseConstraintKind, runAtomic, runAtomicWrites } from '../ports/database.js';
-import { D1WriteRetryExhaustedError, retryableD1ErrorCode, retryD1Write } from '../lib/d1Retry.js';
+import { retryableD1ErrorCode, retryD1Write } from '../lib/d1Retry.js';
 import type { AtomicWrite, BatchCapability, EngineDb } from '../ports/database.js';
 import type { PresenceTracker } from '../ports/presence.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
@@ -3295,6 +3295,8 @@ export async function recordNodeFrameRefused(args: {
 
 /** How long a node should wait before resending a result refused under database pressure. */
 export const NODE_RESULT_RETRY_AFTER_SECONDS = 5;
+/** Attempts to apply a node result through transient database errors before refusing it. */
+const NODE_RESULT_APPLY_ATTEMPTS = 3;
 
 /** Validate and serialize an authenticated node frame, replying only after its effects. */
 export async function handleNodeControlMessage(args: HandleNodeControlMessageArgs) {
@@ -3716,45 +3718,56 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           return;
         }
         let outcome: NodeResultOutcome;
-        try {
-          // A transient D1 failure must not drop the result: retry it here,
-          // bounded. Every write inside is a guarded CAS or an append, so a
-          // retry after a write that did land sees its effect.
-          outcome = await retryD1Write(() => applyNodeInvocationResult(
-            args.db,
-            args.registry,
-            args.workspaceId,
-            args.nodeId,
-            frameProviderName,
-            message.invocation_id,
-            {
-              ...(Object.prototype.hasOwnProperty.call(message, 'output') ? { output: message.output } : {}),
-              ...(message.error ? { error: message.error } : {}),
-            },
-            args.completionDeps,
-          ), 3);
-        } catch (err) {
-          if (!(err instanceof D1WriteRetryExhaustedError) && !retryableD1ErrorCode(err)) throw err;
-          // Still under pressure: tell the node to resend (agent-relay brokers
-          // already retry a tracked frame on d1_pressure) and leave a trace.
-          await recordNodeFrameRefused({
-            db: args.db,
-            workspaceId: args.workspaceId,
-            nodeId: args.nodeId,
-            raw: args.raw,
-            reason: 'd1_pressure',
-            provider: frameProviderName,
-          });
-          sendControl(args.socket, {
-            v: 1,
-            id: requestId(message),
-            type: 'error',
-            ok: false,
-            code: 'd1_pressure',
-            message: `action.result for invocation ${message.invocation_id} was not applied under database pressure;`
-              + ` resend it (retry after ${NODE_RESULT_RETRY_AFTER_SECONDS} s)`,
-          });
-          return;
+        // A transient D1 failure must not drop the result: retry it here,
+        // bounded, but only while no write that is unsafe to repeat (capacity
+        // accounting, rescheduling) has run. After one has, surface the error
+        // as before rather than re-run it.
+        const progress = { mutated: false };
+        for (let attempt = 1; ; attempt += 1) {
+          try {
+            outcome = await applyNodeInvocationResult(
+              args.db,
+              args.registry,
+              args.workspaceId,
+              args.nodeId,
+              frameProviderName,
+              message.invocation_id,
+              {
+                ...(Object.prototype.hasOwnProperty.call(message, 'output') ? { output: message.output } : {}),
+                ...(message.error ? { error: message.error } : {}),
+              },
+              args.completionDeps,
+              { progress },
+            );
+            break;
+          } catch (err) {
+            if (progress.mutated || !retryableD1ErrorCode(err)) throw err;
+            if (attempt < NODE_RESULT_APPLY_ATTEMPTS) {
+              await new Promise((resolve) => setTimeout(resolve, 50 * 2 ** (attempt - 1)));
+              continue;
+            }
+            // Still under pressure and nothing applied: tell the node to
+            // resend (agent-relay brokers already retry a tracked frame on
+            // d1_pressure) and leave a trace on the invocation.
+            await recordNodeFrameRefused({
+              db: args.db,
+              workspaceId: args.workspaceId,
+              nodeId: args.nodeId,
+              raw: args.raw,
+              reason: 'd1_pressure',
+              provider: frameProviderName,
+            });
+            sendControl(args.socket, {
+              v: 1,
+              id: requestId(message),
+              type: 'error',
+              ok: false,
+              code: 'd1_pressure',
+              message: `action.result for invocation ${message.invocation_id} was not applied under database pressure;`
+                + ` resend it (retry after ${NODE_RESULT_RETRY_AFTER_SECONDS} s)`,
+            });
+            return;
+          }
         }
         if (outcome.completed && args.completionDeps) {
           await emitInvocationCompletionEffects(args.completionDeps, args.workspaceId, outcome.completed);
