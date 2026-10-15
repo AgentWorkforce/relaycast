@@ -558,6 +558,93 @@ components:
           type: object
           additionalProperties: { type: number, minimum: 0 }
 
+    ActionInvocationEvent:
+      type: object
+      required: [at, type]
+      description: >-
+        One lifecycle step of an invocation. Types: created, placed, queued,
+        dispatched, send_failed, acknowledged, agent_registered,
+        result_received, result_rejected, requeued, started, completed,
+        failed, agent_exited. Readers must ignore types they do not know.
+      additionalProperties: true
+      properties:
+        at: { type: string, format: date-time }
+        type: { type: string }
+        node_id: { type: string, nullable: true }
+        provider: { type: string }
+        attempt:
+          type: integer
+          description: Dispatch attempt number (queued, dispatched).
+        capability: { type: string }
+        reason:
+          type: string
+          description: >-
+            Structured reason. result_rejected: unknown_invocation,
+            already_settled, dispatched_to_other_node, wrong_provider,
+            not_dispatched, state_changed, invalid_payload. requeued and
+            started: dispatch_timeout, node_lost, inventory_missing,
+            handler_unavailable, retry_due; started also awaiting_readiness
+            when a verify_ready spawn's dispatch is held for harness readiness
+            after its agent registered. result_received: after_requeue for
+            a spawn result accepted from its last node after a requeue.
+            completed: inventory_sync when the node's inventory confirmed it.
+        detail:
+          type: string
+          description: Detail for reason, e.g. liveness_timeout, disconnected or deregistered for node_lost.
+        error: { type: string }
+        ok:
+          type: boolean
+          description: Whether a received or rejected result reported success.
+        agent_id: { type: string }
+        agent_name: { type: string }
+
+    ActionInvocation:
+      type: object
+      required: [invocation_id, action_name, status, created_at]
+      properties:
+        invocation_id: { type: string }
+        action_name: { type: string }
+        caller_id: { type: string, nullable: true }
+        caller_name: { type: string, nullable: true }
+        input:
+          type: object
+          additionalProperties: true
+        output:
+          nullable: true
+          description: >-
+            Handler result. A spawn settled from its agent's registration (see
+            the `started` event) carries agent_id, name, invocation_id, node_id,
+            session_ref and started_from: agent_registration.
+        status: { type: string }
+        error: { type: string, nullable: true }
+        duration_ms: { type: integer, nullable: true }
+        dispatched_node_id: { type: string, nullable: true }
+        dispatched_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time, nullable: true }
+        task_execution:
+          $ref: '#/components/schemas/TaskExecution'
+        events:
+          type: array
+          description: >-
+            Lifecycle timeline, oldest first, capped at 50 entries. When full,
+            the oldest entries after the first are dropped.
+          items:
+            $ref: '#/components/schemas/ActionInvocationEvent'
+        explanation:
+          type: string
+          description: One sentence describing what happened, derived from the row and its timeline.
+        registered_agent:
+          type: object
+          nullable: true
+          description: The non-released agent whose node registration named this invocation (spawns only).
+          properties:
+            agent_id: { type: string }
+            name: { type: string }
+            status: { type: string }
+            node_id: { type: string, nullable: true }
+            registered_at: { type: string, format: date-time, nullable: true }
+
     LifecycleActionInvocation:
       type: object
       required:
@@ -5276,11 +5363,18 @@ paths:
             type: string
       responses:
         '200':
-          description: Invocation
+          description: >-
+            Invocation, with its lifecycle timeline (`events`), a one-sentence
+            `explanation` of what happened, and the live agent registered for it
+            (`registered_agent`), so a caller can see a spawn started even when
+            the node's result is missing or was rejected.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SuccessResponse'
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  data: { $ref: '#/components/schemas/ActionInvocation' }
 
   /nodes:
     post:

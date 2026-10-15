@@ -1105,6 +1105,29 @@ with durable readback. Existing short actions and spawn readiness retain their
 current behavior. Deploy the engine contract before enabling task providers;
 providers must implement durable launch/result recovery before callers use them.
 
+Every invocation also keeps a bounded lifecycle timeline. The same GET returns
+`events` (oldest first, at most 50; the first is always kept): `placed`,
+`queued`/`dispatched` with the node and attempt, `agent_registered` when a node
+registers an agent naming the invocation, `result_received` or
+`result_rejected` with a `reason` (`not_dispatched`, `dispatched_to_other_node`,
+`already_settled`, `wrong_provider`, `unknown_invocation`, `invalid_payload`,
+`state_changed`), `requeued` with a `reason` (`dispatch_timeout`, `node_lost`
+plus `detail`, `inventory_missing`, `handler_unavailable`, `retry_due`), and the
+terminal `completed`/`failed`. It adds a one-sentence `explanation` and, for a
+spawn, the live `registered_agent`. A node whose short `action.result` is not
+applied receives an `error` frame with code `action_result_<reason>`.
+
+A spawn about to be requeued whose agent already registered for it, from a
+node it was dispatched to, is settled as `completed` with that agent
+(`output.started_from: "agent_registration"`, a `started` event) instead of
+being launched a second time. A `verify_ready` spawn is not completed this
+way, because registration does not prove readiness; instead, for two minutes
+after its agent registers, a dispatch timeout keeps it dispatched (a `started`
+event with reason `awaiting_readiness`) so the result the node holds until the
+harness is ready can still be applied. A spawn's successful result from the
+node it was last dispatched to is applied even if the spawn was requeued in
+the meantime and not yet dispatched again.
+
 For crash-safe agent cleanup, `POST /v1/agents/release-exact` requires the
 immutable `expected_agent_id` and a caller-persisted `Idempotency-Key`. The key
 is scoped to the workspace, authenticated caller principal, and `release` action;

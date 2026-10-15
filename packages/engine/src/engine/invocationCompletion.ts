@@ -7,6 +7,7 @@ import type { EngineDb } from '../ports/database.js';
 import type { EngineDeps } from '../ports/index.js';
 import { sendNodeDeliveriesToAgents } from './nodeDeliver.js';
 import { appendAndPublishWorkspaceEvent, appendAndPublishWorkspaceEventWhen } from './workspaceEvents.js';
+import { invocationEvent, recordInvocationEvent } from './invocationEvents.js';
 
 export type InvocationCompletionDeps = Pick<EngineDeps, 'db' | 'realtime' | 'webhookQueue' | 'nodeConnections' | 'config'>;
 
@@ -174,6 +175,16 @@ export async function emitAgentExitedEffects(
   const payload = transformForClient(event);
 
   const fanoutTasks: Promise<unknown>[] = [];
+  if (input.invocationId) {
+    // Close the spawn's timeline: the agent it started is gone (released,
+    // deregistered, or missing from its node's inventory).
+    fanoutTasks.push(recordInvocationEvent(deps.db, workspaceId, input.invocationId, invocationEvent('agent_exited', {
+      node_id: input.nodeId,
+      agent_id: input.agentId,
+      agent_name: input.agentName,
+      reason: input.reason,
+    })));
+  }
   // Notify the spawn caller's mailbox so a spawner learns its agent exited. The
   // stable eventKey dedupes redundant emissions of the same logical exit.
   const callerId = input.invocationId ? await lookupSpawnCaller(deps.db, workspaceId, input.invocationId) : null;

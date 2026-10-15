@@ -36,16 +36,19 @@ it('upgrades existing actions and results additively, preserving rows and every 
       '0069_nodes_online_liveness_index.sql',
       '0070_agent_liveness_status.sql',
       '0071_node_liveness_revision.sql',
+      '0074_action_invocation_events.sql',
     ]);
     for (const table of before) {
       const columns = db.pragma(`table_info(${table.name})`) as { name: string }[];
       expect(columns.slice(0, table.columns.length)).toEqual(table.columns);
-      expect(columns).toHaveLength(table.columns.length + (table.name === 'action_invocations' ? 2 : 1));
+      expect(columns).toHaveLength(table.columns.length + (table.name === 'action_invocations' ? 3 : 1));
       expect(db.pragma(`foreign_key_list(${table.name})`)).toEqual(table.fks);
       expect(db.prepare(`SELECT ${table.columns.map(c => c.name).join(',')} FROM ${table.name}`).all()).toEqual(table.rows);
     }
     expect(db.prepare('SELECT execution_mode FROM actions').get()).toEqual({ execution_mode: 'short' });
     expect(db.prepare('SELECT task_state FROM action_invocations').get()).toEqual({ task_state: null });
+    // 0074 backfills every pre-existing invocation with an empty timeline.
+    expect(db.prepare('SELECT events FROM action_invocations').get()).toEqual({ events: '[]' });
     expect(db.pragma('foreign_key_check')).toEqual([]);
     expect(runMigrations(handle).applied).toEqual([]);
     expect(db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_action_invocations_task_deadline'").get()).toBeDefined();

@@ -7,7 +7,19 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Migration `0074_action_invocation_events.sql` adds `action_invocations.events`, a bounded (50) lifecycle timeline written with each transition. Apply it before upgrading.
+- Invocation GET returns `events`, `explanation` and `registered_agent`; `applyNodeInvocationResult` reports why a node result was not applied, and the node control channel answers such a result with an `action_result_<reason>` error frame.
+- Requeue paths record their reason: `rescheduleNodeInvocation` accepts `reason`, `reasonDetail` and `completionDeps`; `rescheduleInvocationsForLostNode` accepts `offlineReason` and `completionDeps`.
+
+### Changed
+
+- Rescheduling a non-`verify_ready` spawn whose agent registered for it from a dispatched node completes it from that registration (`output.started_from: "agent_registration"`) instead of launching it again.
+- A successful spawn `action.result` from the node the spawn was last dispatched to is applied while the spawn is requeued and undispatched.
+- A dispatch timeout keeps a `verify_ready` spawn dispatched for `VERIFIED_SPAWN_READINESS_HOLD_MS` (120 s) after its agent registered on that node, instead of requeueing it while the node holds the result for harness readiness.
 
 ## [10.4.1] - 2026-10-15
 

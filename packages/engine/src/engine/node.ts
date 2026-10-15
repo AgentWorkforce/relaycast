@@ -50,11 +50,14 @@ import {
 } from './nodeProvider.js';
 import { serializeNodeOp } from './nodeLock.js';
 import {
+  applyNodeInvocationResult,
   completeNodeInvocation,
   dispatchCapacitySpawn,
+  nodeResultRejectionCode,
   rescheduleInvocationsForLostNode,
   rescheduleNodeInvocation,
 } from './action.js';
+import { invocationEvent, invocationTouchedNode, recordInvocationEvent } from './invocationEvents.js';
 import { emitInvocationCompletionEffects, emitAgentExitedEffects, emitNodeStatusEffects, fleetInvocationId } from './invocationCompletion.js';
 import type { InvocationCompletionDeps, NodeOfflineReason } from './invocationCompletion.js';
 import { ackDeliveriesUpToSeq, deliverPendingToNode } from './delivery.js';
@@ -1176,7 +1179,11 @@ export async function settleNodeOffline(
         : []),
     ));
 
-  await rescheduleInvocationsForLostNode(db, registry, workspaceId, nodeId, { claimRevision });
+  await rescheduleInvocationsForLostNode(db, registry, workspaceId, nodeId, {
+    claimRevision,
+    offlineReason: opts.reason,
+    completionDeps: opts.deps,
+  });
 
   if (opts.deps && opts.before && opts.before.status === 'online') {
     await emitNodeStatusEffects(opts.deps, workspaceId, {
@@ -2807,7 +2814,7 @@ export async function reconcileInventory(
         invocation_id: item.invocation_id ?? null,
         session_ref: item.session_ref ?? null,
       },
-    }, completionDeps);
+    }, completionDeps, { source: 'inventory_sync' });
     if (completed) {
       completedInvocations++;
       if (completionDeps) {
@@ -2853,7 +2860,7 @@ export async function reconcileInventory(
     // Actual provider disconnect and invocation expiry retain their own recovery.
     if (liveInvocationIds.has(invocation.id) || requiresSpawnReadiness(invocation.input)) continue;
     try {
-      if (await rescheduleNodeInvocation(db, registry, invocation)) {
+      if (await rescheduleNodeInvocation(db, registry, invocation, { reason: 'inventory_missing', completionDeps })) {
         rescheduledInvocations++;
       }
     } catch {
@@ -3180,12 +3187,64 @@ function sendControl(socket: NodeSocketLike | undefined, payload: Record<string,
   }
 }
 
+/**
+ * Note on the invocation's timeline that an agent registered through this
+ * node naming it. Only invocations this node was placed on or dispatched to
+ * are annotated. Best-effort.
+ */
+async function recordAgentRegisteredForInvocation(
+  args: HandleNodeControlMessageArgs,
+  message: { invocation_id?: string; name: string },
+  agentId: string,
+  recovered = false,
+): Promise<void> {
+  if (!message.invocation_id) return;
+  await recordInvocationEvent(
+    args.db,
+    args.workspaceId,
+    message.invocation_id,
+    invocationEvent('agent_registered', {
+      node_id: args.nodeId,
+      agent_id: agentId,
+      agent_name: message.name,
+      ...(recovered ? { reason: 'recovered' } : {}),
+    }),
+    [invocationTouchedNode(args.nodeId)],
+  );
+}
+
+/**
+ * A malformed `action.result` that still names an invocation id is recorded
+ * on that invocation's timeline (only if this node was placed on or
+ * dispatched to it), so a result lost to a schema error is visible.
+ */
+async function recordMalformedActionResult(args: HandleNodeControlMessageArgs, err: unknown): Promise<void> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(args.raw);
+  } catch {
+    return;
+  }
+  if (!raw || typeof raw !== 'object') return;
+  const frame = raw as { type?: unknown; invocation_id?: unknown };
+  if (frame.type !== 'action.result' || typeof frame.invocation_id !== 'string' || !frame.invocation_id) return;
+  const issue = err instanceof Error ? err.message.replace(/\s+/g, ' ') : 'invalid frame';
+  await recordInvocationEvent(
+    args.db,
+    args.workspaceId,
+    frame.invocation_id,
+    invocationEvent('result_rejected', { node_id: args.nodeId, reason: 'invalid_payload', error: issue }),
+    [invocationTouchedNode(args.nodeId)],
+  );
+}
+
 /** Validate and serialize an authenticated node frame, replying only after its effects. */
 export async function handleNodeControlMessage(args: HandleNodeControlMessageArgs) {
   let message: FleetBrokerToRelaycastMessage;
   try {
     message = parseFleetBrokerToRelaycastMessage(JSON.parse(args.raw));
   } catch (err) {
+    await recordMalformedActionResult(args, err);
     sendControl(args.socket, {
       v: 1,
       id: generateId(),
@@ -3441,6 +3500,8 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           ok: true,
           data: registered,
         });
+        // After the reply, so the timeline write never delays registration.
+        await recordAgentRegisteredForInvocation(args, message, registered.agent_id);
         if (!replySent) return;
         args.registry.markProviderAgentsDeliveryReady?.(
           args.workspaceId,
@@ -3476,6 +3537,7 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           ok: true,
           data: recovered,
         });
+        await recordAgentRegisteredForInvocation(args, message, recovered.agent_id, true);
         if (!replySent) return;
         args.registry.markProviderAgentsDeliveryReady?.(
           args.workspaceId,
@@ -3594,7 +3656,7 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           }
           return;
         }
-        const completed = await completeNodeInvocation(
+        const outcome = await applyNodeInvocationResult(
           args.db,
           args.registry,
           args.workspaceId,
@@ -3607,8 +3669,28 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           },
           args.completionDeps,
         );
-        if (completed && args.completionDeps) {
-          await emitInvocationCompletionEffects(args.completionDeps, args.workspaceId, completed);
+        if (outcome.completed && args.completionDeps) {
+          await emitInvocationCompletionEffects(args.completionDeps, args.workspaceId, outcome.completed);
+        }
+        if (outcome.rejection && !outcome.rejection.benign) {
+          // Nodes have never received a reply to a short action.result, so a
+          // dropped result used to be invisible on both sides. Name the reason
+          // in the existing error frame shape so it reaches the node's logs.
+          console.warn('[node.control] action.result not applied', {
+            workspaceId: args.workspaceId,
+            nodeId: args.nodeId,
+            provider: frameProviderName,
+            invocationId: message.invocation_id,
+            reason: outcome.rejection.reason,
+          });
+          sendControl(args.socket, {
+            v: 1,
+            id: requestId(message),
+            type: 'error',
+            ok: false,
+            code: nodeResultRejectionCode(outcome.rejection.reason),
+            message: outcome.rejection.message,
+          });
         }
         return;
       }
