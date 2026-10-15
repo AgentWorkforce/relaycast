@@ -270,34 +270,44 @@ export class AgentClient {
 
   // === WebSocket ===
 
+  /**
+   * Lazily create the underlying WsClient. Constructing it does not open a
+   * socket, so handlers registered via `on.*` before `connect()` attach to
+   * the same instance `connect()` later opens — no queueing needed.
+   */
+  private ensureWs(): WsClient {
+    if (!this.ws) {
+      this.ws = new WsClient(withInternalWsOrigin(
+        {
+          ...this.wsOptions,
+          token: () => this.fetchDirectNodeToken(),
+          baseUrl: this.client.baseUrl,
+          path: '/v1/node/ws',
+          nodeRegistration: () => this.directNodeRegistration(),
+          autoAckDeliveries: true,
+        },
+        this.client.internalOrigin,
+      ));
+      this.ws.on('open', () => {
+        this.directNodeTokenUses = 0;
+        void this.presence.markOnline().catch(() => {});
+        this.startAutoHeartbeat();
+        this.syncDesiredSubscriptions({ resetRemoteState: true });
+      });
+      this.ws.on('close', () => {
+        this.stopAutoHeartbeat();
+        this.activeWsChannels.clear();
+      });
+      this.ws.on('permanently_disconnected', () => {
+        this.stopAutoHeartbeat();
+        this.activeWsChannels.clear();
+      });
+    }
+    return this.ws;
+  }
+
   connect(): void {
-    if (this.ws) return;
-    this.ws = new WsClient(withInternalWsOrigin(
-      {
-        ...this.wsOptions,
-        token: () => this.fetchDirectNodeToken(),
-        baseUrl: this.client.baseUrl,
-        path: '/v1/node/ws',
-        nodeRegistration: () => this.directNodeRegistration(),
-        autoAckDeliveries: true,
-      },
-      this.client.internalOrigin,
-    ));
-    this.ws.on('open', () => {
-      this.directNodeTokenUses = 0;
-      void this.presence.markOnline().catch(() => {});
-      this.startAutoHeartbeat();
-      this.syncDesiredSubscriptions({ resetRemoteState: true });
-    });
-    this.ws.on('close', () => {
-      this.stopAutoHeartbeat();
-      this.activeWsChannels.clear();
-    });
-    this.ws.on('permanently_disconnected', () => {
-      this.stopAutoHeartbeat();
-      this.activeWsChannels.clear();
-    });
-    this.ws.connect();
+    this.ensureWs().connect();
   }
 
   /** Send a REST heartbeat to keep this agent online in PresenceDO without a WebSocket. */
@@ -424,10 +434,7 @@ export class AgentClient {
   }
 
   private onEvent<T extends WsClientEvent>(eventType: string, handler: (e: T) => void): () => void {
-    if (!this.ws) {
-      throw new Error('WebSocket not connected. Call connect() first.');
-    }
-    return this.ws.on(eventType, handler as (e: WsClientEvent) => void);
+    return this.ensureWs().on(eventType, handler as (e: WsClientEvent) => void);
   }
 
   on = {
@@ -464,35 +471,18 @@ export class AgentClient {
     connected:    (handler: () => void): (() => void) => this.onEvent('open', handler as (e: never) => void),
     disconnected: (handler: () => void): (() => void) => this.onEvent('close', handler as (e: never) => void),
     error:        (handler: () => void): (() => void) => this.onEvent('error', handler as (e: never) => void),
-    reconnecting: (handler: (attempt: number) => void): (() => void) => {
-      if (!this.ws) {
-        throw new Error('WebSocket not connected. Call connect() first.');
-      }
-      return this.ws.on('reconnecting', (e: WsClientEvent) => handler((e as WsReconnectingEvent).attempt));
-    },
-    permanentlyDisconnected: (handler: (attempt: number) => void): (() => void) => {
-      if (!this.ws) {
-        throw new Error('WebSocket not connected. Call connect() first.');
-      }
-      return this.ws.on('permanently_disconnected', (e: WsClientEvent) =>
-        handler((e as WsPermanentlyDisconnectedEvent).attempt));
-    },
-    resynced: (handler: (info: { replayed: number; gapDetected: boolean }) => void): (() => void) => {
-      if (!this.ws) {
-        throw new Error('WebSocket not connected. Call connect() first.');
-      }
-      return this.ws.on('resynced', (e: WsClientEvent) => {
+    reconnecting: (handler: (attempt: number) => void): (() => void) =>
+      this.ensureWs().on('reconnecting', (e: WsClientEvent) => handler((e as WsReconnectingEvent).attempt)),
+    permanentlyDisconnected: (handler: (attempt: number) => void): (() => void) =>
+      this.ensureWs().on('permanently_disconnected', (e: WsClientEvent) =>
+        handler((e as WsPermanentlyDisconnectedEvent).attempt)),
+    resynced: (handler: (info: { replayed: number; gapDetected: boolean }) => void): (() => void) =>
+      this.ensureWs().on('resynced', (e: WsClientEvent) => {
         const event = e as WsResyncedEvent;
         handler({ replayed: event.replayed, gapDetected: event.gapDetected });
-      });
-    },
+      }),
     // Wildcard
-    any: (handler: (e: WsClientEvent) => void): (() => void) => {
-      if (!this.ws) {
-        throw new Error('WebSocket not connected. Call connect() first.');
-      }
-      return this.ws.on('*', handler);
-    },
+    any: (handler: (e: WsClientEvent) => void): (() => void) => this.ensureWs().on('*', handler),
   };
 
   // === Messages ===

@@ -720,41 +720,95 @@ describe('AgentClient WebSocket integration', () => {
     expect(handler).toHaveBeenCalledTimes(2);
   });
 
-  // --- error: call before connect ---
+  // --- handlers registered before connect() ---
 
-  it('on.messageCreated throws if called before connect()', () => {
+  it('on.messageCreated registered before connect() does not throw and fires after connecting', async () => {
     const agent = createAgent();
-    expect(() => agent.on.messageCreated(vi.fn())).toThrow(
-      'WebSocket not connected. Call connect() first.',
-    );
+    const handler = vi.fn();
+
+    expect(() => agent.on.messageCreated(handler)).not.toThrow();
+
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    ws.simulateMessage({
+      type: 'message.created',
+      channel: 'general',
+      message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] },
+    });
+
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it('on.connected throws if called before connect()', () => {
+  it('on.connected registered before connect() fires once the socket opens', async () => {
     const agent = createAgent();
-    expect(() => agent.on.connected(vi.fn())).toThrow(
-      'WebSocket not connected. Call connect() first.',
-    );
+    const handler = vi.fn();
+
+    agent.on.connected(handler);
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await Promise.resolve();
+
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it('on.reconnecting throws if called before connect()', () => {
+  it('on.reconnecting registered before connect() fires with attempt count', async () => {
     const agent = createAgent();
-    expect(() => agent.on.reconnecting(vi.fn())).toThrow(
-      'WebSocket not connected. Call connect() first.',
-    );
+    const handler = vi.fn();
+
+    agent.on.reconnecting(handler);
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    ws.simulateClose();
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(1);
   });
 
-  it('on.permanentlyDisconnected throws if called before connect()', () => {
-    const agent = createAgent();
-    expect(() => agent.on.permanentlyDisconnected(vi.fn())).toThrow(
-      'WebSocket not connected. Call connect() first.',
-    );
+  it('on.permanentlyDisconnected registered before connect() fires with attempt count', async () => {
+    const agent = createAgent({
+      ws: { maxReconnectAttempts: 0, reconnectJitter: false },
+    });
+    const handler = vi.fn();
+
+    agent.on.permanentlyDisconnected(handler);
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    ws.simulateClose();
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(0);
   });
 
-  it('on.any throws if called before connect()', () => {
+  it('on.any registered before connect() receives events once connected', async () => {
     const agent = createAgent();
-    expect(() => agent.on.any(vi.fn())).toThrow(
-      'WebSocket not connected. Call connect() first.',
-    );
+    const handler = vi.fn();
+
+    agent.on.any(handler);
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await Promise.resolve();
+    ws.simulateMessage({
+      type: 'message.created',
+      channel: 'general',
+      message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] },
+    });
+
+    // open + message.created
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  it('registering handlers before connect() does not itself open a WebSocket', () => {
+    const agent = createAgent();
+    agent.on.messageCreated(vi.fn());
+    agent.on.connected(vi.fn());
+    agent.on.any(vi.fn());
+
+    expect(MockWebSocket.instances).toHaveLength(0);
   });
 
   // --- unsubscribe function ---
