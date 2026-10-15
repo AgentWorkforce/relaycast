@@ -263,14 +263,23 @@ impl RelayCast {
         let response = request.send().await?;
 
         let status = response.status().as_u16();
-        let json: ApiResponse<CreateWorkspaceResponse> = response.json().await?;
+        let bytes = response.bytes().await?;
+        let json: ApiResponse<CreateWorkspaceResponse> = serde_json::from_slice(&bytes)?;
 
         if !json.ok {
             let error = json.error.unwrap_or_else(|| ApiErrorInfo {
                 code: "unknown_error".to_string(),
                 message: "Unknown error".to_string(),
             });
-            return Err(RelayError::api(error.code, error.message, status));
+            return Err(RelayError::Api {
+                code: error.code,
+                message: error.message,
+                status,
+                request_id: None,
+                attempts: 1,
+                retry_after_ms: None,
+                details: serde_json::from_slice(&bytes).ok(),
+            });
         }
 
         json.data
@@ -1095,7 +1104,8 @@ impl RelayCast {
             .await?;
 
         let status = response.status().as_u16();
-        let json: ApiResponse<WorkspaceLookup> = response.json().await?;
+        let bytes = response.bytes().await?;
+        let json: ApiResponse<WorkspaceLookup> = serde_json::from_slice(&bytes)?;
 
         if !json.ok {
             if status == 404 {
@@ -1105,7 +1115,15 @@ impl RelayCast {
                 code: "unknown_error".to_string(),
                 message: "Unknown error".to_string(),
             });
-            return Err(RelayError::api(error.code, error.message, status));
+            return Err(RelayError::Api {
+                code: error.code,
+                message: error.message,
+                status,
+                request_id: None,
+                attempts: 1,
+                retry_after_ms: None,
+                details: serde_json::from_slice(&bytes).ok(),
+            });
         }
 
         json.data

@@ -18,6 +18,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased]
 
+### Changed
+
+- Rust SDK 10.0.0 (breaking): `RelayError::Api` keeps the full JSON error body as `details` (read it with `RelayError::details()`), so callers can see server metadata such as `plan` and `upgrade_available` on workspace admission 429s. Struct literals add `details: None`; patterns that destructure the variant need a trailing `..`.
+
 ## [10.4.1] - 2026-10-15
 
 ### Fixed
