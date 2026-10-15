@@ -290,7 +290,7 @@ jobs:
             const fs = require('node:fs');
             const path = require('node:path');
 
-            const dirs = ['a2a', 'types', 'engine', 'sdk-typescript', 'cli', 'mcp', 'react', 'openclaw'];
+            const dirs = ['a2a', 'types', 'engine', 'sdk-typescript', 'cli', 'mcp', 'react', 'openclaw', 'communication-policy'];
             const artifactDir = path.resolve('release-artifacts');
             const packages = [];
             for (const dir of dirs) {
@@ -365,6 +365,7 @@ jobs:
           - mcp
           - react
           - openclaw
+          - communication-policy
 
     steps:
       - name: Checkout code
@@ -488,6 +489,7 @@ jobs:
             "@relaycast/mcp"
             "@relaycast/react"
             "@relaycast/openclaw"
+            "@relaycast/communication-policy"
           )
           {
             echo "## Publish reconciliation for v${NEW_VERSION}"
@@ -842,6 +844,7 @@ jobs:
             | @relaycast/mcp | ${{ needs.build.outputs.new_version }} |
             | @relaycast/react | ${{ needs.build.outputs.new_version }} |
             | @relaycast/openclaw | ${{ needs.build.outputs.new_version }} |
+            | @relaycast/communication-policy | ${{ needs.build.outputs.new_version }} |
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

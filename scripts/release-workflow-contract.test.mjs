@@ -382,7 +382,7 @@ describe("publish workflow safety contract", () => {
     assert.match(packageInput, /options:\n\s+- all\n/);
     assert.doesNotMatch(
       packageInput,
-      /- (?:a2a|types|engine|sdk-typescript|cli|mcp|react|openclaw)/,
+      /- (?:a2a|types|engine|sdk-typescript|cli|mcp|react|openclaw|communication-policy)/,
     );
     assert.doesNotMatch(workflow, /^  publish-single:/m);
     assert.doesNotMatch(workflow, /needs\.publish-single/);
@@ -481,6 +481,7 @@ describe("publish workflow safety contract", () => {
       "@relaycast/mcp",
       "@relaycast/react",
       "@relaycast/openclaw",
+      "@relaycast/communication-policy",
     ]) {
       assert.match(verify, new RegExp(`"${pkg.replace(/[/]/g, "\\/")}"`));
     }

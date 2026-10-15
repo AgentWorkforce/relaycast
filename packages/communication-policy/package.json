@@ -1,0 +1,56 @@
+{
+  "name": "@relaycast/communication-policy",
+  "version": "10.4.0",
+  "description": "Relaycast communication admission and delivery policy",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./contract": {
+      "types": "./dist/contract.d.ts",
+      "import": "./dist/contract.js",
+      "default": "./dist/contract.js"
+    },
+    "./service": {
+      "types": "./dist/service.d.ts",
+      "import": "./dist/service.js",
+      "default": "./dist/service.js"
+    },
+    "./contracts/*": "./contracts/*"
+  },
+  "files": [
+    "dist",
+    "contracts",
+    "fixtures",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run --config vitest.config.ts",
+    "contracts": "npm run build && node scripts/export-contracts.mjs",
+    "contracts:check": "npm run build && node scripts/export-contracts.mjs --check",
+    "prepack": "npm run contracts:check",
+    "lint": "eslint src/"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0",
+    "@types/node": "^22.19.3"
+  },
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AgentWorkforce/relaycast.git",
+    "directory": "packages/communication-policy"
+  },
+  "private": false
+}
