@@ -3665,6 +3665,27 @@ async function releaseHeldSpawnReservation(
 }
 
 /**
+ * For a fallback path about to clear a spawn's dispatch after its reschedule
+ * failed: return the slot the dispatch still holds first. Returns false when
+ * that could not be done, in which case the caller must leave the dispatch in
+ * place so a later reschedule can release it.
+ */
+export async function releaseSpawnReservationBeforeDetach(
+  db: Db,
+  invocation: Pick<InvocationRow, 'id' | 'workspaceId' | 'actionName'>,
+  nodeId: string,
+  where: SQL[] = [],
+): Promise<boolean> {
+  if (!isSpawnInvocation(invocation.actionName)) return true;
+  try {
+    await releaseHeldSpawnReservation(db, invocation.workspaceId, invocation.id, nodeId, where);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * The event for an invocation leaving its node. It names the node and provider
  * connection of the dispatch it left, which is what lets that exact connection
  * still deliver a late spawn result.
@@ -4116,6 +4137,13 @@ export async function rescheduleInvocationsForLostNode(
         rescheduled++;
       }
     } catch {
+      const revisionGuard = opts.claimRevision !== undefined
+        ? [eq(actionInvocations.nodeLivenessRevision, invocation.nodeLivenessRevision)]
+        : [];
+      // Return a slot this dispatch still holds before detaching it from the
+      // node: once dispatched_node_id is cleared nothing could release it. If
+      // that fails too, keep the dispatch for the next sweep to retry.
+      if (!await releaseSpawnReservationBeforeDetach(db, invocation, nodeId, revisionGuard)) continue;
       // Keep the invocation pending; another heartbeat/sweep can retry.
       await db
         .update(actionInvocations)
@@ -4124,7 +4152,6 @@ export async function rescheduleInvocationsForLostNode(
           dispatchedNodeId: null,
           dispatchedProvider: null,
           dispatchedAt: null,
-          spawnReservedAt: null,
           retryAfterAt: nextRetryAfter(invocation.dispatchAttempts + 1),
           events: appendInvocationEvents(requeueEvent(invocation, 'node_lost', opts.offlineReason)),
         })

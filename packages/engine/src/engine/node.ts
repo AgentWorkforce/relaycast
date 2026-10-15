@@ -54,6 +54,7 @@ import {
   completeNodeInvocation,
   dispatchCapacitySpawn,
   nodeResultRejectionCode,
+  releaseSpawnReservationBeforeDetach,
   requeueEvent,
   rescheduleInvocationsForLostNode,
   rescheduleNodeInvocation,
@@ -2868,6 +2869,12 @@ export async function reconcileInventory(
         rescheduledInvocations++;
       }
     } catch {
+      // Return a slot this dispatch still holds before detaching it from the
+      // node; if that fails too, keep the dispatch for a later sync or sweep.
+      if (!await releaseSpawnReservationBeforeDetach(db, invocation, nodeId, [
+        eq(actionInvocations.dispatchedProvider, providerName),
+        inArray(actionInvocations.status, ['pending', 'dispatched']),
+      ])) continue;
       await db
         .update(actionInvocations)
         .set({
