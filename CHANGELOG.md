@@ -22,6 +22,14 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - `GET /v1/deliveries/by-message/{messageId}` proves one still-pending delivery to the calling agent token and returns its server-derived sender id. Unknown, foreign, acknowledged, and expired messages share a 404.
 
+## [10.4.1] - 2026-10-15
+
+### Fixed
+
+- Newly initialized webhooks remain immediately due when database work crosses a clock tick, avoiding a spurious retry failure before the first delivery attempt.
+- Rust SDK: `AgentClient::heartbeat()` and other acknowledgement calls answered `{ "ok": true, "data": null }` no longer fail with "Response missing data field" after the server applied them.
+- Rust SDK success responses must include `data`; an explicit null acknowledgement remains valid, while a missing payload is rejected.
+
 ## [10.4.0] - 2026-10-13
 
 ### Added
@@ -788,7 +796,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v10.4.0...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v10.4.1...HEAD
+[10.4.1]: https://github.com/AgentWorkforce/relaycast/compare/v10.4.0...v10.4.1
 [10.4.0]: https://github.com/AgentWorkforce/relaycast/compare/v10.3.2...v10.4.0
 [10.3.2]: https://github.com/AgentWorkforce/relaycast/compare/v10.3.1...v10.3.2
 [10.3.1]: https://github.com/AgentWorkforce/relaycast/compare/v10.3.0...v10.3.1

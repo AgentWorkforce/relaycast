@@ -13,6 +13,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Agent-token `GET /v1/deliveries/by-message/{messageId}` resolves one pending delivery without the inbox page limit and reveals no other recipient's delivery.
 
+## [10.4.1] - 2026-10-15
+
+### Fixed
+
+- Newly initialized webhooks use the delivery pass's clock for their first due time, avoiding spurious retry failures when insertion crosses a clock tick.
+
 ## [10.4.0] - 2026-10-13
 
 ### Added
