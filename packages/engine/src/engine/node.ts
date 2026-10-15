@@ -3441,6 +3441,8 @@ export async function reconcileInventory(
         // node; if that fails too, keep the dispatch for a later sync or sweep.
         if (!await releaseSpawnReservationBeforeDetach(db, invocation, nodeId, [
           eq(actionInvocations.dispatchedProvider, providerName),
+          // Never detach a dispatch that still holds a slot nothing could then return.
+          isNull(actionInvocations.spawnReservedAt),
           inArray(actionInvocations.status, ['pending', 'dispatched']),
         ])) continue;
         await db
