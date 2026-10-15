@@ -49,6 +49,8 @@ generation; a missing API key alone does not. If saving a rotation fails, the
 process keeps using its fresh in-memory identity and retries persistence on later
 captures. A process exit before storage becomes writable can lose that rotation;
 persistent cross-process rotation cannot be guaranteed while disk writes fail.
+An unreadable or incomplete telemetry file is left in place, so a newer opt-out
+is not replaced by an older in-memory identity.
 
 ### Server identity and ownership
 

@@ -125,6 +125,28 @@ describe('createMcpTelemetry', () => {
     expect(JSON.parse(saved).anonymousId).toBe(ids[1]);
   });
 
+  it('does not replace a newer opt-out when the telemetry file cannot be read', async () => {
+    let saved = JSON.stringify({ anonymousId: 'opted-in' });
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      if (saved === 'corrupt') throw new Error('unexpected end of JSON');
+      return saved;
+    });
+    vi.mocked(fs.writeFileSync).mockImplementation((_path, data) => { saved = String(data); });
+    const telemetry = createMcpTelemetry('10.4.0', { posthogApiKey: 'phc_test' });
+    telemetry.capture('relaycast_mcp_server_started');
+    saved = 'corrupt';
+    telemetry.capture('relaycast_mcp_server_started');
+    expect(saved).toBe('corrupt');
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+    saved = JSON.stringify({ anonymousId: 'rotated', telemetryDisabled: true });
+    telemetry.capture('relaycast_mcp_server_started');
+    await telemetry.flush();
+    expect(capturedBodies).toHaveLength(2);
+    const persisted = JSON.parse(saved) as { anonymousId: string; telemetryDisabled?: boolean };
+    expect(persisted.telemetryDisabled).toBe(true);
+    expect(persisted.anonymousId).not.toBe('opted-in');
+  });
+
   it('keeps a fresh in-memory identity while rotation persistence remains unavailable', async () => {
     vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ anonymousId: 'stale-disk-id' }));
     vi.mocked(fs.writeFileSync).mockImplementation(() => { throw new Error('EACCES'); });

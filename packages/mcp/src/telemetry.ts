@@ -69,25 +69,16 @@ function getPosthogApiKey(options: McpTelemetryOptions): string {
   );
 }
 
-function loadState(fallback?: TelemetryState): TelemetryState {
-  try {
-    const raw = fs.readFileSync(TELEMETRY_PATH, 'utf8');
-    const parsed: unknown = JSON.parse(raw);
-    if (
-      parsed &&
-      typeof parsed === 'object' &&
-      'anonymousId' in parsed &&
-      typeof (parsed as { anonymousId: unknown }).anonymousId === 'string'
-    ) {
-      return parsed as TelemetryState;
-    }
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException;
-    if (e.code !== 'ENOENT') {
-      // Fall through to fresh state.
-    }
-  }
+function isTelemetryState(value: unknown): value is TelemetryState {
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    'anonymousId' in value &&
+    typeof (value as { anonymousId: unknown }).anonymousId === 'string',
+  );
+}
 
+function persistFreshState(fallback?: TelemetryState): TelemetryState {
   const state: TelemetryState = fallback ?? { anonymousId: randomUUID() };
   try {
     const dir = path.dirname(TELEMETRY_PATH);
@@ -98,6 +89,21 @@ function loadState(fallback?: TelemetryState): TelemetryState {
     // telemetry will still work with ephemeral anonymous ID
   }
   return state;
+}
+
+function loadState(fallback?: TelemetryState): TelemetryState {
+  try {
+    const raw = fs.readFileSync(TELEMETRY_PATH, 'utf8');
+    const parsed: unknown = JSON.parse(raw);
+    if (isTelemetryState(parsed)) return parsed;
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    if (e.code === 'ENOENT') return persistFreshState(fallback);
+  }
+
+  // The file is present but unreadable or incomplete. Leave it untouched so a
+  // newer opt-out is not replaced by this process's older in-memory consent.
+  return fallback ?? { anonymousId: randomUUID() };
 }
 
 function runtimePrefersFetch(): boolean {
