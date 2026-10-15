@@ -294,6 +294,36 @@ export interface ActionInvocation {
   dispatchedAt?: string | null;
   createdAt?: string;
   completedAt: string | null;
+  /** Bounded lifecycle timeline, oldest first (invocation GET only). */
+  events?: ActionInvocationEvent[];
+  /** One sentence describing what happened (invocation GET only). */
+  explanation?: string;
+  /** The live agent registered for this invocation, if any (invocation GET only). */
+  registeredAgent?: ActionInvocationRegisteredAgent | null;
+}
+
+/** One entry of an invocation's lifecycle timeline. Unknown `type`s may appear. */
+export interface ActionInvocationEvent {
+  at: string;
+  type: string;
+  nodeId?: string | null;
+  provider?: string;
+  attempt?: number;
+  capability?: string;
+  reason?: string;
+  detail?: string;
+  error?: string;
+  ok?: boolean;
+  agentId?: string;
+  agentName?: string;
+}
+
+export interface ActionInvocationRegisteredAgent {
+  agentId: string;
+  name: string;
+  status: string;
+  nodeId: string | null;
+  registeredAt: string | null;
 }
 
 // === Fleet nodes / triggers ===

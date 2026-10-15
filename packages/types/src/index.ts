@@ -16,3 +16,4 @@ export * from './emoji.js';
 export * from './event-id.js';
 export * from './fleet-wire.js';
 export * from './credentials.js';
+export * from './invocation.js';
