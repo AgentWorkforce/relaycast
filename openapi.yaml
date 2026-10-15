@@ -565,7 +565,9 @@ components:
         One lifecycle step of an invocation. Types: created, placed, queued,
         dispatched, send_failed, acknowledged, agent_registered,
         result_received, result_rejected, requeued, started, completed,
-        failed, agent_exited. Readers must ignore types they do not know.
+        failed, agent_exited, result_refused (a node's result refused before
+        evaluation, e.g. reason d1_pressure; the node is told to resend it).
+        Readers must ignore types they do not know.
       additionalProperties: true
       properties:
         at: { type: string, format: date-time }

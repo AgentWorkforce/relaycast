@@ -26,7 +26,7 @@ import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { acceptTaskInvocation, completeTaskInvocation } from './taskInvocation.js';
 import { databaseConstraintKind, runAtomic, runAtomicWrites } from '../ports/database.js';
-import { retryD1Write } from '../lib/d1Retry.js';
+import { D1WriteRetryExhaustedError, retryableD1ErrorCode, retryD1Write } from '../lib/d1Retry.js';
 import type { AtomicWrite, BatchCapability, EngineDb } from '../ports/database.js';
 import type { PresenceTracker } from '../ports/presence.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
@@ -59,6 +59,7 @@ import {
   rescheduleNodeInvocation,
 } from './action.js';
 import { appendInvocationEvents, invocationEvent, invocationTouchedNode, recordInvocationEvent } from './invocationEvents.js';
+import type { NodeResultOutcome } from './action.js';
 import { emitInvocationCompletionEffects, emitAgentExitedEffects, emitNodeStatusEffects, fleetInvocationId } from './invocationCompletion.js';
 import type { InvocationCompletionDeps, NodeOfflineReason } from './invocationCompletion.js';
 import { ackDeliveriesUpToSeq, deliverPendingToNode } from './delivery.js';
@@ -3225,30 +3226,75 @@ async function recordAgentRegisteredForInvocation(
   );
 }
 
+/** Best-effort read of a raw frame's correlation fields, even when it fails the schema. */
+function peekFrame(raw: string): { id?: string; type?: string; invocationId?: string } {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return {};
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const frame = value as { id?: unknown; type?: unknown; invocation_id?: unknown };
+  return {
+    ...(typeof frame.id === 'string' && frame.id ? { id: frame.id } : {}),
+    ...(typeof frame.type === 'string' ? { type: frame.type } : {}),
+    ...(typeof frame.invocation_id === 'string' && frame.invocation_id ? { invocationId: frame.invocation_id } : {}),
+  };
+}
+
 /**
  * A malformed `action.result` that still names an invocation id is recorded
  * on that invocation's timeline (only if this node was placed on or
  * dispatched to it), so a result lost to a schema error is visible.
  */
 async function recordMalformedActionResult(args: HandleNodeControlMessageArgs, err: unknown): Promise<void> {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(args.raw);
-  } catch {
-    return;
-  }
-  if (!raw || typeof raw !== 'object') return;
-  const frame = raw as { type?: unknown; invocation_id?: unknown };
-  if (frame.type !== 'action.result' || typeof frame.invocation_id !== 'string' || !frame.invocation_id) return;
+  const frame = peekFrame(args.raw);
+  if (frame.type !== 'action.result' || !frame.invocationId) return;
   const issue = err instanceof Error ? err.message.replace(/\s+/g, ' ') : 'invalid frame';
   await recordInvocationEvent(
     args.db,
     args.workspaceId,
-    frame.invocation_id,
+    frame.invocationId,
     invocationEvent('result_rejected', { node_id: args.nodeId, reason: 'invalid_payload', error: issue }),
     [invocationTouchedNode(args.nodeId)],
   );
 }
+
+/**
+ * Record that a node's `action.result` was refused before it could be applied
+ * (for example under database pressure), so the invocation's explanation says
+ * so instead of the result vanishing. For socket owners that refuse a frame
+ * before handing it to {@link handleNodeControlMessage}, such as a host whose
+ * liveness deadline expired. Only invocations this node was placed on or
+ * dispatched to are annotated. Best-effort; returns whether it recorded.
+ */
+export async function recordNodeFrameRefused(args: {
+  db: HandleNodeControlMessageArgs['db'];
+  workspaceId: string;
+  nodeId: string;
+  raw: string;
+  /** Refusal code sent to the node, e.g. `d1_pressure`. */
+  reason: string;
+  provider?: string;
+}): Promise<boolean> {
+  const frame = peekFrame(args.raw);
+  if (frame.type !== 'action.result' || !frame.invocationId) return false;
+  return recordInvocationEvent(
+    args.db,
+    args.workspaceId,
+    frame.invocationId,
+    invocationEvent('result_refused', {
+      node_id: args.nodeId,
+      reason: args.reason,
+      ...(args.provider ? { provider: args.provider } : {}),
+    }),
+    [invocationTouchedNode(args.nodeId)],
+  );
+}
+
+/** How long a node should wait before resending a result refused under database pressure. */
+export const NODE_RESULT_RETRY_AFTER_SECONDS = 5;
 
 /** Validate and serialize an authenticated node frame, replying only after its effects. */
 export async function handleNodeControlMessage(args: HandleNodeControlMessageArgs) {
@@ -3259,7 +3305,8 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
     await recordMalformedActionResult(args, err);
     sendControl(args.socket, {
       v: 1,
-      id: generateId(),
+      // Echo the frame's own id when it has one so the node can match it.
+      id: peekFrame(args.raw).id ?? generateId(),
       type: 'error',
       ok: false,
       code: 'invalid_message',
@@ -3668,19 +3715,47 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           }
           return;
         }
-        const outcome = await applyNodeInvocationResult(
-          args.db,
-          args.registry,
-          args.workspaceId,
-          args.nodeId,
-          frameProviderName,
-          message.invocation_id,
-          {
-            ...(Object.prototype.hasOwnProperty.call(message, 'output') ? { output: message.output } : {}),
-            ...(message.error ? { error: message.error } : {}),
-          },
-          args.completionDeps,
-        );
+        let outcome: NodeResultOutcome;
+        try {
+          // A transient D1 failure must not drop the result: retry it here,
+          // bounded. Every write inside is a guarded CAS or an append, so a
+          // retry after a write that did land sees its effect.
+          outcome = await retryD1Write(() => applyNodeInvocationResult(
+            args.db,
+            args.registry,
+            args.workspaceId,
+            args.nodeId,
+            frameProviderName,
+            message.invocation_id,
+            {
+              ...(Object.prototype.hasOwnProperty.call(message, 'output') ? { output: message.output } : {}),
+              ...(message.error ? { error: message.error } : {}),
+            },
+            args.completionDeps,
+          ), 3);
+        } catch (err) {
+          if (!(err instanceof D1WriteRetryExhaustedError) && !retryableD1ErrorCode(err)) throw err;
+          // Still under pressure: tell the node to resend (agent-relay brokers
+          // already retry a tracked frame on d1_pressure) and leave a trace.
+          await recordNodeFrameRefused({
+            db: args.db,
+            workspaceId: args.workspaceId,
+            nodeId: args.nodeId,
+            raw: args.raw,
+            reason: 'd1_pressure',
+            provider: frameProviderName,
+          });
+          sendControl(args.socket, {
+            v: 1,
+            id: requestId(message),
+            type: 'error',
+            ok: false,
+            code: 'd1_pressure',
+            message: `action.result for invocation ${message.invocation_id} was not applied under database pressure;`
+              + ` resend it (retry after ${NODE_RESULT_RETRY_AFTER_SECONDS} s)`,
+          });
+          return;
+        }
         if (outcome.completed && args.completionDeps) {
           await emitInvocationCompletionEffects(args.completionDeps, args.workspaceId, outcome.completed);
         }
@@ -3702,6 +3777,22 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
             ok: false,
             code: nodeResultRejectionCode(outcome.rejection.reason),
             message: outcome.rejection.message,
+          });
+        } else if (message.id) {
+          // Explicit acknowledgement for a correlated result, so a node that
+          // resends until acknowledged can stop. `data` deliberately carries
+          // no `name`: brokers correlate name-bearing replies to pending
+          // agent registrations.
+          sendControl(args.socket, {
+            v: 1,
+            id: message.id,
+            type: 'reply',
+            ok: true,
+            data: {
+              invocation_id: message.invocation_id,
+              outcome: outcome.rejection ? 'already_applied' : 'applied',
+              ...(outcome.completed ? { status: outcome.completed.status } : {}),
+            },
           });
         }
         return;

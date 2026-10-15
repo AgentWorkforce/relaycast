@@ -271,6 +271,13 @@ export function explainInvocation(input: ExplainInvocationInput): string {
     event.type === 'dispatched' || event.type === 'queued' || event.type === 'requeued'
   ));
   const awaitingReadiness = input.status === 'dispatched' && holdIndex > dispatchIndex;
+  const refusalIndex = lastIndexOf(events, (event) => event.type === 'result_refused');
+  const laterResultIndex = lastIndexOf(events, (event) => event.type === 'result_received' || event.type === 'result_rejected');
+  const refusal = refusalIndex > laterResultIndex ? events[refusalIndex] : undefined;
+  const refusalText = refusal
+    ? `its result was refused ${refusal.reason === 'd1_pressure' ? 'under database pressure' : `(${refusal.reason ?? 'unknown reason'})`}`
+      + ` at ${clock(refusal.at)}; waiting for the node to resend it`
+    : null;
   const rejection = lastRejection
     ? rejectionText(lastRejection, { lastRequeue, nodeName, currentNodeId: input.dispatchedNodeId })
     : null;
@@ -298,6 +305,11 @@ export function explainInvocation(input: ExplainInvocationInput): string {
       return `${parts.join('; ')}.`;
     }
     default: {
+      if (refusalText) {
+        return launched
+          ? `${launched} but ${refusalText}.`
+          : `Node ${nodeName(refusal!.node_id)} reported a result but ${refusalText}.`;
+      }
       if (launched && rejection) return `${launched} but its result was rejected: ${rejection}.`;
       if (launched && input.status === 'pending' && lastRequeue) {
         return `${launched}, but the invocation was requeued at ${clock(lastRequeue.at)} ${requeueText(lastRequeue)}`

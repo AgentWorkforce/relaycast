@@ -13,6 +13,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Migration `0074_action_invocation_events.sql` adds `action_invocations.events`, a bounded (50) lifecycle timeline written with each transition. Apply it before upgrading.
 - Invocation GET returns `events`, `explanation` and `registered_agent`; `applyNodeInvocationResult` reports why a node result was not applied, and the node control channel answers such a result with an `action_result_<reason>` error frame.
+- Node control acknowledges every `action.result` that carries an `id` (`reply` with `outcome: applied | already_applied`), retries a result through transient D1 errors (bounded), answers a still-refused one with a correlated `d1_pressure` error, and echoes the frame `id` on `invalid_message` errors. `recordNodeFrameRefused` and `NODE_RESULT_RETRY_AFTER_SECONDS` are exported from `@relaycast/engine/node-control` for socket owners that refuse a result before the engine sees it.
 - Requeue paths record their reason: `rescheduleNodeInvocation` accepts `reason`, `reasonDetail` and `completionDeps`; `rescheduleInvocationsForLostNode` accepts `offlineReason` and `completionDeps`.
 
 ### Changed

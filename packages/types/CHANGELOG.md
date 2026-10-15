@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `ActionInvocationSchema`, `ActionInvocationEventSchema` and `ActionInvocationRegisteredAgentSchema` for the invocation GET, with `ACTION_INVOCATION_EVENT_TYPES`, `ACTION_RESULT_REJECTION_REASONS` and `ACTION_INVOCATION_REQUEUE_REASONS`.
+- `ActionInvocationSchema`, `ActionInvocationEventSchema` and `ActionInvocationRegisteredAgentSchema` for the invocation GET, with `ACTION_INVOCATION_EVENT_TYPES` (including `result_refused`), `ACTION_RESULT_REJECTION_REASONS` and `ACTION_INVOCATION_REQUEUE_REASONS`.
 
 ## [10.4.0] - 2026-10-13
 

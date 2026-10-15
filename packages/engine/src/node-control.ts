@@ -17,6 +17,11 @@ export {
   // that can run after admission is released.
   claimNodeOffline,
   settleNodeOffline,
+  // A socket owner that refuses an action.result before handing it to the
+  // engine (e.g. under database pressure) records the refusal on the
+  // invocation's timeline with this, so the invocation explains it.
+  recordNodeFrameRefused,
+  NODE_RESULT_RETRY_AFTER_SECONDS,
   type HandleNodeControlMessageArgs,
   type NodeSocketLike,
 } from './engine/node.js';

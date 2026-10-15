@@ -23,6 +23,11 @@ export const ACTION_INVOCATION_EVENT_TYPES = [
   'result_received',
   /** A node reported a result that was not applied; `reason` says why. */
   'result_rejected',
+  /**
+   * A node's result was refused before it could be evaluated (`reason`, e.g.
+   * `d1_pressure`); the node was told to resend it.
+   */
+  'result_refused',
   /** The invocation left its node and went back to placement; `reason` says why. */
   'requeued',
   /**

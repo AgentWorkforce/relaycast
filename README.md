@@ -1114,8 +1114,18 @@ registers an agent naming the invocation, `result_received` or
 `state_changed`), `requeued` with a `reason` (`dispatch_timeout`, `node_lost`
 plus `detail`, `inventory_missing`, `handler_unavailable`, `retry_due`), and the
 terminal `completed`/`failed`. It adds a one-sentence `explanation` and, for a
-spawn, the live `registered_agent`. A node whose short `action.result` is not
-applied receives an `error` frame with code `action_result_<reason>`.
+spawn, the live `registered_agent`.
+
+A short `action.result` that carries an `id` is always answered with that id: a
+`reply` with `data.outcome` `applied` (or `already_applied` for a resend of a
+result already applied) and the invocation `status`, or an `error` frame. The
+error code is `action_result_<reason>` when the result was rejected, or
+`d1_pressure` when it could not be applied under database pressure after
+bounded internal retries; then the node should resend it (the message carries
+the retry delay) and the invocation records a `result_refused` event. Every
+`error` frame echoes the triggering frame's `id` when it has one. A socket
+owner that refuses a result before handing it to the engine records it with
+`recordNodeFrameRefused` from `@relaycast/engine/node-control`.
 
 A spawn about to be requeued whose agent already registered for it, from a
 node it was dispatched to, is settled as `completed` with that agent
