@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNotNull, isNull, like, lt, lte, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, like, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { actions, actionInvocations, agents, agentNodeBindings, channelMembers, dmParticipants, nodes } from '../db/schema.js';
 import { waitForPendingInvocationRetry } from './invocationRetry.js';
@@ -3635,6 +3635,36 @@ export interface RescheduleNodeInvocationOptions {
 }
 
 /**
+ * Return a spawn's native capacity slot exactly once. The reservation marker
+ * is cleared by a compare-and-set before the node's counter is decremented,
+ * so another path that read the same marker (a later timeout, a lost-node
+ * settle, a retry after a storage error) finds it gone and releases nothing.
+ * A failure between the two leaks a slot rather than taking another spawn's.
+ */
+async function releaseHeldSpawnReservation(
+  db: Db,
+  workspaceId: string,
+  invocationId: string,
+  nodeId: string,
+  where: SQL[] = [],
+): Promise<boolean> {
+  const [claimed] = await db
+    .update(actionInvocations)
+    .set({ spawnReservedAt: null })
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.id, invocationId),
+      eq(actionInvocations.dispatchedNodeId, nodeId),
+      isNotNull(actionInvocations.spawnReservedAt),
+      ...where,
+    ))
+    .returning({ id: actionInvocations.id });
+  if (!claimed) return false;
+  await releaseNodeCapacity(db, workspaceId, nodeId);
+  return true;
+}
+
+/**
  * The event for an invocation leaving its node. It names the node and provider
  * connection of the dispatch it left, which is what lets that exact connection
  * still deliver a late spawn result.
@@ -3710,7 +3740,6 @@ async function settleSpawnFromRegistration(
       },
       error: null,
       completedAt: new Date(),
-      spawnReservedAt: null,
       retryAfterAt: null,
       events: appendInvocationEvents(invocationEvent('started', {
         node_id: agent.node_id,
@@ -3730,8 +3759,8 @@ async function settleSpawnFromRegistration(
     ))
     .returning();
   if (!settled) return null;
-  if (invocation.dispatchedNodeId && invocation.spawnReservedAt) {
-    await releaseNodeCapacity(db, invocation.workspaceId, invocation.dispatchedNodeId);
+  if (settled.dispatchedNodeId) {
+    await releaseHeldSpawnReservation(db, invocation.workspaceId, invocation.id, settled.dispatchedNodeId);
   }
   if (opts.completionDeps) {
     await emitInvocationCompletionEffects(opts.completionDeps, invocation.workspaceId, publicInvocation(settled))
@@ -3827,7 +3856,12 @@ export async function rescheduleNodeInvocation(
   // dropped its native reservation at dispatch (spawnReservedAt is null), so it
   // must not release capacity that now belongs to another spawn.
   if (invocation.dispatchedNodeId && isSpawnInvocation(invocation.actionName) && invocation.spawnReservedAt) {
-    await releaseNodeCapacity(db, invocation.workspaceId, invocation.dispatchedNodeId);
+    await releaseHeldSpawnReservation(db, invocation.workspaceId, invocation.id, invocation.dispatchedNodeId, [
+      inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      ...(opts.expectedNodeLivenessRevision !== undefined
+        ? [eq(actionInvocations.nodeLivenessRevision, opts.expectedNodeLivenessRevision)]
+        : []),
+    ]);
   }
   // A shadowed spawn stays pinned to its node: while a `spawn:<harness>` shadow
   // is registered there, native capacity for that harness is unreachable — even
@@ -4403,7 +4437,6 @@ export async function applyNodeInvocationResult(
       error: data.error ?? null,
       status,
       completedAt: new Date(),
-      spawnReservedAt: null,
       events: source === 'inventory_sync'
         ? appendInvocationEvents(invocationEvent('completed', { node_id: nodeId, reason: 'inventory_sync' }))
         : appendInvocationEvents(
@@ -4424,8 +4457,8 @@ export async function applyNodeInvocationResult(
   // holds no native reservation (spawnReservedAt is null), so releasing here
   // would decrement capacity owned by another spawn.
   if (updated) markMutated();
-  if (updated && isSpawnInvocation(updated.actionName) && updated.dispatchedNodeId && existing.spawnReservedAt) {
-    await releaseNodeCapacity(db, workspaceId, updated.dispatchedNodeId);
+  if (updated && isSpawnInvocation(updated.actionName) && updated.dispatchedNodeId && updated.spawnReservedAt) {
+    await releaseHeldSpawnReservation(db, workspaceId, invocationId, updated.dispatchedNodeId);
   }
 
   return updated ? { completed: publicInvocation(updated), rejection: null } : reject('state_changed');
