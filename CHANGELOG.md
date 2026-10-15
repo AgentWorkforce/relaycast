@@ -22,6 +22,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Spawn attempts now fail with structured capacity or availability errors when the selected node cannot accept them; offline attempts are no longer queued or moved to another node.
 - Spawns already queued before this release no longer start when their node reconnects, possibly hours later: they fail with the same structured error and return any capacity they held, at the node's next reconnect or, while it stays offline, on the next timeout sweep.
+- Registered spawn actions, including legacy workspace-global `spawn` aliases, are not queued either, and a caller waiting on events now receives `action.failed` (with `error_details`) when a spawn ends because its node was lost.
+- A dispatched spawn on a node that is still live is given up to 120 s to launch before a dispatch timeout fails it.
 
 ## [10.4.1] - 2026-10-15
 

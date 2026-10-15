@@ -1324,8 +1324,13 @@ the attempt with `spawn_target_offline`, `spawn_target_unavailable`,
 `spawn_harness_unavailable`, `spawn_capacity_exceeded`, or `capacity_changed`.
 The structured error includes `node`, `harness`, `active`, `reserved`, `max`,
 `observed_at`, and `retryable`; unknown counts are `null`. Targeted and
-auto-placed spawns are never queued, retried, or rerouted by the engine. The
-caller keeps the task and chooses whether to retry or select another node.
+auto-placed spawns are never queued, retried, or rerouted by the engine, and
+neither are registered `spawn` / `spawn:<harness>` actions, whatever their
+queue setting. The caller keeps the task and chooses whether to retry or select
+another node. A dispatched spawn whose node stays live gets up to 120 s to
+launch before a dispatch timeout fails it; a lost node fails it at once, and
+either way the caller receives `action.failed` with the structured error in
+`error_details`.
 A node's `action.result` may carry `error_details` beside the stable string
 `error` code; invocation status preserves both. Nodes advertise
 `{name:"relay:spawn-error-details-v1",kind:"capacity"}` at `node.register`

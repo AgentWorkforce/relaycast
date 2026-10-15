@@ -188,6 +188,25 @@ export function spawnPlacementError(
     observed_at: new Date().toISOString(), retryable: code !== 'spawn_harness_unavailable' });
 }
 
+/**
+ * The structured error for a spawn whose node refused a capacity reservation,
+ * classified from the node's current row: offline, handlers not live, full, or
+ * (when none of those holds any more) a capacity change that raced the claim.
+ */
+export async function spawnReservationRefusal(
+  db: Db,
+  workspaceId: string,
+  node: NodeRow | string,
+  capability: string,
+) {
+  const nodeId = typeof node === 'string' ? node : node.id;
+  const [current] = await db.select().from(nodes).where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+  const code = !current || !isNodeLive(current) ? 'spawn_target_offline'
+    : !current.handlersLive ? 'spawn_target_unavailable'
+    : !nodeHasCapacity(current) ? 'spawn_capacity_exceeded' : 'capacity_changed';
+  return spawnPlacementError(code, current ?? node, capability);
+}
+
 export async function reserveNodeCapacity(
   db: Db,
   workspaceId: string,
@@ -241,13 +260,7 @@ export async function claimSpawnNode(
       if (!node.handlersLive) throw spawnPlacementError('spawn_target_unavailable', node, capability);
       if (!nodeHasCapability(node, capability) || excluded.has(node.id)) return null;
       const reserved = await reserveNodeCapacity(tx, workspaceId, node.id);
-      if (!reserved) {
-        const [current] = await tx.select().from(nodes).where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, node.id)));
-        const code = !current || !isNodeLive(current) ? 'spawn_target_offline'
-          : !current.handlersLive ? 'spawn_target_unavailable'
-          : !nodeHasCapacity(current) ? 'spawn_capacity_exceeded' : 'capacity_changed';
-        throw spawnPlacementError(code, current ?? node, capability);
-      }
+      if (!reserved) throw await spawnReservationRefusal(tx, workspaceId, node, capability);
       return { node: reserved, capability, queued: false };
     };
 

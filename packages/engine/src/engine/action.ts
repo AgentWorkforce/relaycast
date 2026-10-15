@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNotNull, isNull, like, lt, lte, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, like, lt, lte, notInArray, or, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { actions, actionInvocations, agents, agentNodeBindings, channelMembers, dmParticipants, nodes } from '../db/schema.js';
 import { waitForPendingInvocationRetry } from './invocationRetry.js';
@@ -21,13 +21,22 @@ import {
 } from './invocationCompletion.js';
 import type { NodeConnectionRegistry, NodeDrainOptions } from '../ports/realtime.js';
 import { runAtomic, runAtomicWrites, type AtomicWrite } from '../ports/database.js';
-import { claimSpawnNode, chooseNodeForAction, isNodeLive, releaseNodeCapacity, reserveNodeCapacity, spawnPlacementError } from './placement.js';
+import {
+  claimSpawnNode,
+  chooseNodeForAction,
+  isNodeLive,
+  releaseNodeCapacity,
+  reserveNodeCapacity,
+  spawnPlacementError,
+  spawnReservationRefusal,
+} from './placement.js';
 import { DEFAULT_PROVIDER_NAME, capacityProviderName, getProvider, isProviderLive } from './nodeProvider.js';
 import { AGENT_TOKEN_HASH_PATTERN, FleetSpawnErrorDetailsSchema, type FleetSpawnErrorDetails } from '@relaycast/types';
 import { createTaskState, expireTaskInvocation, expireTaskInvocations, taskExecution } from './taskInvocation.js';
 
 type Db = ReturnType<typeof getDb>;
 type ActionRow = typeof actions.$inferSelect;
+type NodeRow = typeof nodes.$inferSelect;
 type InvocationRow = typeof actionInvocations.$inferSelect;
 type RetryableInvocationRow = Pick<
   InvocationRow,
@@ -93,6 +102,20 @@ function capabilityName(capability: string | { name?: string } | null | undefine
 
 function isSpawnInvocation(actionName: string): boolean {
   return actionName === 'spawn' || actionName.startsWith('spawn:');
+}
+
+/**
+ * A spawn placed on a node's native capacity, by immutable provenance. A
+ * registered `spawn:<harness>` action keeps `registered_action` even after
+ * pruning clears its action id, so a null action id alone is not proof; a row
+ * from before provenance was recorded counts as native only without an action.
+ */
+function isNativeSpawnInvocation(
+  invocation: Pick<InvocationRow, 'actionName' | 'invocationOrigin' | 'actionId'>,
+): boolean {
+  return isSpawnInvocation(invocation.actionName)
+    && (invocation.invocationOrigin === 'builtin'
+      || (invocation.invocationOrigin === 'legacy_unknown' && invocation.actionId === null));
 }
 
 function isReleaseInvocation(actionName: string): boolean {
@@ -973,13 +996,15 @@ async function emitFailedInvocationEffects(
 ): Promise<void> {
   for (const invocation of failed) {
     try {
+      const { output, error_details } = publicInvocation(invocation);
       await emitInvocationCompletionEffects(completionDeps, workspaceId, {
         invocation_id: invocation.id,
         action_name: invocation.actionName,
         caller_id: invocation.callerId,
         status: 'failed',
-        output: invocation.output,
+        output,
         error: invocation.error,
+        ...(error_details ? { error_details } : {}),
       });
     } catch {
       // Notification is best-effort; the invocation is already terminally failed.
@@ -1745,12 +1770,8 @@ async function dispatchSpawn(args: {
   const shadow = args.bypassShadow ? null : await fetchNodeAction(args.db, args.workspaceId, nodeId, capability);
   const capProvider = (await capacityProviderName(args.db, args.workspaceId, nodeId, capability)) ?? DEFAULT_PROVIDER_NAME;
   if (!await isNodeProviderLive(args.db, args.registry, args.workspaceId, nodeId, shadow?.handlerProvider ?? capProvider)) {
-    const failure = spawnPlacementError('spawn_target_unavailable', placement.node, capability);
-    if (!await failNeverDispatchedInvocation(args.db, args.workspaceId, invocation.id, failure.code!, failure.errorDetails)) {
-      throw codedError('Spawn dispatch state changed while checking provider readiness', 'idempotency_unavailable', 503);
-    }
-    await releaseNodeCapacity(args.db, args.workspaceId, nodeId);
-    throw failure;
+    return rejectUndispatchedSpawn(args.db, args.workspaceId, invocation,
+      spawnPlacementError('spawn_target_unavailable', placement.node, capability), { releaseNodeId: nodeId });
   }
   // Placement and the durable idempotency claim are separate writes on D1.
   // Publish the selected response target immediately; a concurrent replay in
@@ -1802,11 +1823,9 @@ async function dispatchSpawn(args: {
           return invocationAck(settled, { actionName: 'spawn', handlerNodeId: nodeId });
         }
         if (!dispatched.accepted) {
-          const failure = spawnPlacementError('spawn_target_unavailable', placement.node, capability);
-          if (!await failNeverDispatchedInvocation(args.db, args.workspaceId, invocation.id, failure.code!, failure.errorDetails)) {
-            throw codedError('Spawn dispatch state changed before rejection', 'idempotency_unavailable', 503);
-          }
-          throw failure;
+          // The native slot was returned when the shadow was bound.
+          return rejectUndispatchedSpawn(args.db, args.workspaceId, invocation,
+            spawnPlacementError('spawn_target_unavailable', placement.node, capability), { handlerNodeId: nodeId });
         }
         return spawnResult(invocation, nodeId, dispatched);
       }
@@ -1830,17 +1849,52 @@ async function dispatchSpawn(args: {
     pending: placement.queued,
     reservationHeld: !placement.queued,
   });
-  // A send that did not establish a dispatch ends this attempt. Fail the row
-  // before releasing the slot so a concurrent drain cannot claim it.
+  // A send that did not establish a dispatch ends this attempt.
   if (!dispatched.accepted) {
-    const failure = spawnPlacementError(dispatched.sent ? 'capacity_changed' : 'spawn_target_unavailable', placement.node, capability);
-    if (!await failNeverDispatchedInvocation(args.db, args.workspaceId, invocation.id, failure.code!, failure.errorDetails)) {
-      throw codedError('Spawn dispatch state changed before rejection', 'idempotency_unavailable', 503);
-    }
-    await releaseNodeCapacity(args.db, args.workspaceId, nodeId);
-    throw failure;
+    return rejectUndispatchedSpawn(args.db, args.workspaceId, invocation,
+      spawnPlacementError(dispatched.sent ? 'capacity_changed' : 'spawn_target_unavailable', placement.node, capability),
+      { releaseNodeId: nodeId });
   }
   return spawnResult(invocation, nodeId, dispatched);
+}
+
+/**
+ * End a spawn attempt that never established a dispatch: fail the row with
+ * the structured `failure` and throw it.
+ *
+ * `releaseNodeId` names the node whose placement reservation this request
+ * still holds. Until a dispatch attempt lands, no row records that
+ * reservation (`spawnReservedAt` is written by the attempt itself), so nothing
+ * else can release it: it is returned whether or not the failure update wins,
+ * after the update so a concurrent drain never sees the row with a free slot.
+ *
+ * When the update loses, the row was settled concurrently (for example by an
+ * immediate result or a sweep). That outcome is the answer, as it is for an
+ * idempotent replay; only a row that is somehow still open is reported as a
+ * retryable idempotency conflict.
+ */
+async function rejectUndispatchedSpawn(
+  db: Db,
+  workspaceId: string,
+  invocation: InvocationRow,
+  failure: ReturnType<typeof spawnPlacementError>,
+  opts: { releaseNodeId?: string; handlerNodeId?: string } = {},
+): Promise<ReturnType<typeof invocationAck>> {
+  const failed = await failNeverDispatchedInvocation(db, workspaceId, invocation.id, failure.code!, failure.errorDetails);
+  if (opts.releaseNodeId) await releaseNodeCapacity(db, workspaceId, opts.releaseNodeId);
+  if (failed) throw failure;
+  const [current] = await db
+    .select()
+    .from(actionInvocations)
+    .where(and(eq(actionInvocations.workspaceId, workspaceId), eq(actionInvocations.id, invocation.id)));
+  if (!current || OPEN_INVOCATION_STATUSES.some((status) => status === current.status)) {
+    throw codedError('Spawn dispatch state changed before rejection', 'idempotency_unavailable', 503);
+  }
+  const settled = await waitForInvocationReplayOutcome(db, workspaceId, current);
+  return invocationAck(settled, {
+    actionName: 'spawn',
+    ...(opts.handlerNodeId ?? opts.releaseNodeId ? { handlerNodeId: opts.handlerNodeId ?? opts.releaseNodeId } : {}),
+  });
 }
 
 /**
@@ -1862,6 +1916,100 @@ export async function dispatchCapacitySpawn(
     targetNodeId: data.target_node_id,
     bypassShadow: true,
   });
+}
+
+/**
+ * Dispatch a registered `spawn` or `spawn:<harness>` action under the same
+ * rules as a native spawn, whichever entry point invoked it: it is never
+ * queued, whatever the action's queue policy or provider, and a node that is
+ * offline, unavailable or full refuses it at once with a structured spawn
+ * error and keeps no slot for it. Other registered actions keep their queue
+ * policy.
+ */
+async function dispatchRegisteredSpawnAction(args: {
+  db: Db;
+  registry: NodeConnectionRegistry;
+  workspaceId: string;
+  invocation: InvocationRow;
+  action: ActionRow;
+  nodeId: string;
+  providerName: string;
+}): Promise<{ accepted: boolean; pending: boolean; settled?: InvocationRow }> {
+  const { db, workspaceId, invocation, nodeId } = args;
+  const input = recordInput(invocation.input);
+  const capability = dispatchActionNameForInvocation(args.action.name, input);
+  const refuse = async (failure: ReturnType<typeof spawnPlacementError>) => {
+    if (await failNeverDispatchedInvocation(db, workspaceId, invocation.id, failure.code!, failure.errorDetails)) {
+      throw failure;
+    }
+    const [current] = await db
+      .select()
+      .from(actionInvocations)
+      .where(and(eq(actionInvocations.workspaceId, workspaceId), eq(actionInvocations.id, invocation.id)));
+    if (current && !OPEN_INVOCATION_STATUSES.some((status) => status === current.status)) {
+      return { accepted: false, pending: false, settled: current };
+    }
+    throw codedError('Spawn dispatch state changed before rejection', 'idempotency_unavailable', 503);
+  };
+
+  if (!await reserveNodeCapacity(db, workspaceId, nodeId)) {
+    return refuse(await spawnReservationRefusal(db, workspaceId, nodeId, capability));
+  }
+  const dispatched = await dispatchNodeProviderInvocation({
+    db,
+    registry: args.registry,
+    workspaceId,
+    invocationId: invocation.id,
+    nodeId,
+    providerName: args.providerName,
+    action: args.action.name,
+    input,
+    queue: false,
+    actionId: args.action.id,
+    invocationOrigin: 'registered_action',
+    reservationHeld: true,
+  }, { failIfUnavailable: false });
+  if (dispatched.accepted) return dispatched;
+  if (dispatched.providerUnavailable) {
+    // dispatchNodeProviderInvocation already returned the slot.
+    const [node] = await db.select().from(nodes).where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+    return refuse(spawnPlacementError(node && !isNodeLive(node) ? 'spawn_target_offline' : 'spawn_target_unavailable',
+      node ?? nodeId, capability));
+  }
+  await returnUnownedSpawnReservation(db, workspaceId, invocation.id, nodeId);
+  if (dispatched.settled) return dispatched;
+  return refuse(spawnPlacementError('spawn_target_unavailable', nodeId, capability));
+}
+
+/**
+ * Return the slot a registered spawn reserved for a dispatch that was not
+ * established. A reservation the dispatch claim never recorded is held only
+ * by this request. One a claim recorded stays with the row while the row is
+ * open; once the row is settled without releasing it (a failed send), it is
+ * returned here, exactly once, by clearing the row's mark.
+ */
+async function returnUnownedSpawnReservation(db: Db, workspaceId: string, invocationId: string, nodeId: string) {
+  const [row] = await db
+    .select({ status: actionInvocations.status, spawnReservedAt: actionInvocations.spawnReservedAt })
+    .from(actionInvocations)
+    .where(and(eq(actionInvocations.workspaceId, workspaceId), eq(actionInvocations.id, invocationId)));
+  if (!row?.spawnReservedAt) {
+    await releaseNodeCapacity(db, workspaceId, nodeId);
+    return;
+  }
+  if (OPEN_INVOCATION_STATUSES.some((status) => status === row.status)) return;
+  const [cleared] = await db
+    .update(actionInvocations)
+    .set({ spawnReservedAt: null })
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.id, invocationId),
+      eq(actionInvocations.dispatchedNodeId, nodeId),
+      isNotNull(actionInvocations.spawnReservedAt),
+      notInArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+    ))
+    .returning({ id: actionInvocations.id });
+  if (cleared) await releaseNodeCapacity(db, workspaceId, nodeId);
 }
 
 /**
@@ -1912,23 +2060,29 @@ export async function invokeNodeAction(
     caller_name: data.caller_name,
   });
   const providerName = action.handlerProvider ?? DEFAULT_PROVIDER_NAME;
-  const reservedNode = isSpawnInvocation(action.name)
-    ? await reserveNodeCapacity(db, workspaceId, nodeId)
-    : null;
-  const dispatched = await dispatchNodeProviderInvocation({
-    db,
-    registry: options.nodeConnections,
-    workspaceId,
-    invocationId: invocation.id,
-    nodeId,
-    providerName,
-    action: action.name,
-    input: recordInput(invocation.input),
-    queue: action.queue,
-    actionId: action.id,
-    invocationOrigin: 'registered_action',
-    reservationHeld: !!reservedNode,
-  });
+  const dispatched = isSpawnInvocation(action.name)
+    ? await dispatchRegisteredSpawnAction({
+      db,
+      registry: options.nodeConnections,
+      workspaceId,
+      invocation,
+      action,
+      nodeId,
+      providerName,
+    })
+    : await dispatchNodeProviderInvocation({
+      db,
+      registry: options.nodeConnections,
+      workspaceId,
+      invocationId: invocation.id,
+      nodeId,
+      providerName,
+      action: action.name,
+      input: recordInput(invocation.input),
+      queue: action.queue,
+      actionId: action.id,
+      invocationOrigin: 'registered_action',
+    });
   if (dispatched.settled) {
     const settled = await waitForInvocationReplayOutcome(db, workspaceId, dispatched.settled);
     return invocationAck(settled, { actionName, handlerNodeId: nodeId });
@@ -2043,32 +2197,35 @@ export async function invokeAction(
       const settled = await replayInvocationClaim(db, workspaceId, invocation);
       return markInvocationReplay(invocationAck(settled, { actionName }));
     }
-    // Only mark the reservation held when we actually incremented the node's
-    // reserved-capacity counter, so completion/reschedule release stays balanced.
-    // If the reservation can't be taken (node offline / at capacity) the queued
-    // frame reserves later on drain via the spawnReservedAt check.
-    const reservedNode = isSpawnInvocation(action.name)
-      ? await reserveNodeCapacity(db, workspaceId, action.handlerNodeId)
-      : null;
     const providerName = action.handlerProvider ?? DEFAULT_PROVIDER_NAME;
     // Route through the per-provider liveness gate so an offline provider fails
     // fast unless the capability opted into queue. The synthetic `default`
     // provider keeps the legacy queue-on-offline behavior (broker reconnect
     // resilience), so its aliases queue and drain on reconnect as before.
-    const dispatched = await dispatchNodeProviderInvocation({
-      db,
-      registry: options.nodeConnections,
-      workspaceId,
-      invocationId: invocation.id,
-      nodeId: action.handlerNodeId,
-      providerName,
-      action: action.name,
-      input: recordInput(invocation.input),
-      queue: action.queue || providerName === DEFAULT_PROVIDER_NAME,
-      actionId: action.id,
-      invocationOrigin: 'registered_action',
-      reservationHeld: !!reservedNode,
-    });
+    // Spawns are the exception: a registered spawn action is never queued.
+    const dispatched = isSpawnInvocation(action.name)
+      ? await dispatchRegisteredSpawnAction({
+        db,
+        registry: options.nodeConnections,
+        workspaceId,
+        invocation,
+        action,
+        nodeId: action.handlerNodeId,
+        providerName,
+      })
+      : await dispatchNodeProviderInvocation({
+        db,
+        registry: options.nodeConnections,
+        workspaceId,
+        invocationId: invocation.id,
+        nodeId: action.handlerNodeId,
+        providerName,
+        action: action.name,
+        input: recordInput(invocation.input),
+        queue: action.queue || providerName === DEFAULT_PROVIDER_NAME,
+        actionId: action.id,
+        invocationOrigin: 'registered_action',
+      });
     if (dispatched.settled) {
       const settled = await waitForInvocationReplayOutcome(db, workspaceId, dispatched.settled);
       return invocationAck(settled, { actionName, handlerNodeId: action.handlerNodeId });
@@ -3284,10 +3441,11 @@ async function targetAgentForInvocation(
  * such a row records no dispatch attempt and no `dispatchedNodeId`. Its
  * placement survives only in the immutable `handlerNodeId` snapshot.
  *
- * `handlerUnreachableSince` marks the send as settled-unsent. The same
- * snapshot exists while a first send is still in flight, so the mark, not the
- * snapshot, is what lets a drain re-send. Built-in spawns have no action row,
- * so the agent-handler reachability sweep (which joins on one) never reads it.
+ * `handlerUnreachableSince` marked the send as settled-unsent under the
+ * retired queue-and-drain behaviour. The same snapshot exists while a first
+ * send is still in flight, so the mark, not the snapshot, is what lets a drain
+ * or sweep end such a row. Built-in spawns have no action row, so the
+ * agent-handler reachability sweep (which joins on one) never reads it.
  */
 function unsentNativeSpawnOn(workspaceId: string, invocationId: string | null, nodeId: string | null) {
   return and(
@@ -3300,43 +3458,6 @@ function unsentNativeSpawnOn(workspaceId: string, invocationId: string | null, n
     ...(nodeId ? [eq(actionInvocations.handlerNodeId, nodeId)] : []),
     or(eq(actionInvocations.actionName, 'spawn'), like(actionInvocations.actionName, 'spawn:%')),
   );
-}
-
-async function markUnsentNativeSpawn(db: Db, workspaceId: string, invocationId: string, nodeId: string) {
-  await db
-    .update(actionInvocations)
-    .set({ handlerUnreachableSince: new Date() })
-    .where(unsentNativeSpawnOn(workspaceId, invocationId, nodeId));
-}
-
-/** One drain wins the re-send; a loser, or a send still in flight, sees no mark. */
-async function claimUnsentNativeSpawn(db: Db, workspaceId: string, invocationId: string): Promise<boolean> {
-  const [claimed] = await db
-    .update(actionInvocations)
-    .set({ handlerUnreachableSince: null })
-    .where(and(
-      unsentNativeSpawnOn(workspaceId, invocationId, null),
-      isNotNull(actionInvocations.handlerUnreachableSince),
-    ))
-    .returning({ id: actionInvocations.id });
-  return !!claimed;
-}
-
-/** `registry`, calling `onSend` before any provider send starts. */
-function observeSends(registry: NodeConnectionRegistry, onSend: () => void): NodeConnectionRegistry {
-  return new Proxy(registry, {
-    get(target, key) {
-      const value: unknown = Reflect.get(target, key, target);
-      if (typeof value !== 'function') return value;
-      if (key === 'sendToProvider' || key === 'sendAuthorizedActionToProvider') {
-        return (...args: unknown[]) => {
-          onSend();
-          return Reflect.apply(value, target, args);
-        };
-      }
-      return value.bind(target);
-    },
-  });
 }
 
 /**
@@ -3387,11 +3508,16 @@ async function failQueuedNativeSpawn(
 
 /**
  * Fail queued native spawns whose node is not live, so a spawn queued before
- * spawns stopped being queued ends even if its node never reconnects. Rows
- * with a retry delay are left to the timeout sweep's reschedule pass, which
- * fails a spawn once the delay passes, and a live node's rows to its drain.
- * A spawn still being dispatched is never selected: it has no dispatched node
- * and no unsent mark until its attempt is recorded.
+ * spawns stopped being queued ends even if its node never reconnects. A row
+ * behind a retry delay is included: its node is already known to be offline,
+ * so the delay only postpones the same terminal error. A live node's rows are
+ * left to its drain. A spawn still being dispatched is never selected: it has
+ * no dispatched node and no unsent mark until its attempt is recorded.
+ *
+ * Only native spawns are selected, by provenance: a registered `spawn:<harness>`
+ * action whose action id was cleared by pruning may already be accepted by its
+ * provider, and a shadow registered on the node since a native spawn queued
+ * never takes it over.
  */
 async function failQueuedNativeSpawnsOnLostNodes(
   db: Db,
@@ -3411,7 +3537,10 @@ async function failQueuedNativeSpawnsOnLostNodes(
     .where(and(
       eq(actionInvocations.status, 'pending'),
       isNull(actionInvocations.actionId),
-      isNull(actionInvocations.retryAfterAt),
+      or(
+        eq(actionInvocations.invocationOrigin, 'builtin'),
+        eq(actionInvocations.invocationOrigin, 'legacy_unknown'),
+      ),
       or(eq(actionInvocations.actionName, 'spawn'), like(actionInvocations.actionName, 'spawn:%')),
       or(
         isNotNull(actionInvocations.dispatchedNodeId),
@@ -3427,9 +3556,6 @@ async function failQueuedNativeSpawnsOnLostNodes(
         .from(nodes)
         .where(and(eq(nodes.workspaceId, row.workspaceId), eq(nodes.id, nodeId)));
       if (node && isNodeLive(node)) continue;
-      // A shadow registered on the node takes the spawn when the node returns.
-      const capability = dispatchActionNameForInvocation(row.actionName, recordInput(row.input));
-      if ((await fetchNodeAction(db, row.workspaceId, nodeId, capability))?.handlerProvider) continue;
       const failed = await failQueuedNativeSpawn(db, row.workspaceId, row);
       if (failed && completionDeps) {
         await emitFailedInvocationEffects(completionDeps, row.workspaceId, [failed]);
@@ -3446,6 +3572,7 @@ export async function drainNodeInvocations(
   workspaceId: string,
   nodeId: string,
   options: NodeDrainOptions = {},
+  completionDeps?: InvocationCompletionDeps,
 ): Promise<number> {
   const now = new Date();
   const rows = await db
@@ -3506,7 +3633,7 @@ export async function drainNodeInvocations(
       ? { id: row.handlerAgentId, name: row.handlerAgentName, nodeId: row.handlerAgentNodeId }
       : null;
     // Only the unsent-spawn branch above matches a row with no action and no
-    // dispatched node; its placed node is the target.
+    // dispatched node (a native spawn); its placed node is the target.
     const unsentSpawn = row.actionId === null && row.dispatchedNodeId === null;
     const targetNodeId = targetAgent?.nodeId
       ?? row.handlerNodeId
@@ -3515,22 +3642,27 @@ export async function drainNodeInvocations(
     if (targetNodeId !== nodeId) continue;
 
     const input = recordInput(row.input);
-    // A spawn with a registered `spawn:<harness>` shadow re-dispatches to the
-    // shadow's provider like any registered action.
+    // Spawns are never queued. A native spawn still pending here was queued
+    // before that policy (for an offline node, behind a retry delay, or after
+    // a failed first send), so it fails now with a structured error instead
+    // of starting on this node, whether or not the node can take work, and
+    // whether or not the node has registered a `spawn:<harness>` shadow since:
+    // the row's provenance decides, not the node's current actions. A spawn
+    // still being dispatched is never selected: it has no dispatched node and
+    // no unsent mark until its attempt is recorded.
+    if (isNativeSpawnInvocation(row)) {
+      const failed = await failQueuedNativeSpawn(db, workspaceId, row).catch(() => null);
+      if (failed && completionDeps) await emitFailedInvocationEffects(completionDeps, workspaceId, [failed]);
+      continue;
+    }
+    // A registered spawn action whose action row is gone (pruned after its
+    // provider accepted it) can only return to a shadow of the same name,
+    // never to native capacity.
     let shadowProvider: string | null = null;
-    if (isSpawnInvocation(row.actionName)) {
+    if (isSpawnInvocation(row.actionName) && !targetAgent && !row.handlerNodeId) {
       const shadow = await fetchNodeAction(db, workspaceId, nodeId, dispatchActionNameForInvocation(row.actionName, input));
       shadowProvider = shadow?.handlerProvider ?? null;
-      // Spawns are never queued. A native spawn still pending here was queued
-      // before that policy (for an offline node, behind a retry delay, or
-      // after a failed first send), so it fails now with a structured error
-      // instead of starting on this node, whether or not the node can take
-      // work. A spawn still being dispatched is never selected: it has no
-      // dispatched node and no unsent mark until its attempt is recorded.
-      if (!shadowProvider) {
-        await failQueuedNativeSpawn(db, workspaceId, row).catch(() => null);
-        continue;
-      }
+      if (!shadowProvider) continue;
     }
     // Resolve the target provider so the offline queue drains per provider.
     const providerName = targetAgent
@@ -3545,23 +3677,11 @@ export async function drainNodeInvocations(
     // handlers are not live. A missing provider row is a legacy single-socket
     // node, for which connection state remains the available liveness signal.
     if (!(await isHandlerConnectionLive(db, registry, workspaceId, nodeId, providerName))) continue;
-    // A spawn marked unsent whose node now registers a `spawn:<harness>`
-    // shadow goes to that shadow. Claim it first so concurrent drains cannot
-    // both send it.
-    if (unsentSpawn && !await claimUnsentNativeSpawn(db, workspaceId, row.id)) continue;
-    // A definitely-unsent outcome below restores the mark. Whether a send
-    // started separates a pre-send throw (unsent) from a throw with an unknown
-    // outcome.
-    const remarkUnsent = () => unsentSpawn
-      ? markUnsentNativeSpawn(db, workspaceId, row.id, nodeId)
-      : Promise.resolve();
-    let sendStarted = false;
-    const sendRegistry = unsentSpawn ? observeSends(registry, () => { sendStarted = true; }) : registry;
 
     try {
       const dispatched = await dispatchNodeInvocation({
         db,
-        registry: sendRegistry,
+        registry,
         workspaceId,
         invocationId: row.id,
         nodeId,
@@ -3577,16 +3697,48 @@ export async function drainNodeInvocations(
         skipIncrementAttempts: row.dispatchedNodeId === nodeId,
       });
       if (dispatched.accepted) drained++;
-      if (!dispatched.sent) await remarkUnsent();
     } catch {
       // Leave the invocation pending; a later drain or timeout sweep can retry.
-      // A throw before any send leaves the spawn unsent, so it is re-marked. A
-      // throw once a send started is an unknown outcome, so the spawn stays
-      // unmarked and only the never-dispatched sweep ends it.
-      if (!sendStarted) await remarkUnsent().catch(() => {});
     }
   }
   return drained;
+}
+
+/**
+ * How long a dispatched spawn on a node that is still live may go without a
+ * result before generic recovery (the dispatch-timeout sweep, or an
+ * inventory that does not list its agent yet) ends it. Longer than the node's
+ * own readiness hold for a `verify_ready` spawn (90 s), so a held result can
+ * still land.
+ */
+export const SPAWN_LAUNCH_DEADLINE_MS = 120_000;
+
+/**
+ * A dispatched spawn whose node and provider are still live is still being
+ * launched there until {@link SPAWN_LAUNCH_DEADLINE_MS} after its dispatch.
+ * Ending it earlier would let a slow launch register an agent the caller was
+ * told failed, and a retry race it. A lost node, a lost provider or a pending
+ * row is never still launching.
+ */
+async function spawnStillLaunching(
+  db: Db,
+  registry: NodeConnectionRegistry,
+  invocation: Pick<InvocationRow, 'workspaceId' | 'id'>,
+  node: NodeRow,
+): Promise<boolean> {
+  if (!isNodeLive(node)) return false;
+  const [current] = await db
+    .select({
+      status: actionInvocations.status,
+      dispatchedAt: actionInvocations.dispatchedAt,
+      dispatchedNodeId: actionInvocations.dispatchedNodeId,
+      dispatchedProvider: actionInvocations.dispatchedProvider,
+    })
+    .from(actionInvocations)
+    .where(and(eq(actionInvocations.workspaceId, invocation.workspaceId), eq(actionInvocations.id, invocation.id)));
+  if (!current || current.status !== 'dispatched' || current.dispatchedNodeId !== node.id || !current.dispatchedAt) return false;
+  if (Date.now() - current.dispatchedAt.getTime() >= SPAWN_LAUNCH_DEADLINE_MS) return false;
+  return isHandlerConnectionLive(db, registry, invocation.workspaceId, node.id, current.dispatchedProvider ?? DEFAULT_PROVIDER_NAME);
 }
 
 export async function rescheduleNodeInvocation(
@@ -3597,6 +3749,14 @@ export async function rescheduleNodeInvocation(
     allowAttemptedFallback?: boolean;
     retryAfterAt?: Date | null;
     expectedNodeLivenessRevision?: number;
+    /** Emits `action.failed` for a spawn this call ends. */
+    completionDeps?: InvocationCompletionDeps;
+    /**
+     * Generic recovery (the dispatch-timeout sweep, an inventory that does
+     * not list the agent yet) keeps a spawn that is still launching on a live
+     * node. Node loss and a node's explicit refusal never do.
+     */
+    holdLaunchingSpawn?: boolean;
   } = {},
 ) {
   // Once the exact provider accepted this generation, pruning only clears its
@@ -3622,6 +3782,7 @@ export async function rescheduleNodeInvocation(
     const [node] = invocation.dispatchedNodeId
       ? await db.select().from(nodes).where(and(eq(nodes.workspaceId, invocation.workspaceId), eq(nodes.id, invocation.dispatchedNodeId)))
       : [];
+    if (opts.holdLaunchingSpawn && node && await spawnStillLaunching(db, registry, invocation, node)) return false;
     const code = node && !isNodeLive(node) ? 'spawn_target_offline' : 'spawn_target_unavailable';
     const failure = spawnPlacementError(code, node ?? (typeof input.target_node === 'string' ? input.target_node : 'unassigned'), capability);
     const [failed] = await db.update(actionInvocations)
@@ -3630,9 +3791,12 @@ export async function rescheduleNodeInvocation(
         inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
         ...(opts.expectedNodeLivenessRevision !== undefined
           ? [eq(actionInvocations.nodeLivenessRevision, opts.expectedNodeLivenessRevision)] : [])))
-      .returning({ id: actionInvocations.id });
+      .returning();
     if (failed && invocation.dispatchedNodeId && invocation.spawnReservedAt) {
       await releaseNodeCapacity(db, invocation.workspaceId, invocation.dispatchedNodeId);
+    }
+    if (failed && opts.completionDeps) {
+      await emitFailedInvocationEffects(opts.completionDeps, invocation.workspaceId, [failed]);
     }
     return false;
   }
@@ -3816,7 +3980,7 @@ export async function rescheduleInvocationsForLostNode(
   registry: NodeConnectionRegistry,
   workspaceId: string,
   nodeId: string,
-  opts: { claimRevision?: number } = {},
+  opts: { claimRevision?: number; completionDeps?: InvocationCompletionDeps } = {},
 ) {
   const rows = await db
     .select()
@@ -3838,6 +4002,7 @@ export async function rescheduleInvocationsForLostNode(
     try {
       if (await rescheduleNodeInvocation(db, registry, invocation, {
         retryAfterAt: nextRetryAfter(invocation.dispatchAttempts + 1),
+        completionDeps: opts.completionDeps,
         ...(opts.claimRevision !== undefined
           ? { expectedNodeLivenessRevision: invocation.nodeLivenessRevision }
           : {}),
@@ -4003,9 +4168,8 @@ export async function completeNodeInvocation(
   let spawnFailure: ReturnType<typeof spawnPlacementError> | null = null;
   if (nativeSpawnFailure) {
     const [node] = await db.select().from(nodes).where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
-    const input = recordInput(existing.input);
-    const harness = typeof input.cli === 'string' ? `spawn:${input.cli}` : existing.actionName;
-    spawnFailure = spawnPlacementError('spawn_target_unavailable', node ?? nodeId, harness);
+    spawnFailure = spawnPlacementError('spawn_target_unavailable', node ?? nodeId,
+      dispatchActionNameForInvocation(existing.actionName, recordInput(existing.input)));
   }
   if (data.error === 'handler_unavailable') {
     await db
@@ -4268,6 +4432,8 @@ export async function sweepTimedOutInvocations(
       if (await rescheduleNodeInvocation(db, registry, invocation, {
         allowAttemptedFallback: allowFallback,
         retryAfterAt: allowFallback ? null : nextRetryAfter(invocation.dispatchAttempts + 1),
+        completionDeps: sweepOpts.completionDeps,
+        holdLaunchingSpawn: true,
       })) {
         rescheduled++;
       }

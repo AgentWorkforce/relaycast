@@ -1181,7 +1181,7 @@ export async function settleNodeOffline(
         : []),
     ));
 
-  await rescheduleInvocationsForLostNode(db, registry, workspaceId, nodeId, { claimRevision });
+  await rescheduleInvocationsForLostNode(db, registry, workspaceId, nodeId, { claimRevision, completionDeps: opts.deps });
 
   if (opts.deps && opts.before && opts.before.status === 'online') {
     await emitNodeStatusEffects(opts.deps, workspaceId, {
@@ -2858,10 +2858,13 @@ export async function reconcileInventory(
     // Actual provider disconnect and invocation expiry retain their own recovery.
     if (liveInvocationIds.has(invocation.id) || requiresSpawnReadiness(invocation.input)) continue;
     try {
-      if (await rescheduleNodeInvocation(db, registry, invocation)) {
+      if (await rescheduleNodeInvocation(db, registry, invocation, { completionDeps, holdLaunchingSpawn: true })) {
         rescheduledInvocations++;
       }
     } catch {
+      // A spawn is never put back in a queue, and its reservation is never
+      // dropped without being released: leave it for the next pass.
+      if (invocation.actionName === 'spawn' || invocation.actionName.startsWith('spawn:')) continue;
       await db
         .update(actionInvocations)
         .set({
