@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { makeNodeStack, createWorkspace, registerAgent, FakeSocket, injectUpdateFailure, type TestStack } from './harness.js';
 import { actionInvocations, agents, nodes } from '../../db/schema.js';
-import { sweepTimedOutInvocations } from '../../engine/action.js';
+import { rescheduleInvocationsForLostNode, sweepTimedOutInvocations } from '../../engine/action.js';
 import { sweepOfflineNodes } from '../../engine/node.js';
 import { recordNodeFrameRefused } from '../../node-control.js';
 import {
@@ -507,6 +507,36 @@ describe('spawn invocation timeline', () => {
       .where(eq(actionInvocations.id, first));
     await sweepTimedOutInvocations(stack.runtime.handle.db, stack.runtime.realtime, { neverDispatchedSweepGraceMs: 0 });
     expect(await reserved()).toBe(1);
+  });
+
+  it('returns a spawn slot before a failed lost-node reschedule detaches the dispatch', async () => {
+    const ws = await createWorkspace(stack.app, 'timeline-detach-release');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    await attachNode(ws, 'node_alpha', 'alpha');
+    const invocationId = await spawn(caller.token, 'worker-detach');
+    const reserved = async () => (await stack.runtime.handle.db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(eq(nodes.id, 'node_alpha')))[0]!.reservedAgents;
+    expect(await reserved()).toBe(1);
+
+    // The reschedule's own reservation claim fails transiently, so it throws
+    // before returning the slot; the fallback must return it before it
+    // clears dispatched_node_id, after which nothing could.
+    const restore = injectUpdateFailure(
+      stack.runtime.deps.db, actionInvocations, 'D1_ERROR: D1 DB is overloaded. Too many requests queued', { times: 1 },
+    );
+    try {
+      await rescheduleInvocationsForLostNode(stack.runtime.deps.db, stack.runtime.realtime, ws.workspaceId, 'node_alpha');
+    } finally {
+      restore();
+    }
+    expect(await reserved()).toBe(0);
+    const [row] = await stack.runtime.handle.db
+      .select({ status: actionInvocations.status, dispatchedNodeId: actionInvocations.dispatchedNodeId, spawnReservedAt: actionInvocations.spawnReservedAt })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(row).toEqual({ status: 'pending', dispatchedNodeId: null, spawnReservedAt: null });
   });
 
   it('lets a socket owner record a result it refused before the engine saw it', async () => {
