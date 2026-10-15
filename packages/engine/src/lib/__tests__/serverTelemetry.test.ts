@@ -53,6 +53,7 @@ async function emit(options: EmitOptions = {}): Promise<TelemetryEvent> {
     } as unknown as AppEnv['Variables']['engine']);
     c.set('workspace', options.workspace ?? workspaceRow());
     c.set('agent', options.agent);
+    c.set('agentCredentialHash', options.agent ? 'a'.repeat(64) : undefined);
     await next();
   });
   app.post('/emit', (c) => {
@@ -217,7 +218,7 @@ describe('emitServerEvent attribution', () => {
     expect(event.properties).not.toHaveProperty('sender_type');
   });
 
-  it('uses an explicit actor over the token holder', async () => {
+  it('keeps an explicit sender separate from the authenticated token holder', async () => {
     const actor: TelemetryActor = {
       id: 'agent_from',
       name: 'from-agent',
@@ -230,7 +231,8 @@ describe('emitServerEvent attribution', () => {
     });
 
     expect(event.distinctId).toBe(`relaycast-ws:${WORKSPACE_ID}`);
-    expect(event.properties).toMatchObject({ agent_id: 'agent_from', sender_type: 'human' });
+    expect(event.properties).toMatchObject({ agent_id: 'agent_from', sender_type: 'human', actor_kind: 'agent' });
+    expect(event.actor?.agentId).toBe('agent_1');
   });
 
   it('preserves the authenticated actor independently from a route target and forged properties', async () => {

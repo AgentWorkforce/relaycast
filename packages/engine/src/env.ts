@@ -21,6 +21,9 @@ export interface EngineRuntime extends EnginePorts, EngineProviders {
 export interface AppVariables {
   workspace: typeof workspaces.$inferSelect;
   agent: typeof agents.$inferSelect | undefined;
+  /** Hash of the credential actually presented and accepted for this request.
+   * May differ from agent.tokenHash during a previous-token grace window. */
+  agentCredentialHash: string | undefined;
   node: typeof nodes.$inferSelect | undefined;
   observerToken: typeof observerTokens.$inferSelect | undefined;
   db: EngineDb;

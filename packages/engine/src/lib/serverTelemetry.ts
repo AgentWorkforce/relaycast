@@ -169,10 +169,10 @@ export function emitServerEvent<E extends ServerTelemetryEventName>(
 
 
   const sender = actingAgent ? senderProperties(actingAgent) : undefined;
-  // Do not derive a person or group from editable metadata or raw headers.
-  // The host verifies this actor's immutable credential generation separately.
-  const scopedActor = actingAgent && (!actingAgent.workspaceId || actingAgent.workspaceId === workspaceId)
-    ? actingAgent : undefined;
+  // Only the credential-authenticated agent can establish ownership. A node
+  // may name any workspace agent as `from`; loading that sender's row proves
+  // neither possession of its token nor the identity of its Cloud owner.
+  const scopedActor = contextAgent?.workspaceId === workspaceId ? contextAgent : undefined;
 
   c.get("engine").telemetry.capture({
     name: event,
@@ -187,7 +187,7 @@ export function emitServerEvent<E extends ServerTelemetryEventName>(
       workspaceId,
       ...(scopedActor ? {
         agentId: scopedActor.id,
-        credentialHash: scopedActor.tokenHash,
+        credentialHash: c.get('agentCredentialHash'),
         senderType: senderType(scopedActor.type),
       } : {}),
     },
@@ -206,7 +206,7 @@ export function emitServerEvent<E extends ServerTelemetryEventName>(
       analytics_contract_version: 2,
       emitter: 'relaycast-engine',
       identity_source: 'unverified',
-      actor_kind: scopedActor?.type === 'system' ? 'service' : sender?.sender_type ?? 'service',
+      actor_kind: scopedActor && scopedActor.type !== 'system' ? senderType(scopedActor.type) : 'service',
       is_authenticated: false,
     },
   });
