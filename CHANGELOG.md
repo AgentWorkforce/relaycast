@@ -20,6 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
+- Newly initialized webhooks remain immediately due when database work crosses a clock tick, avoiding a spurious retry failure before the first delivery attempt.
 - Rust SDK: `AgentClient::heartbeat()` and other acknowledgement calls answered `{ "ok": true, "data": null }` no longer fail with "Response missing data field" after the server applied them.
 - Rust SDK success responses must include `data`; an explicit null acknowledgement remains valid, while a missing payload is rejected.
 
