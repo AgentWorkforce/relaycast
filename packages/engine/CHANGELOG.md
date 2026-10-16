@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Offline fanout exclusion now treats a fresh direct-node heartbeat or matching broker-provider heartbeat as proof that a hosted agent remains reachable, so a quiet connected agent is not dropped merely because route heartbeats do not update `agents.last_seen`. Disconnected providers and inventory-confirmed exits no longer inherit another provider's liveness.
 
 ## [10.5.0] - 2026-10-16
 
