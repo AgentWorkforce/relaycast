@@ -1,6 +1,8 @@
 import type { Context } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppEnv } from '../../env.js';
+import * as workspaceEngine from '../../engine/workspace.js';
+import { codedError } from '../../lib/httpError.js';
 import { createWorkspace, makeNodeStack, type TestStack } from './harness.js';
 
 const OVERLOAD = 'D1_ERROR: D1 DB is overloaded. Requests queued for too long.';
@@ -122,6 +124,60 @@ describe('uncoded server errors in route handlers', () => {
       expect(body.error.request_id).toBeUndefined();
       expect(errorLog).not.toHaveBeenCalled();
     } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  function createSecondWorkspace(): Promise<Response> {
+    return Promise.resolve(
+      stack.app.request('/v1/workspaces', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'second-workspace' }),
+      }),
+    );
+  }
+
+  it('capture an uncoded workspace creation failure exactly once, in onError', async () => {
+    const captureException = vi.spyOn(stack.runtime.deps.telemetry, 'captureException');
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const create = vi.spyOn(workspaceEngine, 'createWorkspace').mockRejectedValue(new Error(OVERLOAD));
+    try {
+      const response = await createSecondWorkspace();
+
+      expect(response.status).toBe(500);
+      expect(captureException).toHaveBeenCalledTimes(1);
+      expect(captureException).toHaveBeenCalledWith(
+        expect.objectContaining({ message: OVERLOAD }),
+        expect.objectContaining({ path: '/v1/workspaces', status_code: 500, error_code: 'internal_error' }),
+      );
+    } finally {
+      create.mockRestore();
+      errorLog.mockRestore();
+    }
+  });
+
+  it('capture a coded workspace creation failure exactly once, in the route', async () => {
+    const captureException = vi.spyOn(stack.runtime.deps.telemetry, 'captureException');
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const create = vi.spyOn(workspaceEngine, 'createWorkspace').mockRejectedValue(
+      codedError('Workspace storage is unavailable', 'storage_unavailable', 503),
+    );
+    try {
+      const response = await createSecondWorkspace();
+
+      expect(response.status).toBe(503);
+      await expect(response.json()).resolves.toEqual({
+        ok: false,
+        error: { code: 'storage_unavailable', message: 'Workspace storage is unavailable' },
+      });
+      expect(captureException).toHaveBeenCalledTimes(1);
+      expect(captureException).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'storage_unavailable' }),
+        expect.objectContaining({ path: '/v1/workspaces', status_code: 503, error_code: 'storage_unavailable' }),
+      );
+    } finally {
+      create.mockRestore();
       errorLog.mockRestore();
     }
   });
