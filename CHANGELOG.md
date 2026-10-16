@@ -16,7 +16,14 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Resolve hosted analytics ownership from authenticated actor credentials; keep standalone MCP and website events anonymous and personless.
+- Keep MCP anonymous identity stable when an API key is absent, and retry saving opt-out identity rotations after temporary filesystem failures.
+- Leave an unreadable MCP telemetry file in place so a failed read cannot replace a newer opt-out with an older in-memory identity.
+- Resume website analytics in the same page after Do Not Track is turned off, and erase the stored anonymous id while tracking is off.
 
 ## [10.5.1] - 2026-10-16
 

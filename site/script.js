@@ -18,19 +18,21 @@ function getOrCreateDistinctId() {
   }
 }
 
-const telemetry = (() => {
-  // Check for Do Not Track
-  const dnt = navigator.doNotTrack === '1' || 
-              navigator.doNotTrack === 'yes' ||
-              window.doNotTrack === '1' ||
-              navigator.msDoNotTrack === '1';
+function isDoNotTrackEnabled() {
+  return navigator.doNotTrack === '1' ||
+    navigator.doNotTrack === 'yes' ||
+    window.doNotTrack === '1' ||
+    navigator.msDoNotTrack === '1';
+}
 
-  if (dnt) {
-    return {
-      enabled: false,
-      capture: () => {}, // no-op when DNT is enabled
-    };
-  }
+function clearStoredDistinctId() {
+  try { localStorage.removeItem(POSTHOG_DISTINCT_ID_KEY); } catch { /* unavailable */ }
+}
+
+const telemetry = (() => {
+  // Drop any stored anonymous id immediately. Capture below also rechecks so a
+  // page that loaded with DNT on can send again after it is turned off.
+  if (isDoNotTrackEnabled()) clearStoredDistinctId();
 
   const posthogKey =
     window.POSTHOG_API_KEY ||
@@ -50,9 +52,15 @@ const telemetry = (() => {
   const rawHost =
     window.POSTHOG_HOST || window.RELAYCAST_POSTHOG_HOST || getMetaContent('relaycast-posthog-host');
   const host = (rawHost || POSTHOG_DEFAULT_HOST).replace(/\/$/, '');
-  const distinctId = getOrCreateDistinctId();
+  let distinctId = null;
 
   const capture = (event, properties = {}) => {
+    if (isDoNotTrackEnabled()) {
+      clearStoredDistinctId();
+      distinctId = null;
+      return;
+    }
+    distinctId ??= getOrCreateDistinctId();
     const payload = {
       api_key: posthogKey,
       event,
@@ -63,6 +71,13 @@ const telemetry = (() => {
         path: window.location.pathname,
         hostname: window.location.hostname,
         ...properties,
+        $process_person_profile: false,
+        $geoip_disable: true,
+        analytics_contract_version: 2,
+        emitter: 'relaycast-site',
+        identity_source: 'anonymous',
+        actor_kind: 'human',
+        is_authenticated: false,
       },
     };
 
@@ -83,7 +98,7 @@ const telemetry = (() => {
   };
 
   return {
-    enabled: true,
+    get enabled() { return !isDoNotTrackEnabled(); },
     capture,
   };
 })();

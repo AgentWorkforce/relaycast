@@ -36,10 +36,7 @@ function isTruthy(value: string | undefined): boolean {
   return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
 }
 
-function telemetryEnabled(state: TelemetryState, apiKey: string): boolean {
-  // No key configured (e.g. forks, local dev, CI) → silently no-op. Same code
-  // path as the explicit DO_NOT_TRACK / RELAYCAST_TELEMETRY_DISABLED opt-outs.
-  if (!apiKey.trim()) return false;
+function telemetryConsentEnabled(state: TelemetryState): boolean {
   if (isTruthy(process.env.DO_NOT_TRACK) || isTruthy(process.env.RELAYCAST_TELEMETRY_DISABLED)) {
     return false;
   }
@@ -72,26 +69,17 @@ function getPosthogApiKey(options: McpTelemetryOptions): string {
   );
 }
 
-function loadState(): TelemetryState {
-  try {
-    const raw = fs.readFileSync(TELEMETRY_PATH, 'utf8');
-    const parsed: unknown = JSON.parse(raw);
-    if (
-      parsed &&
-      typeof parsed === 'object' &&
-      'anonymousId' in parsed &&
-      typeof (parsed as { anonymousId: unknown }).anonymousId === 'string'
-    ) {
-      return parsed as TelemetryState;
-    }
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException;
-    if (e.code !== 'ENOENT') {
-      // Fall through to fresh state.
-    }
-  }
+function isTelemetryState(value: unknown): value is TelemetryState {
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    'anonymousId' in value &&
+    typeof (value as { anonymousId: unknown }).anonymousId === 'string',
+  );
+}
 
-  const state: TelemetryState = { anonymousId: randomUUID() };
+function persistFreshState(fallback?: TelemetryState): TelemetryState {
+  const state: TelemetryState = fallback ?? { anonymousId: randomUUID() };
   try {
     const dir = path.dirname(TELEMETRY_PATH);
     fs.mkdirSync(dir, { recursive: true });
@@ -101,6 +89,21 @@ function loadState(): TelemetryState {
     // telemetry will still work with ephemeral anonymous ID
   }
   return state;
+}
+
+function loadState(fallback?: TelemetryState): TelemetryState {
+  try {
+    const raw = fs.readFileSync(TELEMETRY_PATH, 'utf8');
+    const parsed: unknown = JSON.parse(raw);
+    if (isTelemetryState(parsed)) return parsed;
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    if (e.code === 'ENOENT') return persistFreshState(fallback);
+  }
+
+  // The file is present but unreadable or incomplete. Leave it untouched so a
+  // newer opt-out is not replaced by this process's older in-memory consent.
+  return fallback ?? { anonymousId: randomUUID() };
 }
 
 function runtimePrefersFetch(): boolean {
@@ -203,21 +206,42 @@ async function postJson(
 }
 
 export function createMcpTelemetry(version = 'unknown', options: McpTelemetryOptions = {}): McpTelemetry {
-  const state = loadState();
+  let state = loadState();
+  let hadConsent: boolean | undefined;
+  let rotationPending = false;
+  let localGeneration: string | undefined;
   const sessionId = randomUUID();
   const pending = new Set<Promise<void>>();
-  const distinctId = process.env.RELAYCAST_TELEMETRY_DISTINCT_ID || state.anonymousId;
   const posthogHost = getPosthogHost(options);
   const posthogApiKey = getPosthogApiKey(options);
   const originClient = options.originClient ?? '@relaycast/mcp';
   const originVersion = options.originVersion ?? version;
 
   const capture = (event: ClientTelemetryEventName, properties: Record<string, unknown> = {}) => {
-    if (!telemetryEnabled(state, posthogApiKey)) return;
+    const current = loadState(state);
+    const consentEnabled = telemetryConsentEnabled(current);
+    if (hadConsent !== false && !consentEnabled) {
+      localGeneration = randomUUID();
+      rotationPending = true;
+    }
+    if (localGeneration) current.anonymousId = localGeneration;
+    if (rotationPending) {
+      try {
+        fs.writeFileSync(TELEMETRY_PATH, JSON.stringify(current) + '\n', 'utf8');
+        rotationPending = false;
+      } catch {
+        // Keep using the fresh in-memory generation and retry on later captures.
+        // A process exit before storage recovers cannot preserve this rotation.
+      }
+    }
+    state = current;
+    hadConsent = consentEnabled;
+    // Missing configuration is not an opt-out and must not rotate identity.
+    if (!consentEnabled || !posthogApiKey.trim()) return;
 
     const parsed = parseTelemetryIngestionEvent({
       event,
-      distinct_id: distinctId,
+      distinct_id: state.anonymousId,
       properties: sanitizeTelemetryProperties({
         surface: 'mcp',
         mcp_version: version,
@@ -237,6 +261,14 @@ export function createMcpTelemetry(version = 'unknown', options: McpTelemetryOpt
         ...parsed.properties,
         origin_client: originClient,
         origin_version: originVersion,
+        $process_person_profile: false,
+        $geoip_disable: true,
+        analytics_contract_version: 2,
+        emitter: 'relaycast-mcp',
+        emitter_version: version,
+        identity_source: 'anonymous',
+        actor_kind: 'agent',
+        is_authenticated: false,
       },
     };
 
