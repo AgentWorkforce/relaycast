@@ -1349,6 +1349,8 @@ under its own per-recipient `depthCap` indefinitely while every subsequent
 broadcast keeps charging it a fresh row, draining the shared workspace cap into
 mailboxes nobody will read. Direct messages, including replies in 1:1 DM threads,
 still target their explicit recipient regardless of offline duration.
+Excluded recipients appear in `_delivery_rejections` with
+`reason: "recipient_offline"`.
 
 Outbound A2A DMs commit accepted egress with their guarded message before transport.
 Keep the same `Idempotency-Key` when retrying a transport failure: the admitted
