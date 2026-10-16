@@ -5,6 +5,7 @@ import {
   channelMembers,
   deliveries,
   dmParticipants,
+  nodeProviders,
   nodes,
 } from '../db/schema.js';
 import type { AtomicWrite, EngineDb } from '../ports/database.js';
@@ -146,9 +147,10 @@ function belowDepthCapSql(workspaceId: string, agentId: unknown, depthCap: numbe
  *
  * http_push routes have no socket-liveness signal, so an old agent presence
  * timestamp does not make their receiver unreachable and must not exclude them.
- * A fresh live node route is authoritative too: broker heartbeats refresh the
- * node row rather than every hosted agent row, so a quiet but connected agent
- * may legitimately have an old `last_seen` timestamp.
+ * A fresh live route is authoritative too: direct-node heartbeats and the
+ * matching broker-provider heartbeat refresh route liveness rather than every
+ * hosted agent row, so a quiet but connected agent may legitimately have an
+ * old `last_seen` timestamp.
  */
 function notLongOfflineSql(offlineExcludeMs: number): SQL {
   return sql`NOT ${longOfflineSql(offlineExcludeMs)}`;
@@ -167,6 +169,19 @@ function longOfflineSql(offlineExcludeMs: number): SQL<number> {
         AND ${nodes.lastHeartbeatAt} IS NOT NULL
         AND ${nodes.lastHeartbeatAt} >= (unixepoch() - ${nodeLivenessSeconds})
         AND ${nodes.lastHeartbeatAt} <= unixepoch()
+        AND (
+          COALESCE(${nodes.role}, '') = 'direct'
+          OR EXISTS (
+            SELECT 1 FROM ${nodeProviders}
+            WHERE ${nodeProviders.workspaceId} = ${agents.workspaceId}
+              AND ${nodeProviders.nodeId} = ${nodes.id}
+              AND ${nodeProviders.name} = ${agents.providerName}
+              AND ${nodeProviders.status} = 'online'
+              AND ${nodeProviders.lastHeartbeatAt} IS NOT NULL
+              AND ${nodeProviders.lastHeartbeatAt} >= (unixepoch() - ${nodeLivenessSeconds})
+              AND ${nodeProviders.lastHeartbeatAt} <= unixepoch()
+          )
+        )
       )
     ))`;
 }

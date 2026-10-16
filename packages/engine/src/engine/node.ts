@@ -1162,13 +1162,30 @@ export async function settleNodeOffline(
         : []),
     ));
 
+  const routeLostAt = new Date();
   await db
     .update(agents)
-    .set({ ...agentLivenessLoss(), lastSeen: new Date() })
+    .set({ ...agentLivenessLoss(), lastSeen: routeLostAt })
     .where(and(
       eq(agents.workspaceId, workspaceId),
       ne(agents.status, 'offline'),
       ne(agents.status, RELEASED_AGENT_STATUS),
+      eq(agents.locationType, 'via_node'),
+      eq(agents.locationNodeId, nodeId),
+      ...(claimRevision !== undefined
+        ? [lt(agents.nodeLivenessRevision, claimRevision)]
+        : []),
+    ));
+  // A quiet hosted agent may already be liveness-offline while its route is
+  // still healthy. Start its exclusion grace at actual route loss without an
+  // UPDATE OF status, which would clear the saved pre-sweep status via trigger.
+  await db
+    .update(agents)
+    .set({ lastSeen: routeLostAt })
+    .where(and(
+      eq(agents.workspaceId, workspaceId),
+      eq(agents.status, 'offline'),
+      isNotNull(agents.statusBeforeLivenessLoss),
       eq(agents.locationType, 'via_node'),
       eq(agents.locationNodeId, nodeId),
       ...(claimRevision !== undefined
@@ -1247,13 +1264,25 @@ export async function handleProviderDisconnect(
       return;
     }
     await markProviderOffline(db, workspaceId, nodeId, providerName);
+    const routeLostAt = new Date();
     await db
       .update(agents)
-      .set({ ...agentLivenessLoss(), lastSeen: new Date() })
+      .set({ ...agentLivenessLoss(), lastSeen: routeLostAt })
       .where(and(
         eq(agents.workspaceId, workspaceId),
         ne(agents.status, 'offline'),
         ne(agents.status, RELEASED_AGENT_STATUS),
+        eq(agents.locationType, 'via_node'),
+        eq(agents.locationNodeId, nodeId),
+        eq(agents.providerName, providerName),
+      ));
+    await db
+      .update(agents)
+      .set({ lastSeen: routeLostAt })
+      .where(and(
+        eq(agents.workspaceId, workspaceId),
+        eq(agents.status, 'offline'),
+        isNotNull(agents.statusBeforeLivenessLoss),
         eq(agents.locationType, 'via_node'),
         eq(agents.locationNodeId, nodeId),
         eq(agents.providerName, providerName),
@@ -1277,13 +1306,25 @@ export async function deregisterProvider(
 ) {
   await removeProvider(db, workspaceId, nodeId, providerName);
   registry.detachProvider(workspaceId, nodeId, providerName);
+  const routeLostAt = new Date();
   await db
     .update(agents)
-    .set({ ...agentLivenessLoss(), lastSeen: new Date() })
+    .set({ ...agentLivenessLoss(), lastSeen: routeLostAt })
     .where(and(
       eq(agents.workspaceId, workspaceId),
       ne(agents.status, 'offline'),
       ne(agents.status, RELEASED_AGENT_STATUS),
+      eq(agents.locationType, 'via_node'),
+      eq(agents.locationNodeId, nodeId),
+      eq(agents.providerName, providerName),
+    ));
+  await db
+    .update(agents)
+    .set({ lastSeen: routeLostAt })
+    .where(and(
+      eq(agents.workspaceId, workspaceId),
+      eq(agents.status, 'offline'),
+      isNotNull(agents.statusBeforeLivenessLoss),
       eq(agents.locationType, 'via_node'),
       eq(agents.locationNodeId, nodeId),
       eq(agents.providerName, providerName),
@@ -2831,10 +2872,27 @@ export async function reconcileInventory(
   const missingAgents = nodeAgents.filter((agent) => !reportedNames.has(agent.name));
   const missing = missingAgents.map((agent) => agent.id);
   if (missing.length > 0) {
-    await db
-      .update(agents)
-      .set({ status: 'offline', lastSeen: new Date() })
-      .where(inArray(agents.id, missing));
+    const missingAt = new Date();
+    await runAtomicWrites(db, [
+      db
+        .update(agentNodeBindings)
+        .set({ status: 'inactive', updatedAt: missingAt })
+        .where(and(
+          eq(agentNodeBindings.workspaceId, workspaceId),
+          eq(agentNodeBindings.nodeId, nodeId),
+          inArray(agentNodeBindings.agentId, missing),
+          eq(agentNodeBindings.status, 'active'),
+        )),
+      db
+        .update(agents)
+        .set({
+          status: 'offline',
+          lastSeen: missingAt,
+          locationNodeId: null,
+          sessionRef: null,
+        })
+        .where(and(eq(agents.workspaceId, workspaceId), inArray(agents.id, missing))),
+    ]);
     if (completionDeps) {
       for (const agent of missingAgents) {
         await emitAgentExitedEffects(completionDeps, workspaceId, {

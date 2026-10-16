@@ -16,11 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
 
 ### Fixed
 
-- Long-idle agents hosted by a freshly heartbeating node remain eligible for channel and group-DM fanout even when their own `last_seen` timestamp is old; node heartbeats refresh the route, not every hosted agent row.
+- Long-idle agents hosted by a freshly heartbeating direct node or broker provider remain eligible for channel and group-DM fanout even when their own `last_seen` timestamp is old; route heartbeats refresh the route, not every hosted agent row. Provider disconnect and inventory-removal handling keeps that exemption scoped to routes that are actually reachable.
 
 ## [10.5.0] - 2026-10-16
 

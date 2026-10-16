@@ -7,6 +7,7 @@ import {
   channelMembers,
   channels,
   deliveries,
+  nodeProviders,
   nodes,
   workspaces,
 } from '../../db/schema.js';
@@ -15,6 +16,7 @@ import * as messageEngine from '../message.js';
 import * as groupDmEngine from '../groupDm.js';
 import * as dmEngine from '../dm.js';
 import * as threadEngine from '../thread.js';
+import { handleProviderDisconnect, reconcileInventory } from '../node.js';
 import { DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS, resolveMailboxConfig } from '../mailboxConfig.js';
 
 /**
@@ -67,6 +69,25 @@ async function addMember(
 async function deliveryCount(db: EngineDb, agentId: string): Promise<number> {
   const rows = await db.select({ c: count() }).from(deliveries).where(eq(deliveries.agentId, agentId));
   return Number(rows[0]?.c ?? 0);
+}
+
+async function addProvider(
+  db: EngineDb,
+  ws: string,
+  nodeId: string,
+  name: string,
+  live = true,
+) {
+  await db.insert(nodeProviders).values({
+    id: `provider_${nodeId}_${name}`,
+    workspaceId: ws,
+    nodeId,
+    name,
+    instanceId: `instance_${nodeId}_${name}`,
+    status: live ? 'online' : 'offline',
+    handlersLive: live,
+    lastHeartbeatAt: new Date(live ? Date.now() : Date.now() - LONG_OFFLINE_MS),
+  });
 }
 
 describe('broadcast fanout excludes long-offline recipients', () => {
@@ -158,7 +179,7 @@ describe('broadcast fanout excludes long-offline recipients', () => {
     expect(await deliveryCount(db, agentId)).toBe(1);
   });
 
-  it('keeps a stale agent row eligible while its bound node is freshly heartbeating', async () => {
+  it('keeps a stale agent row eligible while its broker provider is freshly heartbeating', async () => {
     stack = makeNodeStack();
     const db = stack.runtime.deps.db;
     const ws = 'ws_live_node_stale_agent';
@@ -177,6 +198,7 @@ describe('broadcast fanout excludes long-offline recipients', () => {
       status: 'online',
       lastHeartbeatAt: new Date(),
     });
+    await addProvider(db, ws, nodeId, 'default');
     await db.update(agents)
       .set({ locationType: 'via_node', locationNodeId: nodeId })
       .where(eq(agents.id, agentId));
@@ -195,6 +217,187 @@ describe('broadcast fanout excludes long-offline recipients', () => {
     ]);
     expect(result._delivery_rejections).toEqual([]);
     expect(await deliveryCount(db, agentId)).toBe(1);
+  });
+
+  it('keeps a stale agent row eligible while its direct node is freshly heartbeating', async () => {
+    stack = makeNodeStack();
+    const db = stack.runtime.deps.db;
+    const ws = 'ws_live_direct_stale_agent';
+    const channel = 'chan_general';
+    const nodeId = 'node_live_direct_stale_agent';
+    const agentId = 'agent_live_direct_stale_agent';
+    await seedWorkspaceAndChannel(db, ws, channel);
+    await addMember(db, ws, channel, agentId, { status: 'offline', offlineForMs: LONG_OFFLINE_MS });
+    await db.insert(nodes).values({
+      id: nodeId,
+      workspaceId: ws,
+      name: 'live-direct-stale-agent',
+      tokenHash: 'token_node_live_direct_stale_agent',
+      kind: 'ws',
+      role: 'direct',
+      status: 'online',
+      lastHeartbeatAt: new Date(),
+    });
+    await db.update(agents)
+      .set({ locationType: 'via_node', locationNodeId: nodeId })
+      .where(eq(agents.id, agentId));
+    await db.insert(agentNodeBindings).values({
+      id: 'binding_live_direct_stale_agent',
+      workspaceId: ws,
+      agentId,
+      nodeId,
+      status: 'active',
+    });
+
+    const result = await messageEngine.postMessage(db, ws, channel, SENDER, { text: 'still direct?' });
+
+    expect(result._deliveries).toEqual([
+      expect.objectContaining({ agentId, routeNodeKind: 'ws', routeNodeId: nodeId }),
+    ]);
+    expect(result._delivery_rejections).toEqual([]);
+  });
+
+  it('does not inherit liveness from another provider on the same broker', async () => {
+    stack = makeNodeStack();
+    const db = stack.runtime.deps.db;
+    const ws = 'ws_disconnected_provider';
+    const channel = 'chan_general';
+    const nodeId = 'node_multi_provider';
+    const agentId = 'agent_disconnected_provider';
+    await seedWorkspaceAndChannel(db, ws, channel);
+    await addMember(db, ws, channel, agentId, { status: 'offline', offlineForMs: LONG_OFFLINE_MS });
+    await db.insert(nodes).values({
+      id: nodeId,
+      workspaceId: ws,
+      name: 'multi-provider',
+      tokenHash: 'token_node_multi_provider',
+      kind: 'ws',
+      role: 'broker',
+      status: 'online',
+      lastHeartbeatAt: new Date(),
+    });
+    await addProvider(db, ws, nodeId, 'gone', false);
+    await addProvider(db, ws, nodeId, 'survivor');
+    await db.update(agents)
+      .set({ locationType: 'via_node', locationNodeId: nodeId, providerName: 'gone' })
+      .where(eq(agents.id, agentId));
+    await db.insert(agentNodeBindings).values({
+      id: 'binding_disconnected_provider',
+      workspaceId: ws,
+      agentId,
+      nodeId,
+      status: 'active',
+    });
+
+    const result = await messageEngine.postMessage(db, ws, channel, SENDER, { text: 'anyone there?' });
+
+    expect(result._deliveries).toEqual([]);
+    expect(result._delivery_rejections).toEqual([
+      expect.objectContaining({ agentId, reason: 'recipient_offline' }),
+    ]);
+  });
+
+  it('starts a fresh exclusion grace period when a swept agent loses its provider route', async () => {
+    stack = makeNodeStack();
+    const db = stack.runtime.deps.db;
+    const ws = 'ws_provider_route_loss_grace';
+    const channel = 'chan_general';
+    const nodeId = 'node_route_loss_grace';
+    const agentId = 'agent_route_loss_grace';
+    await seedWorkspaceAndChannel(db, ws, channel);
+    await addMember(db, ws, channel, agentId, { status: 'offline', offlineForMs: LONG_OFFLINE_MS });
+    await db.insert(nodes).values({
+      id: nodeId,
+      workspaceId: ws,
+      name: 'route-loss-grace',
+      tokenHash: 'token_node_route_loss_grace',
+      kind: 'ws',
+      role: 'broker',
+      status: 'online',
+      lastHeartbeatAt: new Date(),
+    });
+    await addProvider(db, ws, nodeId, 'gone');
+    await addProvider(db, ws, nodeId, 'survivor');
+    await db.update(agents)
+      .set({
+        locationType: 'via_node',
+        locationNodeId: nodeId,
+        providerName: 'gone',
+        statusBeforeLivenessLoss: 'active',
+      })
+      .where(eq(agents.id, agentId));
+    await db.insert(agentNodeBindings).values({
+      id: 'binding_route_loss_grace',
+      workspaceId: ws,
+      agentId,
+      nodeId,
+      status: 'active',
+    });
+
+    await handleProviderDisconnect(
+      db,
+      stack.runtime.deps.nodeConnections,
+      ws,
+      nodeId,
+      'gone',
+      true,
+    );
+    const [afterDisconnect] = await db.select().from(agents).where(eq(agents.id, agentId));
+    const result = await messageEngine.postMessage(db, ws, channel, SENDER, { text: 'grace delivery' });
+
+    expect(afterDisconnect?.status).toBe('offline');
+    expect(afterDisconnect?.statusBeforeLivenessLoss).toBe('active');
+    expect(afterDisconnect?.lastSeen.getTime()).toBeGreaterThan(Date.now() - SHORT_OFFLINE_MS);
+    expect(result._deliveries).toEqual([expect.objectContaining({ agentId })]);
+    expect(result._delivery_rejections).toEqual([]);
+  });
+
+  it('invalidates an inventory-confirmed missing route before live-provider exemption', async () => {
+    stack = makeNodeStack();
+    const db = stack.runtime.deps.db;
+    const ws = 'ws_inventory_missing';
+    const channel = 'chan_general';
+    const nodeId = 'node_inventory_missing';
+    const agentId = 'agent_inventory_missing';
+    await seedWorkspaceAndChannel(db, ws, channel);
+    await addMember(db, ws, channel, agentId, { status: 'active' });
+    await db.insert(nodes).values({
+      id: nodeId,
+      workspaceId: ws,
+      name: 'inventory-missing',
+      tokenHash: 'token_node_inventory_missing',
+      kind: 'ws',
+      role: 'broker',
+      status: 'online',
+      lastHeartbeatAt: new Date(),
+    });
+    await addProvider(db, ws, nodeId, 'broker');
+    await db.update(agents)
+      .set({ locationType: 'via_node', locationNodeId: nodeId, providerName: 'broker' })
+      .where(eq(agents.id, agentId));
+    await db.insert(agentNodeBindings).values({
+      id: 'binding_inventory_missing',
+      workspaceId: ws,
+      agentId,
+      nodeId,
+      status: 'active',
+    });
+
+    await reconcileInventory(db, stack.runtime.deps.nodeConnections, ws, nodeId, 'broker', []);
+    const [missing] = await db.select().from(agents).where(eq(agents.id, agentId));
+    const [binding] = await db.select().from(agentNodeBindings)
+      .where(eq(agentNodeBindings.id, 'binding_inventory_missing'));
+    await db.update(agents)
+      .set({ lastSeen: new Date(Date.now() - LONG_OFFLINE_MS) })
+      .where(eq(agents.id, agentId));
+    const result = await messageEngine.postMessage(db, ws, channel, SENDER, { text: 'after grace' });
+
+    expect(missing).toMatchObject({ status: 'offline', locationNodeId: null, sessionRef: null });
+    expect(binding?.status).toBe('inactive');
+    expect(result._deliveries).toEqual([]);
+    expect(result._delivery_rejections).toEqual([
+      expect.objectContaining({ agentId, reason: 'recipient_offline' }),
+    ]);
   });
 
   it('accepts zero as an explicit opt-out of offline fanout exclusion', async () => {
