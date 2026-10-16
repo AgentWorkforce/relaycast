@@ -2,6 +2,7 @@ import { describe, it, expect, expectTypeOf } from 'vitest';
 import {
   DeliverySchema,
   DeliveryItemSchema,
+  DeliveryFailedEventSchema,
   ServerEventSchema,
   SessionMessageSchema,
   SessionMessagesResultSchema,
@@ -479,5 +480,13 @@ describe('Type definitions', () => {
     ]) {
       expect(ServerEventSchema.safeParse(event).success).toBe(true);
     }
+
+    expect(DeliveryFailedEventSchema.parse({
+      type: 'delivery.failed',
+      delivery_id: null,
+      message_id: 'm_1',
+      reason: 'recipient_offline',
+      retryable: false,
+    }).reason).toBe('recipient_offline');
   });
 });

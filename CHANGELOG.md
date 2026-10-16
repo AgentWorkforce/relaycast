@@ -16,7 +16,15 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Channel and group-DM broadcasts stop charging new deliveries to recipients effectively offline longer than `EngineConfig.mailbox.offlineExcludeMs` (default 24h), configurable globally or per workspace and disabled with `0`; idle `http_push` routes remain eligible because they have no socket-liveness signal. Delivery-failure events preserve the `recipient_offline` reason for SDK handlers.
+
+### Fixed
+
+- Long-offline agents no longer accumulate a fresh delivery on every subsequent broadcast, which let a handful of dead agents exhaust a workspace's shared delivery-depth cap and starve live traffic. Replies in 1:1 DM threads remain direct deliveries.
 
 ## [10.4.2] - 2026-10-16
 
@@ -126,7 +134,6 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Fixed
 
 - Thread reads seek the requested thread instead of scanning retained workspace history.
-
 ## [9.2.0] - 2026-10-09
 
 ### Added

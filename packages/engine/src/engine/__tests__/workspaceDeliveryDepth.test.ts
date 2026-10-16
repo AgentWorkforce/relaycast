@@ -92,6 +92,7 @@ async function send(
       mode: 'immediate',
       ttlMs: 3_600_000,
       depthCap: 1000,
+      offlineExcludeMs: 24 * 60 * 60 * 1000,
       workspacePolicy,
     }),
   ]);
@@ -244,6 +245,7 @@ describe('workspace delivery guard at real engine entry points', () => {
         mode: 'immediate',
         ttlMs: 3_600_000,
         depthCap: 1000,
+        offlineExcludeMs: 24 * 60 * 60 * 1000,
         workspacePolicy: policy,
       }),
     ]);
