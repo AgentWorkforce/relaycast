@@ -142,6 +142,9 @@ function belowDepthCapSql(workspaceId: string, agentId: unknown, depthCap: numbe
  * indefinitely, so without this a workspace's shared delivery-depth budget
  * (see workspaceDeliveryPolicy) keeps draining into mailboxes nobody will
  * ever read, starving fanout to agents that are actually online.
+ *
+ * http_push routes have no socket-liveness signal, so an old agent presence
+ * timestamp does not make their receiver unreachable and must not exclude them.
  */
 function notLongOfflineSql(offlineExcludeMs: number): SQL {
   return sql`NOT ${longOfflineSql(offlineExcludeMs)}`;
@@ -150,7 +153,9 @@ function notLongOfflineSql(offlineExcludeMs: number): SQL {
 function longOfflineSql(offlineExcludeMs: number): SQL<number> {
   if (offlineExcludeMs === 0) return sql<number>`0`;
   const cutoffSeconds = Math.floor(offlineExcludeMs / 1000);
-  return sql<number>`(${agents.status} IN ('offline', 'active', 'online') AND ${agents.lastSeen} < (unixepoch() - ${cutoffSeconds}))`;
+  return sql<number>`(${agents.status} IN ('offline', 'active', 'online')
+    AND ${agents.lastSeen} < (unixepoch() - ${cutoffSeconds})
+    AND COALESCE(${nodes.kind}, '') <> 'http_push')`;
 }
 
 /**
@@ -528,6 +533,17 @@ export async function fetchChannelDeliveryOutcomes(
       })
       .from(channelMembers)
       .innerJoin(agents, eq(channelMembers.agentId, agents.id))
+      .leftJoin(agentNodeBindings, and(
+        eq(agentNodeBindings.workspaceId, agents.workspaceId),
+        eq(agentNodeBindings.agentId, channelMembers.agentId),
+        eq(agentNodeBindings.status, 'active'),
+        eq(agents.locationType, 'via_node'),
+        eq(agents.locationNodeId, agentNodeBindings.nodeId),
+      ))
+      .leftJoin(nodes, and(
+        eq(nodes.workspaceId, agents.workspaceId),
+        eq(nodes.id, sql`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`),
+      ))
       .where(and(
         eq(channelMembers.channelId, input.channelId),
         channelMuteDeliveryFilter(mentionHandles),
@@ -561,6 +577,17 @@ export async function fetchGroupDeliveryOutcomes(
       })
       .from(dmParticipants)
       .innerJoin(agents, eq(dmParticipants.agentId, agents.id))
+      .leftJoin(agentNodeBindings, and(
+        eq(agentNodeBindings.workspaceId, agents.workspaceId),
+        eq(agentNodeBindings.agentId, dmParticipants.agentId),
+        eq(agentNodeBindings.status, 'active'),
+        eq(agents.locationType, 'via_node'),
+        eq(agents.locationNodeId, agentNodeBindings.nodeId),
+      ))
+      .leftJoin(nodes, and(
+        eq(nodes.workspaceId, agents.workspaceId),
+        eq(nodes.id, sql`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`),
+      ))
       .where(and(
         eq(dmParticipants.conversationId, input.conversationId),
         isNull(dmParticipants.leftAt),

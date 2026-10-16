@@ -20,7 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Added
 
-- Channel and group-DM broadcasts stop charging new deliveries to recipients effectively offline longer than `EngineConfig.mailbox.offlineExcludeMs` (default 24h), configurable globally or per workspace and disabled with `0`. Delivery-failure events preserve the `recipient_offline` reason for SDK handlers.
+- Channel and group-DM broadcasts stop charging new deliveries to recipients effectively offline longer than `EngineConfig.mailbox.offlineExcludeMs` (default 24h), configurable globally or per workspace and disabled with `0`; idle `http_push` routes remain eligible because they have no socket-liveness signal. Delivery-failure events preserve the `recipient_offline` reason for SDK handlers.
 
 ### Fixed
 

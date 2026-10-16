@@ -1344,11 +1344,12 @@ Channel and group-DM broadcasts never charge a new delivery to a recipient that
 has been continuously offline longer than `EngineConfig.mailbox.offlineExcludeMs`
 (default 24h, configurable globally or per workspace; set it to `0` to disable
 the exclusion). This includes stale `active`/`online` rows whose `last_seen`
-already makes them effectively offline. A dead agent otherwise sits
-under its own per-recipient `depthCap` indefinitely while every subsequent
-broadcast keeps charging it a fresh row, draining the shared workspace cap into
-mailboxes nobody will read. Direct messages, including replies in 1:1 DM threads,
-still target their explicit recipient regardless of offline duration.
+already makes them effectively offline. Agents routed through `http_push`
+remain eligible because that transport has no socket-liveness signal. A dead
+agent otherwise sits under its own per-recipient `depthCap` indefinitely while
+every subsequent broadcast keeps charging it a fresh row, draining the shared
+workspace cap into mailboxes nobody will read. Direct messages, including replies
+in 1:1 DM threads, still target their explicit recipient regardless of offline duration.
 Excluded recipients appear in `_delivery_rejections` with
 `reason: "recipient_offline"`.
 

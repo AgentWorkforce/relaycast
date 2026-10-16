@@ -2,10 +2,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { count, eq, inArray } from 'drizzle-orm';
 import { makeNodeStack, type TestStack } from '../../__tests__/conformance/harness.js';
 import {
+  agentNodeBindings,
   agents,
   channelMembers,
   channels,
   deliveries,
+  nodes,
   workspaces,
 } from '../../db/schema.js';
 import type { EngineDb } from '../../ports/database.js';
@@ -115,6 +117,45 @@ describe('broadcast fanout excludes long-offline recipients', () => {
     expect(result._delivery_rejections).toEqual([
       expect.objectContaining({ agentId: 'agent_stale', reason: 'recipient_offline' }),
     ]);
+  });
+
+  it('keeps an idle http_push recipient eligible without socket liveness', async () => {
+    stack = makeNodeStack();
+    const db = stack.runtime.deps.db;
+    const ws = 'ws_idle_http_push';
+    const channel = 'chan_general';
+    const nodeId = 'node_idle_http_push';
+    const agentId = 'agent_idle_http_push';
+    await seedWorkspaceAndChannel(db, ws, channel);
+    await addMember(db, ws, channel, agentId, { status: 'offline', offlineForMs: LONG_OFFLINE_MS });
+    await db.insert(nodes).values({
+      id: nodeId,
+      workspaceId: ws,
+      name: 'idle-http-push',
+      tokenHash: 'token_node_idle_http_push',
+      kind: 'http_push',
+      role: 'direct',
+      deliveryAdapter: 'http.hmac.v1',
+      status: 'offline',
+    });
+    await db.update(agents)
+      .set({ locationType: 'via_node', locationNodeId: nodeId })
+      .where(eq(agents.id, agentId));
+    await db.insert(agentNodeBindings).values({
+      id: 'binding_idle_http_push',
+      workspaceId: ws,
+      agentId,
+      nodeId,
+      status: 'active',
+    });
+
+    const result = await messageEngine.postMessage(db, ws, channel, SENDER, { text: 'wake up' });
+
+    expect(result._deliveries).toEqual([
+      expect.objectContaining({ agentId, routeNodeKind: 'http_push' }),
+    ]);
+    expect(result._delivery_rejections).toEqual([]);
+    expect(await deliveryCount(db, agentId)).toBe(1);
   });
 
   it('accepts zero as an explicit opt-out of offline fanout exclusion', async () => {
