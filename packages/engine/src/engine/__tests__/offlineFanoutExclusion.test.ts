@@ -373,7 +373,13 @@ describe('broadcast fanout excludes long-offline recipients', () => {
     });
     await addProvider(db, ws, nodeId, 'broker');
     await db.update(agents)
-      .set({ locationType: 'via_node', locationNodeId: nodeId, providerName: 'broker' })
+      .set({
+        locationType: 'via_node',
+        locationNodeId: nodeId,
+        providerName: 'broker',
+        status: 'offline',
+        statusBeforeLivenessLoss: 'active',
+      })
       .where(eq(agents.id, agentId));
     await db.insert(agentNodeBindings).values({
       id: 'binding_inventory_missing',

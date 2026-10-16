@@ -2867,13 +2867,13 @@ export async function reconcileInventory(
       eq(agents.locationType, 'via_node'),
       eq(agents.locationNodeId, nodeId),
       eq(agents.providerName, providerName),
-      eq(agents.status, 'active'),
+      ne(agents.status, RELEASED_AGENT_STATUS),
     ));
   const missingAgents = nodeAgents.filter((agent) => !reportedNames.has(agent.name));
   const missing = missingAgents.map((agent) => agent.id);
   if (missing.length > 0) {
     const missingAt = new Date();
-    await runAtomicWrites(db, [
+    const invalidationResults = await runAtomicWrites(db, [
       db
         .update(agentNodeBindings)
         .set({ status: 'inactive', updatedAt: missingAt })
@@ -2891,10 +2891,21 @@ export async function reconcileInventory(
           locationNodeId: null,
           sessionRef: null,
         })
-        .where(and(eq(agents.workspaceId, workspaceId), inArray(agents.id, missing))),
+        .where(and(
+          eq(agents.workspaceId, workspaceId),
+          inArray(agents.id, missing),
+          eq(agents.locationType, 'via_node'),
+          eq(agents.locationNodeId, nodeId),
+          eq(agents.providerName, providerName),
+          ne(agents.status, RELEASED_AGENT_STATUS),
+        ))
+        .returning({ id: agents.id }),
     ]);
+    const invalidatedIds = new Set(
+      ((invalidationResults[1] ?? []) as Array<{ id: string }>).map((row) => row.id),
+    );
     if (completionDeps) {
-      for (const agent of missingAgents) {
+      for (const agent of missingAgents.filter((candidate) => invalidatedIds.has(candidate.id))) {
         await emitAgentExitedEffects(completionDeps, workspaceId, {
           agentId: agent.id,
           agentName: agent.name,
