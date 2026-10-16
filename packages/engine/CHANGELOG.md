@@ -7,7 +7,12 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- `errorResponse` re-throws an error with no `code` that resolves to a 5xx, so it reaches `app.onError` (structured log, telemetry, and any host classifier chained in front of it) instead of being answered as a bare `500 internal_error` in the route. Coded errors and 4xx are still answered in place, with an unchanged body.
+- `app.onError` adds `error.request_id` to 5xx bodies, matching the `request_id` in the request logs.
 
 ## [10.4.1] - 2026-10-15
 

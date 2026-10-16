@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Unexpected server errors inside route handlers now reach the global error handler, so they are logged and reported to telemetry, and a host can classify them (the hosted service answers a temporarily overloaded database with a retryable `503 database_overloaded` and `Retry-After` instead of `500 internal_error`). Their error bodies carry a `request_id` that matches the server logs.
 
 ### Changed
 
