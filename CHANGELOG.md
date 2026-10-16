@@ -18,6 +18,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased]
 
+### Fixed
+
+- Long-idle agents hosted by a freshly heartbeating node remain eligible for channel and group-DM fanout even when their own `last_seen` timestamp is old; node heartbeats refresh the route, not every hosted agent row.
+
 ## [10.5.0] - 2026-10-16
 
 ### Added

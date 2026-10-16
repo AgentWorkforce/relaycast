@@ -8,6 +8,7 @@ import {
   nodes,
 } from '../db/schema.js';
 import type { AtomicWrite, EngineDb } from '../ports/database.js';
+import { NODE_LIVENESS_TTL_MS } from './placement.js';
 import {
   workspaceActiveDepthSql,
   workspaceGrowthLimit,
@@ -145,6 +146,9 @@ function belowDepthCapSql(workspaceId: string, agentId: unknown, depthCap: numbe
  *
  * http_push routes have no socket-liveness signal, so an old agent presence
  * timestamp does not make their receiver unreachable and must not exclude them.
+ * A fresh live node route is authoritative too: broker heartbeats refresh the
+ * node row rather than every hosted agent row, so a quiet but connected agent
+ * may legitimately have an old `last_seen` timestamp.
  */
 function notLongOfflineSql(offlineExcludeMs: number): SQL {
   return sql`NOT ${longOfflineSql(offlineExcludeMs)}`;
@@ -153,9 +157,18 @@ function notLongOfflineSql(offlineExcludeMs: number): SQL {
 function longOfflineSql(offlineExcludeMs: number): SQL<number> {
   if (offlineExcludeMs === 0) return sql<number>`0`;
   const cutoffSeconds = Math.floor(offlineExcludeMs / 1000);
+  const nodeLivenessSeconds = Math.ceil(NODE_LIVENESS_TTL_MS / 1000);
   return sql<number>`(${agents.status} IN ('offline', 'active', 'online')
     AND ${agents.lastSeen} < (unixepoch() - ${cutoffSeconds})
-    AND COALESCE(${nodes.kind}, '') <> 'http_push')`;
+    AND NOT (
+      COALESCE(${nodes.kind}, '') = 'http_push'
+      OR (
+        COALESCE(${nodes.status}, 'offline') <> 'offline'
+        AND ${nodes.lastHeartbeatAt} IS NOT NULL
+        AND ${nodes.lastHeartbeatAt} >= (unixepoch() - ${nodeLivenessSeconds})
+        AND ${nodes.lastHeartbeatAt} <= unixepoch()
+      )
+    ))`;
 }
 
 /**

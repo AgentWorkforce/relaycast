@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- Offline fanout exclusion now treats a fresh, non-offline bound-node heartbeat as proof that a hosted agent remains reachable, so a quiet connected agent is not dropped merely because broker heartbeats do not update `agents.last_seen`.
+
 ## [10.5.0] - 2026-10-16
 
 ### Added

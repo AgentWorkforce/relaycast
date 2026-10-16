@@ -158,6 +158,45 @@ describe('broadcast fanout excludes long-offline recipients', () => {
     expect(await deliveryCount(db, agentId)).toBe(1);
   });
 
+  it('keeps a stale agent row eligible while its bound node is freshly heartbeating', async () => {
+    stack = makeNodeStack();
+    const db = stack.runtime.deps.db;
+    const ws = 'ws_live_node_stale_agent';
+    const channel = 'chan_general';
+    const nodeId = 'node_live_stale_agent';
+    const agentId = 'agent_live_stale_agent';
+    await seedWorkspaceAndChannel(db, ws, channel);
+    await addMember(db, ws, channel, agentId, { status: 'active', offlineForMs: LONG_OFFLINE_MS });
+    await db.insert(nodes).values({
+      id: nodeId,
+      workspaceId: ws,
+      name: 'live-stale-agent',
+      tokenHash: 'token_node_live_stale_agent',
+      kind: 'ws',
+      role: 'broker',
+      status: 'online',
+      lastHeartbeatAt: new Date(),
+    });
+    await db.update(agents)
+      .set({ locationType: 'via_node', locationNodeId: nodeId })
+      .where(eq(agents.id, agentId));
+    await db.insert(agentNodeBindings).values({
+      id: 'binding_live_stale_agent',
+      workspaceId: ws,
+      agentId,
+      nodeId,
+      status: 'active',
+    });
+
+    const result = await messageEngine.postMessage(db, ws, channel, SENDER, { text: 'still there?' });
+
+    expect(result._deliveries).toEqual([
+      expect.objectContaining({ agentId, routeNodeKind: 'ws', routeNodeId: nodeId }),
+    ]);
+    expect(result._delivery_rejections).toEqual([]);
+    expect(await deliveryCount(db, agentId)).toBe(1);
+  });
+
   it('accepts zero as an explicit opt-out of offline fanout exclusion', async () => {
     stack = makeNodeStack();
     const db = stack.runtime.deps.db;
