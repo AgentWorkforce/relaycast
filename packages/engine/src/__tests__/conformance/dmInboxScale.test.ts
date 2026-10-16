@@ -170,7 +170,7 @@ describe('DM inbox scaling', () => {
       expect(response.status).toBe(500);
       await expect(response.json()).resolves.toEqual({
         ok: false,
-        error: { code: 'internal_error', message: 'Internal server error' },
+        error: { code: 'internal_error', message: 'Internal server error', request_id: expect.any(String) },
       });
       expect(captureException).toHaveBeenCalledWith(
         expect.objectContaining({ message: 'D1_ERROR: D1 DB is overloaded. Requests queued for too long.' }),

@@ -299,7 +299,9 @@ short rollover grace period.
 
 ## Error Handling
 
-API errors use `{ ok: false, error: { code, message } }`. Invalid or expired
+API errors use `{ ok: false, error: { code, message } }`. Unexpected server
+errors (5xx) also carry `error.request_id`, which identifies the request in the
+server logs; quote it when reporting the error. Invalid or expired
 agent tokens return `agent_token_invalid` with HTTP 401. Recover only with an
 explicit current-token, origin-node, or enrolled work-unit proof; use the
 audited owner takeover when those proofs are unavailable.
