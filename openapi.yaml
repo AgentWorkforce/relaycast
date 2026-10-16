@@ -4727,6 +4727,54 @@ paths:
                     items:
                       $ref: '#/components/schemas/DeliveryItem'
 
+  /deliveries/by-message/{messageId}:
+    get:
+      summary: Prove one pending delivery for the calling agent
+      description: >
+        Return only the calling agent token's queued or delivered, unexpired
+        delivery for the given message id. The sender agent id, workspace id,
+        channel id, and delivery reason are server-derived. Unknown, foreign,
+        acknowledged, and expired message ids all return the same 404.
+      tags:
+        - Deliveries
+      security:
+        - agentToken: []
+      parameters:
+        - name: messageId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Pending delivery for this agent
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, data]
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    required: [message_id, workspace_id, channel_id]
+                    properties:
+                      message_id:
+                        type: string
+                      sender_agent_id:
+                        type: string
+                        nullable: true
+                      workspace_id:
+                        type: string
+                      channel_id:
+                        type: string
+                      delivery_reason:
+                        type: string
+                        nullable: true
+        '404':
+          description: Delivery absent, not addressed to this agent, acknowledged, or expired
+
   /deliveries/{id}/ack:
     post:
       summary: Acknowledge a delivery
