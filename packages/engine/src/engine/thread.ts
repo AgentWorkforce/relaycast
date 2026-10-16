@@ -47,7 +47,7 @@ export async function postReply(
 
   const [ch] = await db.select({ name: channels.name }).from(channels).where(eq(channels.id, parent.channelId));
   const [dmConversation] = await db
-    .select({ id: dmConversations.id })
+    .select({ id: dmConversations.id, dmType: dmConversations.dmType })
     .from(dmConversations)
     .where(eq(dmConversations.channelId, parent.channelId));
 
@@ -118,6 +118,7 @@ export async function postReply(
           ttlMs: mailbox.ttlMs,
           depthCap: mailbox.depthCap,
           offlineExcludeMs: mailbox.offlineExcludeMs,
+          excludeLongOffline: dmConversation.dmType !== '1:1',
           workspacePolicy: options.workspaceDeliveryPolicy,
         })
         : buildChannelDeliveryWrite(writeDb, {
@@ -144,6 +145,7 @@ export async function postReply(
       conversationId: dmConversation.id,
       senderAgentId: agentId,
       offlineExcludeMs: mailbox.offlineExcludeMs,
+      excludeLongOffline: dmConversation.dmType !== '1:1',
     })
     : await fetchChannelDeliveryOutcomes(db, {
       messageId: replyId,

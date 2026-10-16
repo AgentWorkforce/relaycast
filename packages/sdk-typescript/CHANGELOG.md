@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- `delivery.failed` event handlers receive the server rejection `reason`, including `recipient_offline` and `depth_cap`.
+
 ## [10.0.2] - 2026-10-11
 
 ### Fixed

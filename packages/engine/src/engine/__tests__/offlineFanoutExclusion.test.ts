@@ -11,7 +11,9 @@ import {
 import type { EngineDb } from '../../ports/database.js';
 import * as messageEngine from '../message.js';
 import * as groupDmEngine from '../groupDm.js';
-import { DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS } from '../mailboxConfig.js';
+import * as dmEngine from '../dm.js';
+import * as threadEngine from '../thread.js';
+import { DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS, resolveMailboxConfig } from '../mailboxConfig.js';
 
 /**
  * Regression: dead agents that never drain their mailbox keep consuming the
@@ -99,6 +101,38 @@ describe('broadcast fanout excludes long-offline recipients', () => {
     expect(result._delivery_rejections).toEqual([]);
   });
 
+  it.each(['active', 'online'])('excludes a stale %s row even before a hosted sweep persists offline', async (status) => {
+    stack = makeNodeStack();
+    const db = stack.runtime.deps.db;
+    const ws = `ws_stale_${status}`;
+    const channel = 'chan_general';
+    await seedWorkspaceAndChannel(db, ws, channel);
+    await addMember(db, ws, channel, 'agent_stale', { status, offlineForMs: LONG_OFFLINE_MS });
+
+    const result = await messageEngine.postMessage(db, ws, channel, SENDER, { text: 'hello' });
+
+    expect(result._deliveries).toEqual([]);
+    expect(result._delivery_rejections).toEqual([
+      expect.objectContaining({ agentId: 'agent_stale', reason: 'recipient_offline' }),
+    ]);
+  });
+
+  it('accepts zero as an explicit opt-out of offline fanout exclusion', async () => {
+    stack = makeNodeStack();
+    const db = stack.runtime.deps.db;
+    const ws = 'ws_offline_exclusion_disabled';
+    const channel = 'chan_general';
+    await seedWorkspaceAndChannel(db, ws, channel);
+    await addMember(db, ws, channel, 'agent_dead', { status: 'offline', offlineForMs: LONG_OFFLINE_MS });
+    const mailbox = resolveMailboxConfig({ mailbox: { offlineExcludeMs: 0 } }, ws);
+
+    const result = await messageEngine.postMessage(db, ws, channel, SENDER, { text: 'hello' }, { mailbox });
+
+    expect(mailbox.offlineExcludeMs).toBe(0);
+    expect(result._deliveries.map((delivery) => delivery.agentId)).toEqual(['agent_dead']);
+    expect(result._delivery_rejections).toEqual([]);
+  });
+
   it('does not let a dead agent accumulate new deliveries across repeated sends', async () => {
     stack = makeNodeStack();
     const db = stack.runtime.deps.db;
@@ -143,6 +177,28 @@ describe('broadcast fanout excludes long-offline recipients', () => {
     expect(result._delivery_rejections).toEqual([
       expect.objectContaining({ agentId: 'agent_dead', reason: 'recipient_offline' }),
     ]);
+  });
+
+  it('keeps a 1:1 DM thread reply addressed to its long-offline recipient', async () => {
+    stack = makeNodeStack();
+    const db = stack.runtime.deps.db;
+    const ws = 'ws_direct_dm_thread_offline';
+    await db.insert(workspaces).values({ id: ws, name: ws, apiKeyHash: `hash_${ws}` });
+    await db.insert(agents).values([
+      { id: SENDER, workspaceId: ws, name: 'sender', tokenHash: `token_${SENDER}` },
+      { id: 'agent_dead', workspaceId: ws, name: 'agent_dead', tokenHash: 'token_dead' },
+    ]);
+
+    const root = await dmEngine.sendDm(db, ws, SENDER, { to: 'agent_dead', text: 'root' });
+    await db.update(agents)
+      .set({ status: 'offline', lastSeen: new Date(Date.now() - LONG_OFFLINE_MS) })
+      .where(eq(agents.id, 'agent_dead'));
+
+    const reply = await threadEngine.postReply(db, ws, root.id, SENDER, { text: 'reply' });
+
+    expect(reply._deliveries.map((delivery) => delivery.agentId)).toEqual(['agent_dead']);
+    expect(reply._delivery_rejections).toEqual([]);
+    expect(await deliveryCount(db, 'agent_dead')).toBe(2);
   });
 
   it('incident regression: excluding dead members keeps a new broadcast under the workspace cap', async () => {

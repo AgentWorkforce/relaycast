@@ -22,13 +22,19 @@ function positiveInt(value: unknown, fallback: number): number {
     : fallback;
 }
 
+function nonNegativeInt(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : fallback;
+}
+
 export function resolveMailboxConfig(config: EngineConfig | undefined, workspaceId: string): MailboxConfig {
   const globalConfig = config?.mailbox;
   const workspaceConfig = globalConfig?.workspaces?.[workspaceId];
   return {
     ttlMs: positiveInt(workspaceConfig?.deliveryTtlMs ?? globalConfig?.deliveryTtlMs, DEFAULT_MAILBOX_TTL_MS),
     depthCap: positiveInt(workspaceConfig?.depthCap ?? globalConfig?.depthCap, DEFAULT_MAILBOX_DEPTH_CAP),
-    offlineExcludeMs: positiveInt(
+    offlineExcludeMs: nonNegativeInt(
       workspaceConfig?.offlineExcludeMs ?? globalConfig?.offlineExcludeMs,
       DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS,
     ),

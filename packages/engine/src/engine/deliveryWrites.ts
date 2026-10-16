@@ -148,8 +148,9 @@ function notLongOfflineSql(offlineExcludeMs: number): SQL {
 }
 
 function longOfflineSql(offlineExcludeMs: number): SQL<number> {
+  if (offlineExcludeMs === 0) return sql<number>`0`;
   const cutoffSeconds = Math.floor(offlineExcludeMs / 1000);
-  return sql<number>`(${agents.status} = ${'offline'} AND ${agents.lastSeen} < (unixepoch() - ${cutoffSeconds}))`;
+  return sql<number>`(${agents.status} IN ('offline', 'active', 'online') AND ${agents.lastSeen} < (unixepoch() - ${cutoffSeconds}))`;
 }
 
 /**
@@ -288,6 +289,8 @@ export function buildGroupDmDeliveryWrite(
     depthCap: number;
     /** Recipients offline longer than this are excluded from the fanout. */
     offlineExcludeMs: number;
+    /** A 1:1 DM thread is direct traffic and must retain its explicit recipient. */
+    excludeLongOffline?: boolean;
     /** Server-resolved workspace growth policy; absent => no workspace guard. */
     workspacePolicy?: WorkspaceDeliveryPolicy;
   },
@@ -349,7 +352,7 @@ export function buildGroupDmDeliveryWrite(
             isNull(dmParticipants.leftAt),
             ne(dmParticipants.agentId, input.senderAgentId),
             newDeliveryIdentitySql(input.messageId, dmParticipants.agentId),
-            notLongOfflineSql(input.offlineExcludeMs),
+            input.excludeLongOffline === false ? undefined : notLongOfflineSql(input.offlineExcludeMs),
             belowDepthCapSql(input.workspaceId, dmParticipants.agentId, input.depthCap),
           ),
         )),
@@ -545,6 +548,7 @@ export async function fetchGroupDeliveryOutcomes(
     conversationId: string;
     senderAgentId: string;
     offlineExcludeMs: number;
+    excludeLongOffline?: boolean;
   },
 ): Promise<DeliveryOutcomeRecords> {
   const [deliveries, intended] = await Promise.all([
@@ -553,7 +557,7 @@ export async function fetchGroupDeliveryOutcomes(
       .select({
         agentId: dmParticipants.agentId,
         agentName: agents.name,
-        offline: longOfflineSql(input.offlineExcludeMs),
+        offline: input.excludeLongOffline === false ? sql<number>`0` : longOfflineSql(input.offlineExcludeMs),
       })
       .from(dmParticipants)
       .innerJoin(agents, eq(dmParticipants.agentId, agents.id))

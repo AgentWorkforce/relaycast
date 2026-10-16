@@ -1279,9 +1279,11 @@ export async function deregisterProvider(
   registry.detachProvider(workspaceId, nodeId, providerName);
   await db
     .update(agents)
-    .set({ status: 'offline', lastSeen: new Date() })
+    .set({ ...agentLivenessLoss(), lastSeen: new Date() })
     .where(and(
       eq(agents.workspaceId, workspaceId),
+      ne(agents.status, 'offline'),
+      ne(agents.status, RELEASED_AGENT_STATUS),
       eq(agents.locationType, 'via_node'),
       eq(agents.locationNodeId, nodeId),
       eq(agents.providerName, providerName),

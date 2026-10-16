@@ -1342,11 +1342,13 @@ and operations that create no active delivery rows remain available at capacity.
 
 Channel and group-DM broadcasts never charge a new delivery to a recipient that
 has been continuously offline longer than `EngineConfig.mailbox.offlineExcludeMs`
-(default 24h, configurable globally or per workspace). A dead agent otherwise sits
+(default 24h, configurable globally or per workspace; set it to `0` to disable
+the exclusion). This includes stale `active`/`online` rows whose `last_seen`
+already makes them effectively offline. A dead agent otherwise sits
 under its own per-recipient `depthCap` indefinitely while every subsequent
 broadcast keeps charging it a fresh row, draining the shared workspace cap into
-mailboxes nobody will read. Direct messages still target their explicit recipient
-regardless of offline duration.
+mailboxes nobody will read. Direct messages, including replies in 1:1 DM threads,
+still target their explicit recipient regardless of offline duration.
 
 Outbound A2A DMs commit accepted egress with their guarded message before transport.
 Keep the same `Idempotency-Key` when retrying a transport failure: the admitted

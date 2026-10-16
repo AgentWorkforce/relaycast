@@ -11,11 +11,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `EngineConfig.mailbox.offlineExcludeMs` (and the matching per-workspace override) bounds how long a continuously-offline agent keeps receiving new channel/group-DM broadcast deliveries before fanout excludes it; defaults to 24h.
+- `EngineConfig.mailbox.offlineExcludeMs` (and the matching per-workspace override) bounds how long an effectively-offline agent keeps receiving new channel/group-DM broadcast deliveries before fanout excludes it; defaults to 24h and accepts `0` to disable exclusion.
 
 ### Fixed
 
-- `buildChannelDeliveryWrite`/`buildGroupDmDeliveryWrite` no longer insert a new delivery row for a recipient that has been offline past `offlineExcludeMs`, so a handful of dead agents can no longer exhaust a workspace's shared delivery-depth cap across repeated broadcasts. `DeliveryRejectionRecord.reason` gained `recipient_offline` alongside `depth_cap` to report the exclusion.
+- `buildChannelDeliveryWrite`/`buildGroupDmDeliveryWrite` no longer insert a new delivery row for a recipient that has been offline past `offlineExcludeMs`, including stale persisted `active`/`online` rows, so a handful of dead agents can no longer exhaust a workspace's shared delivery-depth cap across repeated broadcasts. `DeliveryRejectionRecord.reason` gained `recipient_offline` alongside `depth_cap` to report the exclusion; 1:1 DM thread replies remain direct deliveries.
 
 ## [10.4.2] - 2026-10-16
 

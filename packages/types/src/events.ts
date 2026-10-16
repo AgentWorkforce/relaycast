@@ -335,6 +335,7 @@ export const DeliveryFailedEventSchema = z.object({
   type: z.literal('delivery.failed'),
   delivery_id: z.string().nullable(),
   message_id: z.string(),
+  reason: z.string().nullable().optional(),
   error: z.string().nullable().optional(),
   retryable: z.boolean().nullable().optional(),
 });

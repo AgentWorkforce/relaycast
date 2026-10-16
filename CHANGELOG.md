@@ -20,11 +20,11 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Added
 
-- Channel and group-DM broadcasts stop charging new deliveries to recipients offline longer than `EngineConfig.mailbox.offlineExcludeMs` (default 24h), configurable globally or per workspace.
+- Channel and group-DM broadcasts stop charging new deliveries to recipients effectively offline longer than `EngineConfig.mailbox.offlineExcludeMs` (default 24h), configurable globally or per workspace and disabled with `0`. Delivery-failure events preserve the `recipient_offline` reason for SDK handlers.
 
 ### Fixed
 
-- Long-offline agents no longer accumulate a fresh delivery on every subsequent broadcast, which let a handful of dead agents exhaust a workspace's shared delivery-depth cap and starve live traffic.
+- Long-offline agents no longer accumulate a fresh delivery on every subsequent broadcast, which let a handful of dead agents exhaust a workspace's shared delivery-depth cap and starve live traffic. Replies in 1:1 DM threads remain direct deliveries.
 
 ## [10.4.2] - 2026-10-16
 
