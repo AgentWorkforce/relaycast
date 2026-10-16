@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Changed
+
+- `POST /v1/agents/spawn` accepts any harness a node advertises as `spawn:<id>` (for example `cursor`, `copilot`, `devin`, `qwen`, `amp`), not only `claude`, `codex`, `gemini`, `aider`, `goose`, `opencode` and `grok`. `cli` must be lowercase letters, digits and hyphens, starting with a letter or digit, at most 32 characters.
 
 ## [10.4.2] - 2026-10-16
 

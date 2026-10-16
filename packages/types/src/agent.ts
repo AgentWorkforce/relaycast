@@ -92,8 +92,27 @@ export type AgentPresenceInfo = z.infer<typeof AgentPresenceInfoSchema>;
 
 // === Spawn/Release (Agent Lifecycle) ===
 
-export const CliTypeSchema = z.enum(['claude', 'codex', 'gemini', 'aider', 'goose', 'opencode', 'grok']);
-export type CliType = z.infer<typeof CliTypeSchema>;
+/** Harnesses Relaycast has always named; spawn is not limited to these. */
+export const KNOWN_CLI_TYPES = ['claude', 'codex', 'gemini', 'aider', 'goose', 'opencode', 'grok'] as const;
+export type KnownCliType = (typeof KNOWN_CLI_TYPES)[number];
+
+/**
+ * Shape of a harness id: the `<id>` a node advertises as its `spawn:<id>`
+ * capacity (for example `cursor`, `copilot`, `qwen`). Lowercase letters,
+ * digits and hyphens, starting with a letter or digit, at most 32 characters.
+ * The trailing lookahead requires the absolute end of the string, so a
+ * trailing newline or other whitespace is rejected.
+ */
+export const HARNESS_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$(?![\s\S])/;
+export const HARNESS_ID_RULE = 'lowercase letters, digits and hyphens, starting with a letter or digit, at most 32 characters';
+
+/**
+ * The harness to spawn. Any well-formed harness id is accepted; placement
+ * targets a node that advertises `spawn:<cli>`.
+ */
+export const CliTypeSchema = z.string().regex(HARNESS_ID_PATTERN, `cli must be a harness id: ${HARNESS_ID_RULE}`);
+// `string & {}` keeps editor completion for the known ids without rejecting others.
+export type CliType = KnownCliType | (string & {});
 
 export const SpawnAgentRequestSchema = z.object({
   name: z.string(),
