@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- `inventory.sync`'s missing sweep leaves an agent bound while an open built-in release dispatched to that node and provider names it (and its `expected_agent_id`, when set), for up to the dispatch timeout. The release completion deactivates the binding and tombstones the agent; before, the sweep won the race and the completion failed with `agent_identity_mismatch`.
 
 ## [10.5.1] - 2026-10-16
 
