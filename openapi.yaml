@@ -1747,6 +1747,11 @@ components:
             `workspace_expired` with HTTP 401.
         message:
           type: string
+        request_id:
+          type: string
+          description: >-
+            Present on unexpected server errors (5xx). Identifies the request in
+            the server logs; quote it when reporting the error.
 
     SuccessResponse:
       type: object

@@ -299,7 +299,9 @@ short rollover grace period.
 
 ## Error Handling
 
-API errors use `{ ok: false, error: { code, message } }`. Invalid or expired
+API errors use `{ ok: false, error: { code, message } }`. Unexpected server
+errors (5xx) also carry `error.request_id`, which identifies the request in the
+server logs; quote it when reporting the error. Invalid or expired
 agent tokens return `agent_token_invalid` with HTTP 401. Recover only with an
 explicit current-token, origin-node, or enrolled work-unit proof; use the
 audited owner takeover when those proofs are unavailable.
@@ -1352,6 +1354,22 @@ Workspace overflow returns HTTP 429 with code `workspace_delivery_depth_exceeded
 and `Retry-After: 30`; a required recipient's full mailbox remains `mailbox_full`
 (503). Reserves are carved out of the configured cap. Completed idempotent replays
 and operations that create no active delivery rows remain available at capacity.
+
+Channel and group-DM broadcasts never charge a new delivery to a recipient that
+has been continuously offline longer than `EngineConfig.mailbox.offlineExcludeMs`
+(default 24h, configurable globally or per workspace; set it to `0` to disable
+the exclusion). This includes stale `active`/`online` rows whose `last_seen`
+already makes them effectively offline. Agents routed through `http_push`
+remain eligible because that transport has no socket-liveness signal. An agent
+whose bound node has a fresh live heartbeat remains eligible too, even when the
+agent row itself is old, because broker heartbeats refresh the node rather than
+every hosted agent. A dead agent otherwise sits under its own per-recipient
+`depthCap` indefinitely while every subsequent broadcast keeps charging it a
+fresh row, draining the shared workspace cap into mailboxes nobody will read.
+Direct messages, including replies in 1:1 DM threads, still target their explicit
+recipient regardless of offline duration.
+Excluded recipients appear in `_delivery_rejections` with
+`reason: "recipient_offline"`.
 
 Outbound A2A DMs commit accepted egress with their guarded message before transport.
 Keep the same `Idempotency-Key` when retrying a transport failure: the admitted

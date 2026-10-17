@@ -22,9 +22,39 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - `POST /v1/workspace/rotate-key` self-serve workspace-key rotation: the superseded key keeps a bounded `grace_seconds` continuity window (`0` for immediate compromise cutoff), agent/node/observer tokens and sessions are untouched, and deployments whose canonical key is externally managed refuse the route. The TypeScript SDK exposes it as `relay.workspace.rotateKey()`.
 
+## [10.5.1] - 2026-10-16
+
 ### Fixed
 
+- Long-idle agents hosted by a freshly heartbeating direct node or broker provider remain eligible for channel and group-DM fanout even when their own `last_seen` timestamp is old; route heartbeats refresh the route, not every hosted agent row. Provider disconnect and inventory-removal handling keeps that exemption scoped to routes that are actually reachable.
+
+## [10.5.0] - 2026-10-16
+
+### Added
+
+- Channel and group-DM broadcasts stop charging new deliveries to recipients effectively offline longer than `EngineConfig.mailbox.offlineExcludeMs` (default 24h), configurable globally or per workspace and disabled with `0`; idle `http_push` routes remain eligible because they have no socket-liveness signal. Delivery-failure events preserve the `recipient_offline` reason for SDK handlers.
+
+### Fixed
+
+- Long-offline agents no longer accumulate a fresh delivery on every subsequent broadcast, which let a handful of dead agents exhaust a workspace's shared delivery-depth cap and starve live traffic. Replies in 1:1 DM threads remain direct deliveries.
+
+## [10.4.2] - 2026-10-16
+
+### Fixed
+
+- Unexpected server errors inside route handlers now reach the global error handler, so they are logged and reported to telemetry, and a host can classify them (the hosted service answers a temporarily overloaded database with a retryable `503 database_overloaded` and `Retry-After` instead of `500 internal_error`). Their error bodies carry a `request_id` that matches the server logs.
+
+### Changed
+
+- Rust SDK 10.0.0 (breaking): `RelayError::Api` keeps the full JSON error body as `details` (read it with `RelayError::details()`), so callers can see server metadata such as `plan` and `upgrade_available` on workspace admission 429s. Struct literals add `details: None`; patterns that destructure the variant need a trailing `..`.
+
+## [10.4.1] - 2026-10-15
+
+### Fixed
+
+- Newly initialized webhooks remain immediately due when database work crosses a clock tick, avoiding a spurious retry failure before the first delivery attempt.
 - Rust SDK: `AgentClient::heartbeat()` and other acknowledgement calls answered `{ "ok": true, "data": null }` no longer fail with "Response missing data field" after the server applied them.
+- Rust SDK success responses must include `data`; an explicit null acknowledgement remains valid, while a missing payload is rejected.
 
 ## [10.4.0] - 2026-10-13
 
@@ -116,7 +146,6 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Fixed
 
 - Thread reads seek the requested thread instead of scanning retained workspace history.
-
 ## [9.2.0] - 2026-10-09
 
 ### Added
@@ -792,7 +821,11 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v10.4.0...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v10.5.1...HEAD
+[10.5.1]: https://github.com/AgentWorkforce/relaycast/compare/v10.5.0...v10.5.1
+[10.5.0]: https://github.com/AgentWorkforce/relaycast/compare/v10.4.2...v10.5.0
+[10.4.2]: https://github.com/AgentWorkforce/relaycast/compare/v10.4.1...v10.4.2
+[10.4.1]: https://github.com/AgentWorkforce/relaycast/compare/v10.4.0...v10.4.1
 [10.4.0]: https://github.com/AgentWorkforce/relaycast/compare/v10.3.2...v10.4.0
 [10.3.2]: https://github.com/AgentWorkforce/relaycast/compare/v10.3.1...v10.3.2
 [10.3.1]: https://github.com/AgentWorkforce/relaycast/compare/v10.3.0...v10.3.1

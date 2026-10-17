@@ -281,7 +281,9 @@ workspaceRoutes.post('/workspaces', async (c) => {
     return result.created ? jsonCreated(c, result.workspace) : jsonOk(c, result.workspace);
   } catch (err: unknown) {
     const error = asCodedError(err);
-    if ((error.status ?? 500) >= 500) {
+    // An uncoded 5xx is re-thrown by errorResponse to app.onError, which logs
+    // and captures it; recording it here too would count it twice.
+    if (error.code && (error.status ?? 500) >= 500) {
       const diagnostics = safeErrorDiagnostics(error);
       getRequestLogger(c, 'workspace.create').error('Workspace creation failed', {
         error_code: error.code ?? 'internal_error',

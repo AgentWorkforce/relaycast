@@ -76,6 +76,14 @@ export function safeClientErrorMessage(
  * `as ContentfulStatusCode` cast that Hono's typed status requires, behind a
  * real `instanceof` narrowing instead of the unchecked `err as Error & {...}`
  * assertion that was duplicated across every route handler.
+ *
+ * An error with no `code` that resolves to a 5xx is not an expected outcome of
+ * the route, so it is re-thrown to the app's `onError` rather than answered
+ * here. That handler logs it and records telemetry (answering here dropped
+ * both), and a host can chain a classifier in front of it: the hosted gateway
+ * maps D1 overload to a retryable `503 database_overloaded` with Retry-After,
+ * which a 500 answered here never reached. The client body is the same either
+ * way. Only route handlers call this, so a throw always reaches `onError`.
  */
 export function errorResponse(c: Context, err: unknown) {
   const error = asCodedError(err);
@@ -84,6 +92,8 @@ export function errorResponse(c: Context, err: unknown) {
     return jsonMalformedBody(c);
   }
   const status = effectiveHttpStatus(error);
+  // Throw the normalized Error: Hono hands only `Error` instances to `onError`.
+  if (!error.code && status >= 500) throw error;
   return jsonError(
     c,
     error.code || 'internal_error',

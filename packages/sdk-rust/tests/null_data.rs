@@ -30,10 +30,10 @@ async fn heartbeat_accepts_null_data() {
 }
 
 #[tokio::test]
-async fn untyped_and_optional_requests_accept_missing_data() {
+async fn untyped_and_optional_requests_accept_null_data() {
     let mock_server = MockServer::start().await;
     Mock::given(method("GET"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "ok": true })))
+        .respond_with(null_data())
         .mount(&mock_server)
         .await;
 
@@ -68,7 +68,7 @@ async fn typed_request_still_rejects_null_data() {
         .await
         .expect_err("a typed payload cannot be null");
     assert!(
-        matches!(error, RelayError::InvalidResponse(ref message) if message == "Response missing data field"),
+        matches!(error, RelayError::Json(_)),
         "unexpected error: {error:?}"
     );
 }

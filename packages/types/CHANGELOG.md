@@ -13,6 +13,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - `RotateWorkspaceKeyRequest` / `RotateWorkspaceKeyResponse` wire schemas and the `relaycast_server_workspace_key_rotated` telemetry event.
 
+## [10.5.0] - 2026-10-16
+
+### Added
+
+- `DeliveryFailedEvent.reason` preserves server rejection reasons such as `recipient_offline` and `depth_cap` for SDK event handlers.
+
 ## [10.4.0] - 2026-10-13
 
 ### Added

@@ -253,6 +253,99 @@ async fn exhausted_admission_denials_preserve_the_terminal_diagnostic() {
     }
 }
 
+/// Admission 429s carry server-side upgrade metadata at the top level of the
+/// body (relaycast-cloud#251). The SDK must keep it so callers can use the
+/// server's own upgrade decision instead of guessing from the plan.
+#[tokio::test]
+async fn admission_denial_keeps_plan_and_upgrade_details() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method_matcher("POST"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .set_body_json(json!({
+                    "ok": false,
+                    "error": {
+                        "code": "workspace_busy",
+                        "message": "Workspace write capacity is busy; retry with backoff"
+                    },
+                    "error_code": "workspace_busy",
+                    "plan": "free",
+                    "upgrade_available": true,
+                    "upgrade_url": "https://agentrelay.com/pricing"
+                }))
+                .insert_header("Retry-After", "0"),
+        )
+        .expect(3)
+        .mount(&mock_server)
+        .await;
+
+    let err = client_for(&mock_server)
+        .post::<Value>(
+            "/v1/nodes/chief/agents",
+            Some(json!({ "agent_name": "codex" })),
+            None,
+        )
+        .await
+        .expect_err("sustained admission denial must surface to the caller");
+
+    assert_eq!(err.status(), Some(429));
+    assert_eq!(err.code(), Some("workspace_busy"));
+    assert_eq!(err.attempts(), Some(3));
+    let details = err.details().expect("JSON error body is preserved");
+    assert_eq!(details["plan"], json!("free"));
+    assert_eq!(details["upgrade_available"], json!(true));
+    assert_eq!(
+        details["upgrade_url"],
+        json!("https://agentrelay.com/pricing")
+    );
+    assert_eq!(details["error_code"], json!("workspace_busy"));
+    assert_eq!(details["error"]["code"], json!("workspace_busy"));
+}
+
+/// Plain `{ error: { code, message } }` bodies still expose the body, and
+/// SDK-constructed errors carry no details.
+#[tokio::test]
+async fn plain_error_bodies_expose_details_and_sdk_errors_do_not() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method_matcher("GET"))
+        .respond_with(api_error(404, "not_found", "no such agent"))
+        .mount(&mock_server)
+        .await;
+
+    let err = client_for(&mock_server)
+        .request::<Value>(Method::GET, "/v1/agents/ghost", None::<()>, None, None)
+        .await
+        .expect_err("404 is an error");
+    let details = err.details().expect("JSON error body is preserved");
+    assert_eq!(details["error"]["message"], json!("no such agent"));
+    assert!(details.get("upgrade_available").is_none());
+
+    assert!(RelayError::api("x", "y", 400).details().is_none());
+}
+
+/// A non-JSON error body has no parsed details to keep.
+#[tokio::test]
+async fn non_json_error_bodies_have_no_details() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method_matcher("GET"))
+        .respond_with(ResponseTemplate::new(400).set_body_string("not json"))
+        .mount(&mock_server)
+        .await;
+    let err = client_for(&mock_server)
+        .request::<Value>(Method::GET, "/v1/workspace", None::<()>, None, None)
+        .await
+        .expect_err("non-JSON 400 is an error");
+    match err {
+        RelayError::Api {
+            status, details, ..
+        } => {
+            assert_eq!(status, 400);
+            assert!(details.is_none());
+        }
+        other => panic!("expected RelayError::Api, got {other:?}"),
+    }
+}
+
 /// A non-JSON body on the final exhausted attempt (e.g. a bare-text 502 from
 /// a proxy in front of the API) must surface both the real HTTP status and a
 /// bounded, single-line body summary instead of an opaque JSON-parse error.
