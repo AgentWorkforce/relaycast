@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Muse and Devin are accepted by typed agent spawning, API validation, and MCP; Rust registration preserves Muse, Devin, OpenCode, and Grok CLI hints.
 
 ## [10.5.1] - 2026-10-16
 
