@@ -336,6 +336,18 @@ Two different conditions return HTTP 429, and the error code tells you which:
 | `rate_limit_exceeded` | Per-minute request ceiling | Always clears inside the window; `Retry-After` is at most 60 |
 | `plan_limit_exceeded` | Plan API-call quota for the current billing period | Clears only at the period boundary; `Retry-After` reports it |
 
+A workspace's `plan` (returned by `GET /v1/workspace`) sets both limits:
+
+| Plan | Agents | API calls / month | Requests / minute |
+| --- | --- | --- | --- |
+| `free` | 5 | 100,000 | 300 |
+| `connect` | 10 | 3,000,000 | 1,200 |
+| `pro` | 100 | 10,000,000 | 6,000 |
+| `enterprise` | unlimited | unlimited | 30,000 |
+
+`connect` is sized for short-lived collaboration rooms. Self-hosted deployments
+default to `selfhost`, which is unlimited.
+
 Both carry `Retry-After` and `X-RateLimit-Reset`; successful responses carry
 `X-RateLimit-Limit` and `X-RateLimit-Remaining`. `Retry-After` is authoritative
 — a value beyond your retry budget means retrying cannot help, so fail fast
