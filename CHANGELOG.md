@@ -20,6 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Added
 
+- A `connect` workspace plan for short-lived collaboration rooms: 10 agents, 3M API calls and 100k messages per month, 1,200 requests per minute — between `free` and `pro`.
 - `POST /v1/workspace/rotate-key` self-serve workspace-key rotation: the superseded key keeps a bounded `grace_seconds` continuity window (`0` for immediate compromise cutoff), agent/node/observer tokens and sessions are untouched, and deployments whose canonical key is externally managed refuse the route. The TypeScript SDK exposes it as `relay.workspace.rotateKey()`.
 
 ## [10.5.1] - 2026-10-16

@@ -47,7 +47,7 @@ export const WorkspaceSchema = z.object({
   id: z.string(),
   name: z.string(),
   system_prompt: z.string().nullable(),
-  plan: z.enum(['free', 'pro', 'enterprise']),
+  plan: z.enum(['free', 'connect', 'pro', 'enterprise']),
   created_at: z.string(),
   metadata: z.record(z.string(), z.unknown()),
   effective_retention: z.object({
