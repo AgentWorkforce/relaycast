@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `WorkspaceSchema.plan` accepts `connect`.
+- `WorkspaceSchema.plan` accepts `connect` and `selfhost` (the self-host default, which the schema previously rejected).
 - `RotateWorkspaceKeyRequest` / `RotateWorkspaceKeyResponse` wire schemas and the `relaycast_server_workspace_key_rotated` telemetry event.
 
 ## [10.5.0] - 2026-10-16
