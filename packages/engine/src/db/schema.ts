@@ -54,6 +54,14 @@ export const workspaces = sqliteTable(
     id: text('id').primaryKey(),
     name: text('name').notNull(),
     apiKeyHash: text('api_key_hash').notNull().unique(),
+    // Superseded key captured by rotateWorkspaceKey; authenticatable only
+    // while previousApiKeyExpiresAt is in the future. Mirrors the agent-token
+    // previous slot (migration 0035).
+    previousApiKeyHash: text('previous_api_key_hash'),
+    previousApiKeyExpiresAt: integer('previous_api_key_expires_at', { mode: 'timestamp' }),
+    // Monotonic fence for out-of-band key writers so a stale control-plane
+    // repair cannot overwrite a newer rotation (0073).
+    apiKeyGeneration: integer('api_key_generation').notNull().default(0),
     systemPrompt: text('system_prompt'),
     plan: text('plan').notNull().default('free'),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
@@ -70,6 +78,7 @@ export const workspaces = sqliteTable(
   },
   (table) => [
     index('idx_workspaces_expires_at').on(table.expiresAt),
+    index('idx_workspaces_previous_api_key').on(table.previousApiKeyHash),
     check(
       'workspaces_usage_classification_source_check',
       sql`(

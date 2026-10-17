@@ -312,6 +312,21 @@ created with `expires_in_seconds` return `workspace_expired` with HTTP 401 from
 `401 Unauthorized`, which carries no error body. The cutoff is the stored
 deadline, not the moment the background reap deletes the workspace.
 
+### Rotating the workspace key
+
+`POST /v1/workspace/rotate-key` replaces the authenticated workspace's API key
+and returns the replacement exactly once — persist it from the response rather
+than logging or printing it. The superseded key keeps authenticating for
+`grace_seconds` (default 60, at most 3600) so peers and in-flight callers
+survive the cutover; `grace_seconds: 0` is the compromise mode and kills the
+old key on the spot, on reads and mutations alike. Agent, node and observer
+tokens are not affected — rotating the workspace key changes no identity and
+interrupts no session. The route is opt-in and off by default: set
+`allowWorkspaceKeyRotation` in the engine config to enable it. Hosted
+deployments — where a control plane owns the canonical key — leave it unset
+and rotate through that plane, so the route answers
+`workspace_key_rotation_disabled`.
+
 ### Throttling
 
 Two different conditions return HTTP 429, and the error code tells you which:
