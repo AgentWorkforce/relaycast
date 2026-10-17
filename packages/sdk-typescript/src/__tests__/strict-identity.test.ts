@@ -134,6 +134,98 @@ describe('strict identity APIs', () => {
     });
   });
 
+  describe('registerOrRecover', () => {
+    it('returns register result when agent does not exist', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      const created = { id: 'a_1', name: 'Bot', token: 'at_live_new', status: 'online', created_at: '2024-01-01' };
+      mockFetch.mockImplementation(() => mockResponse(created));
+
+      const result = await relay.registerOrRecover({ name: 'Bot', recoveryProof: 'proof-secret' });
+      expect(result).toEqual({ id: 'a_1', name: 'Bot', token: 'at_live_new', status: 'online', createdAt: '2024-01-01' });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('fails closed on name conflict without a recovery proof', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const { RelayError } = await import('../errors.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() =>
+        mockResponse({ code: 'agent_already_exists', message: 'exists' }, false, 409),
+      );
+
+      await expect(relay.registerOrRecover({ name: 'Bot' })).rejects.toBeInstanceOf(RelayError);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('recovers an existing name when a recovery proof is supplied', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch
+        .mockImplementationOnce(() => mockResponse({ code: 'agent_already_exists', message: 'exists' }, false, 409))
+        .mockImplementationOnce(() => mockResponse({ id: 'a_1', name: 'Bot', status: 'online', created_at: '2024-01-01' }))
+        .mockImplementationOnce(() => mockResponse({
+          agent_id: 'a_1', name: 'Bot', token: 'at_live_recovered', audit_id: 'aid_1',
+        }));
+
+      const result = await relay.registerOrRecover({ name: 'Bot', recoveryProof: 'proof-secret' });
+      expect(result).toEqual({ id: 'a_1', name: 'Bot', token: 'at_live_recovered', status: 'online', createdAt: '2024-01-01' });
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+      expect(mockFetch.mock.calls[0]![0]).toBe('https://cast.agentrelay.com/v1/agents');
+      expect(mockFetch.mock.calls[1]![0]).toBe('https://cast.agentrelay.com/v1/agents/Bot');
+      expect(mockFetch.mock.calls[2]![0]).toBe('https://cast.agentrelay.com/v1/agents/Bot/recover');
+      expect(JSON.parse(mockFetch.mock.calls[2]![1].body)).toEqual({
+        expected_agent_id: 'a_1', recovery_proof: 'proof-secret', reason: 'registerOrRecover fallback after name conflict',
+      });
+    });
+
+    it('rethrows non-conflict errors even with a recovery proof', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const { RelayError } = await import('../errors.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() =>
+        mockResponse({ code: 'unauthorized', message: 'bad token' }, false, 401),
+      );
+
+      const err = await relay.registerOrRecover({ name: 'Bot', recoveryProof: 'proof-secret' }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(RelayError);
+      expect((err as any).code).toBe('unauthorized');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('snake_case option key compatibility', () => {
+    it('forwards snake_case option keys (e.g. auto_join_general) to the wire unchanged', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      const created = { id: 'a_1', name: 'Bot', token: 'at_live_new', status: 'online', created_at: '2024-01-01' };
+      mockFetch.mockImplementation(() => mockResponse(created));
+
+      await relay.registerAgent({ name: 'Bot', auto_join_general: false } as any);
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(JSON.parse(init.body)).toEqual({ name: 'Bot', auto_join_general: false });
+    });
+
+    it('forwards camelCase option keys decamelized to the same wire shape', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      const created = { id: 'a_1', name: 'Bot', token: 'at_live_new', status: 'online', created_at: '2024-01-01' };
+      mockFetch.mockImplementation(() => mockResponse(created));
+
+      await relay.registerAgent({ name: 'Bot', autoJoinGeneral: false });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(JSON.parse(init.body)).toEqual({ name: 'Bot', auto_join_general: false });
+    });
+  });
+
   describe('resolveIdentity', () => {
     it('resolves identity after registerAgent', async () => {
       const { RelayCast } = await import('../relay.js');

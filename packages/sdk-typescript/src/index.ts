@@ -51,6 +51,7 @@ export type {
   EnrollRecoveryCredentialInput,
   RecoverAgentInput,
   RegisterAgentInput,
+  RegisterOrRecoverInput,
   RegisterOrRotateInput,
   ResolvedIdentity,
   RevokeAgentTokenInput,
