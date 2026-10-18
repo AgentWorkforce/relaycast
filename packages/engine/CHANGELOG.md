@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Changed
+
+- `PLAN_LIMITS.connect.api_calls` rises from 3,000,000 to 10,000,000 (equal to `pro`), sized for a full 10-seat room polling for its 7-day maximum life.
 
 ## [10.6.1] - 2026-10-18
 
