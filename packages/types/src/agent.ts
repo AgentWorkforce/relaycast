@@ -92,7 +92,7 @@ export type AgentPresenceInfo = z.infer<typeof AgentPresenceInfoSchema>;
 
 // === Spawn/Release (Agent Lifecycle) ===
 
-export const CliTypeSchema = z.enum(['claude', 'codex', 'gemini', 'aider', 'goose', 'opencode', 'grok', 'muse', 'devin']);
+export const CliTypeSchema = z.enum(['claude', 'codex', 'gemini', 'aider', 'goose', 'opencode', 'grok', 'muse', 'devin', 'buzz']);
 export type CliType = z.infer<typeof CliTypeSchema>;
 
 export const SpawnAgentRequestSchema = z.object({

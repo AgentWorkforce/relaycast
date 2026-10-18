@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { CliTypeSchema, SpawnAgentRequestSchema } from '../index.js';
 
-const supportedClis = ['claude', 'codex', 'gemini', 'aider', 'goose', 'opencode', 'grok', 'muse', 'devin'];
+const supportedClis = ['claude', 'codex', 'gemini', 'aider', 'goose', 'opencode', 'grok', 'muse', 'devin', 'buzz'];
 
 describe('spawn CLI types', () => {
   it.each(supportedClis)('accepts %s without changing the request', (cli) => {

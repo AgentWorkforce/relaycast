@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- The typed agent spawn API accepts Buzz as a CLI choice for nodes that provide it.
 
 ## [10.6.1] - 2026-10-18
 
