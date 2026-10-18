@@ -13,6 +13,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - `DELETE /v1/nodes/:name` deletes a node by id (exact id first) or name, returning `{ id, name, deleted, cascaded_actions }`. It refuses an online node (`node_online`) or one hosting actions (`node_has_actions`) unless `force=true`, and returns `node_delete_conflict` when a heartbeat or action registration lands mid-delete.
 
+### Changed
+
+- `PLAN_LIMITS.connect.api_calls` rises from 3,000,000 to 10,000,000 (equal to `pro`), sized for a full 10-seat room polling for its 7-day maximum life.
+
 ## [10.6.1] - 2026-10-18
 
 ### Fixed

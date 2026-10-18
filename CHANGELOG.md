@@ -22,6 +22,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Self-hosted engines now serve `DELETE /v1/nodes/:name`, so `relay.nodes.delete()` can prune dead nodes from a self-hosted roster instead of returning 404.
 
+### Changed
+
+- The `connect` plan's monthly `api_calls` rises from 3,000,000 to 10,000,000, so a full 10-seat room polling for its whole 7-day life stays within quota.
+
 ## [10.6.1] - 2026-10-18
 
 ### Fixed

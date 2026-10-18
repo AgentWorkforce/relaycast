@@ -13,7 +13,7 @@ export const PLAN_LIMITS: Record<string, PlanLimits> = {
   // Short-lived collaboration rooms (Relay Connect): a handful of seats that
   // poll their inbox continuously, so api_calls dominates while messages stay
   // low. Sized for a two-seat room polling every few seconds for a full month.
-  connect: { messages: 100_000, agents: 10, file_bytes: 1024 * 1024 * 1024, api_calls: 3_000_000, rate_per_min: 1200 },
+  connect: { messages: 100_000, agents: 10, file_bytes: 1024 * 1024 * 1024, api_calls: 10_000_000, rate_per_min: 1200 },
   pro: { messages: 1_000_000, agents: 100, file_bytes: 50 * 1024 * 1024 * 1024, api_calls: 10_000_000, rate_per_min: 6000 },
   enterprise: { messages: Infinity, agents: Infinity, file_bytes: 500 * 1024 * 1024 * 1024, api_calls: Infinity, rate_per_min: 30000 },
   selfhost: { messages: Infinity, agents: Infinity, file_bytes: Infinity, api_calls: Infinity, rate_per_min: 30000 },
