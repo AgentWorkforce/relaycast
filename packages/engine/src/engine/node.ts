@@ -50,6 +50,7 @@ import {
 } from './nodeProvider.js';
 import { serializeNodeOp } from './nodeLock.js';
 import {
+  ACTION_DISPATCH_TIMEOUT_MS,
   completeNodeInvocation,
   dispatchCapacitySpawn,
   rescheduleInvocationsForLostNode,
@@ -2578,6 +2579,52 @@ function requiresSpawnReadiness(input: unknown): boolean {
   return spawnReadinessSchema.safeParse(input).success;
 }
 
+/**
+ * The ids of `candidates` this node is releasing: an open built-in release
+ * dispatched to this node and provider names each one (and its immutable id,
+ * when the release carries one). A node stops listing an agent as soon as it
+ * has ended it, before its release result arrives, so the missing sweep must
+ * leave that binding to the release completion, which deactivates it and
+ * tombstones the agent atomically. Deactivating it first makes the completion
+ * fail (`agent_identity_mismatch`) although the agent did end. A release that
+ * has waited longer than the dispatch timeout no longer shields its agent.
+ * One indexed lookup (`dispatched_node_id`), however many agents are missing.
+ */
+async function releasingAgentIds(
+  db: Db,
+  workspaceId: string,
+  nodeId: string,
+  providerName: string,
+  candidates: ReadonlyArray<{ id: string; name: string }>,
+): Promise<Set<string>> {
+  const cutoff = new Date(Date.now() - ACTION_DISPATCH_TIMEOUT_MS);
+  const releases = await db
+    .select({ input: actionInvocations.input })
+    .from(actionInvocations)
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.dispatchedNodeId, nodeId),
+      eq(actionInvocations.dispatchedProvider, providerName),
+      eq(actionInvocations.actionName, 'release'),
+      eq(actionInvocations.invocationOrigin, 'builtin'),
+      inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked']),
+      or(
+        gt(actionInvocations.dispatchedAt, cutoff),
+        and(isNull(actionInvocations.dispatchedAt), gt(actionInvocations.createdAt, cutoff)),
+      ),
+    ));
+  const releasing = new Set<string>();
+  for (const { input } of releases) {
+    const release = input && typeof input === 'object' && !Array.isArray(input)
+      ? input as Record<string, unknown>
+      : {};
+    const agent = candidates.find((candidate) => candidate.name === release.name
+      && (release.expected_agent_id === undefined || release.expected_agent_id === candidate.id));
+    if (agent) releasing.add(agent.id);
+  }
+  return releasing;
+}
+
 export async function reconcileInventory(
   db: Db,
   registry: NodeConnectionRegistry,
@@ -2869,7 +2916,11 @@ export async function reconcileInventory(
       eq(agents.providerName, providerName),
       ne(agents.status, RELEASED_AGENT_STATUS),
     ));
-  const missingAgents = nodeAgents.filter((agent) => !reportedNames.has(agent.name));
+  const unreported = nodeAgents.filter((agent) => !reportedNames.has(agent.name));
+  const releasing = unreported.length > 0
+    ? await releasingAgentIds(db, workspaceId, nodeId, providerName, unreported)
+    : new Set<string>();
+  const missingAgents = unreported.filter((agent) => !releasing.has(agent.id));
   const missing = missingAgents.map((agent) => agent.id);
   if (missing.length > 0) {
     const missingAt = new Date();

@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- A node's exact release no longer fails with `agent_identity_mismatch` when the node's inventory stops listing the ended agent before its release result arrives; the release completes and tombstones the agent.
 
 ## [10.6.0] - 2026-10-18
 
