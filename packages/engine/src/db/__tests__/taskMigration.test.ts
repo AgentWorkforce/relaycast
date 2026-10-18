@@ -36,6 +36,8 @@ it('upgrades existing actions and results additively, preserving rows and every 
       '0069_nodes_online_liveness_index.sql',
       '0070_agent_liveness_status.sql',
       '0071_node_liveness_revision.sql',
+      '0072_agent_token_expiry.sql',
+      '0073_run_scoped_tokens.sql',
     ]);
     for (const table of before) {
       const columns = db.pragma(`table_info(${table.name})`) as { name: string }[];

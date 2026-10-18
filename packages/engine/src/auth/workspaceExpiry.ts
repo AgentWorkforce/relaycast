@@ -1,6 +1,7 @@
 import type { AuthProvider, AuthRequire, AuthResult, Workspace } from '../ports/auth.js';
 import type { EngineDb } from '../ports/database.js';
 import { isAgentTokenExpired } from './agentTokenExpiry.js';
+import { isRunTokenExpired } from '../engine/runToken.js';
 
 /** Error code every credential path returns for a workspace past `expires_at`. */
 export const WORKSPACE_EXPIRED_CODE = 'workspace_expired';
@@ -47,6 +48,9 @@ export async function authenticateUnexpired(
   if (isWorkspaceExpired(result.workspace)) return workspaceExpiredAuthResult();
   if (result.agent && isAgentTokenExpired(result.agent)) {
     return { ok: false, status: 401, code: 'agent_token_invalid', message: 'Invalid agent token' };
+  }
+  if (result.runToken && isRunTokenExpired(result.runToken)) {
+    return { ok: false, status: 401, code: 'run_token_invalid', message: 'Invalid run token' };
   }
   return result;
 }

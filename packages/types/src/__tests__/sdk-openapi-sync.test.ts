@@ -59,6 +59,10 @@ const NON_SDK_OPENAPI_PATHS = new Set([
   // Node-token self lookup: a service handed a node token (Cloud's node claim)
   // proves which node it is for. Agents never call it.
   '/v1/node/me',
+  // Run-scoped credential control: Cloud mints and revokes run tokens
+  // server-to-server with the workspace key. Agents never call these.
+  '/v1/runs/{param}/tokens',
+  '/v1/runs/{param}/authority',
 ]);
 
 const CORE_SDK_PATHS = new Set([

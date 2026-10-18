@@ -2,6 +2,7 @@ import { and, eq, gt } from 'drizzle-orm';
 import { workspaces, agents, nodes } from '../db/schema.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { getActiveObserverTokenByHash } from '../engine/observerToken.js';
+import { getActiveRunTokenByHash, isRunAuthorityRevoked } from '../engine/runToken.js';
 import type { AuthProvider, AuthResult, AuthRequire } from '../ports/auth.js';
 import type { EngineDb } from '../ports/database.js';
 import { parseAuthToken, validateTokenRequirement } from './tokenKind.js';
@@ -87,6 +88,11 @@ export class SqliteApiKeyAuthProvider implements AuthProvider {
       }
       if (!agent) return unauthorized('Invalid agent token', 'agent_token_invalid');
       if (isAgentTokenExpired(agent)) return unauthorized('Invalid agent token', 'agent_token_invalid');
+      // Run-stamped credentials die with their run, including any token a
+      // recovery or takeover re-issued after the revoke.
+      if (agent.runId && await isRunAuthorityRevoked(db, agent.workspaceId, agent.runId)) {
+        return unauthorized('Invalid agent token', 'agent_token_invalid');
+      }
       const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, agent.workspaceId));
       if (!workspace) return unauthorized('Workspace not found');
       return resolved(workspace, { agent });
@@ -95,6 +101,9 @@ export class SqliteApiKeyAuthProvider implements AuthProvider {
     if (parsedToken.kind === 'node') {
       const [node] = await db.select().from(nodes).where(eq(nodes.tokenHash, hash));
       if (!node) return unauthorized('Invalid node token', 'node_token_invalid');
+      if (node.runId && await isRunAuthorityRevoked(db, node.workspaceId, node.runId)) {
+        return unauthorized('Invalid node token', 'node_token_invalid');
+      }
       const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, node.workspaceId));
       if (!workspace) return unauthorized('Workspace not found');
       return resolved(workspace, { node });
@@ -106,6 +115,14 @@ export class SqliteApiKeyAuthProvider implements AuthProvider {
       const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, observerToken.workspaceId));
       if (!workspace) return unauthorized('Workspace not found');
       return resolved(workspace, { observerToken });
+    }
+
+    if (parsedToken.kind === 'run') {
+      const runToken = await getActiveRunTokenByHash(db, hash);
+      if (!runToken) return unauthorized('Invalid run token', 'run_token_invalid');
+      const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, runToken.workspaceId));
+      if (!workspace) return unauthorized('Workspace not found');
+      return resolved(workspace, { runToken });
     }
 
     return unauthorized('Invalid token format');

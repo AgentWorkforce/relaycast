@@ -4,6 +4,7 @@ import { getAuthTokenKind } from '../auth/tokenKind.js';
 import { getNodeByTokenHash } from './node.js';
 import { hasObserverScope } from './observerToken.js';
 import { getWorkspaceExpiry } from './workspace.js';
+import { isRunAuthorityRevoked } from './runToken.js';
 import {
   WORKSPACE_EXPIRED_CODE,
   WORKSPACE_EXPIRED_MESSAGE,
@@ -93,6 +94,10 @@ export async function authenticateRealtimeWs(deps: WsAuthDeps, token: string): P
     return invalidWsToken('Node token cannot open the workspace stream');
   }
 
+  if (tokenKind === 'run') {
+    return invalidWsToken('Run token cannot open the workspace stream');
+  }
+
   if (tokenKind === 'observer') {
     const result = await authenticateUnexpired(deps.auth, { token, require: 'observer', db: deps.db });
     if (!result.ok) {
@@ -120,6 +125,10 @@ export async function authenticateNodeWs(deps: WsAuthDeps, token: string): Promi
   const hash = await deps.auth.hashToken(token);
   const node = await getNodeByTokenHash(deps.db, hash);
   if (!node) {
+    return invalidWsToken('Invalid node token');
+  }
+  // A node enrolled by a run token cannot reconnect once the run is revoked.
+  if (node.runId && await isRunAuthorityRevoked(deps.db, node.workspaceId, node.runId)) {
     return invalidWsToken('Invalid node token');
   }
 

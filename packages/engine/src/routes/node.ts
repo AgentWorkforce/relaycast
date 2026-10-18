@@ -2,7 +2,7 @@ import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { FleetNodeTagSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
-import { requireAuth, requireNodeToken, requireWorkspaceRead, requireWorkspaceKey } from '../middleware/auth.js';
+import { requireAuth, requireNodeToken, requireWorkspaceRead, requireWorkspaceKey, requireWorkspaceKeyOrRunToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { parseIdempotencyKey } from '../middleware/idempotency.js';
 import { asCodedError, errorResponse } from '../lib/httpError.js';
@@ -135,9 +135,10 @@ function observerAgentIdsFilter(observer: ObserverContext): string[] | undefined
   return normalizeObserverFilters(observer.filters).agent_ids;
 }
 
-// POST /v1/nodes - workspace-key enrollment; established rows also require
-// proof of the current node token.
-nodeRoutes.post('/nodes', requireWorkspaceKey, rateLimit, async (c) => {
+// POST /v1/nodes - workspace-key or run-token enrollment; established rows
+// also require proof of the current node token. A run token stamps new rows
+// with its run_id and may only re-enroll rows of the same run.
+nodeRoutes.post('/nodes', requireWorkspaceKeyOrRunToken, rateLimit, async (c) => {
   try {
     const parsed = await parseJsonBody(c, createNodeSchema, 'invalid node body');
     if (!parsed.ok) {
@@ -189,6 +190,7 @@ async function enrollNode(c: Context<AppEnv>, data: z.infer<typeof createNodeSch
       c.get('workspace').id,
       data,
       expectedTokenHash,
+      c.get('runToken')?.runId,
     );
     const kind = data.kind ?? (existing?.kind as z.infer<typeof nodeKindSchema> | undefined) ?? 'ws';
     const role = data.role
@@ -236,7 +238,7 @@ async function enrollNode(c: Context<AppEnv>, data: z.infer<typeof createNodeSch
       kind,
       role,
       delivery: delivery && !('success' in delivery) ? delivery : null,
-    }, { expectedTokenHash, rotationRecovery });
+    }, { expectedTokenHash, rotationRecovery, runId: c.get('runToken')?.runId });
     return jsonCreated(c, result);
   } catch (err: unknown) {
     return errorResponse(c, err);

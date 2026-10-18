@@ -1,15 +1,20 @@
-import type { workspaces, agents, nodes, observerTokens } from '../db/schema.js';
+import type { workspaces, agents, nodes, observerTokens, runTokens } from '../db/schema.js';
 import type { EngineDb } from './database.js';
 
 export type Workspace = typeof workspaces.$inferSelect;
 export type Agent = typeof agents.$inferSelect;
 export type Node = typeof nodes.$inferSelect;
 export type ObserverToken = typeof observerTokens.$inferSelect;
+export type RunToken = typeof runTokens.$inferSelect;
 
-export type AuthRequire = 'workspace' | 'agent' | 'node' | 'observer' | 'any' | 'sender';
+/**
+ * `run` / `workspace_or_run` admit run-scoped `rt_live_` tokens. Every other
+ * requirement rejects them, so a run token only reaches routes that opt in.
+ */
+export type AuthRequire = 'workspace' | 'agent' | 'node' | 'observer' | 'any' | 'sender' | 'run' | 'workspace_or_run';
 
 export type AuthResult =
-  | { ok: true; workspace: Workspace; agent?: Agent; node?: Node; observerToken?: ObserverToken }
+  | { ok: true; workspace: Workspace; agent?: Agent; node?: Node; observerToken?: ObserverToken; runToken?: RunToken }
   | { ok: false; status: number; code: string; message: string };
 
 /**

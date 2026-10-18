@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
 import { AGENT_TOKEN_HASH_PATTERN, AgentTypeSchema, CliTypeSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
-import { requireWorkspaceKey, requireAuth, requireAgentToken, requireSender, requireWorkspaceRead } from '../middleware/auth.js';
+import { requireWorkspaceKey, requireWorkspaceKeyOrRunToken, requireAuth, requireAgentToken, requireSender, requireWorkspaceRead } from '../middleware/auth.js';
 import {
   authenticateUnexpired,
   isWorkspaceExpired,
@@ -274,10 +274,11 @@ agentRoutes.post(
   },
 );
 
-// POST /v1/agents - register agent (workspace key required)
+// POST /v1/agents - register agent (workspace key, or a run token that stamps
+// the agent with its run_id)
 agentRoutes.post(
   '/agents',
-  requireWorkspaceKey,
+  requireWorkspaceKeyOrRunToken,
   rateLimit,
   async (c) => {
     try {
@@ -314,6 +315,7 @@ agentRoutes.post(
         autoJoinGeneral,
         recoveryProofHash,
         workUnitId,
+        runId: c.get('runToken')?.runId,
       });
       if (skills?.length) {
         await directoryEngine.syncSourceAgentDirectoryEntry(db, workspace.id, {
@@ -759,17 +761,20 @@ agentRoutes.patch(
   },
 );
 
-// DELETE /v1/agents/:name - delete agent
+// DELETE /v1/agents/:name - delete agent (workspace key, or a run token for
+// agents of the same run only)
 agentRoutes.delete(
   '/agents/:name',
-  requireWorkspaceKey,
+  requireWorkspaceKeyOrRunToken,
   rateLimit,
   async (c) => {
     try {
       const db = c.get('db');
       const workspace = c.get('workspace');
       const name = c.req.param('name');
-      const deleted = await agentEngine.deleteAgent(db, workspace.id, name);
+      const deleted = await agentEngine.deleteAgent(db, workspace.id, name, {
+        runId: c.get('runToken')?.runId,
+      });
       if (!deleted) {
         return agentNotFound(c, name);
       }

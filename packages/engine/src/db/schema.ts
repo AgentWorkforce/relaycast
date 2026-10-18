@@ -125,6 +125,9 @@ export const agents = sqliteTable(
     // migration 0035 for the concurrency defect this closes (relay#1542).
     previousTokenHash: text('previous_token_hash'),
     previousTokenExpiresAt: integer('previous_token_expires_at', { mode: 'timestamp' }),
+    // Set when a run token (`rt_live_`) created this agent; revoking the run
+    // authority revokes this agent's credentials (migration 0073).
+    runId: text('run_id'),
     status: text('status').notNull().default('active'),
     handle: text('handle'),
     persona: text('persona'),
@@ -262,6 +265,8 @@ export const nodes = sqliteTable(
     previousTokenExpiresAt: integer('previous_token_expires_at', { mode: 'timestamp' }),
     rotationIdempotencyKeyHash: text('rotation_idempotency_key_hash'),
     rotationRequestDigest: text('rotation_request_digest'),
+    // Set when a run token (`rt_live_`) enrolled this node (migration 0073).
+    runId: text('run_id'),
     // Physical machine grouping in fleet views and a placement input; never a
     // capability scope. Set at enrollment when the caller supplies it, and by a
     // provider on register; null when neither reports one.
@@ -381,6 +386,39 @@ export const observerTokens = sqliteTable(
     index('idx_observer_tokens_workspace_status').on(table.workspaceId, table.status),
     index('idx_observer_tokens_expires_at').on(table.expiresAt),
   ],
+);
+
+// ============================================
+// Run authorities and run tokens (`rt_live_`)
+// ============================================
+export const runAuthorities = sqliteTable(
+  'run_authorities',
+  {
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    runId: text('run_id').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+    // Permanent once set: a revoked run never mints again.
+    revokedAt: integer('revoked_at', { mode: 'timestamp' }),
+  },
+  (table) => [primaryKey({ columns: [table.workspaceId, table.runId] })],
+);
+
+export const runTokens = sqliteTable(
+  'run_tokens',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    runId: text('run_id').notNull(),
+    tokenHash: text('token_hash').notNull().unique(),
+    expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
+    revokedAt: integer('revoked_at', { mode: 'timestamp' }),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => [index('idx_run_tokens_workspace_run').on(table.workspaceId, table.runId)],
 );
 
 // ============================================

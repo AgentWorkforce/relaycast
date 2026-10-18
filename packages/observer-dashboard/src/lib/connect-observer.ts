@@ -3,7 +3,7 @@ import type { DmMessage, WorkspaceDmConversation } from '@relaycast/sdk';
 const DM_PAGE_SIZE = 100;
 const MAX_BROWSER_TIMEOUT_MS = 2_147_000_000;
 
-const CREDENTIAL_PATTERN = /\b(?:rk_live|at_live|nt_live|ot_live|wh_live)_[A-Za-z0-9_-]+\b/g;
+const CREDENTIAL_PATTERN = /\b(?:rk_live|at_live|nt_live|ot_live|rt_live|wh_live)_[A-Za-z0-9_-]+\b/g;
 const CONNECT_INVITE_PATTERN =
   /https?:\/\/(?:www\.)?agentrelay\.com\/connect\/[A-Za-z0-9_-]+(?:\.json|\.md)?(?:\?[^\s]*)?/gi;
 

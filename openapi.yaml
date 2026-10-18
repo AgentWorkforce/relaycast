@@ -153,6 +153,15 @@ components:
       type: http
       scheme: bearer
       description: Scoped observer token (ot_live_*)
+    runToken:
+      type: http
+      scheme: bearer
+      description: >-
+        Run-scoped token (rt_live_*), minted server-side by `POST /runs/{runId}/tokens`.
+        Accepted only by `POST /agents` (stamps run_id), `DELETE /agents/{name}`
+        (agents of the same run only; others return 404), and `POST /nodes`
+        (stamps run_id; only same-run rows may be re-enrolled). Every other route
+        rejects it with 401. Expires after 15 minutes by default (1 hour cap).
     webhookToken:
       type: http
       scheme: bearer
@@ -2448,6 +2457,7 @@ paths:
         - Agents
       security:
         - workspaceKey: []
+        - runToken: []
       requestBody:
         required: true
         content:
@@ -2737,6 +2747,7 @@ paths:
         - Agents
       security:
         - workspaceKey: []
+        - runToken: []
       parameters:
         - name: name
           in: path
@@ -5321,6 +5332,7 @@ paths:
         - Nodes
       security:
         - workspaceKey: []
+        - runToken: []
       parameters:
         - name: X-Relaycast-Node-Token
           in: header
@@ -5502,6 +5514,140 @@ paths:
                         type: string
         '401':
           description: Missing, invalid or non-node token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /runs/{runId}/tokens:
+    post:
+      summary: Mint a run-scoped token
+      description: >-
+        Server-to-server. Issues a short-lived run token (`rt_live_*`) for the
+        run authority identified by `runId`, creating the authority on first
+        mint. Calling again while the run is active issues a fresh token for the
+        same authority; this is how the holder refreshes. Only the token hash is
+        stored. `ttl_seconds` defaults to 900 and is capped at 3600. A revoked
+        run never mints again (410 `run_authority_revoked`).
+      tags:
+        - Runs
+      security:
+        - workspaceKey: []
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ttl_seconds:
+                  type: integer
+                  minimum: 60
+                  description: Requested lifetime in seconds. Defaults to 900; values above 3600 are capped at 3600.
+      responses:
+        '201':
+          description: Run token issued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, data]
+                properties:
+                  ok:
+                    type: boolean
+                    enum: [true]
+                  data:
+                    type: object
+                    required: [token, token_expires_at, run_id]
+                    properties:
+                      token:
+                        type: string
+                        description: Run token (`rt_live_*`). Returned once; never logged.
+                      token_expires_at:
+                        type: string
+                        format: date-time
+                      run_id:
+                        type: string
+        '400':
+          description: Invalid run id or ttl_seconds
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or non-workspace credential
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '410':
+          description: The run authority was revoked (`run_authority_revoked`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /runs/{runId}/authority:
+    delete:
+      summary: Revoke a run authority
+      description: >-
+        Server-to-server, idempotent, and permanent. Revokes every run token for
+        the run and every agent token and node token created under it (agents
+        registered or nodes enrolled with the run token, and agents a run node
+        registers), and force-closes the run's live node connections. Revoking
+        an unknown run records a revoked authority so the run id can never mint.
+        Repeating the call returns the original `revoked_at` with zero counts.
+      tags:
+        - Runs
+      security:
+        - workspaceKey: []
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      responses:
+        '200':
+          description: Run authority revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, data]
+                properties:
+                  ok:
+                    type: boolean
+                    enum: [true]
+                  data:
+                    type: object
+                    required: [run_id, revoked_at, run_tokens_revoked, agents_revoked, nodes_revoked]
+                    properties:
+                      run_id:
+                        type: string
+                      revoked_at:
+                        type: string
+                        format: date-time
+                      run_tokens_revoked:
+                        type: integer
+                      agents_revoked:
+                        type: integer
+                      nodes_revoked:
+                        type: integer
+        '400':
+          description: Invalid run id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or non-workspace credential
           content:
             application/json:
               schema:
