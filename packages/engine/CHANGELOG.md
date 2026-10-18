@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Changed
+
+- `PLAN_LIMITS.connect.api_calls` rises from 3,000,000 to 8,000,000, so a full eight-seat collaboration room polling for its 30-day maximum lifetime stays inside its quota.
 
 ## [10.6.1] - 2026-10-18
 

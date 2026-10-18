@@ -346,7 +346,7 @@ A workspace's `plan` (returned by `GET /v1/workspace`) sets both limits:
 | Plan | Agents | API calls / month | Requests / minute |
 | --- | --- | --- | --- |
 | `free` | 5 | 100,000 | 300 |
-| `connect` | 10 | 3,000,000 | 1,200 |
+| `connect` | 10 | 8,000,000 | 1,200 |
 | `pro` | 100 | 10,000,000 | 6,000 |
 | `enterprise` | unlimited | unlimited | 30,000 |
 
