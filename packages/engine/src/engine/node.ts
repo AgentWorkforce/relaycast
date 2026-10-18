@@ -54,7 +54,6 @@ import {
   completeNodeInvocation,
   dispatchCapacitySpawn,
   emitFailedInvocationEffects,
-  failOpenInvocationRows,
   rescheduleInvocationsForLostNode,
   rescheduleNodeInvocation,
 } from './action.js';
@@ -2105,9 +2104,9 @@ export type DeleteNodeResult =
  *  - the unforced DELETE matches only the liveness epoch the checks (or the
  *    claim) observed, with no hosted action, so a heartbeat, registration or
  *    action registration landing in between leaves the row in place.
- * An open invocation that is still bound to the node or one of its actions
- * once the row goes has nothing left to complete it, so it fails with
- * `node_deleted` in the same atomic step as the delete, as deleteAction does.
+ * The delete itself is one atomic write group: open invocations still bound
+ * to the node or its actions fail with `node_deleted` (as deleteAction does),
+ * agents still located on it lose liveness, and its actions and row go.
  */
 export async function deleteNode(
   db: Db,
@@ -2150,52 +2149,64 @@ export async function deleteNode(
   }
 
   const thisNode = and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, node.id));
-  const unchangedSinceChecks = and(
-    ne(nodes.status, 'online'),
-    eq(nodes.livenessRevision, epoch.livenessRevision),
-    epoch.lastHeartbeatAt === null
-      ? isNull(nodes.lastHeartbeatAt)
-      : eq(nodes.lastHeartbeatAt, epoch.lastHeartbeatAt),
-  );
-  const outcome = await runAtomic(db, async (tx) => {
-    const actionIds = (await tx.select({ id: actions.id }).from(actions).where(hostedActions)).map((row) => row.id);
-    // Read before the delete: its FKs clear both references.
-    const strandedIds = (await tx
-      .select({ id: actionInvocations.id })
-      .from(actionInvocations)
+  const deletable = opts.force
+    ? thisNode
+    : and(
+        thisNode,
+        ne(nodes.status, 'online'),
+        eq(nodes.livenessRevision, epoch.livenessRevision),
+        epoch.lastHeartbeatAt === null
+          ? isNull(nodes.lastHeartbeatAt)
+          : eq(nodes.lastHeartbeatAt, epoch.lastHeartbeatAt),
+        notExists(db.select({ id: actions.id }).from(actions).where(hostedActions)),
+      );
+  // Every statement below is conditioned on the node DELETE still matching,
+  // and the group commits as one unit (a transaction, or a D1 batch), so a
+  // conflict leaves no partial cleanup and a commit leaves no open reference
+  // the FKs have already erased.
+  const nodeStillDeletable = exists(db.select({ id: nodes.id }).from(nodes).where(deletable));
+  const lostAt = new Date();
+  const results = await runAtomicWrites(db, (w) => [
+    // Open work bound to the node or one of its actions has nothing left to
+    // complete it. Runs first, while both references are still set.
+    w.update(actionInvocations)
+      .set({ status: 'failed', error: 'node_deleted', completedAt: lostAt, spawnReservedAt: null })
       .where(and(
         eq(actionInvocations.workspaceId, workspaceId),
         inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked']),
-        actionIds.length > 0
-          ? or(eq(actionInvocations.dispatchedNodeId, node.id), inArray(actionInvocations.actionId, actionIds))
-          : eq(actionInvocations.dispatchedNodeId, node.id),
-      ))).map((row) => row.id);
+        or(
+          eq(actionInvocations.dispatchedNodeId, node.id),
+          inArray(actionInvocations.actionId, w.select({ id: actions.id }).from(actions).where(hostedActions)),
+        ),
+        nodeStillDeletable,
+      ))
+      .returning(),
+    // An agent bound to an offline node is still active; losing the node's
+    // row would leave it active with no route.
+    w.update(agents)
+      .set({ ...agentLivenessLoss(), lastSeen: lostAt })
+      .where(and(
+        eq(agents.workspaceId, workspaceId),
+        eq(agents.locationNodeId, node.id),
+        ne(agents.status, 'offline'),
+        ne(agents.status, RELEASED_AGENT_STATUS),
+        nodeStillDeletable,
+      )),
     // Deleted explicitly rather than by cascade so the count reports the rows
     // actually removed.
-    const removedActions = opts.force
-      ? await tx.delete(actions).where(hostedActions).returning({ id: actions.id })
-      : [];
-    const deleted = await tx
-      .delete(nodes)
-      .where(opts.force
-        ? thisNode
-        : and(
-            thisNode,
-            unchangedSinceChecks,
-            notExists(tx.select({ id: actions.id }).from(actions).where(hostedActions)),
-          ))
-      .returning({ id: nodes.id });
-    if (deleted.length === 0) return { deleted: false as const };
-    const failed = await failOpenInvocationRows(tx, workspaceId, strandedIds, 'node_deleted');
-    return { deleted: true as const, removedActions: removedActions.length, failed };
-  });
+    w.delete(actions).where(and(hostedActions, nodeStillDeletable)).returning({ id: actions.id }),
+    w.delete(nodes).where(deletable).returning({ id: nodes.id }),
+  ], { requireAtomic: true });
+  const [failed, , removedActions, deleted] = results as [
+    Array<typeof actionInvocations.$inferSelect>, unknown, Array<{ id: string }>, Array<{ id: string }>,
+  ];
 
-  if (!outcome.deleted) {
+  if (deleted.length === 0) {
     const stillThere = await getNodeById(db, workspaceId, node.id);
     return { ok: false, code: stillThere ? 'node_delete_conflict' : 'node_not_found' };
   }
-  await emitFailedInvocationEffects(deps, workspaceId, outcome.failed);
-  return { ok: true, id: node.id, name: node.name, cascadedActions: outcome.removedActions };
+  await emitFailedInvocationEffects(deps, workspaceId, failed);
+  return { ok: true, id: node.id, name: node.name, cascadedActions: removedActions.length };
 }
 
 export async function listNodeAgents(db: Db, workspaceId: string, nodeName: string) {

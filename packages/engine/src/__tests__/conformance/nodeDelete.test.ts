@@ -278,4 +278,56 @@ describe('DELETE /v1/nodes/:name', () => {
     const [inv] = await db().select().from(actionInvocations).where(eq(actionInvocations.id, 'inv_pinned'));
     expect(inv).toMatchObject({ status: 'failed', error: 'node_deleted', dispatchedNodeId: null });
   });
+
+  it('takes an agent bound to an already-offline node offline', async () => {
+    await enroll('node_cold', 'cold');
+    const agent = await registerAgent(stack.app, ws.workspaceKey, 'cold-worker');
+    await db().update(agents)
+      .set({ status: 'active', lastSeen: new Date(), locationNodeId: 'node_cold' })
+      .where(eq(agents.id, agent.agentId));
+    expect((await nodeRow('node_cold')).status).toBe('offline');
+
+    expect((await deleteNode('cold')).status).toBe(200);
+    const [after] = await db().select().from(agents).where(eq(agents.id, agent.agentId));
+    expect(after).toMatchObject({ status: 'offline', locationNodeId: null });
+  });
+
+  it('leaves agents and invocations untouched when the delete no longer matches', async () => {
+    await enroll('node_kept', 'kept');
+    const agent = await registerAgent(stack.app, ws.workspaceKey, 'kept-worker');
+    await db().update(agents)
+      .set({ status: 'active', locationNodeId: 'node_kept' })
+      .where(eq(agents.id, agent.agentId));
+    await db().insert(actionInvocations).values({
+      id: 'inv_kept', workspaceId: ws.workspaceId, actionName: 'echo', status: 'dispatched',
+      handlerNodeId: 'node_kept', dispatchedNodeId: 'node_kept',
+    });
+    // An action registered after the checks: the guarded group must not run.
+    const realDb = db();
+    let registered = false;
+    const racingDb = new Proxy(realDb, {
+      get(target, prop, receiver) {
+        const value = Reflect.get(target, prop, receiver);
+        if ((prop === 'withTransaction' || prop === 'batch') && typeof value === 'function' && !registered) {
+          return async (...args: unknown[]) => {
+            registered = true;
+            await target.insert(actions).values({
+              id: 'action_late', workspaceId: ws.workspaceId, name: 'late', description: 'late', handlerNodeId: 'node_kept',
+            });
+            return (value as (...a: unknown[]) => unknown).apply(target, args);
+          };
+        }
+        return value;
+      },
+    });
+
+    const result = await deleteNodeById(racingDb, stack.runtime.deps, ws.workspaceId, 'node_kept');
+    expect(registered).toBe(true);
+    expect(result).toEqual({ ok: false, code: 'node_delete_conflict' });
+    expect(await nodeRow('node_kept')).toBeDefined();
+    const [kept] = await db().select().from(agents).where(eq(agents.id, agent.agentId));
+    expect(kept).toMatchObject({ status: 'active', locationNodeId: 'node_kept' });
+    const [inv] = await db().select().from(actionInvocations).where(eq(actionInvocations.id, 'inv_kept'));
+    expect(inv.status).toBe('dispatched');
+  });
 });

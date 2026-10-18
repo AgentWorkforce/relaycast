@@ -917,7 +917,7 @@ async function failNeverDispatchedInvocation(
  * enclosing transaction commits). A spawn invocation holding a native node
  * reservation releases that capacity, mirroring `completeNodeInvocation`.
  */
-export async function failOpenInvocationRows(
+async function failOpenInvocationRows(
   db: Db,
   workspaceId: string,
   invocationIds: string[],
