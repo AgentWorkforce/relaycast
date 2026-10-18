@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Changed
+
+- The `connect` plan allows 8M API calls a month (was 3M), enough for a full collaboration room over its maximum lifetime.
 
 ## [10.6.1] - 2026-10-18
 
