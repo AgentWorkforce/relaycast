@@ -2086,56 +2086,101 @@ export type DeleteNodeResult =
   | { ok: false; code: 'node_not_found' | 'node_online' | 'node_has_actions' | 'node_delete_conflict' };
 
 /**
- * Delete one node by id (exact id wins) or name. Its FKs cascade the node's
- * bindings, providers and hosted actions and clear agent, delivery and
- * invocation references to it.
+ * Delete one node by its resolved id. Callers resolve a path's id-or-name
+ * once, before taking the node lock; looking the name up again here could
+ * land on a different node whose name equals this id after a concurrent
+ * delete.
  *
  * Unforced, an online node or one hosting actions is refused, and the same
  * guards ride the DELETE itself: a heartbeat or action registration landing
  * after the checks turns the delete into `node_delete_conflict` rather than
  * dropping newly live state. runAtomic is not isolated on every adapter, so
- * one statement is the only boundary that holds everywhere.
+ * the DELETE's own predicate is the only boundary that holds everywhere.
+ *
+ * Before the row goes, the node is settled offline exactly as a lost
+ * connection would be: hosted agents lose liveness and open invocations are
+ * rescheduled while the node and its actions still exist to route them. An
+ * invocation that still cannot move (accepted by a provider, pinned to the
+ * node) is failed once the delete commits, since nothing can finish it.
+ * FKs then cascade bindings, providers and hosted actions.
  */
 export async function deleteNode(
   db: Db,
+  registry: NodeConnectionRegistry,
   workspaceId: string,
-  idOrName: string,
-  opts: { force?: boolean; isConnected?: (nodeId: string) => boolean } = {},
+  nodeId: string,
+  opts: { force?: boolean } = {},
 ): Promise<DeleteNodeResult> {
-  const node = await getNodeById(db, workspaceId, idOrName) ?? await getNodeByName(db, workspaceId, idOrName);
+  const node = await getNodeById(db, workspaceId, nodeId);
   if (!node) return { ok: false, code: 'node_not_found' };
 
   const now = Date.now();
-  // Stricter than isNodeLive: a heartbeat skewed into the future may belong to
-  // a running host, so it counts as online here.
+  const hostedActions = and(eq(actions.workspaceId, workspaceId), eq(actions.handlerNodeId, node.id));
+  if (!opts.force) {
+    const heartbeat = node.lastHeartbeatAt?.getTime();
+    if (
+      isNodeLive(node, now)
+      // A heartbeat skewed into the future may belong to a running host.
+      || (heartbeat !== undefined && heartbeat > now)
+      || registry.isNodeConnected(workspaceId, node.id)
+    ) {
+      return { ok: false, code: 'node_online' };
+    }
+    const [hosted] = await db.select({ id: actions.id }).from(actions).where(hostedActions).limit(1);
+    if (hosted) return { ok: false, code: 'node_has_actions' };
+  }
+
+  await markNodeOffline(db, registry, workspaceId, node.id);
+  const stranded = await db
+    .select({ id: actionInvocations.id })
+    .from(actionInvocations)
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.dispatchedNodeId, node.id),
+      inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked']),
+    ));
+
+  const thisNode = and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, node.id));
+  // Anything that brought the node back since the settle wrote a fresh
+  // online heartbeat; the unforced DELETE must not match it.
   const notLive = or(
     ne(nodes.status, 'online'),
     isNull(nodes.lastHeartbeatAt),
-    lt(nodes.lastHeartbeatAt, new Date(now - NODE_LIVENESS_TTL_MS)),
+    lt(nodes.lastHeartbeatAt, new Date(Date.now() - NODE_LIVENESS_TTL_MS)),
   )!;
-  const hostedActions = and(eq(actions.workspaceId, workspaceId), eq(actions.handlerNodeId, node.id));
-  const [{ count: actionCount }] = await db.select({ count: sql<number>`count(*)` }).from(actions).where(hostedActions);
-
-  if (!opts.force) {
-    const heartbeat = node.lastHeartbeatAt?.getTime();
-    if (isNodeLive(node, now) || (heartbeat !== undefined && heartbeat > now) || opts.isConnected?.(node.id)) {
-      return { ok: false, code: 'node_online' };
-    }
-    if (Number(actionCount) > 0) return { ok: false, code: 'node_has_actions' };
-  }
-
-  const thisNode = and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, node.id));
-  const deleted = await db
-    .delete(nodes)
-    .where(opts.force
-      ? thisNode
-      : and(thisNode, notLive, notExists(db.select({ id: actions.id }).from(actions).where(hostedActions))))
-    .returning({ id: nodes.id });
+  const results = await runAtomicWrites(db, (w) => opts.force
+    ? [
+        // Deleted explicitly rather than by cascade so the count reports the
+        // rows actually removed, in the same atomic group as the node.
+        w.delete(actions).where(hostedActions).returning({ id: actions.id }),
+        w.delete(nodes).where(thisNode).returning({ id: nodes.id }),
+      ]
+    : [
+        w.delete(nodes)
+          .where(and(thisNode, notLive, notExists(w.select({ id: actions.id }).from(actions).where(hostedActions))))
+          .returning({ id: nodes.id }),
+      ]);
+  const deleted = results[results.length - 1] as Array<{ id: string }>;
   if (deleted.length === 0) {
     const stillThere = await getNodeById(db, workspaceId, node.id);
     return { ok: false, code: stillThere ? 'node_delete_conflict' : 'node_not_found' };
   }
-  return { ok: true, id: node.id, name: node.name, cascadedActions: opts.force ? Number(actionCount) : 0 };
+
+  if (stranded.length > 0) {
+    // The FK cleared dispatched_node_id; one still null and open was not moved
+    // by the settle and has no provider left to complete it.
+    await db
+      .update(actionInvocations)
+      .set({ status: 'failed', error: 'node_deleted', completedAt: new Date(), spawnReservedAt: null })
+      .where(and(
+        eq(actionInvocations.workspaceId, workspaceId),
+        inArray(actionInvocations.id, stranded.map((row) => row.id)),
+        isNull(actionInvocations.dispatchedNodeId),
+        inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked']),
+      ));
+  }
+  const removedActions = opts.force ? (results[0] as Array<{ id: string }>).length : 0;
+  return { ok: true, id: node.id, name: node.name, cascadedActions: removedActions };
 }
 
 export async function listNodeAgents(db: Db, workspaceId: string, nodeName: string) {

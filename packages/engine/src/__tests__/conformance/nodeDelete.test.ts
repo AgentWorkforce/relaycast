@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
-import { actions, agentNodeBindings, agents, nodes } from '../../db/schema.js';
+import { actionInvocations, actions, agentNodeBindings, agents, nodes } from '../../db/schema.js';
+import { deleteNode as deleteNodeById } from '../../engine/node.js';
 import { NODE_LIVENESS_TTL_MS } from '../../engine/placement.js';
 
 /**
@@ -156,5 +157,52 @@ describe('DELETE /v1/nodes/:name', () => {
     expect(forced.status).toBe(200);
     expect(((await forced.json()) as { data: { cascaded_actions: number } }).data.cascaded_actions).toBe(2);
     expect(await db().select().from(actions).where(eq(actions.handlerNodeId, 'node_host'))).toEqual([]);
+  });
+
+  it('does not fall back to a name when the resolved id is already gone', async () => {
+    await enroll('node_a', 'alpha');
+    await enroll('node_b', 'node_a');
+    // A queued delete that resolved node_a before a concurrent delete removed it.
+    await db().delete(nodes).where(eq(nodes.id, 'node_a'));
+
+    const result = await deleteNodeById(db(), stack.runtime.realtime, ws.workspaceId, 'node_a', { force: true });
+    expect(result).toEqual({ ok: false, code: 'node_not_found' });
+    expect(await nodeRow('node_b')).toBeDefined();
+  });
+
+  it('takes hosted agents offline instead of leaving them active without a route', async () => {
+    await enroll('node_host', 'agent-host');
+    const agent = await registerAgent(stack.app, ws.workspaceKey, 'hosted-worker');
+    await db().update(agents)
+      .set({ status: 'active', lastSeen: new Date(), locationType: 'via_node', locationNodeId: 'node_host' })
+      .where(eq(agents.id, agent.agentId));
+
+    expect((await deleteNode('agent-host')).status).toBe(200);
+    const [after] = await db().select().from(agents).where(eq(agents.id, agent.agentId));
+    expect(after.status).toBe('offline');
+    expect(after.locationNodeId).toBeNull();
+  });
+
+  it('fails an open invocation the node took with it', async () => {
+    await enroll('node_gone', 'gone');
+    // A dispatched built-in release is pinned to its node and is never
+    // rescheduled, so deleting the node strands it.
+    await db().insert(actionInvocations).values({
+      id: 'inv_pinned',
+      workspaceId: ws.workspaceId,
+      actionName: 'release',
+      invocationOrigin: 'builtin',
+      input: { name: 'someone' },
+      status: 'dispatched',
+      handlerNodeId: 'node_gone',
+      dispatchedNodeId: 'node_gone',
+      dispatchedProvider: 'default',
+      attemptedNodeIds: ['node_gone'],
+      dispatchAttempts: 1,
+    });
+
+    expect((await deleteNode('gone')).status).toBe(200);
+    const [inv] = await db().select().from(actionInvocations).where(eq(actionInvocations.id, 'inv_pinned'));
+    expect(inv).toMatchObject({ status: 'failed', error: 'node_deleted', dispatchedNodeId: null });
   });
 });

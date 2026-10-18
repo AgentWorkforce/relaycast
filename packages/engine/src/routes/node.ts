@@ -471,7 +471,7 @@ nodeRoutes.delete('/nodes/:node/providers/:name', requireWorkspaceKey, rateLimit
 });
 
 const NODE_DELETE_CONFLICTS = {
-  node_online: 'Node is online; pass force=true to detach it',
+  node_online: 'Node is online; pass force=true to delete it anyway',
   node_has_actions: 'Node hosts registered actions; pass force=true to delete them with it',
   node_delete_conflict: 'Node changed during deletion; retry',
 } as const;
@@ -487,13 +487,13 @@ nodeRoutes.delete('/nodes/:name', requireWorkspaceKey, rateLimit, async (c) => {
     if (!node) {
       return jsonNotFound(c, 'node_not_found', 'Node not found');
     }
-    const { nodeConnections } = c.get('engine');
     // Serialize with node-control operations so a register/heartbeat in this
     // isolate cannot interleave; the engine's guarded DELETE covers the rest.
+    // Only the resolved id crosses the lock: re-resolving the path inside it
+    // could pick a different node after a concurrent delete.
     const result = await serializeNodeOp(workspace.id, node.id, () =>
-      nodeEngine.deleteNode(db, workspace.id, node.id, {
+      nodeEngine.deleteNode(db, c.get('engine').nodeConnections, workspace.id, node.id, {
         force: c.req.query('force') === 'true',
-        isConnected: (nodeId) => nodeConnections.isNodeConnected(workspace.id, nodeId),
       }),
     );
     if (!result.ok) {
