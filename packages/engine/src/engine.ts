@@ -42,6 +42,7 @@ import { relayfileInboundRoutes } from './routes/relayfileInbound.js';
 import { eventSubscriptionRoutes } from './routes/eventSubscription.js';
 import { actionRoutes } from './routes/action.js';
 import { nodeRoutes } from './routes/node.js';
+import { runRoutes } from './routes/run.js';
 import { triggerRoutes } from './routes/trigger.js';
 import { a2aRoutes } from './routes/a2a.js';
 import { certifyRoutes } from './routes/certify.js';
@@ -212,6 +213,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
   v1.route('/', eventSubscriptionRoutes);
   v1.route('/', actionRoutes);
   v1.route('/', nodeRoutes);
+  v1.route('/', runRoutes);
   v1.route('/', triggerRoutes);
   v1.route('/', certifyRoutes);
   v1.route('/', consoleRoutes);

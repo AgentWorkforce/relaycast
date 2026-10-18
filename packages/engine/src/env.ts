@@ -1,4 +1,4 @@
-import type { workspaces, agents, nodes, observerTokens } from './db/schema.js';
+import type { workspaces, agents, nodes, observerTokens, runTokens } from './db/schema.js';
 import type { Logger } from './lib/logger.js';
 import type {
   EngineDb,
@@ -23,6 +23,8 @@ export interface AppVariables {
   agent: typeof agents.$inferSelect | undefined;
   node: typeof nodes.$inferSelect | undefined;
   observerToken: typeof observerTokens.$inferSelect | undefined;
+  /** Set only on routes that accept a run-scoped `rt_live_` token. */
+  runToken: typeof runTokens.$inferSelect | undefined;
   db: EngineDb;
   logger: Logger;
   requestId: string;

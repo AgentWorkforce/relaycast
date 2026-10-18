@@ -49,6 +49,9 @@ function makeAuthMiddleware(require: AuthRequire) {
     if (result.observerToken) {
       c.set('observerToken', result.observerToken);
     }
+    if (result.runToken) {
+      c.set('runToken', result.runToken);
+    }
 
     await next();
   });
@@ -134,6 +137,13 @@ export const requireAuth = makeAuthMiddleware('any');
  * `from` agent resolved within the node's workspace.
  */
 export const requireSender = makeAuthMiddleware('sender');
+
+/**
+ * Accepts a workspace key or a run-scoped token (`rt_live_...`). Only agent
+ * register/delete and node enrollment opt in; handlers must scope run callers
+ * to their own run via `c.get('runToken')`.
+ */
+export const requireWorkspaceKeyOrRunToken = makeAuthMiddleware('workspace_or_run');
 
 /** Requires an agent token (`at_live_...`). */
 export const requireAgentToken = makeAuthMiddleware('agent');

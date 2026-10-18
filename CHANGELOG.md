@@ -18,6 +18,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Major]
 
+### Added
+
+- Run-scoped `rt_live_` tokens let a server holder mint short-lived credentials for one run that can only register/delete that run's agents and enroll its nodes; revoking the run authority permanently kills every credential created under it.
+
 ### Changed
 
 - Newly issued agent REST tokens expire after 15 minutes and expose `token_expires_at`; clients must rotate before expiry. Legacy tokens require a staged rotation before this policy can be deployed.

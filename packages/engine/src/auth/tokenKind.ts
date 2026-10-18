@@ -18,6 +18,10 @@ const tokenKindConfig = {
     prefix: 'ot_live_',
     requiredMessage: 'Observer token required (ot_live_...)',
   },
+  run: {
+    prefix: 'rt_live_',
+    requiredMessage: 'Run token required (rt_live_...)',
+  },
 } as const;
 
 export type AuthTokenKind = keyof typeof tokenKindConfig;
@@ -47,11 +51,17 @@ const observerTokenSchema = z
   .startsWith(tokenKindConfig.observer.prefix)
   .transform((token): ParsedTokenFor<'observer'> => ({ kind: 'observer', token }));
 
+const runTokenSchema = z
+  .string()
+  .startsWith(tokenKindConfig.run.prefix)
+  .transform((token): ParsedTokenFor<'run'> => ({ kind: 'run', token }));
+
 export const authTokenSchema = z.union([
   workspaceTokenSchema,
   agentTokenSchema,
   nodeTokenSchema,
   observerTokenSchema,
+  runTokenSchema,
 ]);
 
 export type ParsedAuthToken = z.infer<typeof authTokenSchema>;
@@ -65,7 +75,7 @@ export function getAuthTokenKind(token: string): AuthTokenKind | undefined {
   return parseAuthToken(token)?.kind;
 }
 
-export function requiredTokenMessage(kind: Exclude<AuthRequire, 'any' | 'sender'>): string {
+export function requiredTokenMessage(kind: Exclude<AuthRequire, 'any' | 'sender' | 'workspace_or_run'>): string {
   return tokenKindConfig[kind].requiredMessage;
 }
 
@@ -80,6 +90,10 @@ const allowedKindsByRequire = {
   // `sender` is a principal that can post a message: a workspace key, an agent
   // (posts as itself), or a node token (posts as an explicit `from` agent).
   sender: ['workspace', 'agent', 'node'],
+  run: ['run'],
+  // The only routes a run token reaches (agent register/delete, node enroll)
+  // also accept the workspace key; every other requirement excludes `run`.
+  workspace_or_run: ['workspace', 'run'],
 } as const satisfies Record<AuthRequire, readonly AuthTokenKind[]>;
 
 export type AuthRequirementValidation =
@@ -109,6 +123,18 @@ export function validateTokenRequirement(
       code: 'observer_token_forbidden',
       message: 'Observer token cannot perform this operation',
     };
+  }
+
+  if (tokenKind === 'run') {
+    return {
+      ok: false,
+      code: 'run_token_forbidden',
+      message: 'Run token cannot perform this operation',
+    };
+  }
+
+  if (require === 'workspace_or_run') {
+    return { ok: false, code: 'unauthorized', message: 'Workspace key or run token required' };
   }
 
   if (require === 'any' || require === 'sender') {

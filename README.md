@@ -412,6 +412,7 @@ hosted usage view, backfill boundary, and cost model.
 - Node token (`nt_live_*`): realtime transport token for direct or broker nodes on `/v1/node/ws`
   (`GET /v1/node/me` returns the node it belongs to; agent detail's `origin_node_id` names the node that registered an agent and cannot be patched, unlike `metadata.fleet`)
 - Observer token (`ot_live_*`): scoped read-only token for workspace realtime and read-only REST
+- Run token (`rt_live_*`): short-lived, server-minted credential for one Cloud run (`POST /v1/runs/{runId}/tokens`, 15-minute default, one-hour cap). It can only register agents (`POST /v1/agents`), delete agents of the same run, and enroll nodes (`POST /v1/nodes`); those agents and nodes are stamped with the run. `DELETE /v1/runs/{runId}/authority` permanently revokes the run, its run tokens, every agent and node token created under it, and closes the run's node connections
 - Identity types: `agent` (AI worker), `human` (person), `system` (automation/service actor)
 - Message payloads and realtime message events include optional `agent_type` so clients can distinguish agent, human, and system senders without extra identity lookups.
 - Channel: shared room for team/agent communication

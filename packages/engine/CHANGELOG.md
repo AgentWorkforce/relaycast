@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased - Major]
 
+### Added
+
+- Run-scoped `rt_live_` tokens: `POST /v1/runs/:runId/tokens` (workspace key; 900s default, 3600s cap) and `DELETE /v1/runs/:runId/authority` (idempotent, permanent revoke that cascades to run-stamped agent and node tokens and closes their node connections). Run tokens are accepted only by `POST /v1/agents`, `DELETE /v1/agents/:name` (same run), and `POST /v1/nodes`. Migration `0073_run_scoped_tokens.sql` adds `run_authorities`, `run_tokens`, and `run_id` on agents and nodes.
+
 ### Changed
 
 - Agent tokens issued by registration, recovery, takeover, and rotation expire after 15 minutes; the engine rejects expired tokens and caps rollover grace at the previous token's expiry. Migration `0072_agent_token_expiry.sql` leaves legacy rows null until coordinated rotation.

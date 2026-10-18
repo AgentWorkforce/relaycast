@@ -217,6 +217,8 @@ export async function registerAgent(
     autoJoinGeneral?: boolean;
     recoveryProofHash?: string;
     workUnitId?: string;
+    /** Stamped when a run token registers the agent; run revocation cascades. */
+    runId?: string;
   },
   /**
    * Internal. Set only by the verifier-reclaim retry below, so that retry can
@@ -296,6 +298,7 @@ export async function registerAgent(
           status: 'active',
           tokenHash,
           tokenExpiresAt,
+          runId: data.runId ?? null,
           persona: data.persona ?? null,
           metadata: data.metadata ?? {},
           capabilities: data.capabilities ?? null,
@@ -422,6 +425,7 @@ export async function registerAgent(
     handle: agent.handle ?? `@${agent.name}`,
     token,
     token_expires_at: tokenExpiresAt.toISOString(),
+    ...(agent.runId ? { run_id: agent.runId } : {}),
     status: agent.status,
     capabilities: agent.capabilities ?? null,
     created_at: agent.createdAt.toISOString(),
@@ -760,11 +764,22 @@ export async function claimLegacyAgentIdentity(
   };
 }
 
-export async function deleteAgent(db: Db, workspaceId: string, name: string) {
+export async function deleteAgent(
+  db: Db,
+  workspaceId: string,
+  name: string,
+  options: { runId?: string } = {},
+) {
+  // A run-token caller may only remove agents its own run created; any other
+  // agent is reported as not found rather than forbidden.
   const [agent] = await db
     .select()
     .from(agents)
-    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, name)));
+    .where(and(
+      eq(agents.workspaceId, workspaceId),
+      eq(agents.name, name),
+      ...(options.runId !== undefined ? [eq(agents.runId, options.runId)] : []),
+    ));
 
   if (!agent) return false;
 

@@ -434,6 +434,8 @@ export async function createNodeToken(
   authorization: {
     expectedTokenHash?: string;
     directAgentId?: string;
+    /** Run-token enrollment: stamp new rows, and touch only this run's rows. */
+    runId?: string;
     rotationRecovery?: {
       replacementToken: string;
       idempotencyKeyHash: string;
@@ -454,7 +456,16 @@ export async function createNodeToken(
   // lookup is only a fallback for callers without a stable id. A name held by
   // a *different* node id is a conflict — mirroring node.register — never a
   // silent rewrite of the other node.
-  const existing = await resolveNodeForEnroll(db, workspaceId, data, authorization.expectedTokenHash);
+  const existing = await resolveNodeForEnroll(
+    db,
+    workspaceId,
+    data,
+    authorization.expectedTokenHash,
+    authorization.runId,
+  );
+  if (existing && authorization.runId !== undefined && existing.runId !== authorization.runId) {
+    throw codedError('Node is not owned by this run', 'run_token_forbidden', 403);
+  }
   if (data.node_id !== undefined) {
     const nameHolder = await getNodeByName(db, workspaceId, name);
     if (nameHolder && nameHolder.id !== data.node_id) {
@@ -594,6 +605,7 @@ export async function createNodeToken(
       load: 0,
       loadReported: false,
       activeAgents: 0,
+      runId: authorization.runId ?? null,
       createdAt: now,
     })
     .returning();
@@ -756,6 +768,7 @@ export async function resolveNodeForEnroll(
   workspaceId: string,
   data: { node_id?: string; name: string; machine_id?: string; kind?: string; role?: NodeRole; max_agents?: number },
   expectedTokenHash?: string,
+  runId?: string,
 ) {
   if (data.node_id !== undefined) {
     const byId = await getNodeById(db, workspaceId, data.node_id);
@@ -771,7 +784,9 @@ export async function resolveNodeForEnroll(
   if (byName) return byName;
   if (data.machine_id !== undefined && requestedNodeRole(data) === 'broker') {
     const byMachine = await getBrokerNodeByMachineId(db, workspaceId, data.machine_id, expectedTokenHash);
-    if (byMachine) return byMachine;
+    // Machine grouping is a convenience, not an identity: a run never adopts
+    // another owner's broker, it falls through to a fresh row instead.
+    if (byMachine && (runId === undefined || byMachine.runId === runId)) return byMachine;
   }
   // Machine reuse clears provenLiveAt, so a committed keyed rotation no
   // longer qualifies for the normal reusable-row lookup. Falling back to the
@@ -2233,6 +2248,8 @@ export async function registerAgentViaNode(
             type: 'agent',
             tokenHash,
             tokenExpiresAt,
+            // Agents a run-owned node registers belong to that run.
+            runId: node.runId ?? null,
             status: 'active',
             persona: null,
             metadata: { fleet: { node_id: nodeId, invocation_id: message.invocation_id ?? null, registered_at: now } },

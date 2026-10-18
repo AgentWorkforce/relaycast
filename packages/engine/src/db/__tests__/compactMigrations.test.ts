@@ -57,6 +57,7 @@ function snapshot(handle: SqliteDbHandle) {
           status_before_liveness_loss: _livenessStatus,
           node_liveness_revision: _nodeLivenessRevision,
           token_expires_at: _tokenExpiresAt,
+          run_id: _agentRunId,
           ...existing
         } = row as Record<string, unknown>;
         return JSON.stringify(existing);
@@ -72,6 +73,7 @@ function snapshot(handle: SqliteDbHandle) {
           rotation_idempotency_key_hash: _rotationIdempotencyKeyHash,
           rotation_request_digest: _rotationRequestDigest,
           liveness_revision: _livenessRevision,
+          run_id: _nodeRunId,
           ...existing
         } = row as Record<string, unknown>;
         return JSON.stringify(existing);
@@ -107,6 +109,8 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
     'a2a_egress_context',
     'a2a_inbound',
     'direct_dm_idempotency',
+    'run_authorities',
+    'run_tokens',
     'webhook_deliveries',
   ].includes(table.name) || before.some(original => original.name === table.name))
     .map(table => {
@@ -155,7 +159,9 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
             .replace(', previous_token_expires_at INTEGER DEFAULT NULL', '')
             .replace(', rotation_idempotency_key_hash TEXT DEFAULT NULL', '')
             .replace(', rotation_request_digest TEXT DEFAULT NULL', '')
-            .replace(', liveness_revision INTEGER NOT NULL DEFAULT 0', ''),
+            .replace(', liveness_revision INTEGER NOT NULL DEFAULT 0', '')
+            // 0073 run-scoped credentials.
+            .replace(', run_id TEXT DEFAULT NULL', ''),
         };
       }
       if (table.name === 'node_providers') {
@@ -204,6 +210,8 @@ describe('compact maintenance migration path', () => {
       'a2a_egress_context',
       'a2a_inbound',
       'direct_dm_idempotency',
+      'run_authorities',
+      'run_tokens',
       'webhook_deliveries',
     ].includes(String(name)))).toEqual(before);
     expect(after.find(([name]) => name === 'a2a_egress')).toEqual([
@@ -258,12 +266,14 @@ describe('compact maintenance migration path', () => {
     ]));
     expect(handle.sqlite.pragma('table_info(agents)')).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'token_expires_at', notnull: 0 }),
+      expect.objectContaining({ name: 'run_id', notnull: 0 }),
     ]));
     expect(handle.sqlite.pragma('table_info(nodes)')).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'previous_token_hash', notnull: 0 }),
       expect.objectContaining({ name: 'previous_token_expires_at', notnull: 0 }),
       expect.objectContaining({ name: 'rotation_idempotency_key_hash', notnull: 0 }),
       expect.objectContaining({ name: 'rotation_request_digest', notnull: 0 }),
+      expect.objectContaining({ name: 'run_id', notnull: 0 }),
     ]));
     expect(handle.sqlite.pragma('index_list(nodes)')).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'idx_nodes_workspace_previous_token', unique: 0 }),
