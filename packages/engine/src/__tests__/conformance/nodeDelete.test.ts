@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
-import { actionInvocations, actions, agentNodeBindings, agents, nodes } from '../../db/schema.js';
+import { actionInvocations, actions, agentNodeBindings, agents, nodes, workspaceEvents } from '../../db/schema.js';
 import { deleteNode as deleteNodeById } from '../../engine/node.js';
 import { NODE_LIVENESS_TTL_MS } from '../../engine/placement.js';
 
@@ -165,7 +165,7 @@ describe('DELETE /v1/nodes/:name', () => {
     // A queued delete that resolved node_a before a concurrent delete removed it.
     await db().delete(nodes).where(eq(nodes.id, 'node_a'));
 
-    const result = await deleteNodeById(db(), stack.runtime.realtime, ws.workspaceId, 'node_a', { force: true });
+    const result = await deleteNodeById(db(), stack.runtime.deps, ws.workspaceId, 'node_a', { force: true });
     expect(result).toEqual({ ok: false, code: 'node_not_found' });
     expect(await nodeRow('node_b')).toBeDefined();
   });
@@ -176,11 +176,84 @@ describe('DELETE /v1/nodes/:name', () => {
     await db().update(agents)
       .set({ status: 'active', lastSeen: new Date(), locationType: 'via_node', locationNodeId: 'node_host' })
       .where(eq(agents.id, agent.agentId));
+    // The host stopped heartbeating but nothing has settled it yet.
+    await db().update(nodes)
+      .set({ status: 'online', lastHeartbeatAt: new Date(Date.now() - NODE_LIVENESS_TTL_MS - 60_000) })
+      .where(eq(nodes.id, 'node_host'));
 
     expect((await deleteNode('agent-host')).status).toBe(200);
     const [after] = await db().select().from(agents).where(eq(agents.id, agent.agentId));
     expect(after.status).toBe('offline');
     expect(after.locationNodeId).toBeNull();
+    const events = await db().select().from(workspaceEvents).where(eq(workspaceEvents.workspaceId, ws.workspaceId));
+    expect(events.map((event) => event.type)).toContain('node.status.offline');
+  });
+
+  it('fails a parked invocation bound to an action the forced delete removes', async () => {
+    await enroll('node_parked', 'parked');
+    await hostAction('node_parked', 'echo');
+    await db().insert(actionInvocations).values({
+      id: 'inv_parked',
+      workspaceId: ws.workspaceId,
+      actionId: 'action_node_parked_echo',
+      actionName: 'echo',
+      invocationOrigin: 'registered_action',
+      status: 'pending',
+      handlerNodeId: 'node_parked',
+      dispatchAttempts: 1,
+    });
+
+    expect((await deleteNode('parked', { force: true })).status).toBe(200);
+    const [inv] = await db().select().from(actionInvocations).where(eq(actionInvocations.id, 'inv_parked'));
+    expect(inv).toMatchObject({ status: 'failed', error: 'node_deleted', actionId: null });
+    const events = await db().select().from(workspaceEvents).where(eq(workspaceEvents.workspaceId, ws.workspaceId));
+    expect(events.map((event) => event.type)).toContain('action.failed');
+  });
+
+  it('touches nothing when the node changed after the checks', async () => {
+    await enroll('node_raced', 'raced');
+    const agent = await registerAgent(stack.app, ws.workspaceKey, 'raced-worker');
+    await db().update(agents)
+      .set({ status: 'active', locationType: 'via_node', locationNodeId: 'node_raced' })
+      .where(eq(agents.id, agent.agentId));
+    await db().update(nodes)
+      .set({ status: 'online', lastHeartbeatAt: new Date(Date.now() - NODE_LIVENESS_TTL_MS - 60_000) })
+      .where(eq(nodes.id, 'node_raced'));
+    // Another isolate's heartbeat lands between the liveness check and the
+    // offline claim: the claim's CAS on the observed epoch must miss.
+    const realDb = db();
+    let refreshed = false;
+    const racingDb = new Proxy(realDb, {
+      get(target, prop, receiver) {
+        if (prop === 'update' && !refreshed) {
+          refreshed = true;
+          return (table: unknown) => {
+            const pending = target.update(nodes)
+              .set({ lastHeartbeatAt: new Date(), livenessRevision: 99 })
+              .where(eq(nodes.id, 'node_raced'));
+            return {
+              set: (values: unknown) => ({
+                where: (cond: unknown) => ({
+                  returning: async (cols: unknown) => {
+                    await pending;
+                    return (target.update(table as typeof nodes).set(values as never).where(cond as never) as never as {
+                      returning: (c: unknown) => Promise<unknown[]>;
+                    }).returning(cols);
+                  },
+                }),
+              }),
+            };
+          };
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+
+    const result = await deleteNodeById(racingDb, stack.runtime.deps, ws.workspaceId, 'node_raced');
+    expect(result).toEqual({ ok: false, code: 'node_delete_conflict' });
+    expect(await nodeRow('node_raced')).toBeDefined();
+    const [kept] = await db().select().from(agents).where(eq(agents.id, agent.agentId));
+    expect(kept).toMatchObject({ status: 'active', locationNodeId: 'node_raced' });
   });
 
   it('fails an open invocation the node took with it', async () => {

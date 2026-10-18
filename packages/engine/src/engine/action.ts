@@ -917,7 +917,7 @@ async function failNeverDispatchedInvocation(
  * enclosing transaction commits). A spawn invocation holding a native node
  * reservation releases that capacity, mirroring `completeNodeInvocation`.
  */
-async function failOpenInvocationRows(
+export async function failOpenInvocationRows(
   db: Db,
   workspaceId: string,
   invocationIds: string[],
@@ -964,7 +964,7 @@ async function failOpenInvocationRows(
 }
 
 /** Emit `action.failed` to each failed invocation's caller. Best-effort per row. */
-async function emitFailedInvocationEffects(
+export async function emitFailedInvocationEffects(
   completionDeps: InvocationCompletionDeps,
   workspaceId: string,
   failed: InvocationRow[],

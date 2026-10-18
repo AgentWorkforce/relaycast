@@ -492,7 +492,7 @@ nodeRoutes.delete('/nodes/:name', requireWorkspaceKey, rateLimit, async (c) => {
     // Only the resolved id crosses the lock: re-resolving the path inside it
     // could pick a different node after a concurrent delete.
     const result = await serializeNodeOp(workspace.id, node.id, () =>
-      nodeEngine.deleteNode(db, c.get('engine').nodeConnections, workspace.id, node.id, {
+      nodeEngine.deleteNode(db, c.get('engine'), workspace.id, node.id, {
         force: c.req.query('force') === 'true',
       }),
     );
