@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Changed
+
+- The `connect` plan's monthly `api_calls` rises from 3,000,000 to 10,000,000, so a full 10-seat room polling for its whole 7-day life stays within quota.
 
 ## [10.6.1] - 2026-10-18
 
