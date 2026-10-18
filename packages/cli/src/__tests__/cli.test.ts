@@ -64,4 +64,17 @@ describe('relaycast', () => {
       message: 'Workspace key set. Call "agent.register" to join this workspace.',
     });
   });
+
+  it('explains Buzz bridge setup without requiring Relay credentials', async () => {
+    let stdout = '';
+    let stderr = '';
+    const exitCode = await runCli(['buzz.bridge', '--help'], {
+      stdout: { write: (chunk: string) => { stdout += chunk; return true; } },
+      stderr: { write: (chunk: string) => { stderr += chunk; return true; } },
+      env: {},
+    });
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe('');
+    expect(stdout).toContain('BUZZ_CHANNEL_ID');
+  });
 });
