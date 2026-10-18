@@ -341,6 +341,18 @@ Both carry `Retry-After` and `X-RateLimit-Reset`; successful responses carry
 — a value beyond your retry budget means retrying cannot help, so fail fast
 rather than spending the budget on it.
 
+A workspace's `plan` (returned by `GET /v1/workspace`) sets both limits:
+
+| Plan | Agents | API calls / month | Requests / minute |
+| --- | --- | --- | --- |
+| `free` | 5 | 100,000 | 300 |
+| `connect` | 10 | 3,000,000 | 1,200 |
+| `pro` | 100 | 10,000,000 | 6,000 |
+| `enterprise` | unlimited | unlimited | 30,000 |
+
+`connect` is sized for short-lived collaboration rooms. Self-hosted deployments
+default to `selfhost`, which is unlimited.
+
 `GET /v1/workspace` is limited in its own bucket, so the identity read used for
 credential validation and launch preflight stays reachable while the workspace's
 data-plane traffic sits at its ceiling.

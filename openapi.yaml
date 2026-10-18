@@ -264,6 +264,10 @@ components:
         key:
           type: string
           description: Workspace API key (only returned on creation)
+        plan:
+          type: string
+          enum: [free, connect, pro, enterprise, selfhost]
+          description: Stored plan that sets the workspace's usage limits. `connect` is sized for short-lived collaboration rooms.
         created_at:
           type: string
           format: date-time

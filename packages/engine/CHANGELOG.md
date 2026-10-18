@@ -7,10 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
 
 ### Added
 
+- `PLAN_LIMITS.connect`: a room-sized tier (10 agents, 3,000,000 `api_calls`, 100,000 messages, 1 GiB files, 1,200 requests/min) that a control plane can assign to short-lived collaboration workspaces.
 - `POST /v1/workspace/rotate-key` rotates the authenticated workspace's API key with a bounded `grace_seconds` continuity window for the superseded key (`0` for immediate compromise cutoff). Migration `0073_workspace_key_rotation.sql` adds the `previous_api_key_hash`/`previous_api_key_expires_at` grace slot and the `api_key_generation` ordering fence. `EngineConfig.allowWorkspaceKeyRotation` opts in (default off, so hosted deployments where a control plane owns the canonical key can never serve it).
 
 ## [10.5.1] - 2026-10-16
