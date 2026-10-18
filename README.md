@@ -1343,6 +1343,10 @@ DLQ. Raw hooks must retry rejected payloads; they do not claim Relayfile event-I
 expired deliveries become inspectable dead letters, not acted-on receipts.
 Operators must drain/retry the DLQ before declaring an event matrix complete.
 
+`POST /v1/agents/spawn`, TypeScript `relay.agents.spawn()`, and MCP `agent.add`
+accept `cli`: `claude`, `codex`, `gemini`, `aider`, `goose`, `opencode`, `grok`,
+`muse`, or `devin`. Dispatch requires a host offering the matching spawn capability.
+
 Explicit `target_node` on built-in spawn honors fleet placement even when a
 legacy workspace-global node action named `spawn` exists; its caller allowlist
 continues to apply. A dispatch acknowledgement does not establish harness readiness.

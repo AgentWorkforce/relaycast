@@ -20,6 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
+- Muse and Devin are accepted by typed agent spawning, API validation, and MCP; Rust registration preserves Muse, Devin, OpenCode, and Grok CLI hints.
 - A node's exact release no longer fails with `agent_identity_mismatch` when the node's inventory stops listing the ended agent before its release result arrives; the release completes and tombstones the agent.
 
 ## [10.6.0] - 2026-10-18

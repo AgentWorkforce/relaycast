@@ -511,6 +511,43 @@ describe('node adapter conformance', () => {
       return { sock, handle };
     }
 
+    it.each(['claude', 'codex', 'gemini', 'aider', 'goose', 'opencode', 'grok', 'muse', 'devin'])(
+      'the typed spawn route dispatches %s to its host', async (cli) => {
+        const ws = await createWorkspace(stack.app, `typed-spawn-${cli}`);
+        const host = await enrollAndAttachNode(ws, {
+          id: 'node_spawn', name: 'spawn-host',
+          capabilities: [capability(`spawn:${cli}`, 'spawn', { agent: cli })],
+        });
+        const response = await stack.app.request('/v1/agents/spawn', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+          body: JSON.stringify({ name: 'worker', cli, task: 'Review the code' }),
+        });
+        expect(response.status).toBe(201);
+        const body = await response.json();
+        expect(body.ok).toBe(true);
+        expect(host.sock.ofType('action.invoke').at(-1)).toMatchObject({
+          invocation_id: body.data.invocation_id,
+          action: `spawn:${cli}`,
+          input: expect.objectContaining({ name: 'worker', cli, task: 'Review the code' }),
+        });
+      },
+    );
+
+    it.each(['unknown', 'Muse', 'DEVIN'])('the typed spawn route rejects %s', async (cli) => {
+      const ws = await createWorkspace(stack.app, 'invalid-spawn-cli');
+      const response = await stack.app.request('/v1/agents/spawn', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+        body: JSON.stringify({ name: 'worker', cli, task: 'Review the code' }),
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({
+        ok: false,
+        error: { message: 'cli must be one of: claude, codex, gemini, aider, goose, opencode, grok, muse, devin' },
+      });
+    });
+
     it('an explicit spawn target is not shadowed by a legacy global node alias', async () => {
       const ws = await createWorkspace(stack.app, 'explicit-spawn-target');
       const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');

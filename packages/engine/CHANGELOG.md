@@ -11,6 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `POST /v1/agents/spawn` accepts `cli: muse` and `cli: devin` through the shared CLI schema.
 - `inventory.sync`'s missing sweep leaves an agent bound while an open built-in release dispatched to that node and provider names it (and its `expected_agent_id`, when set), for up to the dispatch timeout. The release completion deactivates the binding and tombstones the agent; before, the sweep won the race and the completion failed with `agent_identity_mismatch`.
 
 ## [10.6.0] - 2026-10-18

@@ -3029,7 +3029,7 @@ paths:
                   description: Unique name for the new agent
                 cli:
                   type: string
-                  enum: [claude, codex, gemini, aider, goose, opencode, grok]
+                  enum: [claude, codex, gemini, aider, goose, opencode, grok, muse, devin]
                   description: Which AI CLI tool to use
                 task:
                   type: string

@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- `CliTypeSchema`, `CliType`, and `SpawnAgentRequest` now accept `muse` and `devin`, alongside existing `opencode` and `grok` values.
 
 ## [10.6.0] - 2026-10-18
 
