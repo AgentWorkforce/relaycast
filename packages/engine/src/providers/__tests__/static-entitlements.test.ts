@@ -22,8 +22,8 @@ describe('StaticEntitlementsProvider', () => {
     for (const metric of ['messages', 'agents', 'file_bytes', 'rate_per_min'] as const) {
       expect(PLAN_LIMITS.connect![metric]).toBeLessThan(PLAN_LIMITS.pro![metric]);
     }
-    // A full 10-seat room polling for its whole 7-day life needs pro's monthly
-    // call budget, so connect matches it rather than sitting below it.
+    // Rooms poll constantly; connect's call budget is set to pro's for
+    // headroom, while its other limits stay below pro.
     expect(PLAN_LIMITS.connect!.api_calls).toBeLessThanOrEqual(PLAN_LIMITS.pro!.api_calls);
   });
 
