@@ -12,6 +12,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Fixed
 
 - `POST /v1/agents/spawn` accepts `cli: muse` and `cli: devin` through the shared CLI schema.
+- `inventory.sync`'s missing sweep leaves an agent bound while an open built-in release dispatched to that node and provider names it (and its `expected_agent_id`, when set), for up to the dispatch timeout. The release completion deactivates the binding and tombstones the agent; before, the sweep won the race and the completion failed with `agent_identity_mismatch`.
+
+## [10.6.0] - 2026-10-18
+
+### Added
+
+- `PLAN_LIMITS.connect`: a room-sized tier (10 agents, 3,000,000 `api_calls`, 100,000 messages, 1 GiB files, 1,200 requests/min) that a control plane can assign to short-lived collaboration workspaces.
+- `POST /v1/workspace/rotate-key` rotates the authenticated workspace's API key with a bounded `grace_seconds` continuity window for the superseded key (`0` for immediate compromise cutoff). Migration `0073_workspace_key_rotation.sql` adds the `previous_api_key_hash`/`previous_api_key_expires_at` grace slot and the `api_key_generation` ordering fence. `EngineConfig.allowWorkspaceKeyRotation` opts in (default off, so hosted deployments where a control plane owns the canonical key can never serve it).
 
 ## [10.5.1] - 2026-10-16
 

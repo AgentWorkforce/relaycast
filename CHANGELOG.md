@@ -21,6 +21,14 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Fixed
 
 - Muse and Devin are accepted by typed agent spawning, API validation, and MCP; Rust registration preserves Muse, Devin, OpenCode, and Grok CLI hints.
+- A node's exact release no longer fails with `agent_identity_mismatch` when the node's inventory stops listing the ended agent before its release result arrives; the release completes and tombstones the agent.
+
+## [10.6.0] - 2026-10-18
+
+### Added
+
+- A `connect` workspace plan for short-lived collaboration rooms: 10 agents, 3M API calls and 100k messages per month, 1,200 requests per minute — between `free` and `pro`.
+- `POST /v1/workspace/rotate-key` self-serve workspace-key rotation: the superseded key keeps a bounded `grace_seconds` continuity window (`0` for immediate compromise cutoff), agent/node/observer tokens and sessions are untouched, and deployments whose canonical key is externally managed refuse the route. The TypeScript SDK exposes it as `relay.workspace.rotateKey()`.
 
 ## [10.5.1] - 2026-10-16
 
@@ -821,7 +829,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v10.5.1...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.0...HEAD
+[10.6.0]: https://github.com/AgentWorkforce/relaycast/compare/v10.5.1...v10.6.0
 [10.5.1]: https://github.com/AgentWorkforce/relaycast/compare/v10.5.0...v10.5.1
 [10.5.0]: https://github.com/AgentWorkforce/relaycast/compare/v10.4.2...v10.5.0
 [10.4.2]: https://github.com/AgentWorkforce/relaycast/compare/v10.4.1...v10.4.2

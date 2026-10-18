@@ -36,6 +36,8 @@ import type {
   DmReceivedEvent,
   WorkspaceDmConversation,
   TokenRotateResponse,
+  RotateWorkspaceKeyRequest,
+  RotateWorkspaceKeyResponse,
   MessageListQuery,
   MessageCreatedEvent,
   MessageReadEvent,
@@ -757,6 +759,15 @@ export class RelayCast {
       this.reconnect(data, options),
     update: (data: UpdateWorkspaceRequest): Promise<Workspace> =>
       this.client.patch('/v1/workspace', data),
+    /**
+     * Replace the workspace API key. The response carries the replacement
+     * exactly once; persist it (do not print it). `graceSeconds` keeps the
+     * superseded key authenticatable for propagation — pass `0` when the old
+     * key may be compromised. Hosted deployments manage keys through the
+     * control plane and refuse this call.
+     */
+    rotateKey: (data?: RotateWorkspaceKeyRequest): Promise<RotateWorkspaceKeyResponse> =>
+      this.client.post('/v1/workspace/rotate-key', data ?? {}),
     delete: (workspaceId?: string): Promise<void> => workspaceId === undefined
       ? this.client.delete('/v1/workspace')
       : this.client.delete(`/v1/workspaces/${encodeURIComponent(workspaceId)}`),

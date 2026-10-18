@@ -1,1 +1,1 @@
-export const SDK_VERSION = "10.5.1" as const;
+export const SDK_VERSION = "10.6.0" as const;
