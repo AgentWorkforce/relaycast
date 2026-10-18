@@ -22,6 +22,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Self-hosted engines now serve `DELETE /v1/nodes/:name`, so `relay.nodes.delete()` can prune dead nodes from a self-hosted roster instead of returning 404.
 
+## [10.6.2] - 2026-10-18
+
 ### Changed
 
 - The `connect` plan's monthly `api_calls` rises from 3,000,000 to 10,000,000, so a full 10-seat room polling for its whole 7-day life stays within quota.
@@ -839,7 +841,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.1...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.2...HEAD
+[10.6.2]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.1...v10.6.2
 [10.6.1]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.0...v10.6.1
 [10.6.0]: https://github.com/AgentWorkforce/relaycast/compare/v10.5.1...v10.6.0
 [10.5.1]: https://github.com/AgentWorkforce/relaycast/compare/v10.5.0...v10.5.1
