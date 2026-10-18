@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `relaycast buzz.bridge` routes signed Buzz room mentions to an existing Relay agent and posts its replies back into the same Buzz thread.
 
 ## [10.6.2] - 2026-10-18
 
