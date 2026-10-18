@@ -21,7 +21,7 @@ import {
   parseFleetBrokerToRelaycastMessage,
 } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
-import { actionInvocations, agents, agentNodeBindings, channelMembers, channels, nodeProviders, nodes } from '../db/schema.js';
+import { actionInvocations, actions, agents, agentNodeBindings, channelMembers, channels, nodeProviders, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { acceptTaskInvocation, completeTaskInvocation } from './taskInvocation.js';
@@ -2079,6 +2079,63 @@ export async function unbindAgentFromNode(db: Db, workspaceId: string, nodeName:
     }
     return true;
   });
+}
+
+export type DeleteNodeResult =
+  | { ok: true; id: string; name: string; cascadedActions: number }
+  | { ok: false; code: 'node_not_found' | 'node_online' | 'node_has_actions' | 'node_delete_conflict' };
+
+/**
+ * Delete one node by id (exact id wins) or name. Its FKs cascade the node's
+ * bindings, providers and hosted actions and clear agent, delivery and
+ * invocation references to it.
+ *
+ * Unforced, an online node or one hosting actions is refused, and the same
+ * guards ride the DELETE itself: a heartbeat or action registration landing
+ * after the checks turns the delete into `node_delete_conflict` rather than
+ * dropping newly live state. runAtomic is not isolated on every adapter, so
+ * one statement is the only boundary that holds everywhere.
+ */
+export async function deleteNode(
+  db: Db,
+  workspaceId: string,
+  idOrName: string,
+  opts: { force?: boolean; isConnected?: (nodeId: string) => boolean } = {},
+): Promise<DeleteNodeResult> {
+  const node = await getNodeById(db, workspaceId, idOrName) ?? await getNodeByName(db, workspaceId, idOrName);
+  if (!node) return { ok: false, code: 'node_not_found' };
+
+  const now = Date.now();
+  // Stricter than isNodeLive: a heartbeat skewed into the future may belong to
+  // a running host, so it counts as online here.
+  const notLive = or(
+    ne(nodes.status, 'online'),
+    isNull(nodes.lastHeartbeatAt),
+    lt(nodes.lastHeartbeatAt, new Date(now - NODE_LIVENESS_TTL_MS)),
+  )!;
+  const hostedActions = and(eq(actions.workspaceId, workspaceId), eq(actions.handlerNodeId, node.id));
+  const [{ count: actionCount }] = await db.select({ count: sql<number>`count(*)` }).from(actions).where(hostedActions);
+
+  if (!opts.force) {
+    const heartbeat = node.lastHeartbeatAt?.getTime();
+    if (isNodeLive(node, now) || (heartbeat !== undefined && heartbeat > now) || opts.isConnected?.(node.id)) {
+      return { ok: false, code: 'node_online' };
+    }
+    if (Number(actionCount) > 0) return { ok: false, code: 'node_has_actions' };
+  }
+
+  const thisNode = and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, node.id));
+  const deleted = await db
+    .delete(nodes)
+    .where(opts.force
+      ? thisNode
+      : and(thisNode, notLive, notExists(db.select({ id: actions.id }).from(actions).where(hostedActions))))
+    .returning({ id: nodes.id });
+  if (deleted.length === 0) {
+    const stillThere = await getNodeById(db, workspaceId, node.id);
+    return { ok: false, code: stillThere ? 'node_delete_conflict' : 'node_not_found' };
+  }
+  return { ok: true, id: node.id, name: node.name, cascadedActions: opts.force ? Number(actionCount) : 0 };
 }
 
 export async function listNodeAgents(db: Db, workspaceId: string, nodeName: string) {
