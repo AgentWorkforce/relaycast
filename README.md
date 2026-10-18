@@ -1176,7 +1176,8 @@ workspace-global actions; use the node-addressed endpoint for a specific node ac
 Inbound webhooks created with `POST /webhooks` return `{ url, token }`. External callers
 must post to `url` with `Authorization: Bearer <token>` and may send either
 `{ "message": "...", "author": "..." }` or the existing `{ "text": "...", "source": "..." }`
-shape. Outbound subscriptions accept custom delivery `headers`; when a `secret` is set,
+shape. A JSON object without these webhook fields is rendered as the message text.
+Outbound subscriptions accept custom delivery `headers`; when a `secret` is set,
 the default `signature_scheme: 'legacy'` sends `X-Relay-Signature: sha256=<hex>`, an
 HMAC-SHA256 over the exact JSON request body. Set `signature_scheme: 'standard-webhooks'`
 with a 24-64-byte base64 `whsec_` secret to send

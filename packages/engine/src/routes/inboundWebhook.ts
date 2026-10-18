@@ -127,6 +127,10 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
       return parsed.response;
     }
     const { text, message, source, author, payload } = parsed.data;
+    const rawPayload = text === undefined && message === undefined && source === undefined
+      && author === undefined && payload === undefined && Object.keys(parsed.data).length > 0
+      ? parsed.data
+      : undefined;
     const result = await inboundWebhookEngine.triggerWebhook(
       db,
       c.req.param('webhookId'),
@@ -135,7 +139,7 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
         text: text ?? message,
         source,
         author: author ?? source,
-        payload: (payload && typeof payload === 'object') ? payload as Record<string, unknown> : undefined,
+        payload: (payload && typeof payload === 'object') ? payload as Record<string, unknown> : rawPayload,
       },
       {
         mailbox: (workspaceId) => resolveMailboxConfig(c.get('engine').config, workspaceId),
