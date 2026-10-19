@@ -2170,8 +2170,10 @@ export async function deleteNode(
     // Open work bound to the node or one of its actions has nothing left to
     // complete it. Runs first, while both references are still set. `running`
     // is an accepted task, which only its dispatching node may complete.
-    // Native spawns and builtins are pinned to the handler_node_id snapshot
-    // (not an FK), so one that has not been sent yet still waits on this node.
+    // A native spawn or builtin that has never been sent is pinned to the
+    // handler_node_id snapshot (not an FK) and still waits on this node. Once
+    // sent, that snapshot is only a 201 record: the settle may have unpinned
+    // the row for placement elsewhere.
     w.update(actionInvocations)
       .set({ status: 'failed', error: 'node_deleted', completedAt: lostAt, spawnReservedAt: null })
       .where(and(
@@ -2184,6 +2186,7 @@ export async function deleteNode(
             eq(actionInvocations.handlerNodeId, node.id),
             isNull(actionInvocations.dispatchedNodeId),
             isNull(actionInvocations.actionId),
+            eq(actionInvocations.dispatchAttempts, 0),
             or(
               eq(actionInvocations.invocationOrigin, 'builtin'),
               eq(actionInvocations.actionName, 'spawn'),

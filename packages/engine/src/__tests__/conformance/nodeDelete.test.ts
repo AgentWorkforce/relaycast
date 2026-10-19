@@ -347,6 +347,12 @@ describe('DELETE /v1/nodes/:name', () => {
         id: 'inv_generic', workspaceId: ws.workspaceId, actionName: 'echo', status: 'pending',
         handlerNodeId: 'node_worker',
       },
+      // A spawn sent before and since unpinned for retry: handler_node_id is
+      // only its 201 snapshot.
+      {
+        id: 'inv_unpinned_spawn', workspaceId: ws.workspaceId, actionName: 'spawn:claude', status: 'pending',
+        handlerNodeId: 'node_worker', dispatchAttempts: 1,
+      },
     ]);
 
     expect((await deleteNode('worker')).status).toBe(200);
@@ -355,5 +361,6 @@ describe('DELETE /v1/nodes/:name', () => {
     expect(byId.inv_task).toMatchObject({ status: 'failed', error: 'node_deleted' });
     expect(byId.inv_spawn).toMatchObject({ status: 'failed', error: 'node_deleted' });
     expect(byId.inv_generic.status).toBe('pending');
+    expect(byId.inv_unpinned_spawn.status).toBe('pending');
   });
 });
