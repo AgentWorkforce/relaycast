@@ -149,7 +149,7 @@ describe('node.heartbeat without a capabilities snapshot', () => {
       type: 'node.heartbeat',
       active_agents: 3,
       handlers_live: true,
-      load: 42,
+      load: 0.42,
       load_reported: true,
       ...overrides,
     });
@@ -174,7 +174,7 @@ describe('node.heartbeat without a capabilities snapshot', () => {
     };
     expect(row).toMatchObject({
       status: 'online', handlers_live: 1, max_agents: 4,
-      active_agents: 3, load: 42, load_reported: 1,
+      active_agents: 3, load: 0.42, load_reported: 1,
     });
   });
 
@@ -207,8 +207,8 @@ describe('node.heartbeat without a capabilities snapshot', () => {
     const node = await steadyBeat(f);
     const row = f.sqlite.prepare('SELECT load, load_reported, max_agents FROM nodes WHERE id = ?').get('node1') as
       { load: number; load_reported: number; max_agents: number };
-    expect(row).toMatchObject({ load: 42, load_reported: 1, max_agents: 0 });
-    expect(node?.load).toBe(42);
+    expect(row).toMatchObject({ load: 0.42, load_reported: 1, max_agents: 0 });
+    expect(node?.load).toBe(0.42);
     const unknown = await steadyBeat(f, { load: 0, load_reported: false });
     expect(unknown?.load).toBeNull();
   });

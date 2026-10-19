@@ -427,3 +427,14 @@ it('accepts the documented unlimited sentinel and finite caps on registration an
     }
   }
 });
+
+
+it('keeps measured utilization normalized on unlimited heartbeat frames', () => {
+  const frame = JSON.parse(fs.readFileSync(path.join(FIXTURE_DIR, 'node.heartbeat.json'), 'utf8'));
+  for (const load of [0, 0.75, 1]) {
+    expect(FleetBrokerToRelaycastMessageSchema.safeParse({ ...frame, max_agents: 0, load, load_reported: true }).success).toBe(true);
+  }
+  for (const load of [null, -1, 2.5]) {
+    expect(FleetBrokerToRelaycastMessageSchema.safeParse({ ...frame, max_agents: 0, load, load_reported: true }).success).toBe(false);
+  }
+});

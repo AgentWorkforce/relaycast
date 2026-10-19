@@ -834,14 +834,14 @@ ephemeral `node.online`, `node.heartbeat`, and `node.offline` events. Each
 carries a `node` payload matching the `GET /nodes` roster entry (capabilities,
 tags, `load`, `active_agents`/`active_agents_stale`/`max_agents`, `handlers_live`,
 `last_heartbeat_at`), so a single event fully refreshes a node's row.
-`load` is explicitly measured utilization or machine load and remains `null`
+`load` is explicitly measured normalized utilization (0–1) and remains `null`
 unless a direct node, or every constituent provider of a broker node,
 explicitly reports a genuine measurement;
 `max_agents: 0` means unlimited capacity, not zero capacity. This documented
 sentinel is retained in registration, heartbeats, and node reads; null is not
 accepted. Active and reserved counts still track work on unlimited nodes without
 refusing for capacity. Positive integers retain the existing cap. Explicitly
-reported machine load is accepted on unlimited nodes too; unknown load remains
+reported machine utilization (0–1) is accepted on unlimited nodes too; unknown load remains
 null, and placement breaks load ties using active plus reserved work.
 
 For the desktop no-limit rollout, ship Relaycast's load handling first, Cloud's

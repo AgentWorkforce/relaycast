@@ -1311,7 +1311,8 @@ components:
           type: number
           nullable: true
           minimum: 0
-          description: Explicitly measured utilization or machine load, including on unlimited nodes. Null unless a direct node, or every constituent provider of a broker node, explicitly reports a genuine measurement.
+          maximum: 1
+          description: Explicitly measured normalized utilization (0–1), including machine utilization on unlimited nodes. Null unless a direct node, or every constituent provider of a broker node, explicitly reports a genuine measurement.
         active_agents:
           type: integer
           description: Managed-agent occupancy. Authoritative only while `live` is true; once a node goes offline this is a frozen historical value — see `active_agents_stale`.
