@@ -9,12 +9,14 @@ function getMetaContent(name) {
 function getOrCreateDistinctId() {
   try {
     const existing = localStorage.getItem(POSTHOG_DISTINCT_ID_KEY);
-    if (existing) return existing;
-    const next = window.crypto?.randomUUID?.() ?? `anon-${Date.now()}`;
-    localStorage.setItem(POSTHOG_DISTINCT_ID_KEY, next);
-    return next;
+    if (existing) return { id: existing, persisted: true };
+  } catch { /* unavailable */ }
+  const id = window.crypto?.randomUUID?.() ?? `anon-${Date.now()}`;
+  try {
+    localStorage.setItem(POSTHOG_DISTINCT_ID_KEY, id);
+    return { id, persisted: true };
   } catch {
-    return window.crypto?.randomUUID?.() ?? `anon-${Date.now()}`;
+    return { id, persisted: false };
   }
 }
 
@@ -53,21 +55,29 @@ const telemetry = (() => {
     window.POSTHOG_HOST || window.RELAYCAST_POSTHOG_HOST || getMetaContent('relaycast-posthog-host');
   const host = (rawHost || POSTHOG_DEFAULT_HOST).replace(/\/$/, '');
   let distinctId = null;
+  let distinctIdPersisted = false;
 
   const capture = (event, properties = {}) => {
     if (isDoNotTrackEnabled()) {
       clearStoredDistinctId();
       distinctId = null;
+      distinctIdPersisted = false;
       posthogSessionId = window.crypto?.randomUUID?.() ?? String(Date.now());
       return;
     }
     let storedId = distinctId;
     try { storedId = localStorage.getItem(POSTHOG_DISTINCT_ID_KEY); } catch { /* unavailable */ }
-    if (distinctId && storedId !== distinctId) {
+    // Missing storage cannot invalidate an identity we could never persist.
+    if (distinctId && storedId !== distinctId && (storedId || distinctIdPersisted)) {
       distinctId = null;
+      distinctIdPersisted = false;
       posthogSessionId = window.crypto?.randomUUID?.() ?? String(Date.now());
     }
-    distinctId ??= getOrCreateDistinctId();
+    if (!distinctId) {
+      const identity = getOrCreateDistinctId();
+      distinctId = identity.id;
+      distinctIdPersisted = identity.persisted;
+    }
     const payload = {
       api_key: posthogKey,
       event,
