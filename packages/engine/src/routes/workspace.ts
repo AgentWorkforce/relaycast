@@ -681,7 +681,7 @@ workspaceRoutes.post('/workspace/rotate-key', requireWorkspaceKey, rateLimit, as
         ? undefined
         : { graceMs: parsed.data.grace_seconds * 1000 },
     );
-    emitServerEvent(c, result.workspaceId, 'relaycast_server_workspace_key_rotated', {
+    emitServerEvent(c, result.workspaceId, 'workspace.key.rotated', {
       grace_seconds: parsed.data.grace_seconds ?? 60,
     });
     return jsonOk(c, {

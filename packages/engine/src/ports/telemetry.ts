@@ -4,6 +4,7 @@ export const ENGINE_OBSERVATION_FACTS = {
   'workspace.updated': [],
   'workspace.deleted': [],
   'workspace.stream.updated': ['stream_mode'],
+  'workspace.key.rotated': ['grace_seconds'],
   'agent.registered': ['agent_id'],
   'agent.updated': ['agent_name'],
   'legacy.identity.claimed': ['agent_name'],

@@ -11,6 +11,9 @@ export function telemetryConsumer(c: Context<AppEnv>): void {
     channel_id: 'ch_1', message_id: 'msg_1',
   }, { actor: { id: 'agent_1', name: 'alice', type: 'agent' } });
 
+  emitServerEvent(c, 'ws_1', 'workspace.key.rotated', { grace_seconds: 60 });
+  // @ts-expect-error Rotation observations require the committed grace period.
+  emitServerEvent(c, 'ws_1', 'workspace.key.rotated', {});
   // @ts-expect-error Event names must exist in the server catalog.
   emitServerEvent(c, 'ws_1', 'relaycast_server_typo', {});
   // @ts-expect-error The resolved route must include its required skill.
