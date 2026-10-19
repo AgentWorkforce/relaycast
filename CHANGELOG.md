@@ -18,11 +18,13 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
-- Unlimited-capacity nodes retain explicitly reported load for placement; load ties count both active and reserved agents.
-
 ### Added
 
 - Self-hosted engines now serve `DELETE /v1/nodes/:name`, so `relay.nodes.delete()` can prune dead nodes from a self-hosted roster instead of returning 404.
+
+## [10.6.3] - 2026-10-19
+
+- Unlimited-capacity nodes retain explicitly reported load for placement; load ties count both active and reserved agents.
 
 ## [10.6.2] - 2026-10-18
 
@@ -843,7 +845,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.2...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.3...HEAD
+[10.6.3]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.2...v10.6.3
 [10.6.2]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.1...v10.6.2
 [10.6.1]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.0...v10.6.1
 [10.6.0]: https://github.com/AgentWorkforce/relaycast/compare/v10.5.1...v10.6.0
