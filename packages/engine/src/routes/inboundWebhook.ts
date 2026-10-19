@@ -127,9 +127,12 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
       return parsed.response;
     }
     const { text, message, source, author, payload } = parsed.data;
-    const rawPayload = text === undefined && message === undefined && source === undefined
-      && author === undefined && payload === undefined && Object.keys(parsed.data).length > 0
-      ? parsed.data
+    // A body with none of the envelope fields is a third party's own event
+    // (e.g. Roma's envelope). Render it as text only; never read its fields
+    // as message metadata, session_ref or trigger control flags.
+    const rawEvent = text === undefined && message === undefined && source === undefined
+      && author === undefined && payload === undefined
+      ? parsed.data as Record<string, unknown>
       : undefined;
     const result = await inboundWebhookEngine.triggerWebhook(
       db,
@@ -139,7 +142,8 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
         text: text ?? message,
         source,
         author: author ?? source,
-        payload: (payload && typeof payload === 'object') ? payload as Record<string, unknown> : rawPayload,
+        payload: (payload && typeof payload === 'object') ? payload as Record<string, unknown> : undefined,
+        rawEvent,
       },
       {
         mailbox: (workspaceId) => resolveMailboxConfig(c.get('engine').config, workspaceId),

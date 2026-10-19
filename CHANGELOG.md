@@ -22,7 +22,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Inbox mention lookup, the unreachable-node delivery sweep, and per-node agent reads no longer scan a workspace's full history, which was stalling the shared database and surfacing as `database_overloaded`.
 - Every response includes its request id in the `X-Request-Id` header.
-- Raw JSON inbound webhook bodies appear in the delivered message instead of a generic event line.
+- Raw JSON inbound webhook bodies (including `{}`) appear in the delivered message instead of a generic event line. Their fields are rendered as text only and never read as message metadata.
 
 ## [10.6.3] - 2026-10-19
 
