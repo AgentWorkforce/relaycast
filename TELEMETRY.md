@@ -39,13 +39,16 @@ Set either environment variable:
 
 ## Identifiers
 
-Standalone MCP telemetry uses the anonymous identifier in `~/.relay/telemetry.json`
+Standalone MCP telemetry reads legacy identity and consent from `~/.relay/telemetry.json`
+and stores new anonymous generations separately in `~/.relay/telemetry-identity.json`
 and always sends `$process_person_profile: false`. Caller-supplied distinct IDs,
 including `RELAYCAST_TELEMETRY_DISTINCT_ID`, cannot select a Cloud person. Events
 include versioned emitter and actor provenance, without email/name writes.
 
-The MCP rereads consent on each capture. Explicit opt-out rotates the anonymous
-generation; a missing API key alone does not. If saving a rotation fails, the
+The MCP rereads consent on each capture and suppresses capture when the consent
+file is malformed or unreadable. Rotation atomically replaces only the identity
+file, never the consent file. Explicit opt-out rotates both anonymous and session
+generations; a missing API key alone does not. If saving a rotation fails, the
 process keeps using its fresh in-memory identity and retries persistence on later
 captures. A process exit before storage becomes writable can lose that rotation;
 persistent cross-process rotation cannot be guaranteed while disk writes fail.

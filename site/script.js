@@ -1,6 +1,6 @@
 const POSTHOG_DEFAULT_HOST = 'https://i.agentrelay.com';
 const POSTHOG_DISTINCT_ID_KEY = 'relaycast_posthog_distinct_id';
-const POSTHOG_SESSION_ID = window.crypto?.randomUUID?.() ?? String(Date.now());
+let posthogSessionId = window.crypto?.randomUUID?.() ?? String(Date.now());
 
 function getMetaContent(name) {
   return document.querySelector(`meta[name="${name}"]`)?.getAttribute('content')?.trim() ?? '';
@@ -58,7 +58,14 @@ const telemetry = (() => {
     if (isDoNotTrackEnabled()) {
       clearStoredDistinctId();
       distinctId = null;
+      posthogSessionId = window.crypto?.randomUUID?.() ?? String(Date.now());
       return;
+    }
+    let storedId = distinctId;
+    try { storedId = localStorage.getItem(POSTHOG_DISTINCT_ID_KEY); } catch { /* unavailable */ }
+    if (distinctId && storedId !== distinctId) {
+      distinctId = null;
+      posthogSessionId = window.crypto?.randomUUID?.() ?? String(Date.now());
     }
     distinctId ??= getOrCreateDistinctId();
     const payload = {
@@ -67,7 +74,7 @@ const telemetry = (() => {
       distinct_id: distinctId,
       properties: {
         surface: 'site',
-        session_id: POSTHOG_SESSION_ID,
+        session_id: posthogSessionId,
         path: window.location.pathname,
         hostname: window.location.hostname,
         ...properties,

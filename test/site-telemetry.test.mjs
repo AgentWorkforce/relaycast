@@ -22,6 +22,7 @@ test('website emits anonymous personless events and honors runtime DNT with rota
   sandbox.navigator.doNotTrack = '1'; sandbox.subject.capture('page'); assert.equal(sent.length, 1);
   sandbox.navigator.doNotTrack = '0'; sandbox.subject.capture('page');
   assert.notEqual(sent[0].distinct_id, sent[1].distinct_id);
+  assert.notEqual(sent[0].properties.session_id, sent[1].properties.session_id);
 });
 test('initial DNT erases the previous anonymous generation and sends nothing', () => {
   const { sandbox, sent, storage } = harness('1');
@@ -40,4 +41,13 @@ test('DNT enabled at startup resumes after it is cleared and rotates the anonymo
   assert.equal(sent[0].properties.$process_person_profile, false);
   assert.equal(sent[0].properties.is_authenticated, false);
   assert.equal(storage.get('relaycast_posthog_distinct_id'), sent[0].distinct_id);
+});
+
+test('another tab changing the shared generation also rotates this tab session', () => {
+  const { sandbox, sent, storage } = harness();
+  sandbox.subject.capture('page');
+  storage.set('relaycast_posthog_distinct_id', 'other-tab-generation');
+  sandbox.subject.capture('page');
+  assert.equal(sent[1].distinct_id, 'other-tab-generation');
+  assert.notEqual(sent[1].properties.session_id, sent[0].properties.session_id);
 });

@@ -13,6 +13,7 @@ import {
 interface TelemetryState {
   anonymousId: string;
   telemetryDisabled?: boolean;
+  missingConsentFile?: boolean;
 }
 
 export interface McpTelemetryOptions {
@@ -28,6 +29,7 @@ export interface McpTelemetry {
 }
 
 const TELEMETRY_PATH = path.join(os.homedir(), '.relay', 'telemetry.json');
+const IDENTITY_PATH = path.join(os.homedir(), '.relay', 'telemetry-identity.json');
 const DEFAULT_POSTHOG_HOST = 'https://i.agentrelay.com';
 
 function isTruthy(value: string | undefined): boolean {
@@ -74,36 +76,45 @@ function isTelemetryState(value: unknown): value is TelemetryState {
     value &&
     typeof value === 'object' &&
     'anonymousId' in value &&
-    typeof (value as { anonymousId: unknown }).anonymousId === 'string',
+    typeof (value as { anonymousId: unknown }).anonymousId === 'string' &&
+    (value as { anonymousId: string }).anonymousId.trim().length > 0 &&
+    (!('telemetryDisabled' in value) || typeof (value as { telemetryDisabled: unknown }).telemetryDisabled === 'boolean'),
   );
 }
 
-function persistFreshState(fallback?: TelemetryState): TelemetryState {
-  const state: TelemetryState = fallback ?? { anonymousId: randomUUID() };
+/** Consent is read-only here: identity rotation must never overwrite an opt-out. */
+function loadState(anonymousId: string): TelemetryState | undefined {
   try {
-    const dir = path.dirname(TELEMETRY_PATH);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(TELEMETRY_PATH, JSON.stringify(state, null, 2) + '\n', 'utf8');
-  } catch {
-    // Best-effort persistence: if filesystem is read-only or unavailable,
-    // telemetry will still work with ephemeral anonymous ID
+    const parsed: unknown = JSON.parse(fs.readFileSync(TELEMETRY_PATH, 'utf8'));
+    return isTelemetryState(parsed) ? parsed : undefined;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { anonymousId, missingConsentFile: true };
+    // Unknown consent is not permission to reuse an older in-memory opt-in.
+    return undefined;
   }
-  return state;
 }
 
-function loadState(fallback?: TelemetryState): TelemetryState {
+function loadAnonymousId(fallback: string): { anonymousId: string; missing?: boolean } | undefined {
   try {
-    const raw = fs.readFileSync(TELEMETRY_PATH, 'utf8');
-    const parsed: unknown = JSON.parse(raw);
-    if (isTelemetryState(parsed)) return parsed;
+    const parsed: unknown = JSON.parse(fs.readFileSync(IDENTITY_PATH, 'utf8'));
+    return isTelemetryState(parsed) ? { anonymousId: parsed.anonymousId } : undefined;
   } catch (err) {
-    const e = err as NodeJS.ErrnoException;
-    if (e.code === 'ENOENT') return persistFreshState(fallback);
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? { anonymousId: fallback, missing: true } : undefined;
   }
+}
 
-  // The file is present but unreadable or incomplete. Leave it untouched so a
-  // newer opt-out is not replaced by this process's older in-memory consent.
-  return fallback ?? { anonymousId: randomUUID() };
+function persistAnonymousId(anonymousId: string): boolean {
+  const temporaryPath = `${IDENTITY_PATH}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(IDENTITY_PATH), { recursive: true });
+    fs.writeFileSync(temporaryPath, JSON.stringify({ anonymousId }) + '\n', { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    fs.renameSync(temporaryPath, IDENTITY_PATH);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try { fs.unlinkSync(temporaryPath); } catch { /* already renamed or unavailable */ }
+  }
 }
 
 function runtimePrefersFetch(): boolean {
@@ -206,11 +217,10 @@ async function postJson(
 }
 
 export function createMcpTelemetry(version = 'unknown', options: McpTelemetryOptions = {}): McpTelemetry {
-  let state = loadState();
+  let state = loadState(randomUUID()) ?? { anonymousId: randomUUID() };
   let hadConsent: boolean | undefined;
-  let rotationPending = false;
   let localGeneration: string | undefined;
-  const sessionId = randomUUID();
+  let sessionId = randomUUID();
   const pending = new Set<Promise<void>>();
   const posthogHost = getPosthogHost(options);
   const posthogApiKey = getPosthogApiKey(options);
@@ -218,24 +228,37 @@ export function createMcpTelemetry(version = 'unknown', options: McpTelemetryOpt
   const originVersion = options.originVersion ?? version;
 
   const capture = (event: ClientTelemetryEventName, properties: Record<string, unknown> = {}) => {
-    const current = loadState(state);
+    const current = loadState(state.anonymousId);
+    if (!current) return;
     const consentEnabled = telemetryConsentEnabled(current);
     if (hadConsent !== false && !consentEnabled) {
       localGeneration = randomUUID();
-      rotationPending = true;
+      sessionId = randomUUID();
     }
-    if (localGeneration) current.anonymousId = localGeneration;
-    if (rotationPending) {
-      try {
-        fs.writeFileSync(TELEMETRY_PATH, JSON.stringify(current) + '\n', 'utf8');
-        rotationPending = false;
-      } catch {
-        // Keep using the fresh in-memory generation and retry on later captures.
-        // A process exit before storage recovers cannot preserve this rotation.
-      }
+    const sharedIdentity = loadAnonymousId(current.anonymousId);
+    if (!localGeneration && !sharedIdentity) return;
+    const anonymousId = localGeneration ?? sharedIdentity!.anonymousId;
+    if (anonymousId !== state.anonymousId) sessionId = randomUUID();
+    if (!localGeneration && sharedIdentity?.missing && current.missingConsentFile) localGeneration = anonymousId;
+    if (localGeneration && persistAnonymousId(localGeneration)) {
+      // The shared file becomes authoritative again after successful persistence.
+      localGeneration = undefined;
     }
-    state = current;
+    state = { ...current, anonymousId };
     hadConsent = consentEnabled;
+    // Recheck consent after a write: another process may opt out during rotation.
+    const latest = loadState(state.anonymousId);
+    if (!latest) return;
+    if (!telemetryConsentEnabled(latest)) {
+      if (hadConsent !== false) {
+        localGeneration = randomUUID();
+        sessionId = randomUUID();
+        // Persist the observed boundary before returning, including process exit.
+        if (persistAnonymousId(localGeneration)) localGeneration = undefined;
+      }
+      hadConsent = false;
+      return;
+    }
     // Missing configuration is not an opt-out and must not rotate identity.
     if (!consentEnabled || !posthogApiKey.trim()) return;
 
