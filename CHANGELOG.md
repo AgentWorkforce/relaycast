@@ -16,7 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+- Unlimited-capacity nodes retain explicitly reported load for placement; load ties count both active and reserved agents.
 
 ## [10.6.2] - 2026-10-18
 
