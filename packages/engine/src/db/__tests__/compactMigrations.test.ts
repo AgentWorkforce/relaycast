@@ -112,14 +112,16 @@ function constraints(handle: SqliteDbHandle) {
 function expectConstraintsPreserved(before: ReturnType<typeof constraints>, after: ReturnType<typeof constraints>) {
   // 0050 may add these redundant named lookup indexes, but must not alter any
   // original constraint (including a lookup that already existed via 0049).
-  expect(after.filter(table => ![
-    'maintenance_cursors',
-    'a2a_egress',
-    'a2a_egress_context',
-    'a2a_inbound',
-    'direct_dm_idempotency',
-    'webhook_deliveries',
-  ].includes(table.name) || before.some(original => original.name === table.name))
+  expect(after.filter(table => (
+    ![
+      'maintenance_cursors',
+      'a2a_egress',
+      'a2a_egress_context',
+      'a2a_inbound',
+      'direct_dm_idempotency',
+      'webhook_deliveries',
+    ].includes(table.name) && !table.name.startsWith('messages_mention_fts')
+  ) || before.some(original => original.name === table.name))
     .map(table => {
       const original = before.find(candidate => candidate.name === table.name);
       // 0055 adds optional event identity columns and their index after the
@@ -221,14 +223,21 @@ describe('compact maintenance migration path', () => {
     expect(handle.sqlite.prepare('SELECT status_before_liveness_loss FROM agents').all())
       .toEqual([{ status_before_liveness_loss: null }]);
     // Remote-DM and direct-idempotency migrations add empty tables; every
-    // pre-existing row and table must remain.
+    // pre-existing row and table must remain. messages_mention_fts is a new
+    // index over those same message bodies, so its shadow tables are not
+    // pre-existing rows.
     expect(after.filter(([name]) => ![
       'a2a_egress',
       'a2a_egress_context',
       'a2a_inbound',
       'direct_dm_idempotency',
       'webhook_deliveries',
-    ].includes(String(name)))).toEqual(before);
+    ].includes(String(name)) && !String(name).startsWith('messages_mention_fts'))).toEqual(before);
+    const mentionRows = handle.sqlite.prepare(
+      'SELECT workspace_id, body FROM messages_mention_fts ORDER BY rowid',
+    ).all() as Array<{ workspace_id: string; body: string }>;
+    expect(mentionRows).toHaveLength(20);
+    expect(mentionRows.every((row) => row.workspace_id === 'workspace11' && row.body === 'preserve me')).toBe(true);
     expect(after.find(([name]) => name === 'a2a_egress')).toEqual([
       'a2a_egress', 0, createHash('sha256').update('[]').digest('hex'),
     ]);

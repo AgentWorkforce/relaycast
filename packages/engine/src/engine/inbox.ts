@@ -15,6 +15,22 @@ type Db = ReturnType<typeof getDb>;
 
 // The handle alphabet of `parseMessageMentions`.
 const MENTION_HANDLE = /^[\w-]+$/;
+// Tokens unicode61 actually indexes: `_` and `-` are separators, so a handle
+// made only of those characters produces no FTS tokens.
+const MENTION_FTS_TOKEN = /^[A-Za-z0-9]+$/;
+
+/**
+ * Workspace-scoped FTS5 MATCH for a canonical handle, or null when FTS cannot
+ * represent it. The last token is a prefix so `@alice你好` (one unicode61
+ * token) still matches handle `alice`. Callers keep the LIKE and
+ * `parseMessageMentions` checks, which drop the extra prefix hits.
+ */
+function mentionFtsMatch(workspaceId: string, tokens: string[]): string | null {
+  if (tokens.length === 0) return null;
+  if (!MENTION_HANDLE.test(workspaceId)) return null;
+  if (tokens.some((token) => !MENTION_FTS_TOKEN.test(token))) return null;
+  return `workspace_id : "${workspaceId}" AND "${tokens.join(' ')}"*`;
+}
 
 export async function getInbox(db: Db, workspaceId: string, agentId: string) {
   const unreadChannels = await db.all<{ channel_name: string; unread_count: number }>(sql`
@@ -59,17 +75,18 @@ export async function getInbox(db: Db, workspaceId: string, agentId: string) {
   }> = [];
   // A canonical mention handle is `[\w-]+`, so a name outside that alphabet can
   // never be mentioned and the history scan is skipped entirely.
-  const mentionTokens = MENTION_HANDLE.test(agentName) ? agentName.split(/[_-]+/).filter(Boolean) : [];
-  if (mentionTokens.length > 0) {
+  const canMention = MENTION_HANDLE.test(agentName);
+  const mentionTokens = canMention ? agentName.split(/[_-]+/).filter(Boolean) : [];
+  if (canMention) {
     const escapedName = agentName.replace(/[\\%_]/g, (ch) => `\\${ch}`);
-    // Candidates come from the messages_fts index rather than a LIKE walk of
-    // the whole workspace history. FTS5's default unicode61 tokenizer splits on
-    // `_` and `-` and case-folds, so every canonical `@handle` body contains
-    // this token phrase: the phrase match is a superset of the LIKE match and
-    // only costs index lookups per actual candidate. Without it, an agent with
-    // few mentions read every message in the workspace on each inbox call —
-    // the single largest D1 consumer in production.
-    const mentionPhrase = `"${mentionTokens.join(' ')}"`;
+    // Candidates come from messages_mention_fts, whose MATCH includes the
+    // workspace id, so a common handle cannot read other tenants. unicode61
+    // splits `_`/`-` and case-folds; the last token is a prefix so a handle
+    // glued to a trailing non-ASCII letter still matches. The LIKE filter and
+    // parseMessageMentions check stay, so the prefix superset does not change
+    // results. A handle with no FTS tokens (`_`, `-`, `---`) cannot use the
+    // index and keeps the workspace-scoped LIKE scan.
+    const mentionMatch = mentionFtsMatch(workspaceId, mentionTokens);
     let cursor: string | undefined;
     for (;;) {
       const batch = await db
@@ -85,7 +102,9 @@ export async function getInbox(db: Db, workspaceId: string, agentId: string) {
         // NOT INDEXED leaves only the rowid lookups from the FTS candidates;
         // otherwise SQLite (D1 has no ANALYZE stats) walks the workspace index
         // to satisfy the ORDER BY and merely filters on the candidate set.
-        .from(sql`${messages} NOT INDEXED`)
+        // Handles with no FTS tokens keep the ordinary table so that walk
+        // stays on idx_messages_workspace_length_id.
+        .from(mentionMatch ? sql`${messages} NOT INDEXED` : messages)
         .innerJoin(channels, eq(messages.channelId, channels.id))
         .innerJoin(agents, eq(messages.agentId, agents.id))
         .leftJoin(
@@ -106,7 +125,9 @@ export async function getInbox(db: Db, workspaceId: string, agentId: string) {
             eq(messages.workspaceId, workspaceId),
             eq(channels.isArchived, false),
             ne(messages.agentId, agentId), // exclude self-mentions
-            sql`messages.rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ${mentionPhrase})`,
+            ...(mentionMatch
+              ? [sql`messages.rowid IN (SELECT rowid FROM messages_mention_fts WHERE messages_mention_fts MATCH ${sql.raw(`'${mentionMatch}'`)})`]
+              : []),
             sql`${messages.body} LIKE ${'%@' + escapedName + '%'} ESCAPE '\\'`,
             or(
               and(eq(channels.channelType, 0), eq(channelMembers.agentId, agentId)),
@@ -117,8 +138,8 @@ export async function getInbox(db: Db, workspaceId: string, agentId: string) {
             // lengths with no numeric precision loss (a bare text compare is not).
             // The cursor predicate matches the ORDER BY exactly. Tradeoff: the
             // scan is bounded per batch but deliberately NOT by a total cap — a
-            // total cap would silently drop valid older mentions. The FTS
-            // candidate set, not the workspace history, bounds the rows read.
+            // total cap would silently drop valid older mentions. When the FTS
+            // match is present, that candidate set bounds the rows read.
             ...(cursor
               ? [
                   sql`(length(${messages.id}) < length(${cursor})

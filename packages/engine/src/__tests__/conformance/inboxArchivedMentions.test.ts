@@ -227,12 +227,51 @@ describe('inbox mention scope', () => {
 
     const mentionSql = statements.find((source) => source.includes('LIKE') && source.includes('"messages"."body"'));
     expect(mentionSql).toBeDefined();
+    expect(mentionSql).toContain('messages_mention_fts');
+    expect(mentionSql).toContain(`workspace_id : "${ws.workspaceId}"`);
     const params = (mentionSql!.match(/\?/g) ?? []).map(() => 'x');
     const plan = (sqlite.prepare(`EXPLAIN QUERY PLAN ${mentionSql}`).all(...params) as Array<{ detail: string }>)
       .map((step) => step.detail)
       .join('\n');
+    expect(plan).toContain('messages_mention_fts');
     expect(plan).toContain('VIRTUAL TABLE INDEX');
     expect(plan).not.toContain('USING INDEX idx_messages_workspace_length_id');
+  });
+
+  it('keeps a mention whose handle is glued to a trailing non-ASCII letter', async () => {
+    const ws = await createWorkspace(stack.app, 'inbox-unicode');
+    const sender = await registerAgent(stack.app, ws.workspaceKey, 'sender');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    expect((await api(sender.token).post('/v1/channels', { name: 'live' })).status).toBe(201);
+    await joinOk(target.token, 'live');
+
+    const idGlued = await send(sender.token, 'live', '@alice你好');
+    const idBare = await send(sender.token, 'live', 'alice你好');
+    const foreign = await createWorkspace(stack.app, 'inbox-unicode-foreign');
+    const foreignSender = await registerAgent(stack.app, foreign.workspaceKey, 'foreign-sender');
+    const idForeign = await send(foreignSender.token, 'general', '@alice你好');
+
+    const inbox = await inboxOf(target.token);
+    const mentionIds = inbox.mentions.map((m) => m.id);
+    expect(mentionIds).toContain(idGlued);
+    expect(mentionIds).not.toContain(idBare);
+    expect(mentionIds).not.toContain(idForeign);
+  });
+
+  it('keeps mentions of separator-only handles that FTS cannot tokenize', async () => {
+    const ws = await createWorkspace(stack.app, 'inbox-separators');
+    const sender = await registerAgent(stack.app, ws.workspaceKey, 'sender');
+    const underscore = await registerAgent(stack.app, ws.workspaceKey, '_');
+    const dashes = await registerAgent(stack.app, ws.workspaceKey, '---');
+    expect((await api(sender.token).post('/v1/channels', { name: 'live' })).status).toBe(201);
+    await joinOk(underscore.token, 'live');
+    await joinOk(dashes.token, 'live');
+
+    const idUnderscore = await send(sender.token, 'live', 'ping @_ now');
+    const idDashes = await send(sender.token, 'live', 'ping @--- now');
+
+    expect((await inboxOf(underscore.token)).mentions.map((m) => m.id)).toEqual([idUnderscore]);
+    expect((await inboxOf(dashes.token)).mentions.map((m) => m.id)).toEqual([idDashes]);
   });
 
   it('skips the mention scan for a name no canonical mention can match', async () => {

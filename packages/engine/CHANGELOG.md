@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- `GET /v1/inbox` finds mention candidates through the `messages_fts` index instead of a `LIKE` walk of the whole workspace history, and skips the scan for names no canonical mention can match. Results are unchanged.
+- `GET /v1/inbox` finds mention candidates through the workspace-scoped `messages_mention_fts` index (migration `0075`) instead of a `LIKE` walk of the whole workspace history, and skips the scan for names no canonical mention can match. Handles the tokenizer cannot represent (`_`, `-`) keep the workspace scan. Results are unchanged.
 - The unreachable-node delivery sweep reads only active deliveries through the new partial index `idx_deliveries_active_location_node` (migration `0074`), not every delivery ever routed to a node.
 - Every response carries its request id in an `X-Request-Id` header (the header the Rust SDK reads), so client error reports stop showing `request_id: null`.
 - Per-node agent roster and inventory lookups are pinned to `idx_agents_location_node_fk` instead of walking every agent in the workspace.

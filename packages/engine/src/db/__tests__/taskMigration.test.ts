@@ -38,6 +38,7 @@ it('upgrades existing actions and results additively, preserving rows and every 
       '0071_node_liveness_revision.sql',
       '0073_workspace_key_rotation.sql',
       '0074_delivery_active_location_node_index.sql',
+      '0075_message_mention_fts.sql',
     ]);
     for (const table of before) {
       const columns = db.pragma(`table_info(${table.name})`) as { name: string }[];
