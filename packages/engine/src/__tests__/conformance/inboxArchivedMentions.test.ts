@@ -229,6 +229,7 @@ describe('inbox mention scope', () => {
     expect(mentionSql).toBeDefined();
     expect(mentionSql).toContain('messages_mention_fts');
     expect(mentionSql).toContain(`workspace_id : "${ws.workspaceId}"`);
+    expect(mentionSql).toContain('body :');
     const params = (mentionSql!.match(/\?/g) ?? []).map(() => 'x');
     const plan = (sqlite.prepare(`EXPLAIN QUERY PLAN ${mentionSql}`).all(...params) as Array<{ detail: string }>)
       .map((step) => step.detail)
@@ -256,6 +257,33 @@ describe('inbox mention scope', () => {
     expect(mentionIds).toContain(idGlued);
     expect(mentionIds).not.toContain(idBare);
     expect(mentionIds).not.toContain(idForeign);
+  });
+
+  it('keeps a short handle on the workspace scan, including a trailing letter', async () => {
+    const ws = await createWorkspace(stack.app, 'inbox-short');
+    const sender = await registerAgent(stack.app, ws.workspaceKey, 'sender');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    expect((await api(sender.token).post('/v1/channels', { name: 'live' })).status).toBe(201);
+    await joinOk(target.token, 'live');
+    const idGlued = await send(sender.token, 'live', '@bob你好');
+
+    const sqlite = stack.runtime.handle.sqlite;
+    const statements: string[] = [];
+    const prepare = sqlite.prepare.bind(sqlite);
+    sqlite.prepare = ((source: string) => {
+      statements.push(source);
+      return prepare(source);
+    }) as typeof sqlite.prepare;
+    let inbox: Awaited<ReturnType<typeof inboxOf>>;
+    try {
+      inbox = await inboxOf(target.token);
+    } finally {
+      sqlite.prepare = prepare;
+    }
+    expect(inbox.mentions.map((mention) => mention.id)).toEqual([idGlued]);
+    const mentionSql = statements.find((source) => source.includes('LIKE') && source.includes('"messages"."body"'));
+    expect(mentionSql).toBeDefined();
+    expect(mentionSql).not.toContain('messages_mention_fts');
   });
 
   it('keeps mentions of separator-only handles that FTS cannot tokenize', async () => {

@@ -94,6 +94,19 @@ describe('uncoded server errors in route handlers', () => {
     }
   });
 
+  it('puts the request id on a CORS preflight and exposes the header', async () => {
+    const response = await stack.app.request('/v1/agents', {
+      method: 'OPTIONS',
+      headers: {
+        origin: 'https://example.com',
+        'access-control-request-method': 'GET',
+      },
+    });
+    expect(response.status).toBe(204);
+    expect(response.headers.get('x-request-id')).toMatch(/.+/);
+    expect(response.headers.get('access-control-expose-headers')?.toLowerCase()).toContain('x-request-id');
+  });
+
   it('let a host classifier turn D1 overload into a retryable 503', async () => {
     installOverloadClassifier(stack);
     const restore = failAgentInserts(stack, OVERLOAD);

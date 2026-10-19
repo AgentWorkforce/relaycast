@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
+import { backfillMessageMentionFts } from '../../engine/inbox.js';
 import { planMigrations } from '../migrationPlan.js';
 
 const directory = fileURLToPath(new URL('../migrations/', import.meta.url));
@@ -208,7 +209,7 @@ describe('compact maintenance migration path', () => {
     expect(handle.sqlite.pragma('foreign_key_check')).toEqual([]);
   });
 
-  it.each([[], [older[0]!], [older[1]!], older].map(already => ({ already })))('preserves every row and converges from $already', ({ already }) => {
+  it.each([[], [older[0]!], [older[1]!], older].map(already => ({ already })))('preserves every row and converges from $already', async ({ already }) => {
     const handle = fixture();
     for (const name of already) {
       handle.sqlite.exec(ddl(name));
@@ -233,6 +234,7 @@ describe('compact maintenance migration path', () => {
       'direct_dm_idempotency',
       'webhook_deliveries',
     ].includes(String(name)) && !String(name).startsWith('messages_mention_fts'))).toEqual(before);
+    expect(await backfillMessageMentionFts(handle.db)).toBeGreaterThan(0);
     const mentionRows = handle.sqlite.prepare(
       'SELECT workspace_id, body FROM messages_mention_fts ORDER BY rowid',
     ).all() as Array<{ workspace_id: string; body: string }>;
@@ -303,7 +305,8 @@ describe('compact maintenance migration path', () => {
     expect(recoveryLookup).toContain('idx_nodes_workspace_previous_token');
     expect(recoveryLookup).not.toContain('SCAN nodes');
     expectConstraintsPreserved(beforeConstraints, constraints(handle));
-    expect(handle.sqlite.prepare('SELECT * FROM maintenance_cursors ORDER BY id').all()).toEqual(cursorRows);
+    expect(handle.sqlite.prepare("SELECT * FROM maintenance_cursors WHERE id != 'mention-fts-backfill' ORDER BY id").all()).toEqual(cursorRows);
+    expect(handle.sqlite.prepare("SELECT cursor FROM maintenance_cursors WHERE id = 'mention-fts-backfill'").get()).toEqual({ cursor: 'complete' });
     expect(handle.sqlite.pragma('foreign_key_check')).toEqual([]);
     const retained = handle.sqlite.prepare("SELECT name FROM _engine_migrations WHERE name IN (?,?) ORDER BY name").all(...older);
     expect(retained).toEqual([...already].sort().map(name => ({ name })));
