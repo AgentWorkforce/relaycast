@@ -1755,7 +1755,8 @@ components:
           type: string
           description: >-
             Present on unexpected server errors (5xx). Identifies the request in
-            the server logs; quote it when reporting the error.
+            the server logs; quote it when reporting the error. Every response
+            also carries this id in the `X-Request-Id` header.
 
     SuccessResponse:
       type: object

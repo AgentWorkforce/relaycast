@@ -9,9 +9,98 @@ import {
   dmParticipants,
 } from '../db/schema.js';
 import { queryInChunks } from '../lib/queryChunks.js';
+import { runAtomicWrites } from '../ports/database.js';
 import { parseMessageMentions } from './mentions.js';
 
 type Db = ReturnType<typeof getDb>;
+
+// The handle alphabet of `parseMessageMentions`.
+const MENTION_HANDLE = /^[\w-]+$/;
+// Tokens unicode61 actually indexes: `_` and `-` are separators, so a handle
+// made only of those characters produces no FTS tokens.
+const MENTION_FTS_TOKEN = /^[A-Za-z0-9]+$/;
+const MENTION_FTS_CURSOR = 'mention-fts-backfill';
+// A shorter final token (`"1"*`, `"dev"*`) makes FTS walk a huge term range.
+// Those handles keep the workspace scan, which still matches a trailing letter.
+const MIN_FTS_PREFIX = 4;
+export const MESSAGE_MENTION_BACKFILL_BATCH = 500;
+
+/**
+ * Workspace-scoped FTS5 MATCH for a canonical handle, or null when FTS cannot
+ * represent it. The prefix is limited to the `body` column: an unscoped
+ * `"1"*` also matches workspace snowflakes and returns every row. The last
+ * token is a prefix so `@alice你好` (one unicode61 token) still matches
+ * handle `alice`. Callers keep the LIKE and `parseMessageMentions` checks.
+ */
+function mentionFtsMatch(workspaceId: string, tokens: string[]): string | null {
+  if (tokens.length === 0) return null;
+  if (!MENTION_HANDLE.test(workspaceId)) return null;
+  if (tokens.some((token) => !MENTION_FTS_TOKEN.test(token))) return null;
+  const last = tokens[tokens.length - 1] ?? '';
+  if (last.length < MIN_FTS_PREFIX) return null;
+  return `workspace_id : "${workspaceId}" AND body : "${tokens.join(' ')}"*`;
+}
+
+export async function messageMentionIndexReady(db: Db): Promise<boolean> {
+  const [row] = await db.all<{ cursor: string }>(
+    sql`SELECT cursor FROM maintenance_cursors WHERE id = ${MENTION_FTS_CURSOR}`,
+  );
+  return row?.cursor === 'complete';
+}
+
+/**
+ * Copy one bounded batch of messages that existed at migration time into
+ * `messages_mention_fts`. Newer rows are already indexed by the insert
+ * trigger. Returns how many rows this call copied.
+ */
+export async function backfillMessageMentionFts(
+  db: Db,
+  limit = MESSAGE_MENTION_BACKFILL_BATCH,
+): Promise<number> {
+  const [saved] = await db.all<{ cursor: string }>(
+    sql`SELECT cursor FROM maintenance_cursors WHERE id = ${MENTION_FTS_CURSOR}`,
+  );
+  if (!saved || saved.cursor === 'complete') return 0;
+  const [afterText, untilText] = saved.cursor.split('/');
+  const after = Number(afterText);
+  const until = Number(untilText);
+  if (!Number.isSafeInteger(after) || !Number.isSafeInteger(until)) return 0;
+  const batchSize = Math.min(Math.max(Math.floor(limit), 1), MESSAGE_MENTION_BACKFILL_BATCH);
+  const [page] = await db.all<{ copied: number; next_rowid: number | null }>(sql`
+    SELECT count(*) AS copied, max(rowid) AS next_rowid FROM (
+      SELECT rowid FROM messages
+      WHERE rowid > ${after} AND rowid <= ${until}
+      ORDER BY rowid
+      LIMIT ${batchSize}
+    )
+  `);
+  const copied = Number(page?.copied ?? 0);
+  const nextRowid = page?.next_rowid == null ? null : Number(page.next_rowid);
+  const cursor = copied === 0 || nextRowid == null || nextRowid >= until
+    ? 'complete'
+    : `${nextRowid}/${until}`;
+  if (copied === 0 || nextRowid == null) {
+    await db.run(sql`UPDATE maintenance_cursors SET cursor = ${cursor} WHERE id = ${MENTION_FTS_CURSOR}`);
+    return 0;
+  }
+  // The page and the cursor commit together. Rows already indexed (an edit
+  // during the copy, or a replay after the cursor update was lost) are
+  // skipped, so a second insert of the same rowid cannot fail the docsize
+  // primary key and leave the cursor stuck.
+  await runAtomicWrites(db, (writeDb) => [
+    writeDb.run(sql`
+      INSERT INTO messages_mention_fts(rowid, workspace_id, body)
+      SELECT rowid, workspace_id, body FROM messages
+      WHERE rowid > ${after} AND rowid <= ${nextRowid}
+        AND NOT EXISTS (
+          SELECT 1 FROM messages_mention_fts_docsize
+          WHERE id = messages.rowid
+        )
+    `),
+    writeDb.run(sql`UPDATE maintenance_cursors SET cursor = ${cursor} WHERE id = ${MENTION_FTS_CURSOR}`),
+  ]);
+  return copied;
+}
 
 export async function getInbox(db: Db, workspaceId: string, agentId: string) {
   const unreadChannels = await db.all<{ channel_name: string; unread_count: number }>(sql`
@@ -54,19 +143,38 @@ export async function getInbox(db: Db, workspaceId: string, agentId: string) {
     text: string;
     created_at: string;
   }> = [];
-  if (agentName) {
+  // A canonical mention handle is `[\w-]+`, so a name outside that alphabet can
+  // never be mentioned and the history scan is skipped entirely.
+  const canMention = MENTION_HANDLE.test(agentName);
+  const mentionTokens = canMention ? agentName.split(/[_-]+/).filter(Boolean) : [];
+  if (canMention) {
     const escapedName = agentName.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+    // Candidates come from messages_mention_fts once its backfill has caught
+    // up. The MATCH includes the workspace id and restricts the prefix to
+    // `body`, so a common or numeric handle cannot read other tenants or every
+    // row of this workspace. Until the backfill finishes, and for handles FTS
+    // cannot represent, the workspace-scoped LIKE scan stays.
+    const mentionMatch = await messageMentionIndexReady(db)
+      ? mentionFtsMatch(workspaceId, mentionTokens)
+      : null;
     let cursor: string | undefined;
     for (;;) {
       const batch = await db
         .select({
-          id: messages.id,
+          // SQL-wrapped: Drizzle rejects bare columns of a table named only
+          // through the SQL FROM below, and this keeps their decoders.
+          id: sql`${messages.id}`.mapWith(messages.id),
           channelName: channels.name,
           agentName: agents.name,
-          body: messages.body,
-          createdAt: messages.createdAt,
+          body: sql`${messages.body}`.mapWith(messages.body),
+          createdAt: sql`${messages.createdAt}`.mapWith(messages.createdAt),
         })
-        .from(messages)
+        // NOT INDEXED leaves only the rowid lookups from the FTS candidates;
+        // otherwise SQLite (D1 has no ANALYZE stats) walks the workspace index
+        // to satisfy the ORDER BY and merely filters on the candidate set.
+        // Handles with no FTS tokens keep the ordinary table so that walk
+        // stays on idx_messages_workspace_length_id.
+        .from(mentionMatch ? sql`${messages} NOT INDEXED` : messages)
         .innerJoin(channels, eq(messages.channelId, channels.id))
         .innerJoin(agents, eq(messages.agentId, agents.id))
         .leftJoin(
@@ -87,6 +195,9 @@ export async function getInbox(db: Db, workspaceId: string, agentId: string) {
             eq(messages.workspaceId, workspaceId),
             eq(channels.isArchived, false),
             ne(messages.agentId, agentId), // exclude self-mentions
+            ...(mentionMatch
+              ? [sql`messages.rowid IN (SELECT rowid FROM messages_mention_fts WHERE messages_mention_fts MATCH ${sql.raw(`'${mentionMatch}'`)})`]
+              : []),
             sql`${messages.body} LIKE ${'%@' + escapedName + '%'} ESCAPE '\\'`,
             or(
               and(eq(channels.channelType, 0), eq(channelMembers.agentId, agentId)),
@@ -97,9 +208,8 @@ export async function getInbox(db: Db, workspaceId: string, agentId: string) {
             // lengths with no numeric precision loss (a bare text compare is not).
             // The cursor predicate matches the ORDER BY exactly. Tradeoff: the
             // scan is bounded per batch but deliberately NOT by a total cap — a
-            // total cap would silently drop valid older mentions.
-            // idx_messages_workspace_length_id covers (workspace_id, length(id), id)
-            // so each batch can stop at MENTION_BATCH without a cross-workspace scan.
+            // total cap would silently drop valid older mentions. When the FTS
+            // match is present, that candidate set bounds the rows read.
             ...(cursor
               ? [
                   sql`(length(${messages.id}) < length(${cursor})
