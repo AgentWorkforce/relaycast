@@ -252,10 +252,17 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     if (error.code === 'invalid_json' || err instanceof SyntaxError) {
       return jsonMalformedBody(c);
     }
-    return jsonError(
-      c,
-      error.code || 'internal_error',
-      safeClientErrorMessage(error),
+    const requestId = c.get('requestId');
+    return c.json(
+      {
+        ok: false as const,
+        error: {
+          code: error.code || 'internal_error',
+          message: safeClientErrorMessage(error),
+          // Lets a caller quote a server error that the logs above can be found by.
+          ...(status >= 500 && requestId ? { request_id: requestId } : {}),
+        },
+      },
       status as ContentfulStatusCode,
     );
   });

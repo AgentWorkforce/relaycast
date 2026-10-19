@@ -7,7 +7,7 @@ import { generateId } from './snowflake.js';
 import { inboundWebhookMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
 import { runAtomicWrites, databaseConstraintKind, type AtomicWrite } from '../ports/database.js';
 import { buildChannelDeliveryWrite, fetchChannelDeliveryOutcomes } from './deliveryWrites.js';
-import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
+import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS, type MailboxConfig } from './mailboxConfig.js';
 import type { WorkspaceDeliveryPolicy } from './workspaceDeliveryPolicy.js';
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 
@@ -225,7 +225,7 @@ export async function triggerWebhook(
   const sessionRef = webhook.tokenHash ? requireSessionRefFromMetadata(metadata) : null;
   const createdAt = new Date();
   const mailbox = typeof options.mailbox === 'function' ? options.mailbox(webhook.workspaceId) : options.mailbox ?? {
-    ttlMs: DEFAULT_MAILBOX_TTL_MS, depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
+    ttlMs: DEFAULT_MAILBOX_TTL_MS, depthCap: DEFAULT_MAILBOX_DEPTH_CAP, offlineExcludeMs: DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS,
   };
   const workspacePolicy = typeof options.workspaceDeliveryPolicy === 'function'
     ? await options.workspaceDeliveryPolicy(webhook.workspaceId)
@@ -256,7 +256,7 @@ export async function triggerWebhook(
     writes.push(buildChannelDeliveryWrite(writeDb, {
       workspaceId: webhook.workspaceId, messageId, channelId: webhook.channelId,
       senderAgentId: postingAgentId, mode: 'immediate',
-      ttlMs: mailbox.ttlMs, depthCap: mailbox.depthCap, rejectOnOverflow: true,
+      ttlMs: mailbox.ttlMs, depthCap: mailbox.depthCap, offlineExcludeMs: mailbox.offlineExcludeMs, rejectOnOverflow: true,
       workspacePolicy,
     }));
     return writes;
@@ -271,6 +271,7 @@ export async function triggerWebhook(
 
   const outcomes = await fetchChannelDeliveryOutcomes(db, {
     messageId, channelId: webhook.channelId, senderAgentId: postingAgentId,
+    offlineExcludeMs: mailbox.offlineExcludeMs,
   });
   return {
     _deliveries: outcomes.deliveries,
@@ -323,6 +324,7 @@ export async function triggerIntegrationMessage(
   const mailbox = options.mailbox ?? {
     ttlMs: DEFAULT_MAILBOX_TTL_MS,
     depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
+    offlineExcludeMs: DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS,
   };
 
   // Insert the message AND compute channel deliveries in one atomic unit — the
@@ -363,6 +365,7 @@ export async function triggerIntegrationMessage(
         mode: data.mode === 'steer' ? 'next-tool-call' : 'immediate',
         ttlMs: mailbox.ttlMs,
         depthCap: mailbox.depthCap,
+        offlineExcludeMs: mailbox.offlineExcludeMs,
         rejectOnOverflow: true,
         workspacePolicy: options.workspaceDeliveryPolicy,
       }),
@@ -381,6 +384,7 @@ export async function triggerIntegrationMessage(
     messageId,
     channelId,
     senderAgentId: postingAgentId,
+    offlineExcludeMs: mailbox.offlineExcludeMs,
   });
 
   return {

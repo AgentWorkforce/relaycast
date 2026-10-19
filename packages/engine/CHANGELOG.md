@@ -17,6 +17,49 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Expose credential-authenticated actor provenance separately from event targets so hosts can verify analytics ownership; fingerprint presented credentials with SHA-256 independently of custom authentication storage. Public metadata cannot identify people.
 
+## [10.6.2] - 2026-10-18
+
+### Changed
+
+- `PLAN_LIMITS.connect.api_calls` rises from 3,000,000 to 10,000,000 (equal to `pro`), sized for a full 10-seat room polling for its 7-day maximum life.
+
+## [10.6.1] - 2026-10-18
+
+### Fixed
+
+- `POST /v1/agents/spawn` accepts `cli: muse` and `cli: devin` through the shared CLI schema.
+- `inventory.sync`'s missing sweep leaves an agent bound while an open built-in release dispatched to that node and provider names it (and its `expected_agent_id`, when set), for up to the dispatch timeout. The release completion deactivates the binding and tombstones the agent; before, the sweep won the race and the completion failed with `agent_identity_mismatch`.
+
+## [10.6.0] - 2026-10-18
+
+### Added
+
+- `PLAN_LIMITS.connect`: a room-sized tier (10 agents, 3,000,000 `api_calls`, 100,000 messages, 1 GiB files, 1,200 requests/min) that a control plane can assign to short-lived collaboration workspaces.
+- `POST /v1/workspace/rotate-key` rotates the authenticated workspace's API key with a bounded `grace_seconds` continuity window for the superseded key (`0` for immediate compromise cutoff). Migration `0073_workspace_key_rotation.sql` adds the `previous_api_key_hash`/`previous_api_key_expires_at` grace slot and the `api_key_generation` ordering fence. `EngineConfig.allowWorkspaceKeyRotation` opts in (default off, so hosted deployments where a control plane owns the canonical key can never serve it).
+
+## [10.5.1] - 2026-10-16
+
+### Fixed
+
+- Offline fanout exclusion now treats a fresh direct-node heartbeat or matching broker-provider heartbeat as proof that a hosted agent remains reachable, so a quiet connected agent is not dropped merely because route heartbeats do not update `agents.last_seen`. Disconnected providers and inventory-confirmed exits no longer inherit another provider's liveness.
+
+## [10.5.0] - 2026-10-16
+
+### Added
+
+- `EngineConfig.mailbox.offlineExcludeMs` (and the matching per-workspace override) bounds how long an effectively-offline agent keeps receiving new channel/group-DM broadcast deliveries before fanout excludes it; defaults to 24h and accepts `0` to disable exclusion.
+
+### Fixed
+
+- `buildChannelDeliveryWrite`/`buildGroupDmDeliveryWrite` no longer insert a new delivery row for a recipient that has been offline past `offlineExcludeMs`, including stale persisted `active`/`online` rows, so a handful of dead agents can no longer exhaust a workspace's shared delivery-depth cap across repeated broadcasts. Idle `http_push` routes remain eligible because they have no socket-liveness signal. `DeliveryRejectionRecord.reason` gained `recipient_offline` alongside `depth_cap` to report the exclusion; 1:1 DM thread replies remain direct deliveries.
+
+## [10.4.2] - 2026-10-16
+
+### Fixed
+
+- `errorResponse` re-throws an error with no `code` that resolves to a 5xx, so it reaches `app.onError` (structured log, telemetry, and any host classifier chained in front of it) instead of being answered as a bare `500 internal_error` in the route. Coded errors and 4xx are still answered in place, with an unchanged body.
+- `app.onError` adds `error.request_id` to 5xx bodies, matching the `request_id` in the request logs.
+
 ## [10.4.1] - 2026-10-15
 
 ### Fixed
@@ -96,7 +139,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Fixed
 
 - Thread reply pagination uses the existing thread index while preserving workspace filtering and decoded fields.
-
 ## [9.2.0] - 2026-10-09
 
 ### Added

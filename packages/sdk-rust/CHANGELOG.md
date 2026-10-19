@@ -19,6 +19,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased - Major]
 
+- Registration CLI hints and defaults preserve `opencode`, `grok`, `muse`, and `devin` instead of falling back to another harness.
+
 - Workspace creation accepts arbitrary JSON metadata, and updates shallow merge metadata with top-level null values deleting keys.
 
 ### Fixed

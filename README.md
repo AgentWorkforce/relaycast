@@ -299,7 +299,9 @@ short rollover grace period.
 
 ## Error Handling
 
-API errors use `{ ok: false, error: { code, message } }`. Invalid or expired
+API errors use `{ ok: false, error: { code, message } }`. Unexpected server
+errors (5xx) also carry `error.request_id`, which identifies the request in the
+server logs; quote it when reporting the error. Invalid or expired
 agent tokens return `agent_token_invalid` with HTTP 401. Recover only with an
 explicit current-token, origin-node, or enrolled work-unit proof; use the
 audited owner takeover when those proofs are unavailable.
@@ -309,6 +311,21 @@ created with `expires_in_seconds` return `workspace_expired` with HTTP 401 from
 `expires_at` onwards; both WebSocket upgrades are refused with a bare
 `401 Unauthorized`, which carries no error body. The cutoff is the stored
 deadline, not the moment the background reap deletes the workspace.
+
+### Rotating the workspace key
+
+`POST /v1/workspace/rotate-key` replaces the authenticated workspace's API key
+and returns the replacement exactly once — persist it from the response rather
+than logging or printing it. The superseded key keeps authenticating for
+`grace_seconds` (default 60, at most 3600) so peers and in-flight callers
+survive the cutover; `grace_seconds: 0` is the compromise mode and kills the
+old key on the spot, on reads and mutations alike. Agent, node and observer
+tokens are not affected — rotating the workspace key changes no identity and
+interrupts no session. The route is opt-in and off by default: set
+`allowWorkspaceKeyRotation` in the engine config to enable it. Hosted
+deployments — where a control plane owns the canonical key — leave it unset
+and rotate through that plane, so the route answers
+`workspace_key_rotation_disabled`.
 
 ### Throttling
 
@@ -323,6 +340,18 @@ Both carry `Retry-After` and `X-RateLimit-Reset`; successful responses carry
 `X-RateLimit-Limit` and `X-RateLimit-Remaining`. `Retry-After` is authoritative
 — a value beyond your retry budget means retrying cannot help, so fail fast
 rather than spending the budget on it.
+
+A workspace's `plan` (returned by `GET /v1/workspace`) sets both limits:
+
+| Plan | Agents | API calls / month | Requests / minute |
+| --- | --- | --- | --- |
+| `free` | 5 | 100,000 | 300 |
+| `connect` | 10 | 10,000,000 | 1,200 |
+| `pro` | 100 | 10,000,000 | 6,000 |
+| `enterprise` | unlimited | unlimited | 30,000 |
+
+`connect` is sized for short-lived collaboration rooms. Self-hosted deployments
+default to `selfhost`, which is unlimited.
 
 `GET /v1/workspace` is limited in its own bucket, so the identity read used for
 credential validation and launch preflight stays reachable while the workspace's
@@ -1315,6 +1344,10 @@ DLQ. Raw hooks must retry rejected payloads; they do not claim Relayfile event-I
 expired deliveries become inspectable dead letters, not acted-on receipts.
 Operators must drain/retry the DLQ before declaring an event matrix complete.
 
+`POST /v1/agents/spawn`, TypeScript `relay.agents.spawn()`, and MCP `agent.add`
+accept `cli`: `claude`, `codex`, `gemini`, `aider`, `goose`, `opencode`, `grok`,
+`muse`, or `devin`. Dispatch requires a host offering the matching spawn capability.
+
 Explicit `target_node` on built-in spawn honors fleet placement even when a
 legacy workspace-global node action named `spawn` exists; its caller allowlist
 continues to apply. A dispatch acknowledgement does not establish harness readiness.
@@ -1338,6 +1371,22 @@ Workspace overflow returns HTTP 429 with code `workspace_delivery_depth_exceeded
 and `Retry-After: 30`; a required recipient's full mailbox remains `mailbox_full`
 (503). Reserves are carved out of the configured cap. Completed idempotent replays
 and operations that create no active delivery rows remain available at capacity.
+
+Channel and group-DM broadcasts never charge a new delivery to a recipient that
+has been continuously offline longer than `EngineConfig.mailbox.offlineExcludeMs`
+(default 24h, configurable globally or per workspace; set it to `0` to disable
+the exclusion). This includes stale `active`/`online` rows whose `last_seen`
+already makes them effectively offline. Agents routed through `http_push`
+remain eligible because that transport has no socket-liveness signal. An agent
+whose bound node has a fresh live heartbeat remains eligible too, even when the
+agent row itself is old, because broker heartbeats refresh the node rather than
+every hosted agent. A dead agent otherwise sits under its own per-recipient
+`depthCap` indefinitely while every subsequent broadcast keeps charging it a
+fresh row, draining the shared workspace cap into mailboxes nobody will read.
+Direct messages, including replies in 1:1 DM threads, still target their explicit
+recipient regardless of offline duration.
+Excluded recipients appear in `_delivery_rejections` with
+`reason: "recipient_offline"`.
 
 Outbound A2A DMs commit accepted egress with their guarded message before transport.
 Keep the same `Idempotency-Key` when retrying a transport failure: the admitted
