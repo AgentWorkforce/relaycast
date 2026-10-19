@@ -6,6 +6,7 @@ import type { EngineDb } from '../../ports/database.js';
 import type { NodeConnectionRegistry } from '../../ports/realtime.js';
 import { deliverPendingToNode, fetchDueNodeDeliveryEvents } from '../delivery.js';
 import { pruneExpired } from '../retention.js';
+import { reconcileInventory } from '../node.js';
 
 const handles: SqliteDbHandle[] = [];
 afterEach(() => { vi.restoreAllMocks(); for (const handle of handles.splice(0)) handle.sqlite.close(); });
@@ -290,5 +291,54 @@ describe('bounded database work with retained history', () => {
     const state = JSON.parse((f.sqlite.prepare("SELECT cursor FROM maintenance_cursors WHERE id = 'retention-v1'").get() as { cursor: string }).cursor);
     expect(state.next).toBe(1);
     expect(f.queries.filter(q => q.sql.includes('WITH page AS MATERIALIZED'))).toHaveLength(1);
+  });
+});
+
+// Production D1 has no ANALYZE stats. Without them SQLite answered the
+// per-node agent lookups from a workspace-leading index, reading every agent
+// in the workspace (avg ~5.7k rows) to find one node's handful.
+describe('per-node agent lookups in a large workspace without ANALYZE', () => {
+  function crowdedWorkspace() {
+    const handle = getSqliteDb(':memory:');
+    handles.push(handle);
+    runMigrations(handle);
+    const sqlite = handle.sqlite;
+    sqlite.exec(`
+      INSERT INTO workspaces(id,name,api_key_hash) VALUES ('ws','test','key');
+      INSERT INTO nodes(id,workspace_id,name,token_hash) VALUES ('node','ws','node','node-key');
+      INSERT INTO agents(id,workspace_id,name,token_hash,location_type,location_node_id,provider_name)
+        VALUES ('agent','ws','recipient','agent-key','via_node','node','provider');
+    `);
+    const agent = sqlite.prepare("INSERT INTO agents(id,workspace_id,name,token_hash) VALUES (?,'ws',?,?)");
+    sqlite.transaction(() => {
+      for (let n = 0; n < 2_000; n++) agent.run(`other-${n}`, `other-${n}`, `other-key-${n}`);
+    })();
+    const queries: { sql: string; params: unknown[] }[] = [];
+    const db = drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => queries.push({ sql, params }) } }) as unknown as EngineDb;
+    const registry = {
+      sendToProvider: vi.fn(async () => true),
+      isProviderAgentDeliveryReady: vi.fn(() => true),
+    } as unknown as NodeConnectionRegistry;
+    const planOf = (query: { sql: string; params: unknown[] }) =>
+      JSON.stringify(sqlite.prepare('EXPLAIN QUERY PLAN ' + query.sql).all(...query.params));
+    return { db, queries, registry, planOf };
+  }
+  const nodeAgentReads = (queries: { sql: string }[]) => queries.filter((q) =>
+    q.sql.startsWith('select') && q.sql.includes('"agents"."location_node_id" = ?') && !q.sql.includes('"agents"."id" in'));
+
+  it('replays a node roster through the node index', async () => {
+    const f = crowdedWorkspace();
+    await deliverPendingToNode(f.db, f.registry, 'ws', 'node', { providerName: 'provider' });
+    const reads = nodeAgentReads(f.queries).filter((q) => q.sql.includes('order by "agents"."name"'));
+    expect(reads.length).toBeGreaterThan(0);
+    for (const query of reads) expect(f.planOf(query)).toContain('idx_agents_location_node_fk');
+  });
+
+  it('reconciles a provider inventory through the node index', async () => {
+    const f = crowdedWorkspace();
+    await reconcileInventory(f.db, f.registry, 'ws', 'node', 'provider', []);
+    const reads = nodeAgentReads(f.queries).filter((q) => q.sql.includes('"metadata" from "agents"'));
+    expect(reads.length).toBeGreaterThan(0);
+    for (const query of reads) expect(f.planOf(query)).toContain('idx_agents_location_node_fk');
   });
 });

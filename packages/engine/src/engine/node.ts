@@ -2906,9 +2906,15 @@ export async function reconcileInventory(
     }
   }
 
+  // Pinned to the node FK index for the same reason as the delivery roster:
+  // without stats SQLite picks idx_agents_roster and reads the workspace.
   const nodeAgents = await db
-    .select({ id: agents.id, name: agents.name, metadata: agents.metadata })
-    .from(agents)
+    .select({
+      id: sql`${agents.id}`.mapWith(agents.id),
+      name: sql`${agents.name}`.mapWith(agents.name),
+      metadata: sql`${agents.metadata}`.mapWith(agents.metadata),
+    })
+    .from(sql`${agents} INDEXED BY idx_agents_location_node_fk`)
     .where(and(
       eq(agents.workspaceId, workspaceId),
       eq(agents.locationType, 'via_node'),

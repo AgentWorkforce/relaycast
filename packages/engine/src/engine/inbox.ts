@@ -13,6 +13,9 @@ import { parseMessageMentions } from './mentions.js';
 
 type Db = ReturnType<typeof getDb>;
 
+// The handle alphabet of `parseMessageMentions`.
+const MENTION_HANDLE = /^[\w-]+$/;
+
 export async function getInbox(db: Db, workspaceId: string, agentId: string) {
   const unreadChannels = await db.all<{ channel_name: string; unread_count: number }>(sql`
     SELECT ch.name AS channel_name, count(*) AS unread_count
@@ -54,19 +57,35 @@ export async function getInbox(db: Db, workspaceId: string, agentId: string) {
     text: string;
     created_at: string;
   }> = [];
-  if (agentName) {
+  // A canonical mention handle is `[\w-]+`, so a name outside that alphabet can
+  // never be mentioned and the history scan is skipped entirely.
+  const mentionTokens = MENTION_HANDLE.test(agentName) ? agentName.split(/[_-]+/).filter(Boolean) : [];
+  if (mentionTokens.length > 0) {
     const escapedName = agentName.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+    // Candidates come from the messages_fts index rather than a LIKE walk of
+    // the whole workspace history. FTS5's default unicode61 tokenizer splits on
+    // `_` and `-` and case-folds, so every canonical `@handle` body contains
+    // this token phrase: the phrase match is a superset of the LIKE match and
+    // only costs index lookups per actual candidate. Without it, an agent with
+    // few mentions read every message in the workspace on each inbox call —
+    // the single largest D1 consumer in production.
+    const mentionPhrase = `"${mentionTokens.join(' ')}"`;
     let cursor: string | undefined;
     for (;;) {
       const batch = await db
         .select({
-          id: messages.id,
+          // SQL-wrapped: Drizzle rejects bare columns of a table named only
+          // through the SQL FROM below, and this keeps their decoders.
+          id: sql`${messages.id}`.mapWith(messages.id),
           channelName: channels.name,
           agentName: agents.name,
-          body: messages.body,
-          createdAt: messages.createdAt,
+          body: sql`${messages.body}`.mapWith(messages.body),
+          createdAt: sql`${messages.createdAt}`.mapWith(messages.createdAt),
         })
-        .from(messages)
+        // NOT INDEXED leaves only the rowid lookups from the FTS candidates;
+        // otherwise SQLite (D1 has no ANALYZE stats) walks the workspace index
+        // to satisfy the ORDER BY and merely filters on the candidate set.
+        .from(sql`${messages} NOT INDEXED`)
         .innerJoin(channels, eq(messages.channelId, channels.id))
         .innerJoin(agents, eq(messages.agentId, agents.id))
         .leftJoin(
@@ -87,6 +106,7 @@ export async function getInbox(db: Db, workspaceId: string, agentId: string) {
             eq(messages.workspaceId, workspaceId),
             eq(channels.isArchived, false),
             ne(messages.agentId, agentId), // exclude self-mentions
+            sql`messages.rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ${mentionPhrase})`,
             sql`${messages.body} LIKE ${'%@' + escapedName + '%'} ESCAPE '\\'`,
             or(
               and(eq(channels.channelType, 0), eq(channelMembers.agentId, agentId)),
@@ -97,9 +117,8 @@ export async function getInbox(db: Db, workspaceId: string, agentId: string) {
             // lengths with no numeric precision loss (a bare text compare is not).
             // The cursor predicate matches the ORDER BY exactly. Tradeoff: the
             // scan is bounded per batch but deliberately NOT by a total cap — a
-            // total cap would silently drop valid older mentions.
-            // idx_messages_workspace_length_id covers (workspace_id, length(id), id)
-            // so each batch can stop at MENTION_BATCH without a cross-workspace scan.
+            // total cap would silently drop valid older mentions. The FTS
+            // candidate set, not the workspace history, bounds the rows read.
             ...(cursor
               ? [
                   sql`(length(${messages.id}) < length(${cursor})
