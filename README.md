@@ -357,12 +357,11 @@ default to `selfhost`, which is unlimited.
 credential validation and launch preflight stays reachable while the workspace's
 data-plane traffic sits at its ceiling.
 
-## Telemetry Attribution
+## Origin and Correlation Headers
 
 Clients may declare optional origin and correlation headers. Hosted adapters
 decide how to use these hints; the engine emits domain observations and never
-uses caller identity hints as authentication or ownership proof. See
-[server observation hooks](./TELEMETRY.md#server-identity-and-ownership).
+uses caller identity hints as authentication or ownership proof.
 
 ```ts
 const relay = new RelayCast({
@@ -387,15 +386,6 @@ const relay = new RelayCast({
 `originActor` is a UA-style path, `{app}/{type}[/{name}]` — for example
 `agent-relay-cli/agent/claude-code` or `pear/user/send-message-box`. (It
 replaced the older `harness` option and its `X-Relaycast-Harness` header.)
-
-An acting agent whose `metadata.cloud_user_id` is set attributes events to that
-user, ahead of these fields. Otherwise `agentRelayUserId`, then
-`agentRelayDistinctId`, is the analytics person key, so a host that knows the
-user only has to set one field. Without any of them an event belongs to the
-workspace and creates no person. `agentRelayMachineId` is sent
-*alongside* the person key rather than instead of it, which is what makes
-"how many machines share this workspace" and "are they one account or several"
-answerable.
 
 The query-parameter forms exist because browsers cannot set custom headers on a
 WebSocket upgrade; the SDK applies them automatically to both the workspace
@@ -1293,12 +1283,19 @@ RELAY_SERVER_URL=http://localhost:8787 npm run -w @relaycast/observer-dashboard 
 
 Then open `http://localhost:3100`.
 
-## Telemetry
+## Engine Hooks
 
-Relaycast includes anonymous telemetry.
+The engine exposes optional typed domain observations through `EngineDeps.telemetry`,
+which defaults to a no-op. Hosts can also supply `EngineConfig.logExport` to receive
+structured log records; console logging remains enabled. The contracts are exported
+from `@relaycast/engine/ports`. Hosts own analytics policy and transport.
 
-- Disable via env: `DO_NOT_TRACK=1` or `RELAYCAST_TELEMETRY_DISABLED=1`
-- Details: [`TELEMETRY.md`](./TELEMETRY.md)
+## MCP Telemetry
+
+The MCP client can send anonymous usage events to PostHog when an API key is
+configured. No key is bundled. Disable capture with `DO_NOT_TRACK=1` or
+`RELAYCAST_TELEMETRY_DISABLED=1`. See the
+[MCP telemetry configuration](./packages/mcp/src/telemetry.ts) for supported settings.
 
 ## Packages
 
