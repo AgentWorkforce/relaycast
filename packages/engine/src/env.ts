@@ -14,6 +14,7 @@ import type {
  * code reads infrastructure off `c.get('engine')` instead of `c.env.*` bindings.
  */
 export interface EngineRuntime extends EnginePorts, EngineProviders {
+  telemetry: NonNullable<EngineProviders["telemetry"]>;
   config: EngineConfig;
 }
 

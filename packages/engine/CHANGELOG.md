@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Patch]
+## [Unreleased - Major]
+
+### Changed
+
+- Replace analytics envelopes with typed domain observations (`kind`, `facts`, `occurredAt`, workspace, sender, and authenticated provenance). Hosts now own event naming, identity, groups, profile policy, and log transport via a generic `logExport` callback. The optional observation sink defaults to a no-op and isolates callback failures.
 
 ### Fixed
 

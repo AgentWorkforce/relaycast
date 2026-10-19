@@ -46,7 +46,8 @@ export type {
   PlanLimits,
   UsageMetric,
 } from './entitlements.js';
-export type { TelemetrySink, TelemetryEvent } from './telemetry.js';
+export { ENGINE_OBSERVATION_FACTS } from './telemetry.js';
+export type { TelemetrySink, TelemetryEvent, EngineObservation, EngineObservationKind, EngineObservationFacts } from './telemetry.js';
 
 import type { EngineDb } from './database.js';
 import type { RealtimeBus, ConnectionRegistry, NodeConnectionRegistry } from './realtime.js';
@@ -76,7 +77,7 @@ export interface EnginePorts {
 export interface EngineProviders {
   auth: AuthProvider;
   entitlements: EntitlementsProvider;
-  telemetry: TelemetrySink;
+  telemetry?: TelemetrySink;
 }
 
 /** Everything `createEngine` needs. */
@@ -141,15 +142,8 @@ export interface EngineConfig {
     url?: string;
     secret?: string;
   };
-  /**
-   * When set, the structured logger exports prod logs to a PostHog OTLP endpoint
-   * via plain fetch (no posthog-node dependency). Self-host leaves this unset and
-   * logs to the console only; cloud wires it from its secrets.
-   */
-  logExport?: {
-    posthogApiKey?: string;
-    posthogHost?: string;
-  };
+  /** Optional host-owned log transport. Console output remains enabled. */
+  logExport?: (record: { level: 'debug' | 'info' | 'warn' | 'error'; message: string; fields: Record<string, unknown>; occurredAt: string }) => void | Promise<void>;
   /**
    * Bounded durable mailbox tuning. Hosted adapters may provide workspace
    * overrides; self-host defaults to one hour TTL and 1000 in-flight deliveries

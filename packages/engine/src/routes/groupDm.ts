@@ -68,7 +68,7 @@ groupDmRoutes.post(
         agent!.id,
         { participants, name },
       );
-      emitServerEvent(c, workspace.id, 'relaycast_server_group_dm_created', {
+      emitServerEvent(c, workspace.id, 'group.dm.created', {
         conversation_id: result.id,
         participant_count: result.participants.length,
       });
@@ -209,7 +209,7 @@ groupDmRoutes.post(
           );
         }
 
-        emitServerEvent(c, workspace.id, 'relaycast_server_group_dm_message_sent', {
+        emitServerEvent(c, workspace.id, 'group.dm.message.sent', {
           conversation_id: publicGroupData.conversation_id,
           message_id: publicGroupData.id,
           from_agent_id: agent!.id,
@@ -247,7 +247,7 @@ groupDmRoutes.post(
         agentCtx!.id,
         agentName,
       );
-      emitServerEvent(c, workspace.id, 'relaycast_server_group_dm_participant_added', {
+      emitServerEvent(c, workspace.id, 'group.dm.participant.added', {
         conversation_id: conversationId,
         agent_name: agentName,
         invited_by_agent_id: agentCtx!.id,
@@ -276,7 +276,7 @@ groupDmRoutes.delete(
         conversationId,
         agent!.id,
       );
-      emitServerEvent(c, workspace.id, 'relaycast_server_group_dm_participant_removed', {
+      emitServerEvent(c, workspace.id, 'group.dm.participant.removed', {
         conversation_id: conversationId,
         agent_id: agent!.id,
       });

@@ -32,17 +32,15 @@ describe('server telemetry attribution without workspace auth', () => {
     const capture = vi.spyOn(stack.runtime.deps.telemetry, 'capture');
     await post('/v1/channels/general/messages', node.token!, { from: 'human-A', text: 'node-selected sender' });
     await stack.settle();
-    const event = capture.mock.calls.map(([value]) => value).find(value => value.name === 'relaycast_server_message_created');
-    expect(event?.actor).toEqual({ workspaceId: ws.workspaceId });
-    expect(event?.properties.actor_kind).toBe('service');
-    expect(event?.setOnce).toBeUndefined();
-    expect(event?.processPersonProfile).toBe(false);
+    const event = capture.mock.calls.map(([value]) => value).find(value => value.kind === 'message.created');
+    expect(event?.authenticatedActor).toBeUndefined();
+    expect(event?.sender).toMatchObject({ id: human.id, type: "human" });
     capture.mockClear();
     await post('/v1/channels/general/messages', human.token!, { text: 'actual authenticated human' });
     await stack.settle();
-    const authenticated = capture.mock.calls.map(([value]) => value).find(value => value.name === 'relaycast_server_message_created');
-    expect(authenticated?.actor).toMatchObject({ agentId: human.id, senderType: 'human' });
-    expect(authenticated?.setOnce).toEqual({ first_human_message_at: expect.any(String) });
+    const authenticated = capture.mock.calls.map(([value]) => value).find(value => value.kind === 'message.created');
+    expect(authenticated?.authenticatedActor).toMatchObject({ agentId: human.id, type: 'human' });
+    expect(authenticated?.occurredAt).toEqual(expect.any(String));
   });
 
   it('retains the presented token generation when old credentials are accepted during grace', async () => {
@@ -62,9 +60,9 @@ describe('server telemetry attribution without workspace auth', () => {
     }, body: JSON.stringify({ text: 'accepted grace credential' }) });
     expect(sent.status).toBe(201);
     await stack.settle();
-    const event = capture.mock.calls.map(([value]) => value).find(value => value.name === 'relaycast_server_message_created');
-    expect(event?.actor?.credentialHash).toBe(oldHash);
-    expect(event?.actor?.credentialHash).not.toBe(newHash);
+    const event = capture.mock.calls.map(([value]) => value).find(value => value.kind === 'message.created');
+    expect(event?.authenticatedActor?.credentialHash).toBe(oldHash);
+    expect(event?.authenticatedActor?.credentialHash).not.toBe(newHash);
   });
 
   it('never exposes plaintext storage keys through a custom telemetry sink', async () => {
@@ -98,10 +96,10 @@ describe('server telemetry attribution without workspace auth', () => {
     expect(read.status).toBe(200);
     await stack.settle();
     const expectedDigest = createHash('sha256').update(human.token).digest('hex');
-    for (const name of ['relaycast_server_message_created', 'relaycast_server_search_executed']) {
-      expect(events.find(event => event.name === name)?.actor).toEqual({
-        workspaceId: ws.workspaceId, agentId: human.id,
-        credentialHash: expectedDigest, senderType: 'human',
+    for (const name of ['message.created', 'search.executed']) {
+      expect(events.find(event => event.kind === name)?.authenticatedActor).toEqual({
+        agentId: human.id,
+        credentialHash: expectedDigest, type: 'human',
       });
     }
     expect(JSON.stringify(events)).not.toContain(human.token);
@@ -134,11 +132,10 @@ describe('server telemetry attribution without workspace auth', () => {
 
     const triggered = capture.mock.calls
       .map(([event]) => event as TelemetryEvent)
-      .find((event) => event.name === 'relaycast_server_inbound_webhook_triggered');
+      .find((event) => event.kind === 'inbound.webhook.triggered');
     expect(triggered).toMatchObject({
-      distinctId: `relaycast-ws:${ws.workspaceId}`,
-      processPersonProfile: false,
+      workspaceId: ws.workspaceId,
     });
-    expect(triggered?.groups).toBeUndefined();
+    expect(triggered).not.toHaveProperty('groups');
   });
 });

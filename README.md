@@ -330,9 +330,10 @@ data-plane traffic sits at its ceiling.
 
 ## Telemetry Attribution
 
-Clients may declare who is driving a request so server-side product telemetry
-can attribute it. Everything here is optional and analytics-only — it never
-affects authentication, authorization, or routing.
+Clients may declare optional origin and correlation headers. Hosted adapters
+decide how to use these hints; the engine emits domain observations and never
+uses caller identity hints as authentication or ownership proof. See
+[server observation hooks](./TELEMETRY.md#server-identity-and-ownership).
 
 ```ts
 const relay = new RelayCast({

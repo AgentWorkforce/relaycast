@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased - Major]
+
+### Changed
+
+- Engine hosting hooks now expose typed domain observations and an optional generic log callback; hosts own analytics event, identity, profile, and transport policy.
 
 ### Fixed
 

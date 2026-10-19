@@ -54,15 +54,23 @@ is not replaced by an older in-memory identity.
 
 ### Server identity and ownership
 
-The engine emits personless `relaycast-ws:<workspace_id>` events. Its protected
-`TelemetryEvent.actor` describes the credential-authenticated principal separately
-from event targets and product sender fields:
+The OSS engine emits typed domain observations through optional `EngineDeps.telemetry`.
+The default sink is a no-op. `EngineObservation` is exported from
+`@relaycast/engine/ports`: `kind` identifies the lifecycle event (for example
+`message.created`), `facts` contains required domain fields, and `workspaceId`
+and `occurredAt` identify its scope and occurrence time. `sender` identifies
+the domain sender; `authenticatedActor` separately describes the credential
+principal with `agentId`, `type`, and an optional SHA-256 `credentialHash`.
+This digest fingerprints the credential actually presented, independently of
+custom authentication storage. It is private host provenance and must never
+reach an analytics transport.
 
-- `workspaceId` identifies the authenticated workspace.
-- `agentId` and `senderType` are present for an authenticated agent.
-- `credentialHash` is SHA-256 of the credential actually presented, independent
-  of a custom auth provider's storage format. It is private provenance for the
-  host and must never be forwarded to PostHog.
+The host maps observations to its event names, identities, groups, eligibility,
+and first-use profile properties. The engine has no analytics identity or
+person-profile fields. Public identity headers and workspace metadata do not
+enter observations. `EngineConfig.logExport(record)` similarly injects a generic
+structured log callback; the host owns endpoint, credentials, and transport.
+Both observer and log callbacks isolate synchronous throws and rejected promises.
 
 A node can select a `from` sender for a product message. That does not establish
 possession of that sender's credential or ownership of their Cloud account.

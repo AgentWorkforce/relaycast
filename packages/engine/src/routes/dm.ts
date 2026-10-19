@@ -109,7 +109,7 @@ dmRoutes.post(
       });
 
       // `data.to` is the resolved recipient name; `to` may be a raw address.
-      const trackDmSent = (data: { conversation_id: string; id: string; to?: string }) => emitServerEvent(c, workspace.id, 'relaycast_server_dm_sent', {
+      const trackDmSent = (data: { conversation_id: string; id: string; to?: string }) => emitServerEvent(c, workspace.id, 'dm.sent', {
         conversation_id: data.conversation_id,
         message_id: data.id,
         from_agent_id: agent!.id,

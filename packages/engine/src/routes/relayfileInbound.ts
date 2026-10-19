@@ -17,7 +17,7 @@ import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
 import { resolveWorkspaceDeliveryPolicyById } from '../engine/workspaceDeliveryPolicy.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
-import { emitServerEvent, loadTelemetryWorkspace } from '../lib/serverTelemetry.js';
+import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const relayfileInboundRoutes = new Hono<AppEnv>();
 
@@ -300,12 +300,11 @@ async (c) => {
       runInBackground(
         c,
         (async () => {
-          const workspace = await loadTelemetryWorkspace(c.get('db'), workspaceId);
-          emitServerEvent(c, workspaceId, 'relaycast_server_relayfile_inbound_delivered', {
+          emitServerEvent(c, workspaceId, 'relayfile.inbound.delivered', {
             channel_id: channelId,
             message_id: result.data.message_id,
             provider,
-          }, { workspace });
+          }, {});
         })(),
         'emit relayfile inbound telemetry',
       );

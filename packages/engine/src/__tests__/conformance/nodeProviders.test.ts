@@ -2030,15 +2030,13 @@ describe('node providers', () => {
 
     const created = capture.mock.calls
       .map(([event]) => event)
-      .find((event) => event.name === 'relaycast_server_message_created');
+      .find((event) => event.kind === 'message.created');
     expect(created).toMatchObject({
-      distinctId: `relaycast-ws:${ws.workspaceId}`,
-      processPersonProfile: false,
-      actor: { workspaceId: ws.workspaceId },
-      properties: { sender_type: 'human', agent_id: poster.agentId, agent_name: 'poster', actor_kind: 'service' },
+      workspaceId: ws.workspaceId,
+      sender: { type: 'human', id: poster.agentId, name: 'poster' },
     });
-    expect(created?.actor).toEqual({ workspaceId: ws.workspaceId });
-    expect(created?.setOnce).toBeUndefined();
+    expect(created?.authenticatedActor).toBeUndefined();
+    expect(created).not.toHaveProperty('setOnce');
   });
 
   it('requires `from` on a node-token message', async () => {
