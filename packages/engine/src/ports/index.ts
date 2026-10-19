@@ -48,6 +48,7 @@ export type {
 } from './entitlements.js';
 export { ENGINE_OBSERVATION_FACTS } from './telemetry.js';
 export type { TelemetrySink, TelemetryEvent, EngineObservation, EngineObservationKind, EngineObservationFacts } from './telemetry.js';
+export type { EngineLogRecord, EngineLogExport } from './logging.js';
 
 import type { EngineDb } from './database.js';
 import type { RealtimeBus, ConnectionRegistry, NodeConnectionRegistry } from './realtime.js';
@@ -59,6 +60,7 @@ import type { EventQueue } from './event-queue.js';
 import type { AuthProvider } from './auth.js';
 import type { EntitlementsProvider } from './entitlements.js';
 import type { TelemetrySink } from './telemetry.js';
+import type { EngineLogExport } from './logging.js';
 
 /** Infrastructure ports the engine reads off the request context. */
 export interface EnginePorts {
@@ -155,7 +157,7 @@ export interface EngineConfig {
     secret?: string;
   };
   /** Optional host-owned log transport. Console output remains enabled. */
-  logExport?: (record: { level: 'debug' | 'info' | 'warn' | 'error'; message: string; fields: Record<string, unknown>; occurredAt: string }) => void | Promise<void>;
+  logExport?: EngineLogExport;
   /**
    * Bounded durable mailbox tuning. Hosted adapters may provide workspace
    * overrides; self-host defaults to one hour TTL and 1000 in-flight deliveries

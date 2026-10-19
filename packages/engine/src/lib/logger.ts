@@ -1,8 +1,9 @@
 import type { Context } from 'hono';
 import type { AppEnv, EngineRuntime } from '../env.js';
+import type { EngineLogExport, EngineLogRecord } from '../ports/logging.js';
 
-type LogLevel = 'debug' | 'info' | 'warn' | 'error';
-type LogFields = Record<string, unknown>;
+type LogLevel = EngineLogRecord['level'];
+type LogFields = EngineLogRecord['fields'];
 
 const DEFAULT_APP_VERSION = '0.1.0';
 const DEFAULT_SDK_VERSION = 'unknown';
@@ -11,7 +12,7 @@ export interface LoggerEnv {
   appVersion?: string;
   appSemver?: string;
   sdkSemver?: string;
-  logExport?: import('../ports/index.js').EngineConfig['logExport'];
+  logExport?: EngineLogExport;
 }
 
 export interface Logger {
