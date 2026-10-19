@@ -16,7 +16,16 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Inbox mention lookup, the unreachable-node delivery sweep, and per-node agent reads no longer scan a workspace's full history, which was stalling the shared database and surfacing as `database_overloaded`.
+- Every response includes its request id in the `X-Request-Id` header.
+
+## [10.6.3] - 2026-10-19
+
+- Unlimited-capacity nodes retain explicitly reported load for placement; load ties count both active and reserved agents.
 
 ## [10.6.2] - 2026-10-18
 
@@ -837,7 +846,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.2...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.3...HEAD
+[10.6.3]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.2...v10.6.3
 [10.6.2]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.1...v10.6.2
 [10.6.1]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.0...v10.6.1
 [10.6.0]: https://github.com/AgentWorkforce/relaycast/compare/v10.5.1...v10.6.0

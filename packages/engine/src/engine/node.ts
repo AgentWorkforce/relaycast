@@ -977,8 +977,8 @@ export async function heartbeatNode(
       const maxAgents = message.max_agents ?? existingProvider?.maxAgents ?? 0;
       // heartbeatProvider's load rule folded in here: a numeric load only
       // counts as a measurement when the provider opts in via load_reported
-      // and is capacity-bounded (zero is the unbounded sentinel).
-      const reportedLoad = maxAgents > 0 && message.load_reported === true && typeof message.load === 'number'
+      // regardless of whether it has a finite agent cap.
+      const reportedLoad = message.load_reported === true && typeof message.load === 'number'
         ? message.load
         : undefined;
       // One write carries both the roster refresh (capabilities/max_agents/
