@@ -330,4 +330,30 @@ describe('DELETE /v1/nodes/:name', () => {
     const [inv] = await db().select().from(actionInvocations).where(eq(actionInvocations.id, 'inv_kept'));
     expect(inv.status).toBe('dispatched');
   });
+
+  it('fails an accepted task and an unsent native spawn pinned to the node', async () => {
+    await enroll('node_worker', 'worker');
+    await db().insert(actionInvocations).values([
+      {
+        id: 'inv_task', workspaceId: ws.workspaceId, actionName: 'build', status: 'running',
+        handlerNodeId: 'node_worker', dispatchedNodeId: 'node_worker', dispatchedProvider: 'default', dispatchAttempts: 1,
+      },
+      {
+        id: 'inv_spawn', workspaceId: ws.workspaceId, actionName: 'spawn:claude', status: 'pending',
+        handlerNodeId: 'node_worker',
+      },
+      // Unpinned generic work stays pending for placement on another node.
+      {
+        id: 'inv_generic', workspaceId: ws.workspaceId, actionName: 'echo', status: 'pending',
+        handlerNodeId: 'node_worker',
+      },
+    ]);
+
+    expect((await deleteNode('worker')).status).toBe(200);
+    const rows = await db().select().from(actionInvocations).where(eq(actionInvocations.workspaceId, ws.workspaceId));
+    const byId = Object.fromEntries(rows.map((row) => [row.id, row]));
+    expect(byId.inv_task).toMatchObject({ status: 'failed', error: 'node_deleted' });
+    expect(byId.inv_spawn).toMatchObject({ status: 'failed', error: 'node_deleted' });
+    expect(byId.inv_generic.status).toBe('pending');
+  });
 });

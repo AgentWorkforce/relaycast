@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { invalidateChannelCache } from './cache.js';
-import { and, asc, eq, exists, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, notExists, or, sql } from 'drizzle-orm';
+import { and, asc, eq, exists, gt, gte, inArray, isNotNull, isNull, like, lt, lte, ne, notExists, or, sql } from 'drizzle-orm';
 import type {
   FleetAgentRecoverMessage,
   FleetAgentRegisterMessage,
@@ -2168,15 +2168,28 @@ export async function deleteNode(
   const lostAt = new Date();
   const results = await runAtomicWrites(db, (w) => [
     // Open work bound to the node or one of its actions has nothing left to
-    // complete it. Runs first, while both references are still set.
+    // complete it. Runs first, while both references are still set. `running`
+    // is an accepted task, which only its dispatching node may complete.
+    // Native spawns and builtins are pinned to the handler_node_id snapshot
+    // (not an FK), so one that has not been sent yet still waits on this node.
     w.update(actionInvocations)
       .set({ status: 'failed', error: 'node_deleted', completedAt: lostAt, spawnReservedAt: null })
       .where(and(
         eq(actionInvocations.workspaceId, workspaceId),
-        inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked']),
+        inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked', 'running']),
         or(
           eq(actionInvocations.dispatchedNodeId, node.id),
           inArray(actionInvocations.actionId, w.select({ id: actions.id }).from(actions).where(hostedActions)),
+          and(
+            eq(actionInvocations.handlerNodeId, node.id),
+            isNull(actionInvocations.dispatchedNodeId),
+            isNull(actionInvocations.actionId),
+            or(
+              eq(actionInvocations.invocationOrigin, 'builtin'),
+              eq(actionInvocations.actionName, 'spawn'),
+              like(actionInvocations.actionName, 'spawn:%'),
+            ),
+          ),
         ),
         nodeStillDeletable,
       ))
