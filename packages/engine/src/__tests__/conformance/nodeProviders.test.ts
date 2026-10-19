@@ -253,7 +253,7 @@ describe('node providers', () => {
     expect(invocation.providerAcceptedAttempt).toBe(invocation.dispatchAttempts);
   }
 
-  it('keeps a mixed finite and unbounded provider aggregate unlimited with unreported load', async () => {
+  it('keeps a mixed finite and unbounded provider aggregate unlimited with measured load', async () => {
     const ws = await createWorkspace(stack.app, 'np-unbounded-load');
     await enrollNode(ws, 'node_a', 'alpha');
     await attachProvider(
@@ -277,13 +277,13 @@ describe('node providers', () => {
       .select({ maxAgents: nodes.maxAgents, load: nodes.load, loadReported: nodes.loadReported })
       .from(nodes)
       .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_a')));
-    expect(node).toEqual({ maxAgents: 0, load: 0, loadReported: false });
+    expect(node).toEqual({ maxAgents: 0, load: 0.5, loadReported: true });
 
     const roster = await stack.app.request('/v1/nodes?name=alpha', {
       headers: { authorization: `Bearer ${ws.workspaceKey}` },
     });
     const body = await roster.json() as { data: Array<Record<string, unknown>> };
-    expect(body.data[0]).toMatchObject({ max_agents: 0, load: null });
+    expect(body.data[0]).toMatchObject({ max_agents: 0, load: 0.5 });
   });
 
   it('keys a registration with no provider field to the synthetic default provider', async () => {
