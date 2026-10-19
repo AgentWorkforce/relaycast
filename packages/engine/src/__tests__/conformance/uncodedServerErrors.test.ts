@@ -75,6 +75,8 @@ describe('uncoded server errors in route handlers', () => {
         ok: false,
         error: { code: 'internal_error', message: 'Internal server error', request_id: expect.any(String) },
       });
+      // The same id rides the header the SDKs read, so clients stop reporting null.
+      expect(response.headers.get('x-request-id')).toBe(body.error.request_id);
       expect(captureException).toHaveBeenCalledWith(
         expect.objectContaining({ message: OVERLOAD }),
         expect.objectContaining({
