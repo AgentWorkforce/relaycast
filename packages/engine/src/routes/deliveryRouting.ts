@@ -644,7 +644,15 @@ async function notifyDeliveryFailures(
  */
 async function advanceMentionIndex(engine: { db?: EngineDeps['db'] }): Promise<void> {
   if (!engine.db) return;
-  await backfillMessageMentionFts(engine.db);
+  try {
+    await backfillMessageMentionFts(engine.db);
+  } catch (error) {
+    // Mention catch-up is maintenance. A failed page must not skip the
+    // delivery sweep that this call exists to run.
+    console.warn('[delivery.sweep] mention index backfill failed; continuing delivery sweep', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 export async function sweepExpiredDeliveries(

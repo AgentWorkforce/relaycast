@@ -9,6 +9,7 @@ import {
   dmParticipants,
 } from '../db/schema.js';
 import { queryInChunks } from '../lib/queryChunks.js';
+import { runAtomicWrites } from '../ports/database.js';
 import { parseMessageMentions } from './mentions.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -74,20 +75,30 @@ export async function backfillMessageMentionFts(
     )
   `);
   const copied = Number(page?.copied ?? 0);
-  if (copied > 0) {
-    await db.run(sql`
-      INSERT INTO messages_mention_fts(rowid, workspace_id, body)
-      SELECT rowid, workspace_id, body FROM messages
-      WHERE rowid > ${after} AND rowid <= ${until}
-      ORDER BY rowid
-      LIMIT ${batchSize}
-    `);
-  }
   const nextRowid = page?.next_rowid == null ? null : Number(page.next_rowid);
   const cursor = copied === 0 || nextRowid == null || nextRowid >= until
     ? 'complete'
     : `${nextRowid}/${until}`;
-  await db.run(sql`UPDATE maintenance_cursors SET cursor = ${cursor} WHERE id = ${MENTION_FTS_CURSOR}`);
+  if (copied === 0 || nextRowid == null) {
+    await db.run(sql`UPDATE maintenance_cursors SET cursor = ${cursor} WHERE id = ${MENTION_FTS_CURSOR}`);
+    return 0;
+  }
+  // The page and the cursor commit together. Rows already indexed (an edit
+  // during the copy, or a replay after the cursor update was lost) are
+  // skipped, so a second insert of the same rowid cannot fail the docsize
+  // primary key and leave the cursor stuck.
+  await runAtomicWrites(db, (writeDb) => [
+    writeDb.run(sql`
+      INSERT INTO messages_mention_fts(rowid, workspace_id, body)
+      SELECT rowid, workspace_id, body FROM messages
+      WHERE rowid > ${after} AND rowid <= ${nextRowid}
+        AND NOT EXISTS (
+          SELECT 1 FROM messages_mention_fts_docsize
+          WHERE id = messages.rowid
+        )
+    `),
+    writeDb.run(sql`UPDATE maintenance_cursors SET cursor = ${cursor} WHERE id = ${MENTION_FTS_CURSOR}`),
+  ]);
   return copied;
 }
 

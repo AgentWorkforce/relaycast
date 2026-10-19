@@ -234,7 +234,16 @@ describe('compact maintenance migration path', () => {
       'direct_dm_idempotency',
       'webhook_deliveries',
     ].includes(String(name)) && !String(name).startsWith('messages_mention_fts'))).toEqual(before);
+    // An edit of a not-yet-indexed historical row must not corrupt the FTS
+    // index, and replaying the same cursor page must not throw or duplicate.
+    handle.sqlite.prepare('UPDATE messages SET body = body WHERE rowid = (SELECT MIN(rowid) FROM messages)').run();
+    expect(handle.sqlite.prepare('PRAGMA integrity_check').get()).toEqual({ integrity_check: 'ok' });
     expect(await backfillMessageMentionFts(handle.db)).toBeGreaterThan(0);
+    const maxRowid = handle.sqlite.prepare('SELECT MAX(rowid) AS rowid FROM messages').get() as { rowid: number };
+    handle.sqlite.prepare("UPDATE maintenance_cursors SET cursor = ? WHERE id = 'mention-fts-backfill'").run(`0/${maxRowid.rowid}`);
+    expect(await backfillMessageMentionFts(handle.db)).toBeGreaterThan(0);
+    expect(handle.sqlite.prepare('SELECT count(*) AS n FROM messages_mention_fts_docsize').get()).toEqual({ n: 20 });
+    expect(handle.sqlite.prepare('PRAGMA integrity_check').get()).toEqual({ integrity_check: 'ok' });
     const mentionRows = handle.sqlite.prepare(
       'SELECT workspace_id, body FROM messages_mention_fts ORDER BY rowid',
     ).all() as Array<{ workspace_id: string; body: string }>;

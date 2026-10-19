@@ -15,21 +15,36 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_mention_fts USING fts5(
   tokenize='unicode61'
 );
 
+-- Deletes target docsize. A historical row is not indexed until the bounded
+-- copy reaches it, so an edit or delete in that window must not issue a
+-- delete command for a rowid the index has never stored.
 CREATE TRIGGER IF NOT EXISTS messages_mention_fts_insert AFTER INSERT ON messages BEGIN
   INSERT INTO messages_mention_fts(rowid, workspace_id, body)
-  VALUES (NEW.rowid, NEW.workspace_id, NEW.body);
+  SELECT NEW.rowid, NEW.workspace_id, NEW.body
+  WHERE NOT EXISTS (
+    SELECT 1 FROM messages_mention_fts_docsize WHERE id = NEW.rowid
+  );
 END;
 
 CREATE TRIGGER IF NOT EXISTS messages_mention_fts_update AFTER UPDATE OF body, workspace_id ON messages BEGIN
   INSERT INTO messages_mention_fts(messages_mention_fts, rowid, workspace_id, body)
-  VALUES ('delete', OLD.rowid, OLD.workspace_id, OLD.body);
+  SELECT 'delete', OLD.rowid, OLD.workspace_id, OLD.body
+  WHERE EXISTS (
+    SELECT 1 FROM messages_mention_fts_docsize WHERE id = OLD.rowid
+  );
   INSERT INTO messages_mention_fts(rowid, workspace_id, body)
-  VALUES (NEW.rowid, NEW.workspace_id, NEW.body);
+  SELECT NEW.rowid, NEW.workspace_id, NEW.body
+  WHERE NOT EXISTS (
+    SELECT 1 FROM messages_mention_fts_docsize WHERE id = NEW.rowid
+  );
 END;
 
 CREATE TRIGGER IF NOT EXISTS messages_mention_fts_delete AFTER DELETE ON messages BEGIN
   INSERT INTO messages_mention_fts(messages_mention_fts, rowid, workspace_id, body)
-  VALUES ('delete', OLD.rowid, OLD.workspace_id, OLD.body);
+  SELECT 'delete', OLD.rowid, OLD.workspace_id, OLD.body
+  WHERE EXISTS (
+    SELECT 1 FROM messages_mention_fts_docsize WHERE id = OLD.rowid
+  );
 END;
 
 -- MAX(rowid) is the primary key, not a body scan. Rows inserted after this
