@@ -21,7 +21,7 @@ import {
   parseFleetBrokerToRelaycastMessage,
 } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
-import { actionInvocations, actions, agents, agentNodeBindings, channelMembers, channels, nodeProviders, nodes } from '../db/schema.js';
+import { actionInvocations, actions, agents, agentNodeBindings, channelMembers, channels, nodeProviders, nodes, workspaceEvents } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { acceptTaskInvocation, completeTaskInvocation } from './taskInvocation.js';
@@ -2165,12 +2165,28 @@ export async function deleteNode(
       // the epoch its event is conditioned on. Run that claim's tail here: its
       // writes are scoped to the claim revision and CAS-guarded, so running
       // alongside the claimer is safe.
-      await settleNodeOffline(db, registry, workspaceId, current.id, {
-        claimRevision: current.livenessRevision,
-        before: { status: 'online', name: current.name },
-        deps,
-        reason: 'deregistered',
-      });
+      await settleNodeOffline(db, registry, workspaceId, current.id, { claimRevision: current.livenessRevision });
+      // Publish the transition only if the claimer has not already: its
+      // claim time is the row's heartbeat.
+      const [published] = await db
+        .select({ seq: workspaceEvents.seq })
+        .from(workspaceEvents)
+        .where(and(
+          eq(workspaceEvents.workspaceId, workspaceId),
+          eq(workspaceEvents.type, 'node.status.offline'),
+          sql`json_extract(${workspaceEvents.payload}, '$.node_id') = ${current.id}`,
+          current.lastHeartbeatAt ? gte(workspaceEvents.createdAt, current.lastHeartbeatAt) : undefined,
+        ))
+        .limit(1);
+      if (!published) {
+        await emitNodeStatusEffects(deps, workspaceId, {
+          status: 'offline',
+          nodeId: current.id,
+          nodeName: current.name,
+          reason: 'deregistered',
+          claimRevision: current.livenessRevision,
+        });
+      }
       break;
     }
     if (attempt >= FORCED_DELETE_CLAIM_ATTEMPTS) return { ok: false, code: 'node_delete_conflict' };

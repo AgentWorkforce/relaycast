@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
 import { actionInvocations, actions, agentNodeBindings, agents, nodes, workspaceEvents } from '../../db/schema.js';
 import { deleteNode as deleteNodeById } from '../../engine/node.js';
+import { emitNodeStatusEffects } from '../../engine/invocationCompletion.js';
 import { NODE_LIVENESS_TTL_MS } from '../../engine/placement.js';
 
 /**
@@ -401,7 +402,7 @@ describe('DELETE /v1/nodes/:name', () => {
     expect(await nodeRow('node_beating')).toBeUndefined();
   });
 
-  it('a forced delete finishes the offline settle another writer claimed before deleting', async () => {
+  it.each([false, true])('a forced delete finishes the offline settle another writer claimed (claimer already published: %s)', async (claimerPublished) => {
     await enroll('node_claimed', 'claimed');
     const agent = await registerAgent(stack.app, ws.workspaceKey, 'claimed-worker');
     await db().update(agents)
@@ -416,9 +417,16 @@ describe('DELETE /v1/nodes/:name', () => {
           raced = true;
           return (table: unknown) => {
             // Another isolate's claim lands first and has not settled yet.
-            const otherClaim = target.update(nodes)
-              .set({ status: 'offline', lastHeartbeatAt: new Date(), livenessRevision: 77 })
-              .where(eq(nodes.id, 'node_claimed'));
+            const otherClaim = (async () => {
+              await target.update(nodes)
+                .set({ status: 'offline', lastHeartbeatAt: new Date(), livenessRevision: 77 })
+                .where(eq(nodes.id, 'node_claimed'));
+              if (claimerPublished) {
+                await emitNodeStatusEffects(stack.runtime.deps, ws.workspaceId, {
+                  status: 'offline', nodeId: 'node_claimed', nodeName: 'claimed', reason: 'deregistered', claimRevision: 77,
+                });
+              }
+            })();
             return {
               set: (values: unknown) => ({
                 where: (cond: unknown) => ({
@@ -443,6 +451,7 @@ describe('DELETE /v1/nodes/:name', () => {
     const [after] = await db().select().from(agents).where(eq(agents.id, agent.agentId));
     expect(after.status).toBe('offline');
     const events = await db().select().from(workspaceEvents).where(eq(workspaceEvents.workspaceId, ws.workspaceId));
-    expect(events.map((event) => event.type)).toContain('node.status.offline');
+    // Published exactly once, by whichever writer got there first.
+    expect(events.filter((event) => event.type === 'node.status.offline')).toHaveLength(1);
   });
 });
