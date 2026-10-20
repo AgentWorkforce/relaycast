@@ -400,4 +400,49 @@ describe('DELETE /v1/nodes/:name', () => {
     expect(result).toMatchObject({ ok: true, id: 'node_beating' });
     expect(await nodeRow('node_beating')).toBeUndefined();
   });
+
+  it('a forced delete finishes the offline settle another writer claimed before deleting', async () => {
+    await enroll('node_claimed', 'claimed');
+    const agent = await registerAgent(stack.app, ws.workspaceKey, 'claimed-worker');
+    await db().update(agents)
+      .set({ status: 'active', lastSeen: new Date(), locationType: 'via_node', locationNodeId: 'node_claimed' })
+      .where(eq(agents.id, agent.agentId));
+    await db().update(nodes).set({ status: 'online', lastHeartbeatAt: new Date() }).where(eq(nodes.id, 'node_claimed'));
+    const realDb = db();
+    let raced = false;
+    const racingDb = new Proxy(realDb, {
+      get(target, prop, receiver) {
+        if (prop === 'update' && !raced) {
+          raced = true;
+          return (table: unknown) => {
+            // Another isolate's claim lands first and has not settled yet.
+            const otherClaim = target.update(nodes)
+              .set({ status: 'offline', lastHeartbeatAt: new Date(), livenessRevision: 77 })
+              .where(eq(nodes.id, 'node_claimed'));
+            return {
+              set: (values: unknown) => ({
+                where: (cond: unknown) => ({
+                  returning: async (cols: unknown) => {
+                    await otherClaim;
+                    return (target.update(table as typeof nodes).set(values as never).where(cond as never) as never as {
+                      returning: (c: unknown) => Promise<unknown[]>;
+                    }).returning(cols);
+                  },
+                }),
+              }),
+            };
+          };
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+
+    const result = await deleteNodeById(racingDb, stack.runtime.deps, ws.workspaceId, 'node_claimed', { force: true });
+    expect(raced).toBe(true);
+    expect(result).toMatchObject({ ok: true, id: 'node_claimed' });
+    const [after] = await db().select().from(agents).where(eq(agents.id, agent.agentId));
+    expect(after.status).toBe('offline');
+    const events = await db().select().from(workspaceEvents).where(eq(workspaceEvents.workspaceId, ws.workspaceId));
+    expect(events.map((event) => event.type)).toContain('node.status.offline');
+  });
 });

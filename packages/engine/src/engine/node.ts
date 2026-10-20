@@ -2153,15 +2153,27 @@ export async function deleteNode(
       break;
     }
     // Unforced, a lost claim means the node changed after the checks. Forced,
-    // the delete goes ahead regardless: claim again against the fresh row, or
-    // stop claiming once another writer has already taken it offline.
-    if (!opts.force || attempt >= FORCED_DELETE_CLAIM_ATTEMPTS) {
-      return { ok: false, code: 'node_delete_conflict' };
-    }
+    // the delete goes ahead regardless, against the fresh row.
+    if (!opts.force) return { ok: false, code: 'node_delete_conflict' };
     const reread = await getNodeById(db, workspaceId, node.id);
     if (!reread) return { ok: false, code: 'node_not_found' };
     current = reread;
     epoch = { lastHeartbeatAt: reread.lastHeartbeatAt, livenessRevision: reread.livenessRevision };
+    if (current.status !== 'online') {
+      // Another writer claimed it offline, and its settle tail may not have
+      // run yet; the delete would erase the references that tail needs and
+      // the epoch its event is conditioned on. Run that claim's tail here: its
+      // writes are scoped to the claim revision and CAS-guarded, so running
+      // alongside the claimer is safe.
+      await settleNodeOffline(db, registry, workspaceId, current.id, {
+        claimRevision: current.livenessRevision,
+        before: { status: 'online', name: current.name },
+        deps,
+        reason: 'deregistered',
+      });
+      break;
+    }
+    if (attempt >= FORCED_DELETE_CLAIM_ATTEMPTS) return { ok: false, code: 'node_delete_conflict' };
   }
 
   const thisNode = and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, node.id));
