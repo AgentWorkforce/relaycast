@@ -1311,6 +1311,8 @@ export const deliveries = sqliteTable(
       .where(sql`${table.locationNodeId} IS NOT NULL`),
     index('idx_deliveries_route_node_fk').on(table.routeNodeId)
       .where(sql`${table.routeNodeId} IS NOT NULL`),
+    index('idx_deliveries_active_location_node').on(table.locationNodeId)
+      .where(sql`${table.status} IN ('queued', 'delivered') AND ${table.locationNodeId} IS NOT NULL`),
     uniqueIndex('idx_deliveries_id_lookup').on(table.id),
     uniqueIndex('deliveries_agent_seq_unique').on(table.workspaceId, table.agentId, table.seq),
     index('idx_deliveries_agent').on(table.agentId, table.createdAt),

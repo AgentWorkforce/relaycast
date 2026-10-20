@@ -83,8 +83,11 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
 
   // Inject the runtime first so the logger and all routes can read it.
   app.use('*', engineContext(runtime));
-  app.use('*', cors());
+  // Before CORS so a preflight, which returns without calling later
+  // middleware, still carries the request id. exposeHeaders lets browser
+  // clients read it.
   app.use('*', loggerMiddleware);
+  app.use('*', cors({ exposeHeaders: ['X-Request-Id'] }));
 
   app.use('*', secureHeaders());
 

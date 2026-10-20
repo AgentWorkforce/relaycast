@@ -13,6 +13,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - `DELETE /v1/nodes/:name` deletes a node by id (exact id first) or name, returning `{ id, name, deleted, cascaded_actions }`. It refuses an online node (`node_online`) or one hosting actions (`node_has_actions`) unless `force=true`, and returns `node_delete_conflict` when a heartbeat or action registration lands mid-delete.
 
+### Fixed
+
+- `GET /v1/inbox` finds mention candidates through `messages_mention_fts` (migration `0075`) once that index has caught up, instead of a `LIKE` walk of the whole workspace history. The migration does not rebuild history; delivery sweeps copy it in bounded batches, replaying a batch is safe, and a failed copy does not skip delivery maintenance. Inbox keeps the workspace scan until the copy finishes. Results are unchanged.
+- The unreachable-node delivery sweep reads only active deliveries through the new partial index `idx_deliveries_active_location_node` (migration `0074`), not every delivery ever routed to a node.
+- Every response carries its request id in an `X-Request-Id` header (the header the Rust SDK reads), so client error reports stop showing `request_id: null`.
+- Per-node agent roster and inventory lookups are pinned to `idx_agents_location_node_fk` instead of walking every agent in the workspace.
+
 ## [10.6.3] - 2026-10-19
 
 - Unlimited-capacity nodes retain explicitly reported load for placement; load ties count both active and reserved agents.
