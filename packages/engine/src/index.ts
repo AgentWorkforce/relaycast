@@ -87,6 +87,10 @@ export { runA2aHealthChecks } from './engine/a2a-health.js';
 // cloud) that still import the old name.
 export { sweepDueNodeDeliveries, sweepDueHttpPushDeliveries } from './routes/deliveryRouting.js';
 export { sweepExpiredDeliveries, sweepUnreachableDeliveries } from './routes/deliveryRouting.js';
+// Mention-index catch-up for 0075. `sweepExpiredDeliveries` advances it one
+// batch per call; hosts whose rotation reaches that sweep rarely can drive it
+// directly (bounded, idempotent, returns rows copied; 0 once complete).
+export { backfillMessageMentionFts, MESSAGE_MENTION_BACKFILL_BATCH } from './engine/inbox.js';
 export { deliverPendingToNode } from './engine/delivery.js';
 export { handleNodeReconnect } from './node-reconnect.js';
 export { handleAgentDisconnect } from './agent-disconnect.js';
