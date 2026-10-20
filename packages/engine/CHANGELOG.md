@@ -13,6 +13,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - `backfillMessageMentionFts` and `MESSAGE_MENTION_BACKFILL_BATCH` are exported from the package root, so hosts can drive the `0075` mention-index copy from their own maintenance instead of waiting on one batch per delivery sweep. Each call copies at most one batch atomically with its cursor, is safe to repeat, and returns `0` once the copy is complete.
 
+### Migration
+
+- Apply `0074_delivery_active_location_node_index.sql` and `0075_message_mention_fts.sql` before updating the worker. The new sweep requires the partial index; mention indexing copies history in bounded maintenance batches while inbox retains its fallback until completion.
+
 ### Fixed
 
 - `GET /v1/inbox` finds mention candidates through `messages_mention_fts` (migration `0075`) once that index has caught up, instead of a `LIKE` walk of the whole workspace history. The migration does not rebuild history; delivery sweeps copy it in bounded batches, replaying a batch is safe, and a failed copy does not skip delivery maintenance. Inbox keeps the workspace scan until the copy finishes. Results are unchanged.

@@ -20,7 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
-- Inbox mention lookup, the unreachable-node delivery sweep, and per-node agent reads no longer scan a workspace's full history, which was stalling the shared database and surfacing as `database_overloaded`.
+- Inbox mention lookup uses a workspace-scoped index after its bounded backfill completes; delivery sweeps and per-node agent reads avoid full-history scans that stalled the shared database and surfaced as `database_overloaded`.
 - Every response includes its request id in the `X-Request-Id` header.
 
 ## [10.6.3] - 2026-10-19
