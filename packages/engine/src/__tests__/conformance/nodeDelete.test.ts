@@ -454,4 +454,41 @@ describe('DELETE /v1/nodes/:name', () => {
     // Published exactly once, by whichever writer got there first.
     expect(events.filter((event) => event.type === 'node.status.offline')).toHaveLength(1);
   });
+
+  describe('claimed node.status.offline publication', () => {
+    async function offlineAt(revision: number) {
+      await db().update(nodes)
+        .set({ status: 'offline', lastHeartbeatAt: new Date(), livenessRevision: revision })
+        .where(eq(nodes.id, 'node_pub'));
+    }
+    function emit(status: 'online' | 'offline', claimRevision?: number) {
+      return emitNodeStatusEffects(stack.runtime.deps, ws.workspaceId, {
+        status, nodeId: 'node_pub', nodeName: 'pub',
+        ...(status === 'offline' ? { reason: 'deregistered' as const } : {}),
+        ...(claimRevision !== undefined ? { claimRevision } : {}),
+      });
+    }
+    async function statusEvents() {
+      const rows = await db().select().from(workspaceEvents).where(eq(workspaceEvents.workspaceId, ws.workspaceId));
+      return rows.filter((row) => row.type.startsWith('node.status.')).map((row) => row.type);
+    }
+
+    it('publishes one claim at most once, whichever writer emits', async () => {
+      await enroll('node_pub', 'pub');
+      await offlineAt(5);
+      await emit('offline', 5);
+      await emit('offline', 5);
+      expect(await statusEvents()).toEqual(['node.status.offline']);
+    });
+
+    it('still publishes an offline that follows a reconnect in the same second', async () => {
+      await enroll('node_pub', 'pub');
+      await offlineAt(5);
+      await emit('offline', 5);
+      await emit('online');
+      await offlineAt(6);
+      await emit('offline', 6);
+      expect(await statusEvents()).toEqual(['node.status.offline', 'node.status.online', 'node.status.offline']);
+    });
+  });
 });
