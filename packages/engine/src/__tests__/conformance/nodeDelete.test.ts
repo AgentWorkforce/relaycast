@@ -363,4 +363,41 @@ describe('DELETE /v1/nodes/:name', () => {
     expect(byId.inv_generic.status).toBe('pending');
     expect(byId.inv_unpinned_spawn.status).toBe('pending');
   });
+
+  it('a forced delete still goes through when a heartbeat beats its offline claim', async () => {
+    await enroll('node_beating', 'beating');
+    await db().update(nodes).set({ status: 'online', lastHeartbeatAt: new Date() }).where(eq(nodes.id, 'node_beating'));
+    const realDb = db();
+    let raced = false;
+    const racingDb = new Proxy(realDb, {
+      get(target, prop, receiver) {
+        if (prop === 'update' && !raced) {
+          raced = true;
+          return (table: unknown) => {
+            const heartbeat = target.update(nodes)
+              .set({ lastHeartbeatAt: new Date(Date.now() + 1_000), livenessRevision: 42 })
+              .where(eq(nodes.id, 'node_beating'));
+            return {
+              set: (values: unknown) => ({
+                where: (cond: unknown) => ({
+                  returning: async (cols: unknown) => {
+                    await heartbeat;
+                    return (target.update(table as typeof nodes).set(values as never).where(cond as never) as never as {
+                      returning: (c: unknown) => Promise<unknown[]>;
+                    }).returning(cols);
+                  },
+                }),
+              }),
+            };
+          };
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+
+    const result = await deleteNodeById(racingDb, stack.runtime.deps, ws.workspaceId, 'node_beating', { force: true });
+    expect(raced).toBe(true);
+    expect(result).toMatchObject({ ok: true, id: 'node_beating' });
+    expect(await nodeRow('node_beating')).toBeUndefined();
+  });
 });

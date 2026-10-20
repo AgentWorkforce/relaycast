@@ -2082,6 +2082,9 @@ export async function unbindAgentFromNode(db: Db, workspaceId: string, nodeName:
   });
 }
 
+/** A forced delete re-claims a node a live heartbeat keeps refreshing at most this often. */
+const FORCED_DELETE_CLAIM_ATTEMPTS = 3;
+
 export type DeleteNodeResult =
   | { ok: true; id: string; name: string; cascadedActions: number }
   | { ok: false; code: 'node_not_found' | 'node_online' | 'node_has_actions' | 'node_delete_conflict' };
@@ -2135,17 +2138,30 @@ export async function deleteNode(
     if (hosted) return { ok: false, code: 'node_has_actions' };
   }
 
+  let current = node;
   let epoch = { lastHeartbeatAt: node.lastHeartbeatAt, livenessRevision: node.livenessRevision };
-  if (node.status === 'online') {
-    const claim = await claimNodeOffline(db, workspaceId, node.id, epoch);
-    if (!claim) return { ok: false, code: 'node_delete_conflict' };
-    await settleNodeOffline(db, registry, workspaceId, node.id, {
-      claimRevision: claim.claimRevision,
-      before: { status: 'online', name: node.name },
-      deps,
-      reason: 'deregistered',
-    });
-    epoch = { lastHeartbeatAt: claim.claimAt, livenessRevision: claim.claimRevision };
+  for (let attempt = 1; current.status === 'online'; attempt++) {
+    const claim = await claimNodeOffline(db, workspaceId, current.id, epoch);
+    if (claim) {
+      await settleNodeOffline(db, registry, workspaceId, current.id, {
+        claimRevision: claim.claimRevision,
+        before: { status: 'online', name: current.name },
+        deps,
+        reason: 'deregistered',
+      });
+      epoch = { lastHeartbeatAt: claim.claimAt, livenessRevision: claim.claimRevision };
+      break;
+    }
+    // Unforced, a lost claim means the node changed after the checks. Forced,
+    // the delete goes ahead regardless: claim again against the fresh row, or
+    // stop claiming once another writer has already taken it offline.
+    if (!opts.force || attempt >= FORCED_DELETE_CLAIM_ATTEMPTS) {
+      return { ok: false, code: 'node_delete_conflict' };
+    }
+    const reread = await getNodeById(db, workspaceId, node.id);
+    if (!reread) return { ok: false, code: 'node_not_found' };
+    current = reread;
+    epoch = { lastHeartbeatAt: reread.lastHeartbeatAt, livenessRevision: reread.livenessRevision };
   }
 
   const thisNode = and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, node.id));
