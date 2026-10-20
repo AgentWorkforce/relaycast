@@ -1312,7 +1312,7 @@ components:
           nullable: true
           minimum: 0
           maximum: 1
-          description: Normalized managed-agent capacity utilization. Null unless a direct node, or every constituent provider of a broker node, explicitly reports a genuine measurement.
+          description: Explicitly measured normalized utilization (0–1), including machine utilization on unlimited nodes. Null unless a direct node, or every constituent provider of a broker node, explicitly reports a genuine measurement.
         active_agents:
           type: integer
           description: Managed-agent occupancy. Authoritative only while `live` is true; once a node goes offline this is a frozen historical value — see `active_agents_stale`.
@@ -1322,7 +1322,7 @@ components:
         max_agents:
           type: integer
           minimum: 0
-          description: Maximum managed agents. Zero means unlimited capacity.
+          description: Maximum managed agents. Zero means unlimited capacity; active and reserved agents remain counted. Null is not accepted.
         last_heartbeat_at:
           type: string
           format: date-time
@@ -1755,7 +1755,8 @@ components:
           type: string
           description: >-
             Present on unexpected server errors (5xx). Identifies the request in
-            the server logs; quote it when reporting the error.
+            the server logs; quote it when reporting the error. Every response
+            also carries this id in the `X-Request-Id` header.
 
     SuccessResponse:
       type: object

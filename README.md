@@ -301,7 +301,8 @@ short rollover grace period.
 
 API errors use `{ ok: false, error: { code, message } }`. Unexpected server
 errors (5xx) also carry `error.request_id`, which identifies the request in the
-server logs; quote it when reporting the error. Invalid or expired
+server logs; quote it when reporting the error. Every response carries the same
+id in the `X-Request-Id` header. Invalid or expired
 agent tokens return `agent_token_invalid` with HTTP 401. Recover only with an
 explicit current-token, origin-node, or enrolled work-unit proof; use the
 audited owner takeover when those proofs are unavailable.
@@ -825,10 +826,18 @@ ephemeral `node.online`, `node.heartbeat`, and `node.offline` events. Each
 carries a `node` payload matching the `GET /nodes` roster entry (capabilities,
 tags, `load`, `active_agents`/`active_agents_stale`/`max_agents`, `handlers_live`,
 `last_heartbeat_at`), so a single event fully refreshes a node's row.
-`load` is normalized managed-agent capacity utilization and remains `null`
+`load` is explicitly measured normalized utilization (0–1) and remains `null`
 unless a direct node, or every constituent provider of a broker node,
 explicitly reports a genuine measurement;
-`max_agents: 0` means unlimited capacity, not zero capacity.
+`max_agents: 0` means unlimited capacity, not zero capacity. This documented
+sentinel is retained in registration, heartbeats, and node reads; null is not
+accepted. Active and reserved counts still track work on unlimited nodes without
+refusing for capacity. Positive integers retain the existing cap. Explicitly
+reported machine utilization (0–1) is accepted on unlimited nodes too; unknown load remains
+null, and placement breaks load ties using active plus reserved work.
+
+For the desktop no-limit rollout, ship Relaycast's load handling first, Cloud's
+load-based placement second, and the desktop default last. No migration is needed.
 
 A node can advertise which repositories it has a checkout of by sending
 `repo_keys` on `node.register`: a list of public `owner/name` keys. Relaycast
