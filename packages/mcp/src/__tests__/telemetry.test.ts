@@ -60,6 +60,7 @@ import { createMcpTelemetry } from '../telemetry.js';
 describe('createMcpTelemetry', () => {
   const consentPath = path.join(mockHomedir, '.relay', 'telemetry.json');
   const identityPath = path.join(mockHomedir, '.relay', 'telemetry-identity.json');
+  const revokedPath = path.join(mockHomedir, '.relay', 'telemetry-revoked-identities.jsonl');
   let files: Map<string, string>;
   const event = 'relaycast_mcp_server_started';
   const bodies = () => capturedBodies.map(body => JSON.parse(body));
@@ -77,6 +78,9 @@ describe('createMcpTelemetry', () => {
     files = new Map(); consent();
     vi.mocked(fs.readFileSync).mockImplementation(read as typeof fs.readFileSync);
     vi.mocked(fs.writeFileSync).mockImplementation((file, data) => { files.set(String(file), String(data)); });
+    vi.mocked(fs.appendFileSync).mockImplementation((file, data) => {
+      files.set(String(file), (files.get(String(file)) ?? '') + String(data));
+    });
     vi.mocked(fs.renameSync).mockImplementation((from, to) => {
       files.set(String(to), read(from)); files.delete(String(from));
     });
@@ -213,6 +217,103 @@ describe('createMcpTelemetry', () => {
     telemetry.capture(event);
     const restarted = create(); restarted.capture(event);
     expect(bodies()[3].distinct_id).toBe(bodies()[0].distinct_id);
+  });
+
+  it('adopts another process rotation instead of overwriting it with pending recovery', () => {
+    files.set(identityPath, '{');
+    vi.mocked(fs.writeFileSync).mockImplementation(() => { throw Error('EACCES'); });
+    const telemetry = create(); telemetry.capture(event);
+    const prior = bodies()[0];
+    files.set(identityPath, JSON.stringify({ anonymousId: 'other-process-rotation' }));
+    vi.mocked(fs.writeFileSync).mockImplementation((file, data) => { files.set(String(file), String(data)); });
+    vi.mocked(fs.writeFileSync).mockClear();
+    telemetry.capture(event);
+    expect(bodies()[1].distinct_id).toBe('other-process-rotation');
+    expect(bodies()[1].properties.session_id).not.toBe(prior.properties.session_id);
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+    expect(JSON.parse(files.get(identityPath)!).anonymousId).toBe('other-process-rotation');
+  });
+
+  it('keeps the opt-out boundary across restart when identity replacement fails', () => {
+    files.set(identityPath, JSON.stringify({ anonymousId: 'before-optout' }));
+    const telemetry = create(); telemetry.capture(event);
+    vi.mocked(fs.renameSync).mockImplementation(() => { throw Error('EACCES'); });
+    process.env.DO_NOT_TRACK = '1'; telemetry.capture(event);
+    delete process.env.DO_NOT_TRACK;
+    const restarted = create(); restarted.capture(event);
+    expect(bodies()).toHaveLength(1);
+    expect(files.get(revokedPath)).toContain('before-optout');
+    vi.mocked(fs.renameSync).mockImplementation((from, to) => {
+      files.set(String(to), read(from)); files.delete(String(from));
+    });
+    restarted.capture(event);
+    expect(bodies()[1].distinct_id).not.toBe('before-optout');
+    expect(JSON.parse(files.get(identityPath)!).anonymousId).toBe(bodies()[1].distinct_id);
+    expect(files.has(revokedPath)).toBe(true);
+  });
+
+  it('adopts a later process boundary without reviving its older pending rotation', () => {
+    files.set(identityPath, JSON.stringify({ anonymousId: 'initial' }));
+    const first = create(); const second = create();
+    first.capture(event); second.capture(event);
+    vi.mocked(fs.renameSync).mockImplementation(() => { throw Error('EACCES'); });
+    process.env.DO_NOT_TRACK = '1'; first.capture(event);
+    delete process.env.DO_NOT_TRACK;
+    vi.mocked(fs.renameSync).mockImplementation((from, to) => {
+      files.set(String(to), read(from)); files.delete(String(from));
+    });
+    second.capture(event);
+    const afterFirstBoundary = bodies()[2].distinct_id;
+    process.env.DO_NOT_TRACK = '1'; second.capture(event);
+    delete process.env.DO_NOT_TRACK; second.capture(event);
+    const afterSecondBoundary = bodies()[3].distinct_id;
+    expect(afterSecondBoundary).not.toBe(afterFirstBoundary);
+    const journal = files.get(revokedPath);
+    first.capture(event);
+    expect(bodies()[4].distinct_id).toBe(afterSecondBoundary);
+    expect(JSON.parse(files.get(identityPath)!).anonymousId).toBe(afterSecondBoundary);
+    expect(files.get(revokedPath)).toBe(journal);
+  });
+
+  it('invalidates the previously emitted ID when consent changes during corrupt-identity recovery', () => {
+    files.set(identityPath, JSON.stringify({ anonymousId: 'previously-emitted' }));
+    const telemetry = create(); telemetry.capture(event);
+    files.set(identityPath, '{');
+    vi.mocked(fs.writeFileSync).mockImplementation((file, data) => {
+      consent(true); files.set(String(file), String(data));
+    });
+    telemetry.capture(event);
+    expect(bodies()).toHaveLength(1);
+    expect(files.get(revokedPath)).toContain('previously-emitted');
+  });
+
+  it('suppresses a candidate invalidated during identity persistence', () => {
+    files.set(identityPath, '{');
+    vi.mocked(fs.writeFileSync).mockImplementation((file, data) => {
+      const candidate = JSON.parse(String(data)).anonymousId;
+      files.set(revokedPath, JSON.stringify([candidate]) + '\n');
+      files.set(String(file), String(data));
+    });
+    create().capture(event);
+    expect(bodies()).toHaveLength(0);
+  });
+
+  it('fails closed when revocation persistence fails or its journal is corrupt', () => {
+    const telemetry = create(); telemetry.capture(event);
+    vi.mocked(fs.appendFileSync).mockImplementation(() => { throw Error('EACCES'); });
+    process.env.DO_NOT_TRACK = '1'; telemetry.capture(event);
+    delete process.env.DO_NOT_TRACK; telemetry.capture(event);
+    expect(bodies()).toHaveLength(1);
+    files.set(revokedPath, '{');
+    create().capture(event);
+    expect(bodies()).toHaveLength(1);
+  });
+
+  it.each(['', '[]\n', '["old-id"]', '["old-id"]\n{'])('fails closed for an incomplete invalidation journal %j', journal => {
+    files.set(revokedPath, journal);
+    create().capture(event);
+    expect(bodies()).toHaveLength(0);
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
   });
 
   it('does not recover identity or send while consent is corrupt', () => {

@@ -30,6 +30,7 @@ export interface McpTelemetry {
 
 const TELEMETRY_PATH = path.join(os.homedir(), '.relay', 'telemetry.json');
 const IDENTITY_PATH = path.join(os.homedir(), '.relay', 'telemetry-identity.json');
+const REVOKED_IDENTITIES_PATH = path.join(os.homedir(), '.relay', 'telemetry-revoked-identities.jsonl');
 const DEFAULT_POSTHOG_HOST = 'https://i.agentrelay.com';
 
 function isTruthy(value: string | undefined): boolean {
@@ -114,6 +115,36 @@ function persistAnonymousId(anonymousId: string): boolean {
     return false;
   } finally {
     try { fs.unlinkSync(temporaryPath); } catch { /* already renamed or unavailable */ }
+  }
+}
+
+/** Append-only invalidation avoids replaying or clearing another process's rotation. */
+function loadRevokedIdentities(): Set<string> | undefined {
+  try {
+    const journal = fs.readFileSync(REVOKED_IDENTITIES_PATH, 'utf8');
+    if (!journal.trim() || !journal.endsWith('\n')) throw Error('Incomplete identity revocation');
+    const lines = journal.trim().split('\n');
+    const ids = lines.filter(Boolean).flatMap(line => {
+      const value: unknown = JSON.parse(line);
+      if (!Array.isArray(value) || value.length === 0 || !value.every(id => typeof id === 'string' && id.trim())) {
+        throw Error('Invalid identity revocation');
+      }
+      return value as string[];
+    });
+    return new Set(ids);
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? new Set() : undefined;
+  }
+}
+
+function persistRevokedIdentities(ids: string[]): boolean {
+  try {
+    fs.mkdirSync(path.dirname(REVOKED_IDENTITIES_PATH), { recursive: true });
+    // One append preserves concurrent boundaries; never truncate or remove this file.
+    fs.appendFileSync(REVOKED_IDENTITIES_PATH, JSON.stringify(ids) + '\n', { encoding: 'utf8', mode: 0o600 });
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -223,6 +254,7 @@ export function createMcpTelemetry(version = 'unknown', options: McpTelemetryOpt
   // An observed opt-out must be durable before this instance resumes capture.
   let rotationPending = false;
   let recoveryGeneration: string | undefined;
+  let pendingRevocations: string[] | undefined;
   let sessionId = randomUUID();
   const pending = new Set<Promise<void>>();
   const posthogHost = getPosthogHost(options);
@@ -233,26 +265,42 @@ export function createMcpTelemetry(version = 'unknown', options: McpTelemetryOpt
   const capture = (event: ClientTelemetryEventName, properties: Record<string, unknown> = {}) => {
     const current = loadState(state.anonymousId);
     if (!current) return;
+    const previousAnonymousId = state.anonymousId;
     const consentEnabled = telemetryConsentEnabled(current);
+    const sharedIdentity = loadAnonymousId(current.anonymousId);
+    const revoked = loadRevokedIdentities();
+    if (!revoked) return; // Unknown invalidation state is not permission to reuse an ID.
     if (hadConsent !== false && !consentEnabled) {
+      pendingRevocations = [...new Set([state.anonymousId, current.anonymousId, sharedIdentity?.anonymousId].filter((id): id is string => Boolean(id)))];
       localGeneration = randomUUID();
       recoveryGeneration = localGeneration;
       rotationPending = true;
       sessionId = randomUUID();
     }
-    const sharedIdentity = loadAnonymousId(current.anonymousId);
-    // Identity damage is independent of consent: recover with a fresh ID, never
-    // the legacy ID which could predate an opt-out. Keep it stable on retries.
-    if (sharedIdentity) recoveryGeneration = undefined;
+    if (pendingRevocations) {
+      if (!persistRevokedIdentities(pendingRevocations)) return;
+      pendingRevocations.forEach(id => revoked.add(id));
+      pendingRevocations = undefined;
+    }
+    // Recovery has no authority over another process's successfully persisted ID.
+    if (sharedIdentity && !sharedIdentity.missing && !revoked.has(sharedIdentity.anonymousId)) {
+      rotationPending = false;
+      localGeneration = undefined;
+      recoveryGeneration = undefined;
+    }
     if (!localGeneration && !sharedIdentity) {
       recoveryGeneration ??= randomUUID();
       localGeneration = recoveryGeneration;
     }
-    const anonymousId = localGeneration ?? sharedIdentity!.anonymousId;
+    let anonymousId = localGeneration ?? sharedIdentity!.anonymousId;
+    if (revoked.has(anonymousId)) {
+      anonymousId = localGeneration = randomUUID();
+      recoveryGeneration = anonymousId;
+      rotationPending = true;
+    }
     if (anonymousId !== state.anonymousId) sessionId = randomUUID();
     if (!localGeneration && sharedIdentity?.missing && current.missingConsentFile) localGeneration = anonymousId;
     if (localGeneration && persistAnonymousId(localGeneration)) {
-      // The shared file becomes authoritative again after successful persistence.
       localGeneration = undefined;
       rotationPending = false;
     }
@@ -263,12 +311,19 @@ export function createMcpTelemetry(version = 'unknown', options: McpTelemetryOpt
     if (!latest) return;
     if (!telemetryConsentEnabled(latest)) {
       if (hadConsent !== false) {
+        pendingRevocations = [...new Set([
+          previousAnonymousId, state.anonymousId, current.anonymousId, sharedIdentity?.anonymousId,
+          loadAnonymousId(current.anonymousId)?.anonymousId,
+        ].filter((id): id is string => Boolean(id)))];
         localGeneration = randomUUID();
         recoveryGeneration = localGeneration;
         rotationPending = true;
         sessionId = randomUUID();
         // Persist the observed boundary before returning, including process exit.
-        if (persistAnonymousId(localGeneration)) {
+        if (persistRevokedIdentities(pendingRevocations)) {
+          pendingRevocations = undefined;
+        }
+        if (!pendingRevocations && persistAnonymousId(localGeneration)) {
           localGeneration = undefined;
           rotationPending = false;
         }
@@ -277,6 +332,8 @@ export function createMcpTelemetry(version = 'unknown', options: McpTelemetryOpt
       return;
     }
     // Missing configuration is not an opt-out and must not rotate identity.
+    const latestRevoked = loadRevokedIdentities();
+    if (!latestRevoked || latestRevoked.has(state.anonymousId)) return;
     if (!consentEnabled || rotationPending || !posthogApiKey.trim()) return;
 
     const parsed = parseTelemetryIngestionEvent({

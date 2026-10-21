@@ -25,7 +25,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Fixed
 
 - Resolve hosted analytics ownership from authenticated actor credentials; keep standalone MCP and website events anonymous and personless.
-- Keep MCP anonymous identity stable when an API key is absent, recover damaged identity files, and wait for persisted rotation before the observing client resumes capture after opt-out.
+- Keep MCP anonymous identity stable when an API key is absent, recover damaged identity files without replacing newer shared identities, and persist opt-out invalidations so failed identity replacement cannot restore an old ID after restart.
 - Leave an unreadable MCP telemetry file in place so a failed read cannot replace a newer opt-out with an older in-memory identity.
 - Resume website analytics in the same page after Do Not Track is turned off, and erase the stored anonymous id while tracking is off.
 
