@@ -184,6 +184,28 @@ export async function listDeliveries(
   });
 }
 
+/** Read only a still-pending message delivered to this exact agent token.
+ * This avoids a queue-page limit and never reveals another agent's messages.
+ */
+export async function pendingDeliveryForMessage(
+  db: Db, workspaceId: string, recipientAgentId: string, messageId: string,
+): Promise<{ message_id: string; sender_agent_id: string | null; workspace_id: string; channel_id: string; delivery_reason: string | null } | null> {
+  const [row] = await db.select({ messageId: deliveries.messageId, senderAgentId: messages.agentId,
+    workspaceId: deliveries.workspaceId, channelId: messages.channelId, reason: deliveries.reason })
+    .from(deliveries)
+    .innerJoin(messages, and(eq(messages.id, deliveries.messageId), eq(messages.workspaceId, deliveries.workspaceId)))
+    .where(and(
+      eq(deliveries.workspaceId, workspaceId),
+      eq(deliveries.agentId, recipientAgentId),
+      eq(deliveries.messageId, messageId),
+      sql`${deliveries.status} IN ('queued', 'delivered')`,
+      sql`(${deliveries.expiresAt} IS NULL OR ${deliveries.expiresAt} > ${Math.floor(Date.now() / 1000)})`,
+    ))
+    .limit(1);
+  return row ? { message_id: row.messageId, sender_agent_id: row.senderAgentId,
+    workspace_id: row.workspaceId, channel_id: row.channelId, delivery_reason: row.reason } : null;
+}
+
 /**
  * Fetch a single delivery owned by the agent, joined to its message so the
  * caller has the `channelId` for serialization. Returns null if not found.
