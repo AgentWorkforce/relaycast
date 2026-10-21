@@ -9,7 +9,6 @@ import {
   dmParticipants,
 } from '../db/schema.js';
 import { queryInChunks } from '../lib/queryChunks.js';
-import { runAtomicWrites } from '../ports/database.js';
 import { parseMessageMentions } from './mentions.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -83,22 +82,22 @@ export async function backfillMessageMentionFts(
     await db.run(sql`UPDATE maintenance_cursors SET cursor = ${cursor} WHERE id = ${MENTION_FTS_CURSOR}`);
     return 0;
   }
-  // The page and the cursor commit together. Rows already indexed (an edit
-  // during the copy, or a replay after the cursor update was lost) are
-  // skipped, so a second insert of the same rowid cannot fail the docsize
-  // primary key and leave the cursor stuck.
-  await runAtomicWrites(db, (writeDb) => [
-    writeDb.run(sql`
-      INSERT INTO messages_mention_fts(rowid, workspace_id, body)
-      SELECT rowid, workspace_id, body FROM messages
-      WHERE rowid > ${after} AND rowid <= ${nextRowid}
-        AND NOT EXISTS (
-          SELECT 1 FROM messages_mention_fts_docsize
-          WHERE id = messages.rowid
-        )
-    `),
-    writeDb.run(sql`UPDATE maintenance_cursors SET cursor = ${cursor} WHERE id = ${MENTION_FTS_CURSOR}`),
-  ]);
+  // Sequential, not runAtomicWrites: on D1 that is drizzle's batch(), which
+  // cannot bind a raw `db.run(sql)` statement with parameters (SQLiteRaw has
+  // no prepared `stmt`), so every page failed in production. Atomicity is not
+  // needed here: rows already indexed (an edit during the copy, or a replay
+  // after the cursor update was lost) are skipped, so a second insert of the
+  // same rowid cannot fail the docsize primary key and leave the cursor stuck.
+  await db.run(sql`
+    INSERT INTO messages_mention_fts(rowid, workspace_id, body)
+    SELECT rowid, workspace_id, body FROM messages
+    WHERE rowid > ${after} AND rowid <= ${nextRowid}
+      AND NOT EXISTS (
+        SELECT 1 FROM messages_mention_fts_docsize
+        WHERE id = messages.rowid
+      )
+  `);
+  await db.run(sql`UPDATE maintenance_cursors SET cursor = ${cursor} WHERE id = ${MENTION_FTS_CURSOR}`);
   return copied;
 }
 
