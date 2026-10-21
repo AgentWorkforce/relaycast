@@ -59,7 +59,10 @@ env:
   # one shared, bounded reconciliation budget for all packages.
   NPM_TAG_VERIFY_ATTEMPTS: 30
   NPM_TAG_VERIFY_DELAY_MS: 10000
-  NPM_PACKAGE_VERIFY_ATTEMPTS: 12
+  # 36 x 10s = 6 minutes per package. 12 attempts (2 minutes) missed npm's
+  # processing delay on both v10.6.0 and v10.6.2 although every package had
+  # published, which skipped Create Release until the job was re-run.
+  NPM_PACKAGE_VERIFY_ATTEMPTS: 36
   NPM_PACKAGE_VERIFY_DELAY_SECONDS: 10
 
 jobs:
