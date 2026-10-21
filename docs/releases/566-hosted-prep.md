@@ -2,7 +2,7 @@
 
 Status: preparation only. Proposed release: **10.6.4** (patch after 10.6.3), subject to release owner devopsgrok confirming the version is still available. No release has been published by this preparation.
 
-Source requirement: the release source must contain `440634bb858f08ffb9ac6da80922c6cbdb2c6c4e` (merged relaycast#566). Hosted currently pins 10.6.3, which does not contain this fix. Keep normal review and CI; Khaliq must explicitly approve merging and publishing. devopsgrok owns the lockstep npm release through the existing Publish NPM Packages workflow. Do not hand-cut changelogs, bump versions ahead of the workflow, or dispatch publishing during preparation.
+Source requirement: the release source must contain `440634bb858f08ffb9ac6da80922c6cbdb2c6c4e` (merged relaycast#566) and `cb4f2704` (merged relaycast#569, which exports `backfillMessageMentionFts` so hosts can drive the 0075 history copy). Hosted currently pins 10.6.3, which does not contain this fix. Keep normal review and CI; Khaliq must explicitly approve merging and publishing. devopsgrok owns the lockstep npm release through the existing Publish NPM Packages workflow. Do not hand-cut changelogs, bump versions ahead of the workflow, or dispatch publishing during preparation.
 
 ## Proposed release notes
 
