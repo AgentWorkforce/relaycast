@@ -186,6 +186,9 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
       {
         nodeConnections,
         idempotencyKey,
+        // Builtin release is authorized only on this route. Message triggers
+        // call invokeAction without this flag and cannot tombstone an agent.
+        authorizeBuiltinRelease: true,
       },
     );
     const replayed = actionEngine.wasInvocationReplayed(result);
