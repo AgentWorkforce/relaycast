@@ -392,10 +392,14 @@ The query-parameter forms exist because browsers cannot set custom headers on a
 WebSocket upgrade; the SDK applies them automatically to both the workspace
 observer socket and agent sockets.
 
-Values must match `[A-Za-z0-9._:-]+` and stay within 120 characters for the org
-slug, 128 for the rest. Anything else is dropped — identity values are never
-truncated to fit, since a shortened id would be a different id and could
-attribute usage to the wrong person or organization.
+Origin actor values are trimmed, lowercased, and capped at 128 characters.
+Allowed characters are ASCII letters, digits, spaces, and `._-/():=;,+@`.
+Missing or invalid values become `unknown`.
+
+Correlation ids are trimmed and must match `[A-Za-z0-9._:-]+`. The org slug
+limit is 120 characters; the other ids have a 128-character limit. Invalid or
+oversized values are ignored without rejecting the request, except that
+`agentRelayDistinctId` is truncated at 128 characters.
 
 ### Workspace usage attribution
 

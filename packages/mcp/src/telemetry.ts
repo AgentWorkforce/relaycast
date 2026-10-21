@@ -220,6 +220,9 @@ export function createMcpTelemetry(version = 'unknown', options: McpTelemetryOpt
   let state = loadState(randomUUID()) ?? { anonymousId: randomUUID() };
   let hadConsent: boolean | undefined;
   let localGeneration: string | undefined;
+  // An observed opt-out must be durable before this instance resumes capture.
+  let rotationPending = false;
+  let recoveryGeneration: string | undefined;
   let sessionId = randomUUID();
   const pending = new Set<Promise<void>>();
   const posthogHost = getPosthogHost(options);
@@ -233,16 +236,25 @@ export function createMcpTelemetry(version = 'unknown', options: McpTelemetryOpt
     const consentEnabled = telemetryConsentEnabled(current);
     if (hadConsent !== false && !consentEnabled) {
       localGeneration = randomUUID();
+      recoveryGeneration = localGeneration;
+      rotationPending = true;
       sessionId = randomUUID();
     }
     const sharedIdentity = loadAnonymousId(current.anonymousId);
-    if (!localGeneration && !sharedIdentity) return;
+    // Identity damage is independent of consent: recover with a fresh ID, never
+    // the legacy ID which could predate an opt-out. Keep it stable on retries.
+    if (sharedIdentity) recoveryGeneration = undefined;
+    if (!localGeneration && !sharedIdentity) {
+      recoveryGeneration ??= randomUUID();
+      localGeneration = recoveryGeneration;
+    }
     const anonymousId = localGeneration ?? sharedIdentity!.anonymousId;
     if (anonymousId !== state.anonymousId) sessionId = randomUUID();
     if (!localGeneration && sharedIdentity?.missing && current.missingConsentFile) localGeneration = anonymousId;
     if (localGeneration && persistAnonymousId(localGeneration)) {
       // The shared file becomes authoritative again after successful persistence.
       localGeneration = undefined;
+      rotationPending = false;
     }
     state = { ...current, anonymousId };
     hadConsent = consentEnabled;
@@ -252,15 +264,20 @@ export function createMcpTelemetry(version = 'unknown', options: McpTelemetryOpt
     if (!telemetryConsentEnabled(latest)) {
       if (hadConsent !== false) {
         localGeneration = randomUUID();
+        recoveryGeneration = localGeneration;
+        rotationPending = true;
         sessionId = randomUUID();
         // Persist the observed boundary before returning, including process exit.
-        if (persistAnonymousId(localGeneration)) localGeneration = undefined;
+        if (persistAnonymousId(localGeneration)) {
+          localGeneration = undefined;
+          rotationPending = false;
+        }
       }
       hadConsent = false;
       return;
     }
     // Missing configuration is not an opt-out and must not rotate identity.
-    if (!consentEnabled || !posthogApiKey.trim()) return;
+    if (!consentEnabled || rotationPending || !posthogApiKey.trim()) return;
 
     const parsed = parseTelemetryIngestionEvent({
       event,

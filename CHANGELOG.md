@@ -25,10 +25,15 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Fixed
 
 - Resolve hosted analytics ownership from authenticated actor credentials; keep standalone MCP and website events anonymous and personless.
-- Keep MCP anonymous identity stable when an API key is absent, and retry saving opt-out identity rotations after temporary filesystem failures.
+- Keep MCP anonymous identity stable when an API key is absent, recover damaged identity files, and wait for persisted rotation before the observing client resumes capture after opt-out.
 - Leave an unreadable MCP telemetry file in place so a failed read cannot replace a newer opt-out with an older in-memory identity.
 - Resume website analytics in the same page after Do Not Track is turned off, and erase the stored anonymous id while tracking is off.
-- Inbox mention lookup, the unreachable-node delivery sweep, and per-node agent reads no longer scan a workspace's full history, which was stalling the shared database and surfacing as `database_overloaded`.
+
+## [10.6.4] - 2026-10-21
+
+### Fixed
+
+- Inbox mention lookup uses a workspace-scoped index after its bounded backfill completes; delivery sweeps and per-node agent reads avoid full-history scans that stalled the shared database and surfaced as `database_overloaded`.
 - Every response includes its request id in the `X-Request-Id` header.
 
 ## [10.6.3] - 2026-10-19
@@ -854,7 +859,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.3...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.4...HEAD
+[10.6.4]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.3...v10.6.4
 [10.6.3]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.2...v10.6.3
 [10.6.2]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.1...v10.6.2
 [10.6.1]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.0...v10.6.1

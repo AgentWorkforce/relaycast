@@ -14,9 +14,29 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Replace analytics envelopes with typed domain observations (`kind`, `facts`, `occurredAt`, workspace, sender, and authenticated provenance). Hosts now own event naming, identity, groups, profile policy, and log transport via a generic `logExport` callback. The optional observation sink defaults to a no-op and isolates callback failures.
 
+### Breaking changes
+
+- Hosts implementing `TelemetrySink.capture` must consume `EngineObservation` (`kind` and `facts`) instead of the analytics envelope (`name`, `distinctId`, `properties`, `groups`, `setOnce`, `processPersonProfile`). `TelemetryEvent` now aliases that observation type.
+- `EngineConfig.logExport` accepts an `EngineLogExport` callback instead of PostHog configuration. Hosts provide their own transport; `EngineLogRecord` defines the callback payload.
+- REST and WebSocket contracts are unchanged. Self-hosts using the default observation sink need no analytics adapter.
+
 ### Fixed
 
 - Expose credential-authenticated actor provenance separately from event targets so hosts can verify analytics ownership; fingerprint presented credentials with SHA-256 independently of custom authentication storage. Public metadata cannot identify people.
+- The `0075` mention-index backfill no longer fails on D1 with "Cannot read properties of undefined (reading 'bind')". Each page was committed through drizzle's D1 `batch()`, which cannot bind raw parameterized statements, so the cursor never advanced and inbox stayed on the history scan. Page writes now run sequentially; the copy was already replay-safe.
+
+## [10.6.4] - 2026-10-21
+
+### Added
+
+- `backfillMessageMentionFts` and `MESSAGE_MENTION_BACKFILL_BATCH` are exported from the package root, so hosts can drive the `0075` mention-index copy from their own maintenance instead of waiting on one batch per delivery sweep. Each call copies at most one batch atomically with its cursor, is safe to repeat, and returns `0` once the copy is complete.
+
+### Migration
+
+- Apply `0074_delivery_active_location_node_index.sql` and `0075_message_mention_fts.sql` before updating the worker. The new sweep requires the partial index; mention indexing copies history in bounded maintenance batches while inbox retains its fallback until completion.
+
+### Fixed
+
 - `GET /v1/inbox` finds mention candidates through `messages_mention_fts` (migration `0075`) once that index has caught up, instead of a `LIKE` walk of the whole workspace history. The migration does not rebuild history; delivery sweeps copy it in bounded batches, replaying a batch is safe, and a failed copy does not skip delivery maintenance. Inbox keeps the workspace scan until the copy finishes. Results are unchanged.
 - The unreachable-node delivery sweep reads only active deliveries through the new partial index `idx_deliveries_active_location_node` (migration `0074`), not every delivery ever routed to a node.
 - Every response carries its request id in an `X-Request-Id` header (the header the Rust SDK reads), so client error reports stop showing `request_id: null`.

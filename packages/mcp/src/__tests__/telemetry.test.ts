@@ -167,12 +167,59 @@ describe('createMcpTelemetry', () => {
     expect(bodies()[2].distinct_id).toBe(persistedGeneration);
   });
 
-  it('keeps one fresh in-memory generation while persistence is unavailable', async () => {
+  it('suppresses capture until an opt-out rotation is persisted, then shares it after restart', async () => {
+    const telemetry = create(); telemetry.capture(event);
+    const prior = bodies()[0];
+    files.set(identityPath, JSON.stringify({ anonymousId: prior.distinct_id }));
     vi.mocked(fs.writeFileSync).mockImplementation(() => { throw Error('EACCES'); });
-    const telemetry = create(); process.env.DO_NOT_TRACK = '1'; telemetry.capture(event);
-    delete process.env.DO_NOT_TRACK; telemetry.capture(event); telemetry.capture(event); await telemetry.flush();
-    expect(bodies()).toHaveLength(2); expect(bodies()[0].distinct_id).not.toBe('legacy-id');
+    process.env.DO_NOT_TRACK = '1'; telemetry.capture(event);
+    delete process.env.DO_NOT_TRACK;
+    telemetry.capture(event); telemetry.capture(event); await telemetry.flush();
+    expect(bodies()).toHaveLength(1);
+    expect(JSON.parse(files.get(identityPath)!).anonymousId).toBe(prior.distinct_id);
+    vi.mocked(fs.writeFileSync).mockImplementation((file, data) => { files.set(String(file), String(data)); });
+    telemetry.capture(event);
+    const resumed = bodies()[1];
+    expect(resumed.distinct_id).not.toBe(prior.distinct_id);
+    expect(resumed.properties.session_id).not.toBe(prior.properties.session_id);
+    const restarted = create(); restarted.capture(event);
+    expect(bodies()[2].distinct_id).toBe(resumed.distinct_id);
+  });
+
+  it.each(['malformed', 'invalid', 'unreadable'])('recovers a %s identity without changing enabled consent', failure => {
+    const originalConsent = files.get(consentPath);
+    files.set(identityPath, failure === 'malformed' ? '{' : JSON.stringify({ anonymousId: '' }));
+    if (failure === 'unreadable') vi.mocked(fs.readFileSync).mockImplementation(file => {
+      if (String(file) === identityPath) throw Object.assign(Error('denied'), { code: 'EACCES' });
+      return read(file);
+    });
+    const telemetry = create(); telemetry.capture(event); telemetry.capture(event);
+    expect(bodies()).toHaveLength(2);
+    expect(bodies()[0].distinct_id).not.toBe('legacy-id');
     expect(bodies()[1].distinct_id).toBe(bodies()[0].distinct_id);
+    expect(JSON.parse(files.get(identityPath)!).anonymousId).toBe(bodies()[0].distinct_id);
+    expect(files.get(consentPath)).toBe(originalConsent);
+  });
+
+  it('keeps a fresh recovery identity stable when repair writes fail and retries later', () => {
+    files.set(identityPath, '{');
+    vi.mocked(fs.writeFileSync).mockImplementation(() => { throw Error('EACCES'); });
+    const telemetry = create(); telemetry.capture(event); telemetry.capture(event);
+    expect(bodies()).toHaveLength(2);
+    expect(bodies()[0].distinct_id).not.toBe('legacy-id');
+    expect(bodies()[1].distinct_id).toBe(bodies()[0].distinct_id);
+    expect(files.get(identityPath)).toBe('{');
+    vi.mocked(fs.writeFileSync).mockImplementation((file, data) => { files.set(String(file), String(data)); });
+    telemetry.capture(event);
+    const restarted = create(); restarted.capture(event);
+    expect(bodies()[3].distinct_id).toBe(bodies()[0].distinct_id);
+  });
+
+  it('does not recover identity or send while consent is corrupt', () => {
+    files.set(consentPath, '{'); files.set(identityPath, '{');
+    create().capture(event);
+    expect(capturedBodies).toHaveLength(0);
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
   });
 
   it('keeps failed atomic identity replacements off the shared file and retries', () => {
