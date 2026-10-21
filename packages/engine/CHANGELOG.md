@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- The `0075` mention-index backfill no longer fails on D1 with "Cannot read properties of undefined (reading 'bind')". Each page was committed through drizzle's D1 `batch()`, which cannot bind raw parameterized statements, so the cursor never advanced and inbox stayed on the history scan. Page writes now run sequentially; the copy was already replay-safe.
+
 ## [10.6.4] - 2026-10-21
 
 ### Added
