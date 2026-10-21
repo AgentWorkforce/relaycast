@@ -22,9 +22,11 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Self-hosted engines now serve `DELETE /v1/nodes/:name`, so `relay.nodes.delete()` can prune dead nodes from a self-hosted roster instead of returning 404.
 
+## [10.6.4] - 2026-10-21
+
 ### Fixed
 
-- Inbox mention lookup, the unreachable-node delivery sweep, and per-node agent reads no longer scan a workspace's full history, which was stalling the shared database and surfacing as `database_overloaded`.
+- Inbox mention lookup uses a workspace-scoped index after its bounded backfill completes; delivery sweeps and per-node agent reads avoid full-history scans that stalled the shared database and surfaced as `database_overloaded`.
 - Every response includes its request id in the `X-Request-Id` header.
 
 ## [10.6.3] - 2026-10-19
@@ -850,7 +852,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.3...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.4...HEAD
+[10.6.4]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.3...v10.6.4
 [10.6.3]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.2...v10.6.3
 [10.6.2]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.1...v10.6.2
 [10.6.1]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.0...v10.6.1
