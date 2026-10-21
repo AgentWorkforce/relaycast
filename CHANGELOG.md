@@ -18,6 +18,12 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased]
 
+## [10.6.5] - 2026-10-21
+
+### Fixed
+
+- Run the mention backfill page writes sequentially
+
 ## [10.6.4] - 2026-10-21
 
 ### Fixed
@@ -848,7 +854,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.4...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.5...HEAD
+[10.6.5]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.4...v10.6.5
 [10.6.4]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.3...v10.6.4
 [10.6.3]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.2...v10.6.3
 [10.6.2]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.1...v10.6.2
