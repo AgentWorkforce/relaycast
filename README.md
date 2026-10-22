@@ -358,11 +358,11 @@ default to `selfhost`, which is unlimited.
 credential validation and launch preflight stays reachable while the workspace's
 data-plane traffic sits at its ceiling.
 
-## Telemetry Attribution
+## Origin and Correlation Headers
 
-Clients may declare who is driving a request so server-side product telemetry
-can attribute it. Everything here is optional and analytics-only — it never
-affects authentication, authorization, or routing.
+Clients may declare optional origin and correlation headers. Hosted adapters
+decide how to use these hints; the engine emits domain observations and never
+uses caller identity hints as authentication or ownership proof.
 
 ```ts
 const relay = new RelayCast({
@@ -388,23 +388,18 @@ const relay = new RelayCast({
 `agent-relay-cli/agent/claude-code` or `pear/user/send-message-box`. (It
 replaced the older `harness` option and its `X-Relaycast-Harness` header.)
 
-An acting agent whose `metadata.cloud_user_id` is set attributes events to that
-user, ahead of these fields. Otherwise `agentRelayUserId`, then
-`agentRelayDistinctId`, is the analytics person key, so a host that knows the
-user only has to set one field. Without any of them an event belongs to the
-workspace and creates no person. `agentRelayMachineId` is sent
-*alongside* the person key rather than instead of it, which is what makes
-"how many machines share this workspace" and "are they one account or several"
-answerable.
-
 The query-parameter forms exist because browsers cannot set custom headers on a
 WebSocket upgrade; the SDK applies them automatically to both the workspace
 observer socket and agent sockets.
 
-Values must match `[A-Za-z0-9._:-]+` and stay within 120 characters for the org
-slug, 128 for the rest. Anything else is dropped — identity values are never
-truncated to fit, since a shortened id would be a different id and could
-attribute usage to the wrong person or organization.
+Origin actor values are trimmed, lowercased, and capped at 128 characters.
+Allowed characters are ASCII letters, digits, spaces, and `._-/():=;,+@`.
+Missing or invalid values become `unknown`.
+
+Correlation ids are trimmed and must match `[A-Za-z0-9._:-]+`. The org slug
+limit is 120 characters; the other ids have a 128-character limit. Invalid or
+oversized values are ignored without rejecting the request, except that
+`agentRelayDistinctId` is truncated at 128 characters.
 
 ### Workspace usage attribution
 
@@ -1302,12 +1297,19 @@ RELAY_SERVER_URL=http://localhost:8787 npm run -w @relaycast/observer-dashboard 
 
 Then open `http://localhost:3100`.
 
-## Telemetry
+## Engine Hooks
 
-Relaycast includes anonymous telemetry.
+The engine exposes optional typed domain observations through `EngineDeps.telemetry`,
+which defaults to a no-op. Hosts can also supply `EngineConfig.logExport` to receive
+structured log records; console logging remains enabled. The contracts are exported
+from `@relaycast/engine/ports`. Hosts own analytics policy and transport.
 
-- Disable via env: `DO_NOT_TRACK=1` or `RELAYCAST_TELEMETRY_DISABLED=1`
-- Details: [`TELEMETRY.md`](./TELEMETRY.md)
+## MCP Telemetry
+
+The MCP client can send anonymous usage events to PostHog when an API key is
+configured. No key is bundled. Disable capture with `DO_NOT_TRACK=1` or
+`RELAYCAST_TELEMETRY_DISABLED=1`. See the
+[MCP telemetry configuration](./packages/mcp/src/telemetry.ts) for supported settings.
 
 ## Packages
 

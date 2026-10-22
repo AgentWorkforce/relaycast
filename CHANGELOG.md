@@ -22,6 +22,25 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Self-hosted engines now serve `DELETE /v1/nodes/:name`, so `relay.nodes.delete()` can prune dead nodes from a self-hosted roster instead of returning 404.
 
+## [11.0.0] - 2026-10-22
+
+### Changed
+
+- Engine hosting hooks now expose typed domain observations and an optional generic log callback; hosts own analytics event, identity, profile, and transport policy.
+
+### Fixed
+
+- Resolve hosted analytics ownership from authenticated actor credentials; keep standalone MCP and website events anonymous and personless.
+- Keep MCP anonymous identity stable when an API key is absent, recover damaged identity files without replacing newer shared identities, and persist opt-out invalidations so failed identity replacement cannot restore an old ID after restart.
+- Leave an unreadable MCP telemetry file in place so a failed read cannot replace a newer opt-out with an older in-memory identity.
+- Resume website analytics in the same page after Do Not Track is turned off, and erase the stored anonymous id while tracking is off.
+
+## [10.6.5] - 2026-10-21
+
+### Fixed
+
+- Run the mention backfill page writes sequentially
+
 ## [10.6.4] - 2026-10-21
 
 ### Fixed
@@ -852,7 +871,9 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.4...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v11.0.0...HEAD
+[11.0.0]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.5...v11.0.0
+[10.6.5]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.4...v10.6.5
 [10.6.4]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.3...v10.6.4
 [10.6.3]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.2...v10.6.3
 [10.6.2]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.1...v10.6.2

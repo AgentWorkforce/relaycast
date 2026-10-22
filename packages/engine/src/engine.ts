@@ -1,3 +1,5 @@
+import { safeTelemetrySink } from './ports/telemetry.js';
+import { NoopTelemetrySink } from './providers/noop-telemetry.js';
 import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { cors } from 'hono/cors';
@@ -10,7 +12,7 @@ import { getRequestLogger, toErrorDetails } from './lib/logger.js';
 import { asCodedError, safeClientErrorMessage } from './lib/httpError.js';
 import { jsonError, jsonMalformedBody, jsonNotFound } from './lib/httpResponse.js';
 import { requiredOriginInfo } from './lib/origin.js';
-import { emitServerEvent, loadTelemetryWorkspace } from './lib/serverTelemetry.js';
+import { emitServerEvent } from './lib/serverTelemetry.js';
 import { runInBackground } from './routes/background.js';
 import {
   authenticateNodeWs,
@@ -75,7 +77,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     webhookQueue: deps.webhookQueue,
     auth: deps.auth,
     entitlements: deps.entitlements,
-    telemetry: deps.telemetry,
+    telemetry: safeTelemetrySink(deps.telemetry ?? new NoopTelemetrySink()),
     config: deps.config ?? {},
   };
 
@@ -131,9 +133,9 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
       observerToken: authResult.observerToken,
     });
     if (response.status === 101) {
-      emitServerEvent(c, authResult.workspace.id, 'relaycast_server_ws_session_started', {
+      emitServerEvent(c, authResult.workspace.id, 'ws.session.started', {
         session_scope: 'workspace',
-      }, { workspace: authResult.workspace });
+      }, {});
     }
     return response;
   });
@@ -180,11 +182,10 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
       runInBackground(
         c,
         (async () => {
-          const workspace = await loadTelemetryWorkspace(db, workspaceId);
-          emitServerEvent(c, workspaceId, 'relaycast_server_ws_session_started', {
+          emitServerEvent(c, workspaceId, 'ws.session.started', {
             node_id: authResult.node.id,
             session_scope: 'node',
-          }, { workspace });
+          }, {});
         })(),
         'emit node session telemetry',
       );

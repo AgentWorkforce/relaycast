@@ -90,38 +90,33 @@ info:
     legacy strict frame shape. Providers must treat an absent `caller_id` as no
     authenticated caller; `caller_name` is informational and never authority.
 
-    Telemetry attribution (optional, all requests):
+    Origin and correlation hints (optional, all requests):
 
-    Clients may declare who is driving a request so server-side product
-    telemetry can attribute it. These are analytics dimensions only — they
-    never affect authentication, authorization, or routing, and are safe to
-    omit entirely.
+    These caller-declared values are untrusted observational hints. They never
+    establish authentication, authorization, analytics ownership, or routing.
+    Hosts own analytics policy; public metadata and caller identity hints do not
+    select a person in engine observations.
 
     | Header | Query parameter | Meaning |
     | --- | --- | --- |
-    | `X-Relaycast-Origin-Actor` | `origin_actor` | UA-style path identifying the caller, `{app}/{type}[/{name}]` (e.g. `agent-relay-cli/agent/claude-code`). Supersedes the former `X-Relaycast-Harness`. |
-    | `X-Agent-Relay-Distinct-Id` | `agent_relay_distinct_id` | Analytics person key for the caller. |
-    | `X-Agent-Relay-Machine-Id` | `agent_relay_machine_id` | Anonymous hashed id of the host machine. Sent alongside the distinct id, not instead of it. |
-    | `X-Agent-Relay-User-Id` | `agent_relay_user_id` | Signed-in user id from the calling product's own account system. Used as the person key when the acting agent has no `metadata.cloud_user_id`. |
-    | `X-Agent-Relay-Org-Id` | `agent_relay_org_id` | Organization id, for per-customer rollups. |
-    | `X-Agent-Relay-Org-Slug` | `agent_relay_org_slug` | Human-readable organization slug. |
+    | `X-Relaycast-Origin-Actor` | `origin_actor` | UA-style caller path, `{app}/{type}[/{name}]` (e.g. `agent-relay-cli/agent/claude-code`). |
+    | `X-Agent-Relay-Distinct-Id` | `agent_relay_distinct_id` | Caller-declared correlation id. |
+    | `X-Agent-Relay-Machine-Id` | `agent_relay_machine_id` | Caller-declared machine id. |
+    | `X-Agent-Relay-User-Id` | `agent_relay_user_id` | Caller-declared user id. |
+    | `X-Agent-Relay-Org-Id` | `agent_relay_org_id` | Caller-declared organization id. |
+    | `X-Agent-Relay-Org-Slug` | `agent_relay_org_slug` | Caller-declared organization slug. |
 
-    The person key is the acting agent's `metadata.cloud_user_id` when set,
-    then `X-Agent-Relay-User-Id`, then `X-Agent-Relay-Distinct-Id`. Without any
-    of them the event belongs to the workspace and creates no person. Organization
-    and workspace groups come from the workspace's `metadata.cloud_org_id` and
-    `metadata.cloud_workspace_id`.
+    Query parameters support WebSocket upgrades (`/v1/ws`, `/v1/node/ws`);
+    the header takes precedence when both are present.
 
-    The query-parameter forms exist for WebSocket upgrades (`/v1/ws`,
-    `/v1/node/ws`), where browsers cannot set custom headers; the header wins
-    when both are present.
+    Origin actor values are trimmed, lowercased, and capped at 128 characters.
+    Allowed characters are ASCII letters, digits, spaces, and `._-/():=;,+@`.
+    Missing or invalid values become `unknown`.
 
-    Values must match `[A-Za-z0-9._:-]+` and stay within 120 characters for the
-    org slug, 128 for the rest. A value that fails either rule is ignored, and
-    only that dimension is dropped — the request itself is unaffected. Identity
-    values are never truncated to fit: a shortened id would be a different id
-    and could attribute usage to the wrong person or organization.
-    (`X-Agent-Relay-Distinct-Id` predates this rule and still truncates at 128.)
+    Correlation ids are trimmed and must match `[A-Za-z0-9._:-]+`. The org slug
+    limit is 120 characters; the other ids have a 128-character limit. Invalid
+    or oversized values are ignored without rejecting the request, except that
+    `X-Agent-Relay-Distinct-Id` is truncated at 128 characters.
   version: 1.0.0
   contact:
     name: Relaycast

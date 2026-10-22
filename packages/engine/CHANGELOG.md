@@ -13,8 +13,24 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - `DELETE /v1/nodes/:name` deletes a node by id (exact id first) or name, returning `{ id, name, deleted, cascaded_actions }`. It refuses an online node (`node_online`) or one hosting actions (`node_has_actions`) unless `force=true`, and returns `node_delete_conflict` when a heartbeat or action registration lands mid-delete.
 
+## [11.0.0] - 2026-10-22
+
+### Changed
+
+- Replace analytics envelopes with typed domain observations (`kind`, `facts`, `occurredAt`, workspace, sender, and authenticated provenance). Hosts now own event naming, identity, groups, profile policy, and log transport via a generic `logExport` callback. The optional observation sink defaults to a no-op and isolates callback failures.
+
+### Breaking changes
+
+- Hosts implementing `TelemetrySink.capture` must consume `EngineObservation` (`kind` and `facts`) instead of the analytics envelope (`name`, `distinctId`, `properties`, `groups`, `setOnce`, `processPersonProfile`). `TelemetryEvent` now aliases that observation type.
+- `EngineConfig.logExport` accepts an `EngineLogExport` callback instead of PostHog configuration. Hosts provide their own transport; `EngineLogRecord` defines the callback payload.
+- REST and WebSocket contracts are unchanged. Self-hosts using the default observation sink need no analytics adapter.
+
+## [10.6.5] - 2026-10-21
+
+
 ### Fixed
 
+- Expose credential-authenticated actor provenance separately from event targets so hosts can verify analytics ownership; fingerprint presented credentials with SHA-256 independently of custom authentication storage. Public metadata cannot identify people.
 - The `0075` mention-index backfill no longer fails on D1 with "Cannot read properties of undefined (reading 'bind')". Each page was committed through drizzle's D1 `batch()`, which cannot bind raw parameterized statements, so the cursor never advanced and inbox stayed on the history scan. Page writes now run sequentially; the copy was already replay-safe.
 
 ## [10.6.4] - 2026-10-21
@@ -37,6 +53,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [10.6.3] - 2026-10-19
 
 - Unlimited-capacity nodes retain explicitly reported load for placement; load ties count both active and reserved agents.
+
 
 ## [10.6.2] - 2026-10-18
 
@@ -215,7 +232,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- Server events belong to the acting agent's cloud user, carry sender fields and org/workspace groups, and fall back to a non-person workspace id; `TelemetryEvent` gains optional `groups`, `setOnce` and `processPersonProfile` for sinks (see [TELEMETRY.md](../../TELEMETRY.md)).
+- Server events belong to the acting agent's cloud user, carry sender fields and org/workspace groups, and fall back to a non-person workspace id; `TelemetryEvent` gains optional `groups`, `setOnce` and `processPersonProfile` for sinks.
 
 ## [8.14.0] - 2026-09-30
 

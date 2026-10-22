@@ -1,3 +1,4 @@
+import { safeTelemetrySink } from '../../ports/telemetry.js';
 import { randomBytes } from 'node:crypto';
 import type { EngineDeps, EngineConfig } from '../../ports/index.js';
 import type { AuthProvider } from '../../ports/auth.js';
@@ -101,7 +102,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
   }
   const db = handle.db;
 
-  const telemetry = options.telemetry ?? new NoopTelemetrySink();
+  const telemetry = safeTelemetrySink(options.telemetry ?? new NoopTelemetrySink());
   const testEnvironment = options.config?.environment === 'test';
   const testFetch: typeof globalThis.fetch = (input, init) => globalThis.fetch(input, init);
   const outboundWebhookFetch = options.config?.outboundWebhookFetch

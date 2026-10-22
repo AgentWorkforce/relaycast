@@ -10,6 +10,8 @@ export type {
   EnginePorts,
   EngineProviders,
   EngineConfig,
+  EngineLogRecord,
+  EngineLogExport,
   EngineDb,
   EngineEvent,
   RealtimeBus,
