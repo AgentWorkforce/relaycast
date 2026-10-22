@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
 import { actionInvocations, actions, agentNodeBindings, agents, nodes, workspaceEvents } from '../../db/schema.js';
-import { deleteNode as deleteNodeById } from '../../engine/node.js';
+import { claimNodeOffline, deleteNode as deleteNodeById } from '../../engine/node.js';
 import { emitNodeStatusEffects } from '../../engine/invocationCompletion.js';
 import { NODE_LIVENESS_TTL_MS } from '../../engine/placement.js';
 
@@ -490,5 +490,34 @@ describe('DELETE /v1/nodes/:name', () => {
       await emit('offline', 6);
       expect(await statusEvents()).toEqual(['node.status.offline', 'node.status.online', 'node.status.offline']);
     });
+  });
+
+  it('finishes a pending offline claim it finds on its first read', async () => {
+    await enroll('node_pending', 'pending');
+    const agent = await registerAgent(stack.app, ws.workspaceKey, 'pending-worker');
+    await db().update(agents)
+      .set({ status: 'active', lastSeen: new Date(), locationType: 'via_node', locationNodeId: 'node_pending' })
+      .where(eq(agents.id, agent.agentId));
+    const lastHeartbeatAt = new Date(Date.now() - NODE_LIVENESS_TTL_MS + 5_000);
+    await db().update(nodes).set({ status: 'online', lastHeartbeatAt }).where(eq(nodes.id, 'node_pending'));
+    // Another isolate claimed it offline and has not settled or published yet.
+    const [row] = await db().select().from(nodes).where(eq(nodes.id, 'node_pending'));
+    const claim = await claimNodeOffline(db(), ws.workspaceId, 'node_pending', {
+      lastHeartbeatAt: row.lastHeartbeatAt, livenessRevision: row.livenessRevision,
+    });
+    expect(claim).toBeDefined();
+
+    expect((await deleteNode('pending')).status).toBe(200);
+    const [after] = await db().select().from(agents).where(eq(agents.id, agent.agentId));
+    expect(after.status).toBe('offline');
+    const events = await db().select().from(workspaceEvents).where(eq(workspaceEvents.workspaceId, ws.workspaceId));
+    expect(events.filter((event) => event.type === 'node.status.offline')).toHaveLength(1);
+  });
+
+  it('does not announce an offline transition for a node that never connected', async () => {
+    await enroll('node_never', 'never');
+    expect((await deleteNode('never')).status).toBe(200);
+    const events = await db().select().from(workspaceEvents).where(eq(workspaceEvents.workspaceId, ws.workspaceId));
+    expect(events.filter((event) => event.type.startsWith('node.status.'))).toEqual([]);
   });
 });

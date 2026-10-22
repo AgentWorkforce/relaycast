@@ -2140,6 +2140,7 @@ export async function deleteNode(
 
   let current = node;
   let epoch = { lastHeartbeatAt: node.lastHeartbeatAt, livenessRevision: node.livenessRevision };
+  let claimedHere = false;
   for (let attempt = 1; current.status === 'online'; attempt++) {
     const claim = await claimNodeOffline(db, workspaceId, current.id, epoch);
     if (claim) {
@@ -2150,6 +2151,7 @@ export async function deleteNode(
         reason: 'deregistered',
       });
       epoch = { lastHeartbeatAt: claim.claimAt, livenessRevision: claim.claimRevision };
+      claimedHere = true;
       break;
     }
     // Unforced, a lost claim means the node changed after the checks. Forced,
@@ -2159,25 +2161,29 @@ export async function deleteNode(
     if (!reread) return { ok: false, code: 'node_not_found' };
     current = reread;
     epoch = { lastHeartbeatAt: reread.lastHeartbeatAt, livenessRevision: reread.livenessRevision };
-    if (current.status !== 'online') {
-      // Another writer claimed it offline, and its settle tail may not have
-      // run yet; the delete would erase the references that tail needs and
-      // the epoch its event is conditioned on. Run that claim's tail here: its
-      // writes are scoped to the claim revision and CAS-guarded, so running
-      // alongside the claimer is safe.
-      await settleNodeOffline(db, registry, workspaceId, current.id, { claimRevision: current.livenessRevision });
-      // Publishes the transition unless the claimer already has (checked
-      // atomically by the emit itself).
-      await emitNodeStatusEffects(deps, workspaceId, {
-        status: 'offline',
-        nodeId: current.id,
-        nodeName: current.name,
-        reason: 'deregistered',
-        claimRevision: current.livenessRevision,
-      });
-      break;
+    if (current.status === 'online' && attempt >= FORCED_DELETE_CLAIM_ATTEMPTS) {
+      return { ok: false, code: 'node_delete_conflict' };
     }
-    if (attempt >= FORCED_DELETE_CLAIM_ATTEMPTS) return { ok: false, code: 'node_delete_conflict' };
+  }
+
+  // An offline row this call did not claim may belong to another writer's
+  // claim (a disconnect, or a concurrent delete on another isolate) whose
+  // settle tail has not run yet; the delete would erase the references that
+  // tail needs and the epoch its event is conditioned on. A claimer runs its
+  // tail right after claiming, so only a recent claim (its time is the row's
+  // heartbeat) can still be pending. Finish it here: the tail's writes are
+  // scoped to the claim revision and CAS-guarded, and the emit publishes the
+  // transition only if the claimer has not.
+  const claimedAt = current.lastHeartbeatAt?.getTime();
+  if (!claimedHere && claimedAt !== undefined && Date.now() - claimedAt <= NODE_LIVENESS_TTL_MS) {
+    await settleNodeOffline(db, registry, workspaceId, current.id, { claimRevision: current.livenessRevision });
+    await emitNodeStatusEffects(deps, workspaceId, {
+      status: 'offline',
+      nodeId: current.id,
+      nodeName: current.name,
+      reason: 'deregistered',
+      claimRevision: current.livenessRevision,
+    });
   }
 
   const thisNode = and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, node.id));
