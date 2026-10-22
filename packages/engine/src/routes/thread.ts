@@ -124,7 +124,7 @@ threadRoutes.post(
           );
         }
 
-        emitServerEvent(c, workspace.id, 'relaycast_server_thread_reply_created', {
+        emitServerEvent(c, workspace.id, 'thread.reply.created', {
           message_id: publicReplyData.id,
           parent_message_id: parentId,
           channel_id: publicReplyData.channel_id ?? null,

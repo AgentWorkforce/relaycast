@@ -60,7 +60,7 @@ searchRoutes.get(
         ...result
       }) => result);
 
-      emitServerEvent(c, workspace.id, 'relaycast_server_search_executed', {
+      emitServerEvent(c, workspace.id, 'search.executed', {
         query_length: q.trim().length,
         result_count: responseResults.length,
         has_channel_filter: Boolean(channel),

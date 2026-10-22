@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
 
 /**
@@ -50,6 +50,19 @@ describe('workspace key rotation', () => {
       body: JSON.stringify({ metadata: { probe: 'workspace-key-rotation' } }),
     });
   }
+
+  it('observes committed rotation as domain facts without either credential', async () => {
+    const { workspaceKey, workspaceId } = await createWorkspace(stack.app, 'rotate-observation');
+    const capture = vi.spyOn(stack.runtime.deps.telemetry!, 'capture');
+    const res = await rotateKey(workspaceKey, 0);
+    expect(res.status).toBe(200);
+    const newKey = await keyFrom(res);
+    const observation = capture.mock.calls.map(([event]) => event).find(event => event.kind === 'workspace.key.rotated');
+    expect(observation).toMatchObject({ kind: 'workspace.key.rotated', workspaceId, facts: { grace_seconds: 0 }, occurredAt: expect.any(String) });
+    expect(observation).not.toHaveProperty('authenticatedActor');
+    expect(JSON.stringify(observation)).not.toContain(workspaceKey);
+    expect(JSON.stringify(observation)).not.toContain(newKey);
+  });
 
   it('authenticates the replacement immediately on reads and mutations', async () => {
     const { workspaceKey } = await createWorkspace(stack.app, 'rotate-replacement-works');

@@ -2015,7 +2015,7 @@ describe('node providers', () => {
     expect(deliverFramesOfType(py.sock, 'message.created').length).toBeGreaterThanOrEqual(1);
   });
 
-  it('attributes node-token message telemetry to the `from` agent', async () => {
+  it('keeps node-token telemetry personless while preserving the display sender', async () => {
     const ws = await createWorkspace(stack.app, 'nt-msg-telemetry');
     const poster = await registerAgent(stack.app, ws.workspaceKey, 'poster');
     await stack.runtime.deps.db
@@ -2030,12 +2030,13 @@ describe('node providers', () => {
 
     const created = capture.mock.calls
       .map(([event]) => event)
-      .find((event) => event.name === 'relaycast_server_message_created');
+      .find((event) => event.kind === 'message.created');
     expect(created).toMatchObject({
-      distinctId: 'user_poster',
-      setOnce: { first_human_message_at: expect.any(String) },
-      properties: { sender_type: 'human', agent_id: poster.agentId, agent_name: 'poster' },
+      workspaceId: ws.workspaceId,
+      sender: { type: 'human', id: poster.agentId, name: 'poster' },
     });
+    expect(created?.authenticatedActor).toBeUndefined();
+    expect(created).not.toHaveProperty('setOnce');
   });
 
   it('requires `from` on a node-token message', async () => {
