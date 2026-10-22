@@ -20,6 +20,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `EngineConfig.logExport` accepts an `EngineLogExport` callback instead of PostHog configuration. Hosts provide their own transport; `EngineLogRecord` defines the callback payload.
 - REST and WebSocket contracts are unchanged. Self-hosts using the default observation sink need no analytics adapter.
 
+## [10.6.5] - 2026-10-21
+
+
 ### Fixed
 
 - Expose credential-authenticated actor provenance separately from event targets so hosts can verify analytics ownership; fingerprint presented credentials with SHA-256 independently of custom authentication storage. Public metadata cannot identify people.
