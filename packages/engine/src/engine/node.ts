@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { invalidateChannelCache } from './cache.js';
-import { and, asc, eq, exists, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, notExists, or, sql } from 'drizzle-orm';
+import { and, asc, eq, exists, gt, gte, inArray, isNotNull, isNull, like, lt, lte, ne, notExists, or, sql } from 'drizzle-orm';
 import type {
   FleetAgentRecoverMessage,
   FleetAgentRegisterMessage,
@@ -21,7 +21,7 @@ import {
   parseFleetBrokerToRelaycastMessage,
 } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
-import { actionInvocations, agents, agentNodeBindings, channelMembers, channels, nodeProviders, nodes } from '../db/schema.js';
+import { actionInvocations, actions, agents, agentNodeBindings, channelMembers, channels, nodeProviders, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { acceptTaskInvocation, completeTaskInvocation } from './taskInvocation.js';
@@ -53,6 +53,7 @@ import {
   ACTION_DISPATCH_TIMEOUT_MS,
   completeNodeInvocation,
   dispatchCapacitySpawn,
+  emitFailedInvocationEffects,
   rescheduleInvocationsForLostNode,
   rescheduleNodeInvocation,
 } from './action.js';
@@ -2079,6 +2080,187 @@ export async function unbindAgentFromNode(db: Db, workspaceId: string, nodeName:
     }
     return true;
   });
+}
+
+/** A forced delete re-claims a node a live heartbeat keeps refreshing at most this often. */
+const FORCED_DELETE_CLAIM_ATTEMPTS = 3;
+
+export type DeleteNodeResult =
+  | { ok: true; id: string; name: string; cascadedActions: number }
+  | { ok: false; code: 'node_not_found' | 'node_online' | 'node_has_actions' | 'node_delete_conflict' };
+
+/**
+ * Delete one node by its resolved id. Callers resolve a path's id-or-name
+ * once, before taking the node lock; looking the name up again here could
+ * land on a different node whose name equals this id after a concurrent
+ * delete.
+ *
+ * Unforced, an online node or one hosting actions is refused. Every write is
+ * then conditioned on the node state those checks saw, because the node lock
+ * only serializes this isolate:
+ *  - a node whose row still reads online is taken offline through the same
+ *    claim + claim-scoped settle a lost connection uses, so its hosted agents
+ *    lose liveness and open invocations are rescheduled while the node and its
+ *    actions still exist to route them. A lost claim means another isolate
+ *    refreshed the node; nothing has been touched and the result is
+ *    `node_delete_conflict`.
+ *  - the unforced DELETE matches only the liveness epoch the checks (or the
+ *    claim) observed, with no hosted action, so a heartbeat, registration or
+ *    action registration landing in between leaves the row in place.
+ * The delete itself is one atomic write group: open invocations still bound
+ * to the node or its actions fail with `node_deleted` (as deleteAction does),
+ * agents still located on it lose liveness, and its actions and row go.
+ */
+export async function deleteNode(
+  db: Db,
+  deps: InvocationCompletionDeps,
+  workspaceId: string,
+  nodeId: string,
+  opts: { force?: boolean } = {},
+): Promise<DeleteNodeResult> {
+  const registry = deps.nodeConnections;
+  const node = await getNodeById(db, workspaceId, nodeId);
+  if (!node) return { ok: false, code: 'node_not_found' };
+
+  const now = Date.now();
+  const hostedActions = and(eq(actions.workspaceId, workspaceId), eq(actions.handlerNodeId, node.id));
+  if (!opts.force) {
+    const heartbeat = node.lastHeartbeatAt?.getTime();
+    if (
+      isNodeLive(node, now)
+      // A heartbeat skewed into the future may belong to a running host.
+      || (heartbeat !== undefined && heartbeat > now)
+      || registry.isNodeConnected(workspaceId, node.id)
+    ) {
+      return { ok: false, code: 'node_online' };
+    }
+    const [hosted] = await db.select({ id: actions.id }).from(actions).where(hostedActions).limit(1);
+    if (hosted) return { ok: false, code: 'node_has_actions' };
+  }
+
+  let current = node;
+  let epoch = { lastHeartbeatAt: node.lastHeartbeatAt, livenessRevision: node.livenessRevision };
+  let claimedHere = false;
+  for (let attempt = 1; current.status === 'online'; attempt++) {
+    const claim = await claimNodeOffline(db, workspaceId, current.id, epoch);
+    if (claim) {
+      await settleNodeOffline(db, registry, workspaceId, current.id, {
+        claimRevision: claim.claimRevision,
+        before: { status: 'online', name: current.name },
+        deps,
+        reason: 'deregistered',
+      });
+      epoch = { lastHeartbeatAt: claim.claimAt, livenessRevision: claim.claimRevision };
+      claimedHere = true;
+      break;
+    }
+    // Unforced, a lost claim means the node changed after the checks. Forced,
+    // the delete goes ahead regardless, against the fresh row.
+    if (!opts.force) return { ok: false, code: 'node_delete_conflict' };
+    const reread = await getNodeById(db, workspaceId, node.id);
+    if (!reread) return { ok: false, code: 'node_not_found' };
+    current = reread;
+    epoch = { lastHeartbeatAt: reread.lastHeartbeatAt, livenessRevision: reread.livenessRevision };
+    if (current.status === 'online' && attempt >= FORCED_DELETE_CLAIM_ATTEMPTS) {
+      return { ok: false, code: 'node_delete_conflict' };
+    }
+  }
+
+  // An offline row this call did not claim may belong to another writer's
+  // claim (a disconnect, or a concurrent delete on another isolate) whose
+  // settle tail has not run yet; the delete would erase the references that
+  // tail needs and the epoch its event is conditioned on. A claimer runs its
+  // tail right after claiming, so only a recent claim (its time is the row's
+  // heartbeat) can still be pending. Finish it here: the tail's writes are
+  // scoped to the claim revision and CAS-guarded, and the emit publishes the
+  // transition only if the claimer has not.
+  const claimedAt = current.lastHeartbeatAt?.getTime();
+  if (!claimedHere && claimedAt !== undefined && Date.now() - claimedAt <= NODE_LIVENESS_TTL_MS) {
+    await settleNodeOffline(db, registry, workspaceId, current.id, { claimRevision: current.livenessRevision });
+    await emitNodeStatusEffects(deps, workspaceId, {
+      status: 'offline',
+      nodeId: current.id,
+      nodeName: current.name,
+      reason: 'deregistered',
+      claimRevision: current.livenessRevision,
+    });
+  }
+
+  const thisNode = and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, node.id));
+  const deletable = opts.force
+    ? thisNode
+    : and(
+        thisNode,
+        ne(nodes.status, 'online'),
+        eq(nodes.livenessRevision, epoch.livenessRevision),
+        epoch.lastHeartbeatAt === null
+          ? isNull(nodes.lastHeartbeatAt)
+          : eq(nodes.lastHeartbeatAt, epoch.lastHeartbeatAt),
+        notExists(db.select({ id: actions.id }).from(actions).where(hostedActions)),
+      );
+  // Every statement below is conditioned on the node DELETE still matching,
+  // and the group commits as one unit (a transaction, or a D1 batch), so a
+  // conflict leaves no partial cleanup and a commit leaves no open reference
+  // the FKs have already erased.
+  const nodeStillDeletable = exists(db.select({ id: nodes.id }).from(nodes).where(deletable));
+  const lostAt = new Date();
+  const results = await runAtomicWrites(db, (w) => [
+    // Open work bound to the node or one of its actions has nothing left to
+    // complete it. Runs first, while both references are still set. `running`
+    // is an accepted task, which only its dispatching node may complete.
+    // A native spawn or builtin that has never been sent is pinned to the
+    // handler_node_id snapshot (not an FK) and still waits on this node. Once
+    // sent, that snapshot is only a 201 record: the settle may have unpinned
+    // the row for placement elsewhere.
+    w.update(actionInvocations)
+      .set({ status: 'failed', error: 'node_deleted', completedAt: lostAt, spawnReservedAt: null })
+      .where(and(
+        eq(actionInvocations.workspaceId, workspaceId),
+        inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked', 'running']),
+        or(
+          eq(actionInvocations.dispatchedNodeId, node.id),
+          inArray(actionInvocations.actionId, w.select({ id: actions.id }).from(actions).where(hostedActions)),
+          and(
+            eq(actionInvocations.handlerNodeId, node.id),
+            isNull(actionInvocations.dispatchedNodeId),
+            isNull(actionInvocations.actionId),
+            eq(actionInvocations.dispatchAttempts, 0),
+            or(
+              eq(actionInvocations.invocationOrigin, 'builtin'),
+              eq(actionInvocations.actionName, 'spawn'),
+              like(actionInvocations.actionName, 'spawn:%'),
+            ),
+          ),
+        ),
+        nodeStillDeletable,
+      ))
+      .returning(),
+    // An agent bound to an offline node is still active; losing the node's
+    // row would leave it active with no route.
+    w.update(agents)
+      .set({ ...agentLivenessLoss(), lastSeen: lostAt })
+      .where(and(
+        eq(agents.workspaceId, workspaceId),
+        eq(agents.locationNodeId, node.id),
+        ne(agents.status, 'offline'),
+        ne(agents.status, RELEASED_AGENT_STATUS),
+        nodeStillDeletable,
+      )),
+    // Deleted explicitly rather than by cascade so the count reports the rows
+    // actually removed.
+    w.delete(actions).where(and(hostedActions, nodeStillDeletable)).returning({ id: actions.id }),
+    w.delete(nodes).where(deletable).returning({ id: nodes.id }),
+  ], { requireAtomic: true });
+  const [failed, , removedActions, deleted] = results as [
+    Array<typeof actionInvocations.$inferSelect>, unknown, Array<{ id: string }>, Array<{ id: string }>,
+  ];
+
+  if (deleted.length === 0) {
+    const stillThere = await getNodeById(db, workspaceId, node.id);
+    return { ok: false, code: stillThere ? 'node_delete_conflict' : 'node_not_found' };
+  }
+  await emitFailedInvocationEffects(deps, workspaceId, failed);
+  return { ok: true, id: node.id, name: node.name, cascadedActions: removedActions.length };
 }
 
 export async function listNodeAgents(db: Db, workspaceId: string, nodeName: string) {

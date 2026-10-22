@@ -1232,6 +1232,7 @@ Programmability, directory & observability:
 POST   /v1/actions                   Register an action (agent-to-agent RPC)
 POST   /v1/actions/:name/invoke      Invoke an action (workspace-scoped / global alias)
 POST   /v1/nodes/:node/actions/:name/invoke  Invoke a node-addressed action
+DELETE /v1/nodes/:name                       Delete a node by id or name (?force=true also deletes an online node and its hosted actions)
 DELETE /v1/nodes/:node/providers/:name       Remove a node provider
 POST   /v1/agents/:name/events       Emit an agent session event (optional Idempotency-Key replays identical retries; status.changed requires payload.status)
 POST   /v1/directory/agents          Publish an agent to the directory

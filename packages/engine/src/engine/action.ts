@@ -964,7 +964,7 @@ async function failOpenInvocationRows(
 }
 
 /** Emit `action.failed` to each failed invocation's caller. Best-effort per row. */
-async function emitFailedInvocationEffects(
+export async function emitFailedInvocationEffects(
   completionDeps: InvocationCompletionDeps,
   workspaceId: string,
   failed: InvocationRow[],
