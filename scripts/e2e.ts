@@ -16,6 +16,7 @@ import { createServer } from 'node:http';
 import { createInterface } from 'node:readline';
 import WebSocket from 'ws';
 import { RelayCast, AgentClient, RelayError } from '../packages/sdk-typescript/src/index.js';
+import { actionWaitObserverCreateBody, actionWaitWsUrl } from './action-wait-ws.js';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -278,10 +279,6 @@ ${B}${CYAN}╔══════════════════════
   let lead!: AgentClient;
   let infra!: AgentClient;
   let backend!: AgentClient;
-  // Raw agent tokens (captured at registration) for the --next-version actions
-  // section, which calls the /v1/actions HTTP contract directly.
-  let leadToken = '';
-  let backendToken = '';
   const passed: string[] = [];
   const failed: string[] = [];
   const channelName = 'engineering';
@@ -408,7 +405,6 @@ ${B}${CYAN}╔══════════════════════
       metadata: { cli: 'claude' },
     });
     lead = relay.as(res.token);
-    leadToken = res.token;
     log('🤖', `${YELLOW}${B}${LEAD}${R} registered`);
   });
 
@@ -431,7 +427,6 @@ ${B}${CYAN}╔══════════════════════
       metadata: { cli: 'claude' },
     });
     backend = relay.as(res.token);
-    backendToken = res.token;
     log('🤖', `${BLUE}${B}${BACKEND}${R} registered`);
   });
 
@@ -1133,9 +1128,17 @@ ${B}${CYAN}╔══════════════════════
   // ── 15. Actions (agent-to-agent RPC) ──────────────────────────────────
   step('Actions');
 
-  // Lightweight raw agent WebSocket to verify action.* fanout.
-  const openWs = (token: string) => {
-    const sock = new WebSocket(`${BASE_URL.replace(/^http/, 'ws')}/v1/ws?token=${token}`);
+  // Workspace observer stream. action.invoked and action.completed are published
+  // there; agent tokens are rejected on /v1/ws and stay on the HTTP calls.
+  let observerToken = '';
+  await run('Create action-wait observer token', async () => {
+    const created = await relay.observerTokens.create(actionWaitObserverCreateBody('e2e-actions'));
+    if (!created.token) throw new Error('observer token was not returned');
+    observerToken = created.token;
+  });
+
+  const openObserverWs = (token: string) => {
+    const sock = new WebSocket(actionWaitWsUrl(BASE_URL, token));
     const events: any[] = [];
     sock.on('message', (d) => {
       // Guard against non-JSON frames so a stray payload can't crash the script.
@@ -1159,10 +1162,10 @@ ${B}${CYAN}╔══════════════════════
     return { ready, waitFor, close: () => sock.close() };
   };
 
-  const handlerWs = openWs(leadToken);
-  const callerWs = openWs(backendToken);
-  await run('Connect handler + caller WebSockets', async () => {
-    await Promise.all([handlerWs.ready, callerWs.ready]);
+  let observerWs: ReturnType<typeof openObserverWs> | undefined;
+  await run('Connect workspace observer WebSocket', async () => {
+    observerWs = openObserverWs(observerToken);
+    await observerWs.ready;
   });
   let invocationId = '';
 
@@ -1193,7 +1196,8 @@ ${B}${CYAN}╔══════════════════════
   });
 
   await run(`Handler ${LEAD} receives action.invoked over WS`, async () => {
-    await handlerWs.waitFor('action.invoked');
+    if (!observerWs) throw new Error('workspace observer socket is not connected');
+    await observerWs.waitFor('action.invoked');
   });
   await pause();
 
@@ -1206,7 +1210,8 @@ ${B}${CYAN}╔══════════════════════
   });
 
   await run(`Caller ${BACKEND} receives action.completed over WS`, async () => {
-    await callerWs.waitFor('action.completed');
+    if (!observerWs) throw new Error('workspace observer socket is not connected');
+    await observerWs.waitFor('action.completed');
   });
 
   await run('Get invocation shows completed + output', async () => {
@@ -1223,8 +1228,7 @@ ${B}${CYAN}╔══════════════════════
     log('🗑️ ', `Deleted deploy action`);
   });
 
-  handlerWs.close();
-  callerWs.close();
+  observerWs?.close();
   await pause();
 
   // ── 16. Inbound Webhooks ──────────────────────────────────────────────
