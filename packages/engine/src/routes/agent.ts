@@ -18,6 +18,7 @@ import * as agentIdentityEngine from '../engine/agentIdentity.js';
 import * as nodeEngine from '../engine/node.js';
 import * as actionEngine from '../engine/action.js';
 import * as directoryEngine from '../engine/directory.js';
+import * as inboundPolicyEngine from '../engine/inboundPolicy.js';
 import * as sessionEventEngine from '../engine/sessionEvent.js';
 import {
   getObserverTokenFromContext,
@@ -609,6 +610,69 @@ agentRoutes.get(
         return agentNotFound(c, name);
       }
       return jsonOk(c, agent);
+    } catch (err: unknown) {
+      return errorResponse(c, err);
+    }
+  },
+);
+
+const inboundPolicySchema = z.object({
+  mode: z.enum(['open', 'allowlist']),
+  allowed_agents: z.array(z.string().min(1)).max(256).optional(),
+  pinned_agents: z.array(z.string().min(1)).max(256).optional(),
+}).strict();
+
+// GET /v1/agents/:name/inbound-policy - who may address this agent. The
+// workspace key reads any agent's policy; an agent token reads only its own,
+// and any other name is not found so the read cannot probe for agents.
+agentRoutes.get(
+  '/agents/:name/inbound-policy',
+  requireAuth,
+  rateLimit,
+  async (c) => {
+    try {
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const caller = c.get('agent');
+      const name = c.req.param('name');
+      const target = await agentEngine.getAgentByName(db, workspace.id, name);
+      if (!target || (caller && caller.id !== target.id)) return agentNotFound(c, name);
+      return jsonOk(c, await inboundPolicyEngine.inboundPolicyView(db, workspace.id, target.id));
+    } catch (err: unknown) {
+      return errorResponse(c, err);
+    }
+  },
+);
+
+// PUT /v1/agents/:name/inbound-policy - set who may address this agent. An
+// agent token may only narrow its own policy; widening it, opening it, or
+// changing pinned_agents needs the workspace key.
+agentRoutes.put(
+  '/agents/:name/inbound-policy',
+  requireAuth,
+  rateLimit,
+  async (c) => {
+    try {
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const caller = c.get('agent');
+      const name = c.req.param('name');
+      const parsed = await parseJsonBody(c, inboundPolicySchema, 'mode is required: open or allowlist');
+      if (!parsed.ok) return parsed.response;
+      const target = await agentEngine.getAgentByName(db, workspace.id, name);
+      if (!target || (caller && caller.id !== target.id)) return agentNotFound(c, name);
+      const policy = await inboundPolicyEngine.setInboundPolicy(
+        db,
+        workspace.id,
+        target.id,
+        caller ? { kind: 'agent', agentId: caller.id } : { kind: 'workspace' },
+        {
+          mode: parsed.data.mode,
+          allowedAgents: parsed.data.allowed_agents,
+          pinnedAgents: parsed.data.pinned_agents,
+        },
+      );
+      return jsonOk(c, policy);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

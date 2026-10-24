@@ -5,6 +5,7 @@ import { channels, channelMembers, agents } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 import { getCachedChannel, setCachedChannel, invalidateChannelCache } from './cache.js';
 import { codedError } from '../lib/httpError.js';
+import { assertMayAddress } from './inboundPolicy.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -494,6 +495,9 @@ export async function inviteAgent(
   if (!invitee) {
     throw codedError(`Agent "${inviteeAgentName}" not found`, 'agent_not_found', 404);
   }
+  // Only an agent the invitee admits may pull it into a channel. Joining on
+  // its own is the invitee's choice and stays unrestricted.
+  await assertMayAddress(db, workspaceId, inviterAgentId, { id: invitee.id, name: inviteeAgentName });
 
   assertSubscriptionRecipient(channel, invitee.id);
 

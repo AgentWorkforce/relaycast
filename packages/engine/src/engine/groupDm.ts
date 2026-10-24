@@ -11,11 +11,28 @@ import {
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS, type MailboxConfig } from './mailboxConfig.js';
 import type { WorkspaceDeliveryPolicy } from './workspaceDeliveryPolicy.js';
 import { codedError } from '../lib/httpError.js';
+import { assertMayAddress, findConversationConflict, refusingMembers } from './inboundPolicy.js';
 import { resolveSendAttachments } from './attachments.js';
 import { publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 
 type Db = ReturnType<typeof getDb>;
+
+function participantNotAllowed() {
+  return codedError(
+    "A participant's inbound policy does not admit every member of this conversation",
+    'participant_not_allowed',
+    403,
+  );
+}
+
+async function activeParticipantIds(db: Db, conversationId: string): Promise<string[]> {
+  const rows = await db
+    .select({ agentId: dmParticipants.agentId })
+    .from(dmParticipants)
+    .where(and(eq(dmParticipants.conversationId, conversationId), isNull(dmParticipants.leftAt)));
+  return rows.map((row) => row.agentId);
+}
 
 export async function createGroupDm(
   db: Db,
@@ -34,6 +51,7 @@ export async function createGroupDm(
     if (!agent) {
       throw codedError(`Agent "${name}" not found`, 'agent_not_found', 404);
     }
+    await assertMayAddress(db, workspaceId, creatorAgentId, { id: agent.id, name });
     participantAgents.push(agent);
   }
 
@@ -42,6 +60,9 @@ export async function createGroupDm(
 
   const allParticipantIds = [creatorAgentId, ...participantAgents.map((a) => a.id)];
   const uniqueIds = [...new Set(allParticipantIds)];
+  // A restricted agent may only share a group with agents it admits, so other
+  // members can never reach it through the group.
+  if (await findConversationConflict(db, workspaceId, uniqueIds)) throw participantNotAllowed();
 
   await runAtomicWrites(db, (writeDb) => {
     const writes: AtomicWrite[] = [
@@ -108,6 +129,10 @@ export async function postGroupMessage(
 
   if (!participant) {
     throw codedError('Not a participant in this conversation', 'forbidden', 403);
+  }
+  // A member's policy may have narrowed after the group formed.
+  if ((await refusingMembers(db, workspaceId, agentId, await activeParticipantIds(db, conversationId))).length > 0) {
+    throw participantNotAllowed();
   }
 
   // Get the conversation to find the channel
@@ -272,6 +297,9 @@ export async function addParticipant(
   if (!invitee) {
     throw codedError(`Agent "${inviteeAgentName}" not found`, 'agent_not_found', 404);
   }
+  await assertMayAddress(db, workspaceId, agentId, { id: invitee.id, name: inviteeAgentName });
+  const members = await activeParticipantIds(db, conversationId);
+  if (await findConversationConflict(db, workspaceId, [...members, invitee.id])) throw participantNotAllowed();
 
   // Check if already a participant
   const [existing] = await db

@@ -38,6 +38,7 @@ import { buildDmReceivedEventData } from './deliveryWire.js';
 import { buildWorkspaceEventWrite } from './workspaceEvents.js';
 import { transformForClient } from './wsTransform.js';
 import { codedError } from '../lib/httpError.js';
+import { assertMayAddress } from './inboundPolicy.js';
 import {
   addressNodeSelection,
   addressNotFound,
@@ -658,6 +659,7 @@ export async function sendDm(
   if (!toAgent) {
     throw codedError(`Agent "${data.to}" not found`, 'agent_not_found', 404);
   }
+  await assertMayAddress(db, workspaceId, fromAgentId, { id: toAgent.id, name: data.to });
 
   const [fromAgent] = await db
     .select({ name: agents.name, node: addressNodeSelection })

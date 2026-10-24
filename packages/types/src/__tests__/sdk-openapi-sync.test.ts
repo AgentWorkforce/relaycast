@@ -56,6 +56,10 @@ const NON_SDK_OPENAPI_PATHS = new Set([
   '/v1/agents/retention',
   // Workspace-owner subscription provisioning, called by the Relay integration CLI.
   '/v1/agents/{param}/subscription-channel',
+  // Inbound policy is set by owners through Cloud and the desktop app, and by
+  // an agent narrowing itself through the relay MCP tools. SDK methods follow
+  // once those callers settle the shape.
+  '/v1/agents/{param}/inbound-policy',
   // Node-token self lookup: a service handed a node token (Cloud's node claim)
   // proves which node it is for. Agents never call it.
   '/v1/node/me',

@@ -836,10 +836,11 @@ describe('workspace lifecycle', () => {
     const withoutDirectCascade = coverage.filter((table) => table.on_delete !== 'CASCADE');
 
     expect(stack.runtime.handle.sqlite.pragma('foreign_keys', { simple: true })).toBe(1);
-    expect(coverage).toHaveLength(36);
+    expect(coverage).toHaveLength(37);
     expect(coverage).toContainEqual({ table_name: 'a2a_inbound', on_delete: 'CASCADE' });
     expect(coverage).toContainEqual({ table_name: 'a2a_egress', on_delete: 'CASCADE' });
     expect(coverage).toContainEqual({ table_name: 'direct_dm_idempotency', on_delete: 'CASCADE' });
+    expect(coverage).toContainEqual({ table_name: 'agent_inbound_policies', on_delete: 'CASCADE' });
     // messages_mention_fts is external content of messages. Workspace delete
     // cascades to messages, and the message delete trigger drops the FTS row.
     expect(withoutDirectCascade).toEqual([

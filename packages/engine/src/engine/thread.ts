@@ -1,6 +1,6 @@
-import { eq, and, sql, lt, gt } from 'drizzle-orm';
+import { eq, and, sql, lt, gt, isNull } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { messages, channels, agents, dmConversations, nodes } from '../db/schema.js';
+import { messages, channels, agents, dmConversations, dmParticipants, nodes } from '../db/schema.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { generateId } from './snowflake.js';
 import {
@@ -14,6 +14,7 @@ import { displayAgentName, publicMessageMetadata, sanitizeUserMessageMetadata } 
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS, type MailboxConfig } from './mailboxConfig.js';
 import type { WorkspaceDeliveryPolicy } from './workspaceDeliveryPolicy.js';
 import { codedError } from '../lib/httpError.js';
+import { refusingMembers } from './inboundPolicy.js';
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 import {
   addressNodeSelection,
@@ -50,6 +51,23 @@ export async function postReply(
     .select({ id: dmConversations.id, dmType: dmConversations.dmType })
     .from(dmConversations)
     .where(eq(dmConversations.channelId, parent.channelId));
+  if (dmConversation) {
+    // A reply reaches every participant, so each one's policy must admit the
+    // replier. Outsiders get the same not-found as a missing parent.
+    const participants = await db
+      .select({ agentId: dmParticipants.agentId })
+      .from(dmParticipants)
+      .where(and(eq(dmParticipants.conversationId, dmConversation.id), isNull(dmParticipants.leftAt)));
+    const memberIds = participants.map((row) => row.agentId);
+    if ((await refusingMembers(db, workspaceId, agentId, memberIds)).length > 0) {
+      if (!memberIds.includes(agentId)) throw codedError('Parent message not found', 'message_not_found', 404);
+      throw codedError(
+        "A participant's inbound policy does not admit every member of this conversation",
+        'participant_not_allowed',
+        403,
+      );
+    }
+  }
 
   const [agent] = await db
     .select({ name: agents.name, node: addressNodeSelection })
