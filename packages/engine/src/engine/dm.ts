@@ -40,6 +40,7 @@ import { buildDmReceivedEventData } from './deliveryWire.js';
 import { buildWorkspaceEventWrite } from './workspaceEvents.js';
 import { transformForClient } from './wsTransform.js';
 import { codedError } from '../lib/httpError.js';
+import { assertMayAddress, getInboundPolicy, policyAdmits } from './inboundPolicy.js';
 import {
   addressNodeSelection,
   addressNotFound,
@@ -676,6 +677,13 @@ export async function sendDm(
   const toAgent = recipient?.agent;
   if (!toAgent) {
     throw codedError(`Agent "${data.to}" not found`, 'agent_not_found', 404);
+  }
+  if (options.address !== undefined) {
+    // A refused address is the same 404 as an address that names nobody.
+    const policy = await getInboundPolicy(db, workspaceId, toAgent.id);
+    if (!policyAdmits(policy, fromAgentId, toAgent.id)) throw addressNotFound(options.address);
+  } else {
+    await assertMayAddress(db, workspaceId, fromAgentId, { id: toAgent.id, name: data.to });
   }
 
   const [fromAgent] = await db

@@ -845,6 +845,13 @@ export const ACTOR_MIGRATIONS: readonly (readonly [string, readonly string[]])[]
     [
       "CREATE INDEX IF NOT EXISTS idx_pending_events_settled_retention\n  ON pending_events(status, completed_at, id)"
     ]
+  ],
+  [
+    "0085_agent_inbound_policies.sql",
+    [
+      "CREATE TABLE agent_inbound_policies (\n  agent_id TEXT PRIMARY KEY NOT NULL REFERENCES agents(id) ON DELETE CASCADE,\n  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,\n  mode TEXT NOT NULL CHECK (mode IN ('open', 'allowlist')),\n  allowed_agent_ids TEXT NOT NULL DEFAULT '[]',\n  pinned_agent_ids TEXT NOT NULL DEFAULT '[]',\n  updated_at INTEGER NOT NULL DEFAULT (unixepoch())\n)",
+      "CREATE INDEX idx_agent_inbound_policies_workspace\n  ON agent_inbound_policies(workspace_id)"
+    ]
   ]
 ];
 
