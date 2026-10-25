@@ -336,6 +336,7 @@ Two different conditions return HTTP 429, and the error code tells you which:
 | --- | --- | --- |
 | `rate_limit_exceeded` | Per-minute request ceiling | Always clears inside the window; `Retry-After` is at most 60 |
 | `plan_limit_exceeded` | Plan API-call quota for the current billing period | Clears only at the period boundary; `Retry-After` reports it |
+| `plan_limit_exceeded` with `limit` | Plan registration cap (`devices`, `agents` or `humans`) hit by a NEW node/agent registration; body carries `max`, `current`, `plan` | Clears when a registration is removed or the plan changes; no `Retry-After` |
 
 Both carry `Retry-After` and `X-RateLimit-Reset`; successful responses carry
 `X-RateLimit-Limit` and `X-RateLimit-Remaining`. `Retry-After` is authoritative

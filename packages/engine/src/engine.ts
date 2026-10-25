@@ -1,4 +1,5 @@
 import { safeTelemetrySink } from './ports/telemetry.js';
+import { planLimitExceededBody, planLimitExceededDetail } from './engine/planCapacity.js';
 import { NoopTelemetrySink } from './providers/noop-telemetry.js';
 import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
@@ -255,6 +256,8 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     if (error.code === 'invalid_json' || err instanceof SyntaxError) {
       return jsonMalformedBody(c);
     }
+    const planLimit = planLimitExceededDetail(error);
+    if (planLimit) return c.json(planLimitExceededBody(error, planLimit), 429);
     const requestId = c.get('requestId');
     return c.json(
       {

@@ -5,6 +5,7 @@ import type { AppEnv } from '../env.js';
 import { requireAuth, requireNodeToken, requireWorkspaceRead, requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { parseIdempotencyKey } from '../middleware/idempotency.js';
+import { registrationCapacityGuard } from '../middleware/planLimits.js';
 import { asCodedError, errorResponse } from '../lib/httpError.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
 import { sha256Hex } from '../lib/crypto.js';
@@ -236,7 +237,7 @@ async function enrollNode(c: Context<AppEnv>, data: z.infer<typeof createNodeSch
       kind,
       role,
       delivery: delivery && !('success' in delivery) ? delivery : null,
-    }, { expectedTokenHash, rotationRecovery });
+    }, { expectedTokenHash, rotationRecovery, capacity: registrationCapacityGuard(c) });
     return jsonCreated(c, result);
   } catch (err: unknown) {
     return errorResponse(c, err);

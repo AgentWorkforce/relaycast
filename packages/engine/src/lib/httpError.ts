@@ -1,6 +1,7 @@
 import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { jsonError, jsonMalformedBody } from './httpResponse.js';
+import { planLimitExceededBody, planLimitExceededDetail } from '../engine/planCapacity.js';
 
 /**
  * Errors thrown inside the engine optionally carry a stable error `code` and an
@@ -91,6 +92,10 @@ export function errorResponse(c: Context, err: unknown) {
   if (err instanceof SyntaxError) {
     return jsonMalformedBody(c);
   }
+  // A registration-cap refusal carries machine-readable detail beyond the
+  // envelope (`error_code`, `limit`, `max`, `current`, `plan`).
+  const planLimit = planLimitExceededDetail(error);
+  if (planLimit) return c.json(planLimitExceededBody(error, planLimit), 429);
   const status = effectiveHttpStatus(error);
   // Throw the normalized Error: Hono hands only `Error` instances to `onError`.
   if (!error.code && status >= 500) throw error;

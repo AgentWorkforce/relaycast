@@ -1,5 +1,7 @@
 import { createMiddleware } from 'hono/factory';
+import type { Context } from 'hono';
 import type { AppEnv } from '../env.js';
+import { createRegistrationCapacityGuard, type RegistrationCapacityGuard } from '../engine/planCapacity.js';
 import type { EntitlementsProvider, UsageMetric } from '../ports/entitlements.js';
 import { usagePeriodResetAt } from '../engine/usage.js';
 import { jsonError } from '../lib/httpResponse.js';
@@ -55,5 +57,18 @@ export function checkPlanLimit(metric: UsageMetric) {
     } catch { /* fail open */ }
 
     await next();
+  });
+}
+
+/**
+ * The plan registration-cap guard for the authenticated workspace on this
+ * request. Registration routes hand it to the engine, which runs it only when
+ * the request would create a NEW node or agent.
+ */
+export function registrationCapacityGuard(c: Context<AppEnv>): RegistrationCapacityGuard {
+  return createRegistrationCapacityGuard({
+    db: c.get('db'),
+    entitlements: c.get('engine').entitlements,
+    workspace: c.get('workspace'),
   });
 }

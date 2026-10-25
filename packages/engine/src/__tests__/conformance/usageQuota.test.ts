@@ -16,6 +16,8 @@ class ApiCallQuotaEntitlements implements EntitlementsProvider {
       file_bytes: Infinity,
       api_calls: this.apiCallLimit,
       rate_per_min: 300,
+      devices: null,
+      humans: null,
     };
   }
 

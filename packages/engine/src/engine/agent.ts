@@ -6,6 +6,7 @@ import { generateId } from './snowflake.js';
 import { invalidateChannelCache } from './cache.js';
 import { queryInChunks } from '../lib/queryChunks.js';
 import { codedError } from '../lib/httpError.js';
+import type { RegistrationCapacityGuard } from './planCapacity.js';
 import { directNodeIdForAgent } from './node.js';
 import { addressNodeSelection, formatAgentAddress } from './address.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
@@ -216,6 +217,8 @@ export async function registerAgent(
     autoJoinGeneral?: boolean;
     recoveryProofHash?: string;
     workUnitId?: string;
+    /** Plan registration-cap guard, consulted only when `name` is NEW to the workspace. */
+    capacity?: RegistrationCapacityGuard;
   },
   /**
    * Internal. Set only by the verifier-reclaim retry below, so that retry can
@@ -241,6 +244,16 @@ export async function registerAgent(
       'invalid_agent_recovery_proof_hash',
       400,
     );
+  }
+  if (data.capacity && !afterVerifierReclaim) {
+    // Only a NEW identity counts against the plan. An established name is
+    // answered by the unique-constraint conflict below — never by the cap —
+    // so a register-or-rotate client at its cap still reaches its rotation.
+    const [established] = await db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, data.name)));
+    if (!established) await data.capacity((data.type ?? 'agent') === 'human' ? 'humans' : 'agents');
   }
   const agentId = generateId();
   const directMachineId = data.directMachinePrefix ? `${data.directMachinePrefix}-${agentId}` : null;

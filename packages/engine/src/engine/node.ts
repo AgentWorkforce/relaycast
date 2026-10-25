@@ -24,6 +24,7 @@ import type { getDb } from '../db/index.js';
 import { actionInvocations, agents, agentNodeBindings, channelMembers, channels, nodeProviders, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
+import { planLimitExceededDetail, type RegistrationCapacityGuard } from './planCapacity.js';
 import { acceptTaskInvocation, completeTaskInvocation } from './taskInvocation.js';
 import { databaseConstraintKind, runAtomic, runAtomicWrites } from '../ports/database.js';
 import { retryD1Write } from '../lib/d1Retry.js';
@@ -88,6 +89,11 @@ export interface HandleNodeControlMessageArgs {
    * caller drives node control without a registry-managed socket.
    */
   connectionId?: string;
+  /**
+   * Plan registration-cap guard for `agent.register`. Absent when the host
+   * enforces no caps (or drives node control without entitlements).
+   */
+  capacity?: RegistrationCapacityGuard;
   raw: string;
 }
 
@@ -439,6 +445,8 @@ export async function createNodeToken(
       idempotencyKeyHash: string;
       requestDigest: string;
     };
+    /** Plan registration-cap guard, consulted only when this enrolls a NEW device. */
+    capacity?: RegistrationCapacityGuard;
   } = {},
 ) {
   const token = authorization.rotationRecovery?.replacementToken ?? `nt_live_${randomHex(24)}`;
@@ -483,6 +491,12 @@ export async function createNodeToken(
     : (data.max_agents ?? existing?.maxAgents ?? 0);
   if (role === 'direct' && maxAgents !== 1) {
     throw codedError('Direct nodes can bind at most one agent', 'direct_node_capacity_exceeded', 400);
+  }
+  // Only a NEW device counts against the plan. Rotating or re-enrolling an
+  // established row never does, and an agent's implicit direct node is its
+  // own WebSocket, not a device.
+  if (!existing && role !== 'direct' && authorization.capacity) {
+    await authorization.capacity('devices');
   }
 
   if (existing) {
@@ -2116,10 +2130,19 @@ export async function registerAgentViaNode(
   nodeId: string,
   providerName: string,
   message: FleetAgentRegisterMessage,
-  options: { deliveryCursorSupported?: boolean } = {},
+  options: { deliveryCursorSupported?: boolean; capacity?: RegistrationCapacityGuard } = {},
 ): Promise<AgentRegisterReplyData> {
   assertRegistrableAgentName(message.name);
   const wantsAutoJoin = message.auto_join_general !== false;
+  if (options.capacity) {
+    // Only a NEW identity counts against the plan: an established name is
+    // answered by the conflict below, never by the cap.
+    const [established] = await db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, message.name)));
+    if (!established) await options.capacity('agents');
+  }
   const registered = await runAtomic(db, async (tx) => {
     // Every awaited statement is a separate D1 round-trip — and this path runs
     // under the node-control liveness deadline whose misses surface as
@@ -3551,7 +3574,10 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           args.nodeId,
           frameProviderName,
           message,
-          { deliveryCursorSupported: supportsProviderDeliveryReadiness(args.registry) },
+          {
+            deliveryCursorSupported: supportsProviderDeliveryReadiness(args.registry),
+            capacity: args.capacity,
+          },
         );
         // The relay broker's node_control client awaits a `reply` frame keyed by
         // the request id (it matches `pending_agent_registrations` by `reply.id`
@@ -3767,6 +3793,9 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
       provider: frameProviderName,
       message: error.message,
     });
+    // A plan-cap refusal carries the same machine-readable detail as the
+    // HTTP 429 (`error_code`, `limit`, `max`, `current`, `plan`).
+    const planLimit = planLimitExceededDetail(err);
     sendControl(args.socket, {
       v: 1,
       id: requestId(message),
@@ -3774,6 +3803,7 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
       ok: false,
       code,
       message: error.message,
+      ...(planLimit ? { error_code: code, ...planLimit } : {}),
     });
   }
   });

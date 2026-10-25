@@ -12,6 +12,8 @@ function entitlementsWithRate(ratePerMin: number): EntitlementsProvider {
         file_bytes: Infinity,
         api_calls: Infinity,
         rate_per_min: ratePerMin,
+        devices: null,
+        humans: null,
       };
     },
     async getUsage() { return 0; },

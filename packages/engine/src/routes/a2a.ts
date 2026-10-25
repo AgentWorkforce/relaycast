@@ -15,6 +15,7 @@ import {
 import { getWorkspaceExpiry } from '../engine/workspace.js';
 import { asCodedError, codedError, errorResponse, type CodedError } from '../lib/httpError.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { registrationCapacityGuard } from '../middleware/planLimits.js';
 import { buildIdempotencyStorageKey, runIdempotent } from '../middleware/idempotency.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { runInBackground } from './background.js';
@@ -264,6 +265,7 @@ a2aRoutes.post('/v1/a2a/register', requireAuth, rateLimit, async (c) => {
       authScheme: parsed.data.auth_scheme,
       authCredential: parsed.data.auth_credential,
       targetAgent: parsed.data.target_agent,
+      capacity: registrationCapacityGuard(c),
     });
 
     return jsonCreated(c, {

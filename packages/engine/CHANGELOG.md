@@ -8,7 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `PlanLimits` gains `devices` and `humans` (`number | null`, null = unlimited) and `UsageMetric` gains `devices`/`humans`; `PLAN_LIMITS` gains `intro` and `pro` takes the billing tiers' caps (intro 5/15/2, pro 15/60/10, enterprise unlimited). Legacy `free`/`connect` carry no registration caps.
+- Registration caps are enforced at every path that creates a node or agent: `POST /v1/nodes`, `POST /v1/agents`, `POST /v1/a2a/register` and the `agent.register` node frame. A refusal is HTTP 429 `plan_limit_exceeded` with top-level `error_code`, `limit`, `max`, `current`, `plan` (the same fields on the WebSocket `error` frame). Re-enrolling or rotating an existing node/agent is never capped; an agent's implicit direct node is not a device.
+- `EntitlementsProvider.getUsage` reports live registration counts for `devices`/`agents`/`humans` (`countRegistrations` is exported for providers); optional `getPlan` reports the effective plan key for the refusal body.
+- `workspaces.plan_limits` (migration `0076`) stores per-workspace cap overrides; `StaticEntitlementsProvider` applies them via `applyWorkspacePlanLimits` and accepts an optional database handle for live counts.
+- `createRegistrationCapacityGuard` and `HandleNodeControlMessageArgs.capacity` let a host's node-control transport enforce the agent cap on `agent.register`.
 
 ## [11.0.0] - 2026-10-22
 

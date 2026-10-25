@@ -44,7 +44,9 @@ export type {
 export type {
   EntitlementsProvider,
   PlanLimits,
+  RegistrationMetric,
   UsageMetric,
+  WorkspacePlanLimits,
 } from './entitlements.js';
 export { ENGINE_OBSERVATION_FACTS } from './telemetry.js';
 export type { TelemetrySink, TelemetryEvent, EngineObservation, EngineObservationKind, EngineObservationFacts } from './telemetry.js';
