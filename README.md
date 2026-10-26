@@ -342,10 +342,16 @@ Two different conditions return HTTP 429, and the error code tells you which:
 `error.upgrade_url` with `error.upgrade_action` (`sign_in` or `upgrade`).
 Self-hosted deployments return `null` for both.
 
-Both carry `Retry-After` and `X-RateLimit-Reset`; successful responses carry
-`X-RateLimit-Limit` and `X-RateLimit-Remaining`. `Retry-After` is authoritative
-— a value beyond your retry budget means retrying cannot help, so fail fast
-rather than spending the budget on it.
+The per-minute ceiling and period quotas carry `Retry-After` and
+`X-RateLimit-Reset`; a spent one-time allowance carries neither, because no
+retry clears it. Successful responses carry `X-RateLimit-Limit` and
+`X-RateLimit-Remaining`. `Retry-After` is authoritative — a value beyond your
+retry budget means retrying cannot help, so fail fast rather than spending the
+budget on it.
+
+A spent one-time allowance still replays earlier sends: a retry with the same
+`Idempotency-Key` returns its stored receipt, and replays never count against
+the allowance.
 
 A workspace's `plan` (returned by `GET /v1/workspace`) sets both limits:
 

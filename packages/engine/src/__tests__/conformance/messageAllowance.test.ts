@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   EntitlementsProvider,
   PlanLimits,
@@ -42,10 +42,14 @@ const UNLIMITED: PlanLimits = {
   rate_per_min: 30_000,
 };
 
-function json(token: string, body: unknown): RequestInit {
+function json(token: string, body: unknown, idempotencyKey?: string): RequestInit {
   return {
     method: 'POST',
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+      ...(idempotencyKey ? { 'idempotency-key': idempotencyKey } : {}),
+    },
     body: JSON.stringify(body),
   };
 }
@@ -191,5 +195,73 @@ describe('lifetime message allowance', () => {
       upgrade_action: 'upgrade',
     });
     expect(body.error.message).toContain('Upgrade your plan to increase limits: https://example.test/billing');
+  });
+
+  it('never spends the allowance on an idempotent replay, and still replays after it is spent', async () => {
+    stack = makeNodeStack({
+      entitlements: new FixedEntitlements(
+        () => stack as TestStack,
+        { ...UNLIMITED, lifetime_messages: 2 },
+        { url: SIGN_IN_URL, action: 'sign_in', plan: 'trial' },
+      ),
+    });
+    const { ws, alice } = await seedConversation(stack, 'replay-ws');
+    const send = (key: string, text: string, path = '/v1/dm', body: unknown = { to: 'bob', text }) =>
+      (stack as TestStack).app.request(path, json(alice.token, body, key));
+
+    const first = await send('key-one', 'one');
+    expect(first.status).toBe(201);
+    const firstBody = await first.json();
+    const retry = await send('key-one', 'one');
+    expect(retry.status).toBe(201);
+    expect(retry.headers.get('Idempotency-Replayed')).toBe('true');
+    await expect(lifetimeMessages(stack, ws.workspaceId)).resolves.toBe('1');
+
+    const second = await send('key-two', 'two', '/v1/channels/team/messages', { text: 'two' });
+    expect(second.status).toBe(201);
+    await expect(lifetimeMessages(stack, ws.workspaceId)).resolves.toBe('2');
+
+    // Spent: a replay of an earlier successful send still returns its receipt.
+    const lateRetry = await send('key-one', 'one');
+    expect(lateRetry.status).toBe(201);
+    expect(lateRetry.headers.get('Idempotency-Replayed')).toBe('true');
+    await expect(lateRetry.json()).resolves.toEqual(firstBody);
+
+    // A fresh keyed send is refused by the route with the full body.
+    const fresh = await send('key-three', 'three');
+    expect(fresh.status).toBe(429);
+    expect(fresh.headers.get('Retry-After')).toBeNull();
+    await expect(fresh.json()).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'plan_limit_exceeded', metric: 'messages', plan: 'trial', limit: 2, usage: 2, upgrade_url: SIGN_IN_URL, upgrade_action: 'sign_in' },
+    });
+    // ...and does not leave an idempotency lock behind that would 409 a retry.
+    const freshAgain = await send('key-three', 'three');
+    expect(freshAgain.status).toBe(429);
+    for (const [path, body] of [
+      ['/v1/channels/team/messages', { text: 'x' }],
+      [`/v1/messages/${(firstBody as { data: { id: string } }).data.id}/replies`, { text: 'x' }],
+    ] as const) {
+      expect((await send(`key-${path}`, 'x', path, body)).status).toBe(429);
+    }
+    await expect(lifetimeMessages(stack, ws.workspaceId)).resolves.toBe('2');
+  });
+
+  it('keeps the count alive past the response through waitUntil', async () => {
+    stack = makeNodeStack({
+      entitlements: new FixedEntitlements(() => stack as TestStack, { ...UNLIMITED, lifetime_messages: 5 }),
+    });
+    const { ws, alice } = await seedConversation(stack, 'wait-until-ws');
+    const pending: Promise<unknown>[] = [];
+    const executionCtx = {
+      waitUntil: vi.fn((promise: Promise<unknown>) => { pending.push(promise); }),
+      passThroughOnException: () => {},
+      props: {},
+    };
+    const res = await stack.app.request('/v1/dm', json(alice.token, { to: 'bob', text: 'hi' }), undefined, executionCtx);
+    expect(res.status).toBe(201);
+    expect(executionCtx.waitUntil).toHaveBeenCalled();
+    await Promise.all(pending);
+    await expect(stack.runtime.deps.kv.get(lifetimeUsageCounterKey(ws.workspaceId, 'messages'))).resolves.toBe('1');
   });
 });

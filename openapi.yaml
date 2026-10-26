@@ -17,8 +17,11 @@ info:
     hosted `trial` plan's 100 messages), which never resets and carries no
     `Retry-After`. Its error carries `metric`, `plan`, `limit`, `usage`,
     `upgrade_url` and `upgrade_action` (`sign_in` or `upgrade`; both null when
-    the deployment has no upgrade path). Both carry `Retry-After` and `X-RateLimit-Reset`, and
-    successful responses carry `X-RateLimit-Limit`/`X-RateLimit-Remaining`.
+    the deployment has no upgrade path). The per-minute ceiling and period
+    quotas carry `Retry-After` and `X-RateLimit-Reset`; a spent one-time
+    allowance carries neither. Idempotent replays of earlier sends still
+    succeed after it is spent and never count against it. Successful
+    responses carry `X-RateLimit-Limit`/`X-RateLimit-Remaining`.
     `GET /workspace` is limited in its own bucket so the identity read used for
     credential validation and launch preflight stays reachable when the
     workspace's data-plane traffic is at its ceiling.
@@ -161,10 +164,11 @@ components:
     Throttled:
       description: >-
         Throttled. `rate_limit_exceeded` is the per-minute ceiling and always
-        clears inside the window; `plan_limit_exceeded` is the billing-period
-        quota and only clears when the period rolls over. `Retry-After` is
-        authoritative for both — treat a value beyond your retry budget as
-        terminal rather than retrying it.
+        clears inside the window; `plan_limit_exceeded` is either the
+        billing-period quota, which only clears when the period rolls over, or a
+        spent one-time message allowance, which never clears and carries no
+        `Retry-After`. When present, `Retry-After` is authoritative — treat a
+        value beyond your retry budget as terminal rather than retrying it.
       headers:
         Retry-After:
           description: Seconds to wait before retrying.
@@ -1750,6 +1754,19 @@ components:
             `workspace_expired` with HTTP 401.
         message:
           type: string
+        metric:
+          type: string
+          enum: [messages, agents, file_bytes, api_calls]
+          description: On `plan_limit_exceeded`, the limited usage metric.
+        plan:
+          type: string
+          description: On `plan_limit_exceeded`, the effective plan whose limit was reached.
+        limit:
+          type: number
+          description: On `plan_limit_exceeded`, the limit that was reached.
+        usage:
+          type: number
+          description: On `plan_limit_exceeded`, current usage of `metric`.
         upgrade_url:
           type: string
           nullable: true

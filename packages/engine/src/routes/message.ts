@@ -5,7 +5,7 @@ import { agents } from '../db/schema.js';
 import type { AppEnv } from '../env.js';
 import { requireSender, requireWorkspaceKey, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
-import { checkMessageAllowance } from '../middleware/planLimits.js';
+import { assertMessageAllowance, checkMessageAllowance } from '../middleware/planLimits.js';
 import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as messageEngine from '../engine/message.js';
 import * as channelEngine from '../engine/channel.js';
@@ -147,15 +147,17 @@ messageRoutes.post(
         status: 201,
         fingerprint: JSON.stringify({ channelId: channel.id, text, blocks, attachments, data, content_type, mode, from }),
         kv: c.get('engine').kv,
-        operation: () =>
-          messageEngine.postMessage(
+        operation: () => {
+          assertMessageAllowance(c);
+          return messageEngine.postMessage(
             db,
             workspace.id,
             channel.id,
             senderAgentId,
             { text, blocks, attachments, data, content_type, mode },
             { mailbox, workspaceDeliveryPolicy },
-          ),
+          );
+        },
         afterOperation: async (data) => {
           await sendWebhookEvent(c, {
             type: 'message.created',

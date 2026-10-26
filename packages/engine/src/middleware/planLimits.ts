@@ -5,6 +5,8 @@ import type { EntitlementsProvider, UpgradeGuidance, UsageMetric } from '../port
 import type { Workspace } from '../ports/auth.js';
 import { getLifetimeUsageMetric, incrementLifetimeUsage, usagePeriodResetAt } from '../engine/usage.js';
 import { setRetryContract } from '../lib/throttle.js';
+import { PlanLimitExceededError, type PlanLimitExceededBody } from '../lib/planLimitError.js';
+import { runInBackground } from '../routes/background.js';
 
 // Re-exported for back-compat with callers/tests that imported the table here.
 export { PLAN_LIMITS } from '../providers/static-entitlements.js';
@@ -52,27 +54,23 @@ async function resolveUpgradeGuidance(
  * one — `upgrade_url` / `upgrade_action` are additive fields on `error` so a
  * client can render "sign in" or "upgrade" without parsing the message.
  */
-function planLimitExceeded(
-  c: Context<AppEnv>,
-  input: {
-    metric: UsageMetric;
-    plan: string;
-    limit: number;
-    usage: number;
-    message: string;
-    guidance: UpgradeGuidance | null;
-  },
-) {
+function planLimitExceededBody(input: {
+  metric: UsageMetric;
+  plan: string;
+  limit: number;
+  usage: number;
+  message: string;
+  guidance: UpgradeGuidance | null;
+}): PlanLimitExceededBody {
   const { guidance } = input;
   const nextStep = guidance
     ? `${guidance.hint ?? (guidance.action === 'sign_in' ? 'Sign in to keep going:' : 'Upgrade your plan to increase limits:')} ${guidance.url}`
     : 'Upgrade your plan to increase limits.';
-  const message = `${input.message} ${nextStep}`;
-  return c.json({
-    ok: false as const,
+  return {
+    ok: false,
     error: {
       code: 'plan_limit_exceeded',
-      message,
+      message: `${input.message} ${nextStep}`,
       metric: input.metric,
       plan: input.plan,
       limit: input.limit,
@@ -80,7 +78,7 @@ function planLimitExceeded(
       upgrade_url: guidance?.url ?? null,
       upgrade_action: guidance?.action ?? null,
     },
-  }, 429);
+  };
 }
 
 export function checkPlanLimit(metric: UsageMetric) {
@@ -109,14 +107,14 @@ export function checkPlanLimit(metric: UsageMetric) {
         // of spending it on a condition retrying cannot fix.
         const resetAt = await resolveUsageResetAt(entitlements, workspace.id, metric);
         setRetryContract(c, resetAt);
-        return planLimitExceeded(c, {
+        return c.json(planLimitExceededBody({
           metric,
           plan,
           limit,
           usage: current,
           message: `Plan limit exceeded for ${metric}. Current plan: ${plan}. Limit: ${limit} per usage period. Current usage: ${current}. Quota resets at ${new Date(resetAt).toISOString()}.`,
           guidance,
-        });
+        }), 429);
       }
     } catch { /* fail open */ }
 
@@ -133,9 +131,17 @@ export function checkPlanLimit(metric: UsageMetric) {
  * touching the counter. The allowance never resets, so the 429 carries no
  * `Retry-After`: retrying cannot clear it; signing in or upgrading does.
  *
- * Only a send that succeeds (2xx) is counted, so a rejected or invalid request
- * never spends the allowance. Check-then-count is not atomic: concurrent sends
- * at the boundary can overshoot by the number in flight, which a soft trial
+ * Idempotency is preserved. Only a fresh send that succeeds (2xx without
+ * `Idempotency-Replayed`) is counted, so retries never spend the allowance.
+ * Once the allowance is spent, a request without an `Idempotency-Key` is
+ * refused here; a keyed request reaches the route so a replay of an earlier
+ * successful send still returns its stored receipt, and the route refuses only
+ * a fresh send ({@link assertMessageAllowance}, called inside the idempotent
+ * operation).
+ *
+ * The count is kept alive past the response with `runInBackground`
+ * (`waitUntil` on Workers). Check-then-count is not atomic: concurrent sends at
+ * the boundary can overshoot by the number in flight, which a soft trial
  * allowance tolerates. Fails open on entitlement or counter errors, matching
  * `checkPlanLimit`.
  */
@@ -164,7 +170,7 @@ export const checkMessageAllowance = createMiddleware<AppEnv>(async (c, next) =>
   if (used >= allowance) {
     const guidance = await resolveUpgradeGuidance(entitlements, workspace, 'messages');
     const plan = guidance?.plan ?? (workspace.plan || 'free');
-    return planLimitExceeded(c, {
+    const body = planLimitExceededBody({
       metric: 'messages',
       plan,
       limit: allowance,
@@ -172,13 +178,23 @@ export const checkMessageAllowance = createMiddleware<AppEnv>(async (c, next) =>
       message: `Message allowance used up: this workspace has sent ${used} of its ${allowance} messages (current plan: ${plan}). The allowance does not reset.`,
       guidance,
     });
+    if (!c.req.header('Idempotency-Key')) return c.json(body, 429);
+    c.set('messageAllowanceDenial', body);
   }
 
   await next();
 
-  if (c.res.status >= 200 && c.res.status < 300) {
-    // Fire-and-forget like the api_calls tracker: counting must never fail or
-    // delay a send that already succeeded.
-    incrementLifetimeUsage(kv, workspace.id, 'messages').catch(() => {});
+  if (c.res.status >= 200 && c.res.status < 300 && c.res.headers.get('Idempotency-Replayed') !== 'true') {
+    runInBackground(c, incrementLifetimeUsage(kv, workspace.id, 'messages'), 'lifetime message usage increment');
   }
 });
+
+/**
+ * Refuse a fresh send when `checkMessageAllowance` found the allowance spent.
+ * Call it first inside a message route's idempotent `operation`, which runs
+ * only for a new send — never for a replay of a stored receipt.
+ */
+export function assertMessageAllowance(c: Context<AppEnv>): void {
+  const denial = c.get('messageAllowanceDenial');
+  if (denial) throw new PlanLimitExceededError(denial);
+}
