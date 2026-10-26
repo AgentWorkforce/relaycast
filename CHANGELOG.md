@@ -22,6 +22,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Hosts can observe the engine's expensive database operations and long-running cleanups, and server errors carry the workspace, caller and operation they occurred in.
 
+### Fixed
+
+- Listing deliveries filtered by status no longer scans the whole workspace's delivery history.
+
 ## [11.0.0] - 2026-10-22
 
 ### Changed
