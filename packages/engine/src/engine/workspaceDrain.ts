@@ -24,10 +24,10 @@ import { reportEngineProgress } from '../lib/engineDiagnostics.js';
  * Order matters: `messages.thread_id`, `messages.agent_id` and
  * `channels.created_by` are NO ACTION references, enforced per statement. So
  * messages are drained newest first (a reply is always newer than its root)
- * with the retention guard that never removes a root still holding replies;
- * agents and channels are left to the final cascade. Tables that cascade from
- * messages (deliveries, message_logs) are drained before them so each message
- * statement stays small.
+ * with the retention guard that never removes a root still holding replies,
+ * and agents go last, guarded against any remaining reference. Tables that
+ * cascade from messages (deliveries, message_logs) are drained before them so
+ * each message statement stays small.
  */
 const DRAIN_TABLES: readonly {
   table: string;
@@ -50,6 +50,24 @@ const DRAIN_TABLES: readonly {
     where: 'NOT EXISTS (SELECT 1 FROM messages replies WHERE replies.thread_id = messages.id)',
     order: 'length(id) DESC, id DESC',
   },
+  // After messages: their attachments are gone. Each file row enqueues its blob
+  // in the durable cleanup outbox (trigger), which the reaper drains.
+  { table: 'files', chunk: 200 },
+  // Cascades members, DM conversations and webhooks.
+  { table: 'channels', chunk: 200 },
+  // Last of the bulk tables: messages, channels and files are NO ACTION
+  // references to agents, so an agent still referenced is left to the cascade.
+  {
+    table: 'agents',
+    chunk: 200,
+    where: [
+      'NOT EXISTS (SELECT 1 FROM messages m WHERE m.agent_id = agents.id)',
+      'NOT EXISTS (SELECT 1 FROM channels c WHERE c.created_by = agents.id)',
+      'NOT EXISTS (SELECT 1 FROM files f WHERE f.uploaded_by = agents.id)',
+      'NOT EXISTS (SELECT 1 FROM webhooks w WHERE w.created_by = agents.id)',
+    ].join(' AND '),
+  },
+  { table: 'nodes', chunk: 200 },
 ];
 
 /**

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { configureEngineDiagnostics } from '../../lib/engineDiagnostics.js';
 import type { EngineProgressSample } from '../../ports/diagnostics.js';
-import { messages, workspaceEvents, workspaces } from '../../db/schema.js';
+import { messages, workspaceCreateIdempotency, workspaceEvents, workspaces } from '../../db/schema.js';
 import { reapExpiredWorkspaces } from '../../engine/workspace.js';
 import {
   drainWorkspaceRows,
@@ -93,6 +93,8 @@ describe('bounded workspace deletion', () => {
 
   it('stops at its wall-clock budget and resumes where it left off', async () => {
     const { ws } = await seedLargeWorkspace('bounded-budget');
+    // Beyond the seeded rows: the workspace's own channels, agents, files and nodes.
+    const ownRows = ['channels', 'agents', 'files', 'nodes'].reduce((sum, table) => sum + count(table, ws.workspaceId), 0);
     let clock = 0;
     // Each statement "takes" 100ms; the 50% duty cycle idles as long again.
     const db = stack.runtime.deps.db;
@@ -114,7 +116,7 @@ describe('bounded workspace deletion', () => {
 
     const rest = await drainWorkspaceRows(db, ws.workspaceId, { maxDurationMs: 60_000, sleep: async () => {} });
     expect(rest.complete).toBe(true);
-    expect(first.rows + rest.rows).toBe(WORKSPACE_ATOMIC_DELETE_MAX_ROWS + 500 + 900);
+    expect(first.rows + rest.rows).toBe(WORKSPACE_ATOMIC_DELETE_MAX_ROWS + 500 + 900 + ownRows);
   });
 
   it('lets the reaper finish a large expired workspace across several calls', async () => {
@@ -146,5 +148,53 @@ describe('bounded workspace deletion', () => {
     const [row] = await stack.runtime.handle.db.select({ expiresAt: workspaces.expiresAt }).from(workspaces)
       .where(eq(workspaces.id, ws.workspaceId));
     expect(row?.expiresAt?.getTime()).toBe(Math.floor(nearer.getTime() / 1000) * 1000);
+  });
+  it('counts and drains a workspace dominated by channels, not just messages and events', async () => {
+    const ws = await createWorkspace(stack.app, 'bounded-channels');
+    stack.runtime.handle.sqlite.prepare(`
+      WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+      INSERT INTO channels (id, workspace_id, name, channel_type, created_at, is_archived)
+      SELECT 'ch_bulk_' || i, ?, 'bulk-' || i, 0, unixepoch(), 0 FROM n
+    `).run(WORKSPACE_ATOMIC_DELETE_MAX_ROWS + 100, ws.workspaceId);
+    expect(await exceedsAtomicDeleteSize(stack.runtime.deps.db, ws.workspaceId)).toBe(true);
+    const response = await stack.app.request(`/v1/workspaces/${ws.workspaceId}`, {
+      method: 'DELETE', headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    expect(response.status).toBe(204);
+    await stack.settle();
+    expect(count('channels', ws.workspaceId)).toBe(0);
+    expect(count('agents', ws.workspaceId)).toBe(0);
+    expect(progress.filter(sample => sample.table === 'channels').length).toBeGreaterThan(1);
+  });
+
+  it('terminalizes create idempotency when a large delete is deferred', async () => {
+    const { ws } = await seedLargeWorkspace('bounded-idempotency');
+    stack.runtime.handle.sqlite.prepare(`
+      INSERT INTO workspace_create_idempotency (owner_scope_hash, idempotency_key_hash, request_digest, workspace_id)
+      VALUES ('owner', 'key', 'digest', ?)
+    `).run(ws.workspaceId);
+    const { deleteWorkspace } = await import('../../engine/workspace.js');
+    await expect(deleteWorkspace(stack.runtime.deps.db, stack.runtime.deps.files, ws.workspaceId))
+      .resolves.toEqual({ deferred: true });
+    // Rows are still there, but a replay must not get this workspace's key back.
+    expect(count('messages', ws.workspaceId)).toBeGreaterThan(0);
+    expect(await stack.runtime.handle.db.select().from(workspaceCreateIdempotency)
+      .where(eq(workspaceCreateIdempotency.workspaceId, ws.workspaceId)))
+      .toMatchObject([{ status: 'terminalized' }]);
+  });
+
+  it('never lets an older large expired workspace starve a smaller one behind it', async () => {
+    const { ws: large } = await seedLargeWorkspace('bounded-starve-large');
+    const small = await createWorkspace(stack.app, 'bounded-starve-small');
+    await stack.runtime.handle.db.update(workspaces).set({ expiresAt: new Date(Date.now() - 60_000) })
+      .where(eq(workspaces.id, large.workspaceId));
+    await stack.runtime.handle.db.update(workspaces).set({ expiresAt: new Date(Date.now() - 1_000) })
+      .where(eq(workspaces.id, small.workspaceId));
+    // A budget far too small to drain the large one in a single call.
+    const reaped = await reapExpiredWorkspaces(stack.runtime.deps.db, stack.runtime.deps.files, {
+      maxDurationMs: 5, sleep: async () => {},
+    });
+    expect(reaped).toContain(small.workspaceId);
+    expect(reaped).not.toContain(large.workspaceId);
   });
 });

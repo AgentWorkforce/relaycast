@@ -932,14 +932,22 @@ export async function deleteWorkspace(
     return { deferred: false };
   }
   const now = options.now ?? new Date();
-  // Pulling a deadline forward never pushes a nearer one back.
-  await db
-    .update(workspaces)
-    .set({ expiresAt: now })
-    .where(and(
-      eq(workspaces.id, workspaceId),
-      or(isNull(workspaces.expiresAt), gt(workspaces.expiresAt, now)),
-    ));
+  await retryD1Write(() => runAtomicWrites(db, (writeDb) => [
+    // Pulling a deadline forward never pushes a nearer one back.
+    writeDb
+      .update(workspaces)
+      .set({ expiresAt: now })
+      .where(and(
+        eq(workspaces.id, workspaceId),
+        or(isNull(workspaces.expiresAt), gt(workspaces.expiresAt, now)),
+      )),
+    // As the atomic delete does: a keyed create replay must not hand back the
+    // key of a workspace that no longer authenticates.
+    writeDb
+      .update(workspaceCreateIdempotency)
+      .set({ status: 'terminalized', terminalizedAt: now })
+      .where(eq(workspaceCreateIdempotency.workspaceId, workspaceId)),
+  ], { requireAtomic: true }));
   reportEngineProgress({ operation: 'workspace.delete', workspaceId, phase: 'started' });
   return { deferred: true };
 }
@@ -1000,15 +1008,25 @@ export async function reapExpiredWorkspaces(
 
   if (expired.length === 0) return [];
 
-  // One wall-clock budget across the whole batch, oldest deadline first: a
-  // large tenant takes several calls to drain, and never more than the budget
-  // (at the drain's duty cycle) of database time per call.
+  // One wall-clock budget across the whole batch. Small workspaces go first
+  // (one atomic delete each); the rest of the budget is split evenly across
+  // the large ones. Every candidate therefore progresses on every call: an
+  // oldest, huge tenant can neither starve the workspaces behind it nor take
+  // more than the budget (at the drain's duty cycle) of database time.
   const clock = options.clock ?? Date.now;
   const deadline = clock() + (options.maxDurationMs ?? WORKSPACE_DRAIN_MAX_DURATION_MS);
-  const drain = { dutyCycle: options.dutyCycle, sleep: options.sleep, now: clock, deadline };
   const reaped: string[] = [];
+  const large: string[] = [];
   for (const { id } of expired) {
-    if (clock() >= deadline) break;
+    if (clock() >= deadline) return reaped;
+    if (await exceedsAtomicDeleteSize(db, id)) large.push(id);
+    else if (await reapWorkspace(db, storage, id)) reaped.push(id);
+  }
+  for (const [index, id] of large.entries()) {
+    const remaining = deadline - clock();
+    if (remaining <= 0) break;
+    const slice = clock() + remaining / (large.length - index);
+    const drain = { dutyCycle: options.dutyCycle, sleep: options.sleep, now: clock, deadline: slice };
     if (await reapWorkspace(db, storage, id, drain)) reaped.push(id);
   }
   return reaped;
