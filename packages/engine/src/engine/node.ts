@@ -107,8 +107,11 @@ function resolveProviderIdentity(
 
 type CapabilityLike = string | FleetCapability;
 
+/** Id prefix of the implicit direct node minted for every agent; reserved. */
+export const IMPLICIT_DIRECT_NODE_ID_PREFIX = 'node_direct_';
+
 export function directNodeIdForAgent(agentId: string): string {
-  return `node_direct_${agentId}`;
+  return `${IMPLICIT_DIRECT_NODE_ID_PREFIX}${agentId}`;
 }
 
 function directNodeNameForAgent(agentId: string): string {
@@ -457,6 +460,20 @@ export async function createNodeToken(
   // dodge every name lookup (including the conflict check below).
   if (!name || name.startsWith('#')) {
     throw codedError('Node name must be non-empty and cannot begin with "#"', 'invalid_node_name', 400);
+  }
+  // `node_direct_<agent id>` is the engine-minted implicit direct node, which
+  // the device count excludes. The namespace is reserved so a host cannot
+  // enroll a node that is miscounted as implicit.
+  if (
+    data.node_id !== undefined
+    && authorization.directAgentId === undefined
+    && data.node_id.startsWith(IMPLICIT_DIRECT_NODE_ID_PREFIX)
+  ) {
+    throw codedError(
+      `Node ids beginning with "${IMPLICIT_DIRECT_NODE_ID_PREFIX}" are reserved for implicit direct nodes`,
+      'reserved_node_id',
+      400,
+    );
   }
   // Enrollment keys on node_id (the stable identity) when supplied; the name
   // lookup is only a fallback for callers without a stable id. A name held by

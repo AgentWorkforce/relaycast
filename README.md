@@ -354,7 +354,9 @@ registration caps:
 | `free` (legacy) | unlimited | unlimited | unlimited | 100,000 | 300 |
 | `connect` (legacy) | unlimited | unlimited | unlimited | 10,000,000 | 1,200 |
 
-A device is any node a host enrolls through `POST /v1/nodes`; the implicit
+The table shows each plan's defaults; a workspace's stored `plan_limits`
+overrides (pushed by the hosting control plane) set its effective registration
+caps. A device is any node a host enrolls through `POST /v1/nodes`; the implicit
 direct node every agent gets for its own WebSocket is not one. `connect` is
 sized for short-lived collaboration rooms. Self-hosted deployments default to
 `selfhost`, which is unlimited.

@@ -95,6 +95,21 @@ describe('plan registration caps', () => {
     expect((await enrollNode(ws, 'node_2', 'second-device')).status).toBe(429);
   });
 
+  it('refuses host enrollment into the reserved implicit-direct id namespace', async () => {
+    stack = makeNodeStack();
+    const ws = await workspaceOnPlan('cap-reserved-id', 'intro', { devices: 1 });
+    expect((await enrollNode(ws, 'node_1', 'only-device')).status).toBe(201);
+
+    const spoofed = await stack.app.request('/v1/nodes', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ node_id: 'node_direct_custom', name: 'spoof', role: 'direct', max_agents: 1 }),
+    });
+    expect(spoofed.status).toBe(400);
+    await expect(spoofed.json()).resolves.toMatchObject({ error: { code: 'reserved_node_id' } });
+    await expect(countRegistrations(stack.runtime.handle.db, ws.workspaceId, 'devices')).resolves.toBe(1);
+  });
+
   it('counts an explicitly enrolled direct node as a device, so a direct-then-broker re-enroll cannot bypass the cap', async () => {
     stack = makeNodeStack();
     const ws = await workspaceOnPlan('cap-explicit-direct', 'intro', { devices: 1 });

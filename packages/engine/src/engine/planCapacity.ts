@@ -106,7 +106,8 @@ export function applyWorkspacePlanLimits(
  *
  * - `devices`: every node a host enrolled, whatever its role or transport.
  *   Every agent also owns an implicit direct node (`node_direct_<agent id>`)
- *   for its own WebSocket; those are not devices.
+ *   for its own WebSocket; those are not devices. The prefix is reserved at
+ *   enrollment (`createNodeToken`), so a host cannot enroll into it.
  * - `agents`: non-human identities that have not been released.
  * - `humans`: `type = 'human'` identities that have not been released.
  */
