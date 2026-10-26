@@ -5,6 +5,7 @@ import { agents } from '../db/schema.js';
 import type { AppEnv } from '../env.js';
 import { requireSender, requireWorkspaceKey, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { checkMessageAllowance } from '../middleware/planLimits.js';
 import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as messageEngine from '../engine/message.js';
 import * as channelEngine from '../engine/channel.js';
@@ -77,6 +78,7 @@ messageRoutes.post(
   '/channels/:name/messages',
   requireSender,
   rateLimit,
+  checkMessageAllowance,
   async (c) => {
     try {
       const db = c.get('db');

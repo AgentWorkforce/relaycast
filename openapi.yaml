@@ -10,10 +10,14 @@ info:
     Authenticated routes are throttled two ways, and the error code says which.
     `rate_limit_exceeded` is the per-minute ceiling: it always clears inside the
     window, so `Retry-After` is at most 60 and retrying works.
-    `plan_limit_exceeded` is the plan's API-call quota for the current billing
-    period, which resets only at the period boundary; `Retry-After` reports that
-    boundary and is normally far beyond any retry budget, so treat it as terminal
-    instead of retrying. Both carry `Retry-After` and `X-RateLimit-Reset`, and
+    `plan_limit_exceeded` is a plan quota: the API-call quota for the current
+    billing period, which resets only at the period boundary (`Retry-After`
+    reports that boundary and is normally far beyond any retry budget, so treat
+    it as terminal instead of retrying), or a one-time message allowance (the
+    hosted `trial` plan's 100 messages), which never resets and carries no
+    `Retry-After`. Its error carries `metric`, `plan`, `limit`, `usage`,
+    `upgrade_url` and `upgrade_action` (`sign_in` or `upgrade`; both null when
+    the deployment has no upgrade path). Both carry `Retry-After` and `X-RateLimit-Reset`, and
     successful responses carry `X-RateLimit-Limit`/`X-RateLimit-Remaining`.
     `GET /workspace` is limited in its own bucket so the identity read used for
     credential validation and launch preflight stays reachable when the
@@ -261,8 +265,8 @@ components:
           description: Workspace API key (only returned on creation)
         plan:
           type: string
-          enum: [free, connect, pro, enterprise, selfhost]
-          description: Stored plan that sets the workspace's usage limits. `connect` is sized for short-lived collaboration rooms.
+          enum: [trial, free, connect, pro, enterprise, selfhost]
+          description: Stored plan that sets the workspace's usage limits. `connect` is sized for short-lived collaboration rooms. `trial` adds a one-time 100-message allowance.
         created_at:
           type: string
           format: date-time
@@ -1746,6 +1750,17 @@ components:
             `workspace_expired` with HTTP 401.
         message:
           type: string
+        upgrade_url:
+          type: string
+          nullable: true
+          description: >-
+            On `plan_limit_exceeded`: where the caller can lift the limit (sign
+            in or upgrade). Null when the deployment has no upgrade path.
+        upgrade_action:
+          type: string
+          nullable: true
+          enum: [sign_in, upgrade]
+          description: On `plan_limit_exceeded`, what `upgrade_url` offers.
         request_id:
           type: string
           description: >-

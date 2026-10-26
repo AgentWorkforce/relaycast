@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { checkMessageAllowance } from '../middleware/planLimits.js';
 import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import { sha256Hex } from '../lib/crypto.js';
 import * as dmEngine from '../engine/dm.js';
@@ -44,6 +45,7 @@ dmRoutes.post(
   '/dm',
   requireAgentToken,
   rateLimit,
+  checkMessageAllowance,
   async (c) => {
     try {
       const db = c.get('db');
