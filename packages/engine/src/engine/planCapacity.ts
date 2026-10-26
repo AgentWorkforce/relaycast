@@ -1,4 +1,4 @@
-import { and, eq, ne, sql } from 'drizzle-orm';
+import { and, eq, like, ne, not, sql } from 'drizzle-orm';
 import type { EngineDb } from '../ports/database.js';
 import type {
   EntitlementsProvider,
@@ -104,8 +104,9 @@ export function applyWorkspacePlanLimits(
  * How many of `metric` the workspace currently has registered — the number a
  * new registration is compared against.
  *
- * - `devices`: nodes a host enrolled (`role <> 'direct'`). Every agent owns an
- *   implicit direct node for its own WebSocket; those are not devices.
+ * - `devices`: every node a host enrolled, whatever its role or transport.
+ *   Every agent also owns an implicit direct node (`node_direct_<agent id>`)
+ *   for its own WebSocket; those are not devices.
  * - `agents`: non-human identities that have not been released.
  * - `humans`: `type = 'human'` identities that have not been released.
  */
@@ -119,7 +120,10 @@ export async function countRegistrations(
     ? await db
       .select({ count })
       .from(nodes)
-      .where(and(eq(nodes.workspaceId, workspaceId), ne(nodes.role, 'direct')))
+      .where(and(
+        eq(nodes.workspaceId, workspaceId),
+        not(and(eq(nodes.role, 'direct'), like(nodes.id, 'node_direct_%'))!),
+      ))
     : await db
       .select({ count })
       .from(agents)

@@ -2548,6 +2548,8 @@ paths:
           description: Malformed registration identity_key (invalid_agent_identity_key)
         '409':
           description: Agent name already exists in this workspace
+        '429':
+          $ref: '#/components/responses/PlanLimitExceeded'
 
     get:
       summary: List agents
@@ -5508,6 +5510,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/PlanLimitExceeded'
     get:
       summary: List nodes
       description: >
@@ -6827,6 +6831,8 @@ paths:
             application/json:
               schema:
                 type: object
+        '429':
+          $ref: '#/components/responses/PlanLimitExceeded'
 
   /a2a/agents:
     get:

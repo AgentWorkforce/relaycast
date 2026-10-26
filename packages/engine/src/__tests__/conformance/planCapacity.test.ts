@@ -95,6 +95,29 @@ describe('plan registration caps', () => {
     expect((await enrollNode(ws, 'node_2', 'second-device')).status).toBe(429);
   });
 
+  it('counts an explicitly enrolled direct node as a device, so a direct-then-broker re-enroll cannot bypass the cap', async () => {
+    stack = makeNodeStack();
+    const ws = await workspaceOnPlan('cap-explicit-direct', 'intro', { devices: 1 });
+    const direct = await stack.app.request('/v1/nodes', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ node_id: 'node_d', name: 'webhook', kind: 'http_push', role: 'direct', max_agents: 1, delivery: { url: 'https://hooks.example/relay' } }),
+    });
+    expect(direct.status).toBe(201);
+    const token = (await direct.json() as { data: { token: string } }).data.token;
+    await expect(countRegistrations(stack.runtime.handle.db, ws.workspaceId, 'devices')).resolves.toBe(1);
+
+    const broker = await enrollNode(ws, 'node_b', 'broker');
+    expect(broker.status).toBe(429);
+    await expect(broker.json()).resolves.toMatchObject(refusal('devices', 1, 1));
+
+    // Re-enrolling the counted node as a broker changes its shape, not the count.
+    const reshaped = await enrollNode(ws, 'node_d', 'webhook', token);
+    expect(reshaped.status).toBe(201);
+    await expect(countRegistrations(stack.runtime.handle.db, ws.workspaceId, 'devices')).resolves.toBe(1);
+    expect((await enrollNode(ws, 'node_b', 'broker')).status).toBe(429);
+  });
+
   it('allows the 15th agent on intro and refuses the 16th; humans are counted separately', async () => {
     stack = makeNodeStack();
     const ws = await workspaceOnPlan('cap-agents', 'intro');

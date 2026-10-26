@@ -20,7 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Added
 
-- Plans cap how many devices (nodes), agents and human members a workspace can register. New `intro` (5/15/2), `pro` (15/60/10) and `enterprise` (unlimited) tiers; a new registration past the cap is refused with HTTP 429 `plan_limit_exceeded` carrying `limit`, `max`, `current` and `plan`, on HTTP and on the node `agent.register` frame. Existing nodes and agents re-register freely.
+- Plans cap how many devices (nodes), agents and human members a workspace can register. New `intro` (5/15/2), `pro` (15/60/10) and `enterprise` (unlimited) tiers; legacy `free` and `connect` carry no registration caps (their never-enforced agent counts are now unlimited); a new registration past the cap is refused with HTTP 429 `plan_limit_exceeded` carrying `limit`, `max`, `current` and `plan`, on HTTP and on the node `agent.register` frame. Existing nodes and agents re-register freely.
 - A hosting control plane can store per-workspace cap overrides on the workspace row (`workspaces.plan_limits`), which the entitlements provider applies over the plan table.
 
 ## [11.0.0] - 2026-10-22

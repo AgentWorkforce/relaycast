@@ -338,22 +338,26 @@ Two different conditions return HTTP 429, and the error code tells you which:
 | `plan_limit_exceeded` | Plan API-call quota for the current billing period | Clears only at the period boundary; `Retry-After` reports it |
 | `plan_limit_exceeded` with `limit` | Plan registration cap (`devices`, `agents` or `humans`) hit by a NEW node/agent registration; body carries `max`, `current`, `plan` | Clears when a registration is removed or the plan changes; no `Retry-After` |
 
-Both carry `Retry-After` and `X-RateLimit-Reset`; successful responses carry
+The first two carry `Retry-After` and `X-RateLimit-Reset`; successful responses carry
 `X-RateLimit-Limit` and `X-RateLimit-Remaining`. `Retry-After` is authoritative
 — a value beyond your retry budget means retrying cannot help, so fail fast
 rather than spending the budget on it.
 
-A workspace's `plan` (returned by `GET /v1/workspace`) sets both limits:
+A workspace's `plan` (returned by `GET /v1/workspace`) sets the quotas and the
+registration caps:
 
-| Plan | Agents | API calls / month | Requests / minute |
-| --- | --- | --- | --- |
-| `free` | 5 | 100,000 | 300 |
-| `connect` | 10 | 10,000,000 | 1,200 |
-| `pro` | 100 | 10,000,000 | 6,000 |
-| `enterprise` | unlimited | unlimited | 30,000 |
+| Plan | Devices | Agents | Humans | API calls / month | Requests / minute |
+| --- | --- | --- | --- | --- | --- |
+| `intro` | 5 | 15 | 2 | 10,000,000 | 6,000 |
+| `pro` | 15 | 60 | 10 | 10,000,000 | 6,000 |
+| `enterprise` | unlimited | unlimited | unlimited | unlimited | 30,000 |
+| `free` (legacy) | unlimited | unlimited | unlimited | 100,000 | 300 |
+| `connect` (legacy) | unlimited | unlimited | unlimited | 10,000,000 | 1,200 |
 
-`connect` is sized for short-lived collaboration rooms. Self-hosted deployments
-default to `selfhost`, which is unlimited.
+A device is any node a host enrolls through `POST /v1/nodes`; the implicit
+direct node every agent gets for its own WebSocket is not one. `connect` is
+sized for short-lived collaboration rooms. Self-hosted deployments default to
+`selfhost`, which is unlimited.
 
 `GET /v1/workspace` is limited in its own bucket, so the identity read used for
 credential validation and launch preflight stays reachable while the workspace's

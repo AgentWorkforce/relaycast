@@ -493,9 +493,10 @@ export async function createNodeToken(
     throw codedError('Direct nodes can bind at most one agent', 'direct_node_capacity_exceeded', 400);
   }
   // Only a NEW device counts against the plan. Rotating or re-enrolling an
-  // established row never does, and an agent's implicit direct node is its
-  // own WebSocket, not a device.
-  if (!existing && role !== 'direct' && authorization.capacity) {
+  // established row never does (its role may change, but it was counted when
+  // it was enrolled), and an agent's implicit direct node — minted on its
+  // behalf, never enrolled by a host — is its own WebSocket, not a device.
+  if (!existing && authorization.directAgentId === undefined && authorization.capacity) {
     await authorization.capacity('devices');
   }
 
