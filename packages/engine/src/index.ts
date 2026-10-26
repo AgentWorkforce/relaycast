@@ -60,6 +60,7 @@ export {
   configureEngineDiagnostics,
   currentEngineOperation,
   engineOperationOf,
+  runWithEngineDiagnostics,
 } from './lib/engineDiagnostics.js';
 export {
   isValidStandardWebhookSecret,

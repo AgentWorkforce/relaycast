@@ -45,7 +45,8 @@ export interface EngineProgressSample {
   durationMs?: number;
 }
 
+/** Callbacks may be async; a throw or rejection is contained and never affects the engine. */
 export interface EngineDiagnostics {
-  operation?(sample: EngineOperationSample): void;
-  progress?(sample: EngineProgressSample): void;
+  operation?(sample: EngineOperationSample): void | Promise<void>;
+  progress?(sample: EngineProgressSample): void | Promise<void>;
 }
