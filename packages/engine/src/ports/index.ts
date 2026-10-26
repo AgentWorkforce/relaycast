@@ -49,6 +49,14 @@ export type {
 export { ENGINE_OBSERVATION_FACTS } from './telemetry.js';
 export type { TelemetrySink, TelemetryEvent, EngineObservation, EngineObservationKind, EngineObservationFacts } from './telemetry.js';
 export type { EngineLogRecord, EngineLogExport } from './logging.js';
+export type {
+  EngineDiagnostics,
+  EngineOperationLabel,
+  EngineOperationSample,
+  EngineOperationScope,
+  EngineProgressOperation,
+  EngineProgressSample,
+} from './diagnostics.js';
 
 import type { EngineDb } from './database.js';
 import type { RealtimeBus, ConnectionRegistry, NodeConnectionRegistry } from './realtime.js';
@@ -60,6 +68,7 @@ import type { EventQueue } from './event-queue.js';
 import type { AuthProvider } from './auth.js';
 import type { EntitlementsProvider } from './entitlements.js';
 import type { TelemetrySink } from './telemetry.js';
+import type { EngineDiagnostics } from './diagnostics.js';
 import type { EngineLogExport } from './logging.js';
 
 /** Infrastructure ports the engine reads off the request context. */
@@ -80,6 +89,11 @@ export interface EngineProviders {
   auth: AuthProvider;
   entitlements: EntitlementsProvider;
   telemetry?: TelemetrySink;
+  /**
+   * Operation timing and cleanup progress (see `ports/diagnostics.ts`).
+   * Optional; dropped when absent.
+   */
+  diagnostics?: EngineDiagnostics;
 }
 
 /** Everything `createEngine` needs. */

@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Hosts can observe the engine's expensive database operations and long-running cleanups, and server errors carry the workspace, caller and operation they occurred in.
 
 ## [11.0.0] - 2026-10-22
 
