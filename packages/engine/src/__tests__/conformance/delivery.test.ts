@@ -379,8 +379,10 @@ describe('durable delivery api', () => {
     const { ws, bob } = await seed();
     for (const status of ['dead_lettered', 'acked', 'failed', 'queued', 'delivered']) {
       const plan = stack.runtime.handle.sqlite
+        // Same projection as listDeliveries: an id-only query could be served
+        // by a different (covering) index and pass for the wrong reason.
         .prepare(`EXPLAIN QUERY PLAN
-          SELECT id FROM deliveries
+          SELECT * FROM deliveries
           WHERE workspace_id = ?
             AND agent_id = ?
             AND status = ?
