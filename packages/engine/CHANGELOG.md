@@ -8,7 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Optional `EngineDeps.diagnostics` (`EngineDiagnostics`) receives operation timing (`inbox.get`, `deliveries.list`, `workspace.delete`, `invocations.sweep`, `backfill.mention_fts`) and backfill progress. `currentEngineOperation()` lets a host's database wrapper attribute statement cost to the operation in flight; `configureEngineDiagnostics()` covers maintenance callers that never build the app. Absent by default.
+- Unhandled 5xx errors now report `workspace_id`, `agent_id`, `engine_operation` and the matched `route` template in the error log and `captureException` context.
 
 ## [11.1.0] - 2026-10-27
 

@@ -57,6 +57,11 @@ export {
 } from './engine/usage.js';
 export { NoopTelemetrySink } from './providers/noop-telemetry.js';
 export {
+  configureEngineDiagnostics,
+  currentEngineOperation,
+  engineOperationOf,
+} from './lib/engineDiagnostics.js';
+export {
   isValidStandardWebhookSecret,
   signStandardWebhook,
   verifyStandardWebhook,
