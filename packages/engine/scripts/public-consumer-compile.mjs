@@ -22,7 +22,7 @@ const config = {
   workspaceDelivery: {
     resolve: async (workspace) => {
       const id: string = workspace.id;
-      const plan: string = workspace.plan;
+      const plan: string | null = workspace.plan;
       await Promise.resolve();
       return id && plan === 'enterprise' ? { cap: 5000, reserve: 0 } : undefined;
     },
