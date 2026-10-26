@@ -109,11 +109,16 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
   // Resolve the per-minute limit. If entitlements are unavailable, fall back to
   // a conservative default and still enforce it — an entitlements outage must
   // NOT translate into unlimited throughput.
-  let globalLimit: number;
+  let globalLimit: number | null;
   try {
     globalLimit = (await entitlements.getLimits(workspace)).rate_per_min;
   } catch {
     globalLimit = FALLBACK_RATE_PER_MIN;
+  }
+  // A null ceiling is unlimited: the provider chose not to throttle this workspace.
+  if (globalLimit === null || !Number.isFinite(globalLimit)) {
+    await presenceRefresh(c, async () => {});
+    return usageTracker(c, next);
   }
   const limit = routeKey ? Math.ceil(globalLimit * ROUTE_MULTIPLIERS[routeKey]) : globalLimit;
 
@@ -128,7 +133,7 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
       // Transient by construction: the bucket is keyed to this minute, so the
       // advertised wait is the real one.
       setRetryContract(c, resetAt, now);
-      return jsonError(c, 'rate_limit_exceeded', `Rate limit exceeded. ${limit} requests per minute allowed for ${workspace.plan} plan.`, 429);
+      return jsonError(c, 'rate_limit_exceeded', `Rate limit exceeded. ${limit} requests per minute allowed.`, 429);
     }
   } catch {
     // Only the limiter backend failing is fail-open — a transient infra hiccup

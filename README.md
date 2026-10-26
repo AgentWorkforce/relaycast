@@ -328,38 +328,39 @@ deployments — where a control plane owns the canonical key — leave it unset
 and rotate through that plane, so the route answers
 `workspace_key_rotation_disabled`.
 
-### Throttling
+### Throttling and limits
 
-Two different conditions return HTTP 429, and the error code tells you which:
+Three conditions return HTTP 429, and the error code tells you which:
 
 | Code | What it is | Retry |
 | --- | --- | --- |
 | `rate_limit_exceeded` | Per-minute request ceiling | Always clears inside the window; `Retry-After` is at most 60 |
-| `plan_limit_exceeded` | Plan API-call quota for the current billing period | Clears only at the period boundary; `Retry-After` reports it |
-| `plan_limit_exceeded` with `limit` | Plan registration cap (`devices`, `agents` or `humans`) hit by a NEW node/agent registration; body carries `max`, `current`, `plan` | Clears when a registration is removed or the plan changes; no `Retry-After` |
+| `plan_limit_exceeded` | API-call quota for the current usage period | Clears only at the period boundary; `Retry-After` reports it |
+| `plan_limit_exceeded` with `limit` | Registration cap (`devices`, `agents` or `humans`) hit by a NEW node/agent registration; body carries `max`, `current` and the host's context (the hosted gateway adds `plan` and `upgrade_url`) | Clears when a registration is removed or the host raises the limit; no `Retry-After` |
 
 The first two carry `Retry-After` and `X-RateLimit-Reset`; successful responses carry
 `X-RateLimit-Limit` and `X-RateLimit-Remaining`. `Retry-After` is authoritative
 — a value beyond your retry budget means retrying cannot help, so fail fast
 rather than spending the budget on it.
 
-A workspace's `plan` (returned by `GET /v1/workspace`) sets the quotas and the
-registration caps:
+The engine carries no tiers or numbers of its own. Every limit comes from the
+deployment's `EntitlementsProvider`, which maps a workspace to a `Limits`
+object keyed by metric (`messages`, `agents`, `file_bytes`, `api_calls`,
+`rate_per_min`, `devices`, `humans`, `message_retention_days`; `null` is
+unlimited). A device is any node a host enrolls through `POST /v1/nodes`; the
+implicit direct node every agent gets for its own WebSocket is not one.
 
-| Plan | Devices | Agents | Humans | API calls / month | Requests / minute |
-| --- | --- | --- | --- | --- | --- |
-| `intro` | 5 | 15 | 2 | 10,000,000 | 6,000 |
-| `pro` | 15 | 60 | 10 | 10,000,000 | 6,000 |
-| `enterprise` | unlimited | unlimited | unlimited | unlimited | 30,000 |
-| `free` (legacy) | unlimited | unlimited | unlimited | 100,000 | 300 |
-| `connect` (legacy) | unlimited | unlimited | unlimited | 10,000,000 | 1,200 |
+- Self-hosted deployments are unlimited by default. To cap your own instance,
+  set static limits in the engine config; absent keys stay unlimited:
 
-The table shows each plan's defaults; a workspace's stored `plan_limits`
-overrides (pushed by the hosting control plane) set its effective registration
-caps. A device is any node a host enrolls through `POST /v1/nodes`; the implicit
-direct node every agent gets for its own WebSocket is not one. `connect` is
-sized for short-lived collaboration rooms. Self-hosted deployments default to
-`selfhost`, which is unlimited.
+  ```ts
+  createNodeRuntime({ config: { limits: { devices: 5, agents: 15, humans: 2, rate_per_min: 600 } } });
+  ```
+
+- A hosting product injects its own provider (`getLimits`, `getUsage`, optional
+  `getUsageResetAt` and `getLimitContext`). `getLimitContext` returns fields the
+  engine spreads verbatim onto the top level of a registration-cap 429 — on
+  `cast.agentrelay.com` that is `plan` and `upgrade_url`.
 
 `GET /v1/workspace` is limited in its own bucket, so the identity read used for
 credential validation and launch preflight stays reachable while the workspace's

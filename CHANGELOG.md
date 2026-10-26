@@ -16,12 +16,16 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Minor]
+## [Unreleased - Major]
 
 ### Added
 
-- Plans cap how many devices (nodes), agents and human members a workspace can register. New `intro` (5/15/2), `pro` (15/60/10) and `enterprise` (unlimited) tiers; legacy `free` and `connect` carry no registration caps (their never-enforced agent counts are now unlimited); a new registration past the cap is refused with HTTP 429 `plan_limit_exceeded` carrying `limit`, `max`, `current` and `plan`, on HTTP and on the node `agent.register` frame. Existing nodes and agents re-register freely.
-- A hosting control plane can store per-workspace cap overrides on the workspace row (`workspaces.plan_limits`), which the entitlements provider applies over the plan table.
+- Registration caps for devices (nodes), agents and human members: a new registration past the deployment's limit is refused with HTTP 429 `plan_limit_exceeded` carrying `limit`, `max`, `current` and the host's context (`plan`, `upgrade_url` on the hosted gateway), on HTTP and on the node `agent.register` frame. Existing nodes and agents re-register freely.
+- Self-hosted operators can cap their own instance with `config.limits`; absent keys stay unlimited.
+
+### Breaking changes
+
+- The engine no longer ships plan tiers: the `PLAN_LIMITS` table and every plan name/number are gone, `PlanLimits` is replaced by the metric-keyed `Limits` (`null` = unlimited), and all limits come from the deployment's entitlements provider. Self-hosted deployments are unlimited by default.
 
 ## [11.0.0] - 2026-10-22
 

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
+import { resolveLimits } from '../../ports/entitlements.js';
 
 /**
  * Regression for the captured cross-channel leak: a native MCP post result
@@ -13,9 +14,9 @@ import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from '.
  * non-member never seeing the mention.
  */
 // Test-only entitlements: a high per-minute ceiling so the bounded >200-candidate
-// fixture is not rate-limited by the free plan. No production limit changes.
+// fixture exercises the limiter without being throttled.
 const testEntitlements = {
-  getLimits: async () => ({ messages: 1_000_000, agents: 1_000_000, file_bytes: 1_000_000_000, api_calls: 1_000_000, rate_per_min: 100_000, devices: null, humans: null }),
+  getLimits: async () => resolveLimits({ messages: 1_000_000, agents: 1_000_000, file_bytes: 1_000_000_000, api_calls: 1_000_000, rate_per_min: 100_000 }),
   getUsage: async () => 0,
 };
 

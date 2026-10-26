@@ -51,7 +51,7 @@ export async function resolveWorkspaceDeliveryPolicyFor(
 ): Promise<WorkspaceDeliveryPolicy | undefined> {
   const dynamic = await config?.workspaceDelivery?.resolve?.({
     id: workspace.id,
-    plan: workspace.plan ?? 'free',
+    plan: workspace.plan ?? null,
   });
   if (dynamic !== undefined) return dynamicWorkspaceDeliveryPolicySchema.parse(dynamic);
   return resolveWorkspaceDeliveryPolicy(config, workspace.id);

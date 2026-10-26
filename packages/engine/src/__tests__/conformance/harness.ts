@@ -53,6 +53,8 @@ export function makeNodeStack(options?: {
   workspaceBootstrapProofRequired?: boolean;
   allowWorkspaceKeyRotation?: boolean;
   entitlements?: EntitlementsProvider;
+  /** Static limits for the default provider (`EngineConfig.limits`). */
+  limits?: EngineConfig['limits'];
 }): TestStack {
   const tasks = new BackgroundTasks();
   observePresence();
@@ -79,6 +81,7 @@ export function makeNodeStack(options?: {
         workspaceBootstrapSecret: options?.workspaceBootstrapSecret ?? 'test-bootstrap-secret',
         workspaceBootstrapProofRequired: options?.workspaceBootstrapProofRequired,
         allowWorkspaceKeyRotation: options?.allowWorkspaceKeyRotation,
+        limits: options?.limits,
       },
       entitlements: options?.entitlements,
       // Disable the auto-sweep timer; tests drive presence.sweep() explicitly.

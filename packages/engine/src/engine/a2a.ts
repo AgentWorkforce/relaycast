@@ -91,7 +91,7 @@ export interface RegisterA2aAgentInput {
   authCredential?: string;
   /** Remote skill/agent that DMs to this proxy should address. */
   targetAgent?: string;
-  /** Plan registration-cap guard, consulted only when a NEW proxy identity is provisioned. */
+  /** Registration-cap guard, consulted only when a NEW proxy identity is provisioned. */
   capacity?: RegistrationCapacityGuard;
 }
 

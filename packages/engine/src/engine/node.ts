@@ -24,7 +24,7 @@ import type { getDb } from '../db/index.js';
 import { actionInvocations, agents, agentNodeBindings, channelMembers, channels, nodeProviders, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
-import { planLimitExceededDetail, type RegistrationCapacityGuard } from './planCapacity.js';
+import { planLimitExceeded, type RegistrationCapacityGuard } from './planCapacity.js';
 import { acceptTaskInvocation, completeTaskInvocation } from './taskInvocation.js';
 import { databaseConstraintKind, runAtomic, runAtomicWrites } from '../ports/database.js';
 import { retryD1Write } from '../lib/d1Retry.js';
@@ -90,7 +90,7 @@ export interface HandleNodeControlMessageArgs {
    */
   connectionId?: string;
   /**
-   * Plan registration-cap guard for `agent.register`. Absent when the host
+   * Registration-cap guard for `agent.register`. Absent when the host
    * enforces no caps (or drives node control without entitlements).
    */
   capacity?: RegistrationCapacityGuard;
@@ -448,7 +448,7 @@ export async function createNodeToken(
       idempotencyKeyHash: string;
       requestDigest: string;
     };
-    /** Plan registration-cap guard, consulted only when this enrolls a NEW device. */
+    /** Registration-cap guard, consulted only when this enrolls a NEW device. */
     capacity?: RegistrationCapacityGuard;
   } = {},
 ) {
@@ -509,7 +509,7 @@ export async function createNodeToken(
   if (role === 'direct' && maxAgents !== 1) {
     throw codedError('Direct nodes can bind at most one agent', 'direct_node_capacity_exceeded', 400);
   }
-  // Only a NEW device counts against the plan. Rotating or re-enrolling an
+  // Only a NEW device counts against the cap. Rotating or re-enrolling an
   // established row never does (its role may change, but it was counted when
   // it was enrolled), and an agent's implicit direct node — minted on its
   // behalf, never enrolled by a host — is its own WebSocket, not a device.
@@ -2153,7 +2153,7 @@ export async function registerAgentViaNode(
   assertRegistrableAgentName(message.name);
   const wantsAutoJoin = message.auto_join_general !== false;
   if (options.capacity) {
-    // Only a NEW identity counts against the plan: an established name is
+    // Only a NEW identity counts against the cap: an established name is
     // answered by the conflict below, never by the cap.
     const [established] = await db
       .select({ id: agents.id })
@@ -3811,17 +3811,19 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
       provider: frameProviderName,
       message: error.message,
     });
-    // A plan-cap refusal carries the same machine-readable detail as the
-    // HTTP 429 (`error_code`, `limit`, `max`, `current`, `plan`).
-    const planLimit = planLimitExceededDetail(err);
+    // A cap refusal carries the same machine-readable detail as the HTTP 429
+    // (`error_code`, `limit`, `max`, `current`) plus the host's context.
+    const refusal = planLimitExceeded(err);
     sendControl(args.socket, {
+      // Host context first: the frame's own fields always win over it.
+      ...(refusal?.context ?? {}),
       v: 1,
       id: requestId(message),
       type: 'error',
       ok: false,
       code,
       message: error.message,
-      ...(planLimit ? { error_code: code, ...planLimit } : {}),
+      ...(refusal ? { error_code: code, ...refusal.detail } : {}),
     });
   }
   });

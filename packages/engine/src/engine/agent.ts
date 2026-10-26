@@ -217,7 +217,7 @@ export async function registerAgent(
     autoJoinGeneral?: boolean;
     recoveryProofHash?: string;
     workUnitId?: string;
-    /** Plan registration-cap guard, consulted only when `name` is NEW to the workspace. */
+    /** Registration-cap guard, consulted only when `name` is NEW to the workspace. */
     capacity?: RegistrationCapacityGuard;
   },
   /**
@@ -246,7 +246,7 @@ export async function registerAgent(
     );
   }
   if (data.capacity && !afterVerifierReclaim) {
-    // Only a NEW identity counts against the plan. An established name is
+    // Only a NEW identity counts against the cap. An established name is
     // answered by the unique-constraint conflict below — never by the cap —
     // so a register-or-rotate client at its cap still reaches its rotation.
     const [established] = await db

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { EntitlementsProvider, PlanLimits, UsageMetric, Workspace } from '../../ports/index.js';
+import { resolveLimits, type EntitlementsProvider, type Limits, type UsageMetric, type Workspace } from '../../ports/index.js';
 import { usageCounterKey, usagePeriodResetAt } from '../../engine/usage.js';
 import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
 
@@ -9,16 +9,8 @@ class ApiCallQuotaEntitlements implements EntitlementsProvider {
     private readonly apiCallLimit: number,
   ) {}
 
-  async getLimits(_workspace: Workspace): Promise<PlanLimits> {
-    return {
-      messages: Infinity,
-      agents: Infinity,
-      file_bytes: Infinity,
-      api_calls: this.apiCallLimit,
-      rate_per_min: 300,
-      devices: null,
-      humans: null,
-    };
+  async getLimits(_workspace: Workspace): Promise<Limits> {
+    return resolveLimits({ api_calls: this.apiCallLimit, rate_per_min: 300 });
   }
 
   // Reads the same period-scoped counter the usage tracker writes, so the
@@ -41,7 +33,7 @@ describe('usage quotas', () => {
     await stack?.close();
   });
 
-  it('records authenticated API calls and enforces the api_calls plan limit', async () => {
+  it('records authenticated API calls and enforces the api_calls quota', async () => {
     stack = makeNodeStack({
       entitlements: new ApiCallQuotaEntitlements(() => stack, 2),
     });

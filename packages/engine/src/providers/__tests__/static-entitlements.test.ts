@@ -1,78 +1,52 @@
 import { describe, expect, it } from 'vitest';
-import { PLAN_LIMITS, StaticEntitlementsProvider } from '../static-entitlements.js';
-import { applyWorkspacePlanLimits } from '../../engine/planCapacity.js';
-import type { Workspace, WorkspacePlanLimits } from '../../ports/index.js';
+import { StaticEntitlementsProvider } from '../static-entitlements.js';
+import { UNLIMITED_LIMITS, resolveLimits } from '../../ports/entitlements.js';
+import type { Workspace } from '../../ports/index.js';
 
-function workspace(plan: string, planLimits: WorkspacePlanLimits | null = null): Workspace {
-  return { id: 'ws_1', plan, planLimits } as Workspace;
-}
+const workspace = { id: 'ws_1', plan: 'anything' } as Workspace;
 
 describe('StaticEntitlementsProvider', () => {
-  it('resolves the connect profile for room workspaces', async () => {
-    const provider = new StaticEntitlementsProvider(undefined, 'free');
-    const limits = await provider.getLimits(workspace('connect'));
-    expect(limits).toBe(PLAN_LIMITS.connect);
-    expect(limits.api_calls).toBe(10_000_000);
+  it('is unlimited by default, whatever the workspace row says', async () => {
+    const provider = new StaticEntitlementsProvider();
+    await expect(provider.getLimits(workspace)).resolves.toEqual(UNLIMITED_LIMITS);
+    await expect(provider.getLimits({ id: 'ws_2', plan: 'other' } as Workspace)).resolves.toEqual(UNLIMITED_LIMITS);
   });
 
-  it('sizes connect between free and pro on every metered metric', () => {
-    for (const metric of ['messages', 'file_bytes', 'api_calls', 'rate_per_min'] as const) {
-      expect(PLAN_LIMITS.connect![metric]).toBeGreaterThan(PLAN_LIMITS.free![metric]);
-    }
-    for (const metric of ['messages', 'file_bytes', 'rate_per_min'] as const) {
-      expect(PLAN_LIMITS.connect![metric]).toBeLessThan(PLAN_LIMITS.pro![metric]);
-    }
-    // Rooms poll constantly; connect's call budget is set to pro's for
-    // headroom, while its other limits stay below pro.
-    expect(PLAN_LIMITS.connect!.api_calls).toBeLessThanOrEqual(PLAN_LIMITS.pro!.api_calls);
-  });
-
-  it('carries the billing tiers\' registration caps', () => {
-    expect(PLAN_LIMITS.intro).toMatchObject({ devices: 5, agents: 15, humans: 2 });
-    expect(PLAN_LIMITS.pro).toMatchObject({ devices: 15, agents: 60, humans: 10 });
-    expect(PLAN_LIMITS.enterprise).toMatchObject({ devices: null, agents: Infinity, humans: null });
-    // Legacy hosted tiers predate registration caps and carry none.
-    for (const plan of ['free', 'connect', 'selfhost'] as const) {
-      expect(PLAN_LIMITS[plan]).toMatchObject({ devices: null, agents: Infinity, humans: null });
-    }
-  });
-
-  it('falls back to the default plan for an unknown plan', async () => {
-    const provider = new StaticEntitlementsProvider(undefined, 'free');
-    expect(await provider.getLimits(workspace('platinum'))).toBe(PLAN_LIMITS.free);
-  });
-
-  it('overlays the workspace row\'s plan_limits on the plan table', async () => {
-    const provider = new StaticEntitlementsProvider(undefined, 'free');
-    const limits = await provider.getLimits(workspace('intro', { devices: 7, humans: null, session_retention_days: 7 }));
-    expect(limits).toMatchObject({ devices: 7, humans: null, agents: 15, api_calls: PLAN_LIMITS.intro!.api_calls });
-  });
-
-  it('reports a registration count of zero without a database handle', async () => {
-    const provider = new StaticEntitlementsProvider(undefined, 'intro');
-    await expect(provider.getUsage('ws_1', 'devices')).resolves.toBe(0);
-  });
-});
-
-describe('applyWorkspacePlanLimits', () => {
-  const base = PLAN_LIMITS.intro!;
-
-  it('returns the plan unchanged without overrides', () => {
-    expect(applyWorkspacePlanLimits(base, null)).toBe(base);
-    expect(applyWorkspacePlanLimits(base, undefined)).toBe(base);
-    expect(applyWorkspacePlanLimits(base, {})).toEqual(base);
-  });
-
-  it('treats a present null as unlimited and an absent key as the plan value', () => {
-    expect(applyWorkspacePlanLimits(base, { devices: null, agents: null })).toMatchObject({
-      devices: null,
-      agents: Infinity,
-      humans: 2,
+  it('applies the operator\'s configured limits over unlimited', async () => {
+    const provider = new StaticEntitlementsProvider(undefined, { devices: 5, rate_per_min: 600 });
+    await expect(provider.getLimits(workspace)).resolves.toEqual({
+      ...UNLIMITED_LIMITS,
+      devices: 5,
+      rate_per_min: 600,
     });
   });
 
-  it('keeps the plan value for a malformed override', () => {
-    const overrides = { devices: -1, agents: 'ten', humans: Number.NaN } as unknown as WorkspacePlanLimits;
-    expect(applyWorkspacePlanLimits(base, overrides)).toEqual(base);
+  it('carries no tier names or numbers of its own', () => {
+    for (const value of Object.values(UNLIMITED_LIMITS)) expect(value).toBeNull();
+    expect(Object.keys(UNLIMITED_LIMITS).sort()).toEqual([
+      'agents', 'api_calls', 'devices', 'file_bytes', 'humans', 'message_retention_days', 'messages', 'rate_per_min',
+    ]);
+  });
+
+  it('reports a registration count of zero without a database handle', async () => {
+    const provider = new StaticEntitlementsProvider(undefined, { devices: 1 });
+    await expect(provider.getUsage('ws_1', 'devices')).resolves.toBe(0);
+  });
+
+  it('reports zero metered usage without a key/value store', async () => {
+    const provider = new StaticEntitlementsProvider();
+    await expect(provider.getUsage('ws_1', 'api_calls')).resolves.toBe(0);
+  });
+});
+
+describe('resolveLimits', () => {
+  it('fills absent keys with unlimited', () => {
+    expect(resolveLimits()).toEqual(UNLIMITED_LIMITS);
+    expect(resolveLimits(null)).toEqual(UNLIMITED_LIMITS);
+    expect(resolveLimits({ agents: 3 })).toEqual({ ...UNLIMITED_LIMITS, agents: 3 });
+  });
+
+  it('keeps an explicit null as unlimited', () => {
+    expect(resolveLimits({ agents: null, humans: 2 })).toEqual({ ...UNLIMITED_LIMITS, humans: 2 });
   });
 });

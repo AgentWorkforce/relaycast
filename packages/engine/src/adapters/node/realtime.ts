@@ -126,7 +126,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     this.nodeCompletionDeps = deps;
   }
 
-  /** Enforce plan registration caps on `agent.register` frames. */
+  /** Enforce registration caps on `agent.register` frames. */
   setEntitlements(entitlements: EntitlementsProvider): void {
     this.entitlements = entitlements;
   }

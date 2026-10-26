@@ -12,7 +12,6 @@ import {
 import { sql } from 'drizzle-orm';
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
 import type { FleetCapability, FleetTaskContext, WorkspaceProvenance } from '@relaycast/types';
-import type { WorkspacePlanLimits } from '../ports/entitlements.js';
 
 export interface TaskInvocationState extends FleetTaskContext {
   deadline: string;
@@ -68,10 +67,10 @@ export const workspaces = sqliteTable(
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
     metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>().default({}),
     retention: text('retention', { mode: 'json' }).$type<WorkspaceRetentionSettings>(),
-    // Registration-cap overrides pushed by a control plane (devices/agents/
-    // humans; null = unlimited). Applied over the plan table by the
-    // entitlements provider; null means the plan table alone decides (0076).
-    planLimits: text('plan_limits', { mode: 'json' }).$type<WorkspacePlanLimits>(),
+    // Host-owned per-workspace limit overrides (0076). The engine never
+    // interprets them: the host's entitlements provider maps them, with
+    // whatever else it knows about the workspace, to the engine's `Limits`.
+    limitOverrides: text('limit_overrides', { mode: 'json' }).$type<Record<string, unknown>>(),
     // A non-null deadline is an explicit, immutable opt-in to whole-workspace
     // deletion. Persistent workspaces always leave this null.
     expiresAt: integer('expires_at', { mode: 'timestamp' }),

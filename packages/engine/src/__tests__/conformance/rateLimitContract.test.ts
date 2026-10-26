@@ -1,20 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { EntitlementsProvider, PlanLimits, Workspace } from '../../ports/index.js';
+import { resolveLimits, type EntitlementsProvider, type Limits, type Workspace } from '../../ports/index.js';
 import { InProcessRateLimiter } from '../../adapters/node/rate-limit.js';
 import { createWorkspace, makeNodeStack, type TestStack } from './harness.js';
 
 function entitlementsWithRate(ratePerMin: number): EntitlementsProvider {
   return {
-    async getLimits(_workspace: Workspace): Promise<PlanLimits> {
-      return {
-        messages: Infinity,
-        agents: Infinity,
-        file_bytes: Infinity,
-        api_calls: Infinity,
-        rate_per_min: ratePerMin,
-        devices: null,
-        humans: null,
-      };
+    async getLimits(_workspace: Workspace): Promise<Limits> {
+      return resolveLimits({ rate_per_min: ratePerMin });
     },
     async getUsage() { return 0; },
   };

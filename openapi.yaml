@@ -19,15 +19,17 @@ info:
     credential validation and launch preflight stays reachable when the
     workspace's data-plane traffic is at its ceiling.
 
-    Plans also cap how many devices (nodes), agents and human members a
-    workspace can register. Enrolling a NEW node (`POST /nodes`), registering a
-    NEW agent (`POST /agents`, `POST /a2a/register`, or an `agent.register`
-    node frame) beyond the cap returns HTTP 429 `plan_limit_exceeded` with the
-    top-level fields `error_code`, `limit` (`devices`|`agents`|`humans`),
-    `max`, `current` and `plan` so a client can explain the refusal and offer
-    an upgrade. Re-enrolling or rotating an existing node or agent is never
-    capped. No `Retry-After` is sent: the cap clears only when the workspace
-    removes a registration or changes plan.
+    The deployment's entitlements provider may also cap how many devices
+    (nodes), agents and human members a workspace can register. Enrolling a NEW
+    node (`POST /nodes`), registering a NEW agent (`POST /agents`,
+    `POST /a2a/register`, or an `agent.register` node frame) beyond the cap
+    returns HTTP 429 `plan_limit_exceeded` with the top-level fields
+    `error_code`, `limit` (`devices`|`agents`|`humans`), `max` and `current`,
+    plus whatever context the provider supplies (the hosted gateway adds `plan`
+    and `upgrade_url`) so a client can explain the refusal and offer an upgrade.
+    Re-enrolling or rotating an existing node or agent is never capped. No
+    `Retry-After` is sent: the cap clears only when a registration is removed
+    or the provider raises the limit.
 
     Workspace delivery capacity applies to all local message producers. A write
     that would exceed it returns HTTP 429 with error code
@@ -194,10 +196,10 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
     PlanLimitExceeded:
       description: >-
-        The workspace is at its plan's registration cap for the requested kind.
+        The workspace is at its registration cap for the requested kind.
         Only a NEW registration is refused; re-enrolling or rotating an existing
         node or agent never is. The cap clears when a registration is removed or
-        the plan changes, so no `Retry-After` is sent.
+        the provider raises the limit, so no `Retry-After` is sent.
       content:
         application/json:
           schema:
@@ -206,7 +208,12 @@ components:
   schemas:
     PlanLimitExceededResponse:
       type: object
-      required: [ok, error, error_code, limit, max, current, plan]
+      required: [ok, error, error_code, limit, max, current]
+      description: >-
+        Beyond the required fields, the deployment's entitlements provider may
+        add context at the top level (for example `plan` and `upgrade_url` on
+        the hosted gateway); the engine passes it through verbatim.
+      additionalProperties: true
       properties:
         ok:
           type: boolean
@@ -229,13 +236,17 @@ components:
           description: Which registration cap refused the request.
         max:
           type: integer
-          description: The plan's cap for `limit`.
+          description: The cap for `limit`.
         current:
           type: integer
           description: How many are registered now.
         plan:
           type: string
-          description: The workspace's effective plan key (for example `intro`, `pro`).
+          description: Provider-supplied, optional. The hosted gateway reports the workspace's billing tier here.
+        upgrade_url:
+          type: string
+          format: uri
+          description: Provider-supplied, optional. Where the workspace can raise its limits.
 
     WorkspaceProvenanceInput:
       type: object
@@ -314,8 +325,7 @@ components:
           description: Workspace API key (only returned on creation)
         plan:
           type: string
-          enum: [free, connect, pro, enterprise, selfhost]
-          description: Stored plan that sets the workspace's usage limits. `connect` is sized for short-lived collaboration rooms.
+          description: Host-assigned plan key stored on the workspace; opaque to the engine, which takes every limit from its entitlements provider.
         created_at:
           type: string
           format: date-time

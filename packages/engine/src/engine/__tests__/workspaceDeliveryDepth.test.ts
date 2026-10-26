@@ -173,18 +173,18 @@ describe('workspace delivery growth guard (channel broadcast)', () => {
   it('resolves the dynamic host policy through the async resolver, clamped within cap', async () => {
     const config = {
       workspaceDelivery: {
-        resolve: async (w: { id: string; plan: string }) =>
-          ({ cap: w.plan === 'enterprise' ? 5000 : 500, reserve: 16 }),
+        resolve: async (w: { id: string; plan: string | null }) =>
+          ({ cap: w.plan === 'tier-large' ? 5000 : 500, reserve: 16 }),
       },
     };
-    expect(await resolveWorkspaceDeliveryPolicyFor(config, { id: 'ws', plan: 'enterprise' }))
+    expect(await resolveWorkspaceDeliveryPolicyFor(config, { id: 'ws', plan: 'tier-large' }))
       .toEqual({ cap: 5000, reserve: 16 });
-    expect(await resolveWorkspaceDeliveryPolicyFor(config, { id: 'ws', plan: 'free' }))
+    expect(await resolveWorkspaceDeliveryPolicyFor(config, { id: 'ws', plan: 'tier-small' }))
       .toEqual({ cap: 500, reserve: 16 });
     // No host policy => undefined (self-host has no workspace guard).
-    expect(await resolveWorkspaceDeliveryPolicyFor(undefined, { id: 'ws', plan: 'free' })).toBeUndefined();
+    expect(await resolveWorkspaceDeliveryPolicyFor(undefined, { id: 'ws', plan: 'tier-small' })).toBeUndefined();
     // A reserve >= cap is clamped into `0 <= reserve < cap`.
-    expect(await resolveWorkspaceDeliveryPolicyFor({ workspaceDelivery: { cap: 100, reserve: 200 } }, { id: 'ws', plan: 'free' }))
+    expect(await resolveWorkspaceDeliveryPolicyFor({ workspaceDelivery: { cap: 100, reserve: 200 } }, { id: 'ws', plan: 'tier-small' }))
       .toEqual({ cap: 100, reserve: 99 });
   });
 

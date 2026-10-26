@@ -1,31 +1,21 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { eq } from 'drizzle-orm';
-import type { EntitlementsProvider, PlanLimits, Workspace, WorkspacePlanLimits } from '../../ports/index.js';
-import { workspaces } from '../../db/schema.js';
-import { PLAN_LIMITS } from '../../providers/static-entitlements.js';
+import type { EntitlementsProvider, Limits, Workspace } from '../../ports/index.js';
+import { resolveLimits } from '../../ports/entitlements.js';
 import { countRegistrations } from '../../engine/planCapacity.js';
 import { createWorkspace, FakeSocket, makeNodeStack, registerAgent, type TestStack } from './harness.js';
 
 type Created = { workspaceKey: string; workspaceId: string };
 
-const INTRO = PLAN_LIMITS.intro!;
+/** The caps a hosted tier might carry; the engine only knows the numbers. */
+const CAPPED = { devices: 5, agents: 15, humans: 2 } as const;
 
-describe('plan registration caps', () => {
+describe('registration caps', () => {
   let stack: TestStack;
 
   afterEach(async () => {
     vi.restoreAllMocks();
     await stack?.close();
   });
-
-  async function workspaceOnPlan(name: string, plan: string, planLimits?: WorkspacePlanLimits): Promise<Created> {
-    const ws = await createWorkspace(stack.app, name);
-    await stack.runtime.handle.db
-      .update(workspaces)
-      .set({ plan, ...(planLimits ? { planLimits } : {}) })
-      .where(eq(workspaces.id, ws.workspaceId));
-    return ws;
-  }
 
   function enrollNode(ws: Created, nodeId: string, name: string, currentToken?: string) {
     return stack.app.request('/v1/nodes', {
@@ -47,20 +37,18 @@ describe('plan registration caps', () => {
     });
   }
 
-  const refusal = (limit: string, max: number, current: number, plan = 'intro') => ({
+  const refusal = (limit: string, max: number, current: number) => ({
     ok: false,
     error: { code: 'plan_limit_exceeded' },
     error_code: 'plan_limit_exceeded',
     limit,
     max,
     current,
-    plan,
   });
 
-  it('allows the 5th device on intro and refuses the 6th with the machine-readable body', async () => {
-    stack = makeNodeStack();
-    const ws = await workspaceOnPlan('cap-devices', 'intro');
-    expect(INTRO.devices).toBe(5);
+  it('allows the 5th device and refuses the 6th with the machine-readable body', async () => {
+    stack = makeNodeStack({ limits: CAPPED });
+    const ws = await createWorkspace(stack.app, 'cap-devices');
 
     const tokens: string[] = [];
     for (let i = 1; i <= 5; i += 1) {
@@ -72,7 +60,10 @@ describe('plan registration caps', () => {
 
     const sixth = await enrollNode(ws, 'node_6', 'device-6');
     expect(sixth.status).toBe(429);
-    await expect(sixth.json()).resolves.toMatchObject(refusal('devices', 5, 5));
+    const body = await sixth.json() as Record<string, unknown>;
+    expect(body).toMatchObject(refusal('devices', 5, 5));
+    // The engine adds nothing it does not know: no tier name without a provider context.
+    expect(body).not.toHaveProperty('plan');
 
     // Re-enrolling (rotating) an established device is not a new registration.
     const rotate = await enrollNode(ws, 'node_1', 'device-1', tokens[0]);
@@ -81,8 +72,8 @@ describe('plan registration caps', () => {
   });
 
   it('does not count an agent\'s implicit direct node as a device', async () => {
-    stack = makeNodeStack();
-    const ws = await workspaceOnPlan('cap-direct', 'intro', { devices: 1 });
+    stack = makeNodeStack({ limits: { devices: 1 } });
+    const ws = await createWorkspace(stack.app, 'cap-direct');
     expect((await enrollNode(ws, 'node_1', 'only-device')).status).toBe(201);
 
     const agent = await registerAgent(stack.app, ws.workspaceKey, 'worker');
@@ -96,8 +87,8 @@ describe('plan registration caps', () => {
   });
 
   it('refuses host enrollment into the reserved implicit-direct id namespace', async () => {
-    stack = makeNodeStack();
-    const ws = await workspaceOnPlan('cap-reserved-id', 'intro', { devices: 1 });
+    stack = makeNodeStack({ limits: { devices: 1 } });
+    const ws = await createWorkspace(stack.app, 'cap-reserved-id');
     expect((await enrollNode(ws, 'node_1', 'only-device')).status).toBe(201);
 
     const spoofed = await stack.app.request('/v1/nodes', {
@@ -111,8 +102,8 @@ describe('plan registration caps', () => {
   });
 
   it('counts an explicitly enrolled direct node as a device, so a direct-then-broker re-enroll cannot bypass the cap', async () => {
-    stack = makeNodeStack();
-    const ws = await workspaceOnPlan('cap-explicit-direct', 'intro', { devices: 1 });
+    stack = makeNodeStack({ limits: { devices: 1 } });
+    const ws = await createWorkspace(stack.app, 'cap-explicit-direct');
     const direct = await stack.app.request('/v1/nodes', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
@@ -133,11 +124,9 @@ describe('plan registration caps', () => {
     expect((await enrollNode(ws, 'node_b', 'broker')).status).toBe(429);
   });
 
-  it('allows the 15th agent on intro and refuses the 16th; humans are counted separately', async () => {
-    stack = makeNodeStack();
-    const ws = await workspaceOnPlan('cap-agents', 'intro');
-    expect(INTRO.agents).toBe(15);
-    expect(INTRO.humans).toBe(2);
+  it('allows the 15th agent and refuses the 16th; humans are counted separately', async () => {
+    stack = makeNodeStack({ limits: CAPPED });
+    const ws = await createWorkspace(stack.app, 'cap-agents');
 
     for (let i = 1; i <= 15; i += 1) {
       expect((await registerAgentRaw(ws, { name: `agent-${i}` })).status, `agent ${i}`).toBe(201);
@@ -157,28 +146,17 @@ describe('plan registration caps', () => {
   });
 
   it('answers an established name with the conflict, never the cap', async () => {
-    stack = makeNodeStack();
-    const ws = await workspaceOnPlan('cap-conflict', 'intro', { agents: 1 });
+    stack = makeNodeStack({ limits: { agents: 1 } });
+    const ws = await createWorkspace(stack.app, 'cap-conflict');
     expect((await registerAgentRaw(ws, { name: 'only' })).status).toBe(201);
     const again = await registerAgentRaw(ws, { name: 'only' });
     expect(again.status).toBe(409);
     await expect(again.json()).resolves.toMatchObject({ error: { code: 'agent_already_exists' } });
   });
 
-  it('applies a workspace plan_limits override over the plan table', async () => {
-    stack = makeNodeStack();
-    const ws = await workspaceOnPlan('cap-override', 'enterprise', { devices: 1, agents: null });
-    expect((await enrollNode(ws, 'node_1', 'first')).status).toBe(201);
-    const second = await enrollNode(ws, 'node_2', 'second');
-    expect(second.status).toBe(429);
-    await expect(second.json()).resolves.toMatchObject(refusal('devices', 1, 1, 'enterprise'));
-    // `agents: null` is unlimited even though it was pushed explicitly.
-    expect((await registerAgentRaw(ws, { name: 'free-agent' })).status).toBe(201);
-  });
-
   it('refuses a WebSocket agent.register at the cap with the same detail on the error frame', async () => {
-    stack = makeNodeStack();
-    const ws = await workspaceOnPlan('cap-ws', 'intro', { agents: 1 });
+    stack = makeNodeStack({ limits: { agents: 1 } });
+    const ws = await createWorkspace(stack.app, 'cap-ws');
     expect((await enrollNode(ws, 'node_a', 'alpha')).status).toBe(201);
 
     const sock = new FakeSocket();
@@ -200,7 +178,6 @@ describe('plan registration caps', () => {
       limit: 'agents',
       max: 1,
       current: 1,
-      plan: 'intro',
     });
 
     // Re-registering the established name is a conflict, not a cap refusal.
@@ -209,12 +186,12 @@ describe('plan registration caps', () => {
   });
 
   it('counts an A2A proxy identity as an agent', async () => {
-    stack = makeNodeStack();
+    stack = makeNodeStack({ limits: { agents: 1 } });
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{}', { status: 200 }));
-    const ws = await workspaceOnPlan('cap-a2a', 'intro', { agents: 1 });
+    const ws = await createWorkspace(stack.app, 'cap-a2a');
     expect((await registerAgentRaw(ws, { name: 'local' })).status).toBe(201);
 
-    const register = () => stack.app.request('/v1/a2a/register', {
+    const refused = await stack.app.request('/v1/a2a/register', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
       body: JSON.stringify({
@@ -226,28 +203,24 @@ describe('plan registration caps', () => {
         },
       }),
     });
-    const refused = await register();
     expect(refused.status).toBe(429);
     await expect(refused.json()).resolves.toMatchObject(refusal('agents', 1, 1));
   });
 
-  it('leaves legacy and self-host tiers uncapped', async () => {
+  it('caps nothing by default', async () => {
     stack = makeNodeStack();
-    for (const plan of ['free', 'connect', 'selfhost', 'enterprise']) {
-      const limits = PLAN_LIMITS[plan]!;
-      expect(limits.devices, plan).toBeNull();
-      expect(limits.humans, plan).toBeNull();
-      expect(limits.agents, plan).toBe(Infinity);
-    }
-    const ws = await workspaceOnPlan('cap-legacy', 'free');
+    const ws = await createWorkspace(stack.app, 'cap-default');
     for (let i = 1; i <= 6; i += 1) {
       expect((await enrollNode(ws, `node_${i}`, `device-${i}`)).status).toBe(201);
+    }
+    for (let i = 1; i <= 3; i += 1) {
+      expect((await registerAgentRaw(ws, { name: `human-${i}`, type: 'human' })).status).toBe(201);
     }
   });
 
   it('fails open when the entitlements provider cannot answer', async () => {
     const broken: EntitlementsProvider = {
-      async getLimits(): Promise<PlanLimits> {
+      async getLimits(): Promise<Limits> {
         throw new Error('billing unavailable');
       },
       async getUsage() {
@@ -256,27 +229,51 @@ describe('plan registration caps', () => {
     };
     stack = makeNodeStack({ entitlements: broken });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const ws = await workspaceOnPlan('cap-fail-open', 'intro');
+    const ws = await createWorkspace(stack.app, 'cap-fail-open');
     expect((await enrollNode(ws, 'node_1', 'device')).status).toBe(201);
     expect(warn).toHaveBeenCalledWith('[plan-capacity] entitlements lookup failed; allowing registration', expect.objectContaining({ metric: 'devices' }));
   });
 
-  it('reports the provider\'s effective plan in the refusal', async () => {
-    const raised: EntitlementsProvider = {
-      async getLimits(workspace: Workspace): Promise<PlanLimits> {
-        return { ...PLAN_LIMITS.pro!, devices: 1, ...(workspace.planLimits ?? {}) } as PlanLimits;
+  it('spreads the provider\'s limit context onto the refusal, on HTTP and on the error frame', async () => {
+    const hosted: EntitlementsProvider = {
+      async getLimits(_workspace: Workspace): Promise<Limits> {
+        return resolveLimits({ devices: 1, agents: 1 });
       },
       getUsage: (workspaceId, metric) =>
         countRegistrations(stack.runtime.handle.db, workspaceId, metric as 'devices' | 'agents' | 'humans'),
-      async getPlan() {
-        return 'pro';
+      async getLimitContext() {
+        return { plan: 'tier-small', upgrade_url: 'https://host.example/upgrade', ok: 'cannot clobber' };
       },
     };
-    stack = makeNodeStack({ entitlements: raised });
-    const ws = await workspaceOnPlan('cap-effective-plan', 'intro');
+    stack = makeNodeStack({ entitlements: hosted });
+    const ws = await createWorkspace(stack.app, 'cap-context');
     expect((await enrollNode(ws, 'node_1', 'first')).status).toBe(201);
     const second = await enrollNode(ws, 'node_2', 'second');
     expect(second.status).toBe(429);
-    await expect(second.json()).resolves.toMatchObject(refusal('devices', 1, 1, 'pro'));
+    await expect(second.json()).resolves.toEqual({
+      ...refusal('devices', 1, 1),
+      error: { code: 'plan_limit_exceeded', message: expect.any(String) },
+      plan: 'tier-small',
+      upgrade_url: 'https://host.example/upgrade',
+    });
+
+    const sock = new FakeSocket();
+    const handle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, 'node_1', sock);
+    await handle.handleMessage(JSON.stringify({
+      v: 1, id: 'reg', type: 'node.register', name: 'first', node_id: 'node_1',
+      capabilities: [], max_agents: 4, tags: [], version: 'test-node', resume_cursor: null,
+    }));
+    expect((await registerAgentRaw(ws, { name: 'only-agent' })).status).toBe(201);
+    await handle.handleMessage(JSON.stringify({ v: 1, id: 'a2', type: 'agent.register', name: 'second-agent' }));
+    expect(sock.ofType('error').at(-1)).toMatchObject({
+      id: 'a2',
+      ok: false,
+      code: 'plan_limit_exceeded',
+      limit: 'agents',
+      max: 1,
+      current: 1,
+      plan: 'tier-small',
+      upgrade_url: 'https://host.example/upgrade',
+    });
   });
 });

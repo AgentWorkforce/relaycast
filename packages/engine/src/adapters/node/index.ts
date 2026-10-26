@@ -161,7 +161,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
   webhookQueue.start();
 
   const auth = options.auth ?? new SqliteApiKeyAuthProvider();
-  const entitlements = options.entitlements ?? new StaticEntitlementsProvider(kv, undefined, db);
+  const entitlements = options.entitlements ?? new StaticEntitlementsProvider(kv, options.config?.limits, db);
 
   // An explicit host-provided boundary is authoritative (the host may prune
   // outside this process). Otherwise report the same fallback the local Node

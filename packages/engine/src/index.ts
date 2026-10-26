@@ -30,7 +30,7 @@ export type {
   Workspace,
   Agent,
   EntitlementsProvider,
-  PlanLimits,
+  Limits,
   UsageMetric,
   TelemetrySink,
   TelemetryEvent,
@@ -43,15 +43,16 @@ export { observerAllowsEvent, type ObserverToken } from './engine/observerToken.
 
 // OSS default providers (self-host). Cloud injects its own.
 export { SqliteApiKeyAuthProvider, hashToken } from './auth/index.js';
-export { StaticEntitlementsProvider, PLAN_LIMITS } from './providers/static-entitlements.js';
-// Plan registration caps (devices/agents/humans): the live counts a provider's
-// `getUsage` reports, the override merge, and the guard a host wires into its
+export { StaticEntitlementsProvider } from './providers/static-entitlements.js';
+export { UNLIMITED_LIMITS, resolveLimits } from './ports/entitlements.js';
+// Registration caps (devices/agents/humans): the live counts a provider's
+// `getUsage` reports, the cap normalizer, and the guard a host wires into its
 // node-control transport so `agent.register` frames are capped like HTTP.
 export {
-  applyWorkspacePlanLimits,
   countRegistrations,
   createRegistrationCapacityGuard,
-  planLimitExceededDetail,
+  planLimitExceeded,
+  registrationCap,
   PLAN_LIMIT_EXCEEDED,
   type PlanLimitExceededDetail,
   type RegistrationCapacityGuard,

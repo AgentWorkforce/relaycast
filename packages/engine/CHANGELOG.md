@@ -8,15 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [Unreleased - Minor]
+## [Unreleased - Major]
 
 ### Added
 
-- `PlanLimits` gains `devices` and `humans` (`number | null`, null = unlimited) and `UsageMetric` gains `devices`/`humans`; `PLAN_LIMITS` gains `intro` and `pro` takes the billing tiers' caps (intro 5/15/2, pro 15/60/10, enterprise unlimited). Legacy `free`/`connect` carry no registration caps.
-- Registration caps are enforced at every path that creates a node or agent: `POST /v1/nodes`, `POST /v1/agents`, `POST /v1/a2a/register` and the `agent.register` node frame. A refusal is HTTP 429 `plan_limit_exceeded` with top-level `error_code`, `limit`, `max`, `current`, `plan` (the same fields on the WebSocket `error` frame). Re-enrolling or rotating an existing node/agent is never capped; an agent's implicit direct node is not a device.
-- `EntitlementsProvider.getUsage` reports live registration counts for `devices`/`agents`/`humans` (`countRegistrations` is exported for providers); optional `getPlan` reports the effective plan key for the refusal body.
-- `workspaces.plan_limits` (migration `0076`) stores per-workspace cap overrides; `StaticEntitlementsProvider` applies them via `applyWorkspacePlanLimits` and accepts an optional database handle for live counts.
+- Registration caps are enforced at every path that creates a node or agent: `POST /v1/nodes`, `POST /v1/agents`, `POST /v1/a2a/register` and the `agent.register` node frame. A refusal is HTTP 429 `plan_limit_exceeded` with top-level `error_code`, `limit`, `max`, `current` and the provider's `getLimitContext` fields spread verbatim (the same fields on the WebSocket `error` frame). Re-enrolling or rotating an existing node/agent is never capped; an agent's implicit direct node is not a device, and the `node_direct_` id prefix is reserved for it (`reserved_node_id`).
+- `Limits` (metric-keyed, `null` = unlimited) with `UNLIMITED_LIMITS` and `resolveLimits`; `UsageMetric` gains `devices`/`humans` and `EntitlementsProvider.getUsage` reports live registration counts for them (`countRegistrations` is exported for providers). Optional `EntitlementsProvider.getLimitContext` supplies the refusal's host context.
+- `EngineConfig.limits` sets static limits for a self-hosted instance; `StaticEntitlementsProvider(kv, limits, db)` applies them and counts registrations from `db`.
+- `workspaces.limit_overrides` (migration `0076`) is a host-owned JSON column the engine never interprets.
 - `createRegistrationCapacityGuard` and `HandleNodeControlMessageArgs.capacity` let a host's node-control transport enforce the agent cap on `agent.register`.
+
+### Breaking changes
+
+- `PLAN_LIMITS` and every plan name, number and rank are removed from the engine; `PlanLimits` is replaced by `Limits`, whose metered fields are `number | null` (`null` = unlimited) instead of `number`/`Infinity`. `StaticEntitlementsProvider` no longer reads `workspace.plan`: it is unlimited unless `config.limits` is set. Hosts that relied on the built-in tiers must supply them from their own provider.
+- `WorkspaceDeliveryPolicyConfig.resolve` receives `plan: string | null` (the row's host-assigned key, no `'free'` default).
+- The `rate_limit_exceeded` and `plan_limit_exceeded` quota messages no longer name a plan.
 
 ## [11.0.0] - 2026-10-22
 

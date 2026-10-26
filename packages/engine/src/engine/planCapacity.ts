@@ -1,11 +1,6 @@
 import { and, eq, like, ne, not, sql } from 'drizzle-orm';
 import type { EngineDb } from '../ports/database.js';
-import type {
-  EntitlementsProvider,
-  PlanLimits,
-  RegistrationMetric,
-  WorkspacePlanLimits,
-} from '../ports/entitlements.js';
+import type { EntitlementsProvider, RegistrationMetric } from '../ports/entitlements.js';
 import type { Workspace } from '../ports/auth.js';
 import { agents, nodes, workspaces } from '../db/schema.js';
 import type { CodedError } from '../lib/httpError.js';
@@ -17,13 +12,14 @@ export interface PlanLimitExceededDetail {
   limit: RegistrationMetric;
   max: number;
   current: number;
-  plan: string;
 }
 
 export interface PlanLimitExceededError extends CodedError {
   code: typeof PLAN_LIMIT_EXCEEDED;
   status: 429;
   planLimit: PlanLimitExceededDetail;
+  /** Host-owned context from `EntitlementsProvider.getLimitContext`, passed through verbatim. */
+  limitContext: Record<string, unknown>;
 }
 
 const REGISTRATION_NOUN: Record<RegistrationMetric, string> = {
@@ -32,21 +28,27 @@ const REGISTRATION_NOUN: Record<RegistrationMetric, string> = {
   humans: 'human member',
 };
 
-export function planLimitExceededError(detail: PlanLimitExceededDetail): PlanLimitExceededError {
+export function planLimitExceededError(
+  detail: PlanLimitExceededDetail,
+  limitContext: Record<string, unknown> = {},
+): PlanLimitExceededError {
   const message =
-    `Plan limit exceeded for ${detail.limit}: the ${detail.plan} plan allows ${detail.max} ` +
+    `Limit exceeded for ${detail.limit}: this workspace allows ${detail.max} ` +
     `${REGISTRATION_NOUN[detail.limit]}${detail.max === 1 ? '' : 's'} and ${detail.current} ` +
-    `${detail.current === 1 ? 'is' : 'are'} registered. Upgrade your plan to register more.`;
+    `${detail.current === 1 ? 'is' : 'are'} registered.`;
   return Object.assign(new Error(message), {
     code: PLAN_LIMIT_EXCEEDED,
     status: 429,
     clientSafe: true as const,
     planLimit: detail,
+    limitContext,
   }) as PlanLimitExceededError;
 }
 
-/** The cap detail when `err` is a registration-cap refusal, else `null`. */
-export function planLimitExceededDetail(err: unknown): PlanLimitExceededDetail | null {
+/** The cap detail and host context when `err` is a registration-cap refusal, else `null`. */
+export function planLimitExceeded(
+  err: unknown,
+): { detail: PlanLimitExceededDetail; context: Record<string, unknown> } | null {
   if (!err || typeof err !== 'object') return null;
   const candidate = err as Partial<PlanLimitExceededError>;
   if (candidate.code !== PLAN_LIMIT_EXCEEDED) return null;
@@ -55,49 +57,36 @@ export function planLimitExceededDetail(err: unknown): PlanLimitExceededDetail |
   if (typeof detail.limit !== 'string' || typeof detail.max !== 'number' || typeof detail.current !== 'number') {
     return null;
   }
-  return { limit: detail.limit, max: detail.max, current: detail.current, plan: String(detail.plan) };
+  const context = candidate.limitContext;
+  return {
+    detail: { limit: detail.limit, max: detail.max, current: detail.current },
+    context: context && typeof context === 'object' && !Array.isArray(context) ? context : {},
+  };
 }
 
 /**
  * The HTTP 429 body for a registration-cap refusal: the standard error
- * envelope plus the top-level `error_code`/`limit`/`max`/`current`/`plan`
- * fields clients key on to explain the refusal and offer an upgrade.
+ * envelope plus top-level `error_code`/`limit`/`max`/`current` and the
+ * provider's context spread at top level (so a hosted gateway's `plan` and
+ * `upgrade_url` land where clients key on them). The fixed fields win over a
+ * context key of the same name.
  */
-export function planLimitExceededBody(error: PlanLimitExceededError | CodedError, detail: PlanLimitExceededDetail) {
+export function planLimitExceededBody(
+  error: CodedError,
+  refusal: { detail: PlanLimitExceededDetail; context: Record<string, unknown> },
+) {
   return {
+    ...refusal.context,
     ok: false as const,
     error: { code: PLAN_LIMIT_EXCEEDED, message: error.message },
     error_code: PLAN_LIMIT_EXCEEDED,
-    ...detail,
+    ...refusal.detail,
   };
 }
 
 /** A finite non-negative cap, or `null` for unlimited / unset / malformed. */
 export function registrationCap(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
-}
-
-/**
- * Overlay a workspace's stored cap overrides on its plan's limits. `null` is
- * unlimited and a finite non-negative number is the cap; an absent or
- * malformed key keeps the plan's value, so a corrupt override can never
- * widen or tighten a cap by accident.
- */
-export function applyWorkspacePlanLimits(
-  base: PlanLimits,
-  overrides: WorkspacePlanLimits | null | undefined,
-): PlanLimits {
-  if (!overrides || typeof overrides !== 'object') return base;
-  const override = (value: unknown): number | null | undefined =>
-    value === null ? null : registrationCap(value) ?? undefined;
-  const limits: PlanLimits = { ...base };
-  const devices = override(overrides.devices);
-  if (devices !== undefined) limits.devices = devices;
-  const humans = override(overrides.humans);
-  if (humans !== undefined) limits.humans = humans;
-  const agents = override(overrides.agents);
-  if (agents !== undefined) limits.agents = agents ?? Infinity;
-  return limits;
 }
 
 /**
@@ -159,13 +148,15 @@ async function resolveWorkspace(db: EngineDb, workspace: Workspace | string): Pr
 
 /**
  * Build the guard the registration paths run before inserting a node or agent.
- * The provider decides the cap (`getLimits`) and the current count
- * (`getUsage`); a provider failure fails open with a warning, matching the
- * api_calls quota middleware — a billing outage must not block registration.
+ * The provider decides the cap (`getLimits`), the current count (`getUsage`)
+ * and the refusal's host context (`getLimitContext`); a provider failure fails
+ * open with a warning, matching the api_calls quota middleware — a billing
+ * outage must not block registration.
  */
 export function createRegistrationCapacityGuard(args: RegistrationCapacityArgs): RegistrationCapacityGuard {
   return async (metric) => {
     let detail: PlanLimitExceededDetail | null = null;
+    let context: Record<string, unknown> = {};
     try {
       const workspace = await resolveWorkspace(args.db, args.workspace);
       if (!workspace) return;
@@ -174,8 +165,12 @@ export function createRegistrationCapacityGuard(args: RegistrationCapacityArgs):
       if (max === null) return;
       const current = await args.entitlements.getUsage(workspace.id, metric);
       if (current < max) return;
-      const plan = (await args.entitlements.getPlan?.(workspace)) ?? workspace.plan;
-      detail = { limit: metric, max, current, plan };
+      detail = { limit: metric, max, current };
+      try {
+        context = (await args.entitlements.getLimitContext?.(workspace)) ?? {};
+      } catch {
+        // The refusal stands without the host's extra fields.
+      }
     } catch (err) {
       console.warn('[plan-capacity] entitlements lookup failed; allowing registration', {
         metric,
@@ -184,6 +179,6 @@ export function createRegistrationCapacityGuard(args: RegistrationCapacityArgs):
       });
       return;
     }
-    throw planLimitExceededError(detail);
+    throw planLimitExceededError(detail, context);
   };
 }

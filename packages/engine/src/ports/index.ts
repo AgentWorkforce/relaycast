@@ -43,11 +43,11 @@ export type {
 } from './auth.js';
 export type {
   EntitlementsProvider,
-  PlanLimits,
+  Limits,
   RegistrationMetric,
   UsageMetric,
-  WorkspacePlanLimits,
 } from './entitlements.js';
+export { UNLIMITED_LIMITS, resolveLimits } from './entitlements.js';
 export { ENGINE_OBSERVATION_FACTS } from './telemetry.js';
 export type { TelemetrySink, TelemetryEvent, EngineObservation, EngineObservationKind, EngineObservationFacts } from './telemetry.js';
 export type { EngineLogRecord, EngineLogExport } from './logging.js';
@@ -60,7 +60,7 @@ import type { FileStorage } from './files.js';
 import type { KeyValueStore } from './kv.js';
 import type { EventQueue } from './event-queue.js';
 import type { AuthProvider } from './auth.js';
-import type { EntitlementsProvider } from './entitlements.js';
+import type { EntitlementsProvider, Limits } from './entitlements.js';
 import type { TelemetrySink } from './telemetry.js';
 import type { EngineLogExport } from './logging.js';
 
@@ -96,6 +96,12 @@ export interface EngineDeps extends EnginePorts, EngineProviders {
 
 export interface EngineConfig {
   environment?: string;
+  /**
+   * Static limits for every workspace on this instance, applied by the default
+   * `StaticEntitlementsProvider` (absent keys are unlimited). Ignored when a
+   * host injects its own entitlements provider.
+   */
+  limits?: Partial<Limits>;
   appVersion?: string;
   appSemver?: string;
   sdkSemver?: string;

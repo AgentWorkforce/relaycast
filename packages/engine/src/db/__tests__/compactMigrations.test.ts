@@ -54,13 +54,13 @@ function snapshot(handle: SqliteDbHandle) {
       // 0070 adds a nullable liveness-recovery marker without backfilling it.
       if (name === 'workspaces') {
         // 0073 adds the rotation grace slot and the generation fence, and
-        // 0076 the plan-limit overrides, as additive columns; exclude them so
+        // 0076 the host limit overrides, as additive columns; exclude them so
         // this comparison stays byte-for-byte over every pre-existing value.
         const {
           previous_api_key_hash: _previousApiKeyHash,
           previous_api_key_expires_at: _previousApiKeyExpiresAt,
           api_key_generation: _apiKeyGeneration,
-          plan_limits: _planLimits,
+          limit_overrides: _limitOverrides,
           ...existing
         } = row as Record<string, unknown>;
         return JSON.stringify(existing);
@@ -160,7 +160,7 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
         return { ...table, sql: original.sql };
       }
       // 0073 appends the rotation grace slot and the generation fence, and
-      // 0076 the plan-limit overrides. Remove only their exact additive DDL so
+      // 0076 the host limit overrides. Remove only their exact additive DDL so
       // every pre-existing workspace constraint stays under comparison.
       if (table.name === 'workspaces') {
         table = {
@@ -169,7 +169,7 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
             .replace(', previous_api_key_hash TEXT', '')
             .replace(', previous_api_key_expires_at INTEGER', '')
             .replace(', api_key_generation INTEGER NOT NULL DEFAULT 0', '')
-            .replace(', plan_limits TEXT', ''),
+            .replace(', limit_overrides TEXT', ''),
         };
       }
       // 0063 appends four nullable recovery fields. Remove only their exact
