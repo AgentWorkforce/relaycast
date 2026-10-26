@@ -67,7 +67,11 @@ describe('engine diagnostics', () => {
   });
 
   it('reports backfill progress through to completion', async () => {
-    appWithDiagnostics(); // configures the module-level sink, as a host would
+    // Maintenance runs outside any app request: hosts configure the fallback sink.
+    configureEngineDiagnostics({
+      operation: sample => { operations.push(sample); },
+      progress: sample => { progress.push(sample); },
+    });
     const db = stack.runtime.deps.db;
     // A pending copy whose remaining range holds no rows: one call completes it.
     stack.runtime.handle.sqlite.prepare(
@@ -76,5 +80,20 @@ describe('engine diagnostics', () => {
     await backfillMessageMentionFts(db);
     expect(progress.at(-1)).toMatchObject({ operation: 'backfill.mention_fts', phase: 'completed', remaining: 0 });
     expect(operations).toContainEqual(expect.objectContaining({ label: 'backfill.mention_fts', outcome: 'ok' }));
+  });
+  it('keeps two apps diagnostics apart, and an app without a sink silent', async () => {
+    const ws = await createWorkspace(stack.app, 'diagnostics-two-apps');
+    const agent = await registerAgent(stack.app, ws.workspaceKey, 'diag-two-apps');
+    const other: EngineOperationSample[] = [];
+    const appA = appWithDiagnostics();
+    const appB = createEngine({ ...stack.runtime.deps, diagnostics: { operation: sample => { other.push(sample); } } });
+    const plain = createEngine(stack.runtime.deps);
+    const headers = { authorization: `Bearer ${agent.token}` };
+    expect((await appA.request('/v1/inbox', { headers })).status).toBe(200);
+    expect((await plain.request('/v1/inbox', { headers })).status).toBe(200);
+    expect((await appB.request('/v1/deliveries', { headers })).status).toBe(200);
+    await stack.settle();
+    expect(operations.map(sample => sample.label)).toEqual(['inbox.get']);
+    expect(other.map(sample => sample.label)).toEqual(['deliveries.list']);
   });
 });

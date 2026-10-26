@@ -6,15 +6,34 @@ import type {
   EngineProgressSample,
 } from '../ports/diagnostics.js';
 
-// Module-level rather than per-request: the operations worth timing include
-// maintenance sweeps that run without an app or request context. Configured by
-// `createEngine` from `EngineDeps.diagnostics`; hosts that drive maintenance
-// without building the app configure it themselves.
-let sink: EngineDiagnostics | undefined;
-const scope = new AsyncLocalStorage<EngineOperationScope>();
+// Two sources of a sink, so separately configured apps never cross:
+//  - each app runs its requests inside `runWithEngineDiagnostics` with its own
+//    `deps.diagnostics` (or none), and work a request starts in the background
+//    inherits that scope;
+//  - `configureEngineDiagnostics` sets the host's own fallback, used by
+//    maintenance sweeps outside any request and by apps built without a sink.
+//    `createEngine` never sets it, so one app's sink cannot leak into another.
+let fallback: EngineDiagnostics | undefined;
+const appScope = new AsyncLocalStorage<{ sink: EngineDiagnostics | undefined }>();
+const operationScope = new AsyncLocalStorage<EngineOperationScope>();
+// A WeakMap rather than a property: a frozen or non-extensible error must be
+// rethrown untouched, never replaced by the TypeError a defineProperty raises.
+const operationLabels = new WeakMap<object, EngineOperationLabel>();
 
+/** The sink for maintenance callers that run outside an app's requests. */
 export function configureEngineDiagnostics(next: EngineDiagnostics | undefined): void {
-  sink = next;
+  fallback = next;
+}
+
+/** Run `fn` with `sink` as the diagnostics destination (`createEngine` does this per request). */
+export function runWithEngineDiagnostics<T>(sink: EngineDiagnostics | undefined, fn: () => T): T {
+  return appScope.run({ sink }, fn);
+}
+
+function activeSink(): EngineDiagnostics | undefined {
+  // An app's own sink wins; an app built without one reports to the sink the
+  // host configured explicitly, never to another app's.
+  return appScope.getStore()?.sink ?? fallback;
 }
 
 /**
@@ -22,21 +41,22 @@ export function configureEngineDiagnostics(next: EngineDiagnostics | undefined):
  * wrapper uses this to attribute each statement's cost to an operation.
  */
 export function currentEngineOperation(): EngineOperationScope | undefined {
-  return scope.getStore();
+  return operationScope.getStore();
 }
 
-/** Label an error thrown inside an operation so the request error path can report it. */
-const OPERATION = Symbol.for('relaycast.engineOperation');
-
+/** The operation an error was thrown inside, so the request error path can report it. */
 export function engineOperationOf(error: unknown): EngineOperationLabel | undefined {
-  return typeof error === 'object' && error !== null
-    ? (error as { [OPERATION]?: EngineOperationLabel })[OPERATION]
-    : undefined;
+  return typeof error === 'object' && error !== null ? operationLabels.get(error) : undefined;
 }
 
-function isolate(callback: () => void): void {
-  // A host callback must never alter engine behavior.
-  try { callback(); } catch { /* best effort */ }
+function isolate(callback: () => unknown): void {
+  // A host callback must never alter engine behavior, sync or async.
+  try {
+    const pending = callback();
+    if (pending && typeof (pending as Promise<unknown>).then === 'function') {
+      void Promise.resolve(pending).catch(() => {});
+    }
+  } catch { /* best effort */ }
 }
 
 /**
@@ -50,22 +70,21 @@ export async function withEngineOperation<T>(
   fn: () => Promise<T>,
 ): Promise<T> {
   const context: EngineOperationScope = workspaceId === undefined ? { label } : { label, workspaceId };
+  const sink = activeSink();
   const start = performance.now();
   try {
-    const result = await scope.run(context, fn);
-    const current = sink;
-    if (current?.operation) {
-      isolate(() => current.operation!({ ...context, durationMs: performance.now() - start, outcome: 'ok' }));
+    const result = await operationScope.run(context, fn);
+    if (sink?.operation) {
+      isolate(() => sink.operation!({ ...context, durationMs: performance.now() - start, outcome: 'ok' }));
     }
     return result;
   } catch (error) {
-    if (typeof error === 'object' && error !== null && !(OPERATION in error)) {
-      Object.defineProperty(error, OPERATION, { value: label, enumerable: false });
+    if (typeof error === 'object' && error !== null && !operationLabels.has(error)) {
+      operationLabels.set(error, label);
     }
-    const current = sink;
-    if (current?.operation) {
+    if (sink?.operation) {
       const errorName = error instanceof Error ? error.name : undefined;
-      isolate(() => current.operation!({
+      isolate(() => sink.operation!({
         ...context,
         durationMs: performance.now() - start,
         outcome: 'error',
@@ -77,6 +96,6 @@ export async function withEngineOperation<T>(
 }
 
 export function reportEngineProgress(sample: EngineProgressSample): void {
-  const current = sink;
-  if (current?.progress) isolate(() => current.progress!(sample));
+  const sink = activeSink();
+  if (sink?.progress) isolate(() => sink.progress!(sample));
 }

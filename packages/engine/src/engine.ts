@@ -13,7 +13,7 @@ import { asCodedError, safeClientErrorMessage } from './lib/httpError.js';
 import { jsonError, jsonMalformedBody, jsonNotFound } from './lib/httpResponse.js';
 import { requiredOriginInfo } from './lib/origin.js';
 import { emitServerEvent } from './lib/serverTelemetry.js';
-import { configureEngineDiagnostics, engineOperationOf } from './lib/engineDiagnostics.js';
+import { engineOperationOf, runWithEngineDiagnostics } from './lib/engineDiagnostics.js';
 import { runInBackground } from './routes/background.js';
 import {
   authenticateNodeWs,
@@ -66,9 +66,6 @@ import { routingRoutes } from './routes/routing.js';
  * no Durable Objects — those concerns belong to the adapter/entrypoint.
  */
 export function createEngine(deps: EngineDeps): Hono<AppEnv> {
-  // Only when supplied: building a second app without diagnostics (tests, a
-  // host's secondary app) must not silently drop a host's configured sink.
-  if (deps.diagnostics) configureEngineDiagnostics(deps.diagnostics);
   const runtime: EngineRuntime = {
     db: deps.db,
     realtime: deps.realtime,
@@ -88,6 +85,9 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
 
   // Inject the runtime first so the logger and all routes can read it.
+  // Each app's requests (and the background work they start) report to this
+  // app's own diagnostics sink, or to none: never another app's.
+  app.use('*', (_c, next) => runWithEngineDiagnostics(deps.diagnostics, next));
   app.use('*', engineContext(runtime));
   // Before CORS so a preflight, which returns without calling later
   // middleware, still carries the request id. exposeHeaders lets browser
