@@ -8,7 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- `GET /v1/deliveries?status=<status>` now reads only the calling agent's rows (migration `0076` adds `idx_deliveries_agent_status_created`). It previously walked every row with that status in the workspace, which on large delivery histories could stall a shared database.
 
 ## [11.0.0] - 2026-10-22
 

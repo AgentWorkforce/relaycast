@@ -1342,6 +1342,8 @@ export const deliveries = sqliteTable(
     index('idx_deliveries_node_retry_workspace').on(table.workspaceId, table.nextAttemptAt, table.createdAt, table.id)
       .where(sql`${table.status} = 'queued' AND ${table.routeNodeKind} IN ('http_push', 'ws', 'fleet_ws', 'direct_ws') AND ${table.nextAttemptAt} IS NOT NULL`),
     index('idx_deliveries_status').on(table.workspaceId, table.status, table.createdAt),
+    index('idx_deliveries_agent_status_created')
+      .on(table.workspaceId, table.agentId, table.status, table.createdAt, table.id),
   ],
 );
 
