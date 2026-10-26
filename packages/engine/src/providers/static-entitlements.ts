@@ -6,6 +6,7 @@ import { getUsageMetric, usagePeriodResetAt } from '../engine/usage.js';
 import { countRegistrations } from '../engine/planCapacity.js';
 
 const REGISTRATION_METRICS = new Set<UsageMetric>(['devices', 'agents', 'humans']);
+const REGISTRATION_CAPS = ['devices', 'agents', 'humans'] as const;
 
 /**
  * Static entitlements — the self-host default. Every workspace gets the same
@@ -24,6 +25,14 @@ export class StaticEntitlementsProvider implements EntitlementsProvider {
     private readonly db?: EngineDb,
   ) {
     this.limits = resolveLimits(limits);
+    // A cap the provider cannot count against would admit everything while
+    // looking configured; refuse the misconfiguration up front.
+    const uncountable = REGISTRATION_CAPS.filter((metric) => typeof this.limits[metric] === 'number');
+    if (uncountable.length > 0 && !db) {
+      throw new Error(
+        `StaticEntitlementsProvider: registration caps (${uncountable.join(', ')}) require a database handle to count against`,
+      );
+    }
   }
 
   async getLimits(_workspace: Workspace): Promise<Limits> {

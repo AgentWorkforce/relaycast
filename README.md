@@ -338,8 +338,10 @@ Three conditions return HTTP 429, and the error code tells you which:
 | `plan_limit_exceeded` | API-call quota for the current usage period | Clears only at the period boundary; `Retry-After` reports it |
 | `plan_limit_exceeded` with `limit` | Registration cap (`devices`, `agents` or `humans`) hit by a NEW node/agent registration; body carries `max`, `current` and the host's context (the hosted gateway adds `plan` and `upgrade_url`) | Clears when a registration is removed or the host raises the limit; no `Retry-After` |
 
-The first two carry `Retry-After` and `X-RateLimit-Reset`; successful responses carry
-`X-RateLimit-Limit` and `X-RateLimit-Remaining`. `Retry-After` is authoritative
+The first two carry `Retry-After` and `X-RateLimit-Reset`; when a finite per-minute
+limit applies, successful responses carry `X-RateLimit-Limit` and
+`X-RateLimit-Remaining` (an unlimited workspace — the self-hosted default — gets
+neither). `Retry-After` is authoritative
 — a value beyond your retry budget means retrying cannot help, so fail fast
 rather than spending the budget on it.
 
@@ -354,7 +356,11 @@ implicit direct node every agent gets for its own WebSocket is not one.
   set static limits in the engine config; absent keys stay unlimited:
 
   ```ts
-  createNodeRuntime({ config: { limits: { devices: 5, agents: 15, humans: 2, rate_per_min: 600 } } });
+  createNodeRuntime({
+    dbPath: './relaycast.db',
+    baseUrl: 'https://relay.example.com',
+    config: { limits: { devices: 5, agents: 15, humans: 2, rate_per_min: 600 } },
+  });
   ```
 
 - A hosting product injects its own provider (`getLimits`, `getUsage`, optional

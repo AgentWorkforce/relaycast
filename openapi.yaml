@@ -21,12 +21,14 @@ info:
 
     The deployment's entitlements provider may also cap how many devices
     (nodes), agents and human members a workspace can register. Enrolling a NEW
-    node (`POST /nodes`), registering a NEW agent (`POST /agents`,
-    `POST /a2a/register`, or an `agent.register` node frame) beyond the cap
-    returns HTTP 429 `plan_limit_exceeded` with the top-level fields
-    `error_code`, `limit` (`devices`|`agents`|`humans`), `max` and `current`,
-    plus whatever context the provider supplies (the hosted gateway adds `plan`
-    and `upgrade_url`) so a client can explain the refusal and offer an upgrade.
+    node (`POST /nodes`) or registering a NEW agent (`POST /agents`,
+    `POST /a2a/register`) beyond the cap returns HTTP 429 `plan_limit_exceeded`
+    with the top-level fields `error_code`, `limit` (`devices`|`agents`|`humans`),
+    `max` and `current`, plus whatever context the provider supplies (the hosted
+    gateway adds `plan` and `upgrade_url`) so a client can explain the refusal
+    and offer an upgrade. An `agent.register` node-control frame at the cap is
+    answered on the WebSocket with an `error` frame carrying `code:
+    plan_limit_exceeded` and the same fields, not with an HTTP response.
     Re-enrolling or rotating an existing node or agent is never capped. No
     `Retry-After` is sent: the cap clears only when a registration is removed
     or the provider raises the limit.

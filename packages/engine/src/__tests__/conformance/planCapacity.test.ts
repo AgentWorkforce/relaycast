@@ -99,6 +99,16 @@ describe('registration caps', () => {
     expect(spoofed.status).toBe(400);
     await expect(spoofed.json()).resolves.toMatchObject({ error: { code: 'reserved_node_id' } });
     await expect(countRegistrations(stack.runtime.handle.db, ws.workspaceId, 'devices')).resolves.toBe(1);
+
+    // A near miss on the prefix (`_` is a LIKE wildcard, not a GLOB one) is an
+    // ordinary host-enrolled direct node: not reserved, and counted.
+    const nearMiss = await stack.app.request('/v1/nodes', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ node_id: 'nodeXdirectXcustom', name: 'near-miss', role: 'direct', max_agents: 1 }),
+    });
+    expect(nearMiss.status).toBe(429);
+    await expect(nearMiss.json()).resolves.toMatchObject(refusal('devices', 1, 1));
   });
 
   it('counts an explicitly enrolled direct node as a device, so a direct-then-broker re-enroll cannot bypass the cap', async () => {

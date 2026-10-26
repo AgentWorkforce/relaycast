@@ -1,4 +1,4 @@
-import { and, eq, like, ne, not, sql } from 'drizzle-orm';
+import { and, eq, ne, not, sql } from 'drizzle-orm';
 import type { EngineDb } from '../ports/database.js';
 import type { EntitlementsProvider, RegistrationMetric } from '../ports/entitlements.js';
 import type { Workspace } from '../ports/auth.js';
@@ -112,7 +112,9 @@ export async function countRegistrations(
       .from(nodes)
       .where(and(
         eq(nodes.workspaceId, workspaceId),
-        not(and(eq(nodes.role, 'direct'), like(nodes.id, 'node_direct_%'))!),
+        // GLOB, not LIKE: in LIKE `_` is a wildcard, so `nodeXdirectX…` would
+        // slip out of the count while passing the literal reserved-prefix check.
+        not(and(eq(nodes.role, 'direct'), sql`${nodes.id} GLOB 'node_direct_*'`)!),
       ))
     : await db
       .select({ count })

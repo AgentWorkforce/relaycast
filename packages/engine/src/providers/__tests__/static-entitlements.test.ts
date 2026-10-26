@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { StaticEntitlementsProvider } from '../static-entitlements.js';
 import { UNLIMITED_LIMITS, resolveLimits } from '../../ports/entitlements.js';
-import type { Workspace } from '../../ports/index.js';
+import type { EngineDb, Workspace } from '../../ports/index.js';
 
 const workspace = { id: 'ws_1', plan: 'anything' } as Workspace;
 
@@ -13,7 +13,7 @@ describe('StaticEntitlementsProvider', () => {
   });
 
   it('applies the operator\'s configured limits over unlimited', async () => {
-    const provider = new StaticEntitlementsProvider(undefined, { devices: 5, rate_per_min: 600 });
+    const provider = new StaticEntitlementsProvider(undefined, { devices: 5, rate_per_min: 600 }, {} as EngineDb);
     await expect(provider.getLimits(workspace)).resolves.toEqual({
       ...UNLIMITED_LIMITS,
       devices: 5,
@@ -28,9 +28,11 @@ describe('StaticEntitlementsProvider', () => {
     ]);
   });
 
-  it('reports a registration count of zero without a database handle', async () => {
-    const provider = new StaticEntitlementsProvider(undefined, { devices: 1 });
-    await expect(provider.getUsage('ws_1', 'devices')).resolves.toBe(0);
+  it('refuses registration caps it has no database to count against', () => {
+    expect(() => new StaticEntitlementsProvider(undefined, { devices: 1 }))
+      .toThrow(/registration caps \(devices\) require a database handle/);
+    // Metered-only limits need no database.
+    expect(() => new StaticEntitlementsProvider(undefined, { rate_per_min: 60 })).not.toThrow();
   });
 
   it('reports zero metered usage without a key/value store', async () => {
