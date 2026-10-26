@@ -22,6 +22,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Hosts can observe the engine's expensive database operations and long-running cleanups, and server errors carry the workspace, caller and operation they occurred in.
 
+### Changed
+
+- Deleting a large workspace no longer stalls the database for every other tenant: its data is removed in bounded background steps after it stops authenticating.
+
 ## [11.0.0] - 2026-10-22
 
 ### Changed

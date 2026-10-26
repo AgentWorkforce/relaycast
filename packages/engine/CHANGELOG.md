@@ -15,6 +15,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Optional `EngineDeps.diagnostics` (`EngineDiagnostics`) receives operation timing (`inbox.get`, `deliveries.list`, `workspace.delete`, `invocations.sweep`, `backfill.mention_fts`) and backfill progress. `currentEngineOperation()` lets a host's database wrapper attribute statement cost to the operation in flight; `configureEngineDiagnostics()` covers maintenance callers that never build the app. Absent by default.
 - Unhandled 5xx errors now report `workspace_id`, `agent_id`, `engine_operation` and the matched `route` template in the error log and `captureException` context.
 
+### Changed
+
+- Deleting a large workspace (over 2,000 bulk rows) no longer runs as one cascading transaction. It stops authenticating at once (`workspace_expired`), and its rows are drained in bounded, paced statements (`reapWorkspace`, the expired-workspace reaper). Small workspaces keep the atomic delete. `deleteWorkspace` now returns `{ deferred }`, and the background reap after workspace creation is capped at 250 ms.
+
 ## [11.0.0] - 2026-10-22
 
 ### Changed
