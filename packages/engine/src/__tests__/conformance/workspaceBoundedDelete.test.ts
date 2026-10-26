@@ -94,7 +94,11 @@ describe('bounded workspace deletion', () => {
   it('stops at its wall-clock budget and resumes where it left off', async () => {
     const { ws } = await seedLargeWorkspace('bounded-budget');
     // Beyond the seeded rows: the workspace's own channels, agents, files and nodes.
-    const ownRows = ['channels', 'agents', 'files', 'nodes'].reduce((sum, table) => sum + count(table, ws.workspaceId), 0);
+    const members = (stack.runtime.handle.sqlite.prepare(
+      'SELECT count(*) AS n FROM channel_members cm JOIN channels c ON c.id = cm.channel_id WHERE c.workspace_id = ?',
+    ).get(ws.workspaceId) as { n: number }).n;
+    const ownRows = members
+      + ['channels', 'agents', 'files', 'nodes'].reduce((sum, table) => sum + count(table, ws.workspaceId), 0);
     let clock = 0;
     // Each statement "takes" 100ms; the 50% duty cycle idles as long again.
     const db = stack.runtime.deps.db;
@@ -112,6 +116,8 @@ describe('bounded workspace deletion', () => {
     expect(first.complete).toBe(false);
     expect(clock).toBeLessThanOrEqual(1_100);
     expect(sleeps.every(ms => ms === 100)).toBe(true);
+    // Every page that deleted rows is paced, including a table's last, short page.
+    expect(sleeps.length).toBe(progress.filter(sample => sample.phase === 'batch').length);
     (db as { all: typeof db.all }).all = all;
 
     const rest = await drainWorkspaceRows(db, ws.workspaceId, { maxDurationMs: 60_000, sleep: async () => {} });
@@ -196,5 +202,74 @@ describe('bounded workspace deletion', () => {
     });
     expect(reaped).toContain(small.workspaceId);
     expect(reaped).not.toContain(large.workspaceId);
+  });
+  it('drains per-message fan-out before the messages, so no page cascades unbounded children', async () => {
+    const { ws, agent } = await seedLargeWorkspace('bounded-fanout');
+    stack.runtime.handle.sqlite.prepare(`
+      INSERT INTO read_receipts (message_id, agent_id)
+      SELECT id, ? FROM messages WHERE workspace_id = ?
+    `).run(agent.agentId, ws.workspaceId);
+    const result = await drainWorkspaceRows(stack.runtime.deps.db, ws.workspaceId, { maxDurationMs: 60_000, sleep: async () => {} });
+    expect(result.complete).toBe(true);
+    const tables = progress.filter(sample => sample.phase === 'batch').map(sample => sample.table);
+    expect(tables.lastIndexOf('read_receipts')).toBeLessThan(tables.indexOf('messages'));
+    expect(stack.runtime.handle.sqlite.prepare('SELECT count(*) AS n FROM read_receipts').get()).toEqual({ n: 0 });
+  });
+
+  it('stops accepting inbound webhooks the moment a large delete is deferred', async () => {
+    const { ws } = await seedLargeWorkspace('bounded-hooks');
+    const created = await stack.app.request('/v1/webhooks', { method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ channel: 'general' }) });
+    expect(created.status).toBe(201);
+    const { data: hook } = await created.json() as { data: { webhook_id: string; token: string } };
+    const { deleteWorkspace } = await import('../../engine/workspace.js');
+    await expect(deleteWorkspace(stack.runtime.deps.db, stack.runtime.deps.files, ws.workspaceId))
+      .resolves.toEqual({ deferred: true });
+    const before = count('messages', ws.workspaceId);
+    const response = await stack.app.request(`/v1/hooks/${hook.webhook_id}`, { method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${hook.token}` },
+      body: JSON.stringify({ text: 'after delete' }) });
+    expect(response.status).toBe(404);
+    expect(count('messages', ws.workspaceId)).toBe(before);
+  });
+
+  it('refuses to drain at all when storage cannot delete objects', async () => {
+    const { ws } = await seedLargeWorkspace('bounded-no-storage-delete');
+    const before = count('messages', ws.workspaceId);
+    const { reapWorkspace } = await import('../../engine/workspace.js');
+    const storage = { ...stack.runtime.deps.files, deleteObjects: undefined };
+    await expect(reapWorkspace(stack.runtime.deps.db, storage, ws.workspaceId))
+      .rejects.toMatchObject({ code: 'file_storage_delete_unsupported', status: 503 });
+    expect(count('messages', ws.workspaceId)).toBe(before);
+    expect(count('workspace_events', ws.workspaceId)).toBeGreaterThan(0);
+  });
+
+  it('reserves half the reaper budget for draining, however many candidates need probing', async () => {
+    // Create everything before anything expires: workspace creation runs its
+    // own background reap, which must not drain the large one for us.
+    const { ws: large } = await seedLargeWorkspace('bounded-reserve-large');
+    const smalls = [];
+    for (let i = 0; i < 5; i += 1) smalls.push(await createWorkspace(stack.app, `bounded-reserve-small-${i}`));
+    await stack.settle();
+    await stack.runtime.handle.db.update(workspaces).set({ expiresAt: new Date(Date.now() - 60_000) })
+      .where(eq(workspaces.id, large.workspaceId));
+    for (const small of smalls) {
+      await stack.runtime.handle.db.update(workspaces).set({ expiresAt: new Date(Date.now() - 1_000) })
+        .where(eq(workspaces.id, small.workspaceId));
+    }
+    progress.length = 0;
+    // Every statement "takes" 50ms: probing and deleting the small ones alone
+    // would eat the whole budget.
+    let clock = 0;
+    const db = stack.runtime.deps.db;
+    const all = db.all.bind(db);
+    (db as { all: typeof db.all }).all = (async (...args: Parameters<typeof db.all>) => { clock += 50; return all(...args); }) as typeof db.all;
+    try {
+      await reapExpiredWorkspaces(db, stack.runtime.deps.files, { maxDurationMs: 2_000, clock: () => clock, sleep: async () => {} });
+    } finally {
+      (db as { all: typeof db.all }).all = all;
+    }
+    expect(progress.some(sample => sample.phase === 'batch' && sample.workspaceId === large.workspaceId)).toBe(true);
   });
 });

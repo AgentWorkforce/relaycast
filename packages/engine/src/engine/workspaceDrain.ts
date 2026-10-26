@@ -29,31 +29,47 @@ import { reportEngineProgress } from '../lib/engineDiagnostics.js';
  * cascade from messages (deliveries, message_logs) are drained before them so
  * each message statement stays small.
  */
-const DRAIN_TABLES: readonly {
+interface DrainTable {
   table: string;
   chunk: number;
   where?: string;
   order?: string;
-}[] = [
+  /**
+   * For a child table without its own `workspace_id`: page it through its
+   * workspace-scoped parent. Children are drained before their parent so a
+   * parent page never cascades an unbounded number of them.
+   */
+  via?: { parent: string; key: string };
+}
+
+const DRAIN_TABLES: readonly DrainTable[] = [
   { table: 'deliveries', chunk: 500 },
   { table: 'message_logs', chunk: 500 },
   { table: 'workspace_events', chunk: 500 },
   { table: 'session_events', chunk: 500 },
   { table: 'action_invocations', chunk: 500 },
   { table: 'usage_records', chunk: 500 },
-  // Cascades webhook_deliveries.
-  { table: 'pending_events', chunk: 200 },
-  // Cascades reactions, receipts, attachments; fires the FTS delete triggers.
+  // One per (event, matching subscription): an event page could otherwise
+  // cascade events × subscriptions rows.
+  { table: 'webhook_deliveries', chunk: 500, via: { parent: 'pending_events', key: 'event_id' } },
+  { table: 'pending_events', chunk: 500 },
+  // Per-message fan-out (one receipt per reader), drained ahead of messages.
+  { table: 'read_receipts', chunk: 500, via: { parent: 'messages', key: 'message_id' } },
+  { table: 'reactions', chunk: 500, via: { parent: 'messages', key: 'message_id' } },
+  { table: 'message_attachments', chunk: 500, via: { parent: 'messages', key: 'message_id' } },
+  // Fires the FTS delete triggers.
   {
     table: 'messages',
     chunk: 200,
     where: 'NOT EXISTS (SELECT 1 FROM messages replies WHERE replies.thread_id = messages.id)',
     order: 'length(id) DESC, id DESC',
   },
-  // After messages: their attachments are gone. Each file row enqueues its blob
-  // in the durable cleanup outbox (trigger), which the reaper drains.
+  // Each file row enqueues its blob in the durable cleanup outbox (trigger),
+  // which the reaper drains.
   { table: 'files', chunk: 200 },
-  // Cascades members, DM conversations and webhooks.
+  { table: 'channel_members', chunk: 500, via: { parent: 'channels', key: 'channel_id' } },
+  { table: 'dm_participants', chunk: 500, via: { parent: 'dm_conversations', key: 'conversation_id' } },
+  // Cascades DM conversations and webhooks.
   { table: 'channels', chunk: 200 },
   // Last of the bulk tables: messages, channels and files are NO ACTION
   // references to agents, so an agent still referenced is left to the cascade.
@@ -69,6 +85,24 @@ const DRAIN_TABLES: readonly {
   },
   { table: 'nodes', chunk: 200 },
 ];
+
+/** The rowids of one page of `entry` in this workspace. Names are the constants above, never input. */
+function pageSql(entry: DrainTable, workspaceId: string, limit: number) {
+  if (entry.via) {
+    return sql`
+      SELECT child.rowid FROM ${sql.raw(entry.table)} child
+      JOIN ${sql.raw(entry.via.parent)} parent ON parent.id = child.${sql.raw(entry.via.key)}
+      WHERE parent.workspace_id = ${workspaceId}
+      LIMIT ${limit}
+    `;
+  }
+  return sql`
+    SELECT rowid FROM ${sql.raw(entry.table)}
+    WHERE workspace_id = ${workspaceId}${entry.where ? sql.raw(` AND ${entry.where}`) : sql``}
+    ${entry.order ? sql.raw(`ORDER BY ${entry.order}`) : sql``}
+    LIMIT ${limit}
+  `;
+}
 
 /**
  * Bulk rows above which a workspace is too large to delete in one atomic
@@ -89,11 +123,9 @@ export async function exceedsAtomicDeleteSize(
   maxRows = WORKSPACE_ATOMIC_DELETE_MAX_ROWS,
 ): Promise<boolean> {
   let seen = 0;
-  for (const { table } of DRAIN_TABLES) {
+  for (const entry of DRAIN_TABLES) {
     const [row] = await db.all<{ n: number }>(sql`
-      SELECT count(*) AS n FROM (
-        SELECT 1 FROM ${sql.raw(table)} WHERE workspace_id = ${workspaceId} LIMIT ${maxRows - seen + 1}
-      )
+      SELECT count(*) AS n FROM (${pageSql({ ...entry, where: undefined, order: undefined }, workspaceId, maxRows - seen + 1)})
     `);
     seen += Number(row?.n ?? 0);
     if (seen > maxRows) return true;
@@ -137,19 +169,14 @@ export async function drainWorkspaceRows(
   const duty = Math.min(Math.max(options.dutyCycle ?? WORKSPACE_DRAIN_DUTY_CYCLE, 0.05), 1);
   let rows = 0;
 
-  for (const { table, chunk, where, order } of DRAIN_TABLES) {
+  for (const entry of DRAIN_TABLES) {
+    const { table, chunk } = entry;
     for (;;) {
       if (now() >= deadline) return { complete: false, rows };
       const started = now();
-      // Table and clause names are the constants above, never input.
       const deleted = await db.all(sql`
         DELETE FROM ${sql.raw(table)}
-        WHERE rowid IN (
-          SELECT rowid FROM ${sql.raw(table)}
-          WHERE workspace_id = ${workspaceId}${where ? sql.raw(` AND ${where}`) : sql``}
-          ${order ? sql.raw(`ORDER BY ${order}`) : sql``}
-          LIMIT ${chunk}
-        )
+        WHERE rowid IN (${pageSql(entry, workspaceId, chunk)})
         RETURNING 1
       `);
       const elapsed = now() - started;
@@ -160,11 +187,12 @@ export async function drainWorkspaceRows(
           remaining: null, durationMs: elapsed,
         });
       }
+      // Every page that deleted rows is paced, a table's last one included.
+      const idle = elapsed * (1 / duty - 1);
+      if (deleted.length > 0 && idle > 0) await sleep(Math.min(idle, Math.max(0, deadline - now())));
       // A short page means this table is empty (or only guarded rows remain,
       // which the final cascade removes in one small statement).
       if (deleted.length < chunk) break;
-      const idle = elapsed * (1 / duty - 1);
-      if (idle > 0) await sleep(Math.min(idle, Math.max(0, deadline - now())));
     }
   }
   return { complete: true, rows };

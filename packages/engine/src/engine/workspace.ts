@@ -963,9 +963,22 @@ export async function reapWorkspace(
   workspaceId: string,
   options: WorkspaceDrainOptions = {},
 ): Promise<boolean> {
+  return reapClassifiedWorkspace(db, storage, workspaceId, undefined, options);
+}
+
+/** `reapWorkspace` for a caller that already probed the size (`large`), or not (`undefined`). */
+async function reapClassifiedWorkspace(
+  db: Db,
+  storage: FileStorage,
+  workspaceId: string,
+  large: boolean | undefined,
+  options: WorkspaceDrainOptions = {},
+): Promise<boolean> {
   return withEngineOperation('workspace.delete', workspaceId, async () => {
+    // Before any row changes, as the atomic delete has always done.
+    requireDeletableStorage(storage);
     // A small workspace keeps the atomic delete; only a large one is drained.
-    if (await exceedsAtomicDeleteSize(db, workspaceId)) {
+    if (large ?? await exceedsAtomicDeleteSize(db, workspaceId)) {
       const drained = await drainWorkspaceRows(db, workspaceId, options);
       if (!drained.complete) return false;
     }
@@ -1015,19 +1028,24 @@ export async function reapExpiredWorkspaces(
   // more than the budget (at the drain's duty cycle) of database time.
   const clock = options.clock ?? Date.now;
   const deadline = clock() + (options.maxDurationMs ?? WORKSPACE_DRAIN_MAX_DURATION_MS);
+  // Classifying (and atomically deleting small ones) may use at most half the
+  // budget, so the large workspaces found always get the other half: probes
+  // alone can never consume every call while nothing is deleted.
+  const classifyUntil = clock() + (deadline - clock()) / 2;
   const reaped: string[] = [];
   const large: string[] = [];
   for (const { id } of expired) {
+    if (large.length > 0 && clock() >= classifyUntil) break;
     if (clock() >= deadline) return reaped;
     if (await exceedsAtomicDeleteSize(db, id)) large.push(id);
-    else if (await reapWorkspace(db, storage, id)) reaped.push(id);
+    else if (await reapClassifiedWorkspace(db, storage, id, false)) reaped.push(id);
   }
   for (const [index, id] of large.entries()) {
     const remaining = deadline - clock();
     if (remaining <= 0) break;
     const slice = clock() + remaining / (large.length - index);
     const drain = { dutyCycle: options.dutyCycle, sleep: options.sleep, now: clock, deadline: slice };
-    if (await reapWorkspace(db, storage, id, drain)) reaped.push(id);
+    if (await reapClassifiedWorkspace(db, storage, id, true, drain)) reaped.push(id);
   }
   return reaped;
 }
