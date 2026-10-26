@@ -277,4 +277,47 @@ describe('bounded workspace deletion', () => {
     }
     expect(progress.some(sample => sample.phase === 'batch' && sample.workspaceId === large.workspaceId)).toBe(true);
   });
+  /** One root message with `replies` replies, every message read once by `agentId`. */
+  function seedThread(ws: { workspaceId: string }, agentId: string, replies: number) {
+    const sqlite = stack.runtime.handle.sqlite;
+    const channel = sqlite.prepare("SELECT id FROM channels WHERE workspace_id = ? AND name = 'general'")
+      .get(ws.workspaceId) as { id: string };
+    sqlite.prepare(`INSERT INTO messages (id, workspace_id, channel_id, agent_id, body, has_attachments, created_at)
+      VALUES ('3000000000', ?, ?, ?, 'root', 0, unixepoch())`).run(ws.workspaceId, channel.id, agentId);
+    sqlite.prepare(`
+      WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+      INSERT INTO messages (id, workspace_id, channel_id, agent_id, thread_id, body, has_attachments, created_at)
+      SELECT '4' || printf('%09d', i), ?, ?, ?, '3000000000', 'reply', 0, unixepoch() FROM n
+    `).run(replies, ws.workspaceId, channel.id, agentId);
+    sqlite.prepare('INSERT INTO read_receipts (message_id, agent_id) SELECT id, ? FROM messages WHERE workspace_id = ?')
+      .run(agentId, ws.workspaceId);
+    return (sqlite.prepare('SELECT count(*) AS n FROM read_receipts').get() as { n: number }).n;
+  }
+  const receiptBatchRows = () => progress
+    .filter(sample => sample.phase === 'batch' && sample.table === 'read_receipts')
+    .reduce((sum, sample) => sum + (sample.rows ?? 0), 0);
+
+  it('keeps draining past a short page until the root behind its replies is gone too', async () => {
+    const ws = await createWorkspace(stack.app, 'bounded-thread-root');
+    const agent = await registerAgent(stack.app, ws.workspaceKey, 'thread-root-agent');
+    const seeded = seedThread(ws, agent.agentId, 150);
+    const result = await drainWorkspaceRows(stack.runtime.deps.db, ws.workspaceId, { maxDurationMs: 60_000, sleep: async () => {} });
+    expect(result.complete).toBe(true);
+    expect(count('messages', ws.workspaceId)).toBe(0);
+    // The root's receipts went in a batch, not in the final cascade.
+    expect(receiptBatchRows()).toBe(seeded);
+  });
+
+  it('never lets overlapping drains skip a page of children', async () => {
+    const { ws, agent } = await seedLargeWorkspace('bounded-overlap');
+    const seeded = seedThread(ws, agent.agentId, 10);
+    const drain = () => drainWorkspaceRows(stack.runtime.deps.db, ws.workspaceId, {
+      maxDurationMs: 60_000, sleep: () => new Promise(resolve => setImmediate(resolve)),
+    });
+    const [a, b] = await Promise.all([drain(), drain()]);
+    expect(a.complete && b.complete).toBe(true);
+    expect(count('messages', ws.workspaceId)).toBe(0);
+    // Every receipt was removed by an explicit batch of one drain or the other.
+    expect(receiptBatchRows()).toBe(seeded);
+  });
 });

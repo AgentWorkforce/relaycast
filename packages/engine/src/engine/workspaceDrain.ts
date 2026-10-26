@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { reportEngineProgress } from '../lib/engineDiagnostics.js';
+import { D1_SAFE_IN_QUERY_CHUNK_SIZE } from '../lib/queryChunks.js';
 
 /**
  * Bounded deletion of one workspace's bulk rows, ahead of the final
@@ -36,10 +37,12 @@ interface DrainStep {
   order?: string;
   /**
    * Fan-out tables keyed by this one's `id` and without a `workspace_id` of
-   * their own. Each round takes ONE bounded page of this table's ids, drains
-   * those parents' children through the foreign-key index, then deletes that
-   * same page, so neither a child query nor a parent cascade ever has to
-   * search or remove more than one page's worth.
+   * their own. Each round reads ONE page of this table's ids (at most
+   * D1_SAFE_IN_QUERY_CHUNK_SIZE, so they can be bound), drains those parents'
+   * children through the foreign-key index, then deletes exactly those ids.
+   * Neither a child query nor a parent cascade ever searches or removes more
+   * than one page's worth, and an overlapping drain of the same workspace
+   * finds the page already gone instead of moving on to an undrained one.
    */
   children?: readonly { table: string; key: string }[];
 }
@@ -54,12 +57,12 @@ const DRAIN_STEPS: readonly DrainStep[] = [
   { table: 'action_invocations', chunk: 500 },
   { table: 'usage_records', chunk: 500 },
   // One webhook delivery per (event, matching subscription).
-  { table: 'pending_events', chunk: 200, children: [{ table: 'webhook_deliveries', key: 'event_id' }] },
+  { table: 'pending_events', chunk: D1_SAFE_IN_QUERY_CHUNK_SIZE, children: [{ table: 'webhook_deliveries', key: 'event_id' }] },
   // Per-message fan-out (one receipt per reader). Deleting a message fires
   // the FTS delete triggers.
   {
     table: 'messages',
-    chunk: 200,
+    chunk: D1_SAFE_IN_QUERY_CHUNK_SIZE,
     where: 'NOT EXISTS (SELECT 1 FROM messages replies WHERE replies.thread_id = messages.id)',
     order: 'length(id) DESC, id DESC',
     children: [
@@ -71,9 +74,9 @@ const DRAIN_STEPS: readonly DrainStep[] = [
   // Each file row enqueues its blob in the durable cleanup outbox (trigger),
   // which the reaper drains.
   { table: 'files', chunk: 200 },
-  { table: 'dm_conversations', chunk: 200, children: [{ table: 'dm_participants', key: 'conversation_id' }] },
+  { table: 'dm_conversations', chunk: D1_SAFE_IN_QUERY_CHUNK_SIZE, children: [{ table: 'dm_participants', key: 'conversation_id' }] },
   // Cascades webhooks.
-  { table: 'channels', chunk: 200, children: [{ table: 'channel_members', key: 'channel_id' }] },
+  { table: 'channels', chunk: D1_SAFE_IN_QUERY_CHUNK_SIZE, children: [{ table: 'channel_members', key: 'channel_id' }] },
   // Last of the bulk tables: messages, channels and files are NO ACTION
   // references to agents, so an agent still referenced is left to the cascade.
   {
@@ -210,21 +213,40 @@ export async function drainWorkspaceRows(
 
   for (const step of DRAIN_STEPS) {
     for (;;) {
-      for (const child of step.children ?? []) {
-        for (;;) {
-          const deleted = await run(child.table, childPageSql(child, pageSql(step, workspaceId, 'id'), CHILD_CHUNK));
-          if (deleted === null) return { complete: false, rows };
-          if (deleted < CHILD_CHUNK) break;
+      if (now() >= deadline) return { complete: false, rows };
+      let deleted: number | null;
+      let pageSize: number;
+      if (step.children) {
+        const ids = (await db.all<{ id: string }>(pageSql(step, workspaceId, 'id'))).map(row => row.id);
+        pageSize = ids.length;
+        if (ids.length === 0) break;
+        const page = sql.join(ids.map(id => sql`${id}`), sql`, `);
+        for (const child of step.children) {
+          for (;;) {
+            const removed = await run(child.table, sql`
+              SELECT rowid FROM ${sql.raw(child.table)} WHERE ${sql.raw(child.key)} IN (${page}) LIMIT ${CHILD_CHUNK}
+            `);
+            if (removed === null) return { complete: false, rows };
+            if (removed < CHILD_CHUNK) break;
+          }
         }
+        // Exactly the parents whose children were drained, guard re-checked.
+        deleted = await run(step.table, sql`
+          SELECT rowid FROM ${sql.raw(step.table)}
+          WHERE id IN (${page})${step.where ? sql.raw(` AND ${step.where}`) : sql``}
+        `);
+      } else {
+        deleted = await run(step.table, pageSql(step, workspaceId, 'rowid'));
+        pageSize = deleted ?? 0;
       }
-      const deleted = step.children
-        // The same page whose children were just drained.
-        ? await run(step.table, sql`SELECT rowid FROM ${sql.raw(step.table)} WHERE id IN (${pageSql(step, workspaceId, 'id')})`)
-        : await run(step.table, pageSql(step, workspaceId, 'rowid'));
       if (deleted === null) return { complete: false, rows };
-      // A short page means this table is empty (or only guarded rows remain,
-      // which the final cascade removes in one small statement).
-      if (deleted < step.chunk) break;
+      // Unguarded: a short page means the table is empty. Guarded (messages,
+      // agents): a short page can still precede rows the guard held back (a
+      // root behind its replies), so only an empty page ends the step; rows
+      // the guard holds back for good are left to the final cascade.
+      // A page an overlapping drain already removed (deleted 0 of a non-empty
+      // page) is not the end: the next round reads the next page.
+      if (step.where ? pageSize === 0 : pageSize < step.chunk) break;
     }
   }
   return { complete: true, rows };
