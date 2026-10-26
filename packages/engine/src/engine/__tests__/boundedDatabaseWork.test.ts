@@ -8,6 +8,10 @@ import { deliverPendingToNode, fetchDueNodeDeliveryEvents } from '../delivery.js
 import { pruneExpired } from '../retention.js';
 import { reconcileInventory } from '../node.js';
 
+// bun:sqlite (the standalone binary's driver, under `npm run test:bun`) has no
+// user-defined SQL functions, which this visit-counting probe relies on.
+const userFunctions = !process.versions.bun;
+
 const handles: SqliteDbHandle[] = [];
 afterEach(() => { vi.restoreAllMocks(); for (const handle of handles.splice(0)) handle.sqlite.close(); });
 
@@ -115,7 +119,7 @@ describe('bounded database work with retained history', () => {
     expect(plan).toContain('SEARCH deliveries USING INDEX idx_deliveries_node_initial');
   });
 
-  it.each([100, 10_000])('counts redrive candidate visits through %i expired rows', async (history) => {
+  it.skipIf(!userFunctions).each([100, 10_000])('counts redrive candidate visits through %i expired rows', async (history) => {
     const f = fixture(0, history + 1);
     f.sqlite.prepare('UPDATE deliveries SET expires_at = 1 WHERE seq <= ?').run(history);
     let visits = 0;

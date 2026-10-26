@@ -846,10 +846,22 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # Standalone relaycast-engine binaries (no Node/npm/native addon), built from
+  # the release tag and attached to the GitHub release created above. Runs only
+  # after Create Release succeeded, so dry runs and failed publishes skip it.
+  engine-binaries:
+    name: Engine binaries
+    needs: [build, create-release]
+    permissions:
+      contents: write
+    uses: ./.github/workflows/engine-binaries.yml
+    with:
+      release_tag: v${{ needs.build.outputs.new_version }}
+
   # Summary
   summary:
     name: Summary
-    needs: [build, publish-packages, verify-publish, create-release]
+    needs: [build, publish-packages, verify-publish, create-release, engine-binaries]
     runs-on: ubuntu-latest
     if: always()
 
@@ -873,4 +885,5 @@ jobs:
             echo "| Publish NPM Packages | ${{ needs.publish-packages.result == 'success' && '✅' || (needs.publish-packages.result == 'skipped' && '⏭️' || '❌') }} ${{ needs.publish-packages.result }} |"
             echo "| Verify Publish | ${{ needs.verify-publish.result == 'success' && '✅' || (needs.verify-publish.result == 'skipped' && '⏭️' || '❌') }} ${{ needs.verify-publish.result }} |"
             echo "| Create Release | ${{ needs.create-release.result == 'success' && '✅' || (needs.create-release.result == 'skipped' && '⏭️' || '❌') }} ${{ needs.create-release.result }} |"
+            echo "| Engine Binaries | ${{ needs.engine-binaries.result == 'success' && '✅' || (needs.engine-binaries.result == 'skipped' && '⏭️' || '❌') }} ${{ needs.engine-binaries.result }} |"
           } >> "$GITHUB_STEP_SUMMARY"

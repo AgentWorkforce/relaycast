@@ -1274,6 +1274,10 @@ It listens on `http://localhost:8787` and stores state in a local SQLite file (o
 `--db <path>` or `$RELAYCAST_DB_PATH`). To run it as a container, build a small image around the
 `relaycast-engine` bin and expose port 8787 — any Docker/OCI host works.
 
+No Node.js? Each GitHub release also attaches standalone `relaycast-engine` executables for Linux
+(glibc and musl), macOS, and Windows — see
+[Standalone binary](./docs/self-hosting.md#standalone-binary-no-nodejs).
+
 Point any SDK at it with `baseUrl`:
 
 ```ts

@@ -22,6 +22,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - New `trial` plan for hosted anonymous workspaces: a one-time allowance of 100 messages (channel posts, DMs, group DMs, thread replies) that never resets. `free`, paid plans and self-hosted `selfhost` are unchanged.
 - `plan_limit_exceeded` errors now carry `metric`, `plan`, `limit`, `usage`, and, when the deployment has an upgrade path, `upgrade_url` and `upgrade_action` (`sign_in` or `upgrade`).
+- Standalone `relaycast-engine` executables for Linux (glibc and musl, x64 and arm64), macOS (x64 and arm64), and Windows x64 are attached to each GitHub release as `relaycast-engine-<version>-<os>-<arch>[.exe]` with `.sha256` files; they run the self-host server with no Node.js, npm, compiler, or native addon.
+- `relaycast-engine --version` prints the engine version.
 
 ### Fixed
 
