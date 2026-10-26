@@ -209,10 +209,15 @@ describe('bounded workspace deletion', () => {
       INSERT INTO read_receipts (message_id, agent_id)
       SELECT id, ? FROM messages WHERE workspace_id = ?
     `).run(agent.agentId, ws.workspaceId);
+    const seeded = (stack.runtime.handle.sqlite.prepare('SELECT count(*) AS n FROM read_receipts').get() as { n: number }).n;
     const result = await drainWorkspaceRows(stack.runtime.deps.db, ws.workspaceId, { maxDurationMs: 60_000, sleep: async () => {} });
     expect(result.complete).toBe(true);
-    const tables = progress.filter(sample => sample.phase === 'batch').map(sample => sample.table);
-    expect(tables.lastIndexOf('read_receipts')).toBeLessThan(tables.indexOf('messages'));
+    // Every receipt went in an explicit, page-bounded batch: none were removed
+    // by a message delete's cascade.
+    const receiptRows = progress
+      .filter(sample => sample.phase === 'batch' && sample.table === 'read_receipts')
+      .reduce((sum, sample) => sum + (sample.rows ?? 0), 0);
+    expect(receiptRows).toBe(seeded);
     expect(stack.runtime.handle.sqlite.prepare('SELECT count(*) AS n FROM read_receipts').get()).toEqual({ n: 0 });
   });
 
