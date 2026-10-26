@@ -375,6 +375,25 @@ describe('durable delivery api', () => {
     expect(plan.some((step) => step.detail.includes('idx_deliveries_agent_active_created'))).toBe(true);
   });
 
+  it('serves an explicit-status listing with an agent-scoped seek, never a workspace status walk', async () => {
+    const { ws, bob } = await seed();
+    for (const status of ['dead_lettered', 'acked', 'failed', 'queued', 'delivered']) {
+      const plan = stack.runtime.handle.sqlite
+        .prepare(`EXPLAIN QUERY PLAN
+          SELECT id FROM deliveries
+          WHERE workspace_id = ?
+            AND agent_id = ?
+            AND status = ?
+          ORDER BY created_at, id
+          LIMIT 50`)
+        .all(ws.workspaceId, bob.agentId, status) as Array<{ detail: string }>;
+      const details = plan.map((step) => step.detail).join(' | ');
+      expect(details, status).toContain('idx_deliveries_agent_status_created');
+      // Already in the requested order: no sort that would force a full read before LIMIT.
+      expect(details, status).not.toContain('TEMP B-TREE');
+    }
+  });
+
   it('rejects a malformed JSON fail body with 400 (no state change)', async () => {
     const { bob } = await seed();
     const [item] = await listDeliveries(bob.token);

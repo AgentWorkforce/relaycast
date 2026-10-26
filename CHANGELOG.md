@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Listing deliveries filtered by status no longer scans the whole workspace's delivery history.
 
 ## [11.0.0] - 2026-10-22
 
