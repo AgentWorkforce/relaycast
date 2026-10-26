@@ -264,4 +264,22 @@ describe('lifetime message allowance', () => {
     await Promise.all(pending);
     await expect(stack.runtime.deps.kv.get(lifetimeUsageCounterKey(ws.workspaceId, 'messages'))).resolves.toBe('1');
   });
+
+  it('counts and caps group-DM messages too', async () => {
+    stack = makeNodeStack({
+      entitlements: new FixedEntitlements(() => stack as TestStack, { ...UNLIMITED, lifetime_messages: 1 }),
+    });
+    const { ws, alice } = await seedConversation(stack, 'group-dm-ws');
+    const group = await stack.app.request('/v1/dm/group', json(alice.token, { participants: ['bob'] }));
+    expect(group.status).toBe(201);
+    const { data } = (await group.json()) as { data: { id: string } };
+
+    const sent = await stack.app.request(`/v1/dm/${data.id}/messages`, json(alice.token, { text: 'one' }));
+    expect(sent.status).toBe(201);
+    await expect(lifetimeMessages(stack, ws.workspaceId)).resolves.toBe('1');
+
+    const refused = await stack.app.request(`/v1/dm/${data.id}/messages`, json(alice.token, { text: 'two' }, 'group-key'));
+    expect(refused.status).toBe(429);
+    await expect(refused.json()).resolves.toMatchObject({ error: { code: 'plan_limit_exceeded', metric: 'messages' } });
+  });
 });
