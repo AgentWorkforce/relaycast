@@ -8,7 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Routes that require an agent, node or observer token now answer `401 unauthorized` when the auth provider returns a result without that principal. Previously a host provider that answered a workspace key with a workspace-only result (for example from a cache) sent `POST /v1/agents/:name/rotate-token` into its handler with no agent, which failed with a 500.
 
 ## [11.0.0] - 2026-10-22
 
