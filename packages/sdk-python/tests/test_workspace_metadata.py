@@ -14,7 +14,7 @@ KEY = "rk_test_workspace"
 METADATA = {"project_id": "p1", "nested": {"camelKey": None}, "list": [False, 3]}
 # Exact public field shape returned by engine/workspace.ts getWorkspace (also PATCH).
 WORKSPACE = {
-    "id": "ws_1", "name": "Test", "plan": "free", "system_prompt": None,
+    "id": "ws_1", "name": "Test", "system_prompt": None,
     "created_at": "2026-10-01T00:00:00.000Z", "metadata": METADATA,
     "effective_retention": {"messages": {
         "policy": "unknown", "message_ttl_days": None, "retained_since": None,

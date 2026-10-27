@@ -9,7 +9,7 @@ import { jsonNotFound } from '../lib/httpResponse.js';
 import type { AppEnv } from '../env.js';
 import type { EngineConfig } from '../ports/index.js';
 import type { AuthProvider } from '../ports/auth.js';
-import type { EntitlementsProvider } from '../ports/entitlements.js';
+import type { AdmissionHooks } from '../ports/admission.js';
 import type { TelemetrySink } from '../ports/telemetry.js';
 import {
   createNodeRuntime,
@@ -35,7 +35,7 @@ export interface StartServerOptions {
   fileSecret?: string;
   migrate?: boolean;
   auth?: AuthProvider;
-  entitlements?: EntitlementsProvider;
+  admission?: AdmissionHooks;
   telemetry?: TelemetrySink;
   config?: EngineConfig;
   presence?: InProcessPresenceOptions;
@@ -82,7 +82,7 @@ export function startServer(options: StartServerOptions): RunningServer {
     fileSecret: options.fileSecret,
     migrate: options.migrate,
     auth: options.auth,
-    entitlements: options.entitlements,
+    admission: options.admission,
     telemetry: options.telemetry,
     config: options.config,
     presence: options.presence,

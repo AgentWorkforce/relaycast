@@ -23,7 +23,6 @@ public struct Workspace: Codable, Equatable, Sendable {
     public let id: String
     public let name: String
     public let systemPrompt: String?
-    public let plan: String?
     public let createdAt: String
     public let metadata: [String: JSONValue]?
 }

@@ -336,44 +336,39 @@ and rotate through that plane, so the route answers
 
 ### Throttling
 
-Two different conditions return HTTP 429, and the error code tells you which:
+Each workspace has a per-minute request ceiling (30,000 by default; set
+`rateLimitPerMinute` in the engine config). Exceeding it returns HTTP 429
+`rate_limit_exceeded`, which always clears inside the window: `Retry-After` is
+at most 60. Successful responses carry `X-RateLimit-Limit` and
+`X-RateLimit-Remaining`.
 
-| Code | What it is | Retry |
-| --- | --- | --- |
-| `rate_limit_exceeded` | Per-minute request ceiling | Always clears inside the window; `Retry-After` is at most 60 |
-| `plan_limit_exceeded` | Plan quota: API calls for the current billing period, or a one-time message allowance | A period quota clears only at the period boundary and `Retry-After` reports it; a one-time allowance never clears and carries no `Retry-After` |
+The engine has no plans or usage quotas. A hosting deployment can add its own
+through admission hooks (`admission` in `createNodeRuntime`/`createEngine`
+deps):
 
-`plan_limit_exceeded` also carries `error.metric`, `error.plan`, `error.limit`,
-`error.usage`, and — when the deployment has an upgrade path —
-`error.upgrade_url` with `error.upgrade_action` (`sign_in` or `upgrade`).
-Self-hosted deployments return `null` for both.
+```ts
+const admission: AdmissionHooks = {
+  // Refuse a request or a message send; return null to admit it.
+  async admit({ workspace, action }) {
+    if (action === 'message' && (await sentThisMonth(workspace.id)) >= 10_000) {
+      return { status: 429, code: 'message_quota_exceeded', message: 'Monthly message quota reached.', retryAt: nextMonth() };
+    }
+    return null;
+  },
+  // Meter what succeeded (2xx, never an idempotent replay).
+  async committed({ workspace, action }) { await countUsage(workspace.id, action); },
+  // Per-workspace override of the per-minute ceiling.
+  async rateLimitPerMinute(workspace) { return tierFor(workspace.id).ratePerMinute; },
+};
+```
 
-The per-minute ceiling and period quotas carry `Retry-After` and
-`X-RateLimit-Reset`; a spent one-time allowance carries neither, because no
-retry clears it. Successful responses carry `X-RateLimit-Limit` and
-`X-RateLimit-Remaining`. `Retry-After` is authoritative — a value beyond your
-retry budget means retrying cannot help, so fail fast rather than spending the
-budget on it.
-
-A spent one-time allowance still replays earlier sends: a retry with the same
-`Idempotency-Key` returns its stored receipt, and replays never count against
-the allowance.
-
-A workspace's `plan` (returned by `GET /v1/workspace`) sets both limits:
-
-| Plan | Agents | API calls / month | Requests / minute |
-| --- | --- | --- | --- |
-| `trial` | 5 | 100,000 | 300 |
-| `free` | 5 | 100,000 | 300 |
-| `connect` | 10 | 10,000,000 | 1,200 |
-| `pro` | 100 | 10,000,000 | 6,000 |
-| `enterprise` | unlimited | unlimited | 30,000 |
-
-`connect` is sized for short-lived collaboration rooms. `trial` is the hosted
-anonymous tier: it also has a one-time allowance of 100 messages (channel posts,
-DMs, group DMs and thread replies) that never resets; signing in moves the
-workspace to `free`. Self-hosted deployments default to `selfhost`, which is
-unlimited.
+A denial is returned as `{ ok: false, error: { code, message, ...details } }`
+with its status, and with `Retry-After` only when the host gave `retryAt`.
+`Retry-After` is authoritative — a value beyond your retry budget means
+retrying cannot help, so fail fast rather than spending the budget on it. A
+denied message send still replays earlier sends: a retry with the same
+`Idempotency-Key` returns its stored receipt. A hook that throws admits the
+request.
 
 `GET /v1/workspace` is limited in its own bucket, so the identity read used for
 credential validation and launch preflight stays reachable while the workspace's

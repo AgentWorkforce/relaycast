@@ -8,6 +8,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [10.0.0] - Unreleased
 
+### Removed
+
+- `Workspace::plan`; servers no longer return it.
+
 ### Added
 
 - `RelayError::Api` keeps the full parsed JSON error body in a new `details: Option<serde_json::Value>` field, exposed through `RelayError::details()`. Server metadata beyond `error.code`/`error.message` now reaches callers, for example the top-level `plan`, `upgrade_available` and `upgrade_url` that workspace admission 429s (`workspace_busy`) carry, so an app can use the server's upgrade decision instead of guessing from the plan. `details` is `None` for non-JSON error bodies and for errors the SDK builds itself (`RelayError::api(...)`, cached-credential and registration guards).
