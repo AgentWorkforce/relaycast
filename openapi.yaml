@@ -5936,7 +5936,13 @@ paths:
   /triggers:
     post:
       summary: Create message trigger
-      description: Create a declarative message trigger that invokes an action when matched.
+      description: >-
+        Create a declarative message trigger that invokes an action when matched.
+        A message trigger cannot invoke the builtin `release` action. When
+        `action_name` is `release` and no registered action uses that name, the
+        match fails with `action_not_found` and does not release an agent. Builtin
+        `release` stays on `POST /v1/actions/{name}/invoke` and the
+        `/v1/agents/release` endpoints.
       tags:
         - Triggers
       security:
@@ -5967,7 +5973,9 @@ paths:
                     actions, then node actions with workspace-global aliases, then plain
                     node-scoped actions. A node-scoped match dispatches to its owning node.
                     Ties select one action deterministically by action ID; triggers do not
-                    fan out.
+                    fan out. The builtin `release` action is excluded: a trigger whose
+                    name is `release` and that does not match a registered action fails
+                    with `action_not_found` instead of releasing an agent.
                 enabled:
                   type: boolean
       responses:
@@ -6056,7 +6064,9 @@ paths:
                     actions, then node actions with workspace-global aliases, then plain
                     node-scoped actions. A node-scoped match dispatches to its owning node.
                     Ties select one action deterministically by action ID; triggers do not
-                    fan out.
+                    fan out. The builtin `release` action is excluded: a trigger whose
+                    name is `release` and that does not match a registered action fails
+                    with `action_not_found` instead of releasing an agent.
                 enabled:
                   type: boolean
       responses:
