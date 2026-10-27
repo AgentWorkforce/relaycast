@@ -110,6 +110,29 @@ describe('mainline replay scope and handoff guards', () => {
     expect(f.frames.map(frame => frame.seq)).toEqual([1]);
   });
 
+  it('does not replay queued or delivered rows owned by a Relay Connect probe', async () => {
+    const f = fixture(0, 2);
+    f.sqlite.exec(`
+      UPDATE agents SET metadata = '{"source":"cloud-relay-connect"}' WHERE id = 'agent';
+      UPDATE deliveries SET status = 'delivered' WHERE seq = 2;
+    `);
+
+    expect(await deliverPendingToNode(f.db, f.registry, 'ws', 'node')).toBe(0);
+    expect(f.send).not.toHaveBeenCalled();
+  });
+
+  it('stops replay when an agent becomes probe-pulled during a hydrated page', async () => {
+    const f = fixture(0, 2);
+    f.send.mockImplementation(async (_ws, _node, _provider, frame) => {
+      f.frames.push(frame);
+      f.sqlite.exec(`UPDATE agents SET metadata = '{"source":"cloud-relay-connect"}' WHERE id = 'agent'`);
+      return true;
+    });
+
+    expect(await deliverPendingToNode(f.db, f.registry, 'ws', 'node')).toBe(1);
+    expect(f.frames.map(frame => frame.seq)).toEqual([1]);
+  });
+
   it('bounds the roster read to the scoped agent ids instead of scanning the node', async () => {
     const f = fixture(0, 1);
     // Retained identities accumulate on a node's location_node_id forever. A
@@ -152,5 +175,4 @@ describe('mainline replay scope and handoff guards', () => {
     expect(await deliverPendingToNode(f.db, f.registry, 'ws', 'node', { agentIds: ['a-z', 'a-rocket'] })).toBe(2);
     expect(f.frames.map(frame => (frame as { agent: string }).agent)).toEqual(['Ｚ', '🚀']);
   });
-
 });

@@ -11,6 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Delivery routing treats agents with `metadata.source = "cloud-relay-connect"` as probe-pulled even when normal registration, a later claim, or reconnect replay gives them an active `ws.node.v1` binding. New rows omit node routing, reconnect replay excludes them (including after a mid-replay handoff), and redrive rewrites queued legacy rows to `self_connected` without erasing the prior dispatch attempt or error.
 - `GET /v1/agents/presence` counts a node-hosted agent as online while its node and that agent's own provider are live, including agents that make no HTTP calls. Agents of a disconnected provider, agents a live node omits from its inventory, and agents that called `POST /v1/agents/disconnect` without deregistering stay offline.
 - A status patch broadcasts the same derived presence the response returns.
 

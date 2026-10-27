@@ -20,6 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
+- Relay Connect participants stay on the desktop probe's pull delivery path even when their standard registration creates, claims, or reconnects a WebSocket node; previously the incidental node route could dispatch or replay over the socket and leave misleading node routing metadata on the queued delivery.
 - `GET /v1/agents/presence` counts a node-hosted agent as online while its node and that agent's own provider are live, including agents that make no HTTP calls. Agents of a disconnected provider, agents a live node omits from its inventory, and agents that called `POST /v1/agents/disconnect` without deregistering stay offline.
 - TypeScript SDK: `agent.on.*` event handlers can be registered before `connect()` instead of throwing.
 - TypeScript SDK: `agent.exited`, `node.status.online`, and `node.status.offline` have camelCase event types. `on.agentExited` is available on `AgentClient` and `RelayCast`. `on.nodeOnline` and `on.nodeOffline` are on `RelayCast` only — node liveness is a workspace-stream and webhook event, not an agent-mailbox delivery.

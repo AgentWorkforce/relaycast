@@ -13,6 +13,7 @@ import { toIso } from '../lib/serialize.js';
 import { readNodeRedriveCandidates } from './nodeRedriveCandidates.js';
 import { fetchAttachmentsBatch, type AttachmentRow } from './attachments.js';
 import type { DeliveryFanoutRecord } from './deliveryWrites.js';
+import { isRelayConnectProbePullSql } from './connectDelivery.js';
 import {
   workspaceActiveDepthSql,
   workspaceGrowthLimit,
@@ -1154,6 +1155,7 @@ async function replayPendingToNode(
     eq(agents.workspaceId, workspaceId),
     eq(agents.locationType, 'via_node'),
     eq(agents.locationNodeId, nodeId),
+    not(isRelayConnectProbePullSql(agents.metadata)),
     scope.providerName === undefined ? undefined : eq(agents.providerName, scope.providerName),
     ids === undefined ? undefined : inArray(agents.id, ids),
   ));
@@ -1214,6 +1216,7 @@ async function replayPendingToNode(
           inArray(deliveries.id, page.map(row => row.id)),
           eq(deliveries.workspaceId, workspaceId),
           eq(agents.locationType, 'via_node'), eq(agents.locationNodeId, nodeId),
+          not(isRelayConnectProbePullSql(agents.metadata)),
           eq(agents.id, recipient.id),
           recipient.providerName === null
             ? isNull(agents.providerName) : eq(agents.providerName, recipient.providerName),
@@ -1235,6 +1238,7 @@ async function replayPendingToNode(
             eq(deliveries.id, row.delivery.id), eq(deliveries.workspaceId, workspaceId),
             eq(agents.id, recipient.id), eq(agents.locationType, 'via_node'),
             eq(agents.locationNodeId, nodeId),
+            not(isRelayConnectProbePullSql(agents.metadata)),
             recipient.providerName === null
               ? isNull(agents.providerName) : eq(agents.providerName, recipient.providerName),
             gt(deliveries.seq, agents.deliveryAckSeq),
