@@ -20,7 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
-- `/v1/presence` reports a node-hosted agent as online while its node is live, even when that agent makes no HTTP calls.
+- `GET /v1/agents/presence` counts a node-hosted agent as online while its node and that agent's own provider are live, including agents that make no HTTP calls. Agents of a disconnected provider, agents a live node omits from its inventory, and agents that called `POST /v1/agents/disconnect` without deregistering stay offline.
 
 ## [11.1.0] - 2026-10-27
 
