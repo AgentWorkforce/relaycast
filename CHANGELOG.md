@@ -22,6 +22,16 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - A message trigger cannot invoke builtin `release`.
 
+### Removed
+
+- The Python SDK (`relaycast-sdk`) is no longer developed or published from this repository.
+
+## [11.1.1] - 2026-10-27
+
+### Fixed
+
+- 401, not 500, when an agent route's auth result has no agent
+
 ## [11.1.0] - 2026-10-27
 
 ### Added
@@ -61,6 +71,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Inbox mention lookup uses a workspace-scoped index after its bounded backfill completes; delivery sweeps and per-node agent reads avoid full-history scans that stalled the shared database and surfaced as `database_overloaded`.
 - Every response includes its request id in the `X-Request-Id` header.
+- Raw JSON inbound webhook bodies (including `{}`) appear in the delivered message instead of a generic event line. Their fields are rendered as text only and never read as message metadata.
 
 ## [10.6.3] - 2026-10-19
 
@@ -885,7 +896,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v11.1.0...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v11.1.1...HEAD
+[11.1.1]: https://github.com/AgentWorkforce/relaycast/compare/v11.1.0...v11.1.1
 [11.1.0]: https://github.com/AgentWorkforce/relaycast/compare/v11.0.0...v11.1.0
 [11.0.0]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.5...v11.0.0
 [10.6.5]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.4...v10.6.5
