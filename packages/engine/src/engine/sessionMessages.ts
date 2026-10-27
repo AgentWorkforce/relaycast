@@ -5,6 +5,7 @@ import type { getDb } from '../db/index.js';
 import { agents, channels, dmConversations, messageSessions, messages } from '../db/schema.js';
 import type { AtomicWrite } from '../ports/database.js';
 import { codedError } from '../lib/httpError.js';
+import { senderAddressField } from './address.js';
 import { displayAgentName, publicMessageMetadata } from './messageMetadata.js';
 import {
   afterSnowflake,
@@ -235,6 +236,7 @@ export async function getMessagesBySessionRef(
         conversation_id: row.conversationId ?? null,
         agent_id: row.agentId,
         agent_name: displayAgentName(row.metadata, row.agentName),
+        ...senderAddressField(row.metadata),
         thread_id: row.threadId,
         text: row.body,
         blocks: (row.blocks as never[] | null) ?? null,

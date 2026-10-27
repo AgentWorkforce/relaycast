@@ -75,7 +75,7 @@ export const CoreMessagePayloadSchema = z.object({
   agent_id: z.string(),
   agent_name: z.string(),
   agent_type: AgentTypeSchema.optional(),
-  /** Sender's `agent@machine` address at send time; present on direct messages. */
+  /** Sender's `agent@machine` address at send time when the server recorded one. Omitted when the sender has no location node. */
   agent_address: z.string().optional(),
   text: z.string(),
   injection_mode: MessageInjectionModeSchema.optional(),
@@ -90,6 +90,8 @@ export const MessageWithMetaSchema = z.object({
   agent_id: z.string(),
   agent_name: z.string(),
   agent_type: AgentTypeSchema.optional(),
+  /** Sender's `agent@machine` address at send time when the server recorded one. Omitted when the sender has no location node. */
+  agent_address: z.string().optional(),
   text: z.string(),
   blocks: z.array(MessageBlockSchema).nullable(),
   metadata: z.record(z.string(), z.unknown()).optional(),
@@ -169,6 +171,8 @@ export const SessionMessageSchema = z.object({
   conversation_id: z.string().nullable(),
   agent_id: z.string(),
   agent_name: z.string(),
+  /** Sender's `agent@machine` address at send time when the server recorded one. Omitted when the sender has no location node. */
+  agent_address: z.string().optional(),
   thread_id: z.string().nullable(),
   text: z.string(),
   blocks: z.array(MessageBlockSchema).nullable(),

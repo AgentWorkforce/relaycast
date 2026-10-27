@@ -13,6 +13,185 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - A message trigger cannot invoke builtin `release`.
 
+## [11.1.0] - 2026-10-27
+
+### Added
+
+- `PLAN_LIMITS.trial` and `PlanLimits.lifetime_messages`: a one-time message allowance enforced on message sends by the new `checkMessageAllowance` middleware; only successful fresh sends are counted (idempotent replays neither count nor get refused), under the never-expiring `usage:<workspace>:messages:lifetime` key (`lifetimeUsageCounterKey`, `getLifetimeUsageMetric`).
+- Optional `EntitlementsProvider.getUpgradeGuidance(workspace, metric)` hook; its URL and action are returned on `plan_limit_exceeded` as `upgrade_url` / `upgrade_action`.
+- Standalone single-file `relaycast-engine` builds (`bun build --compile`, `bun:sqlite`) with the same flags and behaviour as the npm bin; the Node adapter now opens SQLite through a small driver seam, and better-sqlite3 remains the Node driver.
+- `relaycast-engine --version` / `-v` prints the engine version.
+- Outbound webhook DNS pinning also holds when the engine runs under Bun, whose `undici` shim ignores custom dispatchers.
+
+### Fixed
+
+- `GET /v1/deliveries?status=<status>` now reads only the calling agent's rows (migration `0076` adds `idx_deliveries_agent_status_created`). It previously walked every row with that status in the workspace, which on large delivery histories could stall a shared database.
+- Routes that require an agent, node or observer token now answer `401 unauthorized` when the auth provider returns a result without that principal. Previously a host provider that answered a workspace key with a workspace-only result (for example from a cache) sent `POST /v1/agents/:name/rotate-token` into its handler with no agent, which failed with a 500. Observer-readable routes apply the same check, so an observer token resolved without its observer identity no longer reads with the workspace's unscoped access.
+
+## [11.0.0] - 2026-10-22
+
+### Changed
+
+- Replace analytics envelopes with typed domain observations (`kind`, `facts`, `occurredAt`, workspace, sender, and authenticated provenance). Hosts now own event naming, identity, groups, profile policy, and log transport via a generic `logExport` callback. The optional observation sink defaults to a no-op and isolates callback failures.
+
+### Breaking changes
+
+- Hosts implementing `TelemetrySink.capture` must consume `EngineObservation` (`kind` and `facts`) instead of the analytics envelope (`name`, `distinctId`, `properties`, `groups`, `setOnce`, `processPersonProfile`). `TelemetryEvent` now aliases that observation type.
+- `EngineConfig.logExport` accepts an `EngineLogExport` callback instead of PostHog configuration. Hosts provide their own transport; `EngineLogRecord` defines the callback payload.
+- REST and WebSocket contracts are unchanged. Self-hosts using the default observation sink need no analytics adapter.
+
+## [10.6.5] - 2026-10-21
+
+
+### Fixed
+
+- Expose credential-authenticated actor provenance separately from event targets so hosts can verify analytics ownership; fingerprint presented credentials with SHA-256 independently of custom authentication storage. Public metadata cannot identify people.
+- The `0075` mention-index backfill no longer fails on D1 with "Cannot read properties of undefined (reading 'bind')". Each page was committed through drizzle's D1 `batch()`, which cannot bind raw parameterized statements, so the cursor never advanced and inbox stayed on the history scan. Page writes now run sequentially; the copy was already replay-safe.
+
+## [10.6.4] - 2026-10-21
+
+### Added
+
+- `backfillMessageMentionFts` and `MESSAGE_MENTION_BACKFILL_BATCH` are exported from the package root, so hosts can drive the `0075` mention-index copy from their own maintenance instead of waiting on one batch per delivery sweep. Each call copies at most one batch atomically with its cursor, is safe to repeat, and returns `0` once the copy is complete.
+
+### Migration
+
+- Apply `0074_delivery_active_location_node_index.sql` and `0075_message_mention_fts.sql` before updating the worker. The new sweep requires the partial index; mention indexing copies history in bounded maintenance batches while inbox retains its fallback until completion.
+
+### Fixed
+
+- `GET /v1/inbox` finds mention candidates through `messages_mention_fts` (migration `0075`) once that index has caught up, instead of a `LIKE` walk of the whole workspace history. The migration does not rebuild history; delivery sweeps copy it in bounded batches, replaying a batch is safe, and a failed copy does not skip delivery maintenance. Inbox keeps the workspace scan until the copy finishes. Results are unchanged.
+- The unreachable-node delivery sweep reads only active deliveries through the new partial index `idx_deliveries_active_location_node` (migration `0074`), not every delivery ever routed to a node.
+- Every response carries its request id in an `X-Request-Id` header (the header the Rust SDK reads), so client error reports stop showing `request_id: null`.
+- Per-node agent roster and inventory lookups are pinned to `idx_agents_location_node_fk` instead of walking every agent in the workspace.
+
+## [10.6.3] - 2026-10-19
+
+- Unlimited-capacity nodes retain explicitly reported load for placement; load ties count both active and reserved agents.
+
+
+## [10.6.2] - 2026-10-18
+
+### Changed
+
+- `PLAN_LIMITS.connect.api_calls` rises from 3,000,000 to 10,000,000 (equal to `pro`), sized for a full 10-seat room polling for its 7-day maximum life.
+
+## [10.6.1] - 2026-10-18
+
+### Fixed
+
+- `POST /v1/agents/spawn` accepts `cli: muse` and `cli: devin` through the shared CLI schema.
+- `inventory.sync`'s missing sweep leaves an agent bound while an open built-in release dispatched to that node and provider names it (and its `expected_agent_id`, when set), for up to the dispatch timeout. The release completion deactivates the binding and tombstones the agent; before, the sweep won the race and the completion failed with `agent_identity_mismatch`.
+
+## [10.6.0] - 2026-10-18
+
+### Added
+
+- `PLAN_LIMITS.connect`: a room-sized tier (10 agents, 3,000,000 `api_calls`, 100,000 messages, 1 GiB files, 1,200 requests/min) that a control plane can assign to short-lived collaboration workspaces.
+- `POST /v1/workspace/rotate-key` rotates the authenticated workspace's API key with a bounded `grace_seconds` continuity window for the superseded key (`0` for immediate compromise cutoff). Migration `0073_workspace_key_rotation.sql` adds the `previous_api_key_hash`/`previous_api_key_expires_at` grace slot and the `api_key_generation` ordering fence. `EngineConfig.allowWorkspaceKeyRotation` opts in (default off, so hosted deployments where a control plane owns the canonical key can never serve it).
+
+## [10.5.1] - 2026-10-16
+
+### Fixed
+
+- Offline fanout exclusion now treats a fresh direct-node heartbeat or matching broker-provider heartbeat as proof that a hosted agent remains reachable, so a quiet connected agent is not dropped merely because route heartbeats do not update `agents.last_seen`. Disconnected providers and inventory-confirmed exits no longer inherit another provider's liveness.
+
+## [10.5.0] - 2026-10-16
+
+### Added
+
+- `EngineConfig.mailbox.offlineExcludeMs` (and the matching per-workspace override) bounds how long an effectively-offline agent keeps receiving new channel/group-DM broadcast deliveries before fanout excludes it; defaults to 24h and accepts `0` to disable exclusion.
+
+### Fixed
+
+- `buildChannelDeliveryWrite`/`buildGroupDmDeliveryWrite` no longer insert a new delivery row for a recipient that has been offline past `offlineExcludeMs`, including stale persisted `active`/`online` rows, so a handful of dead agents can no longer exhaust a workspace's shared delivery-depth cap across repeated broadcasts. Idle `http_push` routes remain eligible because they have no socket-liveness signal. `DeliveryRejectionRecord.reason` gained `recipient_offline` alongside `depth_cap` to report the exclusion; 1:1 DM thread replies remain direct deliveries.
+
+## [10.4.2] - 2026-10-16
+
+### Fixed
+
+- `errorResponse` re-throws an error with no `code` that resolves to a 5xx, so it reaches `app.onError` (structured log, telemetry, and any host classifier chained in front of it) instead of being answered as a bare `500 internal_error` in the route. Coded errors and 4xx are still answered in place, with an unchanged body.
+- `app.onError` adds `error.request_id` to 5xx bodies, matching the `request_id` in the request logs.
+
+## [10.4.1] - 2026-10-15
+
+### Fixed
+
+- Newly initialized webhooks use the delivery pass's clock for their first due time, avoiding spurious retry failures when insertion crosses a clock tick.
+
+## [10.4.0] - 2026-10-13
+
+### Added
+
+- `origin_node_id` on agent detail responses and `GET /v1/node/me` for node tokens.
+
+## [10.3.2] - 2026-10-13
+
+### Fixed
+
+- Rescheduling a dispatched built-in release no longer issues a D1 read, so `inventory.sync` and the timeout sweep no longer spend one D1 round trip per open release on a node.
+
+## [10.3.1] - 2026-10-13
+
+### Fixed
+
+- A native spawn whose first `action.invoke` send failed is re-dispatched by its placed node's next register or drain instead of waiting for the 72-hour never-dispatched sweep. The row becomes drainable only once the send has settled unsent, and one drain claims it, so a reconnect cannot send it twice or double-count node capacity.
+
+## [10.3.0] - 2026-10-13
+
+### Added
+
+- `claimNodeOffline` / `settleNodeOffline` split the node-offline transition into a one-statement, revision-fenced claim and a resumable tail, so socket owners can release control admission immediately without same-second reconnects losing agents, providers, or newly dispatched work. `markNodeOffline` is unchanged for serialized callers.
+- Implicit direct-node `node.heartbeat` renews its bound agent’s durable roster and presence, acknowledging request IDs with `data.agent_presence` and `agent_id` only after success. The Node adapter wires this automatically; external node-control adapters can opt in with the optional `presence` port.
+
+### Fixed
+
+- Presence heartbeats preserve reported work states; expiry and node disconnect recovery restore only the state lost to liveness, without erasing an explicit offline report.
+- A capability-free `node.heartbeat` no longer pre-reads the provider row or the provider list: the provider write reads `max_agents` in place and the node aggregate folds into one correlated UPDATE, so a steady beat is two writes total.
+
+## [10.1.1] - 2026-10-12
+
+### Fixed
+
+- `POST /v1/messages/:id/replies`, thread reads, `GET /v1/messages/:id`, session reads, queued deliveries, and replayed `thread.reply` frames expose the server-resolved sender `agent_address` without leaking its internal metadata key. Observer `thread.reply` events keep that address on `message`. The field is omitted when the sender has no location node.
+
+## [10.1.0] - 2026-10-11
+
+### Added
+
+- `sweepUnreachableDeliveries` / `deadLetterUnreachableDeliveryBatch`: scheduled drain that dead-letters active deliveries routed (`location_node_id`) to `ws` nodes offline past a grace window (default 30m), emitting `delivery.failed` (`reason: 'node_unreachable'`) sender notices per batch — frees workspace delivery-depth capacity held by mail that can never dispatch, without waiting out the full TTL. `http_push`/`poll` routes and never-connected nodes are untouched.
+
+### Fixed
+
+- `GET /v1/agent` and `GET /v1/agents/<name>` have dedicated rate-limit buckets instead of sharing the workspace-wide `global` bucket; `GET /v1/agents/presence` keeps its tighter allowance and the roster listing is unchanged.
+- `registerAgent` reclaims a recovery verifier left enrolled by its own released tombstone, scoped to the same workspace and agent name; a verifier held by a live identity or a different name is still refused with `agent_recovery_proof_conflict`. Registration writes now require atomic execution.
+
+## [10.0.2] - 2026-10-11
+
+### Fixed
+
+- `agent.register` now groups its reads and writes into batched statement sets on batch-capable handles (D1), cutting roughly eleven sequential round-trips to three — reads, slot-reserve + identity insert, membership + bindings — under the node-control liveness deadline.
+- `GET /v1/dm/conversations/all` supports opt-in cursor pages of at most 500 conversations, internally chunked below D1's bind limit, while preserving the legacy unpaginated and observer response contracts.
+- `GET /v1/dm/conversations/all` applies an observer's conversation allowlist before participant and message enrichment, keeping narrowly scoped links fast in large workspaces.
+- `agent.register`'s cancelled-spawn tombstone check seeks a new composite index on `action_invocations` (`idx_action_invocations_spawn_canceled`, `workspace_id` + `dispatched_node_id`) instead of the whole `status = 'failed'` bucket — measured ~216k rows / ~1.8s per registration on hosted production, enough to breach the node liveness deadline and surface `d1_pressure` on every spawn.
+- The hosted stale-online-node reconcile scan (`status = 'online'` with no workspace predicate) now seeks a new partial covering index (`idx_nodes_online_liveness`) instead of full-scanning `nodes` on every maintenance tick.
+- `node.heartbeat` carrying an unchanged capability snapshot now issues a single provider write (folding upsert + liveness signal), skips `materializeProviderActions` behind a one-read drift check so out-of-band action deletions still self-heal, and folds `proven_live_at` into the aggregate node update — ~15 sequential statements per beat down to ~6 on the node liveness hot path that was breaching the 5s deadline into `d1_pressure`.
+
+## [10.0.1] - 2026-10-11
+
+### Fixed
+
+- `GET /v1/dm/conversations/all` reads participants, message counts and latest messages in D1-safe chunks, so a workspace with more than about 100 DM conversations no longer fails with `internal_error`.
+
+## [10.0.0] - 2026-10-11
+
+### Changed
+
+- `GET /v1/agents` without a status or with `status=all` now defaults to a seven-day `last_seen` window. `include_stale=1` opts out (default `0`); `include_metadata=0` skips stored metadata (default `1`). Explicit status filters and agent detail reads retain historical access; responses remain arrays.
+
+### Fixed
+
+- Thread reply pagination uses the existing thread index while preserving workspace filtering and decoded fields.
 ## [9.2.0] - 2026-10-09
 
 ### Added
@@ -68,7 +247,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- Server events belong to the acting agent's cloud user, carry sender fields and org/workspace groups, and fall back to a non-person workspace id; `TelemetryEvent` gains optional `groups`, `setOnce` and `processPersonProfile` for sinks (see [TELEMETRY.md](../../TELEMETRY.md)).
+- Server events belong to the acting agent's cloud user, carry sender fields and org/workspace groups, and fall back to a non-person workspace id; `TelemetryEvent` gains optional `groups`, `setOnce` and `processPersonProfile` for sinks.
 
 ## [8.14.0] - 2026-09-30
 

@@ -69,6 +69,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
           id: d.id as string,
           agent_id: d.agent_id as string,
           agent_name: d.from_name as string,
+          ...(typeof d.agent_address === 'string' ? { agent_address: d.agent_address } : {}),
           text: d.text as string,
         },
       };

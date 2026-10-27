@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, like, lt, lte, or, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { actions, actionInvocations, agents, agentNodeBindings, channelMembers, dmParticipants, nodes } from '../db/schema.js';
 import { waitForPendingInvocationRetry } from './invocationRetry.js';
@@ -865,6 +865,7 @@ async function failInvocationForUnavailableProvider(
   db: Db,
   workspaceId: string,
   invocationId: string,
+  expectedNodeLivenessRevision?: number,
 ): Promise<void> {
   await db
     .update(actionInvocations)
@@ -873,6 +874,9 @@ async function failInvocationForUnavailableProvider(
       eq(actionInvocations.workspaceId, workspaceId),
       eq(actionInvocations.id, invocationId),
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      ...(expectedNodeLivenessRevision !== undefined
+        ? [eq(actionInvocations.nodeLivenessRevision, expectedNodeLivenessRevision)]
+        : []),
     ));
 }
 
@@ -918,6 +922,7 @@ async function failOpenInvocationRows(
   workspaceId: string,
   invocationIds: string[],
   error: string,
+  expectedNodeLivenessRevision?: number,
 ): Promise<InvocationRow[]> {
   if (invocationIds.length === 0) return [];
   // Capture reservation state before the update clears spawnReservedAt.
@@ -933,6 +938,9 @@ async function failOpenInvocationRows(
       eq(actionInvocations.workspaceId, workspaceId),
       inArray(actionInvocations.id, invocationIds),
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      ...(expectedNodeLivenessRevision !== undefined
+        ? [eq(actionInvocations.nodeLivenessRevision, expectedNodeLivenessRevision)]
+        : []),
     ));
   const failed = await db
     .update(actionInvocations)
@@ -941,6 +949,9 @@ async function failOpenInvocationRows(
       eq(actionInvocations.workspaceId, workspaceId),
       inArray(actionInvocations.id, invocationIds),
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      ...(expectedNodeLivenessRevision !== undefined
+        ? [eq(actionInvocations.nodeLivenessRevision, expectedNodeLivenessRevision)]
+        : []),
     ))
     .returning();
   const failedIds = new Set(failed.map((row) => row.id));
@@ -1034,6 +1045,7 @@ async function dispatchNodeProviderInvocation(args: {
   /** Immutable provenance; unlike actionId, this survives action-row pruning. */
   invocationOrigin: InvocationRow['invocationOrigin'];
   reservationHeld?: boolean;
+  expectedNodeLivenessRevision?: number;
 }, options: {
   failIfUnavailable?: boolean;
 } = {}): Promise<{
@@ -1053,7 +1065,12 @@ async function dispatchNodeProviderInvocation(args: {
       if (options.failIfUnavailable === false) {
         return { accepted: false, pending: false, providerUnavailable: true };
       }
-      await failInvocationForUnavailableProvider(args.db, args.workspaceId, args.invocationId);
+      await failInvocationForUnavailableProvider(
+        args.db,
+        args.workspaceId,
+        args.invocationId,
+        args.expectedNodeLivenessRevision,
+      );
       throw codedError(`Provider "${args.providerName}" is offline for action "${args.action}"`, 'handler_unavailable', 503);
     }
     // The DB is the authoritative offline queue. Do not call sendToProvider
@@ -1075,10 +1092,16 @@ async function dispatchNodeProviderInvocation(args: {
           ? { id: expectedActionId, name: args.action }
           : undefined,
         targetActionId: args.actionId ?? undefined,
+        expectedNodeLivenessRevision: args.expectedNodeLivenessRevision,
       },
     );
     if (!accepted && args.invocationOrigin === 'registered_action') {
-      const settled = await settleDeletedRegisteredAction(args.db, args.workspaceId, args.invocationId);
+      const settled = await settleDeletedRegisteredAction(
+        args.db,
+        args.workspaceId,
+        args.invocationId,
+        args.expectedNodeLivenessRevision,
+      );
       return { accepted: false, pending: false, settled };
     }
     return { accepted, pending: true };
@@ -1787,6 +1810,16 @@ async function dispatchSpawn(args: {
     pending: placement.queued,
     reservationHeld: !placement.queued,
   });
+  // Placement reserved capacity for an attempt that never landed. Return it
+  // first, then mark the row unsent: only the mark makes it drainable, so a
+  // drain never sees it while this send is in flight or still holding the
+  // reservation.
+  if (!dispatched.accepted && !placement.queued) {
+    await releaseNodeCapacity(args.db, args.workspaceId, nodeId);
+  }
+  if (!dispatched.sent) {
+    await markUnsentNativeSpawn(args.db, args.workspaceId, invocation.id, nodeId);
+  }
   return spawnResult(invocation, nodeId, dispatched);
 }
 
@@ -2550,6 +2583,8 @@ async function dispatchNodeAttempt(
     };
     /** Selected retry target; differs from expectedAction.id during a valid failover. */
     targetActionId?: string;
+    /** Reject a stale lost-node rescheduler after any newer dispatch mutation. */
+    expectedNodeLivenessRevision?: number;
   },
 ) {
   const stateFields = opts.pending
@@ -2578,6 +2613,9 @@ async function dispatchNodeAttempt(
       eq(actionInvocations.workspaceId, workspaceId),
       eq(actionInvocations.id, invocationId),
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      ...(opts.expectedNodeLivenessRevision !== undefined
+        ? [eq(actionInvocations.nodeLivenessRevision, opts.expectedNodeLivenessRevision)]
+        : []),
       ...(opts.expectedAction ? [
         eq(actionInvocations.invocationOrigin, 'registered_action'),
         eq(actionInvocations.actionId, opts.expectedAction.id),
@@ -2638,6 +2676,7 @@ async function claimRegisteredActionHandoff(
     retryAfterAt?: Date | null;
     reservationHeld?: boolean;
     skipIncrementAttempts?: boolean;
+    expectedNodeLivenessRevision?: number;
   },
 ): Promise<{ actionId: string; actionName: string; dispatchAttempts: number; taskState: InvocationRow['taskState'] } | null> {
   const claimedActionId = args.targetActionId ?? args.expectedActionId;
@@ -2672,6 +2711,9 @@ async function claimRegisteredActionHandoff(
       eq(actionInvocations.invocationOrigin, 'registered_action'),
       eq(actionInvocations.actionId, args.expectedActionId),
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      ...(args.expectedNodeLivenessRevision !== undefined
+        ? [eq(actionInvocations.nodeLivenessRevision, args.expectedNodeLivenessRevision)]
+        : []),
       sql`NOT (
         ${actionInvocations.actionId} = ${claimedActionId}
         AND COALESCE(${actionInvocations.dispatchedNodeId}, '') = ${args.nodeId}
@@ -2736,6 +2778,7 @@ async function settleDeletedRegisteredAction(
   db: Db,
   workspaceId: string,
   invocationId: string,
+  expectedNodeLivenessRevision?: number,
 ): Promise<InvocationRow | undefined> {
   // A failed handoff can also mean another dispatcher already advanced the
   // same invocation to a different live action. Fail only the FK-null state
@@ -2758,6 +2801,9 @@ async function settleDeletedRegisteredAction(
         sql`${actionInvocations.providerAcceptedAttempt} <> ${actionInvocations.dispatchAttempts}`,
       ),
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      ...(expectedNodeLivenessRevision !== undefined
+        ? [eq(actionInvocations.nodeLivenessRevision, expectedNodeLivenessRevision)]
+        : []),
     ))
     .returning();
   if (failed) return failed;
@@ -2804,6 +2850,7 @@ async function snapshotInvocationHandlerNode(
   workspaceId: string,
   invocationId: string,
   nodeId: string,
+  expectedNodeLivenessRevision?: number,
 ): Promise<boolean> {
   const [updated] = await db
     .update(actionInvocations)
@@ -2814,6 +2861,9 @@ async function snapshotInvocationHandlerNode(
       eq(actionInvocations.workspaceId, workspaceId),
       eq(actionInvocations.id, invocationId),
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      ...(expectedNodeLivenessRevision !== undefined
+        ? [eq(actionInvocations.nodeLivenessRevision, expectedNodeLivenessRevision)]
+        : []),
     ))
     .returning({ id: actionInvocations.id });
   return !!updated;
@@ -2869,6 +2919,7 @@ async function dispatchNodeInvocation(args: {
   retryAfterAt?: Date | null;
   reservationHeld?: boolean;
   skipIncrementAttempts?: boolean;
+  expectedNodeLivenessRevision?: number;
 }): Promise<{
   accepted: boolean;
   pending: boolean;
@@ -2957,6 +3008,7 @@ async function dispatchNodeInvocation(args: {
         args.workspaceId,
         args.invocationId,
         args.nodeId,
+        args.expectedNodeLivenessRevision,
       );
   if (!snapshotted) return { accepted: false, pending: false, sent: false };
   const connectedBefore = args.registry.isProviderConnected(args.workspaceId, args.nodeId, args.providerName);
@@ -2979,6 +3031,7 @@ async function dispatchNodeInvocation(args: {
         retryAfterAt: args.retryAfterAt,
         reservationHeld: args.reservationHeld,
         skipIncrementAttempts: args.skipIncrementAttempts,
+        expectedNodeLivenessRevision: args.expectedNodeLivenessRevision,
       })
       : null;
     if (!registeredNodeClaim) {
@@ -2986,6 +3039,7 @@ async function dispatchNodeInvocation(args: {
         args.db,
         args.workspaceId,
         args.invocationId,
+        args.expectedNodeLivenessRevision,
       );
       return { accepted: false, pending: false, sent: false, settled };
     }
@@ -3005,6 +3059,9 @@ async function dispatchNodeInvocation(args: {
           actionId: args.actionId,
           handlerAgentId: args.agent.id,
           recordAttempt: !args.skipIncrementAttempts,
+          ...(args.expectedNodeLivenessRevision !== undefined
+            ? { expectedNodeLivenessRevision: args.expectedNodeLivenessRevision }
+            : {}),
         },
       ) ?? false)
     : registeredNodeClaim
@@ -3079,10 +3136,23 @@ async function dispatchNodeInvocation(args: {
     return { accepted: false, pending: false, sent: false };
   }
 
-  // Registered node-action state was committed by the pre-send handoff CAS.
-  // Pruning after provider acceptance may clear the action FK, but it cannot
-  // revoke work the provider already received or prevent route-owned completion.
+  // Registered node-action state was committed by the pre-send handoff CAS;
+  // agent-action state was committed by the socket owner's authorization CAS.
+  // Do not write either generation again after the frame is accepted.
   if (registeredNodeClaim) {
+    return { accepted: true, pending, sent: true };
+  }
+  if (args.agent && args.actionId) {
+    const [settled] = await args.db
+      .select()
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, args.workspaceId),
+        eq(actionInvocations.id, args.invocationId),
+      ));
+    if (settled && !OPEN_INVOCATION_STATUSES.some((status) => status === settled.status)) {
+      return { accepted: false, pending: false, sent: true, settled };
+    }
     return { accepted: true, pending, sent: true };
   }
 
@@ -3108,6 +3178,7 @@ async function dispatchNodeInvocation(args: {
         targetActionId: args.agent || args.actionId
           ? finalExpectedActionId ?? undefined
           : undefined,
+        expectedNodeLivenessRevision: args.expectedNodeLivenessRevision,
       },
     );
   if (!accepted && args.invocationOrigin === 'registered_action') {
@@ -3115,6 +3186,7 @@ async function dispatchNodeInvocation(args: {
       args.db,
       args.workspaceId,
       args.invocationId,
+      args.expectedNodeLivenessRevision,
     );
     return { accepted: false, pending: false, sent: true, settled };
   }
@@ -3192,6 +3264,68 @@ async function targetAgentForInvocation(
   };
 }
 
+/**
+ * A native spawn whose first `action.invoke` send failed. A send can fail on a
+ * live node — the provider socket is between reconnects, or the node's owner
+ * rejects the send under pressure — and Cloud keeps no per-node frame queue, so
+ * such a row records no dispatch attempt and no `dispatchedNodeId`. Its
+ * placement survives only in the immutable `handlerNodeId` snapshot.
+ *
+ * `handlerUnreachableSince` marks the send as settled-unsent. The same
+ * snapshot exists while a first send is still in flight, so the mark, not the
+ * snapshot, is what lets a drain re-send. Built-in spawns have no action row,
+ * so the agent-handler reachability sweep (which joins on one) never reads it.
+ */
+function unsentNativeSpawnOn(workspaceId: string, invocationId: string | null, nodeId: string | null) {
+  return and(
+    eq(actionInvocations.workspaceId, workspaceId),
+    ...(invocationId ? [eq(actionInvocations.id, invocationId)] : []),
+    eq(actionInvocations.status, 'pending'),
+    isNull(actionInvocations.actionId),
+    isNull(actionInvocations.dispatchedNodeId),
+    eq(actionInvocations.dispatchAttempts, 0),
+    ...(nodeId ? [eq(actionInvocations.handlerNodeId, nodeId)] : []),
+    or(eq(actionInvocations.actionName, 'spawn'), like(actionInvocations.actionName, 'spawn:%')),
+  );
+}
+
+async function markUnsentNativeSpawn(db: Db, workspaceId: string, invocationId: string, nodeId: string) {
+  await db
+    .update(actionInvocations)
+    .set({ handlerUnreachableSince: new Date() })
+    .where(unsentNativeSpawnOn(workspaceId, invocationId, nodeId));
+}
+
+/** One drain wins the re-send; a loser, or a send still in flight, sees no mark. */
+async function claimUnsentNativeSpawn(db: Db, workspaceId: string, invocationId: string): Promise<boolean> {
+  const [claimed] = await db
+    .update(actionInvocations)
+    .set({ handlerUnreachableSince: null })
+    .where(and(
+      unsentNativeSpawnOn(workspaceId, invocationId, null),
+      isNotNull(actionInvocations.handlerUnreachableSince),
+    ))
+    .returning({ id: actionInvocations.id });
+  return !!claimed;
+}
+
+/** `registry`, calling `onSend` before any provider send starts. */
+function observeSends(registry: NodeConnectionRegistry, onSend: () => void): NodeConnectionRegistry {
+  return new Proxy(registry, {
+    get(target, key) {
+      const value: unknown = Reflect.get(target, key, target);
+      if (typeof value !== 'function') return value;
+      if (key === 'sendToProvider' || key === 'sendAuthorizedActionToProvider') {
+        return (...args: unknown[]) => {
+          onSend();
+          return Reflect.apply(value, target, args);
+        };
+      }
+      return value.bind(target);
+    },
+  });
+}
+
 export async function drainNodeInvocations(
   db: Db,
   registry: NodeConnectionRegistry,
@@ -3213,6 +3347,7 @@ export async function drainNodeInvocations(
       spawnReservedAt: actionInvocations.spawnReservedAt,
       dispatchedNodeId: actionInvocations.dispatchedNodeId,
       dispatchedProvider: actionInvocations.dispatchedProvider,
+      placedNodeId: actionInvocations.handlerNodeId,
       handlerNodeId: actions.handlerNodeId,
       handlerProvider: actions.handlerProvider,
       handlerAgentId: agents.id,
@@ -3234,6 +3369,12 @@ export async function drainNodeInvocations(
         eq(actionInvocations.dispatchedNodeId, nodeId),
         eq(actions.handlerNodeId, nodeId),
         and(eq(agents.locationType, 'via_node'), eq(agents.locationNodeId, nodeId)),
+        // A native spawn whose first send failed on this node: no attempt
+        // landed, so no other column names it.
+        and(
+          unsentNativeSpawnOn(workspaceId, null, nodeId),
+          isNotNull(actionInvocations.handlerUnreachableSince),
+        ),
       ),
     ))
     .orderBy(asc(actionInvocations.createdAt));
@@ -3250,7 +3391,13 @@ export async function drainNodeInvocations(
       && row.handlerAgentNodeId
       ? { id: row.handlerAgentId, name: row.handlerAgentName, nodeId: row.handlerAgentNodeId }
       : null;
-    const targetNodeId = targetAgent?.nodeId ?? row.handlerNodeId ?? row.dispatchedNodeId;
+    // Only the unsent-spawn branch above matches a row with no action and no
+    // dispatched node; its placed node is the target.
+    const unsentSpawn = row.actionId === null && row.dispatchedNodeId === null;
+    const targetNodeId = targetAgent?.nodeId
+      ?? row.handlerNodeId
+      ?? row.dispatchedNodeId
+      ?? (unsentSpawn ? row.placedNodeId : null);
     if (targetNodeId !== nodeId) continue;
 
     const input = recordInput(row.input);
@@ -3278,6 +3425,16 @@ export async function drainNodeInvocations(
     // handlers are not live. A missing provider row is a legacy single-socket
     // node, for which connection state remains the available liveness signal.
     if (!(await isHandlerConnectionLive(db, registry, workspaceId, nodeId, providerName))) continue;
+    // Claim before reserving, so concurrent drains cannot both reserve and send.
+    if (unsentSpawn && !await claimUnsentNativeSpawn(db, workspaceId, row.id)) continue;
+    // A definitely-unsent outcome below restores the mark, after returning
+    // any reservation this drain took. Whether a send started separates a
+    // pre-send throw (unsent) from a throw with an unknown outcome.
+    const remarkUnsent = () => unsentSpawn
+      ? markUnsentNativeSpawn(db, workspaceId, row.id, nodeId)
+      : Promise.resolve();
+    let sendStarted = false;
+    const sendRegistry = unsentSpawn ? observeSends(registry, () => { sendStarted = true; }) : registry;
 
     let reservedForDrain = false;
     try {
@@ -3285,6 +3442,7 @@ export async function drainNodeInvocations(
       if (nativeSpawn && !reservationHeld) {
         const reserved = await reserveNodeCapacity(db, workspaceId, nodeId);
         if (!reserved) {
+          await remarkUnsent();
           const [node] = await db
             .select({
               status: nodes.status,
@@ -3311,7 +3469,7 @@ export async function drainNodeInvocations(
 
       const dispatched = await dispatchNodeInvocation({
         db,
-        registry,
+        registry: sendRegistry,
         workspaceId,
         invocationId: row.id,
         nodeId,
@@ -3330,12 +3488,18 @@ export async function drainNodeInvocations(
         drained++;
       } else if (reservedForDrain) {
         await releaseNodeCapacity(db, workspaceId, nodeId);
+        reservedForDrain = false;
       }
+      if (!dispatched.sent) await remarkUnsent();
     } catch {
       if (reservedForDrain) {
         await releaseNodeCapacity(db, workspaceId, nodeId).catch(() => {});
       }
       // Leave the invocation pending; a later drain or timeout sweep can retry.
+      // A throw before any send leaves the spawn unsent, so it is re-marked. A
+      // throw once a send started is an unknown outcome, so the spawn stays
+      // unmarked and only the never-dispatched sweep ends it.
+      if (!sendStarted) await remarkUnsent().catch(() => {});
     }
   }
   return drained;
@@ -3345,7 +3509,11 @@ export async function rescheduleNodeInvocation(
   db: Db,
   registry: NodeConnectionRegistry,
   invocation: RetryableInvocationRow,
-  opts: { allowAttemptedFallback?: boolean; retryAfterAt?: Date | null } = {},
+  opts: {
+    allowAttemptedFallback?: boolean;
+    retryAfterAt?: Date | null;
+    expectedNodeLivenessRevision?: number;
+  } = {},
 ) {
   // Once the exact provider accepted this generation, pruning only clears its
   // materialized action FK. It must not make timeout, disconnect, or inventory
@@ -3355,7 +3523,13 @@ export async function rescheduleNodeInvocation(
     return false;
   }
   if (isDeletedRegisteredActionInvocation(invocation)) {
-    await failOpenInvocationRows(db, invocation.workspaceId, [invocation.id], 'action_deleted');
+    await failOpenInvocationRows(
+      db,
+      invocation.workspaceId,
+      [invocation.id],
+      'action_deleted',
+      opts.expectedNodeLivenessRevision,
+    );
     return false;
   }
   // Only release capacity the invocation actually holds. A shadowed spawn
@@ -3372,16 +3546,30 @@ export async function rescheduleNodeInvocation(
     const capability = dispatchActionNameForInvocation(invocation.actionName, recordInput(invocation.input));
     const shadow = await fetchNodeAction(db, invocation.workspaceId, invocation.dispatchedNodeId, capability);
     if (shadow) {
-      await db
+      const [reset] = await db
         .update(actionInvocations)
         .set({ status: 'pending', dispatchedAt: null, spawnReservedAt: null, retryAfterAt: null })
         .where(and(
           eq(actionInvocations.workspaceId, invocation.workspaceId),
           eq(actionInvocations.id, invocation.id),
           inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
-        ));
+          ...(opts.expectedNodeLivenessRevision !== undefined
+            ? [eq(actionInvocations.nodeLivenessRevision, opts.expectedNodeLivenessRevision)]
+            : []),
+        ))
+        .returning({ id: actionInvocations.id });
+      if (!reset) return false;
       return false;
     }
+  }
+  // A built-in release that has been dispatched cannot be rescheduled, and
+  // cannot become bindable: only bindInvocationToRegisteredNodeAction sets an
+  // actionId, and it requires dispatch_attempts = 0, which never decreases. So
+  // the lookup below would read nothing. Skip it — inventory.sync and the
+  // timeout sweep walk every open release on a node, and one read each spent a
+  // node's whole liveness deadline before inventory could reply.
+  if (isBuiltinReleaseInvocation(invocation) && invocation.actionId === null && invocation.dispatchAttempts > 0) {
+    return false;
   }
   const targetAgent = await targetAgentForInvocation(db, invocation);
   if (targetAgent) {
@@ -3399,6 +3587,7 @@ export async function rescheduleNodeInvocation(
       expectedActionId: invocation.actionId,
       invocationOrigin: invocation.invocationOrigin,
       retryAfterAt: opts.retryAfterAt ?? null,
+      expectedNodeLivenessRevision: opts.expectedNodeLivenessRevision,
     });
     return dispatched.accepted;
   }
@@ -3448,6 +3637,7 @@ export async function rescheduleNodeInvocation(
             input,
             queue: target.queue,
             reservationHeld: false,
+            expectedNodeLivenessRevision: opts.expectedNodeLivenessRevision,
           }, { failIfUnavailable: false });
           if (dispatched.providerUnavailable) {
             providerRejectedNodeIds.add(placement.node.id);
@@ -3480,10 +3670,16 @@ export async function rescheduleNodeInvocation(
                 ? { id: expectedActionId, name: actionToSend }
                 : undefined,
               targetActionId: target?.id,
+              expectedNodeLivenessRevision: opts.expectedNodeLivenessRevision,
             },
           );
           if (!accepted && invocation.invocationOrigin === 'registered_action') {
-            await settleDeletedRegisteredAction(db, invocation.workspaceId, invocation.id);
+            await settleDeletedRegisteredAction(
+              db,
+              invocation.workspaceId,
+              invocation.id,
+              opts.expectedNodeLivenessRevision,
+            );
           }
           return accepted;
         }
@@ -3500,6 +3696,7 @@ export async function rescheduleNodeInvocation(
           invocationOrigin: invocation.invocationOrigin,
           input,
           reservationHeld,
+          expectedNodeLivenessRevision: opts.expectedNodeLivenessRevision,
         });
         return dispatched.accepted;
       } catch {
@@ -3510,7 +3707,12 @@ export async function rescheduleNodeInvocation(
   }
 
   if (providerRejectedNodeIds.size > 0) {
-    await failInvocationForUnavailableProvider(db, invocation.workspaceId, invocation.id);
+    await failInvocationForUnavailableProvider(
+      db,
+      invocation.workspaceId,
+      invocation.id,
+      opts.expectedNodeLivenessRevision,
+    );
     return false;
   }
 
@@ -3528,6 +3730,9 @@ export async function rescheduleNodeInvocation(
       eq(actionInvocations.workspaceId, invocation.workspaceId),
       eq(actionInvocations.id, invocation.id),
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      ...(opts.expectedNodeLivenessRevision !== undefined
+        ? [eq(actionInvocations.nodeLivenessRevision, opts.expectedNodeLivenessRevision)]
+        : []),
     ));
   return false;
 }
@@ -3537,6 +3742,7 @@ export async function rescheduleInvocationsForLostNode(
   registry: NodeConnectionRegistry,
   workspaceId: string,
   nodeId: string,
+  opts: { claimRevision?: number } = {},
 ) {
   const rows = await db
     .select()
@@ -3545,12 +3751,23 @@ export async function rescheduleInvocationsForLostNode(
       eq(actionInvocations.workspaceId, workspaceId),
       eq(actionInvocations.dispatchedNodeId, nodeId),
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      // The dispatch trigger stamps the accepting node generation. A reconnect
+      // can dispatch new work while settlement runs, including in the same
+      // timestamp second; only attempts older than this claim are recoverable.
+      ...(opts.claimRevision !== undefined
+        ? [lt(actionInvocations.nodeLivenessRevision, opts.claimRevision)]
+        : []),
     ));
 
   let rescheduled = 0;
   for (const invocation of rows) {
     try {
-      if (await rescheduleNodeInvocation(db, registry, invocation, { retryAfterAt: nextRetryAfter(invocation.dispatchAttempts + 1) })) {
+      if (await rescheduleNodeInvocation(db, registry, invocation, {
+        retryAfterAt: nextRetryAfter(invocation.dispatchAttempts + 1),
+        ...(opts.claimRevision !== undefined
+          ? { expectedNodeLivenessRevision: invocation.nodeLivenessRevision }
+          : {}),
+      })) {
         rescheduled++;
       }
     } catch {
@@ -3565,7 +3782,14 @@ export async function rescheduleInvocationsForLostNode(
           spawnReservedAt: null,
           retryAfterAt: nextRetryAfter(invocation.dispatchAttempts + 1),
         })
-        .where(eq(actionInvocations.id, invocation.id));
+        .where(and(
+          eq(actionInvocations.workspaceId, invocation.workspaceId),
+          eq(actionInvocations.id, invocation.id),
+          inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+          ...(opts.claimRevision !== undefined
+            ? [eq(actionInvocations.nodeLivenessRevision, invocation.nodeLivenessRevision)]
+            : []),
+        ));
     }
   }
   return rescheduled;

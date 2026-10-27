@@ -303,6 +303,7 @@ describe('AgentClient WebSocket integration', () => {
       type: 'delivery.failed',
       deliveryId: null,
       messageId: 'm_1',
+      reason: 'depth_cap',
       retryable: false,
     }));
   });

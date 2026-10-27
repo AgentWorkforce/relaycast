@@ -2,6 +2,7 @@ import type { Context } from 'hono';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { AppEnv, EngineRuntime } from '../env.js';
 import * as deliveryEngine from '../engine/delivery.js';
+import { backfillMessageMentionFts } from '../engine/inbox.js';
 import { buildDeliverFrame, buildDeliverPayload } from '../engine/deliveryWire.js';
 import type {
   DeliveryFanoutRecord,
@@ -641,10 +642,24 @@ async function notifyDeliveryFailures(
  * number of small D1-safe statements, then batches the best-effort failure
  * fanout so increasing the drain rate does not multiply D1 reads per notice.
  */
+async function advanceMentionIndex(engine: { db?: EngineDeps['db'] }): Promise<void> {
+  if (!engine.db) return;
+  try {
+    await backfillMessageMentionFts(engine.db);
+  } catch (error) {
+    // Mention catch-up is maintenance. A failed page must not skip the
+    // delivery sweep that this call exists to run.
+    console.warn('[delivery.sweep] mention index backfill failed; continuing delivery sweep', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 export async function sweepExpiredDeliveries(
   engine: EngineDeps,
   opts: { workspaceId?: string; now?: Date; maxBatches?: number } = {},
 ): Promise<number> {
+  await advanceMentionIndex(engine);
   const now = opts.now ?? new Date();
   const requestedMaxBatches = opts.maxBatches ?? DELIVERY_EXPIRY_MAX_BATCHES;
   const maxBatches = Number.isFinite(requestedMaxBatches)
@@ -657,6 +672,40 @@ export async function sweepExpiredDeliveries(
     // Flush every committed batch before another state transition can fail.
     // Otherwise a later D1 error would strand already-dead-lettered rows with
     // notices held only in this invocation's memory.
+    await notifyDeliveryFailures(engine, batch.notices);
+    if (batch.expiredCount < deliveryEngine.DELIVERY_EXPIRY_BATCH_SIZE) break;
+  }
+  return expiredCount;
+}
+
+/** Same per-invocation bound as the TTL sweep; see `sweepExpiredDeliveries`. */
+export const UNREACHABLE_DELIVERY_MAX_BATCHES = DELIVERY_EXPIRY_MAX_BATCHES;
+
+/**
+ * Scheduled unreachable-target drain. Dead-letters active deliveries whose
+ * routing node has been offline past `offlineGraceMs`, flushing every batch's
+ * `delivery.failed` notices before the next transition so an interrupted run
+ * cannot strand dead-lettered rows whose senders were never told.
+ */
+export async function sweepUnreachableDeliveries(
+  engine: EngineDeps,
+  opts: { workspaceId?: string; offlineGraceMs?: number; now?: Date; maxBatches?: number } = {},
+): Promise<number> {
+  await advanceMentionIndex(engine);
+  const now = opts.now ?? new Date();
+  const requestedMaxBatches = opts.maxBatches ?? UNREACHABLE_DELIVERY_MAX_BATCHES;
+  const maxBatches = Number.isFinite(requestedMaxBatches)
+    ? Math.min(Math.max(Math.floor(requestedMaxBatches), 1), UNREACHABLE_DELIVERY_MAX_BATCHES)
+    : UNREACHABLE_DELIVERY_MAX_BATCHES;
+  let expiredCount = 0;
+  for (let batchNumber = 0; batchNumber < maxBatches; batchNumber++) {
+    const batch = await deliveryEngine.deadLetterUnreachableDeliveryBatch(
+      engine.db,
+      opts.workspaceId,
+      opts.offlineGraceMs,
+      now,
+    );
+    expiredCount += batch.expiredCount;
     await notifyDeliveryFailures(engine, batch.notices);
     if (batch.expiredCount < deliveryEngine.DELIVERY_EXPIRY_BATCH_SIZE) break;
   }

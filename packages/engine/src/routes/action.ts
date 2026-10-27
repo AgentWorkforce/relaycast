@@ -83,7 +83,7 @@ actionRoutes.post('/actions', requireAuth, rateLimit, async (c) => {
       completionDeps: c.get('engine'),
     });
 
-    emitServerEvent(c, workspace.id, 'relaycast_server_action_registered', {
+    emitServerEvent(c, workspace.id, 'action.registered', {
       action_name: action.name,
       handler_agent_name: parsed.data.handler_agent ?? null,
       handler_node_name: parsed.data.handler_node ?? null,
@@ -142,7 +142,7 @@ actionRoutes.delete('/actions/:name', requireAuth, rateLimit, async (c) => {
     if (!deleted) {
       return jsonNotFound(c, 'action_not_found', 'Action not found');
     }
-    emitServerEvent(c, workspace.id, 'relaycast_server_action_deleted', {
+    emitServerEvent(c, workspace.id, 'action.deleted', {
       action_name: c.req.param('name'),
     });
     return jsonNoContent(c);
@@ -207,7 +207,7 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
         workspaceId: workspace.id,
         data: eventData,
       });
-      emitServerEvent(c, workspace.id, 'relaycast_server_action_invoked', {
+      emitServerEvent(c, workspace.id, 'action.invoked', {
         action_name: result.action_name,
         invocation_id: result.invocation_id,
         caller_agent_id: agent.id,

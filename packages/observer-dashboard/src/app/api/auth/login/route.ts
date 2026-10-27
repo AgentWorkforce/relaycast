@@ -3,11 +3,10 @@ import { cookies } from 'next/headers';
 import {
   observerBindingMatches,
   resolveRelayServerCandidatesFromRequest,
+  retryAfterHeader,
   selectEngineForKey,
 } from '../../../../lib/relay-server';
 import { mintObserverStreamToken, revokeObserverStreamToken } from '../../../../lib/observer-token';
-
-export const runtime = 'edge';
 
 const COOKIE_NAME = 'relaycast_key';
 const AGENT_COOKIE_NAME = 'relaycast_agent_token';
@@ -58,11 +57,15 @@ export async function POST(request: NextRequest) {
       rejectedAny,
       inconclusiveAny,
       observerTokenId,
+      retryAfterMs,
     } = await selectEngineForKey(candidates, apiKey);
 
     if (!relayServer) {
       if (!rejectedAny || inconclusiveAny) {
-        return NextResponse.json({ success: false, error: 'Unable to validate API key' }, { status: 503 });
+        return NextResponse.json(
+          { success: false, error: 'Unable to validate API key' },
+          { status: 503, headers: retryAfterHeader(retryAfterMs) },
+        );
       }
 
       return NextResponse.json({ success: false, error: 'Invalid API key' }, { status: 401 });
