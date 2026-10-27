@@ -1,0 +1,65 @@
+{
+  "id": "traj_yzv0pqhuya7e",
+  "version": 1,
+  "task": {
+    "title": "Rename SDK directories to sdk-typescript and sdk-python"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-21T00:36:59.363Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-21T00:48:17.579Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_qk9ftyxvgxit",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-21T00:48:17.579Z",
+      "events": [
+        {
+          "ts": 1771634897580,
+          "type": "decision",
+          "content": "Renamed SDK directories to language-specific names: Renamed SDK directories to language-specific names",
+          "raw": {
+            "question": "Renamed SDK directories to language-specific names",
+            "chosen": "Renamed SDK directories to language-specific names",
+            "alternatives": [],
+            "reasoning": "Aligned monorepo layout with future expansion (sdk-typescript, sdk-python, later sdk-rust) while keeping package names unchanged for consumers."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1771634897626,
+          "type": "decision",
+          "content": "Updated TS project references and lockfile after directory moves: Updated TS project references and lockfile after directory moves",
+          "raw": {
+            "question": "Updated TS project references and lockfile after directory moves",
+            "chosen": "Updated TS project references and lockfile after directory moves",
+            "alternatives": [],
+            "reasoning": "Renaming folders broke TS references in mcp/react/openclaw and left a stale lockfile entry; both were fixed to keep turbo builds/tests green."
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-21T00:48:17.671Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "519a54d2ceaf8daf316ce9cdf14630dfa153953a",
+    "endRef": "519a54d2ceaf8daf316ce9cdf14630dfa153953a"
+  },
+  "completedAt": "2026-02-21T00:48:17.671Z",
+  "retrospective": {
+    "summary": "Renamed packages/sdk -> packages/sdk-typescript and packages/python-sdk -> packages/sdk-python, updated path references (AGENTS, e2e import, sdk package metadata, tsconfig references), and validated with turbo tests plus python sdk tests.",
+    "approach": "Standard approach",
+    "confidence": 0.95
+  }
+}

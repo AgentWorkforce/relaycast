@@ -1,0 +1,57 @@
+{
+  "version": "1.0.0",
+  "id": "cc836759-efe6-44bf-9a8e-d7c5b2a8f820",
+  "timestamp": "2026-08-18T08:57:22.065Z",
+  "trajectory": "traj_zy9kpj1n3qya",
+  "files": [
+    {
+      "path": "packages/engine/src/engine/__tests__/workspace.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 9,
+              "end_line": 15,
+              "revision": "67e2c911ca2bb2e68be8c32969023a7d0246573f"
+            },
+            {
+              "start_line": 83,
+              "end_line": 98,
+              "revision": "67e2c911ca2bb2e68be8c32969023a7d0246573f"
+            },
+            {
+              "start_line": 124,
+              "end_line": 174,
+              "revision": "67e2c911ca2bb2e68be8c32969023a7d0246573f"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/engine/workspace.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 81,
+              "end_line": 127,
+              "revision": "67e2c911ca2bb2e68be8c32969023a7d0246573f"
+            },
+            {
+              "start_line": 161,
+              "end_line": 197,
+              "revision": "67e2c911ca2bb2e68be8c32969023a7d0246573f"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

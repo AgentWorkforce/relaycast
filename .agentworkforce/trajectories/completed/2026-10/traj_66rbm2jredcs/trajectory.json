@@ -1,0 +1,53 @@
+{
+  "id": "traj_66rbm2jredcs",
+  "version": 1,
+  "task": {
+    "title": "Render raw JSON inbound webhook bodies"
+  },
+  "status": "completed",
+  "startedAt": "2026-10-18T18:38:15.758Z",
+  "completedAt": "2026-10-18T18:40:27.266Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-10-18T18:38:18.497Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_ayofv7dj9vqh",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-10-18T18:38:18.497Z",
+      "endedAt": "2026-10-18T18:40:27.266Z",
+      "events": [
+        {
+          "ts": 1792348698498,
+          "type": "decision",
+          "content": "Use raw body as payload when no webhook envelope fields are present: Use raw body as payload when no webhook envelope fields are present",
+          "raw": {
+            "question": "Use raw body as payload when no webhook envelope fields are present",
+            "chosen": "Use raw body as payload when no webhook envelope fields are present",
+            "alternatives": [],
+            "reasoning": "Preserves existing text/message/source/author behavior and makes third-party JSON bodies visible in the delivered message."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Rendered raw JSON inbound webhook bodies as message text when no envelope fields are present, with API test and docs.",
+    "approach": "Standard approach",
+    "confidence": 0.9
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "64a6bea22aa909ee578e2b57cfd36258d719696b",
+    "endRef": "64a6bea22aa909ee578e2b57cfd36258d719696b"
+  }
+}

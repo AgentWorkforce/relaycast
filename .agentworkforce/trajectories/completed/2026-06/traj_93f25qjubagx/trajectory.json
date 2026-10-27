@@ -1,0 +1,25 @@
+{
+  "id": "traj_93f25qjubagx",
+  "version": 1,
+  "task": {
+    "title": "Update OpenAPI spawn model field"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-10T14:52:25.948Z",
+  "completedAt": "2026-06-10T14:53:04.775Z",
+  "agents": [],
+  "chapters": [],
+  "retrospective": {
+    "summary": "Updated openapi.yaml /agents/spawn request schema with optional model and aligned cli enum with opencode.",
+    "approach": "Standard approach",
+    "confidence": 0.95
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "99dec3007a643a058a7de668f35dd6e9af44e33d",
+    "endRef": "99dec3007a643a058a7de668f35dd6e9af44e33d"
+  }
+}

@@ -1,0 +1,69 @@
+{
+  "id": "traj_gcua3hnucbil",
+  "version": 1,
+  "task": {
+    "title": "Address node delivery review follow-up"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-25T03:27:12.276Z",
+  "completedAt": "2026-06-25T03:39:14.197Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-06-25T03:36:53.705Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_ehbecpyzdt25",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-06-25T03:36:53.705Z",
+      "endedAt": "2026-06-25T03:39:14.197Z",
+      "events": [
+        {
+          "ts": 1782358613706,
+          "type": "decision",
+          "content": "Addressed delivery review by moving guarantees into the production route: Addressed delivery review by moving guarantees into the production route",
+          "raw": {
+            "question": "Addressed delivery review by moving guarantees into the production route",
+            "chosen": "Addressed delivery review by moving guarantees into the production route",
+            "alternatives": [],
+            "reasoning": "HTTP push retries are exported for hosted schedulers, mute filtering now happens when delivery rows/outcomes are built, redrive claims compare against the observed next_attempt_at, and direct_ws creation no longer clobbers explicit node bindings."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Addressed PR review follow-up for node delivery: exported and documented HTTP push redrive scheduling, moved mute filtering into the delivery-write path, made HTTP redrive claims compare against observed next_attempt_at, stopped direct_ws creation from clobbering explicit node bindings, and moved binding workspace constraints into a new 0024 migration. Validated with JS workspace lint/test/build plus Rust, Swift, and Python SDK tests.",
+    "approach": "Standard approach",
+    "confidence": 0.93
+  },
+  "commits": [
+    "2f0c3ad"
+  ],
+  "filesChanged": [
+    "README.md",
+    "packages/engine/src/__tests__/conformance/node.test.ts",
+    "packages/engine/src/__tests__/conformance/nodeDeliveryContracts.test.ts",
+    "packages/engine/src/db/migrations/0021_node_delivery_contracts.sql",
+    "packages/engine/src/db/migrations/0024_binding_workspace_constraints.sql",
+    "packages/engine/src/engine.ts",
+    "packages/engine/src/engine/delivery.ts",
+    "packages/engine/src/engine/deliveryWrites.ts",
+    "packages/engine/src/engine/node.ts",
+    "packages/engine/src/entrypoints/node.ts",
+    "packages/engine/src/index.ts",
+    "packages/engine/src/routes/deliveryRouting.ts"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "baa580a25308338ef7dfee66073b677026854ae1",
+    "endRef": "2f0c3ade29b4ef82666bb6f9749b77111cf33c23",
+    "traceId": "f19eb6c1-36c9-427b-8589-f996e40eeef3"
+  }
+}

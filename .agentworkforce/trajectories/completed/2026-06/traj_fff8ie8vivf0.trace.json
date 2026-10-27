@@ -1,0 +1,296 @@
+{
+  "version": "1.0.0",
+  "id": "2b13d177-ae85-4e5b-9337-f18309cfcafb",
+  "timestamp": "2026-06-24T14:04:55.656Z",
+  "trajectory": "traj_fff8ie8vivf0",
+  "files": [
+    {
+      "path": "packages/engine/src/__tests__/conformance/httpResponse.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 357,
+              "end_line": 520,
+              "revision": "3401b27a223202263cbab3782c2f262d4c43a026"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/__tests__/nodeUpgradeAuth.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 44,
+              "end_line": 52,
+              "revision": "3401b27a223202263cbab3782c2f262d4c43a026"
+            },
+            {
+              "start_line": 82,
+              "end_line": 121,
+              "revision": "3401b27a223202263cbab3782c2f262d4c43a026"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/engine.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 164,
+              "end_line": 170,
+              "revision": "3401b27a223202263cbab3782c2f262d4c43a026"
+            },
+            {
+              "start_line": 257,
+              "end_line": 263,
+              "revision": "3401b27a223202263cbab3782c2f262d4c43a026"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/engine/wsAuth.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 24,
+              "end_line": 30,
+              "revision": "3401b27a223202263cbab3782c2f262d4c43a026"
+            },
+            {
+              "start_line": 42,
+              "end_line": 49,
+              "revision": "3401b27a223202263cbab3782c2f262d4c43a026"
+            },
+            {
+              "start_line": 82,
+              "end_line": 90,
+              "revision": "3401b27a223202263cbab3782c2f262d4c43a026"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/lib/__tests__/httpError.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 41,
+              "end_line": 47,
+              "revision": "3401b27a223202263cbab3782c2f262d4c43a026"
+            },
+            {
+              "start_line": 52,
+              "end_line": 58,
+              "revision": "3401b27a223202263cbab3782c2f262d4c43a026"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/lib/httpError.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 40,
+              "end_line": 46,
+              "revision": "3401b27a223202263cbab3782c2f262d4c43a026"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/lib/httpQuery.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 11,
+              "end_line": 30,
+              "revision": "3401b27a223202263cbab3782c2f262d4c43a026"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/lib/httpResponse.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 35,
+              "end_line": 41,
+              "revision": "3401b27a223202263cbab3782c2f262d4c43a026"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/routes/action.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 33,
+              "end_line": 45,
+              "revision": "3401b27a223202263cbab3782c2f262d4c43a026"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/routes/directory.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 82,
+              "end_line": 88,
+              "revision": "3401b27a223202263cbab3782c2f262d4c43a026"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/routes/message.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 35,
+              "end_line": 53,
+              "revision": "3401b27a223202263cbab3782c2f262d4c43a026"
+            },
+            {
+              "start_line": 58,
+              "end_line": 64,
+              "revision": "3401b27a223202263cbab3782c2f262d4c43a026"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/routes/search.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 6,
+              "end_line": 18,
+              "revision": "3401b27a223202263cbab3782c2f262d4c43a026"
+            },
+            {
+              "start_line": 26,
+              "end_line": 40,
+              "revision": "3401b27a223202263cbab3782c2f262d4c43a026"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/routes/thread.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 34,
+              "end_line": 40,
+              "revision": "3401b27a223202263cbab3782c2f262d4c43a026"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/routes/workspace.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 42,
+              "end_line": 59,
+              "revision": "3401b27a223202263cbab3782c2f262d4c43a026"
+            },
+            {
+              "start_line": 69,
+              "end_line": 78,
+              "revision": "3401b27a223202263cbab3782c2f262d4c43a026"
+            },
+            {
+              "start_line": 343,
+              "end_line": 349,
+              "revision": "3401b27a223202263cbab3782c2f262d4c43a026"
+            },
+            {
+              "start_line": 396,
+              "end_line": 402,
+              "revision": "3401b27a223202263cbab3782c2f262d4c43a026"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

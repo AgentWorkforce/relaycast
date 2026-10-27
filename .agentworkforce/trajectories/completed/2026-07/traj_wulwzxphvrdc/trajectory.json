@@ -1,0 +1,48 @@
+{
+  "id": "traj_wulwzxphvrdc",
+  "version": 1,
+  "task": {
+    "title": "Emit durable agent.exited and node.status events (issue #273)"
+  },
+  "status": "completed",
+  "startedAt": "2026-07-16T04:15:43.951Z",
+  "completedAt": "2026-07-16T04:34:18.521Z",
+  "agents": [],
+  "chapters": [],
+  "retrospective": {
+    "summary": "Emitted durable agent.exited (deregister / inventory-missing / release) and node.status.online/offline events through the invocation-completion fanout (workspace event log, webhook outbox, spawn caller mailbox); threaded optional completion deps through node/action transition sites",
+    "approach": "Standard approach",
+    "confidence": 0.85
+  },
+  "commits": [
+    "c968cb2"
+  ],
+  "filesChanged": [
+    ".agentworkforce/trajectories/active/traj_wulwzxphvrdc/trajectory.json",
+    "CHANGELOG.md",
+    "README.md",
+    "openapi.yaml",
+    "packages/engine/CHANGELOG.md",
+    "packages/engine/src/__tests__/conformance/agentNodeExitEvents.test.ts",
+    "packages/engine/src/adapters/node/index.ts",
+    "packages/engine/src/adapters/node/realtime.ts",
+    "packages/engine/src/agent-disconnect.ts",
+    "packages/engine/src/engine/__tests__/agentExitedEffects.test.ts",
+    "packages/engine/src/engine/action.ts",
+    "packages/engine/src/engine/invocationCompletion.ts",
+    "packages/engine/src/engine/node.ts",
+    "packages/engine/src/routes/node.ts",
+    "packages/engine/src/routes/presence.ts",
+    "packages/sdk-python/src/relay_sdk/models.py",
+    "packages/types/CHANGELOG.md",
+    "packages/types/src/events.ts",
+    "packages/types/src/subscription.ts"
+  ],
+  "projectId": "git/AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "2e2b7a2b0719db1057555e151ae326154903e685",
+    "endRef": "c968cb2820a1012366308478f4757629e3ea29d2",
+    "traceId": "b2fa69e0-81d6-4e05-9352-c33aa33b5578"
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "id": "traj_nzewjwo33lb9",
+  "version": 1,
+  "task": {
+    "title": "Fix observer DM thread stream leak"
+  },
+  "status": "active",
+  "startedAt": "2026-06-25T13:59:26.335Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-06-25T14:04:00.895Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_4eihm31951x3",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-06-25T14:04:00.895Z",
+      "events": [
+        {
+          "ts": 1782396240896,
+          "type": "decision",
+          "content": "Documented upload-time file.uploaded stream scoping: Documented upload-time file.uploaded stream scoping",
+          "raw": {
+            "question": "Documented upload-time file.uploaded stream scoping",
+            "chosen": "Documented upload-time file.uploaded stream scoping",
+            "alternatives": [],
+            "reasoning": "file.uploaded fires before any message attachment exists, so channel and DM filters cannot be evaluated at emission time; REST and message attachment reads enforce those filters later."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "c0cd16cb19170e948e314402049353b54a8d6744",
+    "endRef": "c0cd16cb19170e948e314402049353b54a8d6744"
+  }
+}9170e948e314402049353b54a8d6744"
+  }
+}

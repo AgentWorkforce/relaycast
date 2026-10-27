@@ -17,6 +17,7 @@ interface CapturedRequest {
 describe('MCP → SDK → HTTP integration', () => {
   let client: Client;
   let captured: CapturedRequest[];
+  let invalidAgentTokens: Set<string>;
   let originalFetch: typeof global.fetch;
 
   function lastReq(): CapturedRequest {
@@ -29,6 +30,7 @@ describe('MCP → SDK → HTTP integration', () => {
 
   beforeEach(async () => {
     captured = [];
+    invalidAgentTokens = new Set();
     originalFetch = global.fetch;
 
     global.fetch = vi.fn(async (url: string | URL, init?: RequestInit) => {
@@ -43,6 +45,17 @@ describe('MCP → SDK → HTTP integration', () => {
       captured.push(req);
 
       const path = new URL(url.toString()).pathname;
+      const bearer = req.headers.authorization?.replace(/^Bearer /, '');
+      if (bearer && invalidAgentTokens.has(bearer)) {
+        return new Response(JSON.stringify({
+          ok: false,
+          error: { code: 'agent_token_invalid', message: 'Invalid agent token' },
+        }), {
+          status: 401,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+
       let data: unknown = {};
 
       // Registration → return token so getAgentClient works
@@ -63,7 +76,6 @@ describe('MCP → SDK → HTTP integration', () => {
           id: 'ws_info',
           name,
           system_prompt: null,
-          plan: 'free',
           created_at: new Date().toISOString(),
           metadata: {},
         };
@@ -180,10 +192,104 @@ describe('MCP → SDK → HTTP integration', () => {
     expect(captured[0].headers['authorization']).toBe('Bearer at_test_integration');
   });
 
+  it('clears an invalid pre-registered token so strict registration can recover', async () => {
+    invalidAgentTokens.add('at_live_stale');
+
+    const mcpServer = createRelayMcpServer({
+      apiKey: 'rk_live_int1',
+      agentToken: 'at_live_stale',
+      agentName: 'IntegrationBot',
+      strictAgentName: true,
+      baseUrl: 'https://api.test.dev',
+    });
+    const staleClient = new Client({ name: 'stale-token-client', version: '0.1.0' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([staleClient.connect(ct), mcpServer.connect(st)]);
+
+    captured = [];
+    const failedPost = await staleClient.callTool({
+      name: 'message.post',
+      arguments: { channel: 'general', text: 'Hello' },
+    });
+    expect(failedPost.isError).toBe(true);
+    const errorText = ((failedPost.content ?? []) as Array<{ text?: string }>)
+      .map((entry) => entry.text ?? '')
+      .join('\n');
+    expect(errorText).toContain('Invalid agent token');
+    expect(errorText).toContain('agent_token_invalid');
+    expect(errorText).toContain('agent.register');
+
+    captured = [];
+    const registerResult = await staleClient.callTool({
+      name: 'agent.register',
+      arguments: { name: 'OtherBot' },
+    });
+    expect(registerResult.isError).toBeFalsy();
+
+    const registerReq = findReq((r) => r.url.endsWith('/v1/agents') && r.method === 'POST');
+    expect(registerReq).toBeDefined();
+    expect(registerReq!.headers.authorization).toBe('Bearer rk_live_int1');
+    expect(registerReq!.body).toMatchObject({ name: 'IntegrationBot' });
+  });
+
+  it('clears a routed invalid token without clearing the active workspace token', async () => {
+    invalidAgentTokens.add('at_live_stale_routed');
+
+    const mcpServer = createRelayMcpServer({
+      apiKey: 'rk_live_int1',
+      agentToken: 'at_live_active',
+      agentName: 'ActiveBot',
+      baseUrl: 'https://api.test.dev',
+      workspaces: [
+        {
+          workspace_id: 'ws_beta',
+          workspace_alias: 'beta',
+          api_key: 'rk_live_ws2',
+          agent_token: 'at_live_stale_routed',
+          agent_name: 'BetaBot',
+        },
+      ],
+    });
+    const routedClient = new Client({ name: 'routed-token-client', version: '0.1.0' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([routedClient.connect(ct), mcpServer.connect(st)]);
+
+    captured = [];
+    const failedPost = await routedClient.callTool({
+      name: 'message.post',
+      arguments: {
+        channel: 'general',
+        text: 'Hello beta',
+        workspace_id: 'ws_beta',
+      },
+    });
+    expect(failedPost.isError).toBe(true);
+    const failedReq = findReq((r) => r.url.includes('/channels/general/messages') && r.method === 'POST');
+    expect(failedReq?.headers.authorization).toBe('Bearer at_live_stale_routed');
+
+    captured = [];
+    const activePost = await routedClient.callTool({
+      name: 'message.post',
+      arguments: { channel: 'general', text: 'Hello active' },
+    });
+    expect(activePost.isError).toBeFalsy();
+    const activeReq = findReq((r) => r.url.includes('/channels/general/messages') && r.method === 'POST');
+    expect(activeReq?.headers.authorization).toBe('Bearer at_live_active');
+
+    captured = [];
+    const registerResult = await routedClient.callTool({
+      name: 'agent.register',
+      arguments: { name: 'RecoveryBot' },
+    });
+    expect(registerResult.isError).toBeFalsy();
+    const registerReq = findReq((r) => r.url.endsWith('/v1/agents') && r.method === 'POST');
+    expect(registerReq).toBeDefined();
+    expect(registerReq!.headers.authorization).toBe('Bearer rk_live_int1');
+  });
+
   it('sends mcp origin headers on relay API requests', async () => {
     await client.callTool({ name: 'channel.list', arguments: {} });
     const req = lastReq();
-    expect(req.headers['x-relaycast-origin-surface']).toBe('mcp');
     expect(req.headers['x-relaycast-origin-client']).toBe('@relaycast/mcp');
     expect(req.headers['x-relaycast-origin-version']).toBeDefined();
   });
@@ -195,7 +301,7 @@ describe('MCP → SDK → HTTP integration', () => {
     await client.callTool({ name: 'workspace.create', arguments: { name: 'project-alpha' } });
     const req = findReq((r) => r.url.endsWith('/v1/workspaces') && r.method === 'POST');
     expect(req).toBeDefined();
-    expect(req!.body).toEqual({ name: 'project-alpha' });
+    expect(req!.body).toEqual({ name: 'project-alpha', provenance: { source: 'mcp' } });
   });
 
   it('workspace.set_key switches workspace-level auth for agent.list', async () => {
@@ -353,10 +459,18 @@ describe('MCP → SDK → HTTP integration', () => {
     expect(req!.body).toMatchObject({ to: 'Alice', text: 'Hi' });
   });
 
-  it('message.dm.list → GET /v1/dm/conversations', async () => {
+  it('message.dm.list → GET /v1/dm/conversations without limit', async () => {
     await client.callTool({ name: 'message.dm.list', arguments: {} });
     const req = findReq((r) => r.url.includes('/dm/conversations'));
     expect(req).toBeDefined();
+    expect(new URL(req!.url).searchParams.has('limit')).toBe(false);
+  });
+
+  it('message.dm.list → GET /v1/dm/conversations with limit', async () => {
+    await client.callTool({ name: 'message.dm.list', arguments: { limit: 25 } });
+    const req = findReq((r) => r.url.includes('/dm/conversations'));
+    expect(req).toBeDefined();
+    expect(req!.url).toContain('limit=25');
   });
 
   it('message.dm.send_group → POST /v1/dm/group then POST /v1/dm/:id/messages', async () => {
@@ -451,9 +565,10 @@ describe('MCP → SDK → HTTP integration', () => {
   });
 
   it('integration.webhook.trigger → POST /v1/hooks/:id', async () => {
-    await client.callTool({ name: 'integration.webhook.trigger', arguments: { webhook_id: 'wh_1', text: 'test' } });
+    await client.callTool({ name: 'integration.webhook.trigger', arguments: { webhook_id: 'wh_1', token: 'wh_live_1', text: 'test' } });
     const req = findReq((r) => r.url.includes('/hooks/wh_1') && r.method === 'POST');
     expect(req).toBeDefined();
+    expect(req?.headers.authorization).toBe('Bearer wh_live_1');
   });
 
   it('integration.subscription.create → POST /v1/subscriptions', async () => {
@@ -473,31 +588,5 @@ describe('MCP → SDK → HTTP integration', () => {
     await client.callTool({ name: 'integration.subscription.delete', arguments: { subscription_id: 'sub_1' } });
     const req = findReq((r) => r.url.includes('/subscriptions/sub_1') && r.method === 'DELETE');
     expect(req).toBeDefined();
-  });
-
-  it('integration.command.register → POST /v1/commands', async () => {
-    await client.callTool({ name: 'integration.command.register', arguments: { command: 'deploy', description: 'Deploy', handler_agent: 'IntegrationBot' } });
-    const req = findReq((r) => r.url.includes('/commands') && r.method === 'POST' && !r.url.includes('/invoke'));
-    expect(req).toBeDefined();
-    expect(req!.body).toMatchObject({ command: 'deploy', description: 'Deploy', handler_agent: 'IntegrationBot' });
-  });
-
-  it('integration.command.list → GET /v1/commands', async () => {
-    await client.callTool({ name: 'integration.command.list', arguments: {} });
-    const req = findReq((r) => r.url.includes('/commands') && r.method === 'GET');
-    expect(req).toBeDefined();
-  });
-
-  it('integration.command.delete → DELETE /v1/commands/:command', async () => {
-    await client.callTool({ name: 'integration.command.delete', arguments: { command: 'deploy' } });
-    const req = findReq((r) => r.url.includes('/commands/deploy') && r.method === 'DELETE');
-    expect(req).toBeDefined();
-  });
-
-  it('integration.command.invoke → POST /v1/commands/:command/invoke', async () => {
-    await client.callTool({ name: 'integration.command.invoke', arguments: { command: 'deploy', channel: 'general' } });
-    const req = findReq((r) => r.url.includes('/commands/deploy/invoke'));
-    expect(req).toBeDefined();
-    expect(req!.body).toMatchObject({ channel: 'general' });
   });
 });

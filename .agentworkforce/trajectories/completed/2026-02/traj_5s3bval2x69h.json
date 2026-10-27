@@ -1,0 +1,53 @@
+{
+  "id": "traj_5s3bval2x69h",
+  "version": 1,
+  "task": {
+    "title": "Disable D1 migrations in PR preview deployments"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-19T03:14:39.688Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-19T03:15:01.666Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_hlogre0m14m6",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-19T03:15:01.666Z",
+      "events": [
+        {
+          "ts": 1771470901667,
+          "type": "decision",
+          "content": "Disable D1 migrations in preview workflow: Disable D1 migrations in preview workflow",
+          "raw": {
+            "question": "Disable D1 migrations in preview workflow",
+            "chosen": "Disable D1 migrations in preview workflow",
+            "alternatives": [],
+            "reasoning": "Preview deployments share staging database, so PR-triggered migrations risk unintended schema changes across active pull requests."
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-19T03:15:05.181Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "25e0151eb805da97baeeba6c0f4bb7265424853b",
+    "endRef": "25e0151eb805da97baeeba6c0f4bb7265424853b"
+  },
+  "completedAt": "2026-02-19T03:15:05.181Z",
+  "retrospective": {
+    "summary": "Updated preview workflow to stop applying D1 migrations in PR environments; migrations now remain in the main deploy workflow for staging and production only.",
+    "approach": "Standard approach",
+    "confidence": 0.95
+  }
+}

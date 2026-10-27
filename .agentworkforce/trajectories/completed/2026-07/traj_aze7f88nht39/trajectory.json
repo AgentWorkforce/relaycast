@@ -1,0 +1,64 @@
+{
+  "id": "traj_aze7f88nht39",
+  "version": 1,
+  "task": {
+    "title": "Define changelog release-level headings",
+    "source": {
+      "system": "plain",
+      "id": "PR #266 follow-up"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-07-13T14:56:43.388Z",
+  "completedAt": "2026-07-13T14:58:18.780Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-07-13T14:57:50.142Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_udpf801t2uuy",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-07-13T14:57:50.142Z",
+      "endedAt": "2026-07-13T14:58:18.780Z",
+      "events": [
+        {
+          "ts": 1783954670143,
+          "type": "decision",
+          "content": "Use monotonic unreleased release-level headings: Use monotonic unreleased release-level headings",
+          "raw": {
+            "question": "Use monotonic unreleased release-level headings",
+            "chosen": "Use monotonic unreleased release-level headings",
+            "alternatives": [],
+            "reasoning": "The highest pending SemVer impact must remain visible for manual releases; later lower-impact changes cannot downgrade the selected release level, and completed releases reset to an empty plain Unreleased heading."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Defined monotonic Unreleased Patch/Minor/Major changelog headings, documented release reset behavior, and marked PR #266 pending notes as Patch.",
+    "approach": "Standard approach",
+    "confidence": 0.98
+  },
+  "commits": [
+    "0e21508"
+  ],
+  "filesChanged": [
+    "AGENTS.md",
+    "CHANGELOG.md",
+    "packages/engine/CHANGELOG.md"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "5a7f449dedfaa120401d1a1109f70e2116a59283",
+    "endRef": "0e21508c677a61d98b7e9b1daf5c66bc82a10631",
+    "traceId": "49b74b3a-0bdc-426c-b0c5-7bf64a2902ec"
+  }
+}

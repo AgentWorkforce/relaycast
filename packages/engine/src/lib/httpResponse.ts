@@ -1,0 +1,131 @@
+import type { Context } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
+
+interface SafeParseSchema<T> {
+  safeParse(value: unknown): { success: true; data: T } | SafeParseFailure;
+}
+
+interface ValidationIssue {
+  code: string;
+  message: string;
+  path: PropertyKey[];
+}
+
+interface SafeParseFailure {
+  success: false;
+  error: { issues: ValidationIssue[] };
+}
+
+type InvalidRequestMessage = string | ((failure: SafeParseFailure) => string);
+
+type ParsedRequestValue<T> =
+  | { ok: true; data: T }
+  | { ok: false; response: Response };
+
+interface ParseJsonBodyOptions {
+  emptyBodyValue?: unknown;
+  malformedBodyError?: {
+    code: string;
+    message: string;
+  };
+}
+
+export function jsonOk<T>(c: Context, data: T, status: ContentfulStatusCode = 200) {
+  return c.json({ ok: true as const, data }, status);
+}
+
+export function jsonSuccess(c: Context) {
+  return c.json({ ok: true as const, data: null });
+}
+
+export function jsonCreated<T>(c: Context, data: T) {
+  return jsonOk(c, data, 201);
+}
+
+export function jsonNoContent(c: Context) {
+  return c.body(null, 204);
+}
+
+export function jsonError(c: Context, code: string, message: string, status: ContentfulStatusCode) {
+  return c.json({ ok: false as const, error: { code, message } }, status);
+}
+
+export function jsonInvalidRequest(c: Context, message: string) {
+  return jsonError(c, 'invalid_request', message, 400);
+}
+
+export function jsonNotFound(c: Context, code: string, message: string) {
+  return jsonError(c, code, message, 404);
+}
+
+export function jsonMalformedBody(c: Context) {
+  return jsonError(c, 'invalid_json', 'Malformed JSON in request body', 400);
+}
+
+function jsonMalformedBodyForOptions(c: Context, options?: ParseJsonBodyOptions) {
+  if (options?.malformedBodyError) {
+    return jsonError(c, options.malformedBodyError.code, options.malformedBodyError.message, 400);
+  }
+
+  return jsonMalformedBody(c);
+}
+
+function validateParsedValue<T>(
+  c: Context,
+  schema: SafeParseSchema<T>,
+  value: unknown,
+  invalidMessage: InvalidRequestMessage,
+): ParsedRequestValue<T> {
+  const parsed = schema.safeParse(value);
+  if (!parsed.success) {
+    const message = typeof invalidMessage === 'function' ? invalidMessage(parsed) : invalidMessage;
+    return { ok: false, response: jsonInvalidRequest(c, message) };
+  }
+
+  return { ok: true, data: parsed.data };
+}
+
+export async function parseJsonBody<T>(
+  c: Context,
+  schema: SafeParseSchema<T>,
+  invalidMessage: InvalidRequestMessage,
+  options?: ParseJsonBodyOptions,
+): Promise<ParsedRequestValue<T>> {
+  let body: unknown;
+
+  try {
+    body = await c.req.json();
+  } catch {
+    return { ok: false, response: jsonMalformedBodyForOptions(c, options) };
+  }
+
+  return validateParsedValue(c, schema, body, invalidMessage);
+}
+
+export async function parseOptionalJsonBody<T>(
+  c: Context,
+  schema: SafeParseSchema<T>,
+  invalidMessage: InvalidRequestMessage,
+  options?: ParseJsonBodyOptions,
+): Promise<ParsedRequestValue<T>> {
+  const bodyText = await c.req.text();
+  let body: unknown = options?.emptyBodyValue === undefined ? {} : options.emptyBodyValue;
+
+  if (bodyText.trim().length > 0) {
+    try {
+      body = JSON.parse(bodyText);
+    } catch {
+      return { ok: false, response: jsonMalformedBodyForOptions(c, options) };
+    }
+  }
+
+  return validateParsedValue(c, schema, body, invalidMessage);
+}
+
+export function parseQueryParams<T>(
+  c: Context,
+  schema: SafeParseSchema<T>,
+  invalidMessage: InvalidRequestMessage,
+): ParsedRequestValue<T> {
+  return validateParsedValue(c, schema, c.req.query(), invalidMessage);
+}

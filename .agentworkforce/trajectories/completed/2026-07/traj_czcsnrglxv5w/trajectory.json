@@ -1,0 +1,81 @@
+{
+  "id": "traj_czcsnrglxv5w",
+  "version": 1,
+  "task": {
+    "title": "Fix issue #241: idempotent action registration, fail-fast on dead handlers, SDK schema casing",
+    "source": {
+      "system": "plain",
+      "id": "relaycast#241"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-07-16T04:41:25.686Z",
+  "completedAt": "2026-07-16T04:41:53.446Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-07-16T04:41:39.481Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_4ij92ogbbv67",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-07-16T04:41:39.481Z",
+      "endedAt": "2026-07-16T04:41:53.446Z",
+      "events": [
+        {
+          "ts": 1784176899484,
+          "type": "decision",
+          "content": "Upsert allows handler takeover by a different agent: Upsert allows handler takeover by a different agent",
+          "raw": {
+            "question": "Upsert allows handler takeover by a different agent",
+            "chosen": "Upsert allows handler takeover by a different agent",
+            "alternatives": [],
+            "reasoning": "The workspace is the trust boundary (agent tokens are already restricted to self-handled registration); takeover is exactly the recovery path when a publisher reconnects under a fresh identity. User was unreachable for AskUserQuestion, so recommended option chosen and flagged in the PR."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1784176900715,
+          "type": "decision",
+          "content": "Fail-fast at invoke plus bounded 2-minute TTL sweep, not TTL-only: Fail-fast at invoke plus bounded 2-minute TTL sweep, not TTL-only",
+          "raw": {
+            "question": "Fail-fast at invoke plus bounded 2-minute TTL sweep, not TTL-only",
+            "chosen": "Fail-fast at invoke plus bounded 2-minute TTL sweep, not TTL-only",
+            "alternatives": [],
+            "reasoning": "Invoke-time 503 handler_unavailable gives LLM callers an in-context recoverable error; the TTL sweep (only fails when the handler is still unreachable, emitting action.failed) bounds races and post-dispatch node loss without killing slow-but-connected handlers."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1784176902027,
+          "type": "decision",
+          "content": "SDK casing exemption covers input/output payloads and headers, not metadata: SDK casing exemption covers input/output payloads and headers, not metadata",
+          "raw": {
+            "question": "SDK casing exemption covers input/output payloads and headers, not metadata",
+            "chosen": "SDK casing exemption covers input/output payloads and headers, not metadata",
+            "alternatives": [],
+            "reasoning": "Invocation payloads are user-authored JSON with the same corruption mode as schemas; metadata round-trips consistently through the TS SDK today so changing it has wider blast radius for stored data."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Fixed all three #241 defects: POST /v1/actions is an idempotent upsert (onConflictDoUpdate against the agent-hosted partial index and the node index; 200 refresh vs 201 create; residual races 409); invokeAction fails fast with 503 handler_unavailable when the handler agent's connection is not live and sweepTimedOutInvocations fails still-unreachable agent-handled invocations after a 2min TTL with action.failed emission; SDK casing transforms pass input_schema/output_schema/input/output/headers verbatim both directions. 6 new conformance tests + SDK casing round-trip tests; all 474 engine + 391 SDK tests green; openapi/README/changelogs updated.",
+    "approach": "Standard approach",
+    "confidence": 0.85
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "git/AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "03ab9ad113b13ce16fbdb0632b222e84c62ab5e9",
+    "endRef": "03ab9ad113b13ce16fbdb0632b222e84c62ab5e9"
+  }
+}

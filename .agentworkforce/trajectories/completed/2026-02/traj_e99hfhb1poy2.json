@@ -1,0 +1,65 @@
+{
+  "id": "traj_e99hfhb1poy2",
+  "version": 1,
+  "task": {
+    "title": "Make SDK camelCase consistent across inputs, outputs, and WS events"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-20T19:57:25.406Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-20T19:57:29.592Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_n60z8b8tsht3",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-20T19:57:29.592Z",
+      "events": [
+        {
+          "ts": 1771617449593,
+          "type": "decision",
+          "content": "Centralize casing translation in SDK transport layer: Centralize casing translation in SDK transport layer",
+          "raw": {
+            "question": "Centralize casing translation in SDK transport layer",
+            "chosen": "Centralize casing translation in SDK transport layer",
+            "alternatives": [],
+            "reasoning": "Applying conversion in HttpClient/WsClient guarantees consistent camelCase behavior across all endpoints/events and avoids per-method drift"
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1771617449639,
+          "type": "decision",
+          "content": "Introduce camelized SDK type aliases: Introduce camelized SDK type aliases",
+          "raw": {
+            "question": "Introduce camelized SDK type aliases",
+            "chosen": "Introduce camelized SDK type aliases",
+            "alternatives": [],
+            "reasoning": "SDK should not leak snake_case API types; local aliases preserve compatibility with source schemas while exposing a clean JS-style surface"
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-20T19:57:34.046Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "3bdbad9ee6a236830c928cbb54fc6bab47c07ade",
+    "endRef": "3bdbad9ee6a236830c928cbb54fc6bab47c07ade"
+  },
+  "completedAt": "2026-02-20T19:57:34.046Z",
+  "retrospective": {
+    "summary": "Implemented SDK-wide camelCase surface by adding request/response/WS casing translation, replacing leaked raw type imports with camelized aliases, removing snake_case input compatibility, updating tests, and validating with sdk test/build",
+    "approach": "Standard approach",
+    "confidence": 0.94
+  }
+}

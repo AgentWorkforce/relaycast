@@ -1,0 +1,63 @@
+{
+  "id": "traj_gjqemr0lou4l",
+  "version": 1,
+  "task": {
+    "title": "Fix observer file route filters"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-25T13:42:07.221Z",
+  "completedAt": "2026-06-25T13:51:29.271Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-06-25T13:49:29.129Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_fy0bd5t8l1kj",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-06-25T13:49:29.129Z",
+      "endedAt": "2026-06-25T13:51:29.271Z",
+      "events": [
+        {
+          "ts": 1782395369130,
+          "type": "decision",
+          "content": "Apply observer filters to file metadata routes: Apply observer filters to file metadata routes",
+          "raw": {
+            "question": "Apply observer filters to file metadata routes",
+            "chosen": "Apply observer filters to file metadata routes",
+            "alternatives": [],
+            "reasoning": "File metadata can reveal cross-channel or cross-agent resources, so /files and /files/:id now use uploader, created_at, and attached message channel/DM context before returning metadata."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Fixed observer file route filtering and low-severity scope/filter consistency findings: debounced last_used_at, granular stream event scopes, stream metadata for read/webhook/file events, created_after on agent events, thread reply_count preservation, lenient scope serialization, and created_by attribution.",
+    "approach": "Standard approach",
+    "confidence": 0.9
+  },
+  "commits": [
+    "c0cd16c"
+  ],
+  "filesChanged": [
+    "packages/engine/src/__tests__/conformance/observerToken.test.ts",
+    "packages/engine/src/engine/observerToken.ts",
+    "packages/engine/src/engine/wsTransform.ts",
+    "packages/engine/src/routes/agent.ts",
+    "packages/engine/src/routes/file.ts",
+    "packages/engine/src/routes/thread.ts"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "284b6c8674fbbd9cfb5618134837390f26cc631e",
+    "endRef": "c0cd16cb19170e948e314402049353b54a8d6744",
+    "traceId": "571c092a-2b04-496b-9151-d34383858d74"
+  }
+}

@@ -1,0 +1,78 @@
+{
+  "version": "1.0.0",
+  "id": "aaaff677-e82d-4a63-b5e0-ac618bcccd56",
+  "timestamp": "2026-07-13T14:06:33.735Z",
+  "trajectory": "traj_hkcaas6ntnwv",
+  "files": [
+    {
+      "path": "CHANGELOG.md",
+      "conversations": [
+        {
+          "contributor": { "type": "ai" },
+          "ranges": [
+            {
+              "start_line": 21,
+              "end_line": 24,
+              "revision": "65c36c7d2ab7db627dbbe285b75571d4e580c399"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/CHANGELOG.md",
+      "conversations": [
+        {
+          "contributor": { "type": "ai" },
+          "ranges": [
+            {
+              "start_line": 12,
+              "end_line": 14,
+              "revision": "65c36c7d2ab7db627dbbe285b75571d4e580c399"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/__tests__/conformance/delivery.test.ts",
+      "conversations": [
+        {
+          "contributor": { "type": "ai" },
+          "ranges": [
+            {
+              "start_line": 14,
+              "end_line": 14,
+              "revision": "65c36c7d2ab7db627dbbe285b75571d4e580c399"
+            },
+            {
+              "start_line": 1564,
+              "end_line": 1635,
+              "revision": "65c36c7d2ab7db627dbbe285b75571d4e580c399"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/engine/delivery.ts",
+      "conversations": [
+        {
+          "contributor": { "type": "ai" },
+          "ranges": [
+            {
+              "start_line": 44,
+              "end_line": 47,
+              "revision": "65c36c7d2ab7db627dbbe285b75571d4e580c399"
+            },
+            {
+              "start_line": 465,
+              "end_line": 467,
+              "revision": "65c36c7d2ab7db627dbbe285b75571d4e580c399"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

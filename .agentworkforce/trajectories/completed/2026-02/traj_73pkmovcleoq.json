@@ -1,0 +1,65 @@
+{
+  "id": "traj_73pkmovcleoq",
+  "version": 1,
+  "task": {
+    "title": "Remove billing functionality and references from repo"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-20T20:39:00.212Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-20T20:45:26.783Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_9e2adn0yjgep",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-20T20:45:26.783Z",
+      "events": [
+        {
+          "ts": 1771620326784,
+          "type": "decision",
+          "content": "Remove billing from public API surface and SDK: Remove billing from public API surface and SDK",
+          "raw": {
+            "question": "Remove billing from public API surface and SDK",
+            "chosen": "Remove billing from public API surface and SDK",
+            "alternatives": [],
+            "reasoning": "Billing is inactive; removing endpoints and client APIs avoids onboarding confusion and accidental use of unsupported functionality"
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1771620330763,
+          "type": "decision",
+          "content": "Keep historical DB migration files untouched: Keep historical DB migration files untouched",
+          "raw": {
+            "question": "Keep historical DB migration files untouched",
+            "chosen": "Keep historical DB migration files untouched",
+            "alternatives": [],
+            "reasoning": "Migration history must remain immutable; billing/stripe references remain only in historical migration artifacts, not active code paths or API docs"
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-20T20:45:37.568Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "3bdbad9ee6a236830c928cbb54fc6bab47c07ade",
+    "endRef": "3bdbad9ee6a236830c928cbb54fc6bab47c07ade"
+  },
+  "completedAt": "2026-02-20T20:45:37.568Z",
+  "retrospective": {
+    "summary": "Removed inactive billing functionality from server routes/engines/tests, SDK client/types/tests, and OpenAPI; validated with types+sdk+server build/test",
+    "approach": "Standard approach",
+    "confidence": 0.96
+  }
+}

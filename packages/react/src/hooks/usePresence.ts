@@ -53,12 +53,14 @@ export function usePresence(): UsePresenceReturn {
       }, 150);
     };
 
-    const offOnline = ctx.ws.on('agent.online', scheduleRefresh);
-    const offOffline = ctx.ws.on('agent.offline', scheduleRefresh);
+    const offActive = ctx.ws.on('agent.status.active', scheduleRefresh);
+    const offOffline = ctx.ws.on('agent.status.offline', scheduleRefresh);
+    const offChanged = ctx.ws.on('agent.status.changed', scheduleRefresh);
 
     return () => {
-      offOnline();
+      offActive();
       offOffline();
+      offChanged();
       if (refreshTimer.current) {
         clearTimeout(refreshTimer.current);
         refreshTimer.current = null;

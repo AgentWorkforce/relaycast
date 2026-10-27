@@ -25,10 +25,13 @@ export type DmParticipant = z.infer<typeof DmParticipantSchema>;
 
 export const DmInjectionModeSchema = MessageInjectionModeSchema;
 
+/** Exactly one of `to` (agent name) or `address` (`agent@machine`). */
 export const SendDmRequestSchema = z.object({
-  to: z.string(),
+  to: z.string().optional(),
+  address: z.string().optional(),
   text: z.string(),
   attachments: z.array(z.string()).optional(),
+  data: z.record(z.string(), z.unknown()).nullable().optional(),
   mode: DmInjectionModeSchema.default('wait'),
 });
 export type SendDmRequest = z.infer<typeof SendDmRequestSchema>;

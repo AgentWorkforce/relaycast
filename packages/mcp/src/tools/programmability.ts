@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { RelayCast, AgentClient } from '@relaycast/sdk';
-import { SubscribableEventTypeSchema } from '@relaycast/types';
+import type { RelayCast, AgentClient, JsonValue } from '@relaycast/sdk';
+import { CliTypeSchema, SubscribableEventTypeSchema } from '@relaycast/types';
 import {
   identityOverrideInputShape,
   workspaceRoutingInputShape,
@@ -23,7 +23,7 @@ export function registerProgrammabilityTools(
 
   server.registerTool('integration.webhook.create', {
     title: 'Create Webhook',
-    description: 'Create an inbound webhook that external services can POST to, delivering messages into a specified channel. Webhooks enable integrations with CI/CD pipelines, monitoring systems, GitHub, and other external tools. Each webhook gets a unique URL that accepts POST requests with a JSON body.',
+    description: 'Create an inbound webhook that external services can POST to, delivering messages into a specified channel. Webhooks enable integrations with CI/CD pipelines, monitoring systems, GitHub, and other external tools. Each webhook gets a unique URL and one-time-visible bearer token for POST requests.',
     inputSchema: {
       name: z.string().describe('Human-readable webhook name to identify its purpose (e.g. "GitHub Alerts", "CI Pipeline")'),
       channel: z.string().describe('Name of the target channel where webhook messages will be delivered'),
@@ -83,14 +83,15 @@ export function registerProgrammabilityTools(
     description: 'Manually trigger an inbound webhook to post a message into its target channel. This is useful for testing webhook integrations or programmatically injecting external events into the workspace. Provide optional text and source identifier to customize the delivered message.',
     inputSchema: {
       webhook_id: z.string().describe('Unique identifier of the webhook to trigger, obtained from list_webhooks or create_webhook'),
+      token: z.string().describe('Bearer token returned by create_webhook for this webhook'),
       text: z.string().optional().describe('Message text to deliver through the webhook into the target channel'),
       source: z.string().optional().describe('Source identifier for the webhook payload (e.g. "github", "jenkins", "datadog")'),
     },
     outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, async ({ webhook_id, text, source }) => {
+  }, async ({ webhook_id, token, text, source }) => {
     const relay = getRelay();
-    const result = await relay.webhooks.trigger(webhook_id, { text, source });
+    const result = await relay.webhooks.trigger(webhook_id, { text, source }, token);
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
       structuredContent: result as unknown as Record<string, unknown>,
@@ -101,17 +102,18 @@ export function registerProgrammabilityTools(
 
   server.registerTool('integration.subscription.create', {
     title: 'Create Event Subscription',
-    description: 'Create an outbound event subscription that POSTs real-time webhook notifications to an external URL when matching events occur. Supported events include message.created, reaction.added, agent.online, and more. Optionally filter events by channel or agent mentions, and provide a secret for HMAC signature verification of payloads.',
+    description: 'Create an outbound event subscription that POSTs real-time webhook notifications to an external URL when matching events occur. Supported events include message.created, message.reacted, agent.status.active, and more. Optionally filter events by channel or agent mentions, attach delivery headers, and provide a secret for HMAC signature verification of payloads.',
     inputSchema: {
-      events: z.array(SubscribableEventTypeSchema).describe('Array of event types to subscribe to (e.g. ["message.created", "reaction.added", "agent.online"])'),
+      events: z.array(SubscribableEventTypeSchema).describe('Array of event types to subscribe to (e.g. ["message.created", "message.reacted", "agent.status.active"])'),
       url: z.string().describe('HTTPS endpoint URL that will receive POST requests with event payloads'),
+      headers: z.record(z.string(), z.string()).optional().describe('Optional custom headers to include on outbound delivery requests'),
       filter_channel: z.string().optional().describe('Only fire events that occur in this specific channel'),
       filter_mentions: z.string().optional().describe('Only fire events where this agent name is @mentioned in the message'),
       secret: z.string().optional().describe('Shared secret used to generate HMAC-SHA256 signatures for payload verification'),
     },
     outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, async ({ events, url, filter_channel, filter_mentions, secret }) => {
+  }, async ({ events, url, headers, filter_channel, filter_mentions, secret }) => {
     const relay = getRelay();
     const filter = (filter_channel || filter_mentions)
       ? { channel: filter_channel, mentions: filter_mentions }
@@ -119,6 +121,7 @@ export function registerProgrammabilityTools(
     const result = await relay.subscriptions.create({
       events,
       url,
+      headers,
       filter,
       secret,
     });
@@ -184,31 +187,30 @@ export function registerProgrammabilityTools(
     };
   });
 
-  // === Agent Commands ===
+  // === Actions (agent-to-agent RPC) ===
 
-  server.registerTool('integration.command.register', {
-    title: 'Register Command',
-    description: 'Register a custom slash command that a specific agent can handle. Other agents in the workspace can invoke this command, and the handler agent receives the invocation with its parameters. Commands enable structured inter-agent workflows, such as /deploy, /review, or /summarize. Re-registering an existing command updates its definition.',
+  server.registerTool('integration.action.register', {
+    title: 'Register Action',
+    description: 'Register an action (async agent-to-agent RPC) that a specific agent handles. Other agents invoke the action; the handler agent receives an `action.invoked` event and reports the result. Replaces the legacy command API. Requires the hosted engine (cast.agentrelay.com) or a self-hosted engine.',
     inputSchema: {
-      command: z.string().describe('Command name without the leading slash (e.g. "deploy", "review", "summarize")'),
-      description: z.string().describe('Human-readable description of what the command does, shown when listing available commands'),
-      handler_agent: z.string().describe('Name of the registered agent responsible for handling invocations of this command'),
-      parameters: z.array(z.object({
-        name: z.string().describe('Parameter name used as the key when passing structured arguments'),
-        description: z.string().optional().describe('Human-readable description of what this parameter controls'),
-        type: z.enum(['string', 'number', 'boolean']).describe('Data type for input validation: "string", "number", or "boolean"'),
-        required: z.boolean().optional().describe('Whether this parameter must be provided when invoking the command'),
-      })).optional().describe('Array of parameter definitions that the command accepts for structured input'),
+      name: z.string().describe('Action name (e.g. "deploy", "review")'),
+      description: z.string().describe('Human-readable description of what the action does'),
+      handler_agent: z.string().describe('Name of the registered agent that handles invocations'),
+      input_schema: z.object({}).passthrough().optional().describe('JSON Schema describing the action input'),
+      output_schema: z.object({}).passthrough().optional().describe('JSON Schema describing the action output'),
+      available_to: z.array(z.string()).optional().describe('Agent names allowed to invoke this action (defaults to all)'),
     },
     outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, async ({ command, description, handler_agent, parameters }) => {
+  }, async ({ name, description, handler_agent, input_schema, output_schema, available_to }) => {
     const relay = getRelay();
-    const result = await relay.commands.register({
-      command,
+    const result = await relay.actions.register({
+      name,
       description,
       handlerAgent: handler_agent,
-      parameters,
+      inputSchema: input_schema,
+      outputSchema: output_schema,
+      availableTo: available_to,
     });
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
@@ -216,65 +218,123 @@ export function registerProgrammabilityTools(
     };
   });
 
-  server.registerTool('integration.command.list', {
-    title: 'List Commands',
-    description: 'List all registered slash commands available in the workspace. Returns each command\'s name, description, handler agent, and parameter definitions. Use this to discover what commands other agents have registered and how to invoke them.',
-    inputSchema: {
-      handler_agent: z.string().optional().describe('Filter commands to show only those handled by this specific agent name'),
-    },
+  server.registerTool('integration.action.list', {
+    title: 'List Actions',
+    description: 'List all registered actions in the workspace. Returns each action\'s name, description, handler agent, and input/output schemas.',
+    inputSchema: {},
     outputSchema: {
-      commands: z.array(z.object({}).passthrough()).describe('Array of command objects with name, description, handler, and parameters'),
+      actions: z.array(z.object({}).passthrough()).describe('Array of action objects'),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, async () => {
     const relay = getRelay();
-    const commands = await relay.commands.list();
+    const actions = await relay.actions.list();
     return {
-      content: [{ type: 'text' as const, text: JSON.stringify(commands, null, 2) }],
-      structuredContent: { commands: commands as unknown as Record<string, unknown>[] },
+      content: [{ type: 'text' as const, text: JSON.stringify(actions, null, 2) }],
+      structuredContent: { actions: actions as unknown as Record<string, unknown>[] },
     };
   });
 
-  server.registerTool('integration.command.delete', {
-    title: 'Delete Command',
-    description: 'Permanently remove a registered slash command from the workspace. Once deleted, other agents can no longer invoke the command. This action cannot be undone, so verify the command is no longer needed before deleting.',
+  server.registerTool('integration.action.get', {
+    title: 'Get Action',
+    description: 'Get a single registered action by name, including its handler agent and input/output schemas.',
     inputSchema: {
-      command: z.string().describe('Name of the command to delete, without the leading slash (e.g. "deploy")'),
+      name: z.string().describe('Name of the action to fetch'),
+    },
+    outputSchema: jsonResult,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  }, async ({ name }) => {
+    const relay = getRelay();
+    const result = await relay.actions.get(name);
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+      structuredContent: result as unknown as Record<string, unknown>,
+    };
+  });
+
+  server.registerTool('integration.action.delete', {
+    title: 'Delete Action',
+    description: 'Permanently remove a registered action from the workspace. Once deleted, agents can no longer invoke it.',
+    inputSchema: {
+      name: z.string().describe('Name of the action to delete'),
     },
     outputSchema: {
-      message: z.string().describe('Confirmation message indicating the command was deleted'),
+      message: z.string().describe('Confirmation message'),
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
-  }, async ({ command }) => {
+  }, async ({ name }) => {
     const relay = getRelay();
-    await relay.commands.delete(command);
-    const message = `Deleted command /${command}`;
+    await relay.actions.delete(name);
+    const message = `Deleted action ${name}`;
     return {
       content: [{ type: 'text' as const, text: message }],
       structuredContent: { message },
     };
   });
 
-  server.registerTool('integration.command.invoke', {
-    title: 'Invoke Command',
-    description: 'Invoke a registered slash command as the current agent within a channel context. The invocation is routed to the command\'s handler agent for processing. You can pass arguments as a raw string or as structured JSON parameters matching the command\'s parameter definitions.',
+  server.registerTool('integration.action.invoke', {
+    title: 'Invoke Action',
+    description: 'Invoke a registered action as the current agent. The invocation is routed to the handler agent for async processing; the returned invocation id can be used to poll for the result. The handler receives an `action.invoked` event.',
     inputSchema: {
-      command: z.string().describe('Name of the command to invoke, without the leading slash (e.g. "deploy", "review")'),
-      channel: z.string().describe('Name of the channel providing context for the command invocation'),
-      args: z.string().optional().describe('Raw argument string passed to the command handler (e.g. "production --force")'),
-      parameters: z.string().optional().describe('JSON-encoded object of structured parameters matching the command\'s parameter definitions'),
+      name: z.string().describe('Name of the action to invoke'),
+      input: z.object({}).passthrough().optional().describe('Input object matching the action\'s input schema'),
       ...workspaceRoutingInputShape,
       ...identityOverrideInputShape,
     },
     outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, async ({ command, channel, args, parameters, workspace_id, workspace_alias, as: asIdentity }) => {
-    const client = getAgentClient(
-      workspaceRefFromArgs({ workspace_id, workspace_alias }),
-      asIdentity,
-    );
-    const parsedParams = parameters ? JSON.parse(parameters) : undefined;
-    const result = await client.commands.invoke(command, { channel, args, parameters: parsedParams });
+  }, async ({ name, input, workspace_id, workspace_alias, as: asIdentity }) => {
+    const client = getAgentClient(workspaceRefFromArgs({ workspace_id, workspace_alias }), asIdentity);
+    const result = await client.actions.invoke(name, input);
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+      structuredContent: result as unknown as Record<string, unknown>,
+    };
+  });
+
+  server.registerTool('integration.action.complete', {
+    title: 'Complete Action Invocation',
+    description: 'As the handler agent, report the result (or error) of an action invocation. Marks the invocation completed or failed and notifies the caller with an `action.completed`/`action.failed` event.',
+    inputSchema: {
+      name: z.string().describe('Name of the action'),
+      invocation_id: z.string().describe('Invocation id returned by invoke'),
+      output: z.object({}).passthrough().optional().describe('Result object matching the action\'s output schema'),
+      error: z.string().optional().describe('Error message if the invocation failed'),
+      duration_ms: z.number().int().nonnegative().optional().describe('How long the action took, in milliseconds'),
+      ...workspaceRoutingInputShape,
+      ...identityOverrideInputShape,
+    },
+    outputSchema: jsonResult,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  }, async ({ name, invocation_id, output, error, duration_ms, workspace_id, workspace_alias, as: asIdentity }) => {
+    const client = getAgentClient(workspaceRefFromArgs({ workspace_id, workspace_alias }), asIdentity);
+    const result = await client.actions.completeInvocation(name, invocation_id, {
+      // The tool accepts an output object; the SDK/contract output type is the
+      // wider JsonValue (scalars/arrays/null also legal), and an object is one.
+      output: output as JsonValue | undefined,
+      error,
+      durationMs: duration_ms,
+    });
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+      structuredContent: result as unknown as Record<string, unknown>,
+    };
+  });
+
+  server.registerTool('integration.action.get_invocation', {
+    title: 'Get Action Invocation',
+    description: 'Get the status and result of an action invocation by id. Use this to poll for completion after invoking an action.',
+    inputSchema: {
+      name: z.string().describe('Name of the action'),
+      invocation_id: z.string().describe('Invocation id returned by invoke'),
+      ...workspaceRoutingInputShape,
+      ...identityOverrideInputShape,
+    },
+    outputSchema: jsonResult,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  }, async ({ name, invocation_id, workspace_id, workspace_alias, as: asIdentity }) => {
+    const client = getAgentClient(workspaceRefFromArgs({ workspace_id, workspace_alias }), asIdentity);
+    const result = await client.actions.getInvocation(name, invocation_id);
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
       structuredContent: result as unknown as Record<string, unknown>,
@@ -288,7 +348,7 @@ export function registerProgrammabilityTools(
     description: 'Add a new AI agent to the workspace to work on a task. This is a BUILT-IN system operation for creating worker agents. If an agent with the same name already exists, it will be reactivated with a new token and updated task. The agent is automatically set to online status and joined to the specified channel.',
     inputSchema: {
       name: z.string().describe('Unique name for the new agent within the workspace (e.g. "worker-1", "code-reviewer")'),
-      cli: z.enum(['claude', 'codex', 'gemini', 'aider', 'goose']).describe('Which AI CLI tool to use for the agent process'),
+      cli: CliTypeSchema.describe('Which AI CLI tool to use for the agent process'),
       task: z.string().describe('The task description or instructions for the agent to work on'),
       channel: z.string().optional().describe('Channel name to automatically join the agent to (e.g. "general", "dev-team")'),
       persona: z.string().optional().describe('Free-text persona description that other agents can read to understand this agent\'s role'),
@@ -308,32 +368,20 @@ export function registerProgrammabilityTools(
 
   server.registerTool('agent.remove', {
     title: 'Remove Agent',
-    description: 'Remove an agent from active duty, marking it as offline. This is a BUILT-IN system operation for agent lifecycle management. Optionally delete the agent entirely from the workspace. Use this when an agent has completed its task or is no longer needed.',
+    description: 'Request that an agent be removed from active duty. This is a BUILT-IN system action routed to the agent broker; the returned invocation is completed when the broker confirms release.',
     inputSchema: {
       name: z.string().describe('Name of the agent to remove (e.g. "worker-1", "code-reviewer")'),
       reason: z.string().optional().describe('Human-readable reason for removing the agent (e.g. "task completed", "no longer needed")'),
       delete_agent: z.boolean().optional().describe('If true, permanently delete the agent instead of just marking it offline'),
     },
-    outputSchema: {
-      name: z.string().describe('Name of the removed agent'),
-      removed: z.boolean().describe('True if the agent was successfully removed'),
-      deleted: z.boolean().describe('True if the agent was permanently deleted'),
-      reason: z.string().nullable().describe('The reason provided for removing the agent'),
-    },
+    outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   }, async ({ name, reason, delete_agent }) => {
     const relay = getRelay();
     const result = await relay.agents.release({ name, reason, deleteAgent: delete_agent });
-    // Transform 'released' to 'removed' for agent-facing consistency
-    const transformed = {
-      name: result.name,
-      removed: result.released,
-      deleted: result.deleted,
-      reason: result.reason,
-    };
     return {
-      content: [{ type: 'text' as const, text: JSON.stringify(transformed, null, 2) }],
-      structuredContent: transformed as unknown as Record<string, unknown>,
+      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+      structuredContent: result as unknown as Record<string, unknown>,
     };
   });
 }

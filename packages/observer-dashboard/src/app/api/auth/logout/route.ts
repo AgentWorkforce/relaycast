@@ -1,43 +1,44 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { RelayCast, RelayError } from '@relaycast/sdk';
-import { resolveRelayServerUrlFromRequest } from '../../../../lib/relay-server';
-
-export const runtime = 'edge';
+import { pickRememberedEngine, resolveRelayServerCandidatesFromRequest } from '../../../../lib/relay-server';
+import { revokeObserverStreamToken } from '../../../../lib/observer-token';
 
 const COOKIE_NAME = 'relaycast_key';
 const AGENT_COOKIE_NAME = 'relaycast_agent_token';
+const WS_TOKEN_COOKIE_NAME = 'relaycast_ws_token';
+const WS_TOKEN_ID_COOKIE_NAME = 'relaycast_ws_token_id';
+const CONNECT_OBSERVER_ID_COOKIE_NAME = 'relaycast_connect_observer_id';
+const ENGINE_COOKIE_NAME = 'relaycast_engine';
 
 /**
  * POST /api/auth/logout
- * Disables workspace stream (best-effort) and clears auth cookies.
+ * Revokes the observer token minted for this session (best effort) and clears
+ * auth cookies.
  */
 export async function POST(request: NextRequest) {
   const cookieStore = await cookies();
-  const apiKey = cookieStore.get(COOKIE_NAME)?.value;
 
-  if (apiKey?.startsWith('rk_live_')) {
-    const relayServer = resolveRelayServerUrlFromRequest(request);
-    const relay = new RelayCast({ apiKey, baseUrl: relayServer });
-    try {
-      await relay.workspace.stream.set(false);
-    } catch (error) {
-      const relayError = error instanceof RelayError ? error : null;
-      console.warn('[api/auth/logout] Failed to disable workspace stream', {
-        detail: relayError
-          ? `${relayError.code} (${relayError.status}): ${relayError.message}`
-          : error instanceof Error
-            ? error.message
-            : String(error),
-        baseUrl: relayServer,
-        host: request.headers.get('host'),
-        observerHost: request.headers.get('x-relaycast-observer-host'),
-        forwardedHost: request.headers.get('x-forwarded-host'),
-      });
+  // Best-effort: revoke the minted observer token so a leaked ws cookie value
+  // stops working immediately instead of lingering until its 30-day expiry.
+  // Only workspace-key sessions mint a token (and store its id + the admin key
+  // needed to revoke it); `ot_live_` logins have no id cookie and are skipped.
+  const wsTokenId = cookieStore.get(WS_TOKEN_ID_COOKIE_NAME)?.value;
+  const adminKey = cookieStore.get(COOKIE_NAME)?.value;
+  if (wsTokenId && adminKey?.startsWith('rk_live_')) {
+    const baseUrl = pickRememberedEngine(
+      cookieStore.get(ENGINE_COOKIE_NAME)?.value,
+      resolveRelayServerCandidatesFromRequest(request),
+    );
+    if (baseUrl) {
+      await revokeObserverStreamToken(baseUrl, adminKey, wsTokenId);
     }
   }
 
   cookieStore.delete(COOKIE_NAME);
   cookieStore.delete(AGENT_COOKIE_NAME);
+  cookieStore.delete(WS_TOKEN_COOKIE_NAME);
+  cookieStore.delete(WS_TOKEN_ID_COOKIE_NAME);
+  cookieStore.delete(CONNECT_OBSERVER_ID_COOKIE_NAME);
+  cookieStore.delete(ENGINE_COOKIE_NAME);
   return NextResponse.json({ success: true });
 }

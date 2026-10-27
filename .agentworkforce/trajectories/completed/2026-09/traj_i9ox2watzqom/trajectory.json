@@ -1,0 +1,98 @@
+{
+  "id": "traj_i9ox2watzqom",
+  "version": 1,
+  "task": {
+    "title": "Restore immutable Relaycast migration 0045 after 8.6.0 release regression"
+  },
+  "status": "completed",
+  "startedAt": "2026-09-09T05:16:24.450Z",
+  "completedAt": "2026-09-09T05:58:26.337Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-09-09T05:34:15.464Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_t9mly2cwjdc5",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-09-09T05:34:15.464Z",
+      "endedAt": "2026-09-09T05:58:26.337Z",
+      "events": [
+        {
+          "ts": 1788932055465,
+          "type": "decision",
+          "content": "Restore migration 0045 to the 8.5.5 canonical bytes and gate releases against npm latest: Restore migration 0045 to the 8.5.5 canonical bytes and gate releases against npm latest",
+          "raw": {
+            "question": "Restore migration 0045 to the 8.5.5 canonical bytes and gate releases against npm latest",
+            "chosen": "Restore migration 0045 to the 8.5.5 canonical bytes and gate releases against npm latest",
+            "alternatives": [],
+            "reasoning": "Mutating relaycast-cloud's applied migration or weakening byte-parity would hide the release regression. The release gate allows only the exact 8.6.0 bad-hash to canonical-hash recovery, then compares every published SQL migration on future releases."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1788932491495,
+          "type": "reflection",
+          "content": "Restored the canonical published migration bytes and added a release-time registry comparison with an exact 8.6.0 recovery exception. Full Node 22 suite, release contracts, build, lint, and the live npm comparison are green.",
+          "raw": {
+            "focalPoints": [
+              "migration-immutability",
+              "release-safety",
+              "regression-proof"
+            ],
+            "confidence": 0.9
+          },
+          "significance": "high",
+          "tags": [
+            "focal:migration-immutability",
+            "focal:release-safety",
+            "focal:regression-proof",
+            "confidence:0.9"
+          ]
+        },
+        {
+          "ts": 1788933505938,
+          "type": "decision",
+          "content": "Protect every active npm release stream, not only latest: Protect every active npm release stream, not only latest",
+          "raw": {
+            "question": "Protect every active npm release stream, not only latest",
+            "chosen": "Protect every active npm release stream, not only latest",
+            "alternatives": [],
+            "reasoning": "Published prerelease migrations may already be applied by users; checking the deduplicated latest/next/beta/alpha tag heads prevents later prerelease or stable releases from rewriting them while keeping registry cost bounded."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Restored migration 0045 canonical bytes and added stable/prerelease published-migration immutability gates",
+    "approach": "Standard approach",
+    "confidence": 0.92
+  },
+  "commits": [
+    "5bb83371"
+  ],
+  "filesChanged": [
+    ".agentworkforce/trajectories/active/traj_i9ox2watzqom/trajectory.json",
+    ".github/workflows/publish-npm.yml",
+    "CHANGELOG.md",
+    "package.json",
+    "packages/engine/CHANGELOG.md",
+    "packages/engine/src/db/migrations/0045_workspace_create_idempotency.sql",
+    "scripts/check-published-engine-migrations.mjs",
+    "scripts/check-published-engine-migrations.test.mjs",
+    "scripts/release-workflow-contract.test.mjs"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "19139b68159d3e9d242358269951c349efe9b1f0",
+    "endRef": "5bb8337168296b2ba77d50015f5f9eb459347e45",
+    "traceId": "3777f51a-242f-4034-9392-11543ae0483e"
+  }
+}

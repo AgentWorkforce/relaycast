@@ -1,11 +1,19 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { useFollowLatest } from '../hooks/use-follow-latest';
 import { Hash, MessageSquare, UserRound } from 'lucide-react';
 import { useMessages, useRelay, sortMessagesChronologically } from '@relaycast/react';
 import { MessageCard } from './MessageCard';
+import { RunPanel } from './RunPanel';
+import { latestRelayflowRun } from '../lib/relayflow-run';
 import { cn } from '../lib/utils';
-import type { MessageWithMeta } from '@relaycast/sdk';
+import type { DmMessage, MessageWithMeta } from '@relaycast/sdk';
+
+const PAGE_SIZE = 50;
+
+// Avoid the React SSR warning for useLayoutEffect in Next.js client components.
+const useIsomorphicLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
 interface ChatFeedProps {
   selectedChannel: string | null;
@@ -18,6 +26,7 @@ interface ChatFeedProps {
   className?: string;
 }
 
+/** Render the selected conversation inside its own bounded scroll pane. */
 export function ChatFeed({
   selectedChannel,
   selectedChannelMemberCount,
@@ -31,14 +40,15 @@ export function ChatFeed({
   const isDm = selectedChannel?.startsWith('dm:');
   const channelName = selectedChannel && !isDm ? selectedChannel : null;
   const dmId = isDm ? selectedChannel!.slice(3) : null;
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   const title = selectedChannel ? (isDm ? dmLabel || 'Direct Message' : `#${selectedChannel}`) : 'Select a channel';
   const memberCount = selectedChannelMemberCount ?? 0;
   const showMemberBadge = !!channelName;
 
   return (
-    <section className={cn('brand-card flex min-w-0 flex-1 flex-col overflow-hidden', className)}>
-      <div className="border-b border-[var(--border-default)] px-5 py-4">
+    <section className={cn('brand-card flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden', className)}>
+      <div className="shrink-0 border-b border-[var(--border-default)] px-5 py-4">
         <div className="flex items-center gap-2">
           {selectedChannel && !isDm ? (
             <Hash className="h-4 w-4 text-[var(--brand-primary)]" />
@@ -60,11 +70,11 @@ export function ChatFeed({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto bg-[color-mix(in_srgb,var(--surface-strong)_72%,transparent)]">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-[color-mix(in_srgb,var(--surface-strong)_72%,transparent)]">
         {channelName ? (
-          <ChannelMessages channel={channelName} onOpenThread={onOpenThread} mentionNames={mentionNames} onOpenAgent={onOpenAgent} />
+          <ChannelMessages key={channelName} channel={channelName} scrollRef={scrollRef} onOpenThread={onOpenThread} mentionNames={mentionNames} onOpenAgent={onOpenAgent} />
         ) : dmId ? (
-          <DmMessages conversationId={dmId} mentionNames={mentionNames} onOpenAgent={onOpenAgent} />
+          <DmMessages key={dmId} conversationId={dmId} scrollRef={scrollRef} mentionNames={mentionNames} onOpenAgent={onOpenAgent} />
         ) : (
           <EmptyState label="Select a channel to view messages" />
         )}
@@ -73,80 +83,192 @@ export function ChatFeed({
   );
 }
 
-function ChannelMessages({ channel, onOpenThread, mentionNames, onOpenAgent }: { channel: string; onOpenThread?: (messageId: string) => void; mentionNames?: string[]; onOpenAgent?: (agentName: string | null) => void; }) {
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const { messages, loading } = useMessages(channel);
-  const sorted = sortMessagesChronologically(messages);
+/**
+ * Pagination scaffolding shared by the channel and DM feeds: keeps the viewport
+ * anchored while older messages are prepended, scrolls to the bottom only when
+ * a new latest message arrives while following the bottom, and loads older
+ * pages when the top sentinel becomes visible.
+ */
+function usePaginatedFeed(
+  scrollRef: RefObject<HTMLDivElement | null>,
+  sorted: MessageWithMeta[],
+  loadOlderPage: () => Promise<number | null>,
+) {
+  const topRef = useRef<HTMLDivElement>(null);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const loadingMoreRef = useRef(false);
+  const prependHeightRef = useRef<number | null>(null);
+
+  const newestId = sorted[sorted.length - 1]?.id;
+  const oldestId = sorted[0]?.id;
+
+  // Restore the scroll position after older messages are prepended.
+  useIsomorphicLayoutEffect(() => {
+    if (prependHeightRef.current === null) return;
+    const container = scrollRef.current;
+    if (container) container.scrollTop += container.scrollHeight - prependHeightRef.current;
+    prependHeightRef.current = null;
+  }, [oldestId, scrollRef]);
+
+  useFollowLatest(scrollRef, newestId);
+
+  const loadOlder = useCallback(async () => {
+    if (loadingMoreRef.current) return;
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    prependHeightRef.current = scrollRef.current?.scrollHeight ?? 0;
+    try {
+      const added = await loadOlderPage();
+      // A null result means the request was stale (conversation switched);
+      // bail without marking the current conversation as exhausted.
+      if (added === null) {
+        prependHeightRef.current = null;
+        return;
+      }
+      if (added < PAGE_SIZE) setHasMore(false);
+      if (added === 0) prependHeightRef.current = null;
+    } catch {
+      prependHeightRef.current = null;
+    } finally {
+      loadingMoreRef.current = false;
+      setLoadingMore(false);
+    }
+  }, [loadOlderPage, scrollRef]);
+
+  // The first page may be the whole history; only probe for more once it is full.
+  const showSentinel = hasMore && sorted.length >= PAGE_SIZE;
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [sorted.length]);
+    const el = topRef.current;
+    if (!el || !showSentinel) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) void loadOlder();
+      },
+      { root: scrollRef.current, rootMargin: '200px 0px 0px 0px' },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [showSentinel, loadOlder, scrollRef]);
 
-  if (loading && sorted.length === 0) return <LoadingState label="Loading messages…" />;
-  if (sorted.length === 0) return <EmptyState label="No messages yet" />;
+  return { topRef, showSentinel, loadingMore };
+}
 
+/** Render chronological messages and the sentinel for loading older pages. */
+function FeedList({
+  sorted,
+  feed,
+  onOpenThread,
+  mentionNames,
+  onOpenAgent,
+}: {
+  sorted: MessageWithMeta[];
+  feed: ReturnType<typeof usePaginatedFeed>;
+  onOpenThread?: (messageId: string) => void;
+  mentionNames?: string[];
+  onOpenAgent?: (agentName: string | null) => void;
+}) {
   return (
     <div className="py-3">
+      {feed.showSentinel && <div ref={feed.topRef} />}
+      {feed.loadingMore && (
+        <div className="flex justify-center py-2">
+          <div className="h-5 w-5 animate-spin rounded-full border-2 border-[var(--brand-primary)] border-t-transparent" />
+        </div>
+      )}
       {sorted.map((msg, i) => {
         const prev = i > 0 ? sorted[i - 1] : null;
         const compact = prev !== null && prev.agentName === msg.agentName && new Date(msg.createdAt).getTime() - new Date(prev.createdAt).getTime() < 300000;
         return <MessageCard key={msg.id} message={msg} compact={compact} onOpenThread={onOpenThread} mentionNames={mentionNames} onOpenAgent={onOpenAgent} />;
       })}
-      <div ref={bottomRef} />
     </div>
   );
 }
 
-function DmMessages({ conversationId, mentionNames, onOpenAgent }: { conversationId: string; mentionNames?: string[]; onOpenAgent?: (agentName: string | null) => void; }) {
+/** Render one channel's live feed and its newest valid relayflow snapshot. */
+function ChannelMessages({ channel, scrollRef, onOpenThread, mentionNames, onOpenAgent }: { channel: string; scrollRef: RefObject<HTMLDivElement | null>; onOpenThread?: (messageId: string) => void; mentionNames?: string[]; onOpenAgent?: (agentName: string | null) => void; }) {
+  const { messages, loading, fetchMore } = useMessages(channel);
+  const sorted = sortMessagesChronologically(messages);
+  const feed = usePaginatedFeed(scrollRef, sorted, fetchMore);
+
+  const run = latestRelayflowRun(sorted);
+
+  if (loading && sorted.length === 0) return <LoadingState label="Loading messages…" />;
+  if (sorted.length === 0) return <EmptyState label="No messages yet" />;
+
+  return (
+    <>
+      {run && <RunPanel run={run} />}
+      <FeedList sorted={sorted} feed={feed} onOpenThread={onOpenThread} mentionNames={mentionNames} onOpenAgent={onOpenAgent} />
+    </>
+  );
+}
+
+function toMessageWithMeta(m: DmMessage): MessageWithMeta {
+  return {
+    id: m.id,
+    channelId: '',
+    agentName: m.agentName,
+    agentId: m.agentId,
+    text: m.text,
+    blocks: null,
+    metadata: {},
+    hasAttachments: (m.attachments?.length ?? 0) > 0,
+    threadId: null,
+    attachments: m.attachments ?? [],
+    createdAt: m.createdAt,
+    replyCount: 0,
+    reactions: [],
+    readByCount: 0,
+  };
+}
+
+function DmMessages({ conversationId, scrollRef, mentionNames, onOpenAgent }: { conversationId: string; scrollRef: RefObject<HTMLDivElement | null>; mentionNames?: string[]; onOpenAgent?: (agentName: string | null) => void; }) {
   const relay = useRelay();
-  const bottomRef = useRef<HTMLDivElement>(null);
   const [messages, setMessages] = useState<MessageWithMeta[]>([]);
   const [loading, setLoading] = useState(true);
+  const requestSeq = useRef(0);
 
   useEffect(() => {
+    const seq = ++requestSeq.current;
     setLoading(true);
-    relay.dmMessages(conversationId, { limit: 50 })
+    setMessages([]);
+    relay.dmMessages(conversationId, { limit: PAGE_SIZE })
       .then((dms) => {
-        setMessages(dms.map((m) => ({
-          id: m.id,
-          channelId: '',
-          agentName: m.agentName,
-          agentId: m.agentId,
-          text: m.text,
-          blocks: null,
-          metadata: {},
-          hasAttachments: (m.attachments?.length ?? 0) > 0,
-          threadId: null,
-          attachments: m.attachments ?? [],
-          createdAt: m.createdAt,
-          replyCount: 0,
-          reactions: [],
-          readByCount: 0,
-        })));
+        if (seq !== requestSeq.current) return;
+        setMessages(dms.map(toMessageWithMeta));
       })
       .catch(() => {})
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (seq !== requestSeq.current) return;
+        setLoading(false);
+      });
+    return () => {
+      requestSeq.current += 1;
+    };
   }, [conversationId, relay]);
 
   const sorted = sortMessagesChronologically(messages);
+  const oldestId = sorted[0]?.id;
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [sorted.length]);
+  const loadOlderPage = useCallback(async (): Promise<number | null> => {
+    if (!oldestId) return null;
+    const seq = requestSeq.current;
+    const older = await relay.dmMessages(conversationId, { before: oldestId, limit: PAGE_SIZE });
+    if (seq !== requestSeq.current) return null;
+    if (older.length > 0) {
+      setMessages((prev) => [...older.map(toMessageWithMeta), ...prev]);
+    }
+    return older.length;
+  }, [conversationId, oldestId, relay]);
+
+  const feed = usePaginatedFeed(scrollRef, sorted, loadOlderPage);
 
   if (loading && sorted.length === 0) return <LoadingState label="Loading messages…" />;
   if (sorted.length === 0) return <EmptyState label="No messages in this conversation" />;
 
-  return (
-    <div className="py-3">
-      {sorted.map((msg, i) => {
-        const prev = i > 0 ? sorted[i - 1] : null;
-        const compact = prev !== null && prev.agentName === msg.agentName && new Date(msg.createdAt).getTime() - new Date(prev.createdAt).getTime() < 300000;
-        return <MessageCard key={msg.id} message={msg} compact={compact} mentionNames={mentionNames} onOpenAgent={onOpenAgent} />;
-      })}
-      <div ref={bottomRef} />
-    </div>
-  );
+  return <FeedList sorted={sorted} feed={feed} mentionNames={mentionNames} onOpenAgent={onOpenAgent} />;
 }
 
 function LoadingState({ label }: { label: string }) {

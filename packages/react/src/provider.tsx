@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { RelayCast, WsClient } from '@relaycast/sdk';
 import type { WsClientEvent } from '@relaycast/sdk';
 import { ClientContext, StoreContext } from './context.js';
@@ -16,6 +16,10 @@ export interface RelayProviderProps {
 }
 
 export function RelayProvider({ apiKey, agentToken, wsToken, baseUrl, channels, debug, children }: RelayProviderProps) {
+  const channelKey = JSON.stringify(channels ?? []);
+  const subscribedChannels = useMemo(() => JSON.parse(channelKey) as string[], [channelKey]);
+  const subscribedChannelsRef = useRef<string[]>(subscribedChannels);
+
   const clients = useMemo(() => {
     const relay = new RelayCast({ apiKey, baseUrl });
     const agent = relay.as(agentToken);
@@ -26,14 +30,19 @@ export function RelayProvider({ apiKey, agentToken, wsToken, baseUrl, channels, 
   const store = useMemo(() => createStore(), []);
 
   useEffect(() => {
+    subscribedChannelsRef.current = subscribedChannels;
+  }, [subscribedChannels]);
+
+  useEffect(() => {
     const { ws } = clients;
     store.setState({ connectionStatus: 'connecting' });
     ws.connect();
 
     const offOpen = ws.on('open', () => {
       store.setState({ connectionStatus: 'connected' });
-      if (channels && channels.length > 0) {
-        ws.subscribe(channels);
+      const currentChannels = subscribedChannelsRef.current;
+      if (currentChannels.length > 0) {
+        ws.subscribe(currentChannels);
       }
     });
 
@@ -59,7 +68,19 @@ export function RelayProvider({ apiKey, agentToken, wsToken, baseUrl, channels, 
       store.setState({ connectionStatus: 'disconnected' });
       ws.disconnect();
     };
-  }, [clients, store, channels]);
+  }, [clients, store]);
+
+  useEffect(() => {
+    const { ws } = clients;
+    if (!ws.connected || subscribedChannels.length === 0) {
+      return;
+    }
+
+    ws.subscribe(subscribedChannels);
+    return () => {
+      ws.unsubscribe(subscribedChannels);
+    };
+  }, [clients, subscribedChannels]);
 
   return (
     <ClientContext.Provider value={clients}>

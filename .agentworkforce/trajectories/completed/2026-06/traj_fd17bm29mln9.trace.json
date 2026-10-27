@@ -1,0 +1,257 @@
+{
+  "version": "1.0.0",
+  "id": "a69892b3-8f85-4ebb-94a6-763552ec4854",
+  "timestamp": "2026-06-24T19:36:37.603Z",
+  "trajectory": "traj_fd17bm29mln9",
+  "files": [
+    {
+      "path": "packages/observer-dashboard/src/lib/relay-server.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 42,
+              "end_line": 56,
+              "revision": "534f416915ad69ae6cec870653fdbfe6f81cb624"
+            },
+            {
+              "start_line": 64,
+              "end_line": 75,
+              "revision": "534f416915ad69ae6cec870653fdbfe6f81cb624"
+            },
+            {
+              "start_line": 79,
+              "end_line": 88,
+              "revision": "534f416915ad69ae6cec870653fdbfe6f81cb624"
+            },
+            {
+              "start_line": 91,
+              "end_line": 97,
+              "revision": "534f416915ad69ae6cec870653fdbfe6f81cb624"
+            },
+            {
+              "start_line": 99,
+              "end_line": 109,
+              "revision": "534f416915ad69ae6cec870653fdbfe6f81cb624"
+            },
+            {
+              "start_line": 111,
+              "end_line": 122,
+              "revision": "534f416915ad69ae6cec870653fdbfe6f81cb624"
+            },
+            {
+              "start_line": 129,
+              "end_line": 135,
+              "revision": "534f416915ad69ae6cec870653fdbfe6f81cb624"
+            },
+            {
+              "start_line": 148,
+              "end_line": 154,
+              "revision": "534f416915ad69ae6cec870653fdbfe6f81cb624"
+            },
+            {
+              "start_line": 164,
+              "end_line": 170,
+              "revision": "534f416915ad69ae6cec870653fdbfe6f81cb624"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/observer-dashboard/src/lib/relay-server.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 20,
+              "end_line": 33,
+              "revision": "534f416915ad69ae6cec870653fdbfe6f81cb624"
+            },
+            {
+              "start_line": 44,
+              "end_line": 49,
+              "revision": "534f416915ad69ae6cec870653fdbfe6f81cb624"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/observer-router/src/worker.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 21,
+              "end_line": 28,
+              "revision": "534f416915ad69ae6cec870653fdbfe6f81cb624"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/sdk-rust/CHANGELOG.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 7,
+              "end_line": 13,
+              "revision": "534f416915ad69ae6cec870653fdbfe6f81cb624"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/sdk-rust/Cargo.toml",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 6,
+              "revision": "534f416915ad69ae6cec870653fdbfe6f81cb624"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/sdk-rust/src/client.rs",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 11,
+              "end_line": 19,
+              "revision": "534f416915ad69ae6cec870653fdbfe6f81cb624"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/sdk-rust/src/lib.rs",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 337,
+              "end_line": 398,
+              "revision": "534f416915ad69ae6cec870653fdbfe6f81cb624"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/sdk-rust/src/relay.rs",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 5,
+              "end_line": 13,
+              "revision": "534f416915ad69ae6cec870653fdbfe6f81cb624"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/sdk-rust/src/ws.rs",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 14,
+              "end_line": 21,
+              "revision": "534f416915ad69ae6cec870653fdbfe6f81cb624"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/sdk-typescript/src/__tests__/agent-ws.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 97,
+              "end_line": 109,
+              "revision": "534f416915ad69ae6cec870653fdbfe6f81cb624"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/sdk-typescript/src/__tests__/ws.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 80,
+              "end_line": 91,
+              "revision": "534f416915ad69ae6cec870653fdbfe6f81cb624"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/e2e.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 43,
+              "end_line": 48,
+              "revision": "534f416915ad69ae6cec870653fdbfe6f81cb624"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -39,6 +39,37 @@ describe('messaging tools', () => {
     expect(result.content).toBeDefined();
   });
 
+  it('forwards session metadata through every message-producing tool', async () => {
+    const data = { session_ref: 'session-1' };
+    mockAgentClient.send.mockResolvedValue({ id: 'msg1' });
+    mockAgentClient.reply.mockResolvedValue({ id: 'reply1' });
+    mockAgentClient.dm.mockResolvedValue({ id: 'dm1' });
+    mockAgentClient.dms.createGroup.mockResolvedValue({ id: 'conv1' });
+    mockAgentClient.dms.sendMessage.mockResolvedValue({ id: 'group1' });
+
+    await client.callTool({
+      name: 'message.post',
+      arguments: { channel: 'general', text: 'channel', data },
+    });
+    await client.callTool({
+      name: 'message.reply',
+      arguments: { message_id: 'msg1', text: 'thread', data },
+    });
+    await client.callTool({
+      name: 'message.dm.send',
+      arguments: { to: 'bot2', text: 'direct', data },
+    });
+    await client.callTool({
+      name: 'message.dm.send_group',
+      arguments: { participants: ['a', 'b'], text: 'group', data },
+    });
+
+    expect(mockAgentClient.send).toHaveBeenCalledWith('general', 'channel', { data });
+    expect(mockAgentClient.reply).toHaveBeenCalledWith('msg1', 'thread', { data });
+    expect(mockAgentClient.dm).toHaveBeenCalledWith('bot2', 'direct', { data });
+    expect(mockAgentClient.dms.sendMessage).toHaveBeenCalledWith('conv1', 'group', { data });
+  });
+
   it('get_messages calls messages()', async () => {
     mockAgentClient.messages.mockResolvedValue([]);
     await client.callTool({ name: 'message.list', arguments: { channel: 'general' } });
@@ -74,6 +105,22 @@ describe('messaging tools', () => {
     mockAgentClient.dms.conversations.mockResolvedValue([]);
     await client.callTool({ name: 'message.dm.list', arguments: { as: 'WriterBot' } });
     expect(mockAgentClient.dms.conversations).toHaveBeenCalled();
+  });
+
+  it('get_dms forwards the requested conversation limit', async () => {
+    mockAgentClient.dms.conversations.mockResolvedValue([]);
+    await client.callTool({ name: 'message.dm.list', arguments: { limit: 25 } });
+    expect(mockAgentClient.dms.conversations).toHaveBeenCalledWith({ limit: 25 });
+  });
+
+  it('get_dms rejects conversation limits above the server maximum', async () => {
+    mockAgentClient.dms.conversations.mockResolvedValue([]);
+    const result = await client.callTool({
+      name: 'message.dm.list',
+      arguments: { limit: 101 },
+    });
+    expect(result.isError).toBe(true);
+    expect(mockAgentClient.dms.conversations).not.toHaveBeenCalled();
   });
 
   it('send_group_dm calls dms.createGroup()', async () => {

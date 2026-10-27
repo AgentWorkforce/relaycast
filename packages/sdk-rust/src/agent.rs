@@ -3,7 +3,7 @@
 use crate::client::{ClientOptions, HttpClient, RequestOptions};
 use crate::error::{RelayError, Result};
 use crate::types::*;
-use crate::ws::{EventReceiver, LifecycleReceiver, WsClient, WsClientOptions};
+use crate::ws::{EventReceiver, LifecycleReceiver, NodeRegistration, WsClient, WsClientOptions};
 
 /// Strip leading '#' from channel names.
 fn strip_hash(channel: &str) -> &str {
@@ -52,6 +52,14 @@ impl AgentClient {
         if let Some(url) = base_url {
             options = options.with_base_url(url);
         }
+        Self::with_options(options)
+    }
+
+    /// Create an agent client with HTTP options, including product origin metadata.
+    ///
+    /// Use `ClientOptions::with_origin` to identify the calling product on HTTP
+    /// requests and WebSocket connections. The API key is the agent token.
+    pub fn with_options(options: ClientOptions) -> Result<Self> {
         let client = HttpClient::new(options)?;
         Ok(Self { client, ws: None })
     }
@@ -66,14 +74,19 @@ impl AgentClient {
         &self.client
     }
 
-    /// Replace the agent token for HTTP and WebSocket operations.
+    /// Replace the agent token for HTTP operations and reset realtime transport.
     pub async fn set_token(&mut self, token: impl Into<String>) -> Result<()> {
         let token = token.into();
         self.client = self.client.with_api_key(token.clone())?;
-        if let Some(ws) = self.ws.as_ref() {
-            ws.set_token(token).await;
+        if let Some(mut ws) = self.ws.take() {
+            ws.disconnect().await;
         }
         Ok(())
+    }
+
+    /// Resolve this agent token to its authenticated agent identity.
+    pub async fn me(&self) -> Result<Agent> {
+        self.client.get("/v1/agent", None, None).await
     }
 
     // === WebSocket ===
@@ -84,13 +97,25 @@ impl AgentClient {
             return Ok(());
         }
 
-        let options = WsClientOptions::new(self.client.api_key())
+        let me = self.me().await?;
+        let direct_node: DirectNodeToken = self
+            .client
+            .post("/v1/agent/node-token", Some(serde_json::json!({})), None)
+            .await?;
+        let mut options = WsClientOptions::new(direct_node.token.clone())
             .with_base_url(self.client.base_url())
-            .with_origin(
-                self.client.origin_surface(),
-                self.client.origin_client(),
-                self.client.origin_version(),
-            );
+            .with_origin(self.client.origin_client(), self.client.origin_version())
+            .with_node_registration(NodeRegistration {
+                node_id: direct_node.node_id,
+                name: direct_node.node_name,
+                agent_name: me.name,
+            });
+        if let Some(origin_actor) = self.client.origin_actor() {
+            options = options.with_origin_actor(origin_actor);
+        }
+        if let Some(id) = self.client.agent_relay_distinct_id() {
+            options = options.with_agent_relay_distinct_id(id);
+        }
         let mut ws = WsClient::new(options);
         ws.connect().await?;
         self.ws = Some(ws);
@@ -690,7 +715,7 @@ impl AgentClient {
 
     /// Invite an agent to a channel.
     pub async fn invite_to_channel(&self, channel: &str, agent: &str) -> Result<serde_json::Value> {
-        let body = serde_json::json!({ "agent": agent });
+        let body = serde_json::json!({ "agent_name": agent });
         self.client
             .post(
                 &format!("/v1/channels/{}/invite", urlencoding::encode(channel)),
@@ -698,6 +723,30 @@ impl AgentClient {
                 None,
             )
             .await
+    }
+
+    /// Mute a channel for this agent (suppress delivery notifications).
+    pub async fn mute_channel(&self, name: &str) -> Result<()> {
+        self.client
+            .post::<serde_json::Value>(
+                &format!("/v1/channels/{}/mute", urlencoding::encode(name)),
+                None::<()>,
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Unmute a previously muted channel for this agent.
+    pub async fn unmute_channel(&self, name: &str) -> Result<()> {
+        self.client
+            .post::<serde_json::Value>(
+                &format!("/v1/channels/{}/unmute", urlencoding::encode(name)),
+                None::<()>,
+                None,
+            )
+            .await?;
+        Ok(())
     }
 
     /// Get channel members.
@@ -845,17 +894,77 @@ impl AgentClient {
             .await
     }
 
-    // === Commands ===
+    // === Durable Delivery ===
 
-    /// Invoke a command.
-    pub async fn invoke_command(
+    /// List durable delivery items queued for this agent.
+    ///
+    /// Defaults to the non-terminal replay queue (`queued` + `delivered`) when
+    /// no status is provided. Each item carries the associated message payload.
+    pub async fn deliveries(
         &self,
-        command: &str,
-        request: InvokeCommandRequest,
-    ) -> Result<CommandInvocation> {
+        opts: Option<ListDeliveriesOptions>,
+    ) -> Result<Vec<DeliveryItem>> {
+        let opts = opts.unwrap_or_default();
+
+        let mut query_params: Vec<(String, String)> = Vec::new();
+        if let Some(status) = opts.status {
+            if let Some(status) = status.as_query_value() {
+                query_params.push(("status".to_string(), status.to_string()));
+            }
+        }
+        if let Some(limit) = opts.limit {
+            query_params.push(("limit".to_string(), limit.to_string()));
+        }
+
+        let query: Vec<(&str, &str)> = query_params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+
+        let query_ref = if query.is_empty() {
+            None
+        } else {
+            Some(query.as_slice())
+        };
+
+        self.client.get("/v1/deliveries", query_ref, None).await
+    }
+
+    /// Idempotently acknowledge a delivery, transitioning it to `acked`.
+    pub async fn ack_delivery(&self, delivery_id: &str) -> Result<Delivery> {
         self.client
             .post(
-                &format!("/v1/commands/{}/invoke", urlencoding::encode(command)),
+                &format!("/v1/deliveries/{}/ack", urlencoding::encode(delivery_id)),
+                None::<()>,
+                None,
+            )
+            .await
+    }
+
+    /// Idempotently record a delivery as `failed`.
+    pub async fn fail_delivery(
+        &self,
+        delivery_id: &str,
+        request: Option<FailDeliveryRequest>,
+    ) -> Result<Delivery> {
+        self.client
+            .post(
+                &format!("/v1/deliveries/{}/fail", urlencoding::encode(delivery_id)),
+                Some(request.unwrap_or_default()),
+                None,
+            )
+            .await
+    }
+
+    /// Idempotently defer a delivery until `available_at`.
+    pub async fn defer_delivery(
+        &self,
+        delivery_id: &str,
+        request: DeferDeliveryRequest,
+    ) -> Result<Delivery> {
+        self.client
+            .post(
+                &format!("/v1/deliveries/{}/defer", urlencoding::encode(delivery_id)),
                 Some(request),
                 None,
             )
@@ -924,5 +1033,62 @@ impl AgentClient {
         };
 
         self.client.get("/v1/files", query_ref, None).await
+    }
+
+    // === Actions (agent-to-agent RPC) ===
+
+    /// Invoke a registered action. The handler agent receives an `action.invoked`
+    /// event; the returned invocation id can be polled with [`Self::get_action_invocation`].
+    pub async fn invoke_action(
+        &self,
+        name: &str,
+        input: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> Result<InvokeActionResult> {
+        self.client
+            .post(
+                &format!("/v1/actions/{}/invoke", urlencoding::encode(name)),
+                Some(InvokeActionRequest { input }),
+                None,
+            )
+            .await
+    }
+
+    /// As the handler agent, report the result (or error) of an invocation.
+    pub async fn complete_action_invocation(
+        &self,
+        name: &str,
+        invocation_id: &str,
+        request: CompleteInvocationRequest,
+    ) -> Result<ActionInvocation> {
+        self.client
+            .post(
+                &format!(
+                    "/v1/actions/{}/invocations/{}/complete",
+                    urlencoding::encode(name),
+                    urlencoding::encode(invocation_id)
+                ),
+                Some(request),
+                None,
+            )
+            .await
+    }
+
+    /// Get the status and result of an action invocation.
+    pub async fn get_action_invocation(
+        &self,
+        name: &str,
+        invocation_id: &str,
+    ) -> Result<ActionInvocation> {
+        self.client
+            .get(
+                &format!(
+                    "/v1/actions/{}/invocations/{}",
+                    urlencoding::encode(name),
+                    urlencoding::encode(invocation_id)
+                ),
+                None,
+                None,
+            )
+            .await
     }
 }

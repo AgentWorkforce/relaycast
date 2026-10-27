@@ -1,0 +1,77 @@
+{
+  "id": "traj_6jkl93zpg343",
+  "version": 1,
+  "task": {
+    "title": "SDK WS reconnect resync: track agent_seq, send resync on reconnect, dedupe replays, emit resynced"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-09T20:01:16.919Z",
+  "completedAt": "2026-06-09T20:01:38.579Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-06-09T20:01:27.218Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_nwxv6txmb01n",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-06-09T20:01:27.218Z",
+      "endedAt": "2026-06-09T20:01:38.579Z",
+      "events": [
+        {
+          "ts": 1781035287221,
+          "type": "decision",
+          "content": "Read agent_seq from the raw WS frame before zod parsing: Read agent_seq from the raw WS frame before zod parsing",
+          "raw": {
+            "question": "Read agent_seq from the raw WS frame before zod parsing",
+            "chosen": "Read agent_seq from the raw WS frame before zod parsing",
+            "alternatives": [],
+            "reasoning": "ServerEventSchema z.object strips unknown keys, so the seq stamp is only visible pre-parse; tracking it in WsClient.onmessage keeps the schema surface unchanged"
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1781035288027,
+          "type": "decision",
+          "content": "Dedupe replays by stable event id LRU (2048) instead of seq comparison: Dedupe replays by stable event id LRU (2048) instead of seq comparison",
+          "raw": {
+            "question": "Dedupe replays by stable event id LRU (2048) instead of seq comparison",
+            "chosen": "Dedupe replays by stable event id LRU (2048) instead of seq comparison",
+            "alternatives": [],
+            "reasoning": "DB-fallback replay events carry no agent_seq and seq-based dropping would silently discard live events after a server counter reset; id dedupe covers the message events that matter"
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1781035288597,
+          "type": "decision",
+          "content": "Send resync after emitting open so consumer open-handlers resubscribe first: Send resync after emitting open so consumer open-handlers resubscribe first",
+          "raw": {
+            "question": "Send resync after emitting open so consumer open-handlers resubscribe first",
+            "chosen": "Send resync after emitting open so consumer open-handlers resubscribe first",
+            "alternatives": [],
+            "reasoning": "Matches the task contract: resync follows the auth/subscribe handshake; AgentClient resubscribes synchronously in its open handler"
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "SDK WS clients now speak the server resync protocol: WsClient tracks agent_seq, sends {type:resync,last_seen_seq,since} after reconnect, dedupes replayed events by stable id, and emits a resynced lifecycle event surfaced as on.resynced on RelayCast/AgentClient. Added resync/resync_ack/resynced frame types to @relaycast/types, package README, and unit tests (fresh-connect no-op, seq tracking, frame ordering, dedupe, ack stats).",
+    "approach": "Standard approach",
+    "confidence": 0.85
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "8145dcf864835b9c10987b2248161b8cfb9d1135",
+    "endRef": "8145dcf864835b9c10987b2248161b8cfb9d1135"
+  }
+}

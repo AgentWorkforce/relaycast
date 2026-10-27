@@ -1,0 +1,300 @@
+import { eq, and, sql, lt, gt, gte, inArray } from 'drizzle-orm';
+import type { DmMessage, WorkspaceDmConversation } from '@relaycast/types';
+import type { getDb } from '../db/index.js';
+import {
+  dmConversations,
+  dmParticipants,
+  messages,
+  agents,
+} from '../db/schema.js';
+import { codedError } from '../lib/httpError.js';
+import { D1_SAFE_IN_QUERY_CHUNK_SIZE, queryInChunks } from '../lib/queryChunks.js';
+import { publicMessageMetadata } from './messageMetadata.js';
+
+type Db = ReturnType<typeof getDb>;
+
+export const DM_CONVERSATION_PAGE_MAX_LIMIT = 500;
+
+interface DmConversationRow {
+  id: string;
+  dmType: string;
+  name: string | null;
+  channelId: string;
+  createdAt: Date;
+}
+
+export interface DmConversationPage {
+  conversations: WorkspaceDmConversation[];
+  nextCursor: string | null;
+}
+
+export function dmMessagePageLimit(limit?: number): number {
+  return Math.min(Math.max(limit || 50, 1), 100);
+}
+
+const DM_COUNT_AGENT_CHUNK_SIZE = Math.floor(D1_SAFE_IN_QUERY_CHUNK_SIZE / 2);
+
+export function dmFilteredCountConversationChunkSize(agentFilterCount: number): number {
+  return Math.max(1, D1_SAFE_IN_QUERY_CHUNK_SIZE - Math.min(agentFilterCount, DM_COUNT_AGENT_CHUNK_SIZE));
+}
+
+export async function listAllDmConversations(
+  db: Db,
+  workspaceId: string,
+  opts: { conversationIds?: string[] } = {},
+): Promise<WorkspaceDmConversation[]> {
+  const scopedConversationIds = opts.conversationIds === undefined
+    ? undefined
+    : [...new Set(opts.conversationIds)];
+  if (scopedConversationIds?.length === 0) {
+    return [];
+  }
+
+  const selectConversations = (conversationIds?: string[]) => db
+    .select({
+      id: dmConversations.id,
+      dmType: dmConversations.dmType,
+      name: dmConversations.name,
+      channelId: dmConversations.channelId,
+      createdAt: dmConversations.createdAt,
+    })
+    .from(dmConversations)
+    .where(and(
+      eq(dmConversations.workspaceId, workspaceId),
+      ...(conversationIds ? [inArray(dmConversations.id, conversationIds)] : []),
+    ));
+
+  // Observer capabilities commonly expose only one conversation in a large
+  // workspace. Apply that scope before any participant/message enrichment so
+  // unauthorized conversations are never loaded. Chunk high-cardinality
+  // capabilities to retain D1's bound-parameter safety.
+  const conversations = scopedConversationIds
+    ? await queryInChunks(scopedConversationIds, selectConversations)
+    : await selectConversations();
+
+  return enrichDmConversations(db, conversations);
+}
+
+export async function listDmConversationsPage(
+  db: Db,
+  workspaceId: string,
+  opts: { limit?: number; cursor?: string } = {},
+): Promise<DmConversationPage> {
+  const limit = Math.min(
+    Math.max(opts.limit ?? DM_CONVERSATION_PAGE_MAX_LIMIT, 1),
+    DM_CONVERSATION_PAGE_MAX_LIMIT,
+  );
+  const rows = await db
+    .select({
+      id: dmConversations.id,
+      dmType: dmConversations.dmType,
+      name: dmConversations.name,
+      channelId: dmConversations.channelId,
+      createdAt: dmConversations.createdAt,
+    })
+    .from(dmConversations)
+    .where(and(
+      eq(dmConversations.workspaceId, workspaceId),
+      ...(opts.cursor ? [gt(dmConversations.id, opts.cursor)] : []),
+    ))
+    .orderBy(dmConversations.id)
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const conversations = rows.slice(0, limit);
+  return {
+    conversations: await enrichDmConversations(db, conversations),
+    nextCursor: hasMore ? conversations.at(-1)?.id ?? null : null,
+  };
+}
+
+async function enrichDmConversations(
+  db: Db,
+  conversations: DmConversationRow[],
+): Promise<WorkspaceDmConversation[]> {
+  if (conversations.length === 0) {
+    return [];
+  }
+
+  const conversationIds = conversations.map((convo) => convo.id);
+  const channelIds = conversations.map((convo) => convo.channelId);
+
+  // A workspace can hold more DM conversations than D1 binds in one statement
+  // (100 parameters), so every IN lookup below runs in D1-safe chunks.
+  // Grouping by channel within a chunk is complete: one channel's rows never
+  // span chunks.
+  const participantRows = await queryInChunks(conversationIds, (chunk) => db
+    .select({
+      conversationId: dmParticipants.conversationId,
+      agentName: agents.name,
+    })
+    .from(dmParticipants)
+    .innerJoin(agents, eq(dmParticipants.agentId, agents.id))
+    .where(inArray(dmParticipants.conversationId, chunk)));
+
+  const messageCounts = await queryInChunks(channelIds, (chunk) => db
+    .select({ channelId: messages.channelId, count: sql<number>`count(*)` })
+    .from(messages)
+    .where(inArray(messages.channelId, chunk))
+    .groupBy(messages.channelId));
+
+  const latestMessageIds = await queryInChunks(channelIds, (chunk) => db
+    .select({ channelId: messages.channelId, lastId: sql<string>`max(${messages.id})` })
+    .from(messages)
+    .where(inArray(messages.channelId, chunk))
+    .groupBy(messages.channelId));
+
+  const lastIds = latestMessageIds.map((row) => row.lastId).filter(Boolean);
+  const latestMessages = await queryInChunks(lastIds, (chunk) => db
+    .select({
+      id: messages.id,
+      channelId: messages.channelId,
+      body: messages.body,
+      createdAt: messages.createdAt,
+      agentId: messages.agentId,
+      agentName: agents.name,
+    })
+    .from(messages)
+    .innerJoin(agents, eq(messages.agentId, agents.id))
+    .where(inArray(messages.id, chunk)));
+
+  const participantsByConversation = new Map<string, string[]>();
+  for (const row of participantRows) {
+    const list = participantsByConversation.get(row.conversationId) || [];
+    list.push(row.agentName);
+    participantsByConversation.set(row.conversationId, list);
+  }
+
+  const messageCountByChannel = new Map<string, number>(
+    messageCounts.map((row) => [row.channelId, row.count]),
+  );
+  const latestByChannel = new Map<string, typeof latestMessages[number]>(
+    latestMessages.map((row) => [row.channelId, row]),
+  );
+
+  return conversations.map((convo) => {
+    const lastMsg = latestByChannel.get(convo.channelId);
+    return {
+      id: convo.id,
+      channel_id: convo.channelId,
+      type: convo.dmType,
+      participants: participantsByConversation.get(convo.id) || [],
+      last_message: lastMsg
+        ? {
+          text: lastMsg.body,
+          agent_id: lastMsg.agentId,
+          agent_name: lastMsg.agentName,
+          created_at: lastMsg.createdAt.toISOString(),
+        }
+        : null,
+      message_count: messageCountByChannel.get(convo.channelId) ?? 0,
+    };
+  });
+}
+
+export async function getDmMessagesForWorkspace(
+  db: Db,
+  workspaceId: string,
+  conversationId: string,
+  opts: { limit?: number; before?: string; after?: string } = {},
+): Promise<DmMessage[]> {
+  const limit = dmMessagePageLimit(opts.limit);
+
+  const [conv] = await db
+    .select()
+    .from(dmConversations)
+    .where(
+      and(
+        eq(dmConversations.id, conversationId),
+        eq(dmConversations.workspaceId, workspaceId),
+      ),
+    );
+
+  if (!conv) {
+    throw codedError('Conversation not found', 'not_found', 404);
+  }
+
+  // Compare/sort on the indexed text PK directly: snowflake ids are fixed-width
+  // (19 digits) so lexical order matches numeric order, keeping the PK index
+  // usable for range scans (a CAST would force a full scan).
+  const conditions = [eq(messages.channelId, conv.channelId)];
+  if (opts.before) conditions.push(lt(messages.id, opts.before));
+  if (opts.after) conditions.push(gt(messages.id, opts.after));
+
+  const rows = await db
+    .select({
+      id: messages.id,
+      agentId: messages.agentId,
+      agentName: agents.name,
+      body: messages.body,
+      metadata: messages.metadata,
+      createdAt: messages.createdAt,
+    })
+    .from(messages)
+    .innerJoin(agents, eq(messages.agentId, agents.id))
+    .where(and(...conditions))
+    .orderBy(sql`${messages.id} DESC`)
+    .limit(limit);
+
+  return rows.map((r) => ({
+    id: r.id,
+    agent_id: r.agentId,
+    agent_name: r.agentName,
+    text: r.body,
+    // Workspace/observer history is a public DM read path and must project
+    // metadata like the agent-facing one, or a federated delivery's Ratify
+    // envelope is visible to the recipient and invisible in history — the same
+    // message reading differently depending on which door you came through.
+    // `publicMessageMetadata` strips the internal `__relaycast_*` keys.
+    metadata: publicMessageMetadata(r.metadata as Record<string, unknown> | null),
+    created_at: r.createdAt.toISOString(),
+  }));
+}
+
+export async function countDmMessagesForWorkspaceConversations(
+  db: Db,
+  workspaceId: string,
+  conversationIds: string[],
+  opts: { agentIds?: string[]; createdAfter?: string } = {},
+): Promise<Map<string, number>> {
+  if (conversationIds.length === 0) return new Map();
+  const uniqueAgentIds = opts.agentIds?.length ? [...new Set(opts.agentIds)] : [];
+  const agentChunks: Array<string[] | null> = [];
+  if (uniqueAgentIds.length === 0) {
+    agentChunks.push(null);
+  } else {
+    for (let index = 0; index < uniqueAgentIds.length; index += DM_COUNT_AGENT_CHUNK_SIZE) {
+      agentChunks.push(uniqueAgentIds.slice(index, index + DM_COUNT_AGENT_CHUNK_SIZE));
+    }
+  }
+
+  const counts = new Map<string, number>();
+  // D1 permits 100 bound parameters. Keep the two workspace predicates and
+  // optional date predicate outside the shared 90-bind IN budget, while
+  // splitting both axes so even large agent filters remain safe.
+  for (const agentChunk of agentChunks) {
+    const rows = await queryInChunks(
+      conversationIds,
+      (conversationChunk) => {
+        const conditions = [
+          inArray(dmConversations.id, conversationChunk),
+          eq(dmConversations.workspaceId, workspaceId),
+          eq(messages.workspaceId, workspaceId),
+        ];
+        if (agentChunk) conditions.push(inArray(messages.agentId, agentChunk));
+        if (opts.createdAfter) conditions.push(gte(messages.createdAt, new Date(opts.createdAfter)));
+        return db
+          .select({ conversationId: dmConversations.id, count: sql<number>`count(*)` })
+          .from(messages)
+          .innerJoin(dmConversations, eq(messages.channelId, dmConversations.channelId))
+          .where(and(...conditions))
+          .groupBy(dmConversations.id);
+      },
+      dmFilteredCountConversationChunkSize(agentChunk?.length ?? 0),
+    );
+    for (const row of rows) {
+      counts.set(row.conversationId, (counts.get(row.conversationId) ?? 0) + Number(row.count));
+    }
+  }
+  return counts;
+}

@@ -1,0 +1,92 @@
+{
+  "id": "traj_85uv3m139tup",
+  "version": 1,
+  "task": {
+    "title": "Validate AgentWorkforce/relaycast PR #410 release-exact idempotency and retry followups",
+    "source": {
+      "system": "plain",
+      "id": "PR-410"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-09-10T05:12:05.577Z",
+  "completedAt": "2026-09-10T05:12:16.573Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-09-10T05:12:15.286Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_2jqyr0hqnlqx",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-09-10T05:12:15.286Z",
+      "endedAt": "2026-09-10T05:12:16.573Z",
+      "events": [
+        {
+          "ts": 1789017135287,
+          "type": "decision",
+          "content": "Documented exact-release idempotency scope and no-duplicate-webhook replay behavior: Documented exact-release idempotency scope and no-duplicate-webhook replay behavior",
+          "raw": {
+            "question": "Documented exact-release idempotency scope and no-duplicate-webhook replay behavior",
+            "chosen": "Documented exact-release idempotency scope and no-duplicate-webhook replay behavior",
+            "alternatives": [],
+            "reasoning": "The route already derives a durable workspace/principal/action claim and suppresses webhook emission on replay; explicit docs and a regression test make the contract reviewable."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1789017135687,
+          "type": "decision",
+          "content": "Extended Rust exact-release parity test through one 503 retry: Extended Rust exact-release parity test through one 503 retry",
+          "raw": {
+            "question": "Extended Rust exact-release parity test through one 503 retry",
+            "chosen": "Extended Rust exact-release parity test through one 503 retry",
+            "alternatives": [],
+            "reasoning": "The helper already forwards RequestOptions with the caller key; matching both attempts proves the key is preserved under bounded automatic retry."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1789017136120,
+          "type": "reflection",
+          "content": "PR #410 followups are implemented and locally validated across engine, TypeScript SDK, and Rust; hosted restart/webhook E2E remains deployment-dependent.",
+          "raw": {
+            "focalPoints": [
+              "idempotency",
+              "webhook",
+              "retry",
+              "e2e"
+            ],
+            "adjustments": "No runtime changes were needed; keep exact-release replay semantics documented and covered by regression tests.",
+            "confidence": 0.92
+          },
+          "significance": "high",
+          "tags": [
+            "focal:idempotency",
+            "focal:webhook",
+            "focal:retry",
+            "focal:e2e",
+            "confidence:0.92"
+          ]
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Added exact-release scope/replay docs, asserted one webhook outbox event across replay, and verified Rust caller-key preservation through a 503 retry; pushed cc6f2c38 to PR #410 branch.",
+    "approach": "Standard approach",
+    "confidence": 0.92
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "cc6f2c38a2094f2a5e9f47099e2aaf54b93d6bed",
+    "endRef": "cc6f2c38a2094f2a5e9f47099e2aaf54b93d6bed"
+  }
+}

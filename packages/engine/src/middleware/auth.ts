@@ -1,0 +1,178 @@
+import { createMiddleware } from 'hono/factory';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
+import { touchLastSeen } from '../engine/agent.js';
+import type { AppEnv } from '../env.js';
+import type { AuthRequire } from '../ports/auth.js';
+import { getAuthTokenKind, requiredTokenMessage } from '../auth/tokenKind.js';
+import { authenticateUnexpired } from '../auth/workspaceExpiry.js';
+import { jsonError } from '../lib/httpResponse.js';
+import { sha256Hex } from '../lib/crypto.js';
+import {
+  hasAnyObserverScope,
+  type ObserverScope,
+} from '../engine/observerToken.js';
+
+// Re-exported for the WS upgrade, which looks tokens up
+// directly. The active provider's `hashToken` is preferred at those call sites.
+export { hashToken } from '../auth/index.js';
+
+const LAST_SEEN_DEBOUNCE_MS = 30_000; // 30 seconds
+
+function extractToken(authHeader: string | undefined): string | null {
+  if (!authHeader?.startsWith('Bearer ')) return null;
+  return authHeader.slice(7);
+}
+
+async function presentedCredentialHash(token: string): Promise<string | undefined> {
+  // AuthProvider.hashToken describes storage, and may return a raw token.
+  // Telemetry provenance always uses its own irreversible SHA-256 digest.
+  try { return await sha256Hex(token); } catch { return undefined; }
+}
+
+/**
+ * The principal a single-kind requirement promises its handlers, when `result`
+ * lacks it. The provider is a host seam: a host cache that answered a workspace
+ * key for a `require: 'agent'` route used to hand `/agents/:name/rotate-token`
+ * a request with no agent, which it dereferenced into a 500.
+ */
+function missingPrincipal(
+  require: AuthRequire,
+  result: { agent?: unknown; node?: unknown; observerToken?: unknown },
+): 'agent' | 'node' | 'observer' | null {
+  if (require === 'agent' && !result.agent) return 'agent';
+  if (require === 'node' && !result.node) return 'node';
+  if (require === 'observer' && !result.observerToken) return 'observer';
+  return null;
+}
+
+function makeAuthMiddleware(require: AuthRequire) {
+  return createMiddleware<AppEnv>(async (c, next) => {
+    const token = extractToken(c.req.header('Authorization'));
+    if (!token) {
+      return jsonError(c, 'unauthorized', 'Missing or invalid Authorization header', 401);
+    }
+
+    const db = c.get('db');
+    const result = await authenticateUnexpired(c.get('engine').auth, { token, require, db });
+    if (!result.ok) {
+      return jsonError(c, result.code, result.message, result.status as ContentfulStatusCode);
+    }
+    const missing = missingPrincipal(require, result);
+    if (missing) {
+      return jsonError(c, 'unauthorized', requiredTokenMessage(missing), 401);
+    }
+
+    c.set('workspace', result.workspace);
+    c.set('agentCredentialHash', result.agent ? await presentedCredentialHash(token) : undefined);
+    if (result.agent) {
+      c.set('agent', result.agent);
+      // Touch lastSeen (debounced, fire-and-forget)
+      if (Date.now() - result.agent.lastSeen.getTime() > LAST_SEEN_DEBOUNCE_MS) {
+        touchLastSeen(db, result.agent.id).catch(() => {});
+      }
+    }
+    if (result.node) {
+      c.set('node', result.node);
+    }
+    if (result.observerToken) {
+      c.set('observerToken', result.observerToken);
+    }
+
+    await next();
+  });
+}
+
+interface WorkspaceReadOptions {
+  allowAgent?: boolean;
+  allowNode?: boolean;
+}
+
+function scopesArray(scopes: ObserverScope | ObserverScope[]): ObserverScope[] {
+  return Array.isArray(scopes) ? scopes : [scopes];
+}
+
+export function requireWorkspaceRead(
+  scopes: ObserverScope | ObserverScope[],
+  options: WorkspaceReadOptions = {},
+) {
+  const requiredScopes = scopesArray(scopes);
+  const allowAgent = options.allowAgent ?? true;
+  const allowNode = options.allowNode ?? true;
+
+  return createMiddleware<AppEnv>(async (c, next) => {
+    const token = extractToken(c.req.header('Authorization'));
+    if (!token) {
+      return jsonError(c, 'unauthorized', 'Missing or invalid Authorization header', 401);
+    }
+
+    const db = c.get('db');
+    const require: AuthRequire = getAuthTokenKind(token) === 'observer'
+      ? 'observer'
+      : allowAgent || allowNode
+        ? 'any'
+        : 'workspace';
+    const result = await authenticateUnexpired(c.get('engine').auth, { token, require, db });
+    if (!result.ok) {
+      return jsonError(c, result.code, result.message, result.status as ContentfulStatusCode);
+    }
+    // An observer token answered without its observer identity would otherwise
+    // fall through below and read with the workspace's full access, unscoped.
+    const missing = missingPrincipal(require, result);
+    if (missing) {
+      return jsonError(c, 'unauthorized', requiredTokenMessage(missing), 401);
+    }
+
+    if (result.observerToken) {
+      if (!hasAnyObserverScope(result.observerToken, requiredScopes)) {
+        return jsonError(c, 'insufficient_scope', 'Observer token lacks the required scope', 403);
+      }
+      c.set('workspace', result.workspace);
+      c.set('agent', undefined);
+      c.set('agentCredentialHash', undefined);
+      c.set('node', undefined);
+      c.set('observerToken', result.observerToken);
+      await next();
+      return;
+    }
+
+    if (result.agent && !allowAgent) {
+      return jsonError(c, 'forbidden', 'Agent token cannot access this resource', 403);
+    }
+    if (result.node && !allowNode) {
+      return jsonError(c, 'forbidden', 'Node token cannot access this resource', 403);
+    }
+
+    c.set('workspace', result.workspace);
+    c.set('agentCredentialHash', result.agent ? await presentedCredentialHash(token) : undefined);
+    if (result.agent) {
+      c.set('agent', result.agent);
+      if (Date.now() - result.agent.lastSeen.getTime() > LAST_SEEN_DEBOUNCE_MS) {
+        touchLastSeen(db, result.agent.id).catch(() => {});
+      }
+    }
+    if (result.node) {
+      c.set('node', result.node);
+    }
+
+    await next();
+  });
+}
+
+/** Requires a workspace key (`rk_live_...`). */
+export const requireWorkspaceKey = makeAuthMiddleware('workspace');
+
+/** Accepts either a workspace key or an agent token. */
+export const requireAuth = makeAuthMiddleware('any');
+
+/**
+ * Accepts a workspace key, an agent token, or a node token — the principals that
+ * can post a message. An agent posts as itself; a node posts as an explicit
+ * `from` agent resolved within the node's workspace.
+ */
+export const requireSender = makeAuthMiddleware('sender');
+
+/** Requires an agent token (`at_live_...`). */
+export const requireAgentToken = makeAuthMiddleware('agent');
+
+/** Requires a node token (`nt_live_...`). */
+export const requireNodeToken = makeAuthMiddleware('node');

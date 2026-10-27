@@ -1,0 +1,62 @@
+{
+  "collected_at": "2026-09-08T17:31:48.255209+00:00",
+  "window": "preceding hour; datetimeHour_geq/datetimeHour_leq",
+  "source": "Cloudflare GraphQL d1QueriesAdaptiveGroups; limit 100; sum_queryDurationMs_DESC",
+  "scope": "database-wide query-shape aggregates; not workspace-specific request traces",
+  "queries": [
+    {
+      "avg": {
+        "queryDurationMs": 35157.9202875,
+        "rowsRead": 3654145,
+        "rowsReturned": 0,
+        "rowsWritten": 65388
+      },
+      "count": 8,
+      "dimensions": {
+        "query": "insert into \"deliveries\" (\"id\", \"workspace_id\", \"message_id\", \"agent_id\", \"mode\", \"reason\", \"priority\", \"deadline\", \"status\", \"seq\", \"location_type\", \"location_node_id\", \"route_node_id\", \"route_node_kind\", \"route_node_role\", \"delivery_adapter\", \"dispatch_attempts\", \"next_attempt_at\", \"last_dispatch_error\", \"expires_at\", \"delivered_at\", \"acked_at\", \"dead_lettered_at\", \"retryable\", \"available_at\", \"error\", \"idempotency_key\", \"created_at\", \"updated_at\") select 'del_' || ? || '_' || \"channel_members\".\"agent_id\", ?, ?, \"channel_members\".\"agent_id\", ?, ?, ?, null, ?, MAX(\"agents\".\"delivery_seq\", \"agents\".\"delivery_ack_seq\") + 1, CASE WHEN \"agent_node_bindings\".\"node_id\" IS NOT NULL THEN 'via_node' ELSE \"agents\".\"location_type\" END, COALESCE(\"agent_node_bindings\".\"node_id\", \"agents\".\"location_node_id\"), COALESCE(\"agent_node_bindings\".\"node_id\", \"agents\".\"location_node_id\"), \"nodes\".\"kind\", \"nodes\".\"role\", \"nodes\".\"delivery_adapter\", 0, null, null, (unixepoch() + ?), null, null, null, null, null, null, null, (unixepoch()), null from \"channel_members\" inner join \"agents\" on \"channel_members\".\"agent_id\" = \"agents\".\"id\" left join \"agent_node_bindings\" on (\"agent_node_bindings\".\"workspace_id\" = ? and \"agent_node_bindings\".\"agent_id\" = \"channel_members\".\"agent_id\" and \"agent_node_bindings\".\"status\" = ? and \"agents\".\"location_type\" = ? and \"agents\".\"location_node_id\" = \"agent_node_bindings\".\"node_id\") left join \"nodes\" on (\"nodes\".\"workspace_id\" = ? and \"nodes\".\"id\" = COALESCE(\"agent_node_bindings\".\"node_id\", \"agents\".\"location_node_id\")) where (\"channel_members\".\"channel_id\" = ? and \"channel_members\".\"is_muted\" = ? and \"channel_members\".\"agent_id\" <> ? and (\n    SELECT COUNT(*)\n    FROM deliveries d\n    WHERE d.workspace_id = ?\n      AND d.agent_id = \"channel_members\".\"agent_id\"\n      AND d.status IN ('queued', 'delivered')\n      AND (d.expires_at IS NULL OR d.expires_at > unixepoch())\n  ) < ?) on conflict do nothing"
+      },
+      "sum": {
+        "queryDurationMs": 281263.3623,
+        "rowsRead": 29233160,
+        "rowsReturned": 0,
+        "rowsWritten": 523110
+      }
+    },
+    {
+      "avg": {
+        "queryDurationMs": 1932.909857142857,
+        "rowsRead": 3753184,
+        "rowsReturned": 24,
+        "rowsWritten": 0
+      },
+      "count": 42,
+      "dimensions": {
+        "query": "select \"deliveries\".\"id\", \"deliveries\".\"workspace_id\", \"deliveries\".\"message_id\", \"deliveries\".\"agent_id\", \"deliveries\".\"mode\", \"deliveries\".\"reason\", \"deliveries\".\"priority\", \"deliveries\".\"deadline\", \"deliveries\".\"status\", \"deliveries\".\"seq\", \"deliveries\".\"location_type\", \"deliveries\".\"location_node_id\", \"deliveries\".\"route_node_id\", \"deliveries\".\"route_node_kind\", \"deliveries\".\"route_node_role\", \"deliveries\".\"delivery_adapter\", \"deliveries\".\"dispatch_attempts\", \"deliveries\".\"next_attempt_at\", \"deliveries\".\"last_dispatch_error\", \"deliveries\".\"expires_at\", \"deliveries\".\"delivered_at\", \"deliveries\".\"acked_at\", \"deliveries\".\"dead_lettered_at\", \"deliveries\".\"retryable\", \"deliveries\".\"available_at\", \"deliveries\".\"error\", \"deliveries\".\"idempotency_key\", \"deliveries\".\"created_at\", \"deliveries\".\"updated_at\", \"agents\".\"name\", \"agents\".\"provider_name\", \"agents\".\"delivery_ack_seq\", \"messages\".\"body\", \"messages\".\"blocks\", \"messages\".\"metadata\", \"messages\".\"has_attachments\", \"messages\".\"thread_id\", \"messages\".\"created_at\", \"messages\".\"channel_id\", \"channels\".\"name\", \"dm_conversations\".\"id\", \"dm_conversations\".\"dm_type\", \"messages\".\"agent_id\", (\n        SELECT a.name FROM agents a WHERE a.id = \"messages\".\"agent_id\"\n      ) from \"deliveries\" inner join \"agents\" on \"deliveries\".\"agent_id\" = \"agents\".\"id\" inner join \"messages\" on \"deliveries\".\"message_id\" = \"messages\".\"id\" inner join \"channels\" on \"messages\".\"channel_id\" = \"channels\".\"id\" left join \"dm_conversations\" on \"dm_conversations\".\"channel_id\" = \"messages\".\"channel_id\" where (\"deliveries\".\"workspace_id\" = ? and \"agents\".\"location_type\" = ? and \"agents\".\"location_node_id\" = ? and \"deliveries\".\"status\" in (?, ?) and \"deliveries\".\"seq\" > \"agents\".\"delivery_ack_seq\" and (\"deliveries\".\"expires_at\" IS NULL OR \"deliveries\".\"expires_at\" > ?) and \"agents\".\"provider_name\" = ?) order by \"agents\".\"name\" asc, \"deliveries\".\"seq\" asc"
+      },
+      "sum": {
+        "queryDurationMs": 81182.21399999999,
+        "rowsRead": 157633764,
+        "rowsReturned": 1038,
+        "rowsWritten": 0
+      }
+    },
+    {
+      "avg": {
+        "queryDurationMs": 1.9549,
+        "rowsRead": 96,
+        "rowsReturned": 83,
+        "rowsWritten": 0
+      },
+      "count": 110,
+      "dimensions": {
+        "query": "select \"id\", \"workspace_id\", \"name\", \"type\", \"token_hash\", \"previous_token_hash\", \"previous_token_expires_at\", \"status\", \"handle\", \"persona\", \"metadata\", \"capabilities\", \"location_type\", \"location_node_id\", \"provider_name\", \"resumable\", \"session_ref\", \"origin_node_id\", \"delivery_ack_seq\", \"delivery_seq\", \"created_at\", \"last_seen\" from \"agents\" where (\"agents\".\"workspace_id\" = ? and \"agents\".\"status\" <> ?)"
+      },
+      "sum": {
+        "queryDurationMs": 215.03900000000002,
+        "rowsRead": 10560,
+        "rowsReturned": 9130,
+        "rowsWritten": 0
+      }
+    }
+  ]
+}

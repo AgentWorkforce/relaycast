@@ -1,0 +1,69 @@
+{
+  "id": "traj_3a7q65ksviqc",
+  "version": 1,
+  "task": {
+    "title": "Fix observer authoritative DM and filter gaps"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-25T14:32:38.363Z",
+  "completedAt": "2026-06-25T14:41:22.234Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-06-25T14:40:37.658Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_aqd36esqzt6q",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-06-25T14:40:37.658Z",
+      "endedAt": "2026-06-25T14:41:22.234Z",
+      "events": [
+        {
+          "ts": 1782398437659,
+          "type": "decision",
+          "content": "Make channel_type authoritative for observer message gating: Make channel_type authoritative for observer message gating",
+          "raw": {
+            "question": "Make channel_type authoritative for observer message gating",
+            "chosen": "Make channel_type authoritative for observer message gating",
+            "alternatives": [],
+            "reasoning": "conversation_id is a derived join and can be absent for non-normal channel rows; treating channel_type != 0 as private before channel-level allow checks makes DM blocking fail closed across single-resource message, thread, and reaction paths."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Made observer DM gating fail closed with channel_type-backed message resources, tightened file/event filters, added SDK scope enums, updated OpenAPI responses, and verified engine/SDK/Rust/Swift tests.",
+    "approach": "Standard approach",
+    "confidence": 0.92
+  },
+  "commits": [
+    "efa6971"
+  ],
+  "filesChanged": [
+    "openapi.yaml",
+    "packages/engine/src/__tests__/conformance/observerToken.test.ts",
+    "packages/engine/src/engine/observerToken.ts",
+    "packages/engine/src/routes/console.ts",
+    "packages/engine/src/routes/message.ts",
+    "packages/engine/src/routes/reaction.ts",
+    "packages/engine/src/routes/thread.ts",
+    "packages/engine/src/routes/workspace.ts",
+    "packages/sdk-rust/src/types.rs",
+    "packages/sdk-rust/tests/parity.rs",
+    "packages/sdk-swift/Sources/Relaycast/Models.swift",
+    "packages/sdk-swift/Tests/RelaycastTests/RelaycastTests.swift"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "3eb1bcf41cbf9ef81e680da5e8aa0ddc588afe19",
+    "endRef": "efa69719ed60c185191b927a041fda709c6cd041",
+    "traceId": "899f091e-da43-4dcd-8ef9-93f43c9b2249"
+  }
+}

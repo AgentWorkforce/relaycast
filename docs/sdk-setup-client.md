@@ -61,7 +61,7 @@ This spec covers:
 5. Support for both the full RelayCast API and the simpler communicate-style interface
 6. What is explicitly out of scope
 
-This spec does **not** cover: self-hosted server setup, Python SDK changes, or changes to any existing `RelayCast` or `AgentClient` methods.
+This spec does **not** cover: self-hosted server setup, or changes to any existing `RelayCast` or `AgentClient` methods.
 
 ---
 
@@ -85,14 +85,14 @@ This spec does **not** cover: self-hosted server setup, Python SDK changes, or c
 └────────────────────┬─────────────────────────────────┘
                      │
 ┌────────────────────▼─────────────────────────────────┐
-│  Relaycast API  (api.relaycast.dev / localhost:7528) │
+│  Relaycast API  (cast.agentrelay.com / :8787)     │
 │  /v1/workspaces, /v1/agents, /v1/channels, etc.     │
 └──────────────────────────────────────────────────────┘
 ```
 
 ### Cloud API base URL
 
-`RelaycastSetup` defaults to `https://api.relaycast.dev`. This is overridable via constructor option for staging/dev environments or local development.
+`RelaycastSetup` defaults to `https://cast.agentrelay.com` (the hosted engine). This is overridable via the `baseUrl` constructor option for staging/dev environments or for a self-hosted engine (`http://localhost:8787`).
 
 ---
 
@@ -106,7 +106,7 @@ The entry point. Stateless — creates workspaces and returns handles.
 export interface RelaycastSetupOptions {
   /**
    * Base URL for the Relaycast API.
-   * @default "https://api.relaycast.dev"
+   * @default "https://cast.agentrelay.com"
    */
   baseUrl?: string
 
@@ -132,13 +132,6 @@ export interface RelaycastSetupOptions {
     maxRetries: number
     baseDelayMs: number
   }
-
-  /**
-   * Enable local mode, targeting a locally running Relaycast daemon.
-   * Automatically sets baseUrl to http://127.0.0.1:7528 if not overridden.
-   * @default false
-   */
-  local?: boolean
 }
 
 export class RelaycastSetup {
@@ -183,6 +176,12 @@ export interface CreateWorkspaceOptions {
    * Required by POST /v1/workspaces.
    */
   name: string
+  /**
+   * Owner-scoped key for crash-safe delegated workspace-create retries.
+   * Requires this setup client to have an authenticated owner `apiKey`;
+   * keyed anonymous creation is rejected.
+   */
+  idempotencyKey?: string
 }
 ```
 
@@ -359,8 +358,10 @@ export class MissingApiKeyError extends RelaycastSetupError {
 
 Sequence:
 
-1. `POST {baseUrl}/v1/workspaces` with body `{ name }`
-   — Auth header: `Authorization: Bearer {apiKey}` if provided, else anonymous
+1. `POST {baseUrl}/v1/workspaces` with body `{ name }` (and an optional
+   `Idempotency-Key` header from `idempotencyKey`)
+   — Auth header: `Authorization: Bearer {apiKey}` is required when
+   `idempotencyKey` is set and optional otherwise
    — Returns: `{ ok: true, data: { workspace_id, api_key, created_at } }`
 
 2. Construct and return a `WorkspaceHandle` with:
@@ -477,15 +478,15 @@ const workspace = await setup.joinWorkspace(
 const alice = await workspace.registerAgent({ name: 'Alice', type: 'agent' })
 ```
 
-This is also the relaycast-side entry point for a `@relayfile/sdk` `AgentWorkspaceInvite`: pass `invite.workspaceId` and `invite.relaycastApiKey` to `joinWorkspace()`, set `baseUrl` from `invite.relaycastBaseUrl` when present, then claim the invited identity with `workspace.relayCast().agents.registerOrRotate({ name: invite.agentName })`. For the full multi-agent workflow, see [Agent Workspace Golden Path](../../relayfile/docs/agent-workspace-golden-path.md).
+This is also the relaycast-side entry point for a `@relayfile/sdk` `AgentWorkspaceInvite`: pass `invite.workspaceId` and `invite.relaycastApiKey` to `joinWorkspace()`, set `baseUrl` from `invite.relaycastBaseUrl` when present, then create the invited identity with `workspace.relayCast().agents.register({ name: invite.agentName })`. A collision fails closed; recover an existing invite identity only with its immutable id and enrolled recovery proof. For the full multi-agent workflow, see [Agent Workspace Golden Path](../../relayfile/docs/agent-workspace-golden-path.md).
 
-### Local development mode
+### Self-hosted / local development mode
+
+Run the engine locally (`npx @relaycast/engine`, default port 8787) and point `baseUrl` at it:
 
 ```ts
 const setup = new RelaycastSetup({
-  local: true,
-  // Optionally override the default local URL
-  // baseUrl: 'http://127.0.0.1:7528',
+  baseUrl: 'http://localhost:8787',
 })
 
 const workspace = await setup.createWorkspace({ name: 'local-dev' })
@@ -636,14 +637,12 @@ The following are explicitly deferred from this spec:
 
 2. **Workspace join token** — A lightweight token that allows joining a workspace without full API key access, for scenarios where you want to share workspace access with untrusted processes.
 
-3. **Python SDK** — Mirror `RelaycastSetup` as `RelaycastSetup` in `packages/sdk-python`.
+3. **Workspace listing** — `RelaycastSetup.listWorkspaces()` to enumerate workspaces the current API key has access to.
 
-4. **Workspace listing** — `RelaycastSetup.listWorkspaces()` to enumerate workspaces the current API key has access to.
+4. **Team invite flow** — A flow for inviting humans to a workspace via email, with email verification and role assignment.
 
-5. **Team invite flow** — A flow for inviting humans to a workspace via email, with email verification and role assignment.
+5. **MCP server auto-setup** — A method on `WorkspaceHandle` that configures the MCP server with the correct workspace credentials automatically.
 
-6. **MCP server auto-setup** — A method on `WorkspaceHandle` that configures the MCP server with the correct workspace credentials automatically.
+6. **Webhook integration setup** — Convenience methods for setting up common webhook integrations (GitHub, Slack, etc.) with sensible defaults.
 
-7. **Webhook integration setup** — Convenience methods for setting up common webhook integrations (GitHub, Slack, etc.) with sensible defaults.
-
-8. **Workspace teardown** — A `workspace.delete()` method on `WorkspaceHandle` for cleaning up ephemeral workspaces.
+7. **Workspace teardown** — A `workspace.delete()` method on `WorkspaceHandle` for cleaning up ephemeral workspaces.

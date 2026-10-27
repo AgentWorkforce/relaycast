@@ -1,0 +1,656 @@
+import { and, eq, isNull, ne, or, sql, inArray, getTableColumns, type SQL, type SQLWrapper } from 'drizzle-orm';
+import {
+  agentNodeBindings,
+  agents,
+  channelMembers,
+  deliveries,
+  dmParticipants,
+  nodeProviders,
+  nodes,
+} from '../db/schema.js';
+import type { AtomicWrite, EngineDb } from '../ports/database.js';
+import { NODE_LIVENESS_TTL_MS } from './placement.js';
+import {
+  workspaceActiveDepthSql,
+  workspaceGrowthLimit,
+  type DeliveryAudience,
+  type WorkspaceDeliveryPolicy,
+} from './workspaceDeliveryPolicy.js';
+
+type DeliveryMode = 'immediate' | 'next-tool-call';
+type ChannelDeliveryReason = 'message' | 'mention' | 'thread-reply';
+
+export interface DeliveryFanoutRecord {
+  id: string;
+  agentId: string;
+  agentName: string;
+  messageId: string;
+  seq: number;
+  mode: string;
+  reason: string;
+  status: string;
+  locationType: string;
+  locationNodeId: string | null;
+  routeNodeId: string | null;
+  routeNodeKind: string | null;
+  routeNodeRole: string | null;
+  deliveryAdapter: string | null;
+  nextAttemptAt?: Date | null;
+}
+
+export type DeliveryRejectionReason = 'depth_cap' | 'recipient_offline';
+
+export interface DeliveryRejectionRecord {
+  agentId: string;
+  agentName: string;
+  messageId: string;
+  reason: DeliveryRejectionReason;
+  error: string;
+  retryable: false;
+}
+
+export interface DeliveryOutcomeRecords {
+  deliveries: DeliveryFanoutRecord[];
+  rejections: DeliveryRejectionRecord[];
+}
+
+function deliveryId(messageId: string, agentId: unknown) {
+  return sql<string>`'del_' || ${messageId} || '_' || ${agentId}`;
+}
+
+function channelReasonSql(
+  mentionHandles: readonly string[],
+  fallback: ChannelDeliveryReason,
+) {
+  if (mentionHandles.length === 0) {
+    return sql<string>`${fallback}`;
+  }
+
+  const mentionList = sql.join(mentionHandles.map((handle) => sql`${handle}`), sql`, `);
+  return sql<string>`case when ${agents.name} in (${mentionList}) then ${'mention'} else ${fallback} end`;
+}
+
+function channelMuteDeliveryFilter(mentionHandles: readonly string[]) {
+  if (mentionHandles.length === 0) {
+    return eq(channelMembers.isMuted, false);
+  }
+  return or(eq(channelMembers.isMuted, false), inArray(agents.name, mentionHandles));
+}
+
+/** Materialize the exact rows that will be inserted, including routing, mute,
+ * mailbox, and duplicate filters. Admission and insertion share this snapshot;
+ * neither re-evaluates recipient membership after sequence triggers run.
+ */
+function deliveryAdmissionSelect(
+  workspaceId: string,
+  policy: WorkspaceDeliveryPolicy | undefined,
+  audience: DeliveryAudience,
+): (query: SQLWrapper) => SQL {
+  return (query) => {
+    if (!policy) return query.getSQL();
+    const columns = Object.values(getTableColumns(deliveries));
+    const names = sql.join(columns.map(column => sql.identifier(column.name)), sql`, `);
+    const values = sql.join(columns.map(column => column.name === 'status'
+      ? sql`CASE WHEN capacity_admission.allowed THEN capacity_candidates.status ELSE NULL END`
+      : sql`capacity_candidates.${sql.identifier(column.name)}`), sql`, `);
+    const limit = workspaceGrowthLimit(policy, audience);
+    return sql`WITH capacity_candidates (${names}) AS MATERIALIZED (${query.getSQL()}),
+      capacity_admission AS MATERIALIZED (
+        SELECT (${workspaceActiveDepthSql(workspaceId)} + (SELECT COUNT(*) FROM capacity_candidates)) <= ${limit} AS allowed
+      )
+      SELECT ${values} FROM capacity_candidates CROSS JOIN capacity_admission WHERE 1`;
+  };
+}
+
+function ttlSeconds(ttlMs: number): number {
+  return Math.max(1, Math.ceil(ttlMs / 1000));
+}
+
+function nextDeliverySeqSql() {
+  // deliverySeq is normally >= deliveryAckSeq. Including the cursor keeps a
+  // future/stale cumulative ACK from making the next allocation replay-hidden.
+  return sql<number>`MAX(${agents.deliverySeq}, ${agents.deliveryAckSeq}) + 1`;
+}
+
+/** Test live mailbox depth with indexed branches capped at the admission limit. */
+function belowDepthCapSql(workspaceId: string, agentId: unknown, depthCap: number) {
+  // Expired-but-not-yet-swept rows are not active mailbox depth: TTL expiry is
+  // only swept lazily (GET /deliveries, /inbox, node replay), so an idle/offline
+  // recipient would otherwise keep rejecting new sends as `depth_cap` long after
+  // its queued rows should have dead-lettered. Exclude expired rows from the count.
+  return sql`(
+    SELECT COUNT(*) FROM (
+      SELECT 1 FROM deliveries d INDEXED BY idx_deliveries_agent_active_expiry
+      WHERE d.workspace_id = ${workspaceId}
+        AND d.agent_id = ${agentId}
+        AND d.status IN ('queued', 'delivered')
+        AND d.expires_at IS NULL
+      UNION ALL
+      SELECT 1 FROM deliveries d INDEXED BY idx_deliveries_agent_active_expiry
+      WHERE d.workspace_id = ${workspaceId}
+        AND d.agent_id = ${agentId}
+        AND d.status IN ('queued', 'delivered')
+        AND d.expires_at > unixepoch()
+      LIMIT ${depthCap}
+    )
+  ) < ${depthCap}`;
+}
+
+/**
+ * True unless the recipient agent has been continuously offline longer than
+ * `offlineExcludeMs`. Broadcast fanout (channel + group-DM) excludes such
+ * agents from the candidate set entirely, rather than charging them a new
+ * delivery: a dead agent sits under its own per-recipient `depthCap`
+ * indefinitely, so without this a workspace's shared delivery-depth budget
+ * (see workspaceDeliveryPolicy) keeps draining into mailboxes nobody will
+ * ever read, starving fanout to agents that are actually online.
+ *
+ * http_push routes have no socket-liveness signal, so an old agent presence
+ * timestamp does not make their receiver unreachable and must not exclude them.
+ * A fresh live route is authoritative too: direct-node heartbeats and the
+ * matching broker-provider heartbeat refresh route liveness rather than every
+ * hosted agent row, so a quiet but connected agent may legitimately have an
+ * old `last_seen` timestamp.
+ */
+function notLongOfflineSql(offlineExcludeMs: number): SQL {
+  return sql`NOT ${longOfflineSql(offlineExcludeMs)}`;
+}
+
+function longOfflineSql(offlineExcludeMs: number): SQL<number> {
+  if (offlineExcludeMs === 0) return sql<number>`0`;
+  const cutoffSeconds = Math.floor(offlineExcludeMs / 1000);
+  const nodeLivenessSeconds = Math.ceil(NODE_LIVENESS_TTL_MS / 1000);
+  return sql<number>`(${agents.status} IN ('offline', 'active', 'online')
+    AND ${agents.lastSeen} < (unixepoch() - ${cutoffSeconds})
+    AND NOT (
+      COALESCE(${nodes.kind}, '') = 'http_push'
+      OR (
+        COALESCE(${nodes.status}, 'offline') <> 'offline'
+        AND ${nodes.lastHeartbeatAt} IS NOT NULL
+        AND ${nodes.lastHeartbeatAt} >= (unixepoch() - ${nodeLivenessSeconds})
+        AND ${nodes.lastHeartbeatAt} <= unixepoch()
+        AND (
+          COALESCE(${nodes.role}, '') = 'direct'
+          OR EXISTS (
+            SELECT 1 FROM ${nodeProviders}
+            WHERE ${nodeProviders.workspaceId} = ${agents.workspaceId}
+              AND ${nodeProviders.nodeId} = ${nodes.id}
+              AND ${nodeProviders.name} = ${agents.providerName}
+              AND ${nodeProviders.status} = 'online'
+              AND ${nodeProviders.lastHeartbeatAt} IS NOT NULL
+              AND ${nodeProviders.lastHeartbeatAt} >= (unixepoch() - ${nodeLivenessSeconds})
+              AND ${nodeProviders.lastHeartbeatAt} <= unixepoch()
+          )
+        )
+      )
+    ))`;
+}
+
+/**
+ * Compose the `workspace_id` value for a delivery insert.
+ *
+ * `deliveries.workspace_id` is NOT NULL, so emitting NULL for a failing
+ * condition turns it into a real statement error that rolls back the enclosing
+ * atomic write — the mechanism the existing `rejectOnOverflow` per-recipient
+ * guard already relies on. The workspace growth condition is scalar (constant
+ * across the fanout), so when it fails the *whole* broadcast is refused, never
+ * silently truncated or partially admitted.
+ */
+/** The `workspace_id` sentinel for the per-recipient / required-mailbox guard. */
+function guardedWorkspaceIdSql(args: {
+  workspaceId: string;
+  perRecipientOk?: SQL;
+}): SQL<string> {
+  if (!args.perRecipientOk) return sql<string>`${args.workspaceId}`;
+  return sql<string>`CASE WHEN ${args.perRecipientOk} THEN ${args.workspaceId} ELSE NULL END`;
+}
+
+function newDeliveryIdentitySql(messageId: string, agentId: unknown) {
+  return sql`NOT EXISTS (SELECT 1 FROM deliveries existing
+    WHERE existing.message_id = ${messageId} AND existing.agent_id = ${agentId})`;
+}
+
+export function buildChannelDeliveryWrite(
+  db: EngineDb,
+  input: {
+    workspaceId: string;
+    messageId: string;
+    channelId: string;
+    senderAgentId: string;
+    mode: DeliveryMode;
+    ttlMs: number;
+    depthCap: number;
+    /** Recipients offline longer than this are excluded from the fanout. */
+    offlineExcludeMs: number;
+    reason?: ChannelDeliveryReason;
+    mentionHandles?: readonly string[];
+    /** Abort the enclosing atomic write when ANY recipient has no capacity. */
+    rejectOnOverflow?: boolean;
+    /** Server-resolved workspace growth policy; absent => no workspace guard. */
+    workspacePolicy?: WorkspaceDeliveryPolicy;
+    /** Server-classified audience; broadcasts may not consume the reserve. */
+    audience?: DeliveryAudience;
+  },
+): AtomicWrite {
+  const mentionHandles = input.mentionHandles ?? [];
+  const reason = channelReasonSql(mentionHandles, input.reason ?? 'message');
+  const workspaceId = guardedWorkspaceIdSql({
+    workspaceId: input.workspaceId,
+    perRecipientOk: input.rejectOnOverflow
+      ? belowDepthCapSql(input.workspaceId, channelMembers.agentId, input.depthCap)
+      : undefined,
+  });
+  const guardedSelect = deliveryAdmissionSelect(input.workspaceId, input.workspacePolicy, input.audience ?? 'broadcast');
+  const status = sql<string>`${'queued'}`;
+  return db
+    .insert(deliveries)
+    .select((qb) =>
+      guardedSelect(qb
+        .select({
+          id: deliveryId(input.messageId, channelMembers.agentId),
+          // A NOT NULL guard runs inside the same INSERT SELECT as capacity
+          // evaluation. Unlike a preflight count, it cannot race another send.
+          // The enclosing atomic write rolls back the message and every recipient.
+          workspaceId,
+          messageId: sql<string>`${input.messageId}`,
+          agentId: channelMembers.agentId,
+          mode: sql<string>`${input.mode}`,
+          reason,
+          priority: sql<string>`${'normal'}`,
+          deadline: sql<null>`null`,
+          status,
+          // Migration 0029 installs an AFTER INSERT trigger that advances the
+          // same agent row to this value. Allocation and high-water advancement
+          // therefore happen in one SQLite statement on every adapter.
+          seq: nextDeliverySeqSql(),
+          locationType: sql<string>`CASE WHEN ${agentNodeBindings.nodeId} IS NOT NULL THEN 'via_node' ELSE ${agents.locationType} END`,
+          locationNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
+          routeNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
+          routeNodeKind: nodes.kind,
+          routeNodeRole: nodes.role,
+          deliveryAdapter: nodes.deliveryAdapter,
+          dispatchAttempts: sql<number>`0`,
+          nextAttemptAt: sql<null>`null`,
+          lastDispatchError: sql<null>`null`,
+          expiresAt: sql`(unixepoch() + ${ttlSeconds(input.ttlMs)})`,
+          deliveredAt: sql<null>`null`,
+          ackedAt: sql<null>`null`,
+          deadLetteredAt: sql<null>`null`,
+          retryable: sql<null>`null`,
+          availableAt: sql<null>`null`,
+          error: sql<null>`null`,
+          idempotencyKey: sql<null>`null`,
+          createdAt: sql`(unixepoch())`,
+          updatedAt: sql<null>`null`,
+        })
+        .from(channelMembers)
+        .innerJoin(agents, eq(channelMembers.agentId, agents.id))
+        .leftJoin(agentNodeBindings, and(
+          eq(agentNodeBindings.workspaceId, input.workspaceId),
+          eq(agentNodeBindings.agentId, channelMembers.agentId),
+          eq(agentNodeBindings.status, 'active'),
+          eq(agents.locationType, 'via_node'),
+          eq(agents.locationNodeId, agentNodeBindings.nodeId),
+        ))
+        .leftJoin(nodes, and(
+          eq(nodes.workspaceId, input.workspaceId),
+          eq(nodes.id, sql`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`),
+        ))
+        .where(
+          and(
+            eq(channelMembers.channelId, input.channelId),
+            channelMuteDeliveryFilter(mentionHandles),
+            ne(channelMembers.agentId, input.senderAgentId),
+            newDeliveryIdentitySql(input.messageId, channelMembers.agentId),
+            notLongOfflineSql(input.offlineExcludeMs),
+            input.rejectOnOverflow ? undefined : belowDepthCapSql(input.workspaceId, channelMembers.agentId, input.depthCap),
+          ),
+        )),
+    )
+    .onConflictDoNothing();
+}
+
+export function buildGroupDmDeliveryWrite(
+  db: EngineDb,
+  input: {
+    workspaceId: string;
+    messageId: string;
+    conversationId: string;
+    senderAgentId: string;
+    mode: DeliveryMode;
+    ttlMs: number;
+    depthCap: number;
+    /** Recipients offline longer than this are excluded from the fanout. */
+    offlineExcludeMs: number;
+    /** A 1:1 DM thread is direct traffic and must retain its explicit recipient. */
+    excludeLongOffline?: boolean;
+    /** Server-resolved workspace growth policy; absent => no workspace guard. */
+    workspacePolicy?: WorkspaceDeliveryPolicy;
+  },
+): AtomicWrite {
+  const workspaceId = guardedWorkspaceIdSql({ workspaceId: input.workspaceId });
+  const guardedSelect = deliveryAdmissionSelect(input.workspaceId, input.workspacePolicy, 'targeted');
+  const status = sql<string>`${'queued'}`;
+  return db
+    .insert(deliveries)
+    .select((qb) =>
+      guardedSelect(qb
+        .select({
+          id: deliveryId(input.messageId, dmParticipants.agentId),
+          workspaceId,
+          messageId: sql<string>`${input.messageId}`,
+          agentId: dmParticipants.agentId,
+          mode: sql<string>`${input.mode}`,
+          reason: sql<string>`${'dm'}`,
+          priority: sql<string>`${'normal'}`,
+          deadline: sql<null>`null`,
+          status,
+          seq: nextDeliverySeqSql(),
+          locationType: sql<string>`CASE WHEN ${agentNodeBindings.nodeId} IS NOT NULL THEN 'via_node' ELSE ${agents.locationType} END`,
+          locationNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
+          routeNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
+          routeNodeKind: nodes.kind,
+          routeNodeRole: nodes.role,
+          deliveryAdapter: nodes.deliveryAdapter,
+          dispatchAttempts: sql<number>`0`,
+          nextAttemptAt: sql<null>`null`,
+          lastDispatchError: sql<null>`null`,
+          expiresAt: sql`(unixepoch() + ${ttlSeconds(input.ttlMs)})`,
+          deliveredAt: sql<null>`null`,
+          ackedAt: sql<null>`null`,
+          deadLetteredAt: sql<null>`null`,
+          retryable: sql<null>`null`,
+          availableAt: sql<null>`null`,
+          error: sql<null>`null`,
+          idempotencyKey: sql<null>`null`,
+          createdAt: sql`(unixepoch())`,
+          updatedAt: sql<null>`null`,
+        })
+        .from(dmParticipants)
+        .innerJoin(agents, eq(dmParticipants.agentId, agents.id))
+        .leftJoin(agentNodeBindings, and(
+          eq(agentNodeBindings.workspaceId, input.workspaceId),
+          eq(agentNodeBindings.agentId, dmParticipants.agentId),
+          eq(agentNodeBindings.status, 'active'),
+          eq(agents.locationType, 'via_node'),
+          eq(agents.locationNodeId, agentNodeBindings.nodeId),
+        ))
+        .leftJoin(nodes, and(
+          eq(nodes.workspaceId, input.workspaceId),
+          eq(nodes.id, sql`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`),
+        ))
+        .where(
+          and(
+            eq(dmParticipants.conversationId, input.conversationId),
+            isNull(dmParticipants.leftAt),
+            ne(dmParticipants.agentId, input.senderAgentId),
+            newDeliveryIdentitySql(input.messageId, dmParticipants.agentId),
+            input.excludeLongOffline === false ? undefined : notLongOfflineSql(input.offlineExcludeMs),
+            belowDepthCapSql(input.workspaceId, dmParticipants.agentId, input.depthCap),
+          ),
+        )),
+    )
+    .onConflictDoNothing();
+}
+
+export function buildDirectDeliveryWrite(
+  db: EngineDb,
+  input: {
+    workspaceId: string;
+    messageId: string;
+    agentId: string;
+    mode: DeliveryMode;
+    reason: string;
+    ttlMs: number;
+    depthCap: number;
+    deliveryId?: string;
+    /** Server-resolved workspace growth policy; absent => no workspace guard. */
+    workspacePolicy?: WorkspaceDeliveryPolicy;
+  },
+): AtomicWrite {
+  const workspaceId = guardedWorkspaceIdSql({ workspaceId: input.workspaceId });
+  const guardedSelect = deliveryAdmissionSelect(input.workspaceId, input.workspacePolicy, 'targeted');
+  const status = sql<string>`${'queued'}`;
+  return db
+    .insert(deliveries)
+    .select((qb) =>
+      guardedSelect(qb
+        .select({
+          id: sql<string>`${input.deliveryId ?? `del_${input.messageId}_${input.agentId}`}`,
+          workspaceId,
+          messageId: sql<string>`${input.messageId}`,
+          agentId: agents.id,
+          mode: sql<string>`${input.mode}`,
+          reason: sql<string>`${input.reason}`,
+          priority: sql<string>`${'normal'}`,
+          deadline: sql<null>`null`,
+          status,
+          seq: nextDeliverySeqSql(),
+          locationType: sql<string>`CASE WHEN ${agentNodeBindings.nodeId} IS NOT NULL THEN 'via_node' ELSE ${agents.locationType} END`,
+          locationNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
+          routeNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
+          routeNodeKind: nodes.kind,
+          routeNodeRole: nodes.role,
+          deliveryAdapter: nodes.deliveryAdapter,
+          dispatchAttempts: sql<number>`0`,
+          nextAttemptAt: sql<null>`null`,
+          lastDispatchError: sql<null>`null`,
+          expiresAt: sql`(unixepoch() + ${ttlSeconds(input.ttlMs)})`,
+          deliveredAt: sql<null>`null`,
+          ackedAt: sql<null>`null`,
+          deadLetteredAt: sql<null>`null`,
+          retryable: sql<null>`null`,
+          availableAt: sql<null>`null`,
+          error: sql<null>`null`,
+          idempotencyKey: sql<null>`null`,
+          createdAt: sql`(unixepoch())`,
+          updatedAt: sql<null>`null`,
+        })
+        .from(agents)
+        .leftJoin(agentNodeBindings, and(
+          eq(agentNodeBindings.workspaceId, input.workspaceId),
+          eq(agentNodeBindings.agentId, agents.id),
+          eq(agentNodeBindings.status, 'active'),
+          eq(agents.locationType, 'via_node'),
+          eq(agents.locationNodeId, agentNodeBindings.nodeId),
+        ))
+        .leftJoin(nodes, and(
+          eq(nodes.workspaceId, input.workspaceId),
+          eq(nodes.id, sql`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`),
+        ))
+        .where(and(
+          eq(agents.id, input.agentId),
+        eq(agents.workspaceId, input.workspaceId),
+        newDeliveryIdentitySql(input.messageId, agents.id),
+          belowDepthCapSql(input.workspaceId, agents.id, input.depthCap),
+        ))),
+    )
+    .onConflictDoNothing();
+}
+
+export async function fetchDeliveryFanoutRecords(
+  db: EngineDb,
+  messageId: string,
+): Promise<DeliveryFanoutRecord[]> {
+  const rows = await db
+    .select({
+      id: deliveries.id,
+      agentId: deliveries.agentId,
+      agentName: agents.name,
+      messageId: deliveries.messageId,
+      seq: deliveries.seq,
+      mode: deliveries.mode,
+      reason: deliveries.reason,
+      status: deliveries.status,
+      locationType: deliveries.locationType,
+      locationNodeId: deliveries.locationNodeId,
+      routeNodeId: deliveries.routeNodeId,
+      routeNodeKind: deliveries.routeNodeKind,
+      routeNodeRole: deliveries.routeNodeRole,
+      deliveryAdapter: deliveries.deliveryAdapter,
+      nextAttemptAt: deliveries.nextAttemptAt,
+    })
+    .from(deliveries)
+    .innerJoin(agents, eq(deliveries.agentId, agents.id))
+    .where(eq(deliveries.messageId, messageId));
+
+  return rows.map((row) => ({
+    id: row.id,
+    agentId: row.agentId,
+    agentName: row.agentName,
+    messageId: row.messageId,
+    seq: row.seq,
+    mode: row.mode,
+    reason: row.reason ?? 'message',
+    status: row.status,
+    locationType: row.locationType,
+    locationNodeId: row.locationNodeId,
+    routeNodeId: row.routeNodeId,
+    routeNodeKind: row.routeNodeKind,
+    routeNodeRole: row.routeNodeRole,
+    deliveryAdapter: row.deliveryAdapter,
+    nextAttemptAt: row.nextAttemptAt,
+  }));
+}
+
+function missingDeliveryRejections(
+  intended: Array<{ agentId: string; agentName: string; offline: number | boolean }>,
+  deliveries: DeliveryFanoutRecord[],
+  messageId: string,
+): DeliveryRejectionRecord[] {
+  const inserted = new Set(deliveries.map((delivery) => delivery.agentId));
+  return intended
+    .filter((recipient) => !inserted.has(recipient.agentId))
+    .map((recipient) => (recipient.offline
+      ? {
+        agentId: recipient.agentId,
+        agentName: recipient.agentName,
+        messageId,
+        reason: 'recipient_offline' as const,
+        error: 'recipient has been offline too long to receive new deliveries',
+        retryable: false as const,
+      }
+      : {
+        agentId: recipient.agentId,
+        agentName: recipient.agentName,
+        messageId,
+        reason: 'depth_cap' as const,
+        error: 'mailbox depth cap exceeded',
+        retryable: false as const,
+      }));
+}
+
+export async function fetchChannelDeliveryOutcomes(
+  db: EngineDb,
+  input: {
+    messageId: string;
+    channelId: string;
+    senderAgentId: string;
+    offlineExcludeMs: number;
+    mentionHandles?: readonly string[];
+  },
+): Promise<DeliveryOutcomeRecords> {
+  const mentionHandles = input.mentionHandles ?? [];
+  const [deliveries, intended] = await Promise.all([
+    fetchDeliveryFanoutRecords(db, input.messageId),
+    db
+      .select({
+        agentId: channelMembers.agentId,
+        agentName: agents.name,
+        offline: longOfflineSql(input.offlineExcludeMs),
+      })
+      .from(channelMembers)
+      .innerJoin(agents, eq(channelMembers.agentId, agents.id))
+      .leftJoin(agentNodeBindings, and(
+        eq(agentNodeBindings.workspaceId, agents.workspaceId),
+        eq(agentNodeBindings.agentId, channelMembers.agentId),
+        eq(agentNodeBindings.status, 'active'),
+        eq(agents.locationType, 'via_node'),
+        eq(agents.locationNodeId, agentNodeBindings.nodeId),
+      ))
+      .leftJoin(nodes, and(
+        eq(nodes.workspaceId, agents.workspaceId),
+        eq(nodes.id, sql`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`),
+      ))
+      .where(and(
+        eq(channelMembers.channelId, input.channelId),
+        channelMuteDeliveryFilter(mentionHandles),
+        ne(channelMembers.agentId, input.senderAgentId),
+            newDeliveryIdentitySql(input.messageId, channelMembers.agentId),
+      )),
+  ]);
+  return {
+    deliveries,
+    rejections: missingDeliveryRejections(intended, deliveries, input.messageId),
+  };
+}
+
+export async function fetchGroupDeliveryOutcomes(
+  db: EngineDb,
+  input: {
+    messageId: string;
+    conversationId: string;
+    senderAgentId: string;
+    offlineExcludeMs: number;
+    excludeLongOffline?: boolean;
+  },
+): Promise<DeliveryOutcomeRecords> {
+  const [deliveries, intended] = await Promise.all([
+    fetchDeliveryFanoutRecords(db, input.messageId),
+    db
+      .select({
+        agentId: dmParticipants.agentId,
+        agentName: agents.name,
+        offline: input.excludeLongOffline === false ? sql<number>`0` : longOfflineSql(input.offlineExcludeMs),
+      })
+      .from(dmParticipants)
+      .innerJoin(agents, eq(dmParticipants.agentId, agents.id))
+      .leftJoin(agentNodeBindings, and(
+        eq(agentNodeBindings.workspaceId, agents.workspaceId),
+        eq(agentNodeBindings.agentId, dmParticipants.agentId),
+        eq(agentNodeBindings.status, 'active'),
+        eq(agents.locationType, 'via_node'),
+        eq(agents.locationNodeId, agentNodeBindings.nodeId),
+      ))
+      .leftJoin(nodes, and(
+        eq(nodes.workspaceId, agents.workspaceId),
+        eq(nodes.id, sql`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`),
+      ))
+      .where(and(
+        eq(dmParticipants.conversationId, input.conversationId),
+        isNull(dmParticipants.leftAt),
+        ne(dmParticipants.agentId, input.senderAgentId),
+            newDeliveryIdentitySql(input.messageId, dmParticipants.agentId),
+      )),
+  ]);
+  return {
+    deliveries,
+    rejections: missingDeliveryRejections(intended, deliveries, input.messageId),
+  };
+}
+
+export async function fetchDirectDeliveryOutcomes(
+  db: EngineDb,
+  input: {
+    messageId: string;
+    recipientAgentId: string;
+  },
+): Promise<DeliveryOutcomeRecords> {
+  const [deliveries, intended] = await Promise.all([
+    fetchDeliveryFanoutRecords(db, input.messageId),
+    db
+      .select({
+        agentId: agents.id,
+        agentName: agents.name,
+        offline: sql<number>`0`,
+      })
+      .from(agents)
+      .where(inArray(agents.id, [input.recipientAgentId])),
+  ]);
+  return {
+    deliveries,
+    // A direct message always targets this one explicitly-chosen recipient
+    // (never excluded for being offline), so any gap here is a depth_cap miss.
+    rejections: missingDeliveryRejections(intended, deliveries, input.messageId),
+  };
+}

@@ -7,7 +7,6 @@ const telemetryString = (max: number) => z.string().trim().min(1).max(max);
 const telemetryKeySchema = z.string().trim().min(1).max(64).regex(/^[a-zA-Z0-9_.-]+$/);
 
 export const telemetryOriginSchema = z.object({
-  origin_surface: telemetryString(32),
   origin_client: telemetryString(80),
   origin_version: telemetryString(48),
 });
@@ -38,10 +37,12 @@ export const SERVER_TELEMETRY_EVENTS = [
   'relaycast_server_workspace_stream_updated',
   'relaycast_server_agent_registered',
   'relaycast_server_agent_updated',
+  'relaycast_server_legacy_identity_claimed',
   'relaycast_server_agent_deleted',
-  'relaycast_server_agent_spawn_requested',
-  'relaycast_server_agent_release_requested',
   'relaycast_server_agent_token_rotated',
+  'relaycast_server_workspace_key_rotated',
+  'relaycast_server_agent_identity_taken_over',
+  'relaycast_server_agent_token_revoked',
   'relaycast_server_channel_created',
   'relaycast_server_channel_updated',
   'relaycast_server_channel_topic_updated',
@@ -49,6 +50,8 @@ export const SERVER_TELEMETRY_EVENTS = [
   'relaycast_server_channel_joined',
   'relaycast_server_channel_left',
   'relaycast_server_channel_invited',
+  'relaycast_server_channel_muted',
+  'relaycast_server_channel_unmuted',
   'relaycast_server_message_created',
   'relaycast_server_thread_reply_created',
   'relaycast_server_file_upload_requested',
@@ -75,6 +78,18 @@ export const SERVER_TELEMETRY_EVENTS = [
   'relaycast_server_system_prompt_updated',
   'relaycast_server_ws_session_started',
   'relaycast_server_ws_session_ended',
+  'relaycast_server_action_registered',
+  'relaycast_server_action_deleted',
+  'relaycast_server_action_invoked',
+  'relaycast_server_directory_agent_created',
+  'relaycast_server_directory_agent_updated',
+  'relaycast_server_directory_agent_deleted',
+  'relaycast_server_directory_rating_upserted',
+  'relaycast_server_directory_search_executed',
+  'relaycast_server_route_resolved',
+  'relaycast_server_route_feedback_recorded',
+  'relaycast_server_routing_config_updated',
+  'relaycast_server_relayfile_inbound_delivered',
 ] as const;
 
 export const TELEMETRY_EVENTS = [
@@ -110,6 +125,39 @@ export const telemetryPropertiesSchema = z
     }
   });
 
+export const TELEMETRY_SENDER_TYPES = ['human', 'agent', 'system'] as const;
+
+export type TelemetrySenderType = typeof TELEMETRY_SENDER_TYPES[number];
+
+/** Who acted on a server event, from the acting agent row. */
+export interface TelemetrySenderProperties {
+  /** `human` when `agents.type = 'human'`; otherwise the agent's type. */
+  sender_type: TelemetrySenderType;
+  agent_id: string;
+  agent_name: string;
+  /** The cloud user who owns a non-human actor; that user is the event's person. */
+  agent_owner_user_id?: string;
+}
+
+/** Longest cloud user, org or workspace id that telemetry attributes to. */
+export const TELEMETRY_CLOUD_ID_MAX_LENGTH = 128;
+
+/** PostHog groups, taken from the cloud ids cloud writes onto `workspaces.metadata`. */
+export const telemetryGroupsSchema = z.object({
+  organization: telemetryString(TELEMETRY_CLOUD_ID_MAX_LENGTH).optional(),
+  workspace: telemetryString(TELEMETRY_CLOUD_ID_MAX_LENGTH).optional(),
+}).strict();
+
+export type TelemetryGroups = z.infer<typeof telemetryGroupsSchema>;
+
+/** Person properties written once, on the person's first send of each kind. */
+export const telemetryPersonSetOnceSchema = z.object({
+  first_human_message_at: telemetryString(64).optional(),
+  first_agent_message_at: telemetryString(64).optional(),
+}).strict();
+
+export type TelemetryPersonSetOnce = z.infer<typeof telemetryPersonSetOnceSchema>;
+
 const telemetryEnvelopeBaseSchema = z.object({
   distinct_id: telemetryString(128),
   properties: telemetryPropertiesSchema.default({}),
@@ -123,21 +171,27 @@ export type TelemetryIngestionEvent = z.infer<typeof telemetryIngestionEventSche
 
 export const internalTelemetryEventSchema = telemetryEnvelopeBaseSchema.extend({
   event: telemetryEventSchema,
+  groups: telemetryGroupsSchema.optional(),
+  set_once: telemetryPersonSetOnceSchema.optional(),
+  /** `false` for events whose distinct id is not a person (the workspace fallback). */
+  process_person_profile: z.boolean().optional(),
 }).merge(telemetryOriginSchema);
 
 export type InternalTelemetryEvent = z.infer<typeof internalTelemetryEventSchema>;
 
-const REQUIRED_SERVER_EVENT_PROPS: Record<ServerTelemetryEventName, readonly string[]> = {
+const REQUIRED_SERVER_EVENT_PROPS = {
   relaycast_server_workspace_created: ['workspace_id'],
   relaycast_server_workspace_updated: ['workspace_id'],
   relaycast_server_workspace_deleted: ['workspace_id'],
   relaycast_server_workspace_stream_updated: ['workspace_id', 'stream_mode'],
   relaycast_server_agent_registered: ['workspace_id', 'agent_id'],
   relaycast_server_agent_updated: ['workspace_id', 'agent_name'],
+  relaycast_server_legacy_identity_claimed: ['workspace_id', 'agent_name'],
   relaycast_server_agent_deleted: ['workspace_id', 'agent_name'],
-  relaycast_server_agent_spawn_requested: ['workspace_id', 'agent_id', 'agent_name'],
-  relaycast_server_agent_release_requested: ['workspace_id', 'agent_name'],
   relaycast_server_agent_token_rotated: ['workspace_id', 'agent_name'],
+  relaycast_server_workspace_key_rotated: ['workspace_id', 'grace_seconds'],
+  relaycast_server_agent_identity_taken_over: ['workspace_id', 'agent_id', 'agent_name', 'audit_id'],
+  relaycast_server_agent_token_revoked: ['workspace_id', 'agent_id', 'agent_name', 'audit_id'],
   relaycast_server_channel_created: ['workspace_id', 'channel_id', 'channel_name'],
   relaycast_server_channel_updated: ['workspace_id', 'channel_id', 'channel_name'],
   relaycast_server_channel_topic_updated: ['workspace_id', 'channel_id', 'channel_name'],
@@ -145,6 +199,8 @@ const REQUIRED_SERVER_EVENT_PROPS: Record<ServerTelemetryEventName, readonly str
   relaycast_server_channel_joined: ['workspace_id', 'channel_name', 'agent_id'],
   relaycast_server_channel_left: ['workspace_id', 'channel_name', 'agent_id'],
   relaycast_server_channel_invited: ['workspace_id', 'channel_name', 'invited_agent_name'],
+  relaycast_server_channel_muted: ['workspace_id', 'channel_name', 'agent_id'],
+  relaycast_server_channel_unmuted: ['workspace_id', 'channel_name', 'agent_id'],
   relaycast_server_message_created: ['workspace_id', 'channel_id', 'message_id'],
   relaycast_server_thread_reply_created: ['workspace_id', 'message_id', 'parent_message_id'],
   relaycast_server_file_upload_requested: ['workspace_id', 'file_id', 'size_bytes'],
@@ -171,7 +227,23 @@ const REQUIRED_SERVER_EVENT_PROPS: Record<ServerTelemetryEventName, readonly str
   relaycast_server_system_prompt_updated: ['workspace_id', 'operation'],
   relaycast_server_ws_session_started: ['workspace_id', 'session_scope'],
   relaycast_server_ws_session_ended: ['workspace_id', 'session_scope', 'duration_ms'],
-};
+  relaycast_server_action_registered: ['workspace_id', 'action_name'],
+  relaycast_server_action_deleted: ['workspace_id', 'action_name'],
+  relaycast_server_action_invoked: ['workspace_id', 'action_name', 'invocation_id'],
+  relaycast_server_directory_agent_created: ['workspace_id'],
+  relaycast_server_directory_agent_updated: ['workspace_id', 'slug'],
+  relaycast_server_directory_agent_deleted: ['workspace_id', 'slug'],
+  relaycast_server_directory_rating_upserted: ['workspace_id', 'slug', 'score'],
+  relaycast_server_directory_search_executed: ['workspace_id', 'result_count'],
+  relaycast_server_route_resolved: ['workspace_id', 'skill'],
+  relaycast_server_route_feedback_recorded: ['workspace_id', 'agent_name', 'success'],
+  relaycast_server_routing_config_updated: ['workspace_id'],
+  relaycast_server_relayfile_inbound_delivered: ['workspace_id', 'provider'],
+} as const satisfies Record<ServerTelemetryEventName, readonly string[]>;
+
+/** Properties `parseInternalTelemetryEvent` requires for a server event. */
+export type ServerTelemetryRequiredProperty<E extends ServerTelemetryEventName> =
+  (typeof REQUIRED_SERVER_EVENT_PROPS)[E][number];
 
 const BLOCKED_PROPERTY_PATTERNS = [
   /token/i,
@@ -231,14 +303,13 @@ export function sanitizeTelemetryProperties(
 
 export function normalizeTelemetryOrigin(origin: Partial<TelemetryOrigin> | undefined): TelemetryOrigin {
   return {
-    origin_surface: normalizeStringValue(origin?.origin_surface ?? 'unknown').slice(0, 32) || 'unknown',
     origin_client: normalizeStringValue(origin?.origin_client ?? 'unknown').slice(0, 80) || 'unknown',
     origin_version: normalizeStringValue(origin?.origin_version ?? 'unknown').slice(0, 48) || 'unknown',
   };
 }
 
 function ensureRequiredServerProperties(event: ServerTelemetryEventName, properties: Record<string, TelemetryPropertyValue>): void {
-  const required = REQUIRED_SERVER_EVENT_PROPS[event];
+  const required: readonly string[] = REQUIRED_SERVER_EVENT_PROPS[event];
   const missing = required.filter((key) => !(key in properties));
   if (missing.length > 0) {
     throw new Error(`Missing required properties for ${event}: ${missing.join(', ')}`);

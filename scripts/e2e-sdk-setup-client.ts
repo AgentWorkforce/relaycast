@@ -11,7 +11,6 @@ import {
 } from '../packages/sdk-typescript/src/index.js';
 
 const DEFAULT_BASE_URL = 'http://localhost:8787';
-const DEFAULT_LOCAL_BASE_URL = 'http://127.0.0.1:7528';
 const ON_MESSAGE_TIMEOUT_MS = 5_000;
 
 type StepResult = Record<string, unknown> | string | number | boolean | null | undefined;
@@ -140,7 +139,6 @@ async function main(): Promise<void> {
   console.log('[config]');
   console.log(JSON.stringify({
     baseUrl,
-    localDefaultBaseUrl: DEFAULT_LOCAL_BASE_URL,
     tempDir: runtime.tempDir,
   }, null, 2));
 
@@ -152,7 +150,17 @@ async function main(): Promise<void> {
   const setup = new RelaycastSetup({ baseUrl });
   let workspace: WorkspaceHandle | null = null;
   await runStep('createWorkspace', async () => {
-    const created = await setup.createWorkspace({ name: workspaceName });
+    const created = await setup.createWorkspace({
+      name: workspaceName,
+      expiresInSeconds: 24 * 60 * 60,
+      provenance: {
+        source: 'ci',
+        originId: process.env.GITHUB_RUN_ID
+          ? `github:AgentWorkforce/relaycast/actions/runs/${process.env.GITHUB_RUN_ID}`
+          : 'relaycast:e2e-sdk-setup:local',
+        classification: 'internal',
+      },
+    });
     assert(created.workspaceId, 'createWorkspace', 'workspaceId was empty');
     assert(created.apiKey, 'createWorkspace', 'apiKey was empty');
     assert(created.info.name === workspaceName, 'createWorkspace', 'workspace name did not round-trip');
@@ -250,14 +258,14 @@ async function main(): Promise<void> {
     };
   });
 
-  await runStep('local mode with real base URL override', async () => {
-    const localSetup = new RelaycastSetup({ local: true, baseUrl });
-    const localJoined = await localSetup.joinWorkspace(workspace.workspaceId, workspace.apiKey);
-    assert(localJoined.info.baseUrl === baseUrl, 'local mode', 'explicit baseUrl should win over the local default');
-    const info = await localJoined.relayCast().workspace.info();
-    assert(info.id === workspace.workspaceId, 'local mode', 'local-mode join did not reach the target workspace');
+  await runStep('explicit base URL override', async () => {
+    const overrideSetup = new RelaycastSetup({ baseUrl });
+    const overrideJoined = await overrideSetup.joinWorkspace(workspace.workspaceId, workspace.apiKey);
+    assert(overrideJoined.info.baseUrl === baseUrl, 'baseUrl override', 'explicit baseUrl should be used');
+    const info = await overrideJoined.relayCast().workspace.info();
+    assert(info.id === workspace.workspaceId, 'baseUrl override', 'join did not reach the target workspace');
     return {
-      baseUrl: localJoined.info.baseUrl,
+      baseUrl: overrideJoined.info.baseUrl,
       workspaceId: info.id,
     };
   });

@@ -1,0 +1,53 @@
+{
+  "id": "traj_u2nlyaaa5pu3",
+  "version": 1,
+  "task": {
+    "title": "Add websocket usage to README quick start example"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-20T19:15:32.623Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-20T19:15:38.139Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_nc7ypjwvkfqz",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-20T19:15:38.139Z",
+      "events": [
+        {
+          "ts": 1771614938140,
+          "type": "decision",
+          "content": "Included realtime listener in top quickstart: Included realtime listener in top quickstart",
+          "raw": {
+            "question": "Included realtime listener in top quickstart",
+            "chosen": "Included realtime listener in top quickstart",
+            "alternatives": [],
+            "reasoning": "New users should see message streaming via on.messageCreated immediately, not only request/response usage"
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-20T19:15:41.597Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "85fa8cad78650cbb35305c0283ea48e810c99b16",
+    "endRef": "85fa8cad78650cbb35305c0283ea48e810c99b16"
+  },
+  "completedAt": "2026-02-20T19:15:41.597Z",
+  "retrospective": {
+    "summary": "Updated README quick start to include websocket connect/subscribe and on.messageCreated realtime callback",
+    "approach": "Standard approach",
+    "confidence": 0.96
+  }
+}

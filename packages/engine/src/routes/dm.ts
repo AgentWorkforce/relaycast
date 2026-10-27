@@ -1,0 +1,275 @@
+import { Hono } from 'hono';
+import { z } from 'zod';
+import type { AppEnv } from '../env.js';
+import { requireAgentToken } from '../middleware/auth.js';
+import { rateLimit } from '../middleware/rateLimit.js';
+import { admitMessage, assertMessageAdmitted } from '../middleware/admission.js';
+import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
+import { sha256Hex } from '../lib/crypto.js';
+import * as dmEngine from '../engine/dm.js';
+import { requireAgentAddress } from '../engine/address.js';
+import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
+import { resolveWorkspaceDeliveryPolicyFor } from '../engine/workspaceDeliveryPolicy.js';
+import { publishWorkspaceEvent } from './fanout.js';
+import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
+import { buildDmReceivedEventData } from '../engine/deliveryWire.js';
+import { runInBackground } from './background.js';
+import { sendWebhookEvent, shouldEnqueueWebhookEvent } from './webhookOutbox.js';
+import { emitServerEvent } from '../lib/serverTelemetry.js';
+import { asCodedError, errorResponse } from '../lib/httpError.js';
+import { jsonError, jsonOk, parseJsonBody, parseQueryParams } from '../lib/httpResponse.js';
+import { parsePaginationQuery, positiveIntQueryParam } from '../lib/httpQuery.js';
+import { canonicalJson } from '../engine/messageMetadata.js';
+
+export const dmRoutes = new Hono<AppEnv>();
+
+// Exactly one recipient: `to` (agent name or `@self`), or `address`
+// (`agent@machine`, which also requires the agent to be on that machine).
+const sendDmSchema = z.object({
+  to: z.string().min(1).optional(),
+  address: z.string().min(1).optional(),
+  text: z.string().min(1),
+  attachments: z.array(z.string()).optional(),
+  data: z.record(z.string(), z.unknown()).nullable().optional(),
+  mode: z.enum(['wait', 'steer']).default('wait'),
+}).refine((body) => (body.to === undefined) !== (body.address === undefined), {
+  path: ['to'],
+});
+
+const listDmConversationsQuerySchema = z.object({
+  limit: positiveIntQueryParam({ max: 100 }),
+});
+
+// POST /v1/dm - send a DM
+dmRoutes.post(
+  '/dm',
+  requireAgentToken,
+  rateLimit,
+  admitMessage,
+  async (c) => {
+    try {
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const agent = c.get('agent');
+      const parsed = await parseJsonBody(c, sendDmSchema, (failure) => {
+        const hasToIssue = failure.error.issues.some((issue) => issue.path[0] === 'to');
+        const hasTextIssue = failure.error.issues.some((issue) => issue.path[0] === 'text');
+        return hasToIssue
+          ? 'exactly one of "to" (agent name) or "address" (agent@machine) is required'
+          : hasTextIssue
+            ? 'text is required'
+            : 'invalid dm body';
+      });
+      if (!parsed.ok) {
+        return parsed.response;
+      }
+      const { address, text, attachments, data, mode } = parsed.data;
+      if (address !== undefined) requireAgentAddress(address);
+      // The engine resolves an addressed recipient from `address`; `to` then
+      // only names the request in the idempotency fingerprint.
+      const to = parsed.data.to ?? address!;
+      const normalizedAttachments = attachments && attachments.length > 0 ? attachments : undefined;
+      // `data` is digested rather than embedded. It is caller-supplied and can
+      // be large — a Ratify proof bundle runs to MAX_PROOF_BUNDLE_BYTES (128
+      // KiB) — and the fingerprint is serialized into the stored idempotency
+      // record, kept for the TTL, and string-compared on every replay. Inlining
+      // it put ~256 KiB per DM into the KV record and made each replay compare
+      // the whole payload. A digest answers the only question the fingerprint
+      // asks — "is this the same request?" — in constant size.
+      // An addressed send fingerprints its address, so reusing a key for a
+      // different address (or for a send by name) is a conflict, not a replay.
+      const fingerprintBody = {
+        to,
+        ...(address !== undefined ? { address } : {}),
+        text,
+        ...(normalizedAttachments ? { attachments: normalizedAttachments } : {}),
+        ...(data !== undefined ? { data_sha256: await sha256Hex(canonicalJson(data)) } : {}),
+      };
+      // Existing KV records used insertion-order JSON. Accept that format only
+      // as a replay-compatible fingerprint during the 24-hour TTL window.
+      const legacyFingerprintBody = data === undefined ? fingerprintBody : {
+        ...fingerprintBody,
+        data_sha256: await sha256Hex(JSON.stringify(data)),
+      };
+      const withMode = (body: typeof fingerprintBody) => mode === 'steer'
+        ? { ...body, mode }
+        : body;
+      // Keep the outer encoding byte-compatible with the pre-canonical format
+      // so a rolled-back engine accepts records written by this version. Only
+      // the nested caller data digest needs canonical ordering.
+      const fingerprint = JSON.stringify(withMode(fingerprintBody));
+      const legacyFingerprint = JSON.stringify(withMode(legacyFingerprintBody));
+
+      const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
+      if (idempotencyError) {
+        return jsonError(c, 'invalid_idempotency_key', idempotencyError, 400);
+      }
+
+      const mailbox = resolveMailboxConfig(c.get('engine').config, workspace.id);
+      const toDmReceivedEventData = (data: Awaited<ReturnType<typeof dmEngine.sendDm>>) => buildDmReceivedEventData(data, {
+        fromName: agent!.name,
+      });
+
+      // `data.to` is the resolved recipient name; `to` may be a raw address.
+      const trackDmSent = (data: { conversation_id: string; id: string; to?: string }) => emitServerEvent(c, workspace.id, 'dm.sent', {
+        conversation_id: data.conversation_id,
+        message_id: data.id,
+        from_agent_id: agent!.id,
+        to_agent_name: data.to ?? to,
+      });
+
+      const idempotent = await runIdempotent({
+        workspaceId: workspace.id,
+        actorId: agent!.id,
+        scope: 'dm:direct',
+        key: idempotencyKey,
+        status: 201,
+        // Backward compatibility: historical fingerprint excluded mode (equivalent to wait).
+        // Only include mode when explicit steer is requested.
+        fingerprint,
+        storageFingerprint: legacyFingerprint,
+        compatibleFingerprints: legacyFingerprint === fingerprint ? [] : [legacyFingerprint],
+        ttlSecondsForResult: (result) => result._idempotency_ttl_seconds,
+        kv: c.get('engine').kv,
+        operation: async () => {
+          assertMessageAdmitted(c);
+          const hasWebhookSubscriptions = await shouldEnqueueWebhookEvent(c, workspace.id, 'dm.received');
+          return dmEngine.sendDm(db, workspace.id, agent!.id, {
+            to,
+            text,
+            attachments: normalizedAttachments,
+            data,
+            mode,
+          }, { mailbox, resolveWorkspaceDeliveryPolicy: () => resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace), idempotencyKey, address,
+            hasWebhookSubscriptions,
+            afterAdmission: (data, event) => {
+              runInBackground(c, c.get('engine').realtime.publishToWorkspaceStream({
+                workspaceId: workspace.id, event: { ...event.payload, seq: event.seq },
+              }), 'publish admitted dm.received');
+              if (event.outboxId) {
+                runInBackground(c, c.get('engine').webhookQueue.send({
+                  type: 'dm.received', workspaceId: workspace.id,
+                  data: event.data, outboxId: event.outboxId,
+                }), 'queue admitted dm.received');
+              }
+              if (data._delivery) runInBackground(c,
+                routeDeliveryOutcomes(c, [data._delivery], 'dm.received', event.data),
+                'route admitted dm delivery');
+              if (data._delivery_rejections.length) runInBackground(c,
+                notifyDeliveryRejections(c, agent!.id, data._delivery_rejections),
+                'notify admitted dm delivery rejection');
+              trackDmSent(data);
+            },
+          });
+        },
+        afterOperation: async (data) => {
+          if (data._notifications_durable) return;
+          await sendWebhookEvent(c, {
+            type: 'dm.received',
+            workspaceId: workspace.id,
+            data: toDmReceivedEventData(data),
+          });
+        },
+      });
+
+      const effectiveIdempotent = idempotent.data._idempotency_replayed && !idempotent.replayed
+        ? { ...idempotent, replayed: true }
+        : idempotent;
+
+      if (!effectiveIdempotent.replayed && !effectiveIdempotent.data._notifications_durable) {
+        const {
+          _delivery,
+          _delivery_rejections,
+          ...publicDmData
+        } = effectiveIdempotent.data as typeof effectiveIdempotent.data & {
+          _delivery?: Parameters<typeof routeDeliveryOutcomes>[1][number] | null;
+          _delivery_rejections?: Parameters<typeof notifyDeliveryRejections>[2];
+        };
+        const eventData = toDmReceivedEventData(effectiveIdempotent.data);
+        runInBackground(c, publishWorkspaceEvent(c, 'dm.received', eventData), 'publish dm.received');
+
+        if (_delivery) {
+          runInBackground(
+            c,
+            routeDeliveryOutcomes(c, [_delivery], 'dm.received', eventData),
+            'route dm delivery',
+          );
+        }
+        if (_delivery_rejections && _delivery_rejections.length > 0) {
+          runInBackground(
+            c,
+            notifyDeliveryRejections(c, agent!.id, _delivery_rejections),
+            'fanout delivery rejected',
+          );
+        }
+
+        trackDmSent(publicDmData);
+      }
+
+      return jsonIdempotentOk(c, effectiveIdempotent);
+    } catch (err: unknown) {
+      return errorResponse(c, err);
+    }
+  },
+);
+
+// GET /v1/dm/conversations - list DM conversations
+dmRoutes.get(
+  '/dm/conversations',
+  requireAgentToken,
+  rateLimit,
+  async (c) => {
+    try {
+      const query = parseQueryParams(c, listDmConversationsQuerySchema, 'Invalid DM conversation query');
+      if (!query.ok) {
+        return query.response;
+      }
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const agent = c.get('agent');
+      const conversations = await dmEngine.listConversations(
+        db,
+        workspace.id,
+        agent!.id,
+        { limit: query.data.limit },
+      );
+      return jsonOk(c, conversations);
+    } catch (err: unknown) {
+      return errorResponse(c, err);
+    }
+  },
+);
+
+// GET /v1/dm/:conversation_id/messages - get DM messages
+dmRoutes.get(
+  '/dm/:conversation_id/messages',
+  requireAgentToken,
+  rateLimit,
+  async (c) => {
+    const db = c.get('db');
+    const workspace = c.get('workspace');
+    const agent = c.get('agent');
+    const query = parsePaginationQuery(c);
+    if (!query.ok) {
+      return query.response;
+    }
+    const { limit, before, after } = query.data;
+
+    const conversationId = c.req.param('conversation_id');
+    try {
+      const msgs = await dmEngine.getDmMessages(
+        db,
+        workspace.id,
+        conversationId,
+        agent!.id,
+        { limit, before, after },
+      );
+      return jsonOk(c, msgs);
+    } catch (err: unknown) {
+      if ((asCodedError(err).status ?? 500) < 500) {
+        return errorResponse(c, err);
+      }
+      throw err;
+    }
+  },
+);

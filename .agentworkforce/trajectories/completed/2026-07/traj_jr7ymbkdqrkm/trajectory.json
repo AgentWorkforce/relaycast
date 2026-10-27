@@ -1,0 +1,57 @@
+{
+  "id": "traj_jr7ymbkdqrkm",
+  "version": 1,
+  "task": {
+    "title": "Engine: multi-provider nodes and node-scoped actions (node-providers spec step 1)",
+    "source": {
+      "system": "plain",
+      "id": "node-providers"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-07-08T10:43:33.469Z",
+  "completedAt": "2026-07-08T11:26:51.690Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-07-08T11:17:58.215Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_kz834ibim082",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-07-08T11:17:58.215Z",
+      "endedAt": "2026-07-08T11:26:51.690Z",
+      "events": [
+        {
+          "ts": 1783509478216,
+          "type": "decision",
+          "content": "Kept nodes aggregate columns + per-provider node_providers table; default-provider actions stay workspace-global aliases (first-writer-wins) for additive migration: Kept nodes aggregate columns + per-provider node_providers table; default-provider actions stay workspace-global aliases (first-writer-wins) for additive migration",
+          "raw": {
+            "question": "Kept nodes aggregate columns + per-provider node_providers table; default-provider actions stay workspace-global aliases (first-writer-wins) for additive migration",
+            "chosen": "Kept nodes aggregate columns + per-provider node_providers table; default-provider actions stay workspace-global aliases (first-writer-wins) for additive migration",
+            "alternatives": [],
+            "reasoning": "Preserves current broker behavior while adding provider persistence, routing, and node-scoped actions"
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Engine multi-provider nodes: fleet-wire provider fields, node_providers table, node-scoped actions + node-addressed invoke, spawn shadowing, per-provider liveness/deliver routing, synthetic default provider",
+    "approach": "Standard approach",
+    "confidence": 0.8
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "27d04a7dc2ca813d513729d978570db937a18c99",
+    "endRef": "27d04a7dc2ca813d513729d978570db937a18c99"
+  }
+}

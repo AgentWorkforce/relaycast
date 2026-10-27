@@ -54,8 +54,8 @@
 //!             WsEvent::MessageCreated(e) => {
 //!                 println!("New message: {}", e.message.text);
 //!             }
-//!             WsEvent::AgentOnline(e) => {
-//!                 println!("Agent online: {}", e.agent.name);
+//!             WsEvent::AgentStatusActive(e) => {
+//!                 println!("Agent active: {}", e.agent.name);
 //!             }
 //!             _ => {}
 //!         }
@@ -72,7 +72,7 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let mut ws = WsClient::new(WsClientOptions::new("at_live_agent_token"));
+//!     let mut ws = WsClient::new(WsClientOptions::new("ot_live_observer_token"));
 //!     let mut raw_events = ws.subscribe_raw_events();
 //!     ws.connect().await?;
 //!
@@ -119,6 +119,7 @@ pub mod dm_participants;
 pub mod error;
 pub mod events;
 pub mod identity;
+pub mod origin_actor;
 pub mod registration;
 pub mod relay;
 pub mod types;
@@ -138,6 +139,10 @@ pub use events::{
     SenderKind,
 };
 pub use identity::{agent_name_eq, is_self_name};
+pub use origin_actor::{
+    sanitize_agent_relay_distinct_id, sanitize_origin_actor, AGENT_RELAY_DISTINCT_ID_HEADER,
+    AGENT_RELAY_DISTINCT_ID_QUERY, ORIGIN_ACTOR_HEADER,
+};
 pub use registration::{
     format_registration_error, registration_is_retryable, registration_retry_after_secs,
     retry_agent_registration, AgentRegistrationClient, AgentRegistrationError,
@@ -150,15 +155,22 @@ pub use ws::{
 
 // Re-export commonly used types
 pub use types::{
+    // Actions & session events
+    ActionCompletedEvent,
+    ActionDefinition,
+    ActionDeniedEvent,
+    ActionFailedEvent,
+    ActionInvocation,
+    ActionInvocationStatus,
+    ActionInvokedEvent,
     // Agents
     Agent,
     AgentChannelMembership,
     // Commands
     AgentCommand,
     AgentListQuery,
-    AgentOfflineEvent,
-    AgentOnlineEvent,
     AgentPresenceInfo,
+    AgentStatusEvent,
     // Channels
     Channel,
     ChannelArchivedEvent,
@@ -170,6 +182,8 @@ pub use types::{
     ChannelWithMembers,
     CommandInvocation,
     CommandInvokedEvent,
+    CompleteInvocationRequest,
+    CompletedStatus,
     CreateAgentRequest,
     CreateAgentResponse,
     CreateChannelRequest,
@@ -185,10 +199,26 @@ pub use types::{
     CreateWebhookResponse,
     // Workspace
     CreateWorkspaceResponse,
+    WorkspaceBootstrapOptions,
+    WorkspaceCreationSource,
+    WorkspaceProvenance,
+    WorkspaceUsageClassification,
+    DeferDeliveryRequest,
+    Delivery,
+    DeliveryAcceptedEvent,
+    DeliveryDeferredEvent,
+    DeliveryDeliveredEvent,
+    DeliveryFailedEvent,
+    DeliveryItem,
+    DeliveryMessage,
+    DeliveryStatus,
     DmConversationSummary,
     DmReceivedEvent,
     DmSendResponse,
+    EmitSessionEventRequest,
     EventSubscription,
+    FailDeliveryRequest,
+    FailedStatus,
     // Files
     FileInfo,
     FileListOptions,
@@ -200,7 +230,11 @@ pub use types::{
     GroupDmReceivedEvent,
     // Inbox
     InboxResponse,
+    InvokeActionRequest,
+    InvokeActionResult,
     InvokeCommandRequest,
+    ListDeliveriesOptions,
+    ListSessionEventsQuery,
     MemberJoinedEvent,
     MemberLeftEvent,
     // Messages
@@ -208,20 +242,25 @@ pub use types::{
     MessageCreatedEvent,
     MessageInjectionMode,
     MessageListQuery,
+    MessageReactedEvent,
     MessageReadEvent,
     MessageUpdatedEvent,
     MessageWithMeta,
+    ObserverScope,
+    ObserverToken,
+    ObserverTokenFilters,
     PostMessageRequest,
-    ReactionAddedEvent,
     // Reactions
     ReactionGroup,
-    ReactionRemovedEvent,
     ReaderInfo,
+    RegisterActionRequest,
     ReleaseAgentRequest,
+    ExactReleaseAgentRequest,
     ReleaseAgentResponse,
     // Search
     SearchOptions,
     SendDmRequest,
+    SessionEvent,
     SetSystemPromptRequest,
     SpawnAgentRequest,
     SpawnAgentResponse,
@@ -230,8 +269,16 @@ pub use types::{
     ThreadReplyRequest,
     ThreadResponse,
     TokenRotateResponse,
+    RecoverAgentRequest,
+    TakeOverAgentRequest,
+    RevokeAgentTokenRequest,
+    EnrollRecoveryCredentialRequest,
+    AgentIdentityRecoveryResponse,
+    AgentIdentityRevocationResponse,
     UpdateAgentRequest,
     UpdateChannelRequest,
+    CreateObserverTokenRequest,
+    UpdateObserverTokenRequest,
     UpdateWorkspaceRequest,
     UploadRequest,
     UploadResponse,
@@ -243,10 +290,132 @@ pub use types::{
     WorkspaceDmConversation,
     WorkspaceDmMessage,
     WorkspaceStats,
-    WorkspaceStreamConfig,
     // Events
     WsEvent,
+    // === Parity surfaces: A2A, directory, routing, skills, nodes, triggers, certify, console ===
+    // A2A
+    A2aAgentCard,
+    A2aAgentCardSkill,
+    A2aAgentRecord,
+    RegisterA2aOptions,
+    RegisterA2aResponse,
+    RemoveA2aAgentResponse,
+    // Directory
+    DirectoryAgent,
+    DirectoryRating,
+    DirectorySearchResult,
+    DirectorySkill,
+    DirectorySkillInput,
+    ImportSkillsRequest,
+    ListDirectoryQuery,
+    PublishToDirectoryRequest,
+    RateDirectoryAgentRequest,
+    SearchDirectoryQuery,
+    UpdateDirectoryAgentRequest,
+    // Routing
+    RouteFeedbackRequest,
+    RouteFeedbackResult,
+    RouteResult,
+    RoutingConfig,
+    RoutingWeights,
+    UpdateRoutingConfigRequest,
+    UpdateRoutingWeights,
+    // Skills
+    SkillSearchQuery,
+    SkillSearchResult,
+    // Fleet nodes
+    BindAgentToNodeRequest,
+    CreateNodeRequest,
+    CreateNodeResponse,
+    HttpPushNodeDelivery,
+    NodeAgentBinding,
+    NodeCapability,
+    NodeDeliveryAuth,
+    NodeDeliveryConfig,
+    NodeListQuery,
+    NodeRosterEntry,
+    // Triggers
+    CreateTriggerRequest,
+    Trigger,
+    UpdateTriggerRequest,
+    // Certification
+    CertificationRun,
+    CertificationTestResult,
+    MonitorCertificationRequest,
+    SubmitCertificationRequest,
+    // Console / observability
+    ConsoleAgentStat,
+    ConsoleAgentStatsQuery,
+    ConsoleCostAgent,
+    ConsoleCostStats,
+    ConsoleCostTotals,
+    ConsoleMessageLog,
+    ConsoleMessagesQuery,
+    ConsoleOverview,
+    ConsoleWindowQuery,
+    // Workspace lookup
+    WorkspaceLookup,
+    WorkspaceLookupOptions,
 };
 
 /// SDK version.
 pub const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Default base URL for the hosted RelayCast engine. Applied whenever a client
+/// is created without an explicit `base_url`. Crate-internal: callers express
+/// "use the hosted default" by passing `None` rather than naming this value.
+pub(crate) const DEFAULT_BASE_URL: &str = "https://cast.agentrelay.com";
+
+/// Rewrite an HTTP(S) base URL to its WebSocket form, mirroring the rewrite the
+/// SDK applies internally when opening a socket.
+fn ws_base_from_http(base: &str) -> String {
+    let trimmed = base.trim().trim_end_matches('/');
+    if let Some(rest) = trimmed.strip_prefix("https://") {
+        format!("wss://{rest}")
+    } else if let Some(rest) = trimmed.strip_prefix("http://") {
+        format!("ws://{rest}")
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Build the fleet node-control WebSocket URL (`{ws_base}/v1/node/ws`) for the
+/// given engine base URL, applying the hosted default when `base_url` is `None`
+/// or blank. Lets callers (e.g. the broker's node-control client) reach the
+/// node-control endpoint without knowing the hosted host or the URL scheme.
+pub fn node_control_ws_url(base_url: Option<&str>) -> String {
+    let base = base_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DEFAULT_BASE_URL);
+    format!("{}/v1/node/ws", ws_base_from_http(base))
+}
+
+#[cfg(test)]
+mod base_url_tests {
+    use super::*;
+
+    #[test]
+    fn node_control_ws_url_defaults_to_hosted_engine() {
+        assert_eq!(
+            node_control_ws_url(None),
+            "wss://cast.agentrelay.com/v1/node/ws"
+        );
+        assert_eq!(
+            node_control_ws_url(Some("   ")),
+            "wss://cast.agentrelay.com/v1/node/ws"
+        );
+    }
+
+    #[test]
+    fn node_control_ws_url_uses_override_and_rewrites_scheme() {
+        assert_eq!(
+            node_control_ws_url(Some("https://self.hosted.example/")),
+            "wss://self.hosted.example/v1/node/ws"
+        );
+        assert_eq!(
+            node_control_ws_url(Some("http://localhost:8787")),
+            "ws://localhost:8787/v1/node/ws"
+        );
+    }
+}

@@ -20,10 +20,22 @@ export const PingEventSchema = z.object({
 });
 export type PingEvent = z.infer<typeof PingEventSchema>;
 
+// Sent after a reconnect to request replay of events missed while disconnected.
+// `last_seen_seq` is the highest `agent_seq` the client observed; `since` is an
+// ISO timestamp used for the DB-backed replay when the gap exceeds the server's
+// in-memory resync ring.
+export const ResyncEventSchema = z.object({
+  type: z.literal('resync'),
+  last_seen_seq: z.number(),
+  since: z.string().optional(),
+});
+export type ResyncEvent = z.infer<typeof ResyncEventSchema>;
+
 export const ClientEventSchema = z.discriminatedUnion('type', [
   SubscribeEventSchema,
   UnsubscribeEventSchema,
   PingEventSchema,
+  ResyncEventSchema,
 ]);
 export type ClientEvent = z.infer<typeof ClientEventSchema>;
 
@@ -36,6 +48,7 @@ export type ChannelMessagePayload = z.infer<typeof ChannelMessagePayloadSchema>;
 export const MessageCreatedEventSchema = z.object({
   id: z.string().uuid(),
   type: z.literal('message.created'),
+  created_at: z.string().optional(),
   channel: z.string(),
   message: ChannelMessagePayloadSchema,
 });
@@ -57,21 +70,14 @@ export const ThreadReplyEventSchema = z.object({
 });
 export type ThreadReplyEvent = z.infer<typeof ThreadReplyEventSchema>;
 
-export const ReactionAddedEventSchema = z.object({
-  type: z.literal('reaction.added'),
+export const MessageReactedEventSchema = z.object({
+  type: z.literal('message.reacted'),
   message_id: z.string(),
   emoji: z.string(),
   agent_name: z.string(),
+  action: z.enum(['added', 'removed']).optional(),
 });
-export type ReactionAddedEvent = z.infer<typeof ReactionAddedEventSchema>;
-
-export const ReactionRemovedEventSchema = z.object({
-  type: z.literal('reaction.removed'),
-  message_id: z.string(),
-  emoji: z.string(),
-  agent_name: z.string(),
-});
-export type ReactionRemovedEvent = z.infer<typeof ReactionRemovedEventSchema>;
+export type MessageReactedEvent = z.infer<typeof MessageReactedEventSchema>;
 
 export const DmReceivedEventSchema = z.object({
   id: z.string().uuid(),
@@ -89,37 +95,83 @@ export const GroupDmReceivedEventSchema = z.object({
 });
 export type GroupDmReceivedEvent = z.infer<typeof GroupDmReceivedEventSchema>;
 
-export const AgentOnlineEventSchema = z.object({
-  type: z.literal('agent.online'),
+export const AgentStatusActiveEventSchema = z.object({
+  type: z.literal('agent.status.active'),
   agent: z.object({ name: z.string() }),
+  status: z.literal('active'),
 });
-export type AgentOnlineEvent = z.infer<typeof AgentOnlineEventSchema>;
+export type AgentStatusActiveEvent = z.infer<typeof AgentStatusActiveEventSchema>;
 
-export const AgentOfflineEventSchema = z.object({
-  type: z.literal('agent.offline'),
+export const AgentStatusIdleEventSchema = z.object({
+  type: z.literal('agent.status.idle'),
   agent: z.object({ name: z.string() }),
+  status: z.literal('idle'),
 });
-export type AgentOfflineEvent = z.infer<typeof AgentOfflineEventSchema>;
+export type AgentStatusIdleEvent = z.infer<typeof AgentStatusIdleEventSchema>;
 
-export const AgentSpawnRequestedEventSchema = z.object({
-  type: z.literal('agent.spawn_requested'),
-  agent: z.object({
-    name: z.string(),
-    cli: z.string(),
-    task: z.string(),
-    channel: z.string().nullable(),
-    already_existed: z.boolean(),
-  }),
-});
-export type AgentSpawnRequestedEvent = z.infer<typeof AgentSpawnRequestedEventSchema>;
-
-export const AgentReleaseRequestedEventSchema = z.object({
-  type: z.literal('agent.release_requested'),
+export const AgentStatusBlockedEventSchema = z.object({
+  type: z.literal('agent.status.blocked'),
   agent: z.object({ name: z.string() }),
-  reason: z.string().nullable(),
-  deleted: z.boolean(),
+  status: z.literal('blocked'),
 });
-export type AgentReleaseRequestedEvent = z.infer<typeof AgentReleaseRequestedEventSchema>;
+export type AgentStatusBlockedEvent = z.infer<typeof AgentStatusBlockedEventSchema>;
+
+export const AgentStatusWaitingEventSchema = z.object({
+  type: z.literal('agent.status.waiting'),
+  agent: z.object({ name: z.string() }),
+  status: z.literal('waiting'),
+});
+export type AgentStatusWaitingEvent = z.infer<typeof AgentStatusWaitingEventSchema>;
+
+export const AgentStatusOfflineEventSchema = z.object({
+  type: z.literal('agent.status.offline'),
+  agent: z.object({ name: z.string() }),
+  status: z.literal('offline'),
+});
+export type AgentStatusOfflineEvent = z.infer<typeof AgentStatusOfflineEventSchema>;
+
+export const AgentStatusChangedEventSchema = z.object({
+  type: z.literal('agent.status.changed'),
+  agent: z.object({ name: z.string() }),
+  status: z.enum(['active', 'idle', 'blocked', 'waiting', 'offline']),
+});
+export type AgentStatusChangedEvent = z.infer<typeof AgentStatusChangedEventSchema>;
+
+// Durable agent exit — an agent hosted by a node was deregistered, dropped from
+// a node inventory sync, or released. Correlates back to the spawn invocation.
+export const AgentExitedEventSchema = z.object({
+  type: z.literal('agent.exited'),
+  agent_id: z.string(),
+  agent_name: z.string(),
+  node_id: z.string().nullable(),
+  invocation_id: z.string().nullable(),
+  reason: z.enum(['deregistered', 'missing_from_inventory', 'released']),
+});
+export type AgentExitedEvent = z.infer<typeof AgentExitedEventSchema>;
+
+// Durable node liveness transitions. Emitted once per online <-> offline flip.
+export const NodeStatusOnlineEventSchema = z.object({
+  type: z.literal('node.status.online'),
+  node_id: z.string(),
+  node_name: z.string().nullable(),
+});
+export type NodeStatusOnlineEvent = z.infer<typeof NodeStatusOnlineEventSchema>;
+
+export const NodeStatusOfflineEventSchema = z.object({
+  type: z.literal('node.status.offline'),
+  node_id: z.string(),
+  node_name: z.string().nullable(),
+  reason: z.enum(['liveness_timeout', 'disconnected', 'deregistered']).optional(),
+});
+export type NodeStatusOfflineEvent = z.infer<typeof NodeStatusOfflineEventSchema>;
+
+export type AgentStatusEvent =
+  | AgentStatusActiveEvent
+  | AgentStatusIdleEvent
+  | AgentStatusBlockedEvent
+  | AgentStatusWaitingEvent
+  | AgentStatusOfflineEvent
+  | AgentStatusChangedEvent;
 
 export const ChannelCreatedEventSchema = z.object({
   type: z.literal('channel.created'),
@@ -186,24 +238,108 @@ export const PongEventSchema = z.object({
 });
 export type PongEvent = z.infer<typeof PongEventSchema>;
 
+// Server acknowledgement of a `resync` request. `replayed` counts the events
+// re-sent (ring buffer plus DB fallback); `gap_detected` is true when the gap
+// exceeded the server's resync ring and a DB-backed replay was attempted.
+export const ResyncAckEventSchema = z.object({
+  type: z.literal('resync_ack'),
+  last_seen_seq: z.number(),
+  current_seq: z.number(),
+  replayed: z.number(),
+  gap_detected: z.boolean(),
+});
+export type ResyncAckEvent = z.infer<typeof ResyncAckEventSchema>;
+
 export const WebhookReceivedEventSchema = z.object({
   type: z.literal('webhook.received'),
   webhook_id: z.string(),
   channel: z.string(),
-  message: z.object({ id: z.string(), text: z.string(), source: z.string().nullable() }),
+  message: z.object({
+    id: z.string(),
+    text: z.string(),
+    source: z.string().nullable(),
+    author: z.string().nullable().optional(),
+  }),
 });
 export type WebhookReceivedEvent = z.infer<typeof WebhookReceivedEventSchema>;
 
-export const CommandInvokedEventSchema = z.object({
-  type: z.literal('command.invoked'),
-  command: z.string(),
-  channel: z.string(),
-  invoked_by: z.string(),
+// Action (agent-to-agent RPC) events. Delivered to the handler agent on invoke,
+// and to the caller agent on completion/failure.
+export const ActionInvokedEventSchema = z.object({
+  type: z.literal('action.invoked'),
+  invocation_id: z.string(),
+  action_name: z.string(),
+  caller_name: z.string(),
   handler_agent_id: z.string(),
-  args: z.string().nullable(),
-  parameters: z.record(z.string(), z.unknown()).nullable(),
+  handler_agent_name: z.string().optional(),
+  input: z.unknown().optional(),
 });
-export type CommandInvokedEvent = z.infer<typeof CommandInvokedEventSchema>;
+export type ActionInvokedEvent = z.infer<typeof ActionInvokedEventSchema>;
+
+export const ActionCompletedEventSchema = z.object({
+  type: z.literal('action.completed'),
+  invocation_id: z.string(),
+  action_name: z.string(),
+  status: z.literal('completed'),
+  output: z.record(z.string(), z.unknown()).nullable(),
+  error: z.string().nullable(),
+});
+export type ActionCompletedEvent = z.infer<typeof ActionCompletedEventSchema>;
+
+export const ActionFailedEventSchema = z.object({
+  type: z.literal('action.failed'),
+  invocation_id: z.string(),
+  action_name: z.string(),
+  status: z.literal('failed'),
+  output: z.record(z.string(), z.unknown()).nullable(),
+  error: z.string().nullable(),
+});
+export type ActionFailedEvent = z.infer<typeof ActionFailedEventSchema>;
+
+export const ActionDeniedEventSchema = z.object({
+  type: z.literal('action.denied'),
+  action_name: z.string(),
+  caller_name: z.string().nullable(),
+  error: z.string(),
+});
+export type ActionDeniedEvent = z.infer<typeof ActionDeniedEventSchema>;
+
+// Durable delivery lifecycle events. Delivered to the recipient agent so an
+// offline consumer can reconcile queued delivery state on reconnect.
+export const DeliveryAcceptedEventSchema = z.object({
+  type: z.literal('delivery.accepted'),
+  delivery_id: z.string(),
+  message_id: z.string(),
+  channel_id: z.string().nullable().optional(),
+  reason: z.string().nullable().optional(),
+});
+export type DeliveryAcceptedEvent = z.infer<typeof DeliveryAcceptedEventSchema>;
+
+export const DeliveryDeliveredEventSchema = z.object({
+  type: z.literal('delivery.delivered'),
+  delivery_id: z.string(),
+  message_id: z.string(),
+});
+export type DeliveryDeliveredEvent = z.infer<typeof DeliveryDeliveredEventSchema>;
+
+export const DeliveryDeferredEventSchema = z.object({
+  type: z.literal('delivery.deferred'),
+  delivery_id: z.string(),
+  message_id: z.string(),
+  available_at: z.string().nullable(),
+  reason: z.string().nullable().optional(),
+});
+export type DeliveryDeferredEvent = z.infer<typeof DeliveryDeferredEventSchema>;
+
+export const DeliveryFailedEventSchema = z.object({
+  type: z.literal('delivery.failed'),
+  delivery_id: z.string().nullable(),
+  message_id: z.string(),
+  reason: z.string().nullable().optional(),
+  error: z.string().nullable().optional(),
+  retryable: z.boolean().nullable().optional(),
+});
+export type DeliveryFailedEvent = z.infer<typeof DeliveryFailedEventSchema>;
 
 // WebSocket client events (emitted by WsClient, not from server)
 export const WsOpenEventSchema = z.object({
@@ -233,18 +369,30 @@ export const WsCloseEventSchema = z.object({
 });
 export type WsCloseEvent = z.infer<typeof WsCloseEventSchema>;
 
+// Emitted by WsClient after the server acknowledges a reconnect resync.
+export const WsResyncedEventSchema = z.object({
+  type: z.literal('resynced'),
+  replayed: z.number(),
+  gap_detected: z.boolean(),
+});
+export type WsResyncedEvent = z.infer<typeof WsResyncedEventSchema>;
+
 export const ServerEventSchema = z.discriminatedUnion('type', [
   MessageCreatedEventSchema,
   MessageUpdatedEventSchema,
   ThreadReplyEventSchema,
-  ReactionAddedEventSchema,
-  ReactionRemovedEventSchema,
+  MessageReactedEventSchema,
   DmReceivedEventSchema,
   GroupDmReceivedEventSchema,
-  AgentOnlineEventSchema,
-  AgentOfflineEventSchema,
-  AgentSpawnRequestedEventSchema,
-  AgentReleaseRequestedEventSchema,
+  AgentStatusActiveEventSchema,
+  AgentStatusIdleEventSchema,
+  AgentStatusBlockedEventSchema,
+  AgentStatusWaitingEventSchema,
+  AgentStatusOfflineEventSchema,
+  AgentStatusChangedEventSchema,
+  AgentExitedEventSchema,
+  NodeStatusOnlineEventSchema,
+  NodeStatusOfflineEventSchema,
   ChannelCreatedEventSchema,
   ChannelUpdatedEventSchema,
   ChannelArchivedEventSchema,
@@ -255,8 +403,16 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
   MessageReadEventSchema,
   FileUploadedEventSchema,
   WebhookReceivedEventSchema,
-  CommandInvokedEventSchema,
+  ActionInvokedEventSchema,
+  ActionCompletedEventSchema,
+  ActionFailedEventSchema,
+  ActionDeniedEventSchema,
+  DeliveryAcceptedEventSchema,
+  DeliveryDeliveredEventSchema,
+  DeliveryDeferredEventSchema,
+  DeliveryFailedEventSchema,
   PongEventSchema,
+  ResyncAckEventSchema,
 ]);
 
 export type ServerEvent = z.infer<typeof ServerEventSchema>;
@@ -276,14 +432,18 @@ export const WsClientEventSchema = z.discriminatedUnion('type', [
   MessageCreatedEventSchema,
   MessageUpdatedEventSchema,
   ThreadReplyEventSchema,
-  ReactionAddedEventSchema,
-  ReactionRemovedEventSchema,
+  MessageReactedEventSchema,
   DmReceivedEventSchema,
   GroupDmReceivedEventSchema,
-  AgentOnlineEventSchema,
-  AgentOfflineEventSchema,
-  AgentSpawnRequestedEventSchema,
-  AgentReleaseRequestedEventSchema,
+  AgentStatusActiveEventSchema,
+  AgentStatusIdleEventSchema,
+  AgentStatusBlockedEventSchema,
+  AgentStatusWaitingEventSchema,
+  AgentStatusOfflineEventSchema,
+  AgentStatusChangedEventSchema,
+  AgentExitedEventSchema,
+  NodeStatusOnlineEventSchema,
+  NodeStatusOfflineEventSchema,
   ChannelCreatedEventSchema,
   ChannelUpdatedEventSchema,
   ChannelArchivedEventSchema,
@@ -294,14 +454,23 @@ export const WsClientEventSchema = z.discriminatedUnion('type', [
   MessageReadEventSchema,
   FileUploadedEventSchema,
   WebhookReceivedEventSchema,
-  CommandInvokedEventSchema,
+  ActionInvokedEventSchema,
+  ActionCompletedEventSchema,
+  ActionFailedEventSchema,
+  ActionDeniedEventSchema,
+  DeliveryAcceptedEventSchema,
+  DeliveryDeliveredEventSchema,
+  DeliveryDeferredEventSchema,
+  DeliveryFailedEventSchema,
   PongEventSchema,
+  ResyncAckEventSchema,
   // Client-only events
   WsOpenEventSchema,
   WsErrorEventSchema,
   WsReconnectingEventSchema,
   WsPermanentlyDisconnectedEventSchema,
   WsCloseEventSchema,
+  WsResyncedEventSchema,
 ]);
 export type WsClientEvent = z.infer<typeof WsClientEventSchema>;
 export type WsClientEventType = WsClientEvent['type'];

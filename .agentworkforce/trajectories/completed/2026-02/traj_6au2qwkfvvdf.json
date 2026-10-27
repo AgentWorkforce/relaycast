@@ -1,0 +1,24 @@
+{
+  "id": "traj_6au2qwkfvvdf",
+  "version": 1,
+  "task": {
+    "title": "Create CLI commands for workspace, agent, and config management",
+    "source": {
+      "system": "plain",
+      "id": "Wave-11/Relay-Transport-CLI"
+    }
+  },
+  "status": "abandoned",
+  "startedAt": "2026-02-07T23:41:42.873Z",
+  "agents": [],
+  "chapters": [],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "relay-cloud-sdk-transport",
+  "tags": [],
+  "_trace": {
+    "startRef": "ca01ad71e2a55bac6fa631c45795fe93f2e2bb8d",
+    "endRef": "ca01ad71e2a55bac6fa631c45795fe93f2e2bb8d"
+  },
+  "completedAt": "2026-02-07T23:43:02.753Z"
+}

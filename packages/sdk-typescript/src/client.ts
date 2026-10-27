@@ -1,7 +1,16 @@
 import { z } from 'zod';
 import { ApiErrorSchema } from '@relaycast/types';
 import { SDK_VERSION } from './version.js';
-import { SDK_ORIGIN, type InternalOrigin } from './origin.js';
+import {
+  ORIGIN_ACTOR_HEADER,
+  SDK_ORIGIN,
+  agentRelayIdentityHeaders,
+  agentRelayIdentityOrigin,
+  resolveAgentRelayIdentity,
+  sanitizeOriginActor,
+  type AgentRelayIdentity,
+  type InternalOrigin,
+} from './origin.js';
 import { camelizeKeys, decamelizeKey, decamelizeKeys, type Camelize } from './casing.js';
 import { RelayError, relayErrorFromApi } from './errors.js';
 
@@ -9,11 +18,50 @@ export interface ClientOptions {
   apiKey: string;
   baseUrl?: string;
   retryPolicy?: RetryPolicyInput;
+  /**
+   * Optional User-Agent-style identifier for the originActor driving requests
+   * (e.g. `'claude-code/2.3 (model=opus-4.8)'`, `'codex'`, `'human'`). Sent as
+   * the `X-Relaycast-Origin-Actor` header; invalid values are dropped. See
+   * {@link sanitizeOriginActor}.
+   */
+  originActor?: string;
+  /**
+   * Optional Agent Relay distinct telemetry id. Sent as the
+   * `X-Agent-Relay-Distinct-Id` header so Relaycast telemetry can be joined to
+   * Agent Relay CLI telemetry without sending user-identifying data. Invalid
+   * values are dropped.
+   */
+  agentRelayDistinctId?: string;
+  /**
+   * Optional Agent Relay Cloud user id of the signed-in operator. Sent as the
+   * `X-Agent-Relay-User-Id` header, and used as the distinct id when
+   * `agentRelayDistinctId` is unset so both sides report one PostHog person.
+   */
+  agentRelayUserId?: string;
+  /**
+   * Optional hashed machine id, sent as `X-Agent-Relay-Machine-Id` alongside the
+   * distinct id so machine-level cross-tabs survive after login.
+   */
+  agentRelayMachineId?: string;
+  /** Optional Agent Relay Cloud organization id, for group analytics. */
+  agentRelayOrgId?: string;
+  /** Optional organization slug, for readable analytics breakdowns. */
+  agentRelayOrgSlug?: string;
 }
 
 export interface RequestOptions {
   headers?: Record<string, string>;
   schema?: z.ZodType;
+  /** Whether this request may be retried automatically. Defaults to true. */
+  retry?: boolean;
+}
+
+export interface ResponseEnvelope<T> {
+  data: T;
+  cursor?: {
+    next: string | null;
+    hasMore: boolean;
+  };
 }
 
 export interface RetryPolicy {
@@ -71,6 +119,8 @@ const DEFAULT_RETRY_POLICY: RetryPolicy = {
   retryOn: [429, 500, 502, 503, 504],
 };
 
+const MAX_AUTOMATIC_RETRY_DELAY_MS = 60_000;
+
 function normalizeRetryPolicy(input?: RetryPolicyInput): RetryPolicy {
   return {
     maxRetries: Number.isFinite(input?.maxRetries) ? Math.max(0, Math.floor(input!.maxRetries!)) : DEFAULT_RETRY_POLICY.maxRetries,
@@ -93,7 +143,9 @@ function computeBackoffMs(policy: RetryPolicy, retryAttempt: number): number {
 }
 
 function parseRetryAfterMs(res: Response): number | null {
-  const header = res.headers.get('Retry-After');
+  // Lightweight SDK test doubles and Fetch-compatible shims can omit
+  // `headers`; treat that exactly as an absent Retry-After value.
+  const header = res.headers?.get('Retry-After');
   if (!header) return null;
 
   const asSeconds = Number(header);
@@ -122,18 +174,23 @@ const apiEnvelopeSchema = z.object({
 export class HttpClient {
   private _apiKey: string;
   private _baseUrl: string;
-  private _originSurface: string;
   private _originClient: string;
   private _originVersion: string;
+  private _originActor?: string;
+  private _identity: AgentRelayIdentity;
   private _retryPolicy: RetryPolicy;
 
   constructor(options: ClientOptions) {
     const origin = readInternalOrigin(options) ?? SDK_ORIGIN;
     this._apiKey = options.apiKey;
-    this._baseUrl = options.baseUrl ?? 'https://api.relaycast.dev';
-    this._originSurface = origin.surface;
+    this._baseUrl = options.baseUrl ?? 'https://cast.agentrelay.com';
     this._originClient = origin.client;
     this._originVersion = origin.version;
+    // A wrapping host's internal origin is authoritative about the originActor;
+    // fall back to the public `originActor` option for plain consumers.
+    this._originActor = sanitizeOriginActor(origin.originActor ?? options.originActor);
+    // A wrapping host's internal origin wins over the public options.
+    this._identity = resolveAgentRelayIdentity(origin, options);
     this._retryPolicy = normalizeRetryPolicy(options.retryPolicy);
   }
 
@@ -145,10 +202,6 @@ export class HttpClient {
     return this._baseUrl;
   }
 
-  get originSurface(): string {
-    return this._originSurface;
-  }
-
   get originClient(): string {
     return this._originClient;
   }
@@ -157,28 +210,68 @@ export class HttpClient {
     return this._originVersion;
   }
 
+  /** Sanitized originActor identifier, or `undefined` when none was supplied. */
+  get originActor(): string | undefined {
+    return this._originActor;
+  }
+
+  /** Sanitized Agent Relay distinct id, or `undefined` when none was supplied. */
+  get agentRelayDistinctId(): string | undefined {
+    return this._identity.distinctId;
+  }
+
+  /** Sanitized Agent Relay Cloud user id, or `undefined` when none was supplied. */
+  get agentRelayUserId(): string | undefined {
+    return this._identity.userId;
+  }
+
+  /** Sanitized hashed machine id, or `undefined` when none was supplied. */
+  get agentRelayMachineId(): string | undefined {
+    return this._identity.machineId;
+  }
+
+  /** Sanitized Agent Relay Cloud organization id, or `undefined`. */
+  get agentRelayOrgId(): string | undefined {
+    return this._identity.orgId;
+  }
+
+  /** Sanitized Agent Relay Cloud organization slug, or `undefined`. */
+  get agentRelayOrgSlug(): string | undefined {
+    return this._identity.orgSlug;
+  }
+
   get retryPolicy(): RetryPolicy {
     return this._retryPolicy;
+  }
+
+  /**
+   * This client's full origin — client/version, origin actor, and every
+   * identity dimension — for handing to a derived HTTP or WebSocket client.
+   * Single source so a newly added dimension reaches every socket at once.
+   */
+  get internalOrigin(): InternalOrigin {
+    return {
+      client: this._originClient,
+      version: this._originVersion,
+      ...(this._originActor ? { originActor: this._originActor } : {}),
+      ...agentRelayIdentityOrigin(this._identity),
+    };
   }
 
   withApiKey(apiKey: string): HttpClient {
     return new HttpClient(withInternalOrigin(
       { apiKey, baseUrl: this._baseUrl, retryPolicy: this._retryPolicy },
-      {
-        surface: this._originSurface,
-        client: this._originClient,
-        version: this._originVersion,
-      },
+      this.internalOrigin,
     ));
   }
 
-  async request<T>(
+  async requestEnvelope<T>(
     method: string,
     path: string,
     body?: unknown,
     query?: Record<string, string>,
     options?: RequestOptions,
-  ): Promise<Camelize<T>> {
+  ): Promise<ResponseEnvelope<Camelize<T>>> {
     const url = new URL(path, this._baseUrl);
     if (query) {
       for (const [k, v] of Object.entries(query)) {
@@ -189,15 +282,22 @@ export class HttpClient {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${this._apiKey}`,
       'X-SDK-Version': SDK_VERSION,
-      'X-Relaycast-Origin-Surface': this._originSurface,
       'X-Relaycast-Origin-Client': this._originClient,
       'X-Relaycast-Origin-Version': this._originVersion,
+      ...(this._originActor ? { [ORIGIN_ACTOR_HEADER]: this._originActor } : {}),
+      ...agentRelayIdentityHeaders(this._identity),
       ...(options?.headers || {}),
     };
 
     const hasBody = body !== undefined && method.toUpperCase() !== 'GET';
     if (hasBody) headers['Content-Type'] = 'application/json';
     const wireBody = hasBody ? decamelizeKeys(body) : undefined;
+    // A POST/PATCH without a caller-provided idempotency key is not safe to
+    // replay after a lost response. Exact lifecycle operations opt in by
+    // carrying their durable key in the request headers.
+    const idempotencyKey = Object.entries(headers).find(([name]) => name.toLowerCase() === 'idempotency-key')?.[1];
+    const isUnsafeMutation = ['POST', 'PATCH'].includes(method.toUpperCase()) && !idempotencyKey;
+    const maxRetries = options?.retry === false || isUnsafeMutation ? 0 : this._retryPolicy.maxRetries;
 
     let attempt = 0;
 
@@ -210,7 +310,7 @@ export class HttpClient {
           body: hasBody ? JSON.stringify(wireBody) : undefined,
         });
       } catch (err) {
-        if (attempt < this._retryPolicy.maxRetries) {
+        if (attempt < maxRetries) {
           const waitMs = computeBackoffMs(this._retryPolicy, attempt);
           attempt += 1;
           await sleep(waitMs);
@@ -223,10 +323,11 @@ export class HttpClient {
         );
       }
 
-      if (this._retryPolicy.retryOn.includes(res.status) && attempt < this._retryPolicy.maxRetries) {
-        const waitMs = res.status === 429
-          ? parseRetryAfterMs(res) ?? computeBackoffMs(this._retryPolicy, attempt)
-          : computeBackoffMs(this._retryPolicy, attempt);
+      if (this._retryPolicy.retryOn.includes(res.status) && attempt < maxRetries) {
+        const waitMs = Math.min(
+          parseRetryAfterMs(res) ?? computeBackoffMs(this._retryPolicy, attempt),
+          MAX_AUTOMATIC_RETRY_DELAY_MS,
+        );
         attempt += 1;
         await sleep(waitMs);
         continue;
@@ -234,7 +335,7 @@ export class HttpClient {
 
       // 204 No Content — return undefined (used by DELETE endpoints)
       if (res.status === 204) {
-        return undefined as Camelize<T>;
+        return { data: undefined as Camelize<T> };
       }
 
       let json: unknown;
@@ -260,14 +361,42 @@ export class HttpClient {
         const errParsed = ApiErrorSchema.safeParse(json);
         const code = errParsed.success ? errParsed.data.error.code : 'unknown_error';
         const message = errParsed.success ? errParsed.data.error.message : 'Unknown error';
-        throw relayErrorFromApi(code, message, res.status);
+        throw relayErrorFromApi(code, message, res.status, parseRetryAfterMs(res) ?? undefined);
       }
 
       const data = envelope.data.data;
 
       const parsedData = options?.schema ? options.schema.parse(data) : data;
-      return camelizeKeys(parsedData) as Camelize<T>;
+      return {
+        data: camelizeKeys(parsedData) as Camelize<T>,
+        ...(envelope.data.cursor
+          ? {
+            cursor: {
+              next: envelope.data.cursor.next,
+              hasMore: envelope.data.cursor.has_more,
+            },
+          }
+          : {}),
+      };
     }
+  }
+
+  async request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    query?: Record<string, string>,
+    options?: RequestOptions,
+  ): Promise<Camelize<T>> {
+    return (await this.requestEnvelope<T>(method, path, body, query, options)).data;
+  }
+
+  getEnvelope<T>(
+    path: string,
+    query?: Record<string, string>,
+    options?: RequestOptions,
+  ): Promise<ResponseEnvelope<Camelize<T>>> {
+    return this.requestEnvelope<T>('GET', path, undefined, query, options);
   }
 
   get<T>(path: string, query?: Record<string, string>, options?: RequestOptions): Promise<Camelize<T>> {

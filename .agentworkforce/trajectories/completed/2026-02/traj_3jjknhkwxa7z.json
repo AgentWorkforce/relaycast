@@ -1,0 +1,54 @@
+{
+  "id": "traj_3jjknhkwxa7z",
+  "version": 1,
+  "task": {
+    "title": "Add semantic version and build SHA to /health"
+  },
+  "status": "abandoned",
+  "startedAt": "2026-02-19T06:40:55.489Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-19T06:46:08.517Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_nt78fl0xg4ad",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-19T06:46:08.517Z",
+      "events": [
+        {
+          "ts": 1771483568518,
+          "type": "decision",
+          "content": "Return both semantic version and build SHA from /health: Return both semantic version and build SHA from /health",
+          "raw": {
+            "question": "Return both semantic version and build SHA from /health",
+            "chosen": "Return both semantic version and build SHA from /health",
+            "alternatives": [],
+            "reasoning": "Semantic version communicates release compatibility while commit SHA confirms exact deployed artifact"
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1771612349238,
+          "type": "note",
+          "content": "Abandoned: Stale active trajectory from previous task",
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-20T18:32:29.238Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "913fa4f2cfe3f54e67343745c37acbe718e55b2a",
+    "endRef": "913fa4f2cfe3f54e67343745c37acbe718e55b2a"
+  },
+  "completedAt": "2026-02-20T18:32:29.238Z"
+}

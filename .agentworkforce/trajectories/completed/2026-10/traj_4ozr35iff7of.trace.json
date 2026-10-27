@@ -1,0 +1,187 @@
+{
+  "version": "1.0.0",
+  "id": "25bbf1fe-531e-4484-bfc4-9805244b527b",
+  "timestamp": "2026-10-11T20:04:15.116Z",
+  "trajectory": "traj_4ozr35iff7of",
+  "files": [
+    {
+      "path": ".agentworkforce/trajectories/active/traj_4ozr35iff7of/trajectory.json",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 46,
+              "revision": "012e5f38afd24227877b66cf853c83cf58a6c4ef"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": ".agentworkforce/trajectories/completed/2026-10/traj_8xat4ug6944x/summary.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 25,
+              "revision": "012e5f38afd24227877b66cf853c83cf58a6c4ef"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": ".agentworkforce/trajectories/completed/2026-10/traj_8xat4ug6944x/trajectory.json",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 8,
+              "end_line": 16,
+              "revision": "012e5f38afd24227877b66cf853c83cf58a6c4ef"
+            },
+            {
+              "start_line": 24,
+              "end_line": 30,
+              "revision": "012e5f38afd24227877b66cf853c83cf58a6c4ef"
+            },
+            {
+              "start_line": 49,
+              "end_line": 60,
+              "revision": "012e5f38afd24227877b66cf853c83cf58a6c4ef"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "CHANGELOG.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 20,
+              "end_line": 26,
+              "revision": "012e5f38afd24227877b66cf853c83cf58a6c4ef"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/CHANGELOG.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 11,
+              "end_line": 17,
+              "revision": "012e5f38afd24227877b66cf853c83cf58a6c4ef"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/engine/__tests__/agentRegisterBatch.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 120,
+              "revision": "012e5f38afd24227877b66cf853c83cf58a6c4ef"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/engine/node.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 26,
+              "end_line": 32,
+              "revision": "012e5f38afd24227877b66cf853c83cf58a6c4ef"
+            },
+            {
+              "start_line": 1159,
+              "end_line": 1164,
+              "revision": "012e5f38afd24227877b66cf853c83cf58a6c4ef"
+            },
+            {
+              "start_line": 1274,
+              "end_line": 1292,
+              "revision": "012e5f38afd24227877b66cf853c83cf58a6c4ef"
+            },
+            {
+              "start_line": 1312,
+              "end_line": 1318,
+              "revision": "012e5f38afd24227877b66cf853c83cf58a6c4ef"
+            },
+            {
+              "start_line": 1330,
+              "end_line": 1355,
+              "revision": "012e5f38afd24227877b66cf853c83cf58a6c4ef"
+            },
+            {
+              "start_line": 1358,
+              "end_line": 1364,
+              "revision": "012e5f38afd24227877b66cf853c83cf58a6c4ef"
+            },
+            {
+              "start_line": 1380,
+              "end_line": 1386,
+              "revision": "012e5f38afd24227877b66cf853c83cf58a6c4ef"
+            },
+            {
+              "start_line": 1394,
+              "end_line": 1399,
+              "revision": "012e5f38afd24227877b66cf853c83cf58a6c4ef"
+            },
+            {
+              "start_line": 1871,
+              "end_line": 1968,
+              "revision": "012e5f38afd24227877b66cf853c83cf58a6c4ef"
+            },
+            {
+              "start_line": 1970,
+              "end_line": 2022,
+              "revision": "012e5f38afd24227877b66cf853c83cf58a6c4ef"
+            },
+            {
+              "start_line": 2024,
+              "end_line": 2066,
+              "revision": "012e5f38afd24227877b66cf853c83cf58a6c4ef"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

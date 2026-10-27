@@ -1,0 +1,25 @@
+{
+  "id": "traj_umo7p21qpv43",
+  "version": 1,
+  "task": {
+    "title": "Open PR for OpenAPI spawn model documentation"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-10T14:57:22.339Z",
+  "completedAt": "2026-06-10T14:58:27.101Z",
+  "agents": [],
+  "chapters": [],
+  "retrospective": {
+    "summary": "Created PR #185 from a clean branch with only openapi.yaml changes documenting optional spawn model and opencode cli enum.",
+    "approach": "Standard approach",
+    "confidence": 0.95
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "99dec3007a643a058a7de668f35dd6e9af44e33d",
+    "endRef": "99dec3007a643a058a7de668f35dd6e9af44e33d"
+  }
+}

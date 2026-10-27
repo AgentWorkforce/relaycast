@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createInternalWsClient } from '@relaycast/sdk/internal';
@@ -37,10 +37,6 @@ vi.mock('@relaycast/sdk', () => {
   class MockRelay {
     agents = {
       register: vi.fn().mockResolvedValue({
-        agent: { name: 'bot1' },
-        token: 'tok_abc',
-      }),
-      registerOrRotate: vi.fn().mockResolvedValue({
         agent: { name: 'bot1' },
         token: 'tok_abc',
       }),
@@ -112,10 +108,6 @@ vi.mock('@relaycast/sdk/internal', () => {
         agent: { name: 'bot1' },
         token: 'tok_abc',
       }),
-      registerOrRotate: vi.fn().mockResolvedValue({
-        agent: { name: 'bot1' },
-        token: 'tok_abc',
-      }),
       list: vi.fn().mockResolvedValue([]),
     };
     webhooks = {
@@ -152,22 +144,54 @@ vi.mock('@relaycast/sdk/internal', () => {
 });
 
 // Import after mock is set up
-import { createRelayMcpServer } from '../server.js';
+import { createRelayMcpServer as createServer } from '../server.js';
+
+const servers: ReturnType<typeof createServer>[] = [];
+function createRelayMcpServer(options: Parameters<typeof createServer>[0]) {
+  const server = createServer(options);
+  servers.push(server);
+  return server;
+}
+
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map((server) => server.close()));
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
 
 describe('createRelayMcpServer', () => {
   let client: Client;
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    vi.stubEnv('DO_NOT_TRACK', '1');
+    // Registration also reads the workspace name through fetch, outside the SDK.
+    // Keep this unit test independent of the hosted API and its network latency.
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({
+      ok: true, data: { name: 'test-workspace' },
+    })));
     const mcpServer = createRelayMcpServer({ apiKey: 'test-key' });
     client = new Client({ name: 'test-client', version: '0.1.0' });
     const [ct, st] = InMemoryTransport.createLinkedPair();
     await Promise.all([client.connect(ct), mcpServer.connect(st)]);
   });
 
-  it('lists all 45 tools', async () => {
+  it('exposes local file tools only to local (non-HTTP) servers', async () => {
+    async function toolNames(options: Parameters<typeof createServer>[0]) {
+      const server = createRelayMcpServer(options);
+      const c = new Client({ name: 'files-client', version: '0.1.0' });
+      const [ct, st] = InMemoryTransport.createLinkedPair();
+      await Promise.all([c.connect(ct), server.connect(st)]);
+      return (await c.listTools()).tools.map((t) => t.name);
+    }
+    expect(await toolNames({ apiKey: 'test-key', localFiles: true })).toContain('message.file.download');
+    expect(await toolNames({ apiKey: 'test-key', localFiles: true, telemetryTransport: 'http' }))
+      .not.toContain('message.file.download');
+  });
+
+  it('lists all 51 tools', async () => {
     const tools = await client.listTools();
-    expect(tools.tools.length).toBe(45);
+    expect(tools.tools.length).toBe(51);
     const toolNames = tools.tools.map((t) => t.name).sort();
     expect(toolNames).toEqual([
       'agent.add',
@@ -184,10 +208,13 @@ describe('createRelayMcpServer', () => {
       'cloud.local-mount.ensure',
       'cloud.local-mount.status',
       'cloud.local-mount.stop',
-      'integration.command.delete',
-      'integration.command.invoke',
-      'integration.command.list',
-      'integration.command.register',
+      'integration.action.complete',
+      'integration.action.delete',
+      'integration.action.get',
+      'integration.action.get_invocation',
+      'integration.action.invoke',
+      'integration.action.list',
+      'integration.action.register',
       'integration.subscription.create',
       'integration.subscription.delete',
       'integration.subscription.get',
@@ -199,6 +226,8 @@ describe('createRelayMcpServer', () => {
       'message.dm.list',
       'message.dm.send',
       'message.dm.send_group',
+      'message.file.complete',
+      'message.file.get',
       'message.file.upload',
       'message.get_thread',
       'message.inbox.check',
@@ -213,6 +242,7 @@ describe('createRelayMcpServer', () => {
       'workspace.create',
       'workspace.join',
       'workspace.list',
+      'workspace.rotate_key',
       'workspace.set_key',
       'workspace.switch',
     ]);
@@ -368,9 +398,14 @@ describe('createRelayMcpServer', () => {
 
   it('retries WS bridge initialization after switching away from a token that failed WS init', async () => {
     const wsFactory = vi.mocked(createInternalWsClient);
+    const retryConnect = vi.fn();
     wsFactory.mockImplementationOnce(() => {
       throw new Error('ws unsupported');
-    });
+    }).mockImplementationOnce(() => ({
+      on: vi.fn().mockReturnValue(() => {}),
+      connect: retryConnect,
+      disconnect: vi.fn(),
+    }) as unknown as ReturnType<typeof createInternalWsClient>);
 
     const bootstrappedServer = createRelayMcpServer({
       apiKey: 'rk_live_bootstrap123',
@@ -394,6 +429,8 @@ describe('createRelayMcpServer', () => {
       arguments: { name: 'retry-bot' },
     });
     expect(registerResult.isError).toBeFalsy();
+    // The tool response completes setSession; assert the retry's connect signal.
     expect(wsFactory).toHaveBeenCalledTimes(2);
+    expect(retryConnect).toHaveBeenCalledTimes(1);
   });
 });

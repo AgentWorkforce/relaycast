@@ -1,5 +1,9 @@
 import { z } from 'zod';
 
+/** Lowercase SHA-256 verifier accepted for server-owned recovery proofs. */
+export const AGENT_RECOVERY_PROOF_HASH_PATTERN = /^[a-f0-9]{64}$/;
+export const AGENT_TOKEN_HASH_PATTERN = /^[a-f0-9]{64}$/;
+
 export const AgentTypeSchema = z.enum(['agent', 'human', 'system']);
 export type AgentType = z.infer<typeof AgentTypeSchema>;
 
@@ -9,10 +13,20 @@ export type AgentStatus = z.infer<typeof AgentStatusSchema>;
 export const AgentSchema = z.object({
   id: z.string(),
   name: z.string(),
+  /**
+   * `agent@machine` for `address` on POST /v1/dm; `machine` is `direct` for a
+   * self-connected agent. Null when the agent is not hosted anywhere.
+   */
+  address: z.string().nullable().optional(),
   type: AgentTypeSchema,
   status: AgentStatusSchema,
   persona: z.string().nullable(),
   metadata: z.record(z.string(), z.unknown()),
+  /**
+   * The node whose authenticated connection registered this agent, set once by
+   * the server and not patchable (unlike `metadata.fleet`). Agent detail only.
+   */
+  origin_node_id: z.string().nullable().optional(),
   last_seen: z.string(),
   created_at: z.string().optional(),
   channels: z.array(z.object({
@@ -24,11 +38,25 @@ export const AgentSchema = z.object({
 });
 export type Agent = z.infer<typeof AgentSchema>;
 
+export const AgentSkillInputSchema = z.object({
+  id: z.string().min(1).optional(),
+  name: z.string().min(1),
+  description: z.string().optional(),
+  tags: z.array(z.string().min(1)).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+export type AgentSkillInput = z.infer<typeof AgentSkillInputSchema>;
+
 export const CreateAgentRequestSchema = z.object({
+  auto_join_general: z.boolean().optional(),
   name: z.string(),
   type: AgentTypeSchema.optional(),
   persona: z.string().optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
+  skills: z.array(AgentSkillInputSchema).optional(),
+  capabilities: z.record(z.string(), z.unknown()).optional(),
+  recovery_proof_hash: z.string().regex(AGENT_RECOVERY_PROOF_HASH_PATTERN).optional(),
+  work_unit_id: z.string().min(1).optional(),
 });
 export type CreateAgentRequest = z.infer<typeof CreateAgentRequestSchema>;
 
@@ -49,7 +77,9 @@ export const UpdateAgentRequestSchema = z.object({
 export type UpdateAgentRequest = z.infer<typeof UpdateAgentRequestSchema>;
 
 export const AgentListQuerySchema = z.object({
-  status: z.union([AgentStatusSchema, z.literal('all')]).optional(),
+  status: z.enum(['online', 'offline', 'away', 'active', 'idle', 'blocked', 'waiting', 'all']).optional(),
+  include_stale: z.boolean().optional(),
+  include_metadata: z.boolean().optional(),
 });
 export type AgentListQuery = z.infer<typeof AgentListQuerySchema>;
 
@@ -62,7 +92,7 @@ export type AgentPresenceInfo = z.infer<typeof AgentPresenceInfoSchema>;
 
 // === Spawn/Release (Agent Lifecycle) ===
 
-export const CliTypeSchema = z.enum(['claude', 'codex', 'gemini', 'aider', 'goose']);
+export const CliTypeSchema = z.enum(['claude', 'codex', 'gemini', 'aider', 'goose', 'opencode', 'grok', 'muse', 'devin']);
 export type CliType = z.infer<typeof CliTypeSchema>;
 
 export const SpawnAgentRequestSchema = z.object({
@@ -71,34 +101,41 @@ export const SpawnAgentRequestSchema = z.object({
   task: z.string(),
   channel: z.string().nullable().optional(),
   persona: z.string().nullable().optional(),
+  model: z.string().nullable().optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 export type SpawnAgentRequest = z.infer<typeof SpawnAgentRequestSchema>;
 
-export const SpawnAgentResponseSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  token: z.string(),
-  cli: CliTypeSchema,
-  task: z.string(),
-  channel: z.string().nullable(),
-  status: AgentStatusSchema,
+const LifecycleActionInvocationResponseSchema = z.object({
+  invocation_id: z.string(),
+  action_name: z.string(),
+  handler_agent_id: z.string().nullable(),
+  handler_node_id: z.string().nullable(),
+  dispatched_node_id: z.string().nullable().optional(),
+  input: z.record(z.string(), z.unknown()),
+  status: z.string(),
   created_at: z.string(),
-  already_existed: z.boolean(),
 });
+
+export const SpawnAgentResponseSchema = LifecycleActionInvocationResponseSchema;
 export type SpawnAgentResponse = z.infer<typeof SpawnAgentResponseSchema>;
 
 export const ReleaseAgentRequestSchema = z.object({
   name: z.string(),
   reason: z.string().nullable().optional(),
   delete_agent: z.boolean().optional(),
+  expected_token_hash: z.string().regex(AGENT_TOKEN_HASH_PATTERN).optional(),
 });
 export type ReleaseAgentRequest = z.infer<typeof ReleaseAgentRequestSchema>;
 
-export const ReleaseAgentResponseSchema = z.object({
-  name: z.string(),
-  released: z.boolean(),
-  deleted: z.boolean(),
-  reason: z.string().nullable(),
+/**
+ * Server-authorized release reconciliation. Unlike the legacy name-addressed
+ * request this pins the mutation to the immutable agent row id.
+ */
+export const ExactReleaseAgentRequestSchema = ReleaseAgentRequestSchema.extend({
+  expected_agent_id: z.string().min(1),
 });
+export type ExactReleaseAgentRequest = z.infer<typeof ExactReleaseAgentRequestSchema>;
+
+export const ReleaseAgentResponseSchema = LifecycleActionInvocationResponseSchema;
 export type ReleaseAgentResponse = z.infer<typeof ReleaseAgentResponseSchema>;

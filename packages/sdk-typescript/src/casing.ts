@@ -8,7 +8,7 @@ export type CamelCase<S extends string> =
 export type Camelize<T> =
   T extends Primitive ? T :
   T extends Array<infer U> ? Array<Camelize<U>> :
-  T extends Record<string, unknown>
+  T extends object
     ? { [K in keyof T as K extends string ? CamelCase<K> : K]: Camelize<T[K]> }
     : T;
 
@@ -26,6 +26,35 @@ function toSnakeKey(key: string): string {
   return key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 }
 
+/**
+ * Fields whose values are user-authored JSON, not wire-protocol shapes: JSON
+ * Schemas (`input_schema`/`output_schema`), action invocation payloads
+ * (`input`/`output`), and HTTP header maps (`headers`). Their keys are data —
+ * transforming them corrupts the document (e.g. a schema's
+ * `properties.batchSize` must not become `properties.batch_size`) — so both
+ * transforms rename the field itself but pass the value through verbatim.
+ *
+ * `data` and `metadata` belong here for the same reason, and their absence was
+ * a live corruption rather than a latent one. Message `data`/`metadata` carry
+ * caller-authored documents, and once Ratify proof bundles and signed
+ * revocation lists travel in them the transform is not merely untidy: a
+ * `RevocationList` whose `revoked_certs` arrives as `revokedCerts` cannot be
+ * reconstructed byte-for-byte, so its signature no longer verifies and the
+ * cross-deployment kill switch fails closed for the wrong reason. Anything
+ * signed must survive a round trip unmodified.
+ */
+const VERBATIM_VALUE_KEYS = new Set([
+  'headers',
+  'input',
+  'output',
+  'input_schema',
+  'inputSchema',
+  'output_schema',
+  'outputSchema',
+  'data',
+  'metadata',
+]);
+
 export function camelizeKeys<T>(value: T): Camelize<T> {
   if (Array.isArray(value)) {
     return value.map((item) => camelizeKeys(item)) as Camelize<T>;
@@ -33,7 +62,7 @@ export function camelizeKeys<T>(value: T): Camelize<T> {
   if (isPlainObject(value)) {
     const out: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(value)) {
-      out[toCamelKey(key)] = camelizeKeys(val);
+      out[toCamelKey(key)] = VERBATIM_VALUE_KEYS.has(key) ? val : camelizeKeys(val);
     }
     return out as Camelize<T>;
   }
@@ -47,7 +76,7 @@ export function decamelizeKeys<T>(value: T): unknown {
   if (isPlainObject(value)) {
     const out: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(value)) {
-      out[toSnakeKey(key)] = decamelizeKeys(val);
+      out[toSnakeKey(key)] = VERBATIM_VALUE_KEYS.has(key) ? val : decamelizeKeys(val);
     }
     return out;
   }

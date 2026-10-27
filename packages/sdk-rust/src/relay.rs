@@ -1,154 +1,59 @@
 //! Main RelayCast client for workspace-level operations.
 
 use crate::agent::AgentClient;
-use crate::client::{ClientOptions, HttpClient};
+use crate::client::{ClientOptions, HttpClient, RequestOptions};
 use crate::error::{RelayError, Result};
 use crate::types::*;
-use std::env;
-use std::fs;
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::Duration;
+use serde::Serialize;
 use url::Url;
 
+use crate::DEFAULT_BASE_URL;
+
 const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
-const DEFAULT_BASE_URL: &str = "https://api.relaycast.dev";
-const DEFAULT_ORIGIN_SURFACE: &str = "sdk";
 const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/sdk-rust";
-const DEFAULT_LOCAL_BASE_URL: &str = "http://127.0.0.1:7528";
-
-#[derive(Debug)]
-struct ResolvedLocalRuntime {
-    api_key: String,
-    base_url: String,
-}
-
-fn strip_trailing_slash(url: &str) -> String {
-    url.trim_end_matches('/').to_string()
-}
-
-fn io_err(context: &str, err: impl std::fmt::Display) -> RelayError {
-    RelayError::InvalidResponse(format!("{context}: {err}"))
-}
-
-fn resolve_local_binary_path() -> Result<PathBuf> {
-    let env_bin = env::var("RELAYCAST_LOCAL_BIN").unwrap_or_default();
-    if !env_bin.trim().is_empty() {
-        let path = PathBuf::from(env_bin.trim());
-        if !path.exists() {
-            return Err(RelayError::InvalidResponse(format!(
-                "RELAYCAST_LOCAL_BIN does not exist: {}",
-                path.display()
-            )));
-        }
-        return Ok(path);
-    }
-
-    let asset = match (env::consts::OS, env::consts::ARCH) {
-        ("macos", "aarch64") => "local-darwin-arm64",
-        ("macos", "x86_64") => "local-darwin-x64",
-        ("linux", "x86_64") => "local-linux-x64",
-        ("windows", "x86_64") => "local-windows-x64.exe",
-        (os, arch) => {
-            return Err(RelayError::InvalidResponse(format!(
-                "Unsupported platform for local relaycast runtime: {os}/{arch}"
-            )))
-        }
-    };
-
-    // Allow binaries shipped with the crate package.
-    let bundled = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("bin")
-        .join(asset);
-    if bundled.exists() {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let perms = std::fs::Permissions::from_mode(0o755);
-            let _ = fs::set_permissions(&bundled, perms);
-        }
-        return Ok(bundled);
-    }
-
-    // Fall back to PATH lookup (`local` / `local.exe`).
-    if cfg!(windows) {
-        Ok(PathBuf::from("local.exe"))
-    } else {
-        Ok(PathBuf::from("local"))
-    }
-}
-
-fn is_local_healthy(base_url: &str) -> bool {
-    let health_url = format!("{}/health", strip_trailing_slash(base_url));
-    let client = match reqwest::blocking::Client::builder()
-        .timeout(Duration::from_millis(600))
-        .build()
-    {
-        Ok(client) => client,
-        Err(_) => return false,
-    };
-
-    match client.get(health_url).send() {
-        Ok(resp) => resp.status().is_success(),
-        Err(_) => false,
-    }
-}
-
-fn wait_for_local_health(base_url: &str, attempts: usize, sleep: Duration) -> bool {
-    for _ in 0..attempts {
-        if is_local_healthy(base_url) {
-            return true;
-        }
-        thread::sleep(sleep);
-    }
-    false
-}
-
-fn ensure_local_runtime(
-    base_url_override: Option<&str>,
-    api_key_override: Option<&str>,
-) -> Result<ResolvedLocalRuntime> {
-    let env_base_url = env::var("RELAYCAST_LOCAL_BASE_URL").ok();
-    let base_url = strip_trailing_slash(
-        base_url_override
-            .or(env_base_url.as_deref())
-            .unwrap_or(DEFAULT_LOCAL_BASE_URL),
-    );
-    let parsed = Url::parse(&base_url)?;
-    let host = parsed.host_str().unwrap_or("127.0.0.1").to_string();
-    let port = parsed.port().unwrap_or(7528);
-
-    if !is_local_healthy(&base_url) {
-        let binary = resolve_local_binary_path()?;
-        Command::new(&binary)
-            .arg("--host")
-            .arg(&host)
-            .arg("--port")
-            .arg(port.to_string())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| io_err("failed starting local relaycast daemon", e))?;
-
-        if !wait_for_local_health(&base_url, 40, Duration::from_millis(100)) {
-            return Err(RelayError::InvalidResponse(format!(
-                "failed to start local relaycast daemon at {base_url}"
-            )));
-        }
-    }
-
-    let api_key = api_key_override
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| RelayError::InvalidResponse("RelayCast api_key is required".to_string()))?;
-
-    Ok(ResolvedLocalRuntime { api_key, base_url })
-}
 
 fn strip_hash(channel: &str) -> &str {
     channel.strip_prefix('#').unwrap_or(channel)
+}
+
+fn validate_anonymous_keyed_bootstrap_destination(base_url: &str) -> Result<Url> {
+    let parsed = Url::parse(base_url).map_err(|_| {
+        RelayError::InvalidResponse(
+            "Anonymous keyed workspace bootstrap requires a valid baseUrl".to_string(),
+        )
+    })?;
+    let hostname = parsed
+        .host_str()
+        .unwrap_or_default()
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    let loopback_http =
+        parsed.scheme() == "http" && matches!(hostname.as_str(), "localhost" | "127.0.0.1" | "::1");
+
+    if parsed.scheme() != "https" && !loopback_http {
+        return Err(RelayError::InvalidResponse(
+            "Anonymous keyed workspace bootstrap requires an HTTPS self-hosted baseUrl (or loopback HTTP for local development)".to_string(),
+        ));
+    }
+
+    Ok(parsed)
+}
+
+fn validate_bootstrap_secret_destination(base_url: &str) -> Result<()> {
+    let parsed = validate_anonymous_keyed_bootstrap_destination(base_url)?;
+    let hostname = parsed
+        .host_str()
+        .unwrap_or_default()
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    if hostname == "cast.agentrelay.com" {
+        return Err(RelayError::InvalidResponse(
+            "Anonymous keyed workspace bootstrap cannot send a bootstrapSecret to the hosted gateway"
+                .to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 /// Options for creating a RelayCast client.
@@ -156,10 +61,23 @@ fn strip_hash(channel: &str) -> &str {
 pub struct RelayCastOptions {
     /// The API key for authentication.
     pub api_key: String,
-    /// The base URL for the API (defaults to https://api.relaycast.dev).
+    /// The base URL for the API (defaults to https://cast.agentrelay.com).
+    ///
+    /// To self-host, run the engine (`relaycast-engine`, default port 8787) and
+    /// set this to e.g. `http://localhost:8787`.
     pub base_url: Option<String>,
-    /// Enable local mode (`local` daemon) auto-bootstrap.
-    pub local: bool,
+    /// Product identifier sent as `X-Relaycast-Origin-Client`; defaults to `@relaycast/sdk-rust`.
+    pub origin_client: Option<String>,
+    /// Product version sent as `X-Relaycast-Origin-Version`; defaults to the crate version.
+    pub origin_version: Option<String>,
+    /// User-Agent-style identifier for the origin_actor driving requests
+    /// (e.g. `"claude-code/2.3 (model=opus-4.8)"`, `"codex"`, `"human"`). Sent as
+    /// the `X-Relaycast-Origin-Actor` header so server-side telemetry can attribute
+    /// traffic. Invalid values are dropped.
+    pub origin_actor: Option<String>,
+    /// Agent Relay distinct telemetry id. Sent as
+    /// `X-Agent-Relay-Distinct-Id` on HTTP requests; invalid values are dropped.
+    pub agent_relay_distinct_id: Option<String>,
 }
 
 impl RelayCastOptions {
@@ -168,16 +86,10 @@ impl RelayCastOptions {
         Self {
             api_key: api_key.into(),
             base_url: None,
-            local: false,
-        }
-    }
-
-    /// Create options for local mode.
-    pub fn local(api_key: impl Into<String>) -> Self {
-        Self {
-            api_key: api_key.into(),
-            base_url: Some(DEFAULT_LOCAL_BASE_URL.to_string()),
-            local: true,
+            origin_client: None,
+            origin_version: None,
+            origin_actor: None,
+            agent_relay_distinct_id: None,
         }
     }
 
@@ -187,9 +99,26 @@ impl RelayCastOptions {
         self
     }
 
-    /// Enable or disable local mode.
-    pub fn with_local(mut self, local: bool) -> Self {
-        self.local = local;
+    /// Set the product identifier and version used for HTTP and agent WebSocket traffic.
+    pub fn with_origin(
+        mut self,
+        origin_client: impl Into<String>,
+        origin_version: impl Into<String>,
+    ) -> Self {
+        self.origin_client = Some(origin_client.into());
+        self.origin_version = Some(origin_version.into());
+        self
+    }
+
+    /// Set the origin_actor identifier sent as the `X-Relaycast-Origin-Actor` header.
+    pub fn with_origin_actor(mut self, origin_actor: impl Into<String>) -> Self {
+        self.origin_actor = Some(origin_actor.into());
+        self
+    }
+
+    /// Set Agent Relay's distinct telemetry id.
+    pub fn with_agent_relay_distinct_id(mut self, id: impl Into<String>) -> Self {
+        self.agent_relay_distinct_id = Some(id.into());
         self
     }
 }
@@ -203,31 +132,26 @@ pub struct RelayCast {
 impl RelayCast {
     /// Create a new RelayCast client with the given options.
     pub fn new(options: RelayCastOptions) -> Result<Self> {
-        let resolved = if options.local {
-            ensure_local_runtime(
-                options.base_url.as_deref(),
-                if options.api_key.trim().is_empty() {
-                    None
-                } else {
-                    Some(options.api_key.as_str())
-                },
-            )?
-        } else {
-            if options.api_key.trim().is_empty() {
-                return Err(RelayError::InvalidResponse(
-                    "RelayCast api_key is required".to_string(),
-                ));
-            }
-            ResolvedLocalRuntime {
-                api_key: options.api_key,
-                base_url: options
-                    .base_url
-                    .unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
-            }
-        };
+        if options.api_key.trim().is_empty() {
+            return Err(RelayError::InvalidResponse(
+                "RelayCast api_key is required".to_string(),
+            ));
+        }
 
-        let mut client_options = ClientOptions::new(resolved.api_key);
-        client_options = client_options.with_base_url(resolved.base_url);
+        let base_url = options
+            .base_url
+            .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+
+        let mut client_options = ClientOptions::new(options.api_key);
+        client_options = client_options.with_base_url(base_url);
+        client_options.origin_client = options.origin_client;
+        client_options.origin_version = options.origin_version;
+        if let Some(origin_actor) = options.origin_actor {
+            client_options = client_options.with_origin_actor(origin_actor);
+        }
+        if let Some(id) = options.agent_relay_distinct_id {
+            client_options = client_options.with_agent_relay_distinct_id(id);
+        }
         let client = HttpClient::new(client_options)?;
         Ok(Self { client })
     }
@@ -236,30 +160,126 @@ impl RelayCast {
     pub async fn create_workspace(
         name: &str,
         base_url: Option<&str>,
+        provenance: WorkspaceProvenance,
     ) -> Result<CreateWorkspaceResponse> {
-        let url = format!("{}/v1/workspaces", base_url.unwrap_or(DEFAULT_BASE_URL));
+        let mut options = WorkspaceBootstrapOptions::new(provenance);
+        if let Some(base_url) = base_url {
+            options = options.with_base_url(base_url);
+        }
+        Self::create_workspace_with_options(name, options).await
+    }
 
-        let client = reqwest::Client::new();
-        let response = client
+    /// Create a workspace with optional crash-safe anonymous idempotency.
+    ///
+    /// A hosted anonymous `idempotency_key` must be a CSPRNG-generated
+    /// reveal-once recovery capability. It is never combined with or used to
+    /// transmit a deployment-wide server secret. An optional
+    /// `bootstrap_secret` is sent only to an explicit safe self-hosted origin
+    /// for deployments that opt into proof enforcement.
+    pub async fn create_workspace_with_options(
+        name: &str,
+        options: WorkspaceBootstrapOptions,
+    ) -> Result<CreateWorkspaceResponse> {
+        let WorkspaceBootstrapOptions {
+            base_url,
+            origin_client,
+            origin_version,
+            provenance,
+            metadata,
+            idempotency_key,
+            bootstrap_secret,
+        } = options;
+
+        if let Some(key) = idempotency_key.as_deref() {
+            if key.len() < 32 {
+                return Err(RelayError::InvalidResponse(
+                    "Anonymous Idempotency-Key must be at least 32 characters".to_string(),
+                ));
+            }
+            if key.len() > 255 || !key.bytes().all(|byte| (b'!'..=b'~').contains(&byte)) {
+                return Err(RelayError::InvalidResponse(
+                    "Idempotency-Key must contain 1-255 visible ASCII characters".to_string(),
+                ));
+            }
+        }
+
+        let anonymous_keyed_request = idempotency_key.is_some();
+        if anonymous_keyed_request {
+            validate_anonymous_keyed_bootstrap_destination(
+                base_url.as_deref().unwrap_or(DEFAULT_BASE_URL),
+            )?;
+        }
+
+        let sends_bootstrap_secret = anonymous_keyed_request && bootstrap_secret.is_some();
+        if sends_bootstrap_secret {
+            let explicit_base_url = base_url.as_deref().ok_or_else(|| {
+                RelayError::InvalidResponse(
+                    "Anonymous keyed workspace bootstrap with a bootstrapSecret requires an explicit self-hosted baseUrl"
+                        .to_string(),
+                )
+            })?;
+            validate_bootstrap_secret_destination(explicit_base_url)?;
+        }
+
+        let url = format!(
+            "{}/v1/workspaces",
+            base_url.as_deref().unwrap_or(DEFAULT_BASE_URL)
+        );
+
+        // An anonymous Idempotency-Key is a reveal-once recovery capability,
+        // so never follow a redirect that could forward it to another origin.
+        let client = if anonymous_keyed_request {
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()?
+        } else {
+            reqwest::Client::new()
+        };
+        let mut body = serde_json::json!({ "name": name, "provenance": provenance });
+        if let Some(metadata) = metadata {
+            body["metadata"] = serde_json::Value::Object(metadata);
+        }
+        let mut request = client
             .post(&url)
             .header("Content-Type", "application/json")
             .header("X-SDK-Version", SDK_VERSION)
-            .header("X-Relaycast-Origin-Surface", DEFAULT_ORIGIN_SURFACE)
-            .header("X-Relaycast-Origin-Client", DEFAULT_ORIGIN_CLIENT)
-            .header("X-Relaycast-Origin-Version", SDK_VERSION)
-            .json(&serde_json::json!({ "name": name }))
-            .send()
-            .await?;
+            .header(
+                "X-Relaycast-Origin-Client",
+                origin_client.as_deref().unwrap_or(DEFAULT_ORIGIN_CLIENT),
+            )
+            .header(
+                "X-Relaycast-Origin-Version",
+                origin_version.as_deref().unwrap_or(SDK_VERSION),
+            )
+            .json(&body);
+        if let Some(key) = idempotency_key {
+            request = request.header("Idempotency-Key", key);
+        }
+        if sends_bootstrap_secret {
+            if let Some(bootstrap_secret) = bootstrap_secret {
+                request = request.header("X-Workspace-Bootstrap-Secret", bootstrap_secret);
+            }
+        }
+        let response = request.send().await?;
 
         let status = response.status().as_u16();
-        let json: ApiResponse<CreateWorkspaceResponse> = response.json().await?;
+        let bytes = response.bytes().await?;
+        let json: ApiResponse<CreateWorkspaceResponse> = serde_json::from_slice(&bytes)?;
 
         if !json.ok {
             let error = json.error.unwrap_or_else(|| ApiErrorInfo {
                 code: "unknown_error".to_string(),
                 message: "Unknown error".to_string(),
             });
-            return Err(RelayError::api(error.code, error.message, status));
+            return Err(RelayError::Api {
+                code: error.code,
+                message: error.message,
+                status,
+                request_id: None,
+                attempts: 1,
+                retry_after_ms: None,
+                details: serde_json::from_slice(&bytes).ok(),
+            });
         }
 
         json.data
@@ -270,6 +290,13 @@ impl RelayCast {
     pub fn as_agent(&self, agent_token: impl Into<String>) -> Result<AgentClient> {
         let client = self.client.with_api_key(agent_token)?;
         Ok(AgentClient::from_client(client))
+    }
+
+    /// Rehydrate an agent client from a persisted agent token, validating it first.
+    pub async fn reconnect_agent(&self, agent_token: impl Into<String>) -> Result<AgentClient> {
+        let agent = self.as_agent(agent_token)?;
+        agent.me().await?;
+        Ok(agent)
     }
 
     // === Workspace ===
@@ -291,28 +318,66 @@ impl RelayCast {
         self.client.delete("/v1/workspace", None).await
     }
 
-    /// Get effective workspace stream configuration.
-    pub async fn workspace_stream_get(&self) -> Result<WorkspaceStreamConfig> {
-        self.client.get("/v1/workspace/stream", None, None).await
+    // === Observer Tokens ===
+
+    /// Create a scoped observer token. The raw token is returned only from this
+    /// response and rotate responses.
+    pub async fn create_observer_token(
+        &self,
+        request: CreateObserverTokenRequest,
+    ) -> Result<ObserverToken> {
+        self.client
+            .post("/v1/observer-tokens", Some(request), None)
+            .await
     }
 
-    /// Set workspace stream override.
-    pub async fn workspace_stream_set(&self, enabled: bool) -> Result<WorkspaceStreamConfig> {
+    /// List observer tokens without returning token material.
+    pub async fn list_observer_tokens(&self) -> Result<Vec<ObserverToken>> {
+        self.client.get("/v1/observer-tokens", None, None).await
+    }
+
+    /// Get observer token metadata by id.
+    pub async fn get_observer_token(&self, id: &str) -> Result<ObserverToken> {
         self.client
-            .put(
-                "/v1/workspace/stream",
-                Some(serde_json::json!({ "enabled": enabled })),
+            .get(
+                &format!("/v1/observer-tokens/{}", urlencoding::encode(id)),
+                None,
                 None,
             )
             .await
     }
 
-    /// Clear workspace stream override and inherit default behavior.
-    pub async fn workspace_stream_inherit(&self) -> Result<WorkspaceStreamConfig> {
+    /// Update observer token scopes, filters, or metadata.
+    pub async fn update_observer_token(
+        &self,
+        id: &str,
+        request: UpdateObserverTokenRequest,
+    ) -> Result<ObserverToken> {
         self.client
-            .put(
-                "/v1/workspace/stream",
-                Some(serde_json::json!({ "mode": "inherit" })),
+            .patch(
+                &format!("/v1/observer-tokens/{}", urlencoding::encode(id)),
+                Some(request),
+                None,
+            )
+            .await
+    }
+
+    /// Rotate an observer token and return the new token material.
+    pub async fn rotate_observer_token(&self, id: &str) -> Result<ObserverToken> {
+        self.client
+            .post(
+                &format!("/v1/observer-tokens/{}/rotate", urlencoding::encode(id)),
+                Some(serde_json::json!({})),
+                None,
+            )
+            .await
+    }
+
+    /// Revoke an observer token.
+    pub async fn revoke_observer_token(&self, id: &str) -> Result<()> {
+        self.client
+            .delete(
+                &format!("/v1/observer-tokens/{}", urlencoding::encode(id)),
                 None,
             )
             .await
@@ -465,6 +530,14 @@ impl RelayCast {
         self.client.post("/v1/agents", Some(request), None).await
     }
 
+    /// Resolve an agent token to its authenticated agent identity.
+    pub async fn get_current_agent(&self, agent_token: impl Into<String>) -> Result<Agent> {
+        self.client
+            .with_api_key(agent_token)?
+            .get("/v1/agent", None, None)
+            .await
+    }
+
     /// List agents.
     pub async fn list_agents(&self, query: Option<AgentListQuery>) -> Result<Vec<Agent>> {
         let query = query.unwrap_or_default();
@@ -499,13 +572,83 @@ impl RelayCast {
     }
 
     /// Rotate an agent's token.
-    pub async fn rotate_agent_token(&self, name: &str) -> Result<TokenRotateResponse> {
+    /// Roll the calling agent's own token over.
+    ///
+    /// Requires the agent's *current* token, not a workspace key: since
+    /// engine 8.2.0 (`fix: make agent identity recovery explicit`, #349) this
+    /// route is authenticated self-rollover only. A workspace owner replacing
+    /// an identity they do not hold the token for uses the explicit, audited
+    /// [`Self::take_over_agent`] or [`Self::recover_agent`] instead.
+    ///
+    /// Mirrors the TypeScript SDK's `agents.rotateToken(name, agentToken)`,
+    /// which took the same `agentToken` parameter in that release.
+    pub async fn rotate_agent_token(
+        &self,
+        name: &str,
+        agent_token: impl Into<String>,
+    ) -> Result<TokenRotateResponse> {
         self.client
+            .with_api_key(agent_token)?
             .post(
                 &format!("/v1/agents/{}/rotate-token", urlencoding::encode(name)),
                 Some(serde_json::json!({})),
                 None,
             )
+            .await
+    }
+
+    /// Recover an existing identity with current-token, node, or work-unit proof.
+    pub async fn recover_agent(
+        &self,
+        name: &str,
+        request: RecoverAgentRequest,
+    ) -> Result<AgentIdentityRecoveryResponse> {
+        self.client
+            .post(
+                &format!("/v1/agents/{}/recover", urlencoding::encode(name)),
+                Some(request),
+                None,
+            )
+            .await
+    }
+
+    /// Explicit audited workspace-owner takeover.
+    pub async fn take_over_agent(
+        &self,
+        name: &str,
+        request: TakeOverAgentRequest,
+    ) -> Result<AgentIdentityRecoveryResponse> {
+        self.client
+            .post(
+                &format!("/v1/agents/{}/takeover", urlencoding::encode(name)),
+                Some(request),
+                None,
+            )
+            .await
+    }
+
+    /// Immediately revoke both current and grace-period token slots.
+    pub async fn revoke_agent_token(
+        &self,
+        name: &str,
+        request: RevokeAgentTokenRequest,
+    ) -> Result<AgentIdentityRevocationResponse> {
+        self.client
+            .post(
+                &format!("/v1/agents/{}/revoke-token", urlencoding::encode(name)),
+                Some(request),
+                None,
+            )
+            .await
+    }
+
+    /// Enroll or rotate the authenticated agent's server-owned proof verifier.
+    pub async fn enroll_recovery_credential(
+        &self,
+        request: EnrollRecoveryCredentialRequest,
+    ) -> Result<serde_json::Value> {
+        self.client
+            .post("/v1/agent/recovery-credential", Some(request), None)
             .await
     }
 
@@ -532,29 +675,12 @@ impl RelayCast {
         self.client.get("/v1/agents/presence", None, None).await
     }
 
-    /// Register an agent or get existing one (with token rotation).
+    /// Deprecated create-only alias. A name collision fails closed.
     pub async fn register_or_get_agent(
         &self,
         request: CreateAgentRequest,
     ) -> Result<CreateAgentResponse> {
-        match self.register_agent(request.clone()).await {
-            Ok(response) => Ok(response),
-            Err(RelayError::Api { code, status, .. })
-                if code == "agent_already_exists" || status == 409 =>
-            {
-                let agent = self.get_agent(&request.name).await?;
-                let token_response = self.rotate_agent_token(&agent.name).await?;
-                let created_at = agent.created_at.or(agent.last_seen).unwrap_or_default();
-                Ok(CreateAgentResponse {
-                    id: agent.id,
-                    name: agent.name,
-                    token: token_response.token,
-                    status: agent.status,
-                    created_at,
-                })
-            }
-            Err(e) => Err(e),
-        }
+        self.register_agent(request).await
     }
 
     /// Spawn an agent process (registering if needed).
@@ -574,6 +700,51 @@ impl RelayCast {
             .await
     }
 
+    /// Release only the exact immutable agent identity using a durable caller
+    /// idempotency key. Reuse the same key after an overload or lost response.
+    pub async fn release_agent_exact(
+        &self,
+        request: ExactReleaseAgentRequest,
+        idempotency_key: impl Into<String>,
+    ) -> Result<ReleaseAgentResponse> {
+        self.client
+            .post(
+                "/v1/agents/release-exact",
+                Some(request),
+                Some(RequestOptions::with_idempotency_key(idempotency_key)),
+            )
+            .await
+    }
+
+    /// Release only while the agent still owns the exact issued-token hash.
+    ///
+    /// The raw token is never sent in this request. Relaycast returns a 409
+    /// conflict without dispatching or mutating the agent when its token has
+    /// rotated since `expected_token_hash` was captured.
+    pub async fn release_agent_if_token_hash(
+        &self,
+        request: ReleaseAgentRequest,
+        expected_token_hash: String,
+    ) -> Result<ReleaseAgentResponse> {
+        #[derive(Serialize)]
+        struct GuardedReleaseAgentRequest {
+            #[serde(flatten)]
+            request: ReleaseAgentRequest,
+            expected_token_hash: String,
+        }
+
+        self.client
+            .post(
+                "/v1/agents/release",
+                Some(GuardedReleaseAgentRequest {
+                    request,
+                    expected_token_hash,
+                }),
+                None,
+            )
+            .await
+    }
+
     // === Webhooks ===
 
     /// Create a webhook.
@@ -582,6 +753,14 @@ impl RelayCast {
         request: CreateWebhookRequest,
     ) -> Result<CreateWebhookResponse> {
         self.client.post("/v1/webhooks", Some(request), None).await
+    }
+
+    /// Create an inbound webhook.
+    pub async fn create_inbound_webhook(
+        &self,
+        request: CreateWebhookRequest,
+    ) -> Result<CreateWebhookResponse> {
+        self.create_webhook(request).await
     }
 
     /// List webhooks.
@@ -596,19 +775,31 @@ impl RelayCast {
             .await
     }
 
-    /// Trigger a webhook.
+    /// Trigger a webhook with its per-webhook bearer token.
     pub async fn trigger_webhook(
         &self,
         webhook_id: &str,
         request: WebhookTriggerRequest,
+        token: impl Into<String>,
     ) -> Result<WebhookTriggerResponse> {
         self.client
+            .with_api_key(token)?
             .post(
                 &format!("/v1/hooks/{}", urlencoding::encode(webhook_id)),
                 Some(request),
                 None,
             )
             .await
+    }
+
+    /// Trigger a webhook with its per-webhook bearer token.
+    pub async fn trigger_webhook_with_token(
+        &self,
+        webhook_id: &str,
+        request: WebhookTriggerRequest,
+        token: impl Into<String>,
+    ) -> Result<WebhookTriggerResponse> {
+        self.trigger_webhook(webhook_id, request, token).await
     }
 
     // === Subscriptions ===
@@ -649,26 +840,102 @@ impl RelayCast {
             .await
     }
 
-    // === Commands ===
+    // === Actions (agent-to-agent RPC) ===
 
-    /// Register a command.
-    pub async fn register_command(
+    /// Register an action (async agent-to-agent RPC). Replaces the legacy command API.
+    pub async fn register_action(
         &self,
-        request: CreateCommandRequest,
-    ) -> Result<CreateCommandResponse> {
-        self.client.post("/v1/commands", Some(request), None).await
+        request: RegisterActionRequest,
+    ) -> Result<ActionDefinition> {
+        self.client.post("/v1/actions", Some(request), None).await
     }
 
-    /// List commands.
-    pub async fn list_commands(&self) -> Result<Vec<AgentCommand>> {
-        self.client.get("/v1/commands", None, None).await
+    /// List registered actions.
+    pub async fn list_actions(&self) -> Result<Vec<ActionDefinition>> {
+        self.client.get("/v1/actions", None, None).await
     }
 
-    /// Delete a command.
-    pub async fn delete_command(&self, command: &str) -> Result<()> {
+    /// Get a single action by name.
+    pub async fn get_action(&self, name: &str) -> Result<ActionDefinition> {
         self.client
-            .delete(
-                &format!("/v1/commands/{}", urlencoding::encode(command)),
+            .get(
+                &format!("/v1/actions/{}", urlencoding::encode(name)),
+                None,
+                None,
+            )
+            .await
+    }
+
+    /// Delete an action.
+    pub async fn delete_action(&self, name: &str) -> Result<()> {
+        self.client
+            .delete(&format!("/v1/actions/{}", urlencoding::encode(name)), None)
+            .await
+    }
+
+    // === Agent session events ===
+
+    /// Emit a session event for an agent (e.g. `status.active`).
+    pub async fn emit_agent_event(
+        &self,
+        name: &str,
+        request: EmitSessionEventRequest,
+    ) -> Result<SessionEvent> {
+        self.client
+            .post(
+                &format!("/v1/agents/{}/events", urlencoding::encode(name)),
+                Some(request),
+                None,
+            )
+            .await
+    }
+
+    /// Emit a session event with a durable identity. Reuse the same key when
+    /// retrying after an ambiguous response so Relaycast replays one event.
+    pub async fn emit_agent_event_with_idempotency_key(
+        &self,
+        name: &str,
+        request: EmitSessionEventRequest,
+        idempotency_key: impl Into<String>,
+    ) -> Result<SessionEvent> {
+        self.client
+            .post(
+                &format!("/v1/agents/{}/events", urlencoding::encode(name)),
+                Some(request),
+                Some(RequestOptions::with_idempotency_key(idempotency_key)),
+            )
+            .await
+    }
+
+    /// List recorded session events for an agent.
+    pub async fn list_agent_events(
+        &self,
+        name: &str,
+        query: Option<ListSessionEventsQuery>,
+    ) -> Result<Vec<SessionEvent>> {
+        let query = query.unwrap_or_default();
+        let mut params: Vec<(String, String)> = Vec::new();
+        if let Some(event_type) = query.event_type {
+            params.push(("type".to_string(), event_type));
+        }
+        if let Some(limit) = query.limit {
+            params.push(("limit".to_string(), limit.to_string()));
+        }
+
+        let slice: Vec<(&str, &str)> = params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        let query_ref = if slice.is_empty() {
+            None
+        } else {
+            Some(slice.as_slice())
+        };
+
+        self.client
+            .get(
+                &format!("/v1/agents/{}/events", urlencoding::encode(name)),
+                query_ref,
                 None,
             )
             .await
@@ -678,7 +945,7 @@ impl RelayCast {
 
     /// Get workspace statistics.
     pub async fn stats(&self) -> Result<WorkspaceStats> {
-        self.client.get("/v1/workspace/stats", None, None).await
+        self.client.get("/v1/console/stats", None, None).await
     }
 
     /// Get recent activity.
@@ -700,9 +967,43 @@ impl RelayCast {
 
     /// Get all DM conversations in the workspace.
     pub async fn all_dm_conversations(&self) -> Result<Vec<WorkspaceDmConversation>> {
-        self.client
-            .get("/v1/dm/conversations/all", None, None)
-            .await
+        let mut conversations = Vec::new();
+        let mut cursor: Option<String> = None;
+        let mut seen_cursors = std::collections::HashSet::new();
+
+        loop {
+            let mut query = vec![("limit", "500")];
+            if let Some(next) = cursor.as_deref() {
+                query.push(("cursor", next));
+            }
+            let (mut page, page_cursor) = self
+                .client
+                .get_with_cursor::<Vec<WorkspaceDmConversation>>(
+                    "/v1/dm/conversations/all",
+                    Some(query.as_slice()),
+                    None,
+                )
+                .await?;
+            conversations.append(&mut page);
+
+            let Some(page_cursor) = page_cursor else {
+                return Ok(conversations);
+            };
+            if !page_cursor.has_more {
+                return Ok(conversations);
+            }
+            let next = page_cursor.next.ok_or_else(|| {
+                RelayError::InvalidResponse(
+                    "DM conversation pagination did not provide a next cursor".to_string(),
+                )
+            })?;
+            if !seen_cursors.insert(next.clone()) {
+                return Err(RelayError::InvalidResponse(
+                    "DM conversation pagination did not advance".to_string(),
+                ));
+            }
+            cursor = Some(next);
+        }
     }
 
     /// Resolve participants for a workspace DM conversation.
@@ -759,5 +1060,714 @@ impl RelayCast {
                 None,
             )
             .await
+    }
+
+    // === Workspace bootstrap ===
+
+    /// Look up a workspace by name. Returns `None` when no workspace matches.
+    pub async fn lookup_workspace(
+        name: &str,
+        base_url: Option<&str>,
+    ) -> Result<Option<WorkspaceLookup>> {
+        let mut options = WorkspaceLookupOptions::new();
+        if let Some(base_url) = base_url {
+            options = options.with_base_url(base_url);
+        }
+        Self::lookup_workspace_with_options(name, options).await
+    }
+
+    /// Look up a workspace with configurable product origin metadata.
+    pub async fn lookup_workspace_with_options(
+        name: &str,
+        options: WorkspaceLookupOptions,
+    ) -> Result<Option<WorkspaceLookup>> {
+        let url = format!(
+            "{}/v1/workspaces/by-name/{}",
+            options.base_url.as_deref().unwrap_or(DEFAULT_BASE_URL),
+            urlencoding::encode(name)
+        );
+
+        let client = reqwest::Client::new();
+        let response = client
+            .get(&url)
+            .header("Content-Type", "application/json")
+            .header("X-SDK-Version", SDK_VERSION)
+            .header(
+                "X-Relaycast-Origin-Client",
+                options.origin_client.as_deref().unwrap_or(DEFAULT_ORIGIN_CLIENT),
+            )
+            .header(
+                "X-Relaycast-Origin-Version",
+                options.origin_version.as_deref().unwrap_or(SDK_VERSION),
+            )
+            .send()
+            .await?;
+
+        let status = response.status().as_u16();
+        let bytes = response.bytes().await?;
+        let json: ApiResponse<WorkspaceLookup> = serde_json::from_slice(&bytes)?;
+
+        if !json.ok {
+            if status == 404 {
+                return Ok(None);
+            }
+            let error = json.error.unwrap_or_else(|| ApiErrorInfo {
+                code: "unknown_error".to_string(),
+                message: "Unknown error".to_string(),
+            });
+            return Err(RelayError::Api {
+                code: error.code,
+                message: error.message,
+                status,
+                request_id: None,
+                attempts: 1,
+                retry_after_ms: None,
+                details: serde_json::from_slice(&bytes).ok(),
+            });
+        }
+
+        json.data
+            .map(Some)
+            .ok_or_else(|| RelayError::InvalidResponse("Response missing data field".to_string()))
+    }
+
+    // === A2A (agent-to-agent bridge) ===
+
+    /// Register an A2A agent bridge.
+    pub async fn register_a2a(&self, options: RegisterA2aOptions) -> Result<RegisterA2aResponse> {
+        self.client
+            .post("/v1/a2a/register", Some(options), None)
+            .await
+    }
+
+    /// List registered A2A agents.
+    pub async fn list_a2a_agents(&self) -> Result<Vec<A2aAgentRecord>> {
+        self.client.get("/v1/a2a/agents", None, None).await
+    }
+
+    /// Remove an A2A agent by name.
+    pub async fn remove_a2a_agent(&self, name: &str) -> Result<RemoveA2aAgentResponse> {
+        self.client
+            .request(
+                reqwest::Method::DELETE,
+                &format!("/v1/a2a/agents/{}", urlencoding::encode(name)),
+                None::<()>,
+                None,
+                None,
+            )
+            .await
+    }
+
+    /// Fetch the agent card for an A2A agent.
+    pub async fn get_a2a_agent_card(&self, name: &str) -> Result<A2aAgentCard> {
+        self.client
+            .get(
+                &format!("/v1/a2a/agents/{}/card", urlencoding::encode(name)),
+                None,
+                None,
+            )
+            .await
+    }
+
+    // === Routing ===
+
+    /// Route a skill (and optional message) to the best candidate agent.
+    pub async fn route(&self, skill: &str, message: Option<&str>) -> Result<RouteResult> {
+        self.client
+            .post(
+                "/v1/route",
+                Some(serde_json::json!({ "skill": skill, "message": message })),
+                None,
+            )
+            .await
+    }
+
+    /// Report route feedback (success/failure) for a routed agent.
+    pub async fn route_feedback(
+        &self,
+        request: RouteFeedbackRequest,
+    ) -> Result<RouteFeedbackResult> {
+        self.client
+            .post("/v1/route/feedback", Some(request), None)
+            .await
+    }
+
+    /// Get the workspace routing configuration.
+    pub async fn get_routing_config(&self) -> Result<RoutingConfig> {
+        self.client.get("/v1/routing/config", None, None).await
+    }
+
+    /// Update the workspace routing configuration.
+    pub async fn update_routing_config(
+        &self,
+        request: UpdateRoutingConfigRequest,
+    ) -> Result<RoutingConfig> {
+        self.client
+            .put("/v1/routing/config", Some(request), None)
+            .await
+    }
+
+    // === Directory ===
+
+    /// Search the agent directory.
+    pub async fn search_directory(
+        &self,
+        query: SearchDirectoryQuery,
+    ) -> Result<Vec<DirectorySearchResult>> {
+        let mut params: Vec<(String, String)> = Vec::new();
+        if let Some(q) = query.q {
+            params.push(("q".to_string(), q));
+        }
+        if let Some(tags) = query.tags {
+            if !tags.is_empty() {
+                params.push(("tags".to_string(), tags.join(",")));
+            }
+        }
+        if let Some(status) = query.status {
+            params.push(("status".to_string(), status));
+        }
+        if let Some(limit) = query.limit {
+            params.push(("limit".to_string(), limit.to_string()));
+        }
+
+        let slice: Vec<(&str, &str)> = params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        let query_ref = if slice.is_empty() {
+            None
+        } else {
+            Some(slice.as_slice())
+        };
+
+        self.client
+            .get("/v1/directory/search", query_ref, None)
+            .await
+    }
+
+    /// Publish an agent to the directory.
+    pub async fn publish_to_directory(
+        &self,
+        request: PublishToDirectoryRequest,
+    ) -> Result<DirectoryAgent> {
+        self.client
+            .post("/v1/directory/agents", Some(request), None)
+            .await
+    }
+
+    /// List directory agents.
+    pub async fn list_directory(
+        &self,
+        query: Option<ListDirectoryQuery>,
+    ) -> Result<Vec<DirectoryAgent>> {
+        let query = query.unwrap_or_default();
+        let mut params: Vec<(String, String)> = Vec::new();
+        if let Some(status) = query.status {
+            params.push(("status".to_string(), status));
+        }
+        if let Some(limit) = query.limit {
+            params.push(("limit".to_string(), limit.to_string()));
+        }
+
+        let slice: Vec<(&str, &str)> = params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        let query_ref = if slice.is_empty() {
+            None
+        } else {
+            Some(slice.as_slice())
+        };
+
+        self.client
+            .get("/v1/directory/agents", query_ref, None)
+            .await
+    }
+
+    /// Get a directory agent by slug.
+    pub async fn get_directory_agent(&self, slug: &str) -> Result<DirectoryAgent> {
+        self.client
+            .get(
+                &format!("/v1/directory/agents/{}", urlencoding::encode(slug)),
+                None,
+                None,
+            )
+            .await
+    }
+
+    /// Update a directory agent.
+    pub async fn update_directory_agent(
+        &self,
+        slug: &str,
+        request: UpdateDirectoryAgentRequest,
+    ) -> Result<DirectoryAgent> {
+        self.client
+            .patch(
+                &format!("/v1/directory/agents/{}", urlencoding::encode(slug)),
+                Some(request),
+                None,
+            )
+            .await
+    }
+
+    /// Delete a directory agent.
+    pub async fn delete_directory_agent(&self, slug: &str) -> Result<()> {
+        self.client
+            .delete(
+                &format!("/v1/directory/agents/{}", urlencoding::encode(slug)),
+                None,
+            )
+            .await
+    }
+
+    /// List ratings for a directory agent.
+    pub async fn list_directory_ratings(&self, slug: &str) -> Result<Vec<DirectoryRating>> {
+        self.client
+            .get(
+                &format!("/v1/directory/agents/{}/ratings", urlencoding::encode(slug)),
+                None,
+                None,
+            )
+            .await
+    }
+
+    /// Rate a directory agent.
+    pub async fn rate_directory_agent(
+        &self,
+        slug: &str,
+        request: RateDirectoryAgentRequest,
+    ) -> Result<DirectoryRating> {
+        self.client
+            .post(
+                &format!("/v1/directory/agents/{}/ratings", urlencoding::encode(slug)),
+                Some(request),
+                None,
+            )
+            .await
+    }
+
+    // === Skills ===
+
+    /// Import (sync) skills onto a directory agent.
+    pub async fn import_skills(
+        &self,
+        request: ImportSkillsRequest,
+    ) -> Result<Option<DirectoryAgent>> {
+        self.client
+            .post("/v1/skills/sync", Some(request), None)
+            .await
+    }
+
+    /// Search skills across the directory.
+    pub async fn search_skills(
+        &self,
+        query: Option<SkillSearchQuery>,
+    ) -> Result<Vec<SkillSearchResult>> {
+        let query = query.unwrap_or_default();
+        let mut params: Vec<(String, String)> = Vec::new();
+        if let Some(q) = query.q {
+            params.push(("q".to_string(), q));
+        }
+        if let Some(limit) = query.limit {
+            params.push(("limit".to_string(), limit.to_string()));
+        }
+
+        let slice: Vec<(&str, &str)> = params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        let query_ref = if slice.is_empty() {
+            None
+        } else {
+            Some(slice.as_slice())
+        };
+
+        self.client.get("/v1/skills/search", query_ref, None).await
+    }
+
+    // === Fleet nodes ===
+
+    /// Enroll or rotate a node token.
+    pub async fn create_node(&self, request: CreateNodeRequest) -> Result<CreateNodeResponse> {
+        self.client.post("/v1/nodes", Some(request), None).await
+    }
+
+    /// Rotate or modify an established node after proving possession of its
+    /// current token. The proof is sent only in a header, never in the JSON
+    /// request body.
+    pub async fn create_node_with_current_token(
+        &self,
+        request: CreateNodeRequest,
+        current_token: &str,
+    ) -> Result<CreateNodeResponse> {
+        self.create_node_with_headers(request, current_token, None)
+            .await
+    }
+
+    /// Rotate an established node through the server's recoverable path. The
+    /// idempotency key must be CSPRNG-generated, at least 32 characters, and
+    /// reused with the same proof and request after a transport failure.
+    pub async fn create_node_with_rotation_recovery(
+        &self,
+        request: CreateNodeRequest,
+        current_token: &str,
+        idempotency_key: &str,
+    ) -> Result<CreateNodeResponse> {
+        self.create_node_with_headers(request, current_token, Some(idempotency_key))
+            .await
+    }
+
+    async fn create_node_with_headers(
+        &self,
+        request: CreateNodeRequest,
+        current_token: &str,
+        idempotency_key: Option<&str>,
+    ) -> Result<CreateNodeResponse> {
+        let headers = vec![(
+            "X-Relaycast-Node-Token".to_string(),
+            current_token.to_string(),
+        )];
+        self.client
+            .post(
+                "/v1/nodes",
+                Some(request),
+                Some(RequestOptions {
+                    headers: Some(headers),
+                    idempotency_key: idempotency_key.map(str::to_owned),
+                }),
+            )
+            .await
+    }
+
+    /// List fleet nodes on the roster.
+    pub async fn list_nodes(&self, query: Option<NodeListQuery>) -> Result<Vec<NodeRosterEntry>> {
+        let query = query.unwrap_or_default();
+        let mut params: Vec<(String, String)> = Vec::new();
+        if let Some(capability) = query.capability {
+            params.push(("capability".to_string(), capability));
+        }
+        if let Some(name) = query.name {
+            params.push(("name".to_string(), name));
+        }
+
+        let slice: Vec<(&str, &str)> = params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        let query_ref = if slice.is_empty() {
+            None
+        } else {
+            Some(slice.as_slice())
+        };
+
+        self.client.get("/v1/nodes", query_ref, None).await
+    }
+
+    /// Get a fleet node by name.
+    pub async fn get_node(&self, name: &str) -> Result<NodeRosterEntry> {
+        self.client
+            .get(
+                &format!("/v1/nodes/{}", urlencoding::encode(name)),
+                None,
+                None,
+            )
+            .await
+    }
+
+    /// List active agent bindings for a node.
+    pub async fn list_node_agents(&self, name: &str) -> Result<Vec<NodeAgentBinding>> {
+        self.client
+            .get(
+                &format!("/v1/nodes/{}/agents", urlencoding::encode(name)),
+                None,
+                None,
+            )
+            .await
+    }
+
+    /// Bind an agent to a node delivery host.
+    pub async fn bind_agent_to_node(
+        &self,
+        name: &str,
+        request: BindAgentToNodeRequest,
+    ) -> Result<NodeAgentBinding> {
+        self.client
+            .post(
+                &format!("/v1/nodes/{}/agents", urlencoding::encode(name)),
+                Some(request),
+                None,
+            )
+            .await
+    }
+
+    /// Remove an active node binding for an agent.
+    pub async fn unbind_agent_from_node(&self, name: &str, agent_name: &str) -> Result<()> {
+        self.client
+            .delete(
+                &format!(
+                    "/v1/nodes/{}/agents/{}",
+                    urlencoding::encode(name),
+                    urlencoding::encode(agent_name)
+                ),
+                None,
+            )
+            .await
+    }
+
+    // === Triggers ===
+
+    /// Create a trigger.
+    pub async fn create_trigger(&self, request: CreateTriggerRequest) -> Result<Trigger> {
+        self.client.post("/v1/triggers", Some(request), None).await
+    }
+
+    /// List triggers.
+    pub async fn list_triggers(&self) -> Result<Vec<Trigger>> {
+        self.client.get("/v1/triggers", None, None).await
+    }
+
+    /// Get a trigger by id.
+    pub async fn get_trigger(&self, id: &str) -> Result<Trigger> {
+        self.client
+            .get(
+                &format!("/v1/triggers/{}", urlencoding::encode(id)),
+                None,
+                None,
+            )
+            .await
+    }
+
+    /// Update a trigger.
+    pub async fn update_trigger(&self, id: &str, request: UpdateTriggerRequest) -> Result<Trigger> {
+        self.client
+            .patch(
+                &format!("/v1/triggers/{}", urlencoding::encode(id)),
+                Some(request),
+                None,
+            )
+            .await
+    }
+
+    /// Delete a trigger.
+    pub async fn delete_trigger(&self, id: &str) -> Result<()> {
+        self.client
+            .delete(&format!("/v1/triggers/{}", urlencoding::encode(id)), None)
+            .await
+    }
+
+    // === Certification ===
+
+    /// Submit a certification run for an external agent.
+    pub async fn certify(&self, request: SubmitCertificationRequest) -> Result<CertificationRun> {
+        self.client.post("/v1/certify", Some(request), None).await
+    }
+
+    /// Get a certification run by id.
+    pub async fn get_certification(&self, id: &str) -> Result<CertificationRun> {
+        self.client
+            .get(
+                &format!("/v1/certify/{}", urlencoding::encode(id)),
+                None,
+                None,
+            )
+            .await
+    }
+
+    /// Public badge SVG URL for a certification run (served without an auth header).
+    pub fn certification_badge_url(&self, id: &str) -> String {
+        format!(
+            "{}/v1/certify/{}/badge.svg",
+            self.client.base_url().trim_end_matches('/'),
+            urlencoding::encode(id)
+        )
+    }
+
+    /// Enable certification monitoring for an external agent.
+    pub async fn monitor_certification(
+        &self,
+        request: MonitorCertificationRequest,
+    ) -> Result<CertificationRun> {
+        self.client
+            .post("/v1/certify/monitor", Some(request), None)
+            .await
+    }
+
+    // === Console / observability ===
+
+    /// List console message logs.
+    pub async fn console_messages(
+        &self,
+        query: Option<ConsoleMessagesQuery>,
+    ) -> Result<Vec<ConsoleMessageLog>> {
+        let query = query.unwrap_or_default();
+        let mut params: Vec<(String, String)> = Vec::new();
+        if let Some(limit) = query.limit {
+            params.push(("limit".to_string(), limit.to_string()));
+        }
+        if let Some(before) = query.before {
+            params.push(("before".to_string(), before));
+        }
+        if let Some(agent_id) = query.agent_id {
+            params.push(("agent_id".to_string(), agent_id));
+        }
+        if let Some(channel_id) = query.channel_id {
+            params.push(("channel_id".to_string(), channel_id));
+        }
+        if let Some(conversation_id) = query.conversation_id {
+            params.push(("conversation_id".to_string(), conversation_id));
+        }
+        if let Some(delivery_kind) = query.delivery_kind {
+            params.push(("delivery_kind".to_string(), delivery_kind));
+        }
+
+        let slice: Vec<(&str, &str)> = params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        let query_ref = if slice.is_empty() {
+            None
+        } else {
+            Some(slice.as_slice())
+        };
+
+        self.client
+            .get("/v1/console/messages", query_ref, None)
+            .await
+    }
+
+    /// Get console overview statistics.
+    pub async fn console_stats(
+        &self,
+        query: Option<ConsoleWindowQuery>,
+    ) -> Result<ConsoleOverview> {
+        let query = query.unwrap_or_default();
+        let days = query.days.map(|d| d.to_string());
+        let slice: Vec<(&str, &str)> = days
+            .as_ref()
+            .map(|d| vec![("days", d.as_str())])
+            .unwrap_or_default();
+        let query_ref = if slice.is_empty() {
+            None
+        } else {
+            Some(slice.as_slice())
+        };
+        self.client.get("/v1/console/stats", query_ref, None).await
+    }
+
+    /// List per-agent console statistics.
+    pub async fn console_agents(
+        &self,
+        query: Option<ConsoleAgentStatsQuery>,
+    ) -> Result<Vec<ConsoleAgentStat>> {
+        let query = query.unwrap_or_default();
+        let mut params: Vec<(String, String)> = Vec::new();
+        if let Some(days) = query.days {
+            params.push(("days".to_string(), days.to_string()));
+        }
+        if let Some(limit) = query.limit {
+            params.push(("limit".to_string(), limit.to_string()));
+        }
+
+        let slice: Vec<(&str, &str)> = params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        let query_ref = if slice.is_empty() {
+            None
+        } else {
+            Some(slice.as_slice())
+        };
+
+        self.client.get("/v1/console/agents", query_ref, None).await
+    }
+
+    /// Get console cost statistics.
+    pub async fn console_costs(
+        &self,
+        query: Option<ConsoleWindowQuery>,
+    ) -> Result<ConsoleCostStats> {
+        let query = query.unwrap_or_default();
+        let days = query.days.map(|d| d.to_string());
+        let slice: Vec<(&str, &str)> = days
+            .as_ref()
+            .map(|d| vec![("days", d.as_str())])
+            .unwrap_or_default();
+        let query_ref = if slice.is_empty() {
+            None
+        } else {
+            Some(slice.as_slice())
+        };
+        self.client.get("/v1/console/costs", query_ref, None).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{CreateAgentRequest, RelayCast, RelayCastOptions};
+    use serde_json::json;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn ok(data: serde_json::Value) -> ResponseTemplate {
+        ResponseTemplate::new(200).set_body_json(json!({ "ok": true, "data": data }))
+    }
+
+    fn request() -> CreateAgentRequest {
+        CreateAgentRequest {
+            name: "scout".to_string(),
+            agent_type: Some("agent".to_string()),
+            persona: None,
+            metadata: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn register_agent_parses_workspace_id() {
+        let server = MockServer::start().await;
+        let relay =
+            RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+                .expect("relay init");
+
+        Mock::given(method("POST"))
+            .and(path("/v1/agents"))
+            .respond_with(ok(json!({
+                "id": "a1",
+                "workspace_id": "ws_123",
+                "name": "scout",
+                "token": "at_live_1",
+                "status": "active",
+                "created_at": "2026-01-01T00:00:00.000Z"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let response = relay.register_agent(request()).await.expect("register");
+        assert_eq!(response.workspace_id.as_deref(), Some("ws_123"));
+    }
+
+    #[tokio::test]
+    async fn register_agent_without_workspace_id_defaults_to_none() {
+        // Engines that predate the field omit it; the client must still parse.
+        let server = MockServer::start().await;
+        let relay =
+            RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+                .expect("relay init");
+
+        Mock::given(method("POST"))
+            .and(path("/v1/agents"))
+            .respond_with(ok(json!({
+                "id": "a1",
+                "name": "scout",
+                "token": "at_live_1",
+                "status": "active",
+                "created_at": "2026-01-01T00:00:00.000Z"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let response = relay.register_agent(request()).await.expect("register");
+        assert_eq!(response.workspace_id, None);
     }
 }

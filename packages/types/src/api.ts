@@ -19,7 +19,7 @@ export const ApiErrorSchema = z.object({
 });
 
 export const ApiResponseSchema = <T extends z.ZodType>(dataSchema: T) =>
-  z.discriminatedUnion('ok', [ApiSuccessSchema(dataSchema), ApiErrorSchema]);
+  z.discriminatedUnion('ok', [ApiSuccessSchema(dataSchema), ApiErrorSchema]) as unknown as z.ZodType<ApiResponse<z.output<T>>>;
 
 export const InboxResponseSchema = z.object({
   unread_channels: z.array(z.object({ channel_name: z.string(), unread_count: z.number() })),
