@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { RelayCast } from '../relay.js';
+import type { AgentExitedEvent, NodeStatusOfflineEvent, NodeStatusOnlineEvent } from '../types.js';
 import { WsClient } from '../ws.js';
 
 class MockWebSocket {
@@ -666,5 +668,92 @@ describe('WsClient', () => {
 
     client.reconnect();
     expect(MockWebSocket.instances).toHaveLength(2);
+  });
+});
+
+describe('RelayCast workspace stream events', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    MockWebSocket.instances = [];
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('camelizes agent.exited and node.status frames on /v1/ws', () => {
+    const relay = new RelayCast({
+      apiKey: 'rk_live_test',
+      baseUrl: 'http://localhost:8080',
+    });
+    relay.connect();
+
+    const ws = MockWebSocket.instances[0]!;
+    const url = new URL(ws.url);
+    expect(url.pathname).toBe('/v1/ws');
+    ws.simulateOpen();
+
+    let exited: AgentExitedEvent | undefined;
+    let online: NodeStatusOnlineEvent | undefined;
+    let offline: NodeStatusOfflineEvent | undefined;
+    relay.on.agentExited((event) => {
+      exited = event;
+    });
+    relay.on.nodeOnline((event) => {
+      online = event;
+    });
+    relay.on.nodeOffline((event) => {
+      offline = event;
+    });
+
+    // appendAndPublishWorkspaceEvent publishes the transformForClient frame
+    // (flat snake_case fields, plus created_at and the durable seq).
+    ws.simulateMessage({
+      type: 'agent.exited',
+      agent_id: 'agt_01J7FLEET000000000000101',
+      agent_name: 'claude-worker-7',
+      node_id: 'node_1',
+      invocation_id: null,
+      reason: 'deregistered',
+      created_at: '2026-10-10T09:00:00.000Z',
+      seq: 4,
+    });
+    ws.simulateMessage({
+      type: 'node.status.online',
+      node_id: 'node_1',
+      node_name: 'builder-1',
+      created_at: '2026-10-10T09:00:01.000Z',
+      seq: 5,
+    });
+    ws.simulateMessage({
+      type: 'node.status.offline',
+      node_id: 'node_1',
+      node_name: 'builder-1',
+      reason: 'liveness_timeout',
+      created_at: '2026-10-10T09:00:02.000Z',
+      seq: 6,
+    });
+
+    expect(exited).toEqual({
+      type: 'agent.exited',
+      agentId: 'agt_01J7FLEET000000000000101',
+      agentName: 'claude-worker-7',
+      nodeId: 'node_1',
+      invocationId: null,
+      reason: 'deregistered',
+    });
+    expect(online).toEqual({
+      type: 'node.status.online',
+      nodeId: 'node_1',
+      nodeName: 'builder-1',
+    });
+    expect(offline).toEqual({
+      type: 'node.status.offline',
+      nodeId: 'node_1',
+      nodeName: 'builder-1',
+      reason: 'liveness_timeout',
+    });
+
+    relay.disconnect();
   });
 });

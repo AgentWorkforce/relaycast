@@ -424,6 +424,9 @@ export class RelayCast {
     agentActive:     (handler: (e: AgentStatusActiveEvent) => void): (() => void)  => this.onEvent('agent.status.active', handler),
     agentOffline:    (handler: (e: AgentStatusOfflineEvent) => void): (() => void) => this.onEvent('agent.status.offline', handler),
     agentExited:     (handler: (e: AgentExitedEvent) => void): (() => void)     => this.onEvent('agent.exited', handler),
+    // Node liveness is published on this workspace stream (`/v1/ws`) and to
+    // webhooks. It is not delivered to an agent mailbox, so AgentClient does
+    // not expose these handlers.
     nodeOnline:      (handler: (e: NodeStatusOnlineEvent) => void): (() => void) => this.onEvent('node.status.online', handler),
     nodeOffline:     (handler: (e: NodeStatusOfflineEvent) => void): (() => void) => this.onEvent('node.status.offline', handler),
     channelCreated:  (handler: (e: ChannelCreatedEvent) => void): (() => void)  => this.onEvent('channel.created', handler),

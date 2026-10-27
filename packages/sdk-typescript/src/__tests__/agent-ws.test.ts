@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentClient, type AgentClientOptions } from '../agent.js';
 import { stableRelaycastEventId } from '../event-id.js';
 import { HttpClient } from '../client.js';
-import type { AgentExitedEvent, NodeStatusOfflineEvent, NodeStatusOnlineEvent } from '../types.js';
+import type { AgentExitedEvent } from '../types.js';
 
 class MockWebSocket {
   static readonly OPEN = 1;
@@ -362,7 +362,7 @@ describe('AgentClient WebSocket integration', () => {
     );
   });
 
-  it('on.agentExited camelizes a real captured agent.exited frame', async () => {
+  it('on.agentExited camelizes the spawn-caller deliver frame', async () => {
     const agent = createAgent();
     agent.connect();
     const ws = await nextSocket();
@@ -373,15 +373,28 @@ describe('AgentClient WebSocket integration', () => {
       received = event;
     });
 
-    // Real wire shape: the engine's wsTransform.ts emits snake_case fields
-    // matching AgentExitedEventSchema in @relaycast/types.
+    // emitAgentExitedEffects notifies the spawn caller through
+    // sendNodeDeliveriesToAgents: a synthetic seq-0 deliver frame whose
+    // payload is { type, data } with the snake_case event fields.
     ws.simulateMessage({
-      type: 'agent.exited',
-      agent_id: 'agt_01J7FLEET000000000000101',
-      agent_name: 'claude-worker-7',
-      node_id: 'node_1',
-      invocation_id: null,
-      reason: 'deregistered',
+      v: 1,
+      type: 'deliver',
+      delivery_id: 'evt_agent_exited_agt_01J7FLEET000000000000101_none_deregistered_caller_1',
+      agent_id: 'caller_1',
+      agent: 'spawner',
+      msg_id: 'agt_01J7FLEET000000000000101_none_deregistered',
+      seq: 0,
+      mode: 'wait',
+      payload: {
+        type: 'agent.exited',
+        data: {
+          agent_id: 'agt_01J7FLEET000000000000101',
+          agent_name: 'claude-worker-7',
+          node_id: 'node_1',
+          invocation_id: null,
+          reason: 'deregistered',
+        },
+      },
     });
 
     expect(received).toEqual({
@@ -392,34 +405,8 @@ describe('AgentClient WebSocket integration', () => {
       invocationId: null,
       reason: 'deregistered',
     });
-  });
-
-  it('on.nodeOnline/on.nodeOffline camelize real captured node.status frames', async () => {
-    const agent = createAgent();
-    agent.connect();
-    const ws = await nextSocket();
-    ws.simulateOpen();
-
-    let online: NodeStatusOnlineEvent | undefined;
-    let offline: NodeStatusOfflineEvent | undefined;
-    agent.on.nodeOnline((event) => { online = event; });
-    agent.on.nodeOffline((event) => { offline = event; });
-
-    ws.simulateMessage({ type: 'node.status.online', node_id: 'node_1', node_name: 'builder-1' });
-    ws.simulateMessage({
-      type: 'node.status.offline',
-      node_id: 'node_1',
-      node_name: 'builder-1',
-      reason: 'liveness_timeout',
-    });
-
-    expect(online).toEqual({ type: 'node.status.online', nodeId: 'node_1', nodeName: 'builder-1' });
-    expect(offline).toEqual({
-      type: 'node.status.offline',
-      nodeId: 'node_1',
-      nodeName: 'builder-1',
-      reason: 'liveness_timeout',
-    });
+    expect(agent.on).not.toHaveProperty('nodeOnline');
+    expect(agent.on).not.toHaveProperty('nodeOffline');
   });
 
   // --- subscribe / unsubscribe proxy ---
