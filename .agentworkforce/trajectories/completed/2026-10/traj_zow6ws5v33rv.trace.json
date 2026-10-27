@@ -1,0 +1,154 @@
+{
+  "version": "1.0.0",
+  "id": "e37b6125-ae8e-494c-9320-7eba0a7c818d",
+  "timestamp": "2026-10-11T20:04:44.981Z",
+  "trajectory": "traj_zow6ws5v33rv",
+  "files": [
+    {
+      "path": ".agentworkforce/trajectories/active/traj_zow6ws5v33rv/trajectory.json",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 46,
+              "revision": "b9df951a205ae3902658ccd518a1b436cde069a1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": ".agentworkforce/trajectories/completed/2026-10/traj_8xat4ug6944x/summary.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 25,
+              "revision": "b9df951a205ae3902658ccd518a1b436cde069a1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": ".agentworkforce/trajectories/completed/2026-10/traj_8xat4ug6944x/trajectory.json",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 8,
+              "end_line": 16,
+              "revision": "b9df951a205ae3902658ccd518a1b436cde069a1"
+            },
+            {
+              "start_line": 24,
+              "end_line": 30,
+              "revision": "b9df951a205ae3902658ccd518a1b436cde069a1"
+            },
+            {
+              "start_line": 49,
+              "end_line": 60,
+              "revision": "b9df951a205ae3902658ccd518a1b436cde069a1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "CHANGELOG.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 23,
+              "end_line": 29,
+              "revision": "b9df951a205ae3902658ccd518a1b436cde069a1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/CHANGELOG.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 13,
+              "end_line": 19,
+              "revision": "b9df951a205ae3902658ccd518a1b436cde069a1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/db/__tests__/taskMigration.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 32,
+              "end_line": 38,
+              "revision": "b9df951a205ae3902658ccd518a1b436cde069a1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/db/migrations/0069_nodes_online_liveness_index.sql",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 15,
+              "revision": "b9df951a205ae3902658ccd518a1b436cde069a1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/engine/__tests__/staleOnlineIndex.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 58,
+              "revision": "b9df951a205ae3902658ccd518a1b436cde069a1"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

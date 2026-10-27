@@ -72,6 +72,9 @@ const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
 const validateReleaseTag = fileURLToPath(
   new URL("./validate-release-tag.mjs", import.meta.url),
 );
+const restoreReleaseLockMetadata = fileURLToPath(
+  new URL("./restore-release-lock-metadata.mjs", import.meta.url),
+);
 const cutChangelog = fileURLToPath(
   new URL("./cut-changelog.mjs", import.meta.url),
 );
@@ -560,6 +563,60 @@ describe("publish workflow safety contract", () => {
     assert.match(refresh, /working-directory: docker/);
     assert.match(refresh, /refresh-docker-lock\.mjs/);
     assert.doesNotMatch(refresh, /npm (?:install|update) --package-lock-only/);
+  });
+
+  it("restores source peer metadata after npm refreshes the release lockfile", () => {
+    const build = jobBlock("build");
+    const refresh = build.indexOf("npm install --package-lock-only --ignore-scripts");
+    const restore = build.indexOf("restore-release-lock-metadata.mjs", refresh);
+    const validate = build.indexOf("Validate release version, changelog, and generated-source parity");
+    assert.ok(refresh !== -1, "workspace lock refresh not found");
+    assert.ok(restore > refresh, "peer metadata restore must follow npm's lock refresh");
+    assert.ok(validate > restore, "release validation must follow metadata restoration");
+  });
+
+  it("restores peer metadata at its source JSON position", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "relaycast-release-lock-metadata-"));
+    try {
+      const sourceLock = {
+        name: "fixture",
+        lockfileVersion: 3,
+        packages: {
+          "packages/example": {
+            version: "1.0.0",
+            peer: true,
+            engines: { node: ">=22" },
+            funding: { url: "https://example.test" },
+          },
+        },
+      };
+      writeFileSync(path.join(root, "package-lock.json"), `${JSON.stringify(sourceLock, null, 2)}\n`);
+      git(root, ["init"]);
+      git(root, ["config", "user.email", "release-test@example.com"]);
+      git(root, ["config", "user.name", "Release Test"]);
+      git(root, ["add", "package-lock.json"]);
+      git(root, ["commit", "-m", "source lock"]);
+
+      const refreshedLock = structuredClone(sourceLock);
+      refreshedLock.packages["packages/example"].version = "1.1.0";
+      delete refreshedLock.packages["packages/example"].peer;
+      writeFileSync(path.join(root, "package-lock.json"), `${JSON.stringify(refreshedLock, null, 2)}\n`);
+
+      const restored = spawnSync(process.execPath, [restoreReleaseLockMetadata], {
+        cwd: root,
+        encoding: "utf8",
+      });
+      assert.equal(restored.status, 0, restored.stderr);
+
+      const expectedLock = structuredClone(sourceLock);
+      expectedLock.packages["packages/example"].version = "1.1.0";
+      assert.equal(
+        readFileSync(path.join(root, "package-lock.json"), "utf8"),
+        `${JSON.stringify(expectedLock, null, 2)}\n`,
+      );
+    } finally {
+      removeTemporaryDirectory(root);
+    }
   });
 
   it("reuses a matching tagged tree on rerun and tags before reconciling main", () => {

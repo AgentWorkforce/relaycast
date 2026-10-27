@@ -231,6 +231,7 @@ pub async fn bootstrap_session(
                         request_id: None,
                         attempts: 1,
                         retry_after_ms: None,
+                        details: None,
                     }),
                 } {
                     Ok(result) => {
@@ -336,6 +337,7 @@ pub async fn bootstrap_session(
                         request_id: None,
                         attempts: 1,
                         retry_after_ms: None,
+                        details: None,
                     })?;
                 let rotate_result = relay
                     .rotate_agent_token(&name, existing_agent_token)

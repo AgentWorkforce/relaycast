@@ -1,6 +1,7 @@
 export const LEGACY_TOOL_NAME_ALIASES = {
   create_workspace: 'workspace.create',
   set_workspace_key: 'workspace.set_key',
+  rotate_workspace_key: 'workspace.rotate_key',
   register: 'agent.register',
   list_agents: 'agent.list',
   list_workspaces: 'workspace.list',

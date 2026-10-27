@@ -18,7 +18,7 @@ export const DeliveryMessageSchema = z.object({
   channel_id: z.string(),
   agent_id: z.string().nullable(),
   agent_name: z.string().nullable(),
-  /** Sender's `agent@machine` at send time; present on direct messages. */
+  /** Sender's `agent@machine` address at send time when the server recorded one, on direct messages and thread replies. Omitted when the sender has no location node. */
   agent_address: z.string().optional(),
   text: z.string(),
   thread_id: z.string().nullable(),

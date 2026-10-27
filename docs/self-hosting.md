@@ -16,9 +16,10 @@ of hosted infrastructure and account management.
 
 ## 1. Prerequisites
 
-- **Node.js ≥ 20** (`node -v`).
-- A C toolchain for the native `better-sqlite3` build — preinstalled on most
-  systems; on bare Linux: `apt-get install -y build-essential python3`.
+- **Node.js ≥ 20** (`node -v`) and a C toolchain for the native
+  `better-sqlite3` build (on bare Linux: `apt-get install -y build-essential
+  python3`) — **or** the [standalone binary](#standalone-binary-no-nodejs),
+  which needs neither.
 - A writable directory for the SQLite file and uploaded files.
 - An open TCP port (default `8787`).
 
@@ -41,6 +42,32 @@ npx @relaycast/engine --db ./relaycast.db --port 8787
 npm install -g @relaycast/engine
 relaycast-engine --db ./relaycast.db --port 8787
 ```
+
+### Standalone binary (no Node.js)
+
+Each GitHub release attaches a single-file `relaycast-engine` executable per
+platform, so a machine needs no Node.js, npm, compiler, or native addon:
+`relaycast-engine-<version>-<os>-<arch>` (`.exe` on Windows) for `linux-x64`,
+`linux-arm64`, `linux-musl-x64`, `linux-musl-arm64`, `darwin-x64`,
+`darwin-arm64`, and `windows-x64`, each with a `.sha256` file.
+
+```bash
+V=<version>   # a release that carries binaries
+T=linux-x64   # your platform
+base=https://github.com/AgentWorkforce/relaycast/releases/download/v$V
+curl -fsSLO "$base/relaycast-engine-$V-$T" -O "$base/relaycast-engine-$V-$T.sha256"
+sha256sum -c "relaycast-engine-$V-$T.sha256"   # macOS: shasum -a 256 -c
+chmod +x "relaycast-engine-$V-$T"
+./relaycast-engine-$V-$T --db ./relaycast.db --port 8787
+```
+
+It takes the same flags and environment variables as the npm bin, and
+`--version` prints the engine version. The binary embeds Bun and uses its
+built-in SQLite. glibc builds need glibc 2.17 or newer; the musl builds need
+`libstdc++` (`apk add libstdc++` on Alpine). The macOS and Windows binaries are
+not yet signed by a developer certificate, so a browser download may need
+`xattr -d com.apple.quarantine <file>` on macOS or a SmartScreen confirmation on
+Windows (`curl` downloads are not quarantined).
 
 On start it migrates the database (idempotent), then serves on the port and prints
 a hint for creating your first workspace:
@@ -322,8 +349,8 @@ Be honest with yourself about what self-host is and isn't:
 - **In-process background work.** Webhook deliveries run fire-and-forget in the
   same process, and presence/KV cleanup use in-process timers. They don't
   survive a restart mid-flight.
-- **Counters reset on restart.** Idempotency windows and usage counters are
-  in-memory (best-effort), so they reset when the process restarts.
+- **Idempotency windows reset on restart.** They are in-memory (best-effort),
+  so they reset when the process restarts.
 - **Workspace-stream overrides reset on restart.** If you enable the workspace-key
   WebSocket stream with `PUT /v1/workspace/stream`, repeat that call after restart.
 - **Restart resets live realtime sequences.** A restart loses in-memory
@@ -333,7 +360,7 @@ Be honest with yourself about what self-host is and isn't:
 
 | | Self-host | Hosted |
 |---|---|---|
-| Billing / plan entitlements | static, effectively unlimited single tier | Stripe-backed per-workspace |
+| Billing / usage quotas | none (per-minute rate ceiling only) | per-workspace, through admission hooks |
 | Multi-tenant admin / org management | — | yes |
 | Horizontal scaling / multi-region | single process | Durable Objects + edge |
 | Managed backups & SLA | you operate the SQLite file + process | managed |

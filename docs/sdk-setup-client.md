@@ -61,7 +61,7 @@ This spec covers:
 5. Support for both the full RelayCast API and the simpler communicate-style interface
 6. What is explicitly out of scope
 
-This spec does **not** cover: self-hosted server setup, Python SDK changes, or changes to any existing `RelayCast` or `AgentClient` methods.
+This spec does **not** cover: self-hosted server setup, or changes to any existing `RelayCast` or `AgentClient` methods.
 
 ---
 
@@ -637,14 +637,12 @@ The following are explicitly deferred from this spec:
 
 2. **Workspace join token** — A lightweight token that allows joining a workspace without full API key access, for scenarios where you want to share workspace access with untrusted processes.
 
-3. **Python SDK** — Mirror `RelaycastSetup` as `RelaycastSetup` in `packages/sdk-python`.
+3. **Workspace listing** — `RelaycastSetup.listWorkspaces()` to enumerate workspaces the current API key has access to.
 
-4. **Workspace listing** — `RelaycastSetup.listWorkspaces()` to enumerate workspaces the current API key has access to.
+4. **Team invite flow** — A flow for inviting humans to a workspace via email, with email verification and role assignment.
 
-5. **Team invite flow** — A flow for inviting humans to a workspace via email, with email verification and role assignment.
+5. **MCP server auto-setup** — A method on `WorkspaceHandle` that configures the MCP server with the correct workspace credentials automatically.
 
-6. **MCP server auto-setup** — A method on `WorkspaceHandle` that configures the MCP server with the correct workspace credentials automatically.
+6. **Webhook integration setup** — Convenience methods for setting up common webhook integrations (GitHub, Slack, etc.) with sensible defaults.
 
-7. **Webhook integration setup** — Convenience methods for setting up common webhook integrations (GitHub, Slack, etc.) with sensible defaults.
-
-8. **Workspace teardown** — A `workspace.delete()` method on `WorkspaceHandle` for cleaning up ephemeral workspaces.
+7. **Workspace teardown** — A `workspace.delete()` method on `WorkspaceHandle` for cleaning up ephemeral workspaces.

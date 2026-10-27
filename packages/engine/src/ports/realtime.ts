@@ -75,6 +75,8 @@ export interface AgentActionProviderAuthorization {
   handlerAgentId: string;
   /** False when a queued attempt was already counted before this delivery. */
   recordAttempt: boolean;
+  /** Optional lost-node retry generation; the socket owner must CAS it. */
+  expectedNodeLivenessRevision?: number;
 }
 
 /** Exact token-generation proof for a release accepted by the socket owner. */

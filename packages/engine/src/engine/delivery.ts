@@ -1,7 +1,7 @@
 import { parseMessageMentions } from './mentions.js';
-import { eq, and, not, asc, isNull, inArray, notInArray, lte, gt, sql, getTableColumns, type SQL } from 'drizzle-orm';
+import { eq, and, asc, exists, isNull, isNotNull, inArray, lt, ne, not, notInArray, lte, gt, sql, getTableColumns, type SQL } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { deliveries, messages, agents, readReceipts, channelMembers, channels, dmConversations } from '../db/schema.js';
+import { deliveries, messages, agents, nodes, readReceipts, channelMembers, channels, dmConversations } from '../db/schema.js';
 import type { DeliveryStatus } from '@relaycast/types';
 import { runAtomic } from '../ports/database.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
@@ -20,6 +20,7 @@ import {
   WorkspaceDeliveryCapacityError,
   type WorkspaceDeliveryPolicy,
 } from './workspaceDeliveryPolicy.js';
+import { queryInChunks } from '../lib/queryChunks.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -493,7 +494,7 @@ export interface DeliveryFailureNotice {
   target_agent_id: string;
   target_agent_name: string;
   seq: number;
-  reason: 'ttl_expired';
+  reason: 'ttl_expired' | 'node_unreachable';
   error: string;
   retryable: false;
 }
@@ -580,6 +581,119 @@ export async function expireDueDeliveries(
   return (await expireDueDeliveryBatch(db, workspaceId, now)).notices;
 }
 
+/**
+ * Nodes that have been offline past this window are treated as permanently
+ * unreachable for delivery purposes: their queued mail can never dispatch, and
+ * every minute it lingers it consumes the workspace delivery-depth cap.
+ * Well under the delivery TTL (minutes, not seconds) so a routine node
+ * restart or deploy never burns queued mail.
+ */
+export const UNREACHABLE_NODE_GRACE_MS = 30 * 60 * 1000;
+
+/**
+ * Dead-letter one bounded batch of deliveries routed to a node that has been
+ * offline past {@link UNREACHABLE_NODE_GRACE_MS}. Mirrors
+ * {@link expireDueDeliveryBatch} — same transition, same sender notices — but
+ * the trigger is reachability rather than TTL: a delivery whose
+ * `location_node_id` node cannot come back inside the row's useful life only
+ * serves to pin the workspace depth cap until expiry.
+ *
+ * One bounded join read then a guarded update. Driving the scan from
+ * deliveries joined to nodes (rather than a fixed page of stale node ids)
+ * means a crowd of delivery-free stale nodes cannot starve later nodes that
+ * still hold mail; ordering oldest-heartbeat-first drains the longest-dead
+ * targets first.
+ *
+ * Eligibility is deliberately narrow:
+ * - `kind = 'ws'` only. `http_push`/`poll` nodes have no socket liveness
+ *   contract — `offline` + a stale heartbeat is their normal resting state —
+ *   and their mail dispatches via the host-driven redrive sweep or next poll.
+ * - `last_heartbeat_at IS NOT NULL` — a node that has never connected may
+ *   simply be mid-startup; its deliveries keep the ordinary TTL path.
+ * - The UPDATE rechecks node staleness inside the statement via a correlated
+ *   EXISTS, so a node that reconnects between the read and the write keeps
+ *   its mail.
+ */
+export async function deadLetterUnreachableDeliveryBatch(
+  db: Db,
+  workspaceId: string | undefined,
+  offlineGraceMs: number = UNREACHABLE_NODE_GRACE_MS,
+  now: Date = new Date(),
+): Promise<ExpiredDeliveryBatch> {
+  const graceMs = Number.isFinite(offlineGraceMs) && offlineGraceMs > 0
+    ? offlineGraceMs
+    : UNREACHABLE_NODE_GRACE_MS;
+  const staleBefore = new Date(now.getTime() - graceMs);
+  const staleNodePredicate = and(
+    eq(nodes.id, deliveries.locationNodeId),
+    eq(nodes.kind, 'ws'),
+    ne(nodes.status, 'online'),
+    isNotNull(nodes.lastHeartbeatAt),
+    lt(nodes.lastHeartbeatAt, staleBefore),
+  );
+
+  // Pinned to the active-only location index: without it SQLite drove this
+  // from idx_deliveries_location_node_fk, reading every delivery ever routed
+  // to a node (~250k rows, 3.5-4.6s per run in production) to find the few
+  // still active, and stalled the shared D1 for every tenant while it ran.
+  const due = await db
+    .select({
+      delivery: indexedDeliveryColumns,
+      senderAgentId: messages.agentId,
+      targetAgentName: agents.name,
+    })
+    .from(sql`${deliveries} INDEXED BY idx_deliveries_active_location_node`)
+    .innerJoin(nodes, staleNodePredicate)
+    .innerJoin(messages, eq(deliveries.messageId, messages.id))
+    .innerJoin(agents, eq(deliveries.agentId, agents.id))
+    .where(and(
+      workspaceId ? eq(deliveries.workspaceId, workspaceId) : undefined,
+      // Literal statuses, as in expireDueDeliveryBatch: parameterizing them
+      // hides the predicate from SQLite's partial-index selection.
+      sql`${deliveries.status} IN ('queued', 'delivered')`,
+      isNotNull(deliveries.locationNodeId),
+    ))
+    .orderBy(asc(nodes.lastHeartbeatAt), asc(deliveries.expiresAt), asc(deliveries.id))
+    .limit(DELIVERY_EXPIRY_BATCH_SIZE);
+
+  if (due.length === 0) return { expiredCount: 0, notices: [] };
+
+  const ids = due.map((row) => row.delivery.id);
+  const updated = await db
+    .update(deliveries)
+    .set({
+      status: 'dead_lettered',
+      error: 'target node unreachable',
+      retryable: false,
+      deadLetteredAt: now,
+      updatedAt: now,
+    })
+    .where(and(
+      workspaceId ? eq(deliveries.workspaceId, workspaceId) : undefined,
+      inArray(deliveries.id, ids),
+      notInArray(deliveries.status, ['acked', 'dead_lettered', 'failed']),
+      exists(db.select({ id: nodes.id }).from(nodes).where(staleNodePredicate)),
+    ))
+    .returning({ id: deliveries.id });
+  const updatedIds = new Set(updated.map((row) => row.id));
+
+  const notices = due
+    .filter((row) => row.senderAgentId && updatedIds.has(row.delivery.id))
+    .map((row) => ({
+      workspace_id: row.delivery.workspaceId,
+      delivery_id: row.delivery.id,
+      message_id: row.delivery.messageId,
+      sender_agent_id: row.senderAgentId,
+      target_agent_id: row.delivery.agentId,
+      target_agent_name: row.targetAgentName,
+      seq: row.delivery.seq,
+      reason: 'node_unreachable' as const,
+      error: 'target node unreachable',
+      retryable: false as const,
+    }));
+  return { expiredCount: updated.length, notices };
+}
+
 function wireMode(mode: string): 'wait' | 'steer' {
   return mode === 'next-tool-call' ? 'steer' : 'wait';
 }
@@ -660,6 +774,7 @@ function buildRoutableDeliveryEvent(
         channel_name: row.channelName,
         agent_id: row.senderAgentId,
         agent_name: senderName,
+        ...senderAddressField(row.metadata as Record<string, unknown> | null),
         thread_id: row.threadId,
         text: row.body,
         blocks: (row.blocks as unknown[] | null) || null,
@@ -989,6 +1104,25 @@ export function deliverPendingToNode(
   return promise;
 }
 
+// SQLite's `ORDER BY name` is BINARY collation — UTF-8 byte order. JS string
+// comparison is UTF-16 code-unit order, which diverges once a name leaves the
+// BMP (a non-BMP name like `🚀` encodes to a surrogate pair whose first code
+// unit sorts below `Ｚ`, while its UTF-8 leading byte sorts above). The scoped
+// path merges chunks in JS, so it must reproduce the same ordering the
+// unscoped `ORDER BY` used or replay frames go out in a different order.
+const utf8BinaryOrder = (() => {
+  const encoder = new TextEncoder();
+  return (a: string, b: string): number => {
+    const x = encoder.encode(a);
+    const y = encoder.encode(b);
+    const n = Math.min(x.length, y.length);
+    for (let i = 0; i < n; i++) {
+      if (x[i] !== y[i]) return x[i]! - y[i]!;
+    }
+    return x.length - y.length;
+  };
+})();
+
 /** Drain a finite per-agent high-water mark in ordered, readiness-checked pages. */
 async function replayPendingToNode(
   db: Db,
@@ -1002,16 +1136,34 @@ async function replayPendingToNode(
 
   // Resolve the small node roster first. A delivery-first join lets SQLite
   // choose the workspace/status index and scan millions of retained rows.
-  const recipients = await db.select({
-    id: agents.id, name: agents.name, providerName: agents.providerName,
-    ackSeq: agents.deliveryAckSeq,
-  }).from(agents).where(and(
+  // A scoped replay must bound the roster read the same way: agents are never
+  // unlinked from location_node_id, so released/offline identities accumulate
+  // on a busy node — filtering `wantedIds` in JS here read every retained row
+  // (≈6.5k on production) for every single-agent register/recover replay.
+  // Push the scope into the primary-key IN list instead; the set is deduped and
+  // chunked to stay under D1's bound-parameter cap.
+  // The unscoped roster is pinned to the node FK index: D1 keeps no ANALYZE
+  // stats, so SQLite otherwise walks agents_workspace_name_unique to satisfy
+  // the ORDER BY, reading every agent in the workspace (avg ~5.7k rows,
+  // ~33ms in production) to find one node's handful.
+  const rosterQuery = (ids?: string[]) => db.select({
+    id: sql`${agents.id}`.mapWith(agents.id),
+    name: sql`${agents.name}`.mapWith(agents.name),
+    providerName: sql`${agents.providerName}`.mapWith(agents.providerName),
+    ackSeq: sql`${agents.deliveryAckSeq}`.mapWith(agents.deliveryAckSeq),
+  }).from(ids === undefined ? sql`${agents} INDEXED BY idx_agents_location_node_fk` : sql`${agents}`).where(and(
     eq(agents.workspaceId, workspaceId),
     eq(agents.locationType, 'via_node'),
     eq(agents.locationNodeId, nodeId),
     not(isRelayConnectProbePullSql(agents.metadata)),
     scope.providerName === undefined ? undefined : eq(agents.providerName, scope.providerName),
-  )).orderBy(asc(agents.name));
+    ids === undefined ? undefined : inArray(agents.id, ids),
+  ));
+  const scopedIds = wantedIds ? [...wantedIds].sort() : undefined;
+  const recipients = scopedIds === undefined
+    ? await rosterQuery().orderBy(asc(agents.name))
+    : (await queryInChunks(scopedIds, chunk => rosterQuery(chunk)))
+      .sort((a, b) => utf8BinaryOrder(a.name, b.name));
 
   let delivered = 0;
   for (const recipient of recipients) {

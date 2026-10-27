@@ -43,6 +43,7 @@ import type {
   DmReceivedEvent,
   GroupDmReceivedEvent,
   RelaycastMessageEvent,
+  AgentExitedEvent,
   AgentStatusActiveEvent,
   AgentStatusChangedEvent,
   AgentStatusOfflineEvent,
@@ -164,6 +165,8 @@ function ensureRelaycastMessageEventId(event: RelaycastMessageEvent): RelaycastM
 export class AgentClient {
   public readonly client: HttpClient;
   private ws: WsClient | null = null;
+  /** True after `connect()` has started the current transport. Reset by `disconnect()`. */
+  private wsConnectStarted = false;
   private autoHeartbeatMs: number | false;
   private autoHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private pendingHeartbeat: Promise<void> | null = null;
@@ -270,34 +273,50 @@ export class AgentClient {
 
   // === WebSocket ===
 
+  /**
+   * Lazily create the underlying WsClient. Constructing it does not open a
+   * socket, so handlers registered via `on.*` before `connect()` attach to
+   * the same instance `connect()` later opens — no queueing needed.
+   */
+  private ensureWs(): WsClient {
+    if (!this.ws) {
+      this.ws = new WsClient(withInternalWsOrigin(
+        {
+          ...this.wsOptions,
+          token: () => this.fetchDirectNodeToken(),
+          baseUrl: this.client.baseUrl,
+          path: '/v1/node/ws',
+          nodeRegistration: () => this.directNodeRegistration(),
+          autoAckDeliveries: true,
+        },
+        this.client.internalOrigin,
+      ));
+      this.ws.on('open', () => {
+        this.directNodeTokenUses = 0;
+        void this.presence.markOnline().catch(() => {});
+        this.startAutoHeartbeat();
+        this.syncDesiredSubscriptions({ resetRemoteState: true });
+      });
+      this.ws.on('close', () => {
+        this.stopAutoHeartbeat();
+        this.activeWsChannels.clear();
+      });
+      this.ws.on('permanently_disconnected', () => {
+        this.stopAutoHeartbeat();
+        this.activeWsChannels.clear();
+      });
+    }
+    return this.ws;
+  }
+
   connect(): void {
-    if (this.ws) return;
-    this.ws = new WsClient(withInternalWsOrigin(
-      {
-        ...this.wsOptions,
-        token: () => this.fetchDirectNodeToken(),
-        baseUrl: this.client.baseUrl,
-        path: '/v1/node/ws',
-        nodeRegistration: () => this.directNodeRegistration(),
-        autoAckDeliveries: true,
-      },
-      this.client.internalOrigin,
-    ));
-    this.ws.on('open', () => {
-      this.directNodeTokenUses = 0;
-      void this.presence.markOnline().catch(() => {});
-      this.startAutoHeartbeat();
-      this.syncDesiredSubscriptions({ resetRemoteState: true });
-    });
-    this.ws.on('close', () => {
-      this.stopAutoHeartbeat();
-      this.activeWsChannels.clear();
-    });
-    this.ws.on('permanently_disconnected', () => {
-      this.stopAutoHeartbeat();
-      this.activeWsChannels.clear();
-    });
-    this.ws.connect();
+    // Handlers may construct the client early via ensureWs(). Starting it is
+    // still once per transport: a second connect(), including after the
+    // circuit breaker trips, must not open another socket. disconnect()
+    // clears this so an explicit teardown can connect again.
+    if (this.wsConnectStarted) return;
+    this.wsConnectStarted = true;
+    this.ensureWs().connect();
   }
 
   /** Send a REST heartbeat to keep this agent online in PresenceDO without a WebSocket. */
@@ -346,6 +365,7 @@ export class AgentClient {
       this.ws.disconnect();
       this.ws = null;
     }
+    this.wsConnectStarted = false;
     this.activeWsChannels.clear();
     // Always send the HTTP disconnect — it works even without a WS and
     // serves as the authoritative presence update.
@@ -424,10 +444,7 @@ export class AgentClient {
   }
 
   private onEvent<T extends WsClientEvent>(eventType: string, handler: (e: T) => void): () => void {
-    if (!this.ws) {
-      throw new Error('WebSocket not connected. Call connect() first.');
-    }
-    return this.ws.on(eventType, handler as (e: WsClientEvent) => void);
+    return this.ensureWs().on(eventType, handler as (e: WsClientEvent) => void);
   }
 
   on = {
@@ -441,6 +458,11 @@ export class AgentClient {
     agentStatusChanged: (handler: (e: AgentStatusChangedEvent) => void): (() => void) => this.onEvent('agent.status.changed', handler),
     agentActive:     (handler: (e: AgentStatusActiveEvent) => void): (() => void)  => this.onEvent('agent.status.active', handler),
     agentOffline:    (handler: (e: AgentStatusOfflineEvent) => void): (() => void) => this.onEvent('agent.status.offline', handler),
+    // The spawn caller receives `agent.exited` on this socket as a `deliver`
+    // frame. Node liveness has no agent mailbox — `emitNodeStatusEffects`
+    // publishes `node.status.*` only to the workspace stream and webhooks —
+    // so those handlers live on `RelayCast`, which connects to `/v1/ws`.
+    agentExited:     (handler: (e: AgentExitedEvent) => void): (() => void)     => this.onEvent('agent.exited', handler),
     channelCreated:  (handler: (e: ChannelCreatedEvent) => void): (() => void)  => this.onEvent('channel.created', handler),
     channelUpdated:  (handler: (e: ChannelUpdatedEvent) => void): (() => void)  => this.onEvent('channel.updated', handler),
     channelArchived: (handler: (e: ChannelArchivedEvent) => void): (() => void) => this.onEvent('channel.archived', handler),
@@ -464,35 +486,18 @@ export class AgentClient {
     connected:    (handler: () => void): (() => void) => this.onEvent('open', handler as (e: never) => void),
     disconnected: (handler: () => void): (() => void) => this.onEvent('close', handler as (e: never) => void),
     error:        (handler: () => void): (() => void) => this.onEvent('error', handler as (e: never) => void),
-    reconnecting: (handler: (attempt: number) => void): (() => void) => {
-      if (!this.ws) {
-        throw new Error('WebSocket not connected. Call connect() first.');
-      }
-      return this.ws.on('reconnecting', (e: WsClientEvent) => handler((e as WsReconnectingEvent).attempt));
-    },
-    permanentlyDisconnected: (handler: (attempt: number) => void): (() => void) => {
-      if (!this.ws) {
-        throw new Error('WebSocket not connected. Call connect() first.');
-      }
-      return this.ws.on('permanently_disconnected', (e: WsClientEvent) =>
-        handler((e as WsPermanentlyDisconnectedEvent).attempt));
-    },
-    resynced: (handler: (info: { replayed: number; gapDetected: boolean }) => void): (() => void) => {
-      if (!this.ws) {
-        throw new Error('WebSocket not connected. Call connect() first.');
-      }
-      return this.ws.on('resynced', (e: WsClientEvent) => {
+    reconnecting: (handler: (attempt: number) => void): (() => void) =>
+      this.ensureWs().on('reconnecting', (e: WsClientEvent) => handler((e as WsReconnectingEvent).attempt)),
+    permanentlyDisconnected: (handler: (attempt: number) => void): (() => void) =>
+      this.ensureWs().on('permanently_disconnected', (e: WsClientEvent) =>
+        handler((e as WsPermanentlyDisconnectedEvent).attempt)),
+    resynced: (handler: (info: { replayed: number; gapDetected: boolean }) => void): (() => void) =>
+      this.ensureWs().on('resynced', (e: WsClientEvent) => {
         const event = e as WsResyncedEvent;
         handler({ replayed: event.replayed, gapDetected: event.gapDetected });
-      });
-    },
+      }),
     // Wildcard
-    any: (handler: (e: WsClientEvent) => void): (() => void) => {
-      if (!this.ws) {
-        throw new Error('WebSocket not connected. Call connect() first.');
-      }
-      return this.ws.on('*', handler);
-    },
+    any: (handler: (e: WsClientEvent) => void): (() => void) => this.ensureWs().on('*', handler),
   };
 
   // === Messages ===

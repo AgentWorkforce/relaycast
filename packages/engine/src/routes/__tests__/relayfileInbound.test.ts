@@ -66,10 +66,6 @@ class FailingKeyValueStore implements KeyValueStore {
   async delete(): Promise<void> {
     throw new Error('kv unavailable');
   }
-
-  async increment(): Promise<number> {
-    throw new Error('kv unavailable');
-  }
 }
 
 describe('relayfile inbound bridge', () => {
