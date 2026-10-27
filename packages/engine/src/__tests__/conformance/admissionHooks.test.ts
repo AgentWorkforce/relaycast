@@ -101,7 +101,9 @@ describe('admission hooks', () => {
 
     const refused = await stack.app.request('/v1/dm', json(alice.token, { to: 'bob', text: 'four' }));
     expect(refused.status).toBe(429);
+    // No `retryAt`: neither the retry contract nor the per-minute reset is advertised.
     expect(refused.headers.get('Retry-After')).toBeNull();
+    expect(refused.headers.get('X-RateLimit-Reset')).toBeNull();
     await expect(refused.json()).resolves.toEqual({
       ok: false,
       error: { code: 'message_quota_exceeded', message: 'Sent 3 of 3 messages.', limit: 3, usage: 3 },
@@ -157,6 +159,8 @@ describe('admission hooks', () => {
     // A fresh keyed send is refused by the route with the host's denial.
     const fresh = await send('key-three', 'three');
     expect(fresh.status).toBe(429);
+    expect(fresh.headers.get('Retry-After')).toBeNull();
+    expect(fresh.headers.get('X-RateLimit-Reset')).toBeNull();
     await expect(fresh.json()).resolves.toMatchObject({
       ok: false,
       error: { code: 'message_quota_exceeded', limit: 2, usage: 2 },
@@ -260,6 +264,18 @@ describe('admission hooks', () => {
     expect(res.status).toBe(201);
     // The configured ceiling holds through a failing rate hook (message sends get half).
     expect(res.headers.get('X-RateLimit-Limit')).toBe('60');
+  });
+
+  it('ignores an invalid configured ceiling', async () => {
+    for (const rateLimitPerMinute of [Number.NaN, -1, 0, Number.POSITIVE_INFINITY]) {
+      stack = makeNodeStack({ rateLimitPerMinute });
+      const ws = await createWorkspace(stack.app, 'bad-config-ws');
+      const res = await stack.app.request('/v1/workspace', { headers: { authorization: `Bearer ${ws.workspaceKey}` } });
+      expect(res.status).toBe(200);
+      expect(res.headers.get('X-RateLimit-Limit')).toBe('30000');
+      await stack.close();
+      stack = undefined;
+    }
   });
 
   it('takes the per-workspace rate ceiling from the hook', async () => {

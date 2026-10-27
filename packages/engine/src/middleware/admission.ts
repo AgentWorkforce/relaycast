@@ -26,9 +26,18 @@ export async function resolveAdmission(
   }
 }
 
-/** Render a denial as the error envelope, with `Retry-After` when the host gave one. */
+/**
+ * Render a denial as the error envelope, with `Retry-After` when the host gave
+ * one. Without `retryAt` no retry clears the denial, so the per-minute reset
+ * `rateLimit` already set is withdrawn rather than advertised.
+ */
 export function admissionDeniedResponse(c: Context, denial: AdmissionDenial) {
-  if (denial.retryAt !== undefined && Number.isFinite(denial.retryAt)) setRetryContract(c, denial.retryAt);
+  if (denial.retryAt !== undefined && Number.isFinite(denial.retryAt)) {
+    setRetryContract(c, denial.retryAt);
+  } else {
+    c.header('X-RateLimit-Reset', undefined);
+    c.header('Retry-After', undefined);
+  }
   return c.json(
     { ok: false, error: { ...denial.details, code: denial.code, message: denial.message } },
     denial.status as ContentfulStatusCode,

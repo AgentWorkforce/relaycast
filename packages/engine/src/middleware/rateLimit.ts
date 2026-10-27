@@ -8,6 +8,10 @@ import { presenceRefresh } from './presenceRefresh.js';
 /** Per-workspace requests-per-minute ceiling when the host configures none. */
 export const DEFAULT_RATE_LIMIT_PER_MINUTE = 30_000;
 
+function validRatePerMinute(value: number | undefined): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
 // Per-route rate limit multipliers (fraction of the global per-minute limit).
 // POST endpoints get tighter limits, GET endpoints get looser.
 export const ROUTE_MULTIPLIERS: Record<string, number> = {
@@ -98,12 +102,12 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
   const now = Date.now();
   const bucketKey = `${workspace.id}:${routeKey ?? 'global'}:${rateLimitWindow(now)}`;
 
-  // A failing host hook degrades to the configured ceiling, never to no limit.
-  let globalLimit = config.rateLimitPerMinute ?? DEFAULT_RATE_LIMIT_PER_MINUTE;
+  // An invalid ceiling (config or hook) or a failing hook degrades to the next
+  // valid one, never to no limit or to refusing everything.
+  let globalLimit = validRatePerMinute(config.rateLimitPerMinute) ?? DEFAULT_RATE_LIMIT_PER_MINUTE;
   if (admission?.rateLimitPerMinute) {
     try {
-      const resolved = await admission.rateLimitPerMinute(workspace);
-      if (Number.isFinite(resolved) && resolved > 0) globalLimit = resolved;
+      globalLimit = validRatePerMinute(await admission.rateLimitPerMinute(workspace)) ?? globalLimit;
     } catch { /* keep the configured ceiling */ }
   }
   const limit = routeKey ? Math.ceil(globalLimit * ROUTE_MULTIPLIERS[routeKey]) : globalLimit;
