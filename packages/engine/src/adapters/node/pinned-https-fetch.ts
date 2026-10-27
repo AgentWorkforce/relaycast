@@ -27,6 +27,8 @@ export function createLookupPinnedHttpsFetch(lookup: LookupFunction): typeof glo
     signal?.throwIfAborted();
 
     const body = req.body ? Buffer.from(await req.arrayBuffer()) : undefined;
+    // The signal may have aborted while the body was buffered.
+    signal?.throwIfAborted();
     const headers: Record<string, string> = {};
     req.headers.forEach((value, key) => {
       headers[key] = value;
@@ -46,17 +48,26 @@ export function createLookupPinnedHttpsFetch(lookup: LookupFunction): typeof glo
           agent: false,
         },
         (res) => {
-          const responseHeaders = new Headers();
-          for (const [key, value] of Object.entries(res.headers)) {
-            if (value === undefined) continue;
-            for (const item of Array.isArray(value) ? value : [value]) responseHeaders.append(key, item);
+          // This callback runs outside the executor, so a throw here (e.g.
+          // `new Response` refusing a status outside 200-599) would escape as
+          // an uncaught exception instead of rejecting the fetch.
+          try {
+            const responseHeaders = new Headers();
+            for (const [key, value] of Object.entries(res.headers)) {
+              if (value === undefined) continue;
+              for (const item of Array.isArray(value) ? value : [value]) responseHeaders.append(key, item);
+            }
+            const status = res.statusCode ?? 502;
+            if (status < 200 || status > 599) throw new TypeError(`Unsupported response status ${status}`);
+            const responseBody = NULL_BODY_STATUSES.has(status) || req.method === 'HEAD'
+              ? null
+              : (Readable.toWeb(res) as ReadableStream<Uint8Array>);
+            if (responseBody === null) res.resume();
+            resolve(new Response(responseBody, { status, statusText: res.statusMessage, headers: responseHeaders }));
+          } catch (err) {
+            res.destroy();
+            reject(err);
           }
-          const status = res.statusCode ?? 502;
-          const responseBody = NULL_BODY_STATUSES.has(status) || req.method === 'HEAD'
-            ? null
-            : (Readable.toWeb(res) as ReadableStream<Uint8Array>);
-          if (responseBody === null) res.resume();
-          resolve(new Response(responseBody, { status, statusText: res.statusMessage, headers: responseHeaders }));
         },
       );
       const onAbort = () => client.destroy(signal?.reason instanceof Error ? signal.reason : new Error('The operation was aborted'));

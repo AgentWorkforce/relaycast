@@ -54,4 +54,30 @@ describe('createLookupPinnedHttpsFetch', () => {
     await expect(pinnedFetch('http://plain.example.test/')).rejects.toThrow(/only supports https/);
     await expect(pinnedFetch('https://hooks.example.test/', { signal: AbortSignal.abort() })).rejects.toThrow();
   });
+
+  it('does not connect when the signal aborts while the request body is buffered', async () => {
+    let lookups = 0;
+    const counting: LookupFunction = (hostname, _options, callback) => {
+      lookups += 1;
+      callback(Object.assign(new Error(`denied ${hostname}`), { code: 'ENOTFOUND' }), '', 0);
+    };
+    const pinnedFetch = createLookupPinnedHttpsFetch(counting);
+    const controller = new AbortController();
+    const body = new ReadableStream<Uint8Array>({
+      pull(stream) {
+        controller.abort();
+        stream.enqueue(new TextEncoder().encode('{}'));
+        stream.close();
+      },
+    });
+    await expect(
+      pinnedFetch('https://hooks.example.test/', {
+        method: 'POST',
+        body,
+        signal: controller.signal,
+        duplex: 'half',
+      } as RequestInit),
+    ).rejects.toThrow();
+    expect(lookups).toBe(0);
+  });
 });

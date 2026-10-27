@@ -88,7 +88,10 @@ class BunSqliteStatement {
   constructor(
     private readonly stmt: Statement,
     private readonly db: Database,
-  ) {}
+    private readonly live?: Set<BunSqliteStatement>,
+  ) {
+    live?.add(this);
+  }
 
   run(...params: Params): { changes: number; lastInsertRowid: number | bigint } {
     const result = this.stmt.run(...(params as never[]));
@@ -134,6 +137,7 @@ class BunSqliteStatement {
   }
 
   finalize(): void {
+    if (this.live && !this.live.delete(this)) return;
     this.stmt.finalize();
   }
 }
@@ -143,6 +147,12 @@ export class BunSqliteDatabase {
   readonly name: string;
   readonly memory: boolean;
   #open = true;
+  /**
+   * Statements from `prepare()`. bun:sqlite closes with `sqlite3_close_v2`, so a
+   * connection with unfinalized statements stays open until they are collected;
+   * better-sqlite3 finalizes them on `close()`, and so does this facade.
+   */
+  readonly #live = new Set<BunSqliteStatement>();
 
   constructor(path = ':memory:') {
     this.native = new Database(path, { create: true, strict: true });
@@ -210,13 +220,19 @@ export class BunSqliteDatabase {
         statements[0].finalize();
         throw new RangeError('The supplied SQL string contains more than one statement');
       }
-      return new BunSqliteStatement(statements[0], this.native);
+      return new BunSqliteStatement(statements[0], this.native, this.#live);
     }
-    return new BunSqliteStatement(this.native.prepare(sql), this.native);
+    return new BunSqliteStatement(this.native.prepare(sql), this.native, this.#live);
   }
 
   pragma(source: string, options: { simple?: boolean } = {}): unknown {
-    const rows = this.native.prepare(`PRAGMA ${source}`).all() as Record<string, unknown>[];
+    const stmt = this.native.prepare(`PRAGMA ${source}`);
+    let rows: Record<string, unknown>[];
+    try {
+      rows = stmt.all() as Record<string, unknown>[];
+    } finally {
+      stmt.finalize();
+    }
     if (!options.simple) return rows;
     const first = rows[0];
     return first === undefined ? undefined : Object.values(first)[0];
@@ -237,6 +253,13 @@ export class BunSqliteDatabase {
 
   close(): this {
     if (this.#open) {
+      for (const stmt of [...this.#live]) {
+        try {
+          stmt.finalize();
+        } catch {
+          // Already finalized natively; closing must not fail over it.
+        }
+      }
       this.native.close();
       this.#open = false;
     }
