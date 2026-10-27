@@ -6641,7 +6641,7 @@ paths:
   /hooks/{webhookId}:
     post:
       summary: Trigger inbound webhook
-      description: Trigger a configured inbound webhook. Requires the per-webhook bearer token returned by `POST /webhooks`. Accepts either `{ message, author }` (SDK shape) or `{ text, source, payload }`; `message` maps to message text and `author` is used as the displayed sender without being copied into `source`.
+      description: Trigger a configured inbound webhook. Requires the per-webhook bearer token returned by `POST /webhooks`. Accepts either `{ message, author }` (SDK shape) or `{ text, source, payload }`; `message` maps to message text and `author` is used as the displayed sender without being copied into `source`. A JSON object with none of `text`, `message`, `source`, `author` or `payload` (including `{}`) is rendered as JSON in the message text, capped at 16,000 characters; its fields are not read as message metadata, so they never set `session_ref` or suppress message triggers.
       tags:
         - Webhooks
       security:
