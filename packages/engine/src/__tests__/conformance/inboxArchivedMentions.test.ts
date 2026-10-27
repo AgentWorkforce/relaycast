@@ -12,16 +12,9 @@ import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from '.
  * {name, topic, metadata} (no private flag), so privacy is proven by a
  * non-member never seeing the mention.
  */
-// Test-only entitlements: a high per-minute ceiling so the bounded >200-candidate
-// fixture is not rate-limited by the free plan. No production limit changes.
-const testEntitlements = {
-  getLimits: async () => ({ messages: 1_000_000, agents: 1_000_000, file_bytes: 1_000_000_000, api_calls: 1_000_000, rate_per_min: 100_000 }),
-  getUsage: async () => 0,
-};
-
 describe('inbox mention scope', () => {
   let stack: TestStack;
-  beforeEach(() => { stack = makeNodeStack({ entitlements: testEntitlements }); });
+  beforeEach(() => { stack = makeNodeStack(); });
   afterEach(async () => { await stack.close(); });
 
   const api = (token: string) => ({

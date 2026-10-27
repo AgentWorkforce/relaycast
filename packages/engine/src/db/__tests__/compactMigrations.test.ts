@@ -54,9 +54,10 @@ function snapshot(handle: SqliteDbHandle) {
       // 0070 adds a nullable liveness-recovery marker without backfilling it.
       if (name === 'workspaces') {
         // 0073 adds the rotation grace slot and the generation fence as
-        // additive columns; exclude them so this comparison stays
-        // byte-for-byte over every pre-existing value.
+        // additive columns, and 0077 drops `plan`; exclude them so this
+        // comparison stays byte-for-byte over every other value.
         const {
+          plan: _plan,
           previous_api_key_hash: _previousApiKeyHash,
           previous_api_key_expires_at: _previousApiKeyExpiresAt,
           api_key_generation: _apiKeyGeneration,
@@ -99,7 +100,9 @@ function constraints(handle: SqliteDbHandle) {
   const db = handle.sqlite;
   const tables = db.prepare("SELECT name,sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != '_engine_migrations' ORDER BY name").all() as { name: string; sql: string }[];
   return tables.map(({ name, sql }) => ({
-    name, sql,
+    name,
+    // 0077 drops `plan`; compare every other workspace column definition.
+    sql: name === 'workspaces' ? sql.replace(/\s*`plan` text DEFAULT 'free' NOT NULL,/, '') : sql,
     foreignKeys: db.pragma(`foreign_key_list("${name}")`),
     uniqueIndexes: (db.pragma(`index_list("${name}")`) as { name: string; unique: number; origin: string; partial: number }[])
       .filter(index => index.unique === 1)

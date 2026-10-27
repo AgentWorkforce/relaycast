@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { messages, observerTokens, workspaces } from '../../db/schema.js';
+import { messages, observerTokens } from '../../db/schema.js';
 import { dmFilteredCountConversationChunkSize, dmMessagePageLimit } from '../../engine/dmAll.js';
 import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
 
@@ -55,10 +55,6 @@ describe('Relay Connect observer capability', () => {
 
   it('lists more DM conversations than one D1 statement can bind, for the workspace and an observer', async () => {
     const room = await createWorkspace(stack.app, 'connect-many-dms');
-    await stack.runtime.deps.db
-      .update(workspaces)
-      .set({ plan: 'enterprise' })
-      .where(eq(workspaces.id, room.workspaceId));
     const alice = await registerAgent(stack.app, room.workspaceKey, 'alice');
     const peers = Array.from({ length: 505 }, (_, index) => `peer-${String(index).padStart(3, '0')}`);
     const conversationIds: string[] = [];

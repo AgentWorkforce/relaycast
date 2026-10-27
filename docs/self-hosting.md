@@ -349,8 +349,8 @@ Be honest with yourself about what self-host is and isn't:
 - **In-process background work.** Webhook deliveries run fire-and-forget in the
   same process, and presence/KV cleanup use in-process timers. They don't
   survive a restart mid-flight.
-- **Counters reset on restart.** Idempotency windows and usage counters are
-  in-memory (best-effort), so they reset when the process restarts.
+- **Idempotency windows reset on restart.** They are in-memory (best-effort),
+  so they reset when the process restarts.
 - **Workspace-stream overrides reset on restart.** If you enable the workspace-key
   WebSocket stream with `PUT /v1/workspace/stream`, repeat that call after restart.
 - **Restart resets live realtime sequences.** A restart loses in-memory
@@ -360,7 +360,7 @@ Be honest with yourself about what self-host is and isn't:
 
 | | Self-host | Hosted |
 |---|---|---|
-| Billing / plan entitlements | static, effectively unlimited single tier | Stripe-backed per-workspace |
+| Billing / usage quotas | none (per-minute rate ceiling only) | per-workspace, through admission hooks |
 | Multi-tenant admin / org management | — | yes |
 | Horizontal scaling / multi-region | single process | Durable Objects + edge |
 | Managed backups & SLA | you operate the SQLite file + process | managed |

@@ -29,9 +29,10 @@ export type {
   AuthRequire,
   Workspace,
   Agent,
-  EntitlementsProvider,
-  PlanLimits,
-  UsageMetric,
+  AdmissionAction,
+  AdmissionContext,
+  AdmissionDenial,
+  AdmissionHooks,
   TelemetrySink,
   TelemetryEvent,
 } from './ports/index.js';
@@ -43,18 +44,6 @@ export { observerAllowsEvent, type ObserverToken } from './engine/observerToken.
 
 // OSS default providers (self-host). Cloud injects its own.
 export { SqliteApiKeyAuthProvider, hashToken } from './auth/index.js';
-export { StaticEntitlementsProvider, PLAN_LIMITS } from './providers/static-entitlements.js';
-// Usage-counter key contract. An `EntitlementsProvider` reads the counters the
-// engine writes, so it has to agree with the engine on the billing period the
-// key is scoped to — build the key with these rather than by hand.
-export {
-  getLifetimeUsageMetric,
-  getUsageMetric,
-  lifetimeUsageCounterKey,
-  usageCounterKey,
-  usagePeriod,
-  usagePeriodResetAt,
-} from './engine/usage.js';
 export { NoopTelemetrySink } from './providers/noop-telemetry.js';
 export {
   isValidStandardWebhookSecret,
