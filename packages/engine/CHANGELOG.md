@@ -7,16 +7,18 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Major]
+## [Unreleased - Patch]
+
+### Fixed
+
+- A status patch broadcasts the same derived presence the response returns.
+
+## [12.0.0] - 2026-10-27
 
 ### Added
 
 - `AdmissionHooks` (`EngineDeps.admission`, `createNodeRuntime({ admission })`, `startServer({ admission })`): `admit({ workspace, action })` refuses a `request` or `message` with an `AdmissionDenial` (`status`, `code`, `message`, `details`, `retryAt`); `committed(ctx)` reports each successful, non-replayed action; `rateLimitPerMinute(workspace)` overrides the per-minute ceiling. A hook that throws admits the request. A denied keyed message send still replays its stored receipt.
 - `EngineConfig.rateLimitPerMinute` (default 30,000).
-
-### Fixed
-
-- A status patch broadcasts the same derived presence the response returns.
 
 ### Removed
 
