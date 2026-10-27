@@ -26,7 +26,7 @@ import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { acceptTaskInvocation, completeTaskInvocation } from './taskInvocation.js';
 import { databaseConstraintKind, runAtomic, runAtomicWrites } from '../ports/database.js';
-import { retryD1Write } from '../lib/d1Retry.js';
+import { retryableD1ErrorCode, retryD1Write } from '../lib/d1Retry.js';
 import type { AtomicWrite, BatchCapability, EngineDb } from '../ports/database.js';
 import type { PresenceTracker } from '../ports/presence.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
@@ -51,11 +51,17 @@ import {
 import { serializeNodeOp } from './nodeLock.js';
 import {
   ACTION_DISPATCH_TIMEOUT_MS,
+  applyNodeInvocationResult,
   completeNodeInvocation,
   dispatchCapacitySpawn,
+  nodeResultRejectionCode,
+  releaseSpawnReservationBeforeDetach,
+  requeueEvent,
   rescheduleInvocationsForLostNode,
   rescheduleNodeInvocation,
 } from './action.js';
+import { appendInvocationEvents, invocationEvent, invocationTouchedNode, recordInvocationEvent } from './invocationEvents.js';
+import type { NodeResultOutcome } from './action.js';
 import { emitInvocationCompletionEffects, emitAgentExitedEffects, emitNodeStatusEffects, fleetInvocationId } from './invocationCompletion.js';
 import type { InvocationCompletionDeps, NodeOfflineReason } from './invocationCompletion.js';
 import { ackDeliveriesUpToSeq, deliverPendingToNode } from './delivery.js';
@@ -1194,7 +1200,11 @@ export async function settleNodeOffline(
         : []),
     ));
 
-  await rescheduleInvocationsForLostNode(db, registry, workspaceId, nodeId, { claimRevision });
+  await rescheduleInvocationsForLostNode(db, registry, workspaceId, nodeId, {
+    claimRevision,
+    offlineReason: opts.reason,
+    completionDeps: opts.deps,
+  });
 
   if (opts.deps && opts.before && opts.before.status === 'online') {
     await emitNodeStatusEffects(opts.deps, workspaceId, {
@@ -2441,11 +2451,13 @@ export async function recoverAgentViaNode(
     }
     try {
       const now = new Date().toISOString();
-      const fleetMetadata = sql`json_object(
+      // Patch the nested `metadata.fleet` correlation that registration writes
+      // and spawn lookups read (`fleetInvocationId`), not the metadata root.
+      const fleetMetadata = sql`json_object('fleet', json_object(
         'node_id', ${nodeId},
         'invocation_id', ${message.invocation_id ?? null},
         'registered_at', ${now}
-      )`;
+      ))`;
       const [result] = await tx
         .update(agents)
         .set({
@@ -2897,7 +2909,7 @@ export async function reconcileInventory(
         invocation_id: item.invocation_id ?? null,
         session_ref: item.session_ref ?? null,
       },
-    }, completionDeps);
+    }, completionDeps, { source: 'inventory_sync' });
     if (completed) {
       completedInvocations++;
       if (completionDeps) {
@@ -2981,10 +2993,16 @@ export async function reconcileInventory(
     // Actual provider disconnect and invocation expiry retain their own recovery.
     if (liveInvocationIds.has(invocation.id) || requiresSpawnReadiness(invocation.input)) continue;
     try {
-      if (await rescheduleNodeInvocation(db, registry, invocation)) {
+      if (await rescheduleNodeInvocation(db, registry, invocation, { reason: 'inventory_missing', completionDeps })) {
         rescheduledInvocations++;
       }
     } catch {
+      // Return a slot this dispatch still holds before detaching it from the
+      // node; if that fails too, keep the dispatch for a later sync or sweep.
+      if (!await releaseSpawnReservationBeforeDetach(db, invocation, nodeId, [
+        eq(actionInvocations.dispatchedProvider, providerName),
+        inArray(actionInvocations.status, ['pending', 'dispatched']),
+      ])) continue;
       await db
         .update(actionInvocations)
         .set({
@@ -2993,8 +3011,19 @@ export async function reconcileInventory(
           dispatchedProvider: null,
           dispatchedAt: null,
           retryAfterAt: new Date(Date.now() + 5_000),
+          events: appendInvocationEvents(requeueEvent(invocation, 'inventory_missing')),
         })
-        .where(eq(actionInvocations.id, invocation.id));
+        // Only the dispatch this sync observed: a reschedule that threw after
+        // the row settled or moved must not clear (or vouch for) another one.
+        .where(and(
+          eq(actionInvocations.workspaceId, workspaceId),
+          eq(actionInvocations.id, invocation.id),
+          eq(actionInvocations.dispatchedNodeId, nodeId),
+          eq(actionInvocations.dispatchedProvider, providerName),
+          // Never detach a dispatch that still holds a slot nothing could then return.
+          isNull(actionInvocations.spawnReservedAt),
+          inArray(actionInvocations.status, ['pending', 'dispatched']),
+        ));
     }
   }
 
@@ -3308,15 +3337,115 @@ function sendControl(socket: NodeSocketLike | undefined, payload: Record<string,
   }
 }
 
+/**
+ * Note on the invocation's timeline that an agent registered through this
+ * node naming it. Only invocations this node was placed on or dispatched to
+ * are annotated. Best-effort.
+ */
+async function recordAgentRegisteredForInvocation(
+  args: HandleNodeControlMessageArgs,
+  message: { invocation_id?: string; name: string },
+  agentId: string,
+  recovered = false,
+): Promise<void> {
+  if (!message.invocation_id) return;
+  await recordInvocationEvent(
+    args.db,
+    args.workspaceId,
+    message.invocation_id,
+    invocationEvent('agent_registered', {
+      node_id: args.nodeId,
+      agent_id: agentId,
+      agent_name: message.name,
+      ...(recovered ? { reason: 'recovered' } : {}),
+    }),
+    [invocationTouchedNode(args.nodeId)],
+  );
+}
+
+/** Best-effort read of a raw frame's correlation fields, even when it fails the schema. */
+function peekFrame(raw: string): { id?: string; type?: string; invocationId?: string } {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return {};
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const frame = value as { id?: unknown; type?: unknown; invocation_id?: unknown };
+  return {
+    ...(typeof frame.id === 'string' && frame.id ? { id: frame.id } : {}),
+    ...(typeof frame.type === 'string' ? { type: frame.type } : {}),
+    ...(typeof frame.invocation_id === 'string' && frame.invocation_id ? { invocationId: frame.invocation_id } : {}),
+  };
+}
+
+/**
+ * A malformed `action.result` that still names an invocation id is recorded
+ * on that invocation's timeline (only if this node was placed on or
+ * dispatched to it), so a result lost to a schema error is visible.
+ */
+async function recordMalformedActionResult(args: HandleNodeControlMessageArgs, err: unknown): Promise<void> {
+  const frame = peekFrame(args.raw);
+  if (frame.type !== 'action.result' || !frame.invocationId) return;
+  const issue = err instanceof Error ? err.message.replace(/\s+/g, ' ') : 'invalid frame';
+  await recordInvocationEvent(
+    args.db,
+    args.workspaceId,
+    frame.invocationId,
+    invocationEvent('result_rejected', { node_id: args.nodeId, reason: 'invalid_payload', error: issue }),
+    [invocationTouchedNode(args.nodeId)],
+  );
+}
+
+/**
+ * Record that a node's `action.result` was refused before it could be applied
+ * (for example under database pressure), so the invocation's explanation says
+ * so instead of the result vanishing. For socket owners that refuse a frame
+ * before handing it to {@link handleNodeControlMessage}, such as a host whose
+ * liveness deadline expired. Only invocations this node was placed on or
+ * dispatched to are annotated. Best-effort; returns whether it recorded.
+ */
+export async function recordNodeFrameRefused(args: {
+  db: HandleNodeControlMessageArgs['db'];
+  workspaceId: string;
+  nodeId: string;
+  raw: string;
+  /** Refusal code sent to the node, e.g. `d1_pressure`. */
+  reason: string;
+  provider?: string;
+}): Promise<boolean> {
+  const frame = peekFrame(args.raw);
+  if (frame.type !== 'action.result' || !frame.invocationId) return false;
+  return recordInvocationEvent(
+    args.db,
+    args.workspaceId,
+    frame.invocationId,
+    invocationEvent('result_refused', {
+      node_id: args.nodeId,
+      reason: args.reason,
+      ...(args.provider ? { provider: args.provider } : {}),
+    }),
+    [invocationTouchedNode(args.nodeId)],
+  );
+}
+
+/** How long a node should wait before resending a result refused under database pressure. */
+export const NODE_RESULT_RETRY_AFTER_SECONDS = 5;
+/** Attempts to apply a node result through transient database errors before refusing it. */
+const NODE_RESULT_APPLY_ATTEMPTS = 3;
+
 /** Validate and serialize an authenticated node frame, replying only after its effects. */
 export async function handleNodeControlMessage(args: HandleNodeControlMessageArgs) {
   let message: FleetBrokerToRelaycastMessage;
   try {
     message = parseFleetBrokerToRelaycastMessage(JSON.parse(args.raw));
   } catch (err) {
+    await recordMalformedActionResult(args, err);
     sendControl(args.socket, {
       v: 1,
-      id: generateId(),
+      // Echo the frame's own id when it has one so the node can match it.
+      id: peekFrame(args.raw).id ?? generateId(),
       type: 'error',
       ok: false,
       code: 'invalid_message',
@@ -3569,6 +3698,8 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           ok: true,
           data: registered,
         });
+        // After the reply, so the timeline write never delays registration.
+        await recordAgentRegisteredForInvocation(args, message, registered.agent_id);
         if (!replySent) return;
         args.registry.markProviderAgentsDeliveryReady?.(
           args.workspaceId,
@@ -3604,6 +3735,7 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           ok: true,
           data: recovered,
         });
+        await recordAgentRegisteredForInvocation(args, message, recovered.agent_id, true);
         if (!replySent) return;
         args.registry.markProviderAgentsDeliveryReady?.(
           args.workspaceId,
@@ -3730,21 +3862,98 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           }
           return;
         }
-        const completed = await completeNodeInvocation(
-          args.db,
-          args.registry,
-          args.workspaceId,
-          args.nodeId,
-          frameProviderName,
-          message.invocation_id,
-          {
-            ...(Object.prototype.hasOwnProperty.call(message, 'output') ? { output: message.output } : {}),
-            ...(message.error ? { error: message.error } : {}),
-          },
-          args.completionDeps,
-        );
-        if (completed && args.completionDeps) {
-          await emitInvocationCompletionEffects(args.completionDeps, args.workspaceId, completed);
+        let outcome: NodeResultOutcome;
+        // A transient D1 failure must not drop the result: retry it here,
+        // bounded, but only while no write that is unsafe to repeat (capacity
+        // accounting, rescheduling) has run. After one has, surface the error
+        // as before rather than re-run it.
+        const progress = { mutated: false };
+        for (let attempt = 1; ; attempt += 1) {
+          try {
+            outcome = await applyNodeInvocationResult(
+              args.db,
+              args.registry,
+              args.workspaceId,
+              args.nodeId,
+              frameProviderName,
+              message.invocation_id,
+              {
+                ...(Object.prototype.hasOwnProperty.call(message, 'output') ? { output: message.output } : {}),
+                ...(message.error ? { error: message.error } : {}),
+              },
+              args.completionDeps,
+              { progress },
+            );
+            break;
+          } catch (err) {
+            if (progress.mutated || !retryableD1ErrorCode(err)) throw err;
+            if (attempt < NODE_RESULT_APPLY_ATTEMPTS) {
+              await new Promise((resolve) => setTimeout(resolve, 50 * 2 ** (attempt - 1)));
+              continue;
+            }
+            // Still under pressure and nothing applied: tell the node to
+            // resend (agent-relay brokers already retry a tracked frame on
+            // d1_pressure) and leave a trace on the invocation.
+            await recordNodeFrameRefused({
+              db: args.db,
+              workspaceId: args.workspaceId,
+              nodeId: args.nodeId,
+              raw: args.raw,
+              reason: 'd1_pressure',
+              provider: frameProviderName,
+            });
+            sendControl(args.socket, {
+              v: 1,
+              id: requestId(message),
+              type: 'error',
+              ok: false,
+              code: 'd1_pressure',
+              message: `action.result for invocation ${message.invocation_id} was not applied under database pressure;`
+                + ` resend it (retry after ${NODE_RESULT_RETRY_AFTER_SECONDS} s)`,
+            });
+            return;
+          }
+        }
+        if (outcome.completed && args.completionDeps) {
+          await emitInvocationCompletionEffects(args.completionDeps, args.workspaceId, outcome.completed);
+        }
+        if (outcome.rejection && !outcome.rejection.benign) {
+          // Nodes have never received a reply to a short action.result, so a
+          // dropped result used to be invisible on both sides. Name the reason
+          // in the existing error frame shape so it reaches the node's logs.
+          console.warn('[node.control] action.result not applied', {
+            workspaceId: args.workspaceId,
+            nodeId: args.nodeId,
+            provider: frameProviderName,
+            invocationId: message.invocation_id,
+            reason: outcome.rejection.reason,
+          });
+          sendControl(args.socket, {
+            v: 1,
+            id: requestId(message),
+            type: 'error',
+            ok: false,
+            code: nodeResultRejectionCode(outcome.rejection.reason),
+            message: outcome.rejection.message,
+          });
+        } else if (message.id) {
+          // Explicit acknowledgement for a correlated result, so a node that
+          // resends until acknowledged can stop. `data` deliberately carries
+          // no `name`: brokers correlate name-bearing replies to pending
+          // agent registrations.
+          sendControl(args.socket, {
+            v: 1,
+            id: message.id,
+            type: 'reply',
+            ok: true,
+            data: {
+              invocation_id: message.invocation_id,
+              // `requeued`: the report was taken (the node need not resend),
+              // and the invocation moved to another attempt rather than settling.
+              outcome: outcome.rejection ? 'already_applied' : outcome.requeued ? 'requeued' : 'applied',
+              ...(outcome.completed ? { status: outcome.completed.status } : {}),
+            },
+          });
         }
         return;
       }

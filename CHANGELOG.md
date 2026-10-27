@@ -16,7 +16,18 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
+
+### Added
+
+- `GET /v1/actions/{name}/invocations/{id}` returns the invocation's lifecycle timeline (`events`), a one-sentence `explanation`, and the agent registered for a spawn (`registered_agent`), so a caller can see where a spawn got to and why its result was or was not applied.
+- A node whose `action.result` is not applied now receives an `error` frame naming the reason (`action_result_<reason>`) instead of silence; a result that carries an `id` is acknowledged with a `reply` (`applied` / `already_applied`).
+- A result that cannot be applied under database pressure is retried internally and, if still refused, answered with a correlated `d1_pressure` error so the node resends it; the refusal appears on the invocation's timeline. Error frames echo the triggering frame's `id`.
+
+### Changed
+
+- A spawn whose agent already registered is settled as started with that agent instead of being requeued and launched again; a spawn's successful result from its last node is applied after a requeue.
+- A `verify_ready` spawn whose agent has registered is no longer requeued by the 30-second dispatch timeout while the node waits up to 90 seconds for harness readiness, so the node's held result is applied instead of dropped.
 
 ### Fixed
 

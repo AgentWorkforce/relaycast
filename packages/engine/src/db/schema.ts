@@ -11,7 +11,7 @@ import {
 } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
-import type { FleetCapability, FleetTaskContext, WorkspaceProvenance } from '@relaycast/types';
+import type { ActionInvocationEvent, FleetCapability, FleetTaskContext, WorkspaceProvenance } from '@relaycast/types';
 
 export interface TaskInvocationState extends FleetTaskContext {
   deadline: string;
@@ -1177,6 +1177,10 @@ export const actionInvocations = sqliteTable(
     // cleared when connectivity recovers. Failure requires CONTINUOUS
     // unreachability for the TTL, giving handler restarts a real grace window.
     handlerUnreachableSince: integer('handler_unreachable_since', { mode: 'timestamp' }),
+    // Bounded, append-only lifecycle timeline (newest last). Written in the same
+    // UPDATE as each state transition it records, so it never disagrees with
+    // the row; see engine/invocationEvents.ts.
+    events: text('events', { mode: 'json' }).$type<ActionInvocationEvent[]>().notNull().default([]),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
     completedAt: integer('completed_at', { mode: 'timestamp' }),
   },
