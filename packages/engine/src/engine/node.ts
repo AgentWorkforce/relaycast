@@ -3639,6 +3639,14 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           message.agents,
           args.completionDeps,
         );
+        // An agent the node had dropped and is routing again is a new hosting
+        // episode. Clear a presence-only disconnect so node liveness can count
+        // them without an HTTP heartbeat. An agent the snapshot already
+        // routed keeps the hold: still being listed is not recovery.
+        if (args.presence?.clearExplicitDisconnect && result.newlyRoutedAgentIds.length > 0) {
+          await Promise.all(result.newlyRoutedAgentIds.map((agentId) =>
+            args.presence!.clearExplicitDisconnect!(args.workspaceId, agentId)));
+        }
         const replySent = sendControl(args.socket, {
           v: 1,
           id: requestId(message),
