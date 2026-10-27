@@ -1296,6 +1296,12 @@ RELAY_SERVER_URL=http://localhost:8787 npm run -w @relaycast/observer-dashboard 
 
 Then open `http://localhost:3100`.
 
+The hosted dashboard runs as a Cloudflare Worker built with the [OpenNext adapter](https://opennext.js.org/cloudflare). The `relaycast-observer-router` worker serves it on `observer.relaycast.dev` through a service binding. To preview the Worker build locally:
+
+```bash
+npm run -w @relaycast/observer-dashboard preview
+```
+
 ## Engine Hooks
 
 The engine exposes optional typed domain observations through `EngineDeps.telemetry`,
