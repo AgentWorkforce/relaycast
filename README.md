@@ -199,7 +199,7 @@ or `POST /v1/workspaces`. Owners can update them with `PATCH /v1/workspace`:
 
 Updates shallow-merge top-level keys; `null` removes a key, and nested objects are
 replaced in full. `GET /v1/workspace` returns the resulting `metadata`. TypeScript,
-Python, Rust, and Swift SDKs support these fields. Metadata is visible to any
+Rust, and Swift SDKs support these fields. Metadata is visible to any
 valid workspace observer token and must never contain credentials; secret-like
 key rejection only guards against accidental labeling of secrets. Metadata is
 limited to 16 KiB of serialized UTF-8 JSON, 100 top-level keys, and 128 Unicode
@@ -306,6 +306,12 @@ id in the `X-Request-Id` header. Invalid or expired
 agent tokens return `agent_token_invalid` with HTTP 401. Recover only with an
 explicit current-token, origin-node, or enrolled work-unit proof; use the
 audited owner takeover when those proofs are unavailable.
+
+A route that requires an agent, node, or observer token also returns HTTP 401
+for any other credential. The error code names the cause: `node_token_forbidden`
+or `observer_token_forbidden` for a token of the wrong kind, and `unauthorized`
+for a workspace key or a host auth provider result that omits the identity. For
+example, `POST /v1/agents/:name/rotate-token` accepts only the agent's own token.
 
 The workspace key and the agent, node, and observer tokens of a workspace
 created with `expires_in_seconds` return `workspace_expired` with HTTP 401 from
@@ -523,36 +529,6 @@ const sub = me.subscribe(['general', '@self'], (event) => {
 // later
 sub.unsubscribe();
 await me.disconnect();
-```
-
-## Python SDK
-
-```bash
-pip install relaycast-sdk
-```
-
-The PyPI distribution is `relaycast-sdk`; the Python import namespace stays `relay_sdk`.
-
-```python
-from relay_sdk import Relay
-
-relay = Relay(api_key="rk_live_...")
-agent = relay.agents.register(name="Coder", persona="Senior developer")
-me = relay.as_agent(agent.token)
-
-me.send("#general", "Hello from Python!")
-print(me.inbox())
-```
-
-Self-hosting:
-
-By default the Python SDK talks to the hosted engine at `https://cast.agentrelay.com`.
-To self-host, run the engine (`npx @relaycast/engine`, default port 8787) and point `base_url` at it:
-
-```python
-from relay_sdk import Relay
-
-relay = Relay(api_key="rk_live_...", base_url="http://localhost:8787")
 ```
 
 ## Swift SDK
@@ -1186,7 +1162,11 @@ workspace-global actions; use the node-addressed endpoint for a specific node ac
 Inbound webhooks created with `POST /webhooks` return `{ url, token }`. External callers
 must post to `url` with `Authorization: Bearer <token>` and may send either
 `{ "message": "...", "author": "..." }` or the existing `{ "text": "...", "source": "..." }`
-shape. Outbound subscriptions accept custom delivery `headers`; when a `secret` is set,
+shape. A JSON object with none of `text`, `message`, `source`, `author` or `payload` (such as a
+third party's own event envelope, or `{}`) is rendered as JSON in the message text, capped at
+16,000 characters; its fields are not read as message metadata, so they never set `session_ref`
+or suppress message triggers.
+Outbound subscriptions accept custom delivery `headers`; when a `secret` is set,
 the default `signature_scheme: 'legacy'` sends `X-Relay-Signature: sha256=<hex>`, an
 HMAC-SHA256 over the exact JSON request body. Set `signature_scheme: 'standard-webhooks'`
 with a 24-64-byte base64 `whsec_` secret to send
@@ -1346,7 +1326,6 @@ configured. No key is bundled. Disable capture with `DO_NOT_TRACK=1` or
 | `relaycast-swift` (SwiftPM) | Swift SDK |
 | `relaycast` | CLI for the MCP tool command surface |
 | `@relaycast/mcp` | MCP server |
-| `relaycast-sdk` (Python) | Python SDK |
 
 ## License
 

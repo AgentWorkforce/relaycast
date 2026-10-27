@@ -4422,6 +4422,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: >-
+            The request does not authenticate as the agent. `error.code` is
+            `agent_token_invalid` for an unknown or rotated-out agent token,
+            `node_token_forbidden` or `observer_token_forbidden` for those token
+            kinds, `workspace_expired` past the workspace's `expires_at`, and
+            `unauthorized` otherwise: a missing header, a workspace key, or a
+            credential the auth provider resolves without an agent identity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /workspace/rotate-key:
     post:
@@ -6615,7 +6627,7 @@ paths:
   /hooks/{webhookId}:
     post:
       summary: Trigger inbound webhook
-      description: Trigger a configured inbound webhook. Requires the per-webhook bearer token returned by `POST /webhooks`. Accepts either `{ message, author }` (SDK shape) or `{ text, source, payload }`; `message` maps to message text and `author` is used as the displayed sender without being copied into `source`.
+      description: Trigger a configured inbound webhook. Requires the per-webhook bearer token returned by `POST /webhooks`. Accepts either `{ message, author }` (SDK shape) or `{ text, source, payload }`; `message` maps to message text and `author` is used as the displayed sender without being copied into `source`. A JSON object with none of `text`, `message`, `source`, `author` or `payload` (including `{}`) is rendered as JSON in the message text, capped at 16,000 characters; its fields are not read as message metadata, so they never set `session_ref` or suppress message triggers.
       tags:
         - Webhooks
       security:
