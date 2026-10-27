@@ -68,7 +68,7 @@ describe('workspace creation attribution', () => {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-relaycast-origin-client': '@relaycast/sdk-python',
+        'x-relaycast-origin-client': '@relaycast/sdk',
       },
       body: JSON.stringify({ name: 'sdk-attributed' }),
     });

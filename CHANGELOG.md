@@ -26,6 +26,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - `Workspace.plan` is gone from the API, `@relaycast/types`, and the Rust and Swift SDKs; migration `0077` drops the `workspaces.plan` column.
 - The engine no longer returns `plan_limit_exceeded`; a hosting deployment's admission policy returns its own codes.
+- The Python SDK (`relaycast-sdk`) is no longer developed or published from this repository.
 
 ## [11.1.0] - 2026-10-27
 
@@ -66,6 +67,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Inbox mention lookup uses a workspace-scoped index after its bounded backfill completes; delivery sweeps and per-node agent reads avoid full-history scans that stalled the shared database and surfaced as `database_overloaded`.
 - Every response includes its request id in the `X-Request-Id` header.
+- Raw JSON inbound webhook bodies (including `{}`) appear in the delivered message instead of a generic event line. Their fields are rendered as text only and never read as message metadata.
 
 ## [10.6.3] - 2026-10-19
 
