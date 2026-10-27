@@ -608,7 +608,6 @@ export async function getWorkspace(
   return {
     id: workspace.id,
     name: workspace.name,
-    plan: workspace.plan,
     system_prompt: workspace.systemPrompt,
     created_at: workspace.createdAt.toISOString(),
     metadata: workspace.metadata,

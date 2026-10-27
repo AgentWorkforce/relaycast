@@ -8,12 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [Unreleased - Minor]
+## [Unreleased - Major]
 
 ### Added
 
 - Optional `EngineDeps.diagnostics` (`EngineDiagnostics`) receives operation timing (`inbox.get`, `deliveries.list`, `workspace.delete`, `invocations.sweep`, `backfill.mention_fts`) and backfill progress. Each app reports only to its own sink, and callbacks may be async. `currentEngineOperation()` lets a host's database wrapper attribute statement cost to the operation in flight; `configureEngineDiagnostics()` sets a host fallback, used by maintenance that runs outside any app and by apps built without a sink. `runWithEngineDiagnostics(sink, fn)` runs host work (a queue or cron handler) against a specific sink, as `createEngine` does per request, and `engineOperationOf(error)` returns the operation an error was thrown inside. Absent by default; no migration is needed.
 - Unhandled 5xx errors now report `workspace_id`, `agent_id`, `engine_operation` and the matched `route` template in the error log and `captureException` context.
+- `AdmissionHooks` (`EngineDeps.admission`, `createNodeRuntime({ admission })`, `startServer({ admission })`): `admit({ workspace, action })` refuses a `request` or `message` with an `AdmissionDenial` (`status`, `code`, `message`, `details`, `retryAt`); `committed(ctx)` reports each successful, non-replayed action; `rateLimitPerMinute(workspace)` overrides the per-minute ceiling. A hook that throws admits the request. A denied keyed message send still replays its stored receipt.
+- `EngineConfig.rateLimitPerMinute` (default 30,000).
+
+### Removed
+
+- `EntitlementsProvider`, `PlanLimits`, `UpgradeGuidance`, `UsageMetric`, `StaticEntitlementsProvider`, `PLAN_LIMITS`, the `checkPlanLimit` / `checkMessageAllowance` middleware, and the usage-counter helpers (`usageCounterKey`, `getUsageMetric`, `lifetimeUsageCounterKey`, `getLifetimeUsageMetric`, `usagePeriod`, `usagePeriodResetAt`). The engine no longer writes `usage:*` KV counters. `KeyValueStore.increment` is removed; the port is `get`/`put`/`delete`.
+- The `workspaces.plan` column (migration `0077_drop_workspace_plan.sql`). A host that keeps tiers must copy the column into its own storage before applying it.
+- `WorkspaceDeliveryPolicyConfig.resolve` receives `{ id }`; it no longer gets `plan`.
 
 ### Changed
 
