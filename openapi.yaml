@@ -2685,7 +2685,12 @@ paths:
       description: >-
         Update agent properties. Platform-managed metadata keys such as
         `identity_key` are rejected; use the dedicated legacy identity claim
-        endpoint for the one supported backfill operation.
+        endpoint for the one supported backfill operation. A `status` write
+        does not renew `last_seen`. The response `status` is derived presence,
+        and workspace WebSocket plus outbound webhook subscribers receive that
+        same value as `agent.status.<status>`. Persisted `active` or legacy
+        `online` older than the five-minute TTL is `offline`, so patching a
+        stale agent to `active` returns and emits `offline`.
       tags:
         - Agents
       security:
@@ -2702,6 +2707,15 @@ paths:
             schema:
               type: object
               properties:
+                status:
+                  type: string
+                  enum: [active, idle, blocked, waiting, offline, online]
+                  description: >-
+                    Requested lifecycle status. `online` is reported as
+                    `active` when `last_seen` is inside the five-minute TTL.
+                    The write does not renew `last_seen`; a stale `active` or
+                    `online` row is returned and broadcast as `offline`
+                    (`agent.status.offline`).
                 persona:
                   type: string
                 metadata:
