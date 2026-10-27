@@ -1,5 +1,6 @@
 import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
+import { carryEngineOperation } from './engineDiagnostics.js';
 import { jsonError, jsonMalformedBody } from './httpResponse.js';
 import { PlanLimitExceededError } from './planLimitError.js';
 
@@ -28,6 +29,7 @@ export function asCodedError(err: unknown): CodedError {
     const message = 'message' in err ? String((err as { message: unknown }).message) : 'Unknown error';
     const error = Object.assign(new Error(message), err);
     error.message = message;
+    carryEngineOperation(err, error);
     return error as CodedError;
   }
   return new Error(typeof err === 'string' ? err : 'Unknown error');

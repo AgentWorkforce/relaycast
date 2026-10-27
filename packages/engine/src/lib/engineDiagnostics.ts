@@ -49,6 +49,16 @@ export function engineOperationOf(error: unknown): EngineOperationLabel | undefi
   return typeof error === 'object' && error !== null ? operationLabels.get(error) : undefined;
 }
 
+/**
+ * Give `to` the operation label of `from`, for code that wraps a thrown value
+ * in a new error (a plain-object rejection becomes an `Error`), so the request
+ * error path still reports the operation.
+ */
+export function carryEngineOperation(from: unknown, to: object): void {
+  const label = engineOperationOf(from);
+  if (label !== undefined && !operationLabels.has(to)) operationLabels.set(to, label);
+}
+
 function isolate(callback: () => unknown): void {
   // A host callback must never alter engine behavior, sync or async.
   try {

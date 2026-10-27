@@ -66,6 +66,22 @@ describe('engine diagnostics', () => {
     expect(operations).toContainEqual(expect.objectContaining({ label: 'inbox.get', outcome: 'error' }));
   });
 
+  it('keeps the operation when a plain-object rejection is wrapped into an Error', async () => {
+    const ws = await createWorkspace(stack.app, 'diagnostics-plain-rejection');
+    const agent = await registerAgent(stack.app, ws.workspaceKey, 'diag-plain-rejection');
+    // A database adapter that rejects with a non-Error object.
+    const db = Object.create(stack.runtime.deps.db) as EngineDb & { all: unknown };
+    db.all = () => Promise.reject({ message: 'adapter failure' });
+    const captureException = vi.fn();
+    const app = appWithDiagnostics({ db, captureException });
+    const response = await app.request('/v1/inbox', { headers: { authorization: `Bearer ${agent.token}` } });
+    expect(response.status).toBe(500);
+    await stack.settle();
+    expect(captureException).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      engine_operation: 'inbox.get',
+    }));
+  });
+
   it('reports backfill progress through to completion', async () => {
     // Maintenance runs outside any app request: hosts configure the fallback sink.
     configureEngineDiagnostics({
