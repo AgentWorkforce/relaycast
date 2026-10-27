@@ -21,7 +21,8 @@ import {
   parseFleetBrokerToRelaycastMessage,
 } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
-import { actionInvocations, agents, agentNodeBindings, channelMembers, channels, nodeProviders, nodes } from '../db/schema.js';
+import { actionInvocations, agents, agentNodeBindings, channelMembers, channels, nodeProviders, nodes, workspaces } from '../db/schema.js';
+import { isWorkspaceExpired, WORKSPACE_EXPIRED_CODE, WORKSPACE_EXPIRED_MESSAGE } from '../auth/workspaceExpiry.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { acceptTaskInvocation, completeTaskInvocation } from './taskInvocation.js';
@@ -3309,6 +3310,23 @@ function sendControl(socket: NodeSocketLike | undefined, payload: Record<string,
 }
 
 /** Validate and serialize an authenticated node frame, replying only after its effects. */
+/**
+ * A node socket authenticates once, at upgrade. A workspace deleted (or past
+ * its deadline) afterwards keeps that socket, and a large workspace is drained
+ * in steps with its nodes last, so frames that create identity must re-check:
+ * otherwise a connected node registers agents into a workspace being deleted.
+ */
+async function assertWorkspaceUnexpired(db: EngineDb, workspaceId: string): Promise<void> {
+  const [row] = await db
+    .select({ expiresAt: workspaces.expiresAt })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+  if (!row || isWorkspaceExpired(row)) {
+    throw codedError(WORKSPACE_EXPIRED_MESSAGE, WORKSPACE_EXPIRED_CODE, 401);
+  }
+}
+
 export async function handleNodeControlMessage(args: HandleNodeControlMessageArgs) {
   let message: FleetBrokerToRelaycastMessage;
   try {
@@ -3349,6 +3367,11 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
   // check, the provider-row upsert, or the aggregate recompute.
   return serializeNodeOp(args.workspaceId, args.nodeId, async () => {
   try {
+    // Only identity-creating frames: heartbeats are the hot path, and a
+    // heartbeat into a deleted workspace creates nothing.
+    if (message.type === 'node.register' || message.type === 'agent.register') {
+      await assertWorkspaceUnexpired(args.db, args.workspaceId);
+    }
     switch (message.type) {
       case 'node.register': {
         const provider = resolveProviderIdentity(message, args.connectionId);

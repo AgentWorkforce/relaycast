@@ -56,6 +56,13 @@ const DRAIN_STEPS: readonly DrainStep[] = [
   { table: 'session_events', chunk: 500 },
   { table: 'action_invocations', chunk: 500 },
   { table: 'usage_records', chunk: 500 },
+  // Append-only history that outlives message retention and agent deletion.
+  { table: 'message_sessions', chunk: 500 },
+  { table: 'agent_identity_audit', chunk: 500 },
+  { table: 'direct_dm_idempotency', chunk: 500 },
+  { table: 'routing_failures', chunk: 500 },
+  { table: 'a2a_inbound', chunk: 500 },
+  { table: 'a2a_egress', chunk: D1_SAFE_IN_QUERY_CHUNK_SIZE, children: [{ table: 'a2a_egress_context', key: 'id' }] },
   // One webhook delivery per (event, matching subscription).
   { table: 'pending_events', chunk: D1_SAFE_IN_QUERY_CHUNK_SIZE, children: [{ table: 'webhook_deliveries', key: 'event_id' }] },
   // Per-message fan-out (one receipt per reader). Deleting a message fires
@@ -91,6 +98,11 @@ const DRAIN_STEPS: readonly DrainStep[] = [
   },
   { table: 'nodes', chunk: 200 },
 ];
+
+/** Tables the drain pages through, children included (for coverage checks). */
+export function drainedWorkspaceTables(): string[] {
+  return DRAIN_STEPS.flatMap(step => [step.table, ...(step.children ?? []).map(child => child.table)]);
+}
 
 // Names below are the constants above, never input.
 
@@ -191,10 +203,17 @@ export async function drainWorkspaceRows(
   const duty = Math.min(Math.max(options.dutyCycle ?? WORKSPACE_DRAIN_DUTY_CYCLE, 0.05), 1);
   let rows = 0;
 
+  // The deadline stops a call only once it has deleted something. Every call
+  // re-checks the already-empty tables first; were those cheap probes allowed
+  // to spend a short slice (the reaper splits its budget across workspaces),
+  // a call could end before reaching the rows left, and every later call the
+  // same way. The overrun is bounded: at most one probe per step plus a page.
+  const spent = () => rows > 0 && now() >= deadline;
+
   // One paced, deadline-checked statement. Returns rows deleted, or null when
   // the budget is spent before it could run.
   const run = async (table: string, rowids: ReturnType<typeof sql>): Promise<number | null> => {
-    if (now() >= deadline) return null;
+    if (spent()) return null;
     const started = now();
     const deleted = await db.all(sql`DELETE FROM ${sql.raw(table)} WHERE rowid IN (${rowids}) RETURNING 1`);
     const elapsed = now() - started;
@@ -213,7 +232,7 @@ export async function drainWorkspaceRows(
 
   for (const step of DRAIN_STEPS) {
     for (;;) {
-      if (now() >= deadline) return { complete: false, rows };
+      if (spent()) return { complete: false, rows };
       let deleted: number | null;
       let pageSize: number;
       if (step.children) {

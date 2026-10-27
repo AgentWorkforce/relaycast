@@ -4,12 +4,14 @@ import { configureEngineDiagnostics } from '../../lib/engineDiagnostics.js';
 import type { EngineProgressSample } from '../../ports/diagnostics.js';
 import { messages, workspaceCreateIdempotency, workspaceEvents, workspaces } from '../../db/schema.js';
 import { reapExpiredWorkspaces } from '../../engine/workspace.js';
+import { handleNodeControlMessage } from '../../node-control.js';
 import {
+  drainedWorkspaceTables,
   drainWorkspaceRows,
   exceedsAtomicDeleteSize,
   WORKSPACE_ATOMIC_DELETE_MAX_ROWS,
 } from '../../engine/workspaceDrain.js';
-import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
+import { createWorkspace, FakeSocket, makeNodeStack, registerAgent, type TestStack } from './harness.js';
 
 describe('bounded workspace deletion', () => {
   let stack: TestStack;
@@ -55,6 +57,79 @@ describe('bounded workspace deletion', () => {
   const count = (table: string, workspaceId: string) =>
     (stack.runtime.handle.sqlite.prepare(`SELECT count(*) AS n FROM ${table} WHERE workspace_id = ?`)
       .get(workspaceId) as { n: number }).n;
+
+  it('drains every table that grows with a workspace, leaving only bounded ones to the final cascade', () => {
+    // Per-workspace or per-agent configuration: a handful of rows each, so the
+    // final cascade over them stays small. Anything that accumulates history
+    // must be drained instead — add new tables to DRAIN_STEPS, not here.
+    const bounded = new Set([
+      'workspaces', 'workspace_create_idempotency', 'agent_recovery_credentials', 'observer_tokens',
+      'node_providers', 'agent_node_bindings', 'a2a_agents', 'directory_agents', 'directory_skills',
+      'directory_ratings', 'routing_configs', 'certifications', 'dm_conversation_reservations',
+      'webhooks', 'event_subscriptions', 'actions', 'triggers',
+    ]);
+    const sqlite = stack.runtime.handle.sqlite;
+    // Virtual (FTS) tables are maintained by triggers on the tables they index.
+    const tables = (sqlite.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND sql NOT LIKE 'CREATE VIRTUAL TABLE%'",
+    ).all() as { name: string }[])
+      .map(row => row.name)
+      .filter(name => (sqlite.prepare(`SELECT name FROM pragma_table_info('${name}')`).all() as { name: string }[])
+        .some(column => column.name === 'workspace_id'));
+    const drained = new Set(drainedWorkspaceTables());
+    expect(tables.filter(name => !drained.has(name) && !bounded.has(name))).toEqual([]);
+  });
+
+  it('makes progress even when its budget is spent before the first non-empty table', async () => {
+    // Only messages hold rows; every earlier step is an empty probe.
+    const { ws } = await seedLargeWorkspace('bounded-progress', { events: 0 });
+    // Every call's budget is already spent: each must still delete something,
+    // so repeated calls finish the drain instead of re-probing forever.
+    let result = { complete: false, rows: 0 };
+    let calls = 0;
+    while (!result.complete && calls < 200) {
+      result = await drainWorkspaceRows(stack.runtime.deps.db, ws.workspaceId, {
+        deadline: Date.now() - 1, sleep: async () => {},
+      });
+      calls++;
+    }
+    expect(result.complete).toBe(true);
+    expect(count('messages', ws.workspaceId)).toBe(0);
+  });
+
+  it('rejects agent registration from a node socket opened before the workspace was deleted', async () => {
+    const ws = await createWorkspace(stack.app, 'bounded-node-socket');
+    const created = await stack.app.request('/v1/nodes', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ node_id: 'node_deleted_ws', name: 'deleted-ws-broker', role: 'broker', capabilities: [], max_agents: 4 }),
+    });
+    expect(created.status).toBe(201);
+    const socket = new FakeSocket();
+    const send = (frame: Record<string, unknown>) => handleNodeControlMessage({
+      db: stack.runtime.handle.db,
+      registry: stack.runtime.realtime,
+      completionDeps: stack.runtime.deps,
+      workspaceId: ws.workspaceId,
+      nodeId: 'node_deleted_ws',
+      socket,
+      raw: JSON.stringify(frame),
+    });
+    await send({
+      v: 1, id: 'register', type: 'node.register', name: 'deleted-ws-broker', node_id: 'node_deleted_ws',
+      capabilities: [], max_agents: 4, tags: [], version: 'v1', resume_cursor: null,
+    });
+    expect(socket.ofType('reply').at(-1)).toMatchObject({ id: 'register', ok: true });
+
+    // The deferred delete tombstones the workspace; the socket stays open.
+    stack.runtime.handle.sqlite.prepare('UPDATE workspaces SET expires_at = unixepoch() - 1 WHERE id = ?')
+      .run(ws.workspaceId);
+    await send({ v: 1, id: 'agent', type: 'agent.register', name: 'late-agent', session_ref: 'pty://late', resumable: true });
+
+    expect(socket.ofType('error').at(-1)).toMatchObject({ id: 'agent', code: 'workspace_expired' });
+    expect(stack.runtime.handle.sqlite.prepare("SELECT count(*) AS n FROM agents WHERE workspace_id = ? AND name = 'late-agent'")
+      .get(ws.workspaceId)).toEqual({ n: 0 });
+  });
 
   it('keeps small workspaces on the atomic delete', async () => {
     const ws = await createWorkspace(stack.app, 'bounded-small');

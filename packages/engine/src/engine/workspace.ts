@@ -1023,9 +1023,9 @@ export async function reapExpiredWorkspaces(
 
   // One wall-clock budget across the whole batch. Small workspaces go first
   // (one atomic delete each); the rest of the budget is split evenly across
-  // the large ones. Every candidate therefore progresses on every call: an
-  // oldest, huge tenant can neither starve the workspaces behind it nor take
-  // more than the budget (at the drain's duty cycle) of database time.
+  // the large ones. A huge tenant therefore cannot take more than its share of
+  // the budget (at the drain's duty cycle) of database time, and every drain
+  // call it is given deletes at least one page, however short its slice.
   const clock = options.clock ?? Date.now;
   const deadline = clock() + (options.maxDurationMs ?? WORKSPACE_DRAIN_MAX_DURATION_MS);
   // Classifying (and atomically deleting small ones) may use at most half the
