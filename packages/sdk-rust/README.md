@@ -336,12 +336,29 @@ use relaycast::{RelayError, Result};
 async fn example() -> Result<()> {
     match relay.get_agent("nonexistent").await {
         Ok(agent) => println!("Found: {}", agent.name),
-        Err(RelayError::Api { code, message, status }) => {
+        Err(RelayError::Api { code, message, status, .. }) => {
             println!("API error {}: {} (HTTP {})", code, message, status);
         }
         Err(e) => println!("Other error: {}", e),
     }
     Ok(())
+}
+```
+
+`RelayError::details()` returns the server's full JSON error body, including
+fields the typed variant does not model. Workspace admission 429s, for
+example, say whether an upgrade would help:
+
+```rust
+if let Err(err) = relay.get_agent("worker").await {
+    if err.is_rate_limited() {
+        let upgrade = err
+            .details()
+            .and_then(|body| body.get("upgrade_available"))
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        println!("busy; upgrade available: {upgrade}");
+    }
 }
 ```
 

@@ -102,7 +102,7 @@ export function addressNotFound(address: string) {
   return codedError(`No agent at address "${address}"`, 'address_not_found', 404);
 }
 
-/** `{ agent_address }` for a DM message whose persisted metadata carries the sender's address, else `{}`. */
+/** `{ agent_address }` when persisted metadata carries the sender's address, else `{}`. */
 export function senderAddressField(
   metadata: Record<string, unknown> | null | undefined,
 ): { agent_address?: string } {

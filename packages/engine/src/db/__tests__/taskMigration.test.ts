@@ -32,12 +32,21 @@ it('upgrades existing actions and results additively, preserving rows and every 
       '0065_action_invocations_task_deadline_any_status.sql',
       '0066_action_invocations_status_sweep_ranges.sql',
       '0067_webhook_delivery_reliability.sql',
-      '0068_agent_spawned_by.sql',
+      '0068_spawn_canceled_index.sql',
+      '0069_nodes_online_liveness_index.sql',
+      '0070_agent_liveness_status.sql',
+      '0071_node_liveness_revision.sql',
+      '0073_workspace_key_rotation.sql',
+      '0074_delivery_active_location_node_index.sql',
+      '0075_message_mention_fts.sql',
+      '0076_deliveries_agent_status_created_index.sql',
+      '0077_drop_workspace_plan.sql',
+      '0078_agent_spawned_by.sql',
     ]);
     for (const table of before) {
       const columns = db.pragma(`table_info(${table.name})`) as { name: string }[];
       expect(columns.slice(0, table.columns.length)).toEqual(table.columns);
-      expect(columns).toHaveLength(table.columns.length + 1);
+      expect(columns).toHaveLength(table.columns.length + (table.name === 'action_invocations' ? 2 : 1));
       expect(db.pragma(`foreign_key_list(${table.name})`)).toEqual(table.fks);
       expect(db.prepare(`SELECT ${table.columns.map(c => c.name).join(',')} FROM ${table.name}`).all()).toEqual(table.rows);
     }

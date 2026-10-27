@@ -9,7 +9,7 @@ it('adds agents.spawned_by additively, leaving existing agents unowned', () => {
   const db = handle.sqlite;
   try {
     db.exec('CREATE TABLE _engine_migrations(name TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)');
-    for (const name of readdirSync(directory).filter(name => name.endsWith('.sql') && name < '0068').sort()) {
+    for (const name of readdirSync(directory).filter(name => name.endsWith('.sql') && name < '0078').sort()) {
       db.exec(readFileSync(directory + name, 'utf8'));
       db.prepare('INSERT INTO _engine_migrations VALUES (?,0)').run(name);
     }
@@ -19,7 +19,7 @@ it('adds agents.spawned_by additively, leaving existing agents unowned', () => {
     const rows = db.prepare('SELECT * FROM agents').all();
     const fks = db.pragma('foreign_key_list(agents)');
 
-    expect(runMigrations(handle).applied).toEqual(['0068_agent_spawned_by.sql']);
+    expect(runMigrations(handle).applied).toEqual(['0078_agent_spawned_by.sql']);
     const after = db.pragma('table_info(agents)') as { name: string; type: string; notnull: number; dflt_value: unknown }[];
     expect(after.slice(0, columns.length)).toEqual(columns);
     expect(after.slice(columns.length)).toEqual([

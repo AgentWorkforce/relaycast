@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
+import { backfillMessageMentionFts } from '../../engine/inbox.js';
 import { planMigrations } from '../migrationPlan.js';
 
 const directory = fileURLToPath(new URL('../migrations/', import.meta.url));
@@ -48,11 +49,31 @@ function snapshot(handle: SqliteDbHandle) {
   return tables.map(({ name }) => {
     const rows = handle.sqlite.prepare(`SELECT * FROM "${name}"`).all().map(row => {
       // 0056 adds a conservative reconciliation witness and backfills it from
-      // the existing last_seen value, and 0068 adds the NULL spawned_by owner.
-      // Exclude those additive fields so this regression continues to compare
-      // all pre-existing user data.
+      // the existing last_seen value. Exclude that additive bookkeeping field
+      // so this regression continues to compare all pre-existing user data.
+      // 0070 adds a nullable liveness-recovery marker without backfilling it.
+      // 0078 adds the NULL spawned_by owner.
+      if (name === 'workspaces') {
+        // 0073 adds the rotation grace slot and the generation fence as
+        // additive columns, and 0077 drops `plan`; exclude them so this
+        // comparison stays byte-for-byte over every other value.
+        const {
+          plan: _plan,
+          previous_api_key_hash: _previousApiKeyHash,
+          previous_api_key_expires_at: _previousApiKeyExpiresAt,
+          api_key_generation: _apiKeyGeneration,
+          ...existing
+        } = row as Record<string, unknown>;
+        return JSON.stringify(existing);
+      }
       if (name === 'agents') {
-        const { status_updated_at: _statusUpdatedAt, spawned_by: _spawnedBy, ...existing } = row as Record<string, unknown>;
+        const {
+          status_updated_at: _statusUpdatedAt,
+          status_before_liveness_loss: _livenessStatus,
+          node_liveness_revision: _nodeLivenessRevision,
+          spawned_by: _spawnedBy,
+          ...existing
+        } = row as Record<string, unknown>;
         return JSON.stringify(existing);
       }
       // 0063 adds only bounded node-rotation recovery metadata. Exclude those
@@ -65,6 +86,7 @@ function snapshot(handle: SqliteDbHandle) {
           previous_token_expires_at: _previousTokenExpiresAt,
           rotation_idempotency_key_hash: _rotationIdempotencyKeyHash,
           rotation_request_digest: _rotationRequestDigest,
+          liveness_revision: _livenessRevision,
           ...existing
         } = row as Record<string, unknown>;
         return JSON.stringify(existing);
@@ -80,7 +102,9 @@ function constraints(handle: SqliteDbHandle) {
   const db = handle.sqlite;
   const tables = db.prepare("SELECT name,sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != '_engine_migrations' ORDER BY name").all() as { name: string; sql: string }[];
   return tables.map(({ name, sql }) => ({
-    name, sql,
+    name,
+    // 0077 drops `plan`; compare every other workspace column definition.
+    sql: name === 'workspaces' ? sql.replace(/\s*`plan` text DEFAULT 'free' NOT NULL,/, '') : sql,
     foreignKeys: db.pragma(`foreign_key_list("${name}")`),
     uniqueIndexes: (db.pragma(`index_list("${name}")`) as { name: string; unique: number; origin: string; partial: number }[])
       .filter(index => index.unique === 1)
@@ -94,14 +118,16 @@ function constraints(handle: SqliteDbHandle) {
 function expectConstraintsPreserved(before: ReturnType<typeof constraints>, after: ReturnType<typeof constraints>) {
   // 0050 may add these redundant named lookup indexes, but must not alter any
   // original constraint (including a lookup that already existed via 0049).
-  expect(after.filter(table => ![
-    'maintenance_cursors',
-    'a2a_egress',
-    'a2a_egress_context',
-    'a2a_inbound',
-    'direct_dm_idempotency',
-    'webhook_deliveries',
-  ].includes(table.name) || before.some(original => original.name === table.name))
+  expect(after.filter(table => (
+    ![
+      'maintenance_cursors',
+      'a2a_egress',
+      'a2a_egress_context',
+      'a2a_inbound',
+      'direct_dm_idempotency',
+      'webhook_deliveries',
+    ].includes(table.name) && !table.name.startsWith('messages_mention_fts')
+  ) || before.some(original => original.name === table.name))
     .map(table => {
       const original = before.find(candidate => candidate.name === table.name);
       // 0055 adds optional event identity columns and their index after the
@@ -121,7 +147,12 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
         table = { ...table, sql: table.sql.replace(", execution_mode TEXT NOT NULL DEFAULT 'short'", '') };
       }
       if (table.name === 'action_invocations') {
-        table = { ...table, sql: table.sql.replace(', task_state TEXT', '') };
+        table = {
+          ...table,
+          sql: table.sql
+            .replace(', task_state TEXT', '')
+            .replace(', node_liveness_revision INTEGER NOT NULL DEFAULT 0', ''),
+        };
       }
       if (table.name === 'event_subscriptions') {
         table = { ...table, sql: table.sql.replace(", signature_scheme TEXT NOT NULL DEFAULT 'legacy'", '') };
@@ -131,6 +162,18 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
       }
       if (table.name === 'agents' && original) {
         return { ...table, sql: original.sql };
+      }
+      // 0073 appends the rotation grace slot and the generation fence.
+      // Remove only their exact additive DDL so every pre-existing workspace
+      // constraint stays under comparison.
+      if (table.name === 'workspaces') {
+        table = {
+          ...table,
+          sql: table.sql
+            .replace(', previous_api_key_hash TEXT', '')
+            .replace(', previous_api_key_expires_at INTEGER', '')
+            .replace(', api_key_generation INTEGER NOT NULL DEFAULT 0', ''),
+        };
       }
       // 0063 appends four nullable recovery fields. Remove only their exact
       // additive DDL so changes to every pre-existing node constraint remain
@@ -142,7 +185,14 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
             .replace(', previous_token_hash TEXT DEFAULT NULL', '')
             .replace(', previous_token_expires_at INTEGER DEFAULT NULL', '')
             .replace(', rotation_idempotency_key_hash TEXT DEFAULT NULL', '')
-            .replace(', rotation_request_digest TEXT DEFAULT NULL', ''),
+            .replace(', rotation_request_digest TEXT DEFAULT NULL', '')
+            .replace(', liveness_revision INTEGER NOT NULL DEFAULT 0', ''),
+        };
+      }
+      if (table.name === 'node_providers') {
+        table = {
+          ...table,
+          sql: table.sql.replace(', liveness_revision INTEGER NOT NULL DEFAULT 0', ''),
         };
       }
       return {
@@ -164,7 +214,7 @@ describe('compact maintenance migration path', () => {
     expect(handle.sqlite.pragma('foreign_key_check')).toEqual([]);
   });
 
-  it.each([[], [older[0]!], [older[1]!], older].map(already => ({ already })))('preserves every row and converges from $already', ({ already }) => {
+  it.each([[], [older[0]!], [older[1]!], older].map(already => ({ already })))('preserves every row and converges from $already', async ({ already }) => {
     const handle = fixture();
     for (const name of already) {
       handle.sqlite.exec(ddl(name));
@@ -176,15 +226,34 @@ describe('compact maintenance migration path', () => {
     const beforeConstraints = constraints(handle);
     expect(runMigrations(handle).applied).toEqual(files.filter(name => name >= replacement));
     const after = snapshot(handle);
+    expect(handle.sqlite.prepare('SELECT status_before_liveness_loss FROM agents').all())
+      .toEqual([{ status_before_liveness_loss: null }]);
     // Remote-DM and direct-idempotency migrations add empty tables; every
-    // pre-existing row and table must remain.
+    // pre-existing row and table must remain. messages_mention_fts is a new
+    // index over those same message bodies, so its shadow tables are not
+    // pre-existing rows.
     expect(after.filter(([name]) => ![
       'a2a_egress',
       'a2a_egress_context',
       'a2a_inbound',
       'direct_dm_idempotency',
       'webhook_deliveries',
-    ].includes(String(name)))).toEqual(before);
+    ].includes(String(name)) && !String(name).startsWith('messages_mention_fts'))).toEqual(before);
+    // An edit of a not-yet-indexed historical row must not corrupt the FTS
+    // index, and replaying the same cursor page must not throw or duplicate.
+    handle.sqlite.prepare('UPDATE messages SET body = body WHERE rowid = (SELECT MIN(rowid) FROM messages)').run();
+    expect(handle.sqlite.prepare('PRAGMA integrity_check').get()).toEqual({ integrity_check: 'ok' });
+    expect(await backfillMessageMentionFts(handle.db)).toBeGreaterThan(0);
+    const maxRowid = handle.sqlite.prepare('SELECT MAX(rowid) AS rowid FROM messages').get() as { rowid: number };
+    handle.sqlite.prepare("UPDATE maintenance_cursors SET cursor = ? WHERE id = 'mention-fts-backfill'").run(`0/${maxRowid.rowid}`);
+    expect(await backfillMessageMentionFts(handle.db)).toBeGreaterThan(0);
+    expect(handle.sqlite.prepare('SELECT count(*) AS n FROM messages_mention_fts_docsize').get()).toEqual({ n: 20 });
+    expect(handle.sqlite.prepare('PRAGMA integrity_check').get()).toEqual({ integrity_check: 'ok' });
+    const mentionRows = handle.sqlite.prepare(
+      'SELECT workspace_id, body FROM messages_mention_fts ORDER BY rowid',
+    ).all() as Array<{ workspace_id: string; body: string }>;
+    expect(mentionRows).toHaveLength(20);
+    expect(mentionRows.every((row) => row.workspace_id === 'workspace11' && row.body === 'preserve me')).toBe(true);
     expect(after.find(([name]) => name === 'a2a_egress')).toEqual([
       'a2a_egress', 0, createHash('sha256').update('[]').digest('hex'),
     ]);
@@ -250,7 +319,8 @@ describe('compact maintenance migration path', () => {
     expect(recoveryLookup).toContain('idx_nodes_workspace_previous_token');
     expect(recoveryLookup).not.toContain('SCAN nodes');
     expectConstraintsPreserved(beforeConstraints, constraints(handle));
-    expect(handle.sqlite.prepare('SELECT * FROM maintenance_cursors ORDER BY id').all()).toEqual(cursorRows);
+    expect(handle.sqlite.prepare("SELECT * FROM maintenance_cursors WHERE id != 'mention-fts-backfill' ORDER BY id").all()).toEqual(cursorRows);
+    expect(handle.sqlite.prepare("SELECT cursor FROM maintenance_cursors WHERE id = 'mention-fts-backfill'").get()).toEqual({ cursor: 'complete' });
     expect(handle.sqlite.pragma('foreign_key_check')).toEqual([]);
     const retained = handle.sqlite.prepare("SELECT name FROM _engine_migrations WHERE name IN (?,?) ORDER BY name").all(...older);
     expect(retained).toEqual([...already].sort().map(name => ({ name })));

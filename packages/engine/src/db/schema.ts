@@ -54,8 +54,15 @@ export const workspaces = sqliteTable(
     id: text('id').primaryKey(),
     name: text('name').notNull(),
     apiKeyHash: text('api_key_hash').notNull().unique(),
+    // Superseded key captured by rotateWorkspaceKey; authenticatable only
+    // while previousApiKeyExpiresAt is in the future. Mirrors the agent-token
+    // previous slot (migration 0035).
+    previousApiKeyHash: text('previous_api_key_hash'),
+    previousApiKeyExpiresAt: integer('previous_api_key_expires_at', { mode: 'timestamp' }),
+    // Monotonic fence for out-of-band key writers so a stale control-plane
+    // repair cannot overwrite a newer rotation (0073).
+    apiKeyGeneration: integer('api_key_generation').notNull().default(0),
     systemPrompt: text('system_prompt'),
-    plan: text('plan').notNull().default('free'),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
     metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>().default({}),
     retention: text('retention', { mode: 'json' }).$type<WorkspaceRetentionSettings>(),
@@ -70,6 +77,7 @@ export const workspaces = sqliteTable(
   },
   (table) => [
     index('idx_workspaces_expires_at').on(table.expiresAt),
+    index('idx_workspaces_previous_api_key').on(table.previousApiKeyHash),
     check(
       'workspaces_usage_classification_source_check',
       sql`(
@@ -146,9 +154,15 @@ export const agents = sqliteTable(
     // Migration 0056 backfills historical rows from last_seen and its SQLite
     // trigger advances this value for every later status/liveness write.
     statusUpdatedAt: integer('status_updated_at', { mode: 'timestamp' }),
-    // Id of the agent whose spawn invocation created this one (migration 0068).
+    // Id of the agent whose spawn invocation created this one (migration 0078).
     // Grants that agent release/delete rights over it; NULL when unowned.
     spawnedBy: text('spawned_by'),
+    // Only liveness transitions populate this; explicit status writes clear it.
+    statusBeforeLivenessLoss: text('status_before_liveness_loss'),
+    // Monotonic boundary copied from the hosting node's liveness generation.
+    // Offline settlement uses this instead of second-resolution timestamps so
+    // a same-second re-registration cannot be mistaken for pre-claim state.
+    nodeLivenessRevision: integer('node_liveness_revision').notNull().default(0),
   },
   (table) => [
     uniqueIndex('agents_workspace_name_unique').on(table.workspaceId, table.name),
@@ -159,6 +173,9 @@ export const agents = sqliteTable(
       .where(sql`${table.status} <> 'released'`),
     index('idx_agents_location_node_fk').on(table.locationNodeId)
       .where(sql`${table.locationNodeId} IS NOT NULL`),
+    index('idx_agents_location_node_liveness_revision')
+      .on(table.workspaceId, table.locationNodeId, table.nodeLivenessRevision)
+      .where(sql`${table.locationType} = 'via_node' AND ${table.locationNodeId} IS NOT NULL AND ${table.status} NOT IN ('offline', 'released')`),
     index('idx_agents_origin_node_fk').on(table.originNodeId)
       .where(sql`${table.originNodeId} IS NOT NULL`),
     index('idx_agents_token').on(table.tokenHash),
@@ -278,6 +295,10 @@ export const nodes = sqliteTable(
     // enrollment re-issues this row's token. This is the only column that means
     // "this node proved it was alive", and the machine_id reuse gate reads it.
     provenLiveAt: integer('proven_live_at', { mode: 'timestamp' }),
+    // Advanced by every node liveness write and explicitly by an offline
+    // claim. Child provider/agent/invocation rows are stamped relative to this
+    // generation so the asynchronous settle tail has a precise boundary.
+    livenessRevision: integer('liveness_revision').notNull().default(0),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   },
   (table) => [
@@ -326,11 +347,14 @@ export const nodeProviders = sqliteTable(
     status: text('status').notNull().default('offline'),
     version: text('version').notNull().default('unknown'),
     lastHeartbeatAt: integer('last_heartbeat_at', { mode: 'timestamp' }),
+    livenessRevision: integer('liveness_revision').notNull().default(0),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   },
   (table) => [
     uniqueIndex('node_providers_node_name_unique').on(table.workspaceId, table.nodeId, table.name),
     index('idx_node_providers_node').on(table.workspaceId, table.nodeId),
+    index('idx_node_providers_liveness_revision')
+      .on(table.workspaceId, table.nodeId, table.livenessRevision),
     index('idx_node_providers_node_fk').on(table.nodeId),
   ],
 );
@@ -1138,6 +1162,9 @@ export const actionInvocations = sqliteTable(
     durationMs: integer('duration_ms'),
     dispatchedNodeId: text('dispatched_node_id').references(() => nodes.id, { onDelete: 'set null' }),
     dispatchedAt: integer('dispatched_at', { mode: 'timestamp' }),
+    // Generation of the node liveness epoch that accepted this dispatch.
+    // A lost-node settle only reschedules attempts older than its claim.
+    nodeLivenessRevision: integer('node_liveness_revision').notNull().default(0),
     // Dispatch-attempt generation accepted atomically by the socket owner.
     // Unlike action_id, this survives capability pruning without granting a
     // later retry generation the previous attempt's acceptance.
@@ -1161,6 +1188,9 @@ export const actionInvocations = sqliteTable(
     index('idx_action_invocations_action').on(table.actionId, table.createdAt),
     index('idx_action_invocations_caller').on(table.callerId, table.createdAt),
     index('idx_action_invocations_dispatched_node').on(table.dispatchedNodeId, table.createdAt),
+    index('idx_action_invocations_dispatched_node_liveness_revision')
+      .on(table.workspaceId, table.dispatchedNodeId, table.nodeLivenessRevision)
+      .where(sql`${table.dispatchedNodeId} IS NOT NULL AND ${table.status} IN ('pending', 'dispatched', 'invoked')`),
     index('idx_action_invocations_pending_workspace')
       .on(table.workspaceId, table.createdAt)
       .where(sql`${table.status} = 'pending'`),
@@ -1283,6 +1313,8 @@ export const deliveries = sqliteTable(
       .where(sql`${table.locationNodeId} IS NOT NULL`),
     index('idx_deliveries_route_node_fk').on(table.routeNodeId)
       .where(sql`${table.routeNodeId} IS NOT NULL`),
+    index('idx_deliveries_active_location_node').on(table.locationNodeId)
+      .where(sql`${table.status} IN ('queued', 'delivered') AND ${table.locationNodeId} IS NOT NULL`),
     uniqueIndex('idx_deliveries_id_lookup').on(table.id),
     uniqueIndex('deliveries_agent_seq_unique').on(table.workspaceId, table.agentId, table.seq),
     index('idx_deliveries_agent').on(table.agentId, table.createdAt),
@@ -1312,6 +1344,8 @@ export const deliveries = sqliteTable(
     index('idx_deliveries_node_retry_workspace').on(table.workspaceId, table.nextAttemptAt, table.createdAt, table.id)
       .where(sql`${table.status} = 'queued' AND ${table.routeNodeKind} IN ('http_push', 'ws', 'fleet_ws', 'direct_ws') AND ${table.nextAttemptAt} IS NOT NULL`),
     index('idx_deliveries_status').on(table.workspaceId, table.status, table.createdAt),
+    index('idx_deliveries_agent_status_created')
+      .on(table.workspaceId, table.agentId, table.status, table.createdAt, table.id),
   ],
 );
 

@@ -2,6 +2,10 @@ import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
 
+// bun:sqlite (the standalone binary's driver, under `npm run test:bun`) has no
+// user-defined SQL functions, which this visit-counting probe relies on.
+const userFunctions = !process.versions.bun;
+
 const migration = readFileSync(new URL('../migrations/0051_node_foreign_key_indexes.sql', import.meta.url), 'utf8');
 const keys = [
   ['deliveries', 'location_node_id', 'idx_deliveries_location_node_fk'],
@@ -54,7 +58,7 @@ function fixture(history = 10_000) {
 }
 
 describe('node deletion foreign-key work', () => {
-  it('visits only matching child rows instead of retained history, including empty-node probes', () => {
+  it.skipIf(!userFunctions)('visits only matching child rows instead of retained history, including empty-node probes', () => {
     const db = fixture();
     // Replay the same probe before and after the additive migration. These are
     // SQLite's child-key equality probes for REFERENCES nodes(id), with a
