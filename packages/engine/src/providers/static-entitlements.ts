@@ -5,10 +5,15 @@ import { getUsageMetric, usagePeriodResetAt } from '../engine/usage.js';
 /**
  * The default plan limits, lifted from the original `middleware/planLimits.ts`.
  * Self-host deployments typically run the `selfhost` tier (everything
- * unlimited); the free/connect/pro/enterprise tiers are kept so the same code serves a
+ * unlimited); the trial/free/connect/pro/enterprise tiers are kept so the same code serves a
  * tiered deployment if a workspace's `plan` column is set.
  */
 export const PLAN_LIMITS: Record<string, PlanLimits> = {
+  // Hosted anonymous trial: a workspace created without signing in. A one-time
+  // 100-message allowance (`lifetime_messages`, never resets) is enough to prove
+  // agents on two machines can talk; signing in moves the workspace to `free`.
+  // The other limits match `free` so the trial is only ever narrower.
+  trial: { messages: 100, lifetime_messages: 100, agents: 5, file_bytes: 100 * 1024 * 1024, api_calls: 100_000, rate_per_min: 300 },
   free: { messages: 10_000, agents: 5, file_bytes: 100 * 1024 * 1024, api_calls: 100_000, rate_per_min: 300 },
   // Short-lived collaboration rooms (Relay Connect): a handful of seats that
   // poll their inbox continuously, so api_calls dominates while messages stay

@@ -12,6 +12,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Added
 
 - `DELETE /v1/nodes/:name` deletes a node by id (exact id first) or name, returning `{ id, name, deleted, cascaded_actions }`. It refuses an online node (`node_online`) or one hosting actions (`node_has_actions`) unless `force=true`, and returns `node_delete_conflict` when a heartbeat or action registration lands mid-delete.
+- `PLAN_LIMITS.trial` and `PlanLimits.lifetime_messages`: a one-time message allowance enforced on message sends by the new `checkMessageAllowance` middleware; only successful fresh sends are counted (idempotent replays neither count nor get refused), under the never-expiring `usage:<workspace>:messages:lifetime` key (`lifetimeUsageCounterKey`, `getLifetimeUsageMetric`).
+- Optional `EntitlementsProvider.getUpgradeGuidance(workspace, metric)` hook; its URL and action are returned on `plan_limit_exceeded` as `upgrade_url` / `upgrade_action`.
 
 ### Fixed
 

@@ -44,6 +44,7 @@ export type {
 export type {
   EntitlementsProvider,
   PlanLimits,
+  UpgradeGuidance,
   UsageMetric,
 } from './entitlements.js';
 export { ENGINE_OBSERVATION_FACTS } from './telemetry.js';
