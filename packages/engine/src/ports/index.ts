@@ -44,6 +44,7 @@ export type {
 export type {
   EntitlementsProvider,
   PlanLimits,
+  UpgradeGuidance,
   UsageMetric,
 } from './entitlements.js';
 export { ENGINE_OBSERVATION_FACTS } from './telemetry.js';
@@ -91,7 +92,8 @@ export interface EngineProviders {
   telemetry?: TelemetrySink;
   /**
    * Operation timing and cleanup progress (see `ports/diagnostics.ts`).
-   * Optional; dropped when absent.
+   * Optional. When absent, samples go to the host fallback set with
+   * `configureEngineDiagnostics()`, and are dropped only if neither is set.
    */
   diagnostics?: EngineDiagnostics;
 }

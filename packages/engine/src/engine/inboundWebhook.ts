@@ -168,11 +168,37 @@ function rethrowMailboxError(error: unknown): never {
   throw error;
 }
 
+/** Longest raw webhook JSON rendered into message text, in UTF-16 code units. */
+export const RAW_WEBHOOK_EVENT_TEXT_LIMIT = 16_000;
+const RAW_WEBHOOK_EVENT_TRUNCATED_SUFFIX = '… [truncated]';
+
+/** Render a raw third-party webhook body as JSON text, capped at RAW_WEBHOOK_EVENT_TEXT_LIMIT. */
+export function renderRawWebhookEvent(event: Record<string, unknown>): string {
+  const json = JSON.stringify(event);
+  if (json.length <= RAW_WEBHOOK_EVENT_TEXT_LIMIT) return json;
+  let end = RAW_WEBHOOK_EVENT_TEXT_LIMIT - RAW_WEBHOOK_EVENT_TRUNCATED_SUFFIX.length;
+  // Do not split a surrogate pair.
+  const last = json.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return `${json.slice(0, end)}${RAW_WEBHOOK_EVENT_TRUNCATED_SUFFIX}`;
+}
+
 export async function triggerWebhook(
   db: Db,
   webhookId: string,
   token: string | null,
-  data: { text?: string; source?: string; author?: string; payload?: Record<string, unknown> },
+  data: {
+    text?: string;
+    source?: string;
+    author?: string;
+    payload?: Record<string, unknown>;
+    /**
+     * A third-party JSON body posted as-is (no webhook envelope fields). It is
+     * rendered into the message text only; its fields are never read as
+     * message metadata, session_ref or delivery control flags.
+     */
+    rawEvent?: Record<string, unknown>;
+  },
   options: {
     mailbox?: MailboxConfig | ((workspaceId: string) => MailboxConfig);
     workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy | ((workspaceId: string) => WorkspaceDeliveryPolicy | undefined | Promise<WorkspaceDeliveryPolicy | undefined>);
@@ -208,7 +234,9 @@ export async function triggerWebhook(
     data.text ||
     (data.payload
       ? `Webhook ${webhook.name}: ${JSON.stringify(data.payload)}`
-      : `Webhook event from ${data.source || 'external'}`);
+      : data.rawEvent
+        ? `Webhook ${webhook.name}: ${renderRawWebhookEvent(data.rawEvent)}`
+        : `Webhook event from ${data.source || 'external'}`);
   const author = data.author || data.source || webhook.name;
 
   // Webhook must have a creator agent to post messages

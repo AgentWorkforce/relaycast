@@ -12,7 +12,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- Optional `EngineDeps.diagnostics` (`EngineDiagnostics`) receives operation timing (`inbox.get`, `deliveries.list`, `workspace.delete`, `invocations.sweep`, `backfill.mention_fts`) and backfill progress. Each app reports only to its own sink, and callbacks may be async. `currentEngineOperation()` lets a host's database wrapper attribute statement cost to the operation in flight; `configureEngineDiagnostics()` sets a host fallback for maintenance that runs outside any app. Absent by default.
+- Optional `EngineDeps.diagnostics` (`EngineDiagnostics`) receives operation timing (`inbox.get`, `deliveries.list`, `workspace.delete`, `invocations.sweep`, `backfill.mention_fts`) and backfill progress. Each app reports only to its own sink, and callbacks may be async. `currentEngineOperation()` lets a host's database wrapper attribute statement cost to the operation in flight; `configureEngineDiagnostics()` sets a host fallback, used by maintenance that runs outside any app and by apps built without a sink. `runWithEngineDiagnostics(sink, fn)` runs host work (a queue or cron handler) against a specific sink, as `createEngine` does per request, and `engineOperationOf(error)` returns the operation an error was thrown inside. Absent by default; no migration is needed.
 - Unhandled 5xx errors now report `workspace_id`, `agent_id`, `engine_operation` and the matched `route` template in the error log and `captureException` context.
 
 ### Changed
@@ -21,9 +21,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Inbound webhooks (`POST /v1/hooks/:webhookId`) of an expired or deleted workspace now return `404` instead of accepting messages.
 - A node socket opened before its workspace expired or was deleted can no longer `node.register` or `agent.register` into it: those frames now get a `workspace_expired` error.
 
+## [11.1.0] - 2026-10-27
+
+### Added
+
+- `PLAN_LIMITS.trial` and `PlanLimits.lifetime_messages`: a one-time message allowance enforced on message sends by the new `checkMessageAllowance` middleware; only successful fresh sends are counted (idempotent replays neither count nor get refused), under the never-expiring `usage:<workspace>:messages:lifetime` key (`lifetimeUsageCounterKey`, `getLifetimeUsageMetric`).
+- Optional `EntitlementsProvider.getUpgradeGuidance(workspace, metric)` hook; its URL and action are returned on `plan_limit_exceeded` as `upgrade_url` / `upgrade_action`.
+- Standalone single-file `relaycast-engine` builds (`bun build --compile`, `bun:sqlite`) with the same flags and behaviour as the npm bin; the Node adapter now opens SQLite through a small driver seam, and better-sqlite3 remains the Node driver.
+- `relaycast-engine --version` / `-v` prints the engine version.
+- Outbound webhook DNS pinning also holds when the engine runs under Bun, whose `undici` shim ignores custom dispatchers.
+
 ### Fixed
 
 - `GET /v1/deliveries?status=<status>` now reads only the calling agent's rows (migration `0076` adds `idx_deliveries_agent_status_created`). It previously walked every row with that status in the workspace, which on large delivery histories could stall a shared database.
+- Routes that require an agent, node or observer token now answer `401 unauthorized` when the auth provider returns a result without that principal. Previously a host provider that answered a workspace key with a workspace-only result (for example from a cache) sent `POST /v1/agents/:name/rotate-token` into its handler with no agent, which failed with a 500. Observer-readable routes apply the same check, so an observer token resolved without its observer identity no longer reads with the workspace's unscoped access.
 
 ## [11.0.0] - 2026-10-22
 
@@ -61,6 +72,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - The unreachable-node delivery sweep reads only active deliveries through the new partial index `idx_deliveries_active_location_node` (migration `0074`), not every delivery ever routed to a node.
 - Every response carries its request id in an `X-Request-Id` header (the header the Rust SDK reads), so client error reports stop showing `request_id: null`.
 - Per-node agent roster and inventory lookups are pinned to `idx_agents_location_node_fk` instead of walking every agent in the workspace.
+- Raw JSON bodies sent to `POST /v1/hooks/:webhookId` (any object without `text`, `message`, `source`, `author` or `payload`, including `{}`) appear in the resulting channel message, capped at 16,000 characters. Their fields are rendered as text only: a third-party `session_ref` or `action_generated` no longer reaches message metadata, session validation or trigger suppression.
 
 ## [10.6.3] - 2026-10-19
 

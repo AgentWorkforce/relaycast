@@ -90,7 +90,7 @@ export function ChatFeed({
  * pages when the top sentinel becomes visible.
  */
 function usePaginatedFeed(
-  scrollRef: RefObject<HTMLDivElement>,
+  scrollRef: RefObject<HTMLDivElement | null>,
   sorted: MessageWithMeta[],
   loadOlderPage: () => Promise<number | null>,
 ) {
@@ -187,7 +187,7 @@ function FeedList({
 }
 
 /** Render one channel's live feed and its newest valid relayflow snapshot. */
-function ChannelMessages({ channel, scrollRef, onOpenThread, mentionNames, onOpenAgent }: { channel: string; scrollRef: RefObject<HTMLDivElement>; onOpenThread?: (messageId: string) => void; mentionNames?: string[]; onOpenAgent?: (agentName: string | null) => void; }) {
+function ChannelMessages({ channel, scrollRef, onOpenThread, mentionNames, onOpenAgent }: { channel: string; scrollRef: RefObject<HTMLDivElement | null>; onOpenThread?: (messageId: string) => void; mentionNames?: string[]; onOpenAgent?: (agentName: string | null) => void; }) {
   const { messages, loading, fetchMore } = useMessages(channel);
   const sorted = sortMessagesChronologically(messages);
   const feed = usePaginatedFeed(scrollRef, sorted, fetchMore);
@@ -224,7 +224,7 @@ function toMessageWithMeta(m: DmMessage): MessageWithMeta {
   };
 }
 
-function DmMessages({ conversationId, scrollRef, mentionNames, onOpenAgent }: { conversationId: string; scrollRef: RefObject<HTMLDivElement>; mentionNames?: string[]; onOpenAgent?: (agentName: string | null) => void; }) {
+function DmMessages({ conversationId, scrollRef, mentionNames, onOpenAgent }: { conversationId: string; scrollRef: RefObject<HTMLDivElement | null>; mentionNames?: string[]; onOpenAgent?: (agentName: string | null) => void; }) {
   const relay = useRelay();
   const [messages, setMessages] = useState<MessageWithMeta[]>([]);
   const [loading, setLoading] = useState(true);

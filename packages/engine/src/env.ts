@@ -1,5 +1,6 @@
 import type { workspaces, agents, nodes, observerTokens } from './db/schema.js';
 import type { Logger } from './lib/logger.js';
+import type { PlanLimitExceededBody } from './lib/planLimitError.js';
 import type {
   EngineDb,
   EnginePorts,
@@ -42,6 +43,12 @@ export interface AppVariables {
    * times per request). Unset until the first webhook-eligible mutation.
    */
   webhookSubscribersExist?: boolean;
+  /**
+   * Set by `checkMessageAllowance` when the workspace's one-time message
+   * allowance is spent but the request carries an `Idempotency-Key`: the route
+   * still replays a stored receipt, and refuses only a fresh send with this body.
+   */
+  messageAllowanceDenial?: PlanLimitExceededBody;
   /** The injected ports + providers + config for this deployment. */
   engine: EngineRuntime;
 }

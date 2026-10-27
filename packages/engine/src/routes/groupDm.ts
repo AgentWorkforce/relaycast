@@ -4,6 +4,7 @@ import type { AppEnv } from '../env.js';
 import { errorResponse } from '../lib/httpError.js';
 import { requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { assertMessageAllowance, checkMessageAllowance } from '../middleware/planLimits.js';
 import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as groupDmEngine from '../engine/groupDm.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
@@ -84,6 +85,7 @@ groupDmRoutes.post(
   '/dm/:conversation_id/messages',
   requireAgentToken,
   rateLimit,
+  checkMessageAllowance,
   async (c) => {
     try {
       const db = c.get('db');
@@ -159,8 +161,9 @@ groupDmRoutes.post(
         fingerprint,
         compatibleFingerprints: legacyFingerprint === fingerprint ? [] : [legacyFingerprint],
         kv: c.get('engine').kv,
-        operation: async () =>
-          groupDmEngine.postGroupMessage(
+        operation: async () => {
+          assertMessageAllowance(c);
+          return groupDmEngine.postGroupMessage(
             db,
             workspace.id,
             conversationId,
@@ -172,7 +175,8 @@ groupDmRoutes.post(
               mode,
             },
             { mailbox, workspaceDeliveryPolicy: await resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace) },
-          ),
+          );
+        },
         afterOperation: async (data) => {
           await sendWebhookEvent(c, {
             type: 'group_dm.received',

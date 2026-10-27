@@ -26,9 +26,19 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Deleting a large workspace no longer stalls the database for every other tenant: its data is removed in bounded background steps after it stops authenticating.
 
+## [11.1.0] - 2026-10-27
+
+### Added
+
+- New `trial` plan for hosted anonymous workspaces: a one-time allowance of 100 messages (channel posts, DMs, group DMs, thread replies) that never resets. `free`, paid plans and self-hosted `selfhost` are unchanged.
+- `plan_limit_exceeded` errors now carry `metric`, `plan`, `limit`, `usage`, and, when the deployment has an upgrade path, `upgrade_url` and `upgrade_action` (`sign_in` or `upgrade`).
+- Standalone `relaycast-engine` executables for Linux (glibc and musl, x64 and arm64), macOS (x64 and arm64), and Windows x64 are attached to each GitHub release as `relaycast-engine-<version>-<os>-<arch>[.exe]` with `.sha256` files; they run the self-host server with no Node.js, npm, compiler, or native addon.
+- `relaycast-engine --version` prints the engine version.
+
 ### Fixed
 
 - Listing deliveries filtered by status no longer scans the whole workspace's delivery history.
+- Agent-, node- and observer-token routes answer 401 when a host auth provider returns a result without that identity, instead of a 500 (agent routes) or unscoped workspace access (observer reads).
 
 ## [11.0.0] - 2026-10-22
 
@@ -55,6 +65,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Inbox mention lookup uses a workspace-scoped index after its bounded backfill completes; delivery sweeps and per-node agent reads avoid full-history scans that stalled the shared database and surfaced as `database_overloaded`.
 - Every response includes its request id in the `X-Request-Id` header.
+- Raw JSON inbound webhook bodies (including `{}`) appear in the delivered message instead of a generic event line. Their fields are rendered as text only and never read as message metadata.
 
 ## [10.6.3] - 2026-10-19
 
@@ -879,7 +890,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v11.0.0...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v11.1.0...HEAD
+[11.1.0]: https://github.com/AgentWorkforce/relaycast/compare/v11.0.0...v11.1.0
 [11.0.0]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.5...v11.0.0
 [10.6.5]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.4...v10.6.5
 [10.6.4]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.3...v10.6.4

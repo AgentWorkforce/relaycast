@@ -47,3 +47,9 @@ packages/sdk-typescript/bin/*
 relaycast-files/
 *.db
 .agentworkforce/relay*
+
+# OpenNext Cloudflare build output
+.open-next/
+
+# Standalone engine binaries (packages/engine/standalone/build.ts)
+dist-standalone/

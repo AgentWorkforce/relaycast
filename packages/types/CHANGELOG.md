@@ -9,6 +9,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [11.1.0] - 2026-10-27
+
+### Added
+
+- Workspace `plan` accepts `trial`.
+
 ## [10.6.1] - 2026-10-18
 
 ### Fixed
