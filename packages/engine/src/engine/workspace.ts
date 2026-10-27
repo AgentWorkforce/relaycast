@@ -1041,9 +1041,12 @@ export async function reapExpiredWorkspaces(
     else if (await reapClassifiedWorkspace(db, storage, id, false)) reaped.push(id);
   }
   for (const [index, id] of large.entries()) {
+    // One slow probe can spend the whole budget. The first large workspace
+    // still gets its drain call, which deletes at least one page however
+    // short its slice; otherwise every tick would re-probe and never drain.
     const remaining = deadline - clock();
-    if (remaining <= 0) break;
-    const slice = clock() + remaining / (large.length - index);
+    if (remaining <= 0 && index > 0) break;
+    const slice = clock() + Math.max(0, remaining) / (large.length - index);
     const drain = { dutyCycle: options.dutyCycle, sleep: options.sleep, now: clock, deadline: slice };
     if (await reapClassifiedWorkspace(db, storage, id, true, drain)) reaped.push(id);
   }

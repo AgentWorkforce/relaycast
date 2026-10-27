@@ -137,6 +137,11 @@ describe('bounded workspace deletion', () => {
     expect(socket.ofType('error').at(-1)).toMatchObject({ id: 'recover', code: 'workspace_expired' });
     expect(stack.runtime.handle.sqlite.prepare('SELECT count(*) AS n FROM action_invocations WHERE workspace_id = ?')
       .get(ws.workspaceId)).toEqual({ n: 0 });
+    // Heartbeats and inventory writes are refused as well.
+    await send({ v: 1, id: 'beat', type: 'node.heartbeat', load: 0, active_agents: 0, handlers_live: true });
+    expect(socket.ofType('error').at(-1)).toMatchObject({ id: 'beat', code: 'workspace_expired' });
+    await send({ v: 1, id: 'sync', type: 'inventory.sync', agents: [] });
+    expect(socket.ofType('error').at(-1)).toMatchObject({ id: 'sync', code: 'workspace_expired' });
   });
 
   it('keeps small workspaces on the atomic delete', async () => {
@@ -206,6 +211,29 @@ describe('bounded workspace deletion', () => {
     const rest = await drainWorkspaceRows(db, ws.workspaceId, { maxDurationMs: 60_000, sleep: async () => {} });
     expect(rest.complete).toBe(true);
     expect(first.rows + rest.rows).toBe(WORKSPACE_ATOMIC_DELETE_MAX_ROWS + 500 + 900 + ownRows);
+  });
+
+  it('still drains when probing a large workspace spends the whole budget', async () => {
+    const { ws } = await seedLargeWorkspace('bounded-slow-probe');
+    await stack.runtime.handle.db.update(workspaces).set({ expiresAt: new Date(Date.now() - 1_000) })
+      .where(eq(workspaces.id, ws.workspaceId));
+    const before = count('workspace_events', ws.workspaceId) + count('messages', ws.workspaceId);
+    let clock = 0;
+    // Every raw statement "takes" a full budget, so the size probe overruns it.
+    const db = stack.runtime.deps.db;
+    const all = db.all.bind(db);
+    (db as { all: typeof db.all }).all = (async (...args: Parameters<typeof db.all>) => {
+      clock += 1_000;
+      return all(...args);
+    }) as typeof db.all;
+    try {
+      await reapExpiredWorkspaces(db, stack.runtime.deps.files, {
+        maxDurationMs: 1_000, clock: () => clock, sleep: async () => {},
+      });
+    } finally {
+      (db as { all: typeof db.all }).all = all;
+    }
+    expect(count('workspace_events', ws.workspaceId) + count('messages', ws.workspaceId)).toBeLessThan(before);
   });
 
   it('lets the reaper finish a large expired workspace across several calls', async () => {

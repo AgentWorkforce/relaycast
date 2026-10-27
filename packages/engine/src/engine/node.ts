@@ -3316,6 +3316,15 @@ function sendControl(socket: NodeSocketLike | undefined, payload: Record<string,
  * in steps with its nodes last, so frames that create identity must re-check:
  * otherwise a connected node registers agents into a workspace being deleted.
  */
+/** Control frames still admitted after the workspace expires (see the gate below). */
+const SETTLING_CONTROL_FRAMES: ReadonlySet<string> = new Set([
+  'action.accept',
+  'action.result',
+  'delivery.ack',
+  'node.deregister',
+  'agent.deregister',
+]);
+
 async function assertWorkspaceUnexpired(db: EngineDb, workspaceId: string): Promise<void> {
   const [row] = await db
     .select({ expiresAt: workspaces.expiresAt })
@@ -3367,15 +3376,10 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
   // check, the provider-row upsert, or the aggregate recompute.
   return serializeNodeOp(args.workspaceId, args.nodeId, async () => {
   try {
-    // Only frames that create identity or start work: heartbeats are the hot
-    // path and create nothing, and completing work already in flight
-    // (`action.accept` / `action.result`, `delivery.ack`) must still settle.
-    if (
-      message.type === 'node.register'
-      || message.type === 'agent.register'
-      || message.type === 'agent.recover'
-      || message.type === 'node.spawn'
-    ) {
+    // A socket outlives its workspace's deletion, and every other frame writes
+    // durable state (a heartbeat can insert provider and action rows). Only
+    // frames that settle work already in flight or tear identity down pass.
+    if (!SETTLING_CONTROL_FRAMES.has(message.type)) {
       await assertWorkspaceUnexpired(args.db, args.workspaceId);
     }
     switch (message.type) {
