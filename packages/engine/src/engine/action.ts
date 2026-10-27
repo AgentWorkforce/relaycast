@@ -1045,6 +1045,14 @@ async function dispatchNodeProviderInvocation(args: {
   invocationOrigin: InvocationRow['invocationOrigin'];
   reservationHeld?: boolean;
   expectedNodeLivenessRevision?: number;
+  /**
+   * Claim tokens from the retry that selected this row. A later read would
+   * observe the winner's generation and send a second frame.
+   */
+  claimStatus?: InvocationClaimStatus;
+  observedRetryAfterAt?: Date | null;
+  observedDispatchAttempts?: number;
+  observedDispatchedNodeId?: string | null;
 }, options: {
   failIfUnavailable?: boolean;
 } = {}): Promise<{
@@ -1105,23 +1113,35 @@ async function dispatchNodeProviderInvocation(args: {
     }
     return { accepted, pending: true };
   }
-  // The row may already be dispatched. A native spawn claim has to match that
-  // generation; the fresh-row defaults (pending, no attempts) would lose.
-  const [claimRow] = await args.db
-    .select({
-      status: actionInvocations.status,
-      retryAfterAt: actionInvocations.retryAfterAt,
-      dispatchAttempts: actionInvocations.dispatchAttempts,
-      dispatchedNodeId: actionInvocations.dispatchedNodeId,
-    })
-    .from(actionInvocations)
-    .where(and(
-      eq(actionInvocations.workspaceId, args.workspaceId),
-      eq(actionInvocations.id, args.invocationId),
-    ));
+  // A retry passes the generation it selected. Re-reading here would adopt a
+  // claim that won while this retry was placing, and both would send. Callers
+  // without a snapshot still read the row so a dispatched spawn does not fall
+  // back to the fresh-row defaults.
+  const suppliedClaim = args.claimStatus
+    ? {
+      claimStatus: args.claimStatus,
+      observedRetryAfterAt: args.observedRetryAfterAt ?? null,
+      observedDispatchAttempts: args.observedDispatchAttempts ?? 0,
+      observedDispatchedNodeId: args.observedDispatchedNodeId ?? null,
+    }
+    : null;
+  const [claimRow] = suppliedClaim
+    ? []
+    : await args.db
+      .select({
+        status: actionInvocations.status,
+        retryAfterAt: actionInvocations.retryAfterAt,
+        dispatchAttempts: actionInvocations.dispatchAttempts,
+        dispatchedNodeId: actionInvocations.dispatchedNodeId,
+      })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, args.workspaceId),
+        eq(actionInvocations.id, args.invocationId),
+      ));
   return dispatchNodeInvocation({
     ...args,
-    ...(claimRow ? observedInvocationClaim(claimRow) : {}),
+    ...(suppliedClaim ?? (claimRow ? observedInvocationClaim(claimRow) : {})),
   });
 }
 
@@ -3870,6 +3890,7 @@ export async function rescheduleNodeInvocation(
             queue: target.queue,
             reservationHeld: false,
             expectedNodeLivenessRevision: opts.expectedNodeLivenessRevision,
+            ...observedInvocationClaim(invocation),
           }, { failIfUnavailable: false });
           if (dispatched.providerUnavailable) {
             providerRejectedNodeIds.add(placement.node.id);
