@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentClient, type AgentClientOptions } from '../agent.js';
 import { stableRelaycastEventId } from '../event-id.js';
 import { HttpClient } from '../client.js';
+import type { AgentExitedEvent } from '../types.js';
 
 class MockWebSocket {
   static readonly OPEN = 1;
@@ -359,6 +360,53 @@ describe('AgentClient WebSocket integration', () => {
     expect(handler).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'channel.created' }),
     );
+  });
+
+  it('on.agentExited camelizes the spawn-caller deliver frame', async () => {
+    const agent = createAgent();
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+
+    let received: AgentExitedEvent | undefined;
+    agent.on.agentExited((event) => {
+      received = event;
+    });
+
+    // emitAgentExitedEffects notifies the spawn caller through
+    // sendNodeDeliveriesToAgents: a synthetic seq-0 deliver frame whose
+    // payload is { type, data } with the snake_case event fields.
+    ws.simulateMessage({
+      v: 1,
+      type: 'deliver',
+      delivery_id: 'evt_agent_exited_agt_01J7FLEET000000000000101_none_deregistered_caller_1',
+      agent_id: 'caller_1',
+      agent: 'spawner',
+      msg_id: 'agt_01J7FLEET000000000000101_none_deregistered',
+      seq: 0,
+      mode: 'wait',
+      payload: {
+        type: 'agent.exited',
+        data: {
+          agent_id: 'agt_01J7FLEET000000000000101',
+          agent_name: 'claude-worker-7',
+          node_id: 'node_1',
+          invocation_id: null,
+          reason: 'deregistered',
+        },
+      },
+    });
+
+    expect(received).toEqual({
+      type: 'agent.exited',
+      agentId: 'agt_01J7FLEET000000000000101',
+      agentName: 'claude-worker-7',
+      nodeId: 'node_1',
+      invocationId: null,
+      reason: 'deregistered',
+    });
+    expect(agent.on).not.toHaveProperty('nodeOnline');
+    expect(agent.on).not.toHaveProperty('nodeOffline');
   });
 
   // --- subscribe / unsubscribe proxy ---
