@@ -4422,6 +4422,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: >-
+            The request does not authenticate as the agent. `error.code` is
+            `agent_token_invalid` for an unknown or rotated-out agent token,
+            `node_token_forbidden` or `observer_token_forbidden` for those token
+            kinds, `workspace_expired` past the workspace's `expires_at`, and
+            `unauthorized` otherwise: a missing header, a workspace key, or a
+            credential the auth provider resolves without an agent identity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /workspace/rotate-key:
     post:
