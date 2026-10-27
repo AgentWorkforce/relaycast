@@ -4392,9 +4392,12 @@ paths:
                 $ref: '#/components/schemas/SuccessResponse'
         '401':
           description: >-
-            `unauthorized` when the request does not authenticate as an agent:
-            a missing or invalid token, a workspace key, or any credential the
-            auth provider resolves without an agent identity.
+            The request does not authenticate as the agent. `error.code` is
+            `agent_token_invalid` for an unknown or rotated-out agent token,
+            `node_token_forbidden` or `observer_token_forbidden` for those token
+            kinds, `workspace_expired` past the workspace's `expires_at`, and
+            `unauthorized` otherwise: a missing header, a workspace key, or a
+            credential the auth provider resolves without an agent identity.
           content:
             application/json:
               schema:

@@ -307,9 +307,10 @@ agent tokens return `agent_token_invalid` with HTTP 401. Recover only with an
 explicit current-token, origin-node, or enrolled work-unit proof; use the
 audited owner takeover when those proofs are unavailable.
 
-Routes that require an agent, node, or observer token return `unauthorized`
-with HTTP 401 when the credential does not resolve to that principal, including
-a workspace key and a host auth provider result that omits the identity. For
+A route that requires an agent, node, or observer token also returns HTTP 401
+for any other credential. The error code names the cause: `node_token_forbidden`
+or `observer_token_forbidden` for a token of the wrong kind, and `unauthorized`
+for a workspace key or a host auth provider result that omits the identity. For
 example, `POST /v1/agents/:name/rotate-token` accepts only the agent's own token.
 
 The workspace key and the agent, node, and observer tokens of a workspace
