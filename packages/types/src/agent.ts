@@ -22,6 +22,11 @@ export const AgentSchema = z.object({
   status: AgentStatusSchema,
   persona: z.string().nullable(),
   metadata: z.record(z.string(), z.unknown()),
+  /**
+   * The node whose authenticated connection registered this agent, set once by
+   * the server and not patchable (unlike `metadata.fleet`). Agent detail only.
+   */
+  origin_node_id: z.string().nullable().optional(),
   last_seen: z.string(),
   created_at: z.string().optional(),
   channels: z.array(z.object({
@@ -72,7 +77,9 @@ export const UpdateAgentRequestSchema = z.object({
 export type UpdateAgentRequest = z.infer<typeof UpdateAgentRequestSchema>;
 
 export const AgentListQuerySchema = z.object({
-  status: z.union([AgentStatusSchema, z.literal('all')]).optional(),
+  status: z.enum(['online', 'offline', 'away', 'active', 'idle', 'blocked', 'waiting', 'all']).optional(),
+  include_stale: z.boolean().optional(),
+  include_metadata: z.boolean().optional(),
 });
 export type AgentListQuery = z.infer<typeof AgentListQuerySchema>;
 
@@ -85,7 +92,7 @@ export type AgentPresenceInfo = z.infer<typeof AgentPresenceInfoSchema>;
 
 // === Spawn/Release (Agent Lifecycle) ===
 
-export const CliTypeSchema = z.enum(['claude', 'codex', 'gemini', 'aider', 'goose', 'opencode', 'grok']);
+export const CliTypeSchema = z.enum(['claude', 'codex', 'gemini', 'aider', 'goose', 'opencode', 'grok', 'muse', 'devin']);
 export type CliType = z.infer<typeof CliTypeSchema>;
 
 export const SpawnAgentRequestSchema = z.object({

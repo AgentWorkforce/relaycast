@@ -99,6 +99,14 @@ five minutes appear `offline`. Roster status filters run in SQL against that
 derived presence; `status=online` aliases `active`. Durable stale-status cleanup
 runs separately from reads.
 
+The default roster (including `status=all`) contains unreleased agents seen in
+the last seven days. Use `include_stale=1` for older identities; explicit status
+filters retain their existing scope, and lookup by name remains available.
+Metadata stays included for desktop compatibility. Set `include_metadata=0` to
+return `metadata: {}` without loading the stored JSON. The response remains an
+array. TypeScript callers use `agents.list({ includeStale: true,
+includeMetadata: false })`; MCP `agent.list` accepts the snake_case options.
+
 Workspace administrators can preview bounded registry reclamation with
 `POST /v1/agents/retention` (`retention_days: 30` by default). Physical deletion
 requires explicit `delete: true`; live/recent agents, every node association,
@@ -291,16 +299,40 @@ short rollover grace period.
 
 ## Error Handling
 
-API errors use `{ ok: false, error: { code, message } }`. Invalid or expired
+API errors use `{ ok: false, error: { code, message } }`. Unexpected server
+errors (5xx) also carry `error.request_id`, which identifies the request in the
+server logs; quote it when reporting the error. Every response carries the same
+id in the `X-Request-Id` header. Invalid or expired
 agent tokens return `agent_token_invalid` with HTTP 401. Recover only with an
 explicit current-token, origin-node, or enrolled work-unit proof; use the
 audited owner takeover when those proofs are unavailable.
+
+A route that requires an agent, node, or observer token also returns HTTP 401
+for any other credential. The error code names the cause: `node_token_forbidden`
+or `observer_token_forbidden` for a token of the wrong kind, and `unauthorized`
+for a workspace key or a host auth provider result that omits the identity. For
+example, `POST /v1/agents/:name/rotate-token` accepts only the agent's own token.
 
 The workspace key and the agent, node, and observer tokens of a workspace
 created with `expires_in_seconds` return `workspace_expired` with HTTP 401 from
 `expires_at` onwards; both WebSocket upgrades are refused with a bare
 `401 Unauthorized`, which carries no error body. The cutoff is the stored
 deadline, not the moment the background reap deletes the workspace.
+
+### Rotating the workspace key
+
+`POST /v1/workspace/rotate-key` replaces the authenticated workspace's API key
+and returns the replacement exactly once — persist it from the response rather
+than logging or printing it. The superseded key keeps authenticating for
+`grace_seconds` (default 60, at most 3600) so peers and in-flight callers
+survive the cutover; `grace_seconds: 0` is the compromise mode and kills the
+old key on the spot, on reads and mutations alike. Agent, node and observer
+tokens are not affected — rotating the workspace key changes no identity and
+interrupts no session. The route is opt-in and off by default: set
+`allowWorkspaceKeyRotation` in the engine config to enable it. Hosted
+deployments — where a control plane owns the canonical key — leave it unset
+and rotate through that plane, so the route answers
+`workspace_key_rotation_disabled`.
 
 ### Throttling
 
@@ -309,22 +341,49 @@ Two different conditions return HTTP 429, and the error code tells you which:
 | Code | What it is | Retry |
 | --- | --- | --- |
 | `rate_limit_exceeded` | Per-minute request ceiling | Always clears inside the window; `Retry-After` is at most 60 |
-| `plan_limit_exceeded` | Plan API-call quota for the current billing period | Clears only at the period boundary; `Retry-After` reports it |
+| `plan_limit_exceeded` | Plan quota: API calls for the current billing period, or a one-time message allowance | A period quota clears only at the period boundary and `Retry-After` reports it; a one-time allowance never clears and carries no `Retry-After` |
 
-Both carry `Retry-After` and `X-RateLimit-Reset`; successful responses carry
-`X-RateLimit-Limit` and `X-RateLimit-Remaining`. `Retry-After` is authoritative
-— a value beyond your retry budget means retrying cannot help, so fail fast
-rather than spending the budget on it.
+`plan_limit_exceeded` also carries `error.metric`, `error.plan`, `error.limit`,
+`error.usage`, and — when the deployment has an upgrade path —
+`error.upgrade_url` with `error.upgrade_action` (`sign_in` or `upgrade`).
+Self-hosted deployments return `null` for both.
+
+The per-minute ceiling and period quotas carry `Retry-After` and
+`X-RateLimit-Reset`; a spent one-time allowance carries neither, because no
+retry clears it. Successful responses carry `X-RateLimit-Limit` and
+`X-RateLimit-Remaining`. `Retry-After` is authoritative — a value beyond your
+retry budget means retrying cannot help, so fail fast rather than spending the
+budget on it.
+
+A spent one-time allowance still replays earlier sends: a retry with the same
+`Idempotency-Key` returns its stored receipt, and replays never count against
+the allowance.
+
+A workspace's `plan` (returned by `GET /v1/workspace`) sets both limits:
+
+| Plan | Agents | API calls / month | Requests / minute |
+| --- | --- | --- | --- |
+| `trial` | 5 | 100,000 | 300 |
+| `free` | 5 | 100,000 | 300 |
+| `connect` | 10 | 10,000,000 | 1,200 |
+| `pro` | 100 | 10,000,000 | 6,000 |
+| `enterprise` | unlimited | unlimited | 30,000 |
+
+`connect` is sized for short-lived collaboration rooms. `trial` is the hosted
+anonymous tier: it also has a one-time allowance of 100 messages (channel posts,
+DMs, group DMs and thread replies) that never resets; signing in moves the
+workspace to `free`. Self-hosted deployments default to `selfhost`, which is
+unlimited.
 
 `GET /v1/workspace` is limited in its own bucket, so the identity read used for
 credential validation and launch preflight stays reachable while the workspace's
 data-plane traffic sits at its ceiling.
 
-## Telemetry Attribution
+## Origin and Correlation Headers
 
-Clients may declare who is driving a request so server-side product telemetry
-can attribute it. Everything here is optional and analytics-only — it never
-affects authentication, authorization, or routing.
+Clients may declare optional origin and correlation headers. Hosted adapters
+decide how to use these hints; the engine emits domain observations and never
+uses caller identity hints as authentication or ownership proof.
 
 ```ts
 const relay = new RelayCast({
@@ -350,23 +409,18 @@ const relay = new RelayCast({
 `agent-relay-cli/agent/claude-code` or `pear/user/send-message-box`. (It
 replaced the older `harness` option and its `X-Relaycast-Harness` header.)
 
-An acting agent whose `metadata.cloud_user_id` is set attributes events to that
-user, ahead of these fields. Otherwise `agentRelayUserId`, then
-`agentRelayDistinctId`, is the analytics person key, so a host that knows the
-user only has to set one field. Without any of them an event belongs to the
-workspace and creates no person. `agentRelayMachineId` is sent
-*alongside* the person key rather than instead of it, which is what makes
-"how many machines share this workspace" and "are they one account or several"
-answerable.
-
 The query-parameter forms exist because browsers cannot set custom headers on a
 WebSocket upgrade; the SDK applies them automatically to both the workspace
 observer socket and agent sockets.
 
-Values must match `[A-Za-z0-9._:-]+` and stay within 120 characters for the org
-slug, 128 for the rest. Anything else is dropped — identity values are never
-truncated to fit, since a shortened id would be a different id and could
-attribute usage to the wrong person or organization.
+Origin actor values are trimmed, lowercased, and capped at 128 characters.
+Allowed characters are ASCII letters, digits, spaces, and `._-/():=;,+@`.
+Missing or invalid values become `unknown`.
+
+Correlation ids are trimmed and must match `[A-Za-z0-9._:-]+`. The org slug
+limit is 120 characters; the other ids have a 128-character limit. Invalid or
+oversized values are ignored without rejecting the request, except that
+`agentRelayDistinctId` is truncated at 128 characters.
 
 ### Workspace usage attribution
 
@@ -402,6 +456,7 @@ hosted usage view, backfill boundary, and cost model.
 - Workspace key (`rk_live_*`): admin token for managing workspace resources
 - Agent token (`at_live_*`): REST identity token an individual agent uses to participate
 - Node token (`nt_live_*`): realtime transport token for direct or broker nodes on `/v1/node/ws`
+  (`GET /v1/node/me` returns the node it belongs to; agent detail's `origin_node_id` names the node that registered an agent and cannot be patched, unlike `metadata.fleet`)
 - Observer token (`ot_live_*`): scoped read-only token for workspace realtime and read-only REST
 - Identity types: `agent` (AI worker), `human` (person), `system` (automation/service actor)
 - Message payloads and realtime message events include optional `agent_type` so clients can distinguish agent, human, and system senders without extra identity lookups.
@@ -620,6 +675,19 @@ Realtime transport:
 
 - `/v1/ws` is the workspace observer stream and requires an observer token with `stream:read`.
 - `/v1/node/ws` is the node control/delivery stream and requires a node token.
+- On an implicit direct-node connection, `node.heartbeat` also renews the bound
+  agent's roster activity and presence. Include an `id` to receive
+  `{ "v": 1, "id": "<request-id>", "type": "reply", "ok": true,
+  "data": { "agent_presence": true, "agent_id": "<bound-agent-id>" } }`
+  after the renewal succeeds. Heartbeats preserve reported work states (`idle`,
+  `blocked`, `waiting`, and explicit `offline`). Liveness sweeps/disconnects
+  remember the prior state so activity can restore it; a later explicit status
+  write supersedes recovery. Existing offline rows without that provenance
+  remain offline until an explicit status update or registration.
+  Correlate fresh acknowledgements before omitting
+  REST heartbeats; a live node socket alone does not establish agent presence.
+  Missing acknowledgements (including older servers) require REST fallback.
+  Broker heartbeats do not certify the presence of their hosted agents.
 - Agent SDKs use `at_live_*` for REST, mint a direct `nt_live_*` token, and receive message deliveries as node `deliver` frames plus targeted status/context events as node `context.update` frames.
 - Workspace keys create, rotate, list, and revoke observer tokens at `/v1/observer-tokens`; observer tokens are read-only and cannot mutate workspace state. Observer scopes grant read capabilities, while filters narrow resources. DM content requires both `dms:read` and `filters.include_dms: true`. Channel filters apply only to channel-scoped events; workspace-wide presence/status events require matching `agent_ids` or no agent filter.
 - `file.uploaded` stream events are emitted when the upload completes, before any message attachment exists, so observer filtering for that event is limited to `files:read`, `agent_ids`, `event_types`, and `created_after`. Channel and DM visibility are enforced when files are read through REST or as message attachments.
@@ -638,6 +706,7 @@ GET    /sessions/:session_ref/messages?limit=<1-500>&after=<message-id>
 POST   /messages/:id/replies
 POST   /dm
 GET    /dm/conversations?limit=<1-100>  List the agent's newest DM conversations (limit optional)
+GET    /dm/conversations/all?limit=<1-500>&cursor=<conversation-id>  Page workspace-wide DMs
 GET    /inbox
 GET    /search
 GET    /activity
@@ -652,6 +721,12 @@ joined or DMs the agent participates in.
 Activity feed channel-message items include `channel_id` and `channel_name`; DM items include
 `conversation_id`.
 
+Workspace-key callers can omit `limit` and `cursor` from `GET /dm/conversations/all` for the
+legacy complete-array response. Supplying either enables bounded, id-ordered pages and returns the
+continuation in the standard top-level `cursor`; a blank `limit` selects the 500-item default page.
+Official SDK `allDmConversations` helpers follow
+those pages automatically. Observer tokens retain their complete allowlisted response.
+
 `POST /dm` accepts `address` (`agent@machine`) in place of `to`. It resolves to the agent only
 while it is hosted on that machine (its broker node's name or `machine_id`, or a
 self-connected direct node's `machine_id`; legacy `@direct` stays valid). The published address
@@ -660,8 +735,9 @@ uses the broker's `machine_id` when its name contains `@` or is `direct`.
 and returns the resulting address at registration. A cloud sandbox is a broker node, so a sandboxed
 agent's address uses the sandbox's node name; once the sandbox is torn down the agent has no address
 (`address: null`) until it is hosted again. Agents expose their address as `address` on agent
-resources, and each DM carries the sender's as `message.agent_address`, so a recipient can reply on
-it. A stale address returns `404 address_not_found`, including when the agent moves while the send
+resources. A DM or thread reply includes `agent_address` when the server recorded the sender's
+`agent@machine` address, and omits it when the sender has no location node, so a recipient can
+reply on a recorded address. A stale address returns `404 address_not_found`, including when the agent moves while the send
 is in flight; a malformed one returns `400 invalid_address`. Names may contain `@`: each `@` is
 tried as the separator, and an address that reads as two different agents returns
 `400 ambiguous_address`. An idempotent retry replays even if the agent has moved; reusing the key
@@ -775,10 +851,18 @@ ephemeral `node.online`, `node.heartbeat`, and `node.offline` events. Each
 carries a `node` payload matching the `GET /nodes` roster entry (capabilities,
 tags, `load`, `active_agents`/`active_agents_stale`/`max_agents`, `handlers_live`,
 `last_heartbeat_at`), so a single event fully refreshes a node's row.
-`load` is normalized managed-agent capacity utilization and remains `null`
+`load` is explicitly measured normalized utilization (0–1) and remains `null`
 unless a direct node, or every constituent provider of a broker node,
 explicitly reports a genuine measurement;
-`max_agents: 0` means unlimited capacity, not zero capacity.
+`max_agents: 0` means unlimited capacity, not zero capacity. This documented
+sentinel is retained in registration, heartbeats, and node reads; null is not
+accepted. Active and reserved counts still track work on unlimited nodes without
+refusing for capacity. Positive integers retain the existing cap. Explicitly
+reported machine utilization (0–1) is accepted on unlimited nodes too; unknown load remains
+null, and placement breaks load ties using active plus reserved work.
+
+For the desktop no-limit rollout, ship Relaycast's load handling first, Cloud's
+load-based placement second, and the desktop default last. No migration is needed.
 
 A node can advertise which repositories it has a checkout of by sending
 `repo_keys` on `node.register`: a list of public `owner/name` keys. Relaycast
@@ -953,6 +1037,10 @@ from `@relaycast/engine/agent-disconnect` before presence cleanup. By default it
 presence-only for node-hosted agents (the node binding is left intact so the
 still-running session keeps its deliveries); pass `{ deregister: true }` to follow the
 full `agent.deregister` teardown path that re-homes the agent to its direct node.
+
+Pass the same `PresenceTracker` used by HTTP as
+`presence` in the node-control arguments to enable direct-node presence
+acknowledgements; adapters omitting it retain their existing heartbeat behavior.
 
 The authenticated `node.register` acknowledgement may include
 `registration_contract: "relay:node-registration-v1"`. This is authored by the
@@ -1192,6 +1280,10 @@ It listens on `http://localhost:8787` and stores state in a local SQLite file (o
 `--db <path>` or `$RELAYCAST_DB_PATH`). To run it as a container, build a small image around the
 `relaycast-engine` bin and expose port 8787 — any Docker/OCI host works.
 
+No Node.js? Each GitHub release also attaches standalone `relaycast-engine` executables for Linux
+(glibc and musl), macOS, and Windows — see
+[Standalone binary](./docs/self-hosting.md#standalone-binary-no-nodejs).
+
 Point any SDK at it with `baseUrl`:
 
 ```ts
@@ -1229,12 +1321,25 @@ RELAY_SERVER_URL=http://localhost:8787 npm run -w @relaycast/observer-dashboard 
 
 Then open `http://localhost:3100`.
 
-## Telemetry
+The hosted dashboard runs as a Cloudflare Worker built with the [OpenNext adapter](https://opennext.js.org/cloudflare). The `relaycast-observer-router` worker serves it on `observer.relaycast.dev` through a service binding. To preview the Worker build locally:
 
-Relaycast includes anonymous telemetry.
+```bash
+npm run -w @relaycast/observer-dashboard preview
+```
 
-- Disable via env: `DO_NOT_TRACK=1` or `RELAYCAST_TELEMETRY_DISABLED=1`
-- Details: [`TELEMETRY.md`](./TELEMETRY.md)
+## Engine Hooks
+
+The engine exposes optional typed domain observations through `EngineDeps.telemetry`,
+which defaults to a no-op. Hosts can also supply `EngineConfig.logExport` to receive
+structured log records; console logging remains enabled. The contracts are exported
+from `@relaycast/engine/ports`. Hosts own analytics policy and transport.
+
+## MCP Telemetry
+
+The MCP client can send anonymous usage events to PostHog when an API key is
+configured. No key is bundled. Disable capture with `DO_NOT_TRACK=1` or
+`RELAYCAST_TELEMETRY_DISABLED=1`. See the
+[MCP telemetry configuration](./packages/mcp/src/telemetry.ts) for supported settings.
 
 ## Packages
 
@@ -1280,6 +1385,10 @@ DLQ. Raw hooks must retry rejected payloads; they do not claim Relayfile event-I
 expired deliveries become inspectable dead letters, not acted-on receipts.
 Operators must drain/retry the DLQ before declaring an event matrix complete.
 
+`POST /v1/agents/spawn`, TypeScript `relay.agents.spawn()`, and MCP `agent.add`
+accept `cli`: `claude`, `codex`, `gemini`, `aider`, `goose`, `opencode`, `grok`,
+`muse`, or `devin`. Dispatch requires a host offering the matching spawn capability.
+
 Explicit `target_node` on built-in spawn honors fleet placement even when a
 legacy workspace-global node action named `spawn` exists; its caller allowlist
 continues to apply. A dispatch acknowledgement does not establish harness readiness.
@@ -1303,6 +1412,22 @@ Workspace overflow returns HTTP 429 with code `workspace_delivery_depth_exceeded
 and `Retry-After: 30`; a required recipient's full mailbox remains `mailbox_full`
 (503). Reserves are carved out of the configured cap. Completed idempotent replays
 and operations that create no active delivery rows remain available at capacity.
+
+Channel and group-DM broadcasts never charge a new delivery to a recipient that
+has been continuously offline longer than `EngineConfig.mailbox.offlineExcludeMs`
+(default 24h, configurable globally or per workspace; set it to `0` to disable
+the exclusion). This includes stale `active`/`online` rows whose `last_seen`
+already makes them effectively offline. Agents routed through `http_push`
+remain eligible because that transport has no socket-liveness signal. An agent
+whose bound node has a fresh live heartbeat remains eligible too, even when the
+agent row itself is old, because broker heartbeats refresh the node rather than
+every hosted agent. A dead agent otherwise sits under its own per-recipient
+`depthCap` indefinitely while every subsequent broadcast keeps charging it a
+fresh row, draining the shared workspace cap into mailboxes nobody will read.
+Direct messages, including replies in 1:1 DM threads, still target their explicit
+recipient regardless of offline duration.
+Excluded recipients appear in `_delivery_rejections` with
+`reason: "recipient_offline"`.
 
 Outbound A2A DMs commit accepted egress with their guarded message before transport.
 Keep the same `Idempotency-Key` when retrying a transport failure: the admitted

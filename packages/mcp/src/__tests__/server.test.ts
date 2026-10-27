@@ -189,9 +189,9 @@ describe('createRelayMcpServer', () => {
       .not.toContain('message.file.download');
   });
 
-  it('lists all 47 tools', async () => {
+  it('lists all 48 tools', async () => {
     const tools = await client.listTools();
-    expect(tools.tools.length).toBe(47);
+    expect(tools.tools.length).toBe(48);
     const toolNames = tools.tools.map((t) => t.name).sort();
     expect(toolNames).toEqual([
       'agent.add',
@@ -239,6 +239,7 @@ describe('createRelayMcpServer', () => {
       'workspace.create',
       'workspace.join',
       'workspace.list',
+      'workspace.rotate_key',
       'workspace.set_key',
       'workspace.switch',
     ]);

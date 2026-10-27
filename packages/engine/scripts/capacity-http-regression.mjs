@@ -8,6 +8,7 @@ import { drizzle } from 'drizzle-orm/d1';
 import { Miniflare } from 'miniflare';
 import Database from 'better-sqlite3';
 import { buildChannelDeliveryWrite, buildDirectDeliveryWrite } from '../dist/engine/deliveryWrites.js';
+import { DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS } from '../dist/engine/mailboxConfig.js';
 import { runAtomicWrites } from '../dist/ports/database.js';
 import { resolveWorkspaceDeliveryPolicyFor, resolveWorkspaceDeliveryPolicy } from '../dist/engine/workspaceDeliveryPolicy.js';
 import { deriveRelayfileInboundSecret } from '../dist/routes/relayfileInbound.js';
@@ -138,9 +139,9 @@ try {
     assert.equal(await scalar('SELECT count(*) FROM message_sessions WHERE workspace_id=? AND session_ref=?',ws,'must-rollback'),0);
     assert.equal(await scalar('SELECT count(*) FROM messages WHERE workspace_id=?',ws),1);
     const message=(await rows('SELECT id FROM messages WHERE workspace_id=?',ws))[0].id;
-    await runAtomicWrites(db,tx=>[buildChannelDeliveryWrite(tx,{workspaceId:ws,messageId:message,channelId:ws+'ch',senderAgentId:ws+'sender',mode:'immediate',ttlMs:3600000,depthCap:1,rejectOnOverflow:true,workspacePolicy:{cap:1}})],{requireAtomic:true});
+    await runAtomicWrites(db,tx=>[buildChannelDeliveryWrite(tx,{workspaceId:ws,messageId:message,channelId:ws+'ch',senderAgentId:ws+'sender',mode:'immediate',ttlMs:3600000,depthCap:1,offlineExcludeMs:DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS,rejectOnOverflow:true,workspacePolicy:{cap:1}})],{requireAtomic:true});
     await run("UPDATE deliveries SET status='acked' WHERE workspace_id=?",ws);
-    await runAtomicWrites(db,tx=>[buildChannelDeliveryWrite(tx,{workspaceId:ws,messageId:message,channelId:ws+'ch',senderAgentId:ws+'sender',mode:'immediate',ttlMs:3600000,depthCap:1,rejectOnOverflow:true,workspacePolicy:{cap:1}})],{requireAtomic:true});
+    await runAtomicWrites(db,tx=>[buildChannelDeliveryWrite(tx,{workspaceId:ws,messageId:message,channelId:ws+'ch',senderAgentId:ws+'sender',mode:'immediate',ttlMs:3600000,depthCap:1,offlineExcludeMs:DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS,rejectOnOverflow:true,workspacePolicy:{cap:1}})],{requireAtomic:true});
     assert.equal(await depth(ws),0);record('HTTP new key rejected, recorded replay, rollback, duplicate settled identity');
   }
   {
@@ -232,7 +233,7 @@ try {
     for(const concurrent of [false,true]){
       const ws=await seed('large-'+concurrent,4889,{cap:5000});
       const metricsStart=d1Metrics.length;
-      const query=buildChannelDeliveryWrite(db,{workspaceId:ws,messageId:'plan-only',channelId:ws+'ch',senderAgentId:ws+'sender',mode:'immediate',ttlMs:3600000,depthCap:1000,workspacePolicy:{cap:5000}}).toSQL();
+      const query=buildChannelDeliveryWrite(db,{workspaceId:ws,messageId:'plan-only',channelId:ws+'ch',senderAgentId:ws+'sender',mode:'immediate',ttlMs:3600000,depthCap:1000,offlineExcludeMs:DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS,workspacePolicy:{cap:5000}}).toSQL();
       const plan=await rows('EXPLAIN QUERY PLAN '+query.sql,...query.params);
       assert.ok(plan.some(row=>String(row.detail).includes('MATERIALIZE capacity_candidates')));assert.ok(plan.some(row=>String(row.detail).includes('MATERIALIZE capacity_admission')));
       const a=concurrent?null:await send(ws,'large A');if(a)expectStatus(a,201);

@@ -19,7 +19,7 @@ describe('integration delivery backpressure and join freshness', () => {
     const { data: channel } = await response.json();
     const db = stack.runtime.handle.db;
     const emit = (text: string) => triggerIntegrationMessage(db, ws.workspaceId, channel.id,
-      { text, source: 'github', author: 'GitHub' }, { mailbox: { ttlMs: 60_000, depthCap: 1 } });
+      { text, source: 'github', author: 'GitHub' }, { mailbox: { ttlMs: 60_000, depthCap: 1, offlineExcludeMs: 24 * 60 * 60 * 1000 } });
     const first = await emit('unique-first');
     const late = await registerAgent(stack.app, ws.workspaceKey, 'late');
     await post('/v1/channels/events/join', late.token);
@@ -42,7 +42,7 @@ describe('integration delivery backpressure and join freshness', () => {
     const { data: channel } = await ch.json();
     const db = stack.runtime.handle.db;
     const emit = (text: string) => triggerIntegrationMessage(db, ws.workspaceId, channel.id,
-      { text, source: 'github', author: 'GitHub' }, { mailbox: { ttlMs: 60_000, depthCap: 2 } });
+      { text, source: 'github', author: 'GitHub' }, { mailbox: { ttlMs: 60_000, depthCap: 2, offlineExcludeMs: 24 * 60 * 60 * 1000 } });
     const events = Array.from({length: 8}, (_, i) => `unique-${i}`);
     const burst = await Promise.allSettled(events.map(emit));
     expect(burst.filter(r => r.status === 'fulfilled')).toHaveLength(2);

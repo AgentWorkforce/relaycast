@@ -3,9 +3,10 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { touchLastSeen } from '../engine/agent.js';
 import type { AppEnv } from '../env.js';
 import type { AuthRequire } from '../ports/auth.js';
-import { getAuthTokenKind } from '../auth/tokenKind.js';
+import { getAuthTokenKind, requiredTokenMessage } from '../auth/tokenKind.js';
 import { authenticateUnexpired } from '../auth/workspaceExpiry.js';
 import { jsonError } from '../lib/httpResponse.js';
+import { sha256Hex } from '../lib/crypto.js';
 import {
   hasAnyObserverScope,
   type ObserverScope,
@@ -22,6 +23,28 @@ function extractToken(authHeader: string | undefined): string | null {
   return authHeader.slice(7);
 }
 
+async function presentedCredentialHash(token: string): Promise<string | undefined> {
+  // AuthProvider.hashToken describes storage, and may return a raw token.
+  // Telemetry provenance always uses its own irreversible SHA-256 digest.
+  try { return await sha256Hex(token); } catch { return undefined; }
+}
+
+/**
+ * The principal a single-kind requirement promises its handlers, when `result`
+ * lacks it. The provider is a host seam: a host cache that answered a workspace
+ * key for a `require: 'agent'` route used to hand `/agents/:name/rotate-token`
+ * a request with no agent, which it dereferenced into a 500.
+ */
+function missingPrincipal(
+  require: AuthRequire,
+  result: { agent?: unknown; node?: unknown; observerToken?: unknown },
+): 'agent' | 'node' | 'observer' | null {
+  if (require === 'agent' && !result.agent) return 'agent';
+  if (require === 'node' && !result.node) return 'node';
+  if (require === 'observer' && !result.observerToken) return 'observer';
+  return null;
+}
+
 function makeAuthMiddleware(require: AuthRequire) {
   return createMiddleware<AppEnv>(async (c, next) => {
     const token = extractToken(c.req.header('Authorization'));
@@ -34,8 +57,13 @@ function makeAuthMiddleware(require: AuthRequire) {
     if (!result.ok) {
       return jsonError(c, result.code, result.message, result.status as ContentfulStatusCode);
     }
+    const missing = missingPrincipal(require, result);
+    if (missing) {
+      return jsonError(c, 'unauthorized', requiredTokenMessage(missing), 401);
+    }
 
     c.set('workspace', result.workspace);
+    c.set('agentCredentialHash', result.agent ? await presentedCredentialHash(token) : undefined);
     if (result.agent) {
       c.set('agent', result.agent);
       // Touch lastSeen (debounced, fire-and-forget)
@@ -87,6 +115,12 @@ export function requireWorkspaceRead(
     if (!result.ok) {
       return jsonError(c, result.code, result.message, result.status as ContentfulStatusCode);
     }
+    // An observer token answered without its observer identity would otherwise
+    // fall through below and read with the workspace's full access, unscoped.
+    const missing = missingPrincipal(require, result);
+    if (missing) {
+      return jsonError(c, 'unauthorized', requiredTokenMessage(missing), 401);
+    }
 
     if (result.observerToken) {
       if (!hasAnyObserverScope(result.observerToken, requiredScopes)) {
@@ -94,6 +128,7 @@ export function requireWorkspaceRead(
       }
       c.set('workspace', result.workspace);
       c.set('agent', undefined);
+      c.set('agentCredentialHash', undefined);
       c.set('node', undefined);
       c.set('observerToken', result.observerToken);
       await next();
@@ -108,6 +143,7 @@ export function requireWorkspaceRead(
     }
 
     c.set('workspace', result.workspace);
+    c.set('agentCredentialHash', result.agent ? await presentedCredentialHash(token) : undefined);
     if (result.agent) {
       c.set('agent', result.agent);
       if (Date.now() - result.agent.lastSeen.getTime() > LAST_SEEN_DEBOUNCE_MS) {

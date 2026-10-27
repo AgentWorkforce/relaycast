@@ -22,6 +22,194 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - A status patch broadcasts the same derived presence the response returns.
 
+## [11.1.0] - 2026-10-27
+
+### Added
+
+- New `trial` plan for hosted anonymous workspaces: a one-time allowance of 100 messages (channel posts, DMs, group DMs, thread replies) that never resets. `free`, paid plans and self-hosted `selfhost` are unchanged.
+- `plan_limit_exceeded` errors now carry `metric`, `plan`, `limit`, `usage`, and, when the deployment has an upgrade path, `upgrade_url` and `upgrade_action` (`sign_in` or `upgrade`).
+- Standalone `relaycast-engine` executables for Linux (glibc and musl, x64 and arm64), macOS (x64 and arm64), and Windows x64 are attached to each GitHub release as `relaycast-engine-<version>-<os>-<arch>[.exe]` with `.sha256` files; they run the self-host server with no Node.js, npm, compiler, or native addon.
+- `relaycast-engine --version` prints the engine version.
+
+### Fixed
+
+- Listing deliveries filtered by status no longer scans the whole workspace's delivery history.
+- Agent-, node- and observer-token routes answer 401 when a host auth provider returns a result without that identity, instead of a 500 (agent routes) or unscoped workspace access (observer reads).
+
+## [11.0.0] - 2026-10-22
+
+### Changed
+
+- Engine hosting hooks now expose typed domain observations and an optional generic log callback; hosts own analytics event, identity, profile, and transport policy.
+
+### Fixed
+
+- Resolve hosted analytics ownership from authenticated actor credentials; keep standalone MCP and website events anonymous and personless.
+- Keep MCP anonymous identity stable when an API key is absent, recover damaged identity files without replacing newer shared identities, and persist opt-out invalidations so failed identity replacement cannot restore an old ID after restart.
+- Leave an unreadable MCP telemetry file in place so a failed read cannot replace a newer opt-out with an older in-memory identity.
+- Resume website analytics in the same page after Do Not Track is turned off, and erase the stored anonymous id while tracking is off.
+
+## [10.6.5] - 2026-10-21
+
+### Fixed
+
+- Run the mention backfill page writes sequentially
+
+## [10.6.4] - 2026-10-21
+
+### Fixed
+
+- Inbox mention lookup uses a workspace-scoped index after its bounded backfill completes; delivery sweeps and per-node agent reads avoid full-history scans that stalled the shared database and surfaced as `database_overloaded`.
+- Every response includes its request id in the `X-Request-Id` header.
+
+## [10.6.3] - 2026-10-19
+
+- Unlimited-capacity nodes retain explicitly reported load for placement; load ties count both active and reserved agents.
+
+## [10.6.2] - 2026-10-18
+
+### Changed
+
+- The `connect` plan's monthly `api_calls` rises from 3,000,000 to 10,000,000, so a full 10-seat room polling for its whole 7-day life stays within quota.
+
+## [10.6.1] - 2026-10-18
+
+### Fixed
+
+- Muse and Devin are accepted by typed agent spawning, API validation, and MCP; Rust registration preserves Muse, Devin, OpenCode, and Grok CLI hints.
+- A node's exact release no longer fails with `agent_identity_mismatch` when the node's inventory stops listing the ended agent before its release result arrives; the release completes and tombstones the agent.
+
+## [10.6.0] - 2026-10-18
+
+### Added
+
+- A `connect` workspace plan for short-lived collaboration rooms: 10 agents, 3M API calls and 100k messages per month, 1,200 requests per minute — between `free` and `pro`.
+- `POST /v1/workspace/rotate-key` self-serve workspace-key rotation: the superseded key keeps a bounded `grace_seconds` continuity window (`0` for immediate compromise cutoff), agent/node/observer tokens and sessions are untouched, and deployments whose canonical key is externally managed refuse the route. The TypeScript SDK exposes it as `relay.workspace.rotateKey()`.
+
+## [10.5.1] - 2026-10-16
+
+### Fixed
+
+- Long-idle agents hosted by a freshly heartbeating direct node or broker provider remain eligible for channel and group-DM fanout even when their own `last_seen` timestamp is old; route heartbeats refresh the route, not every hosted agent row. Provider disconnect and inventory-removal handling keeps that exemption scoped to routes that are actually reachable.
+
+## [10.5.0] - 2026-10-16
+
+### Added
+
+- Channel and group-DM broadcasts stop charging new deliveries to recipients effectively offline longer than `EngineConfig.mailbox.offlineExcludeMs` (default 24h), configurable globally or per workspace and disabled with `0`; idle `http_push` routes remain eligible because they have no socket-liveness signal. Delivery-failure events preserve the `recipient_offline` reason for SDK handlers.
+
+### Fixed
+
+- Long-offline agents no longer accumulate a fresh delivery on every subsequent broadcast, which let a handful of dead agents exhaust a workspace's shared delivery-depth cap and starve live traffic. Replies in 1:1 DM threads remain direct deliveries.
+
+## [10.4.2] - 2026-10-16
+
+### Fixed
+
+- Unexpected server errors inside route handlers now reach the global error handler, so they are logged and reported to telemetry, and a host can classify them (the hosted service answers a temporarily overloaded database with a retryable `503 database_overloaded` and `Retry-After` instead of `500 internal_error`). Their error bodies carry a `request_id` that matches the server logs.
+
+### Changed
+
+- Rust SDK 10.0.0 (breaking): `RelayError::Api` keeps the full JSON error body as `details` (read it with `RelayError::details()`), so callers can see server metadata such as `plan` and `upgrade_available` on workspace admission 429s. Struct literals add `details: None`; patterns that destructure the variant need a trailing `..`.
+
+## [10.4.1] - 2026-10-15
+
+### Fixed
+
+- Newly initialized webhooks remain immediately due when database work crosses a clock tick, avoiding a spurious retry failure before the first delivery attempt.
+- Rust SDK: `AgentClient::heartbeat()` and other acknowledgement calls answered `{ "ok": true, "data": null }` no longer fail with "Response missing data field" after the server applied them.
+- Rust SDK success responses must include `data`; an explicit null acknowledgement remains valid, while a missing payload is rejected.
+
+## [10.4.0] - 2026-10-13
+
+### Added
+
+- Agent detail (`GET /v1/agents/{name}`) returns `origin_node_id`: the node whose authenticated connection registered the agent. It cannot be patched, so a service can tell which node spawned an agent without trusting `metadata.fleet`.
+- `GET /v1/node/me` returns the id, name and workspace of the node a node token belongs to, so a service handed the token can prove which node it is for.
+
+## [10.3.2] - 2026-10-13
+
+### Fixed
+
+- A node with many unfinished releases no longer has every `inventory.sync` rejected with `d1_pressure`, so it stops reconnecting in a loop.
+
+## [10.3.1] - 2026-10-13
+
+### Fixed
+
+- A spawn whose first send to a live node failed now starts when that node reconnects, instead of staying pending for up to 72 hours.
+
+## [10.3.0] - 2026-10-13
+
+### Added
+
+- Direct-node WebSocket heartbeats can maintain agent presence without REST heartbeats, with correlated acknowledgements for safe client fallback.
+
+### Fixed
+
+- Node liveness reconciliation releases control admission after one fenced claim while preserving same-second reconnects and their newly dispatched work.
+- Presence heartbeats preserve reported work states; expiry and node disconnect recovery restore only the state lost to liveness, without erasing an explicit offline report.
+- Capability-free node heartbeats now write the provider and node rows in two statements instead of a read-then-write chain, lowering steady-state D1 pressure on the hosted node liveness path.
+
+## [10.1.1] - 2026-10-12
+
+### Fixed
+
+- Thread replies preserve the sender's exact `agent@machine` address when the server recorded one, including responses, thread history, direct and session reads, queued and replayed deliveries, and observer events. The field is omitted when the sender has no location node.
+
+## [10.1.0] - 2026-10-11
+
+### Added
+
+- Scheduled `sweepUnreachableDeliveries` drain: dead-letters active deliveries routed to nodes offline past a 30m grace window (`delivery.failed` reason `node_unreachable`), so undeliverable mail stops consuming workspace delivery-depth capacity ahead of its TTL.
+
+### Fixed
+
+- Agent identity lookups keep their own rate-limit allowance instead of competing with the workspace's message traffic, so a busy workspace can still register and verify agents.
+- A handle whose delivery identity was previously released can be registered again instead of being refused permanently.
+
+## [10.0.3] - 2026-10-11
+
+### Fixed
+
+- Roll back recovered admission when replayed landing fails
+- Recover committed admission after a lost batch response
+- Make refused agent-slot admission abort the atomic group
+- Batch agent.register statement groups on D1
+- Compare is_global in the heartbeat drift check
+- Slim the node.heartbeat statement count
+- Index the global stale-online-node reconcile scan
+- Make the tombstone index provable under bound parameters
+- Index cancelled-spawn tombstone check on agent.register
+
+## [10.0.2] - 2026-10-11
+
+### Fixed
+
+- Brokered agent registration issues three batched D1 statement groups instead of ~11 sequential queries, keeping spawns inside the node liveness deadline on a loaded database.
+- Official SDK workspace-wide DM listing uses bounded cursor pages internally while preserving its complete-array return value; legacy unpaginated HTTP callers and scoped observer links retain their existing full-list behavior.
+- Conversation-scoped observer links load only their allowed direct messages instead of enriching every DM in the workspace first.
+- Relay Connect observer pages refresh only the affected conversation after a realtime DM and reconcile the full scoped list every five minutes, avoiding a full conversation-list read on every event or 15-second tick.
+- Agent registration through a node no longer scans the full failed-invocation history on every `agent.register`, removing the ~2s read that tipped hosted node-control frames into `d1_pressure` timeouts on large workspaces.
+- The hosted maintenance sweep that reconciles stale online nodes no longer full-scans the node table every tick, removing a recurring ~24k-row read from the liveness path.
+- Node heartbeats no longer re-materialize identical action manifests and no longer write the provider row twice per beat, cutting the steady-state statement count on the hosted node liveness path by more than half.
+
+## [10.0.1] - 2026-10-11
+
+### Fixed
+
+- Relay Connect observer links no longer show "invalid, revoked" when the workspace is rate-limited or Relaycast is briefly unavailable. The page says it is temporarily unavailable, retries with bounded backoff in the same tab, and offers "Try again". Only a link the engine rejects or no longer recognises (400/401/403/404) shows as revoked.
+- `GET /v1/dm/conversations/all` no longer fails with `internal_error` for a workspace with more than about 100 DM conversations on Cloudflare D1.
+
+## [10.0.0] - 2026-10-11
+
+### Changed
+
+- Default and `status=all` agent rosters now show only agents seen within seven days. Use `include_stale=1` for historical discovery; `include_metadata=0` returns a lean roster. Metadata and the array response remain available by default.
+
+### Fixed
+
+- Thread reads seek the requested thread instead of scanning retained workspace history.
 ## [9.2.0] - 2026-10-09
 
 ### Added
@@ -697,7 +885,29 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v9.2.0...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v11.1.0...HEAD
+[11.1.0]: https://github.com/AgentWorkforce/relaycast/compare/v11.0.0...v11.1.0
+[11.0.0]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.5...v11.0.0
+[10.6.5]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.4...v10.6.5
+[10.6.4]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.3...v10.6.4
+[10.6.3]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.2...v10.6.3
+[10.6.2]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.1...v10.6.2
+[10.6.1]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.0...v10.6.1
+[10.6.0]: https://github.com/AgentWorkforce/relaycast/compare/v10.5.1...v10.6.0
+[10.5.1]: https://github.com/AgentWorkforce/relaycast/compare/v10.5.0...v10.5.1
+[10.5.0]: https://github.com/AgentWorkforce/relaycast/compare/v10.4.2...v10.5.0
+[10.4.2]: https://github.com/AgentWorkforce/relaycast/compare/v10.4.1...v10.4.2
+[10.4.1]: https://github.com/AgentWorkforce/relaycast/compare/v10.4.0...v10.4.1
+[10.4.0]: https://github.com/AgentWorkforce/relaycast/compare/v10.3.2...v10.4.0
+[10.3.2]: https://github.com/AgentWorkforce/relaycast/compare/v10.3.1...v10.3.2
+[10.3.1]: https://github.com/AgentWorkforce/relaycast/compare/v10.3.0...v10.3.1
+[10.3.0]: https://github.com/AgentWorkforce/relaycast/compare/v10.1.1...v10.3.0
+[10.1.1]: https://github.com/AgentWorkforce/relaycast/compare/v10.1.0...v10.1.1
+[10.1.0]: https://github.com/AgentWorkforce/relaycast/compare/v10.0.3...v10.1.0
+[10.0.3]: https://github.com/AgentWorkforce/relaycast/compare/v10.0.2...v10.0.3
+[10.0.2]: https://github.com/AgentWorkforce/relaycast/compare/v10.0.1...v10.0.2
+[10.0.1]: https://github.com/AgentWorkforce/relaycast/compare/v10.0.0...v10.0.1
+[10.0.0]: https://github.com/AgentWorkforce/relaycast/compare/v9.2.0...v10.0.0
 [9.2.0]: https://github.com/AgentWorkforce/relaycast/compare/v9.1.0...v9.2.0
 [9.1.0]: https://github.com/AgentWorkforce/relaycast/compare/v9.0.0...v9.1.0
 [9.0.0]: https://github.com/AgentWorkforce/relaycast/compare/v8.16.0...v9.0.0

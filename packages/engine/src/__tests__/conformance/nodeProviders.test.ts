@@ -253,7 +253,7 @@ describe('node providers', () => {
     expect(invocation.providerAcceptedAttempt).toBe(invocation.dispatchAttempts);
   }
 
-  it('keeps a mixed finite and unbounded provider aggregate unlimited with unreported load', async () => {
+  it('keeps a mixed finite and unbounded provider aggregate unlimited with measured load', async () => {
     const ws = await createWorkspace(stack.app, 'np-unbounded-load');
     await enrollNode(ws, 'node_a', 'alpha');
     await attachProvider(
@@ -277,13 +277,13 @@ describe('node providers', () => {
       .select({ maxAgents: nodes.maxAgents, load: nodes.load, loadReported: nodes.loadReported })
       .from(nodes)
       .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_a')));
-    expect(node).toEqual({ maxAgents: 0, load: 0, loadReported: false });
+    expect(node).toEqual({ maxAgents: 0, load: 0.5, loadReported: true });
 
     const roster = await stack.app.request('/v1/nodes?name=alpha', {
       headers: { authorization: `Bearer ${ws.workspaceKey}` },
     });
     const body = await roster.json() as { data: Array<Record<string, unknown>> };
-    expect(body.data[0]).toMatchObject({ max_agents: 0, load: null });
+    expect(body.data[0]).toMatchObject({ max_agents: 0, load: 0.5 });
   });
 
   it('keys a registration with no provider field to the synthetic default provider', async () => {
@@ -2015,7 +2015,7 @@ describe('node providers', () => {
     expect(deliverFramesOfType(py.sock, 'message.created').length).toBeGreaterThanOrEqual(1);
   });
 
-  it('attributes node-token message telemetry to the `from` agent', async () => {
+  it('keeps node-token telemetry personless while preserving the display sender', async () => {
     const ws = await createWorkspace(stack.app, 'nt-msg-telemetry');
     const poster = await registerAgent(stack.app, ws.workspaceKey, 'poster');
     await stack.runtime.deps.db
@@ -2030,12 +2030,13 @@ describe('node providers', () => {
 
     const created = capture.mock.calls
       .map(([event]) => event)
-      .find((event) => event.name === 'relaycast_server_message_created');
+      .find((event) => event.kind === 'message.created');
     expect(created).toMatchObject({
-      distinctId: 'user_poster',
-      setOnce: { first_human_message_at: expect.any(String) },
-      properties: { sender_type: 'human', agent_id: poster.agentId, agent_name: 'poster' },
+      workspaceId: ws.workspaceId,
+      sender: { type: 'human', id: poster.agentId, name: 'poster' },
     });
+    expect(created?.authenticatedActor).toBeUndefined();
+    expect(created).not.toHaveProperty('setOnce');
   });
 
   it('requires `from` on a node-token message', async () => {
