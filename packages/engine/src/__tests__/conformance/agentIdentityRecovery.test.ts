@@ -169,6 +169,116 @@ describe('explicit agent identity recovery', () => {
     expect((await authenticate(await responseToken(recovered))).status).toBe(200);
   });
 
+  it('only reclaims the tombstone belonging to the SAME name', async () => {
+    // Review caught this: workspace + released status alone would let any new
+    // name in the workspace consume a different agent's verifier and inherit
+    // recovery authority backed by that agent's proof. Reclaiming `foo` must
+    // only ever consume what `foo` left behind.
+    const workspace = await createWorkspace(stack.app, 'cross-name-reclaim-workspace');
+    const verifierHash = 'e'.repeat(64);
+    const register = (name: string) => stack.app.request('/v1/agents', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${workspace.workspaceKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ name, recovery_proof_hash: verifierHash }),
+    });
+
+    expect((await register('original-name')).status).toBe(201);
+    expect((await stack.app.request('/v1/agents/original-name', {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${workspace.workspaceKey}` },
+    })).status).toBe(204);
+
+    // A DIFFERENT name must not inherit the tombstone's verifier.
+    const other = await register('unrelated-name');
+    expect(other.status).toBe(409);
+    await expect(other.json()).resolves.toMatchObject({
+      error: { code: 'agent_recovery_proof_conflict' },
+    });
+
+    // ...and the tombstone's credential is still there, so the rightful name
+    // can still reclaim it afterwards.
+    expect((await register('original-name')).status).toBe(201);
+  });
+
+  it('never takes a verifier from a LIVE identity in the same workspace', async () => {
+    // The guard that matters. Reclaim only applies to a tombstoned holder; if
+    // it ever applied to a live one it would hand that agent's recovery
+    // authority to whoever registered next. The existing reuse test is
+    // cross-workspace, where the workspace scope alone would block it, so this
+    // one is deliberately SAME-workspace: it fails if the released check is
+    // dropped while every other test still passes.
+    const workspace = await createWorkspace(stack.app, 'live-verifier-workspace');
+    const verifierHash = 'd'.repeat(64);
+    const register = (name: string) => stack.app.request('/v1/agents', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${workspace.workspaceKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ name, recovery_proof_hash: verifierHash }),
+    });
+
+    const live = await register('live-holder');
+    expect(live.status).toBe(201);
+    const liveAgent = await live.json() as { data: { id: string } };
+
+    const stolen = await register('would-be-thief');
+    expect(stolen.status).toBe(409);
+    await expect(stolen.json()).resolves.toMatchObject({
+      error: { code: 'agent_recovery_proof_conflict' },
+    });
+
+    // The holder keeps its credential: refusing the request is not enough if
+    // the row was already deleted on the way to refusing it.
+    const rows = await stack.runtime.deps.db
+      .select()
+      .from(agentRecoveryCredentials)
+      .where(eq(agentRecoveryCredentials.verifierHash, verifierHash));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.agentId).toBe(liveAgent.data.id);
+  });
+
+  it('lets a released name be registered again with the same derived verifier', async () => {
+    // Release tombstones the agent but keeps its credential enrolled, and the
+    // verifier is globally unique. A caller deriving the verifier from stable
+    // inputs -- workspace, owner, agent name -- re-presents the same value on
+    // every attempt, so without reclaim a released name is unregisterable
+    // forever and no retry can clear it.
+    const workspace = await createWorkspace(stack.app, 'released-verifier-workspace');
+    const verifierHash = 'c'.repeat(64);
+    const register = () => stack.app.request('/v1/agents', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${workspace.workspaceKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ name: 'recycled-name', recovery_proof_hash: verifierHash }),
+    });
+
+    expect((await register()).status).toBe(201);
+
+    const released = await stack.app.request('/v1/agents/recycled-name', {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${workspace.workspaceKey}` },
+    });
+    expect(released.status).toBe(204);
+
+    // Before the reclaim this was a permanent 409.
+    const again = await register();
+    expect(again.status).toBe(201);
+
+    // The reclaim must take exactly one credential, not leave a duplicate or
+    // strand the tombstone's row: the new identity owns the verifier now.
+    const rows = await stack.runtime.deps.db
+      .select()
+      .from(agentRecoveryCredentials)
+      .where(eq(agentRecoveryCredentials.verifierHash, verifierHash));
+    expect(rows).toHaveLength(1);
+  });
+
   it('reports verifier reuse accurately and rejects cross-workspace credential rows', async () => {
     const firstWorkspace = await createWorkspace(stack.app, 'proof-owner-workspace');
     const secondWorkspace = await createWorkspace(stack.app, 'proof-attacker-workspace');

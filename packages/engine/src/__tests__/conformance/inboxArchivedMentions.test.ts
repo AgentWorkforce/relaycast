@@ -12,16 +12,9 @@ import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from '.
  * {name, topic, metadata} (no private flag), so privacy is proven by a
  * non-member never seeing the mention.
  */
-// Test-only entitlements: a high per-minute ceiling so the bounded >200-candidate
-// fixture is not rate-limited by the free plan. No production limit changes.
-const testEntitlements = {
-  getLimits: async () => ({ messages: 1_000_000, agents: 1_000_000, file_bytes: 1_000_000_000, api_calls: 1_000_000, rate_per_min: 100_000 }),
-  getUsage: async () => 0,
-};
-
 describe('inbox mention scope', () => {
   let stack: TestStack;
-  beforeEach(() => { stack = makeNodeStack({ entitlements: testEntitlements }); });
+  beforeEach(() => { stack = makeNodeStack(); });
   afterEach(async () => { await stack.close(); });
 
   const api = (token: string) => ({
@@ -185,6 +178,141 @@ describe('inbox mention scope', () => {
     // there is no total scan cap.
     expect(ids.has(idNewestValid)).toBe(true);
     expect(ids.has(idOldestValid)).toBe(true);
+  });
+
+  // Production D1 regression: with few or no mentions, the LIKE-only candidate
+  // walk read the target's whole workspace history on every inbox call (avg
+  // ~14k rows, up to 12s under load; ~20% of all D1 time over 7 days).
+  it('drives mention candidates from messages_fts, not a workspace history walk', async () => {
+    const ws = await createWorkspace(stack.app, 'inbox-fts');
+    const sender = await registerAgent(stack.app, ws.workspaceKey, 'sender');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'gh-target-0908');
+    const liveRes = await api(sender.token).post('/v1/channels', { name: 'live' });
+    expect(liveRes.status).toBe(201);
+    const liveChannelId = (await liveRes.json()).data.id as string;
+    await joinOk(target.token, 'live');
+
+    const sqlite = stack.runtime.handle.sqlite;
+    const insertMessage = sqlite.prepare(
+      'INSERT INTO messages (id, workspace_id, channel_id, agent_id, body) VALUES (?, ?, ?, ?, ?)',
+    );
+    const idValid = '123456789012345678';
+    sqlite.transaction(() => {
+      insertMessage.run(idValid, ws.workspaceId, liveChannelId, sender.agentId, 'ping @GH-target_0908? no: @gh-target-0908 yes');
+      for (let i = 0; i < 500; i++) {
+        insertMessage.run(`9${String(i).padStart(21, '0')}`, ws.workspaceId, liveChannelId, sender.agentId, `chatter ${i}`);
+      }
+    })();
+
+    const statements: string[] = [];
+    const prepare = sqlite.prepare.bind(sqlite);
+    sqlite.prepare = ((source: string) => {
+      statements.push(source);
+      return prepare(source);
+    }) as typeof sqlite.prepare;
+    let inbox: Awaited<ReturnType<typeof inboxOf>>;
+    try {
+      inbox = await inboxOf(target.token);
+    } finally {
+      sqlite.prepare = prepare;
+    }
+    expect(inbox.mentions.map((m) => m.id)).toEqual([idValid]);
+
+    const mentionSql = statements.find((source) => source.includes('LIKE') && source.includes('"messages"."body"'));
+    expect(mentionSql).toBeDefined();
+    expect(mentionSql).toContain('messages_mention_fts');
+    expect(mentionSql).toContain(`workspace_id : "${ws.workspaceId}"`);
+    expect(mentionSql).toContain('body :');
+    const params = (mentionSql!.match(/\?/g) ?? []).map(() => 'x');
+    const plan = (sqlite.prepare(`EXPLAIN QUERY PLAN ${mentionSql}`).all(...params) as Array<{ detail: string }>)
+      .map((step) => step.detail)
+      .join('\n');
+    expect(plan).toContain('messages_mention_fts');
+    expect(plan).toContain('VIRTUAL TABLE INDEX');
+    expect(plan).not.toContain('USING INDEX idx_messages_workspace_length_id');
+  });
+
+  it('keeps a mention whose handle is glued to a trailing non-ASCII letter', async () => {
+    const ws = await createWorkspace(stack.app, 'inbox-unicode');
+    const sender = await registerAgent(stack.app, ws.workspaceKey, 'sender');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    expect((await api(sender.token).post('/v1/channels', { name: 'live' })).status).toBe(201);
+    await joinOk(target.token, 'live');
+
+    const idGlued = await send(sender.token, 'live', '@alice你好');
+    const idBare = await send(sender.token, 'live', 'alice你好');
+    const foreign = await createWorkspace(stack.app, 'inbox-unicode-foreign');
+    const foreignSender = await registerAgent(stack.app, foreign.workspaceKey, 'foreign-sender');
+    const idForeign = await send(foreignSender.token, 'general', '@alice你好');
+
+    const inbox = await inboxOf(target.token);
+    const mentionIds = inbox.mentions.map((m) => m.id);
+    expect(mentionIds).toContain(idGlued);
+    expect(mentionIds).not.toContain(idBare);
+    expect(mentionIds).not.toContain(idForeign);
+  });
+
+  it('keeps a short handle on the workspace scan, including a trailing letter', async () => {
+    const ws = await createWorkspace(stack.app, 'inbox-short');
+    const sender = await registerAgent(stack.app, ws.workspaceKey, 'sender');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    expect((await api(sender.token).post('/v1/channels', { name: 'live' })).status).toBe(201);
+    await joinOk(target.token, 'live');
+    const idGlued = await send(sender.token, 'live', '@bob你好');
+
+    const sqlite = stack.runtime.handle.sqlite;
+    const statements: string[] = [];
+    const prepare = sqlite.prepare.bind(sqlite);
+    sqlite.prepare = ((source: string) => {
+      statements.push(source);
+      return prepare(source);
+    }) as typeof sqlite.prepare;
+    let inbox: Awaited<ReturnType<typeof inboxOf>>;
+    try {
+      inbox = await inboxOf(target.token);
+    } finally {
+      sqlite.prepare = prepare;
+    }
+    expect(inbox.mentions.map((mention) => mention.id)).toEqual([idGlued]);
+    const mentionSql = statements.find((source) => source.includes('LIKE') && source.includes('"messages"."body"'));
+    expect(mentionSql).toBeDefined();
+    expect(mentionSql).not.toContain('messages_mention_fts');
+  });
+
+  it('keeps mentions of separator-only handles that FTS cannot tokenize', async () => {
+    const ws = await createWorkspace(stack.app, 'inbox-separators');
+    const sender = await registerAgent(stack.app, ws.workspaceKey, 'sender');
+    const underscore = await registerAgent(stack.app, ws.workspaceKey, '_');
+    const dashes = await registerAgent(stack.app, ws.workspaceKey, '---');
+    expect((await api(sender.token).post('/v1/channels', { name: 'live' })).status).toBe(201);
+    await joinOk(underscore.token, 'live');
+    await joinOk(dashes.token, 'live');
+
+    const idUnderscore = await send(sender.token, 'live', 'ping @_ now');
+    const idDashes = await send(sender.token, 'live', 'ping @--- now');
+
+    expect((await inboxOf(underscore.token)).mentions.map((m) => m.id)).toEqual([idUnderscore]);
+    expect((await inboxOf(dashes.token)).mentions.map((m) => m.id)).toEqual([idDashes]);
+  });
+
+  it('skips the mention scan for a name no canonical mention can match', async () => {
+    const ws = await createWorkspace(stack.app, 'inbox-dotted');
+    await registerAgent(stack.app, ws.workspaceKey, 'sender');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'dotted.name');
+
+    const sqlite = stack.runtime.handle.sqlite;
+    const statements: string[] = [];
+    const prepare = sqlite.prepare.bind(sqlite);
+    sqlite.prepare = ((source: string) => {
+      statements.push(source);
+      return prepare(source);
+    }) as typeof sqlite.prepare;
+    try {
+      expect((await inboxOf(target.token)).mentions).toEqual([]);
+    } finally {
+      sqlite.prepare = prepare;
+    }
+    expect(statements.some((source) => source.includes('LIKE') && source.includes('"messages"."body"'))).toBe(false);
   });
 });
 

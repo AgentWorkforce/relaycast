@@ -549,5 +549,85 @@ describe('addressed send', () => {
       expect(message.agent_address).toBe('alice@direct');
       expect(message.metadata).toEqual({ topic: 'x', injection_mode: 'wait' });
     });
+
+    it.each([
+      { description: 'server metadata', data: { topic: 'thread' } },
+      {
+        description: 'a spoofed sender address',
+        data: { [SENDER_ADDRESS_METADATA_KEY]: 'mallory@elsewhere', topic: 'thread' },
+      },
+    ])('carries the thread reply sender address with $description', async ({ data }) => {
+      const { ws, alice, bob } = await seed();
+      const dm = await send(alice.token, 'bob@laptop', { text: 'reply to me' });
+      expect(dm.status).toBe(201);
+      const sent = (await dm.json()) as { data: { message: { id: string } } };
+      const sessionRef = 'thread-reply-sender-address';
+
+      const response = await stack.app.request(`/v1/messages/${sent.data.message.id}/replies`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+        body: JSON.stringify({ text: 'ownership proof', data: { ...data, session_ref: sessionRef } }),
+      });
+      expect(response.status).toBe(201);
+      const reply = (await response.json()) as { data: Json };
+      expect(reply.data.agent_address).toBe('bob@laptop');
+      expect(reply.data.metadata).toEqual({ topic: 'thread', session_ref: sessionRef });
+
+      const queued = (await (await stack.app.request('/v1/deliveries', {
+        headers: { authorization: `Bearer ${alice.token}` },
+      })).json()) as { data: Array<{ message: Json }> };
+      expect(queued.data).toHaveLength(1);
+      expect(queued.data[0].message.agent_address).toBe('bob@laptop');
+
+      const thread = (await (await stack.app.request(`/v1/messages/${sent.data.message.id}/replies`, {
+        headers: { authorization: `Bearer ${alice.token}` },
+      })).json()) as { data: { parent: Json; replies: Json[] } };
+      expect(thread.data.parent.agent_address).toBe('alice@direct');
+      expect(thread.data.parent.metadata).not.toHaveProperty(SENDER_ADDRESS_METADATA_KEY);
+      expect(thread.data.replies[0].agent_address).toBe('bob@laptop');
+      expect(thread.data.replies[0].metadata).toEqual({ topic: 'thread', session_ref: sessionRef });
+
+      const read = await stack.app.request(`/v1/messages/${reply.data.id}`, {
+        headers: { authorization: `Bearer ${alice.token}` },
+      });
+      expect(read.status).toBe(200);
+      const message = (await read.json()) as { data: Json };
+      expect(message.data.agent_address).toBe('bob@laptop');
+      expect(message.data.metadata).not.toHaveProperty(SENDER_ADDRESS_METADATA_KEY);
+
+      const session = await stack.app.request(`/v1/sessions/${sessionRef}/messages`, {
+        headers: { authorization: `Bearer ${ws.workspaceKey}` },
+      });
+      expect(session.status).toBe(200);
+      const sessionBody = (await session.json()) as { data: { messages: Json[] } };
+      expect(sessionBody.data.messages).toEqual([
+        expect.objectContaining({
+          id: reply.data.id,
+          agent_address: 'bob@laptop',
+          text: 'ownership proof',
+        }),
+      ]);
+      expect(sessionBody.data.messages[0]?.metadata).not.toHaveProperty(SENDER_ADDRESS_METADATA_KEY);
+    });
+
+    it('omits the sender address for an unhosted thread reply', async () => {
+      const { alice, bob } = await seed();
+      const parentResponse = await send(alice.token, 'bob@laptop', { text: 'reply to me' });
+      expect(parentResponse.status).toBe(201);
+      const parent = (await parentResponse.json()) as { data: { message: { id: string } } };
+
+      await stack.runtime.deps.db.update(agents)
+        .set({ locationNodeId: null })
+        .where(eq(agents.id, bob.agentId));
+
+      const response = await stack.app.request(`/v1/messages/${parent.data.message.id}/replies`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+        body: JSON.stringify({ text: 'from nowhere' }),
+      });
+      expect(response.status).toBe(201);
+      const reply = (await response.json()) as { data: Json };
+      expect(reply.data).not.toHaveProperty('agent_address');
+    });
   });
 });

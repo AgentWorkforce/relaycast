@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { startServer } from '../entrypoints/node.js';
+import { engineVersion } from './version.js';
 
 const HELP = `relaycast-engine — run a self-hosted Relaycast server (Node + SQLite)
 
@@ -11,6 +12,7 @@ Options:
   --port <n>         HTTP port (default: $PORT or 8787)
   --base-url <url>   Public origin for signed file URLs (default: http://localhost:<port>)
   --env <name>       Environment label (default: production)
+  -v, --version      Print the engine version
   -h, --help         Show this help
 
 After start, create a workspace:
@@ -23,6 +25,7 @@ interface ServeArgs {
   baseUrl?: string;
   environment: string;
   help: boolean;
+  version: boolean;
 }
 
 function parseArgs(argv: string[], env: NodeJS.ProcessEnv): ServeArgs {
@@ -32,10 +35,12 @@ function parseArgs(argv: string[], env: NodeJS.ProcessEnv): ServeArgs {
     baseUrl: undefined,
     environment: env.RELAYCAST_ENV ?? 'production',
     help: false,
+    version: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--help' || arg === '-h') out.help = true;
+    else if (arg === '--version' || arg === '-v') out.version = true;
     else if (arg === '--db') out.db = argv[++i] ?? out.db;
     else if (arg === '--port') out.port = Number(argv[++i] ?? out.port);
     else if (arg === '--base-url') out.baseUrl = argv[++i];
@@ -48,6 +53,10 @@ async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2), process.env);
   if (opts.help) {
     process.stdout.write(HELP);
+    return;
+  }
+  if (opts.version) {
+    process.stdout.write(`${engineVersion()}\n`);
     return;
   }
   if (!Number.isFinite(opts.port) || opts.port <= 0) {

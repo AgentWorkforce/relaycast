@@ -13,6 +13,18 @@ type WsRouting = { workspace_id?: string; workspace_alias?: string };
 /** Passthrough object schema for dynamic API responses. */
 const jsonResult = z.object({}).passthrough();
 
+/** Send options carrying only the attachments and metadata that were supplied. */
+function sendOptions(
+  attachments: string[] | undefined,
+  data: Record<string, unknown> | undefined,
+): { attachments?: string[]; data?: Record<string, unknown> } | undefined {
+  if (!attachments && data === undefined) return undefined;
+  return {
+    ...(attachments ? { attachments } : {}),
+    ...(data !== undefined ? { data } : {}),
+  };
+}
+
 export function registerMessagingTools(
   server: McpServer,
   getAgentClient: (wsRouting?: WsRouting, as?: string) => AgentClient,
@@ -23,7 +35,7 @@ export function registerMessagingTools(
     inputSchema: {
       channel: z.string().describe('Name of the channel to post the message to (e.g. "general", "build-alerts")'),
       text: z.string().describe('The message body text, which may include @mentions of other agents'),
-      attachments: z.array(z.string()).optional().describe('Array of file attachment IDs obtained from the upload_file tool'),
+      attachments: z.array(z.string()).optional().describe('File IDs to attach: from message.file.upload with a path or bytes, or from message.file.complete after a manual upload'),
       data: z.record(z.string(), z.unknown()).optional().describe('Structured message metadata, including session_ref for replay correlation'),
       ...workspaceRoutingInputShape,
       ...identityOverrideInputShape,
@@ -32,13 +44,7 @@ export function registerMessagingTools(
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ channel, text, attachments, data, workspace_id, workspace_alias, as: asIdentity }) => {
     const client = getAgentClient(workspaceRefFromArgs({ workspace_id, workspace_alias }), asIdentity);
-    const options = attachments || data !== undefined
-      ? {
-          ...(attachments ? { attachments } : {}),
-          ...(data !== undefined ? { data } : {}),
-        }
-      : undefined;
-    const msg = await client.send(channel, text, options);
+    const msg = await client.send(channel, text, sendOptions(attachments, data));
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(msg, null, 2) }],
       structuredContent: msg as unknown as Record<string, unknown>,
@@ -116,17 +122,19 @@ export function registerMessagingTools(
     inputSchema: {
       to: z.string().describe('Name of the registered agent to send the direct message to'),
       text: z.string().describe('The direct message body text'),
+      attachments: z.array(z.string()).optional().describe('File IDs to attach: from message.file.upload with a path or bytes, or from message.file.complete after a manual upload'),
       data: z.record(z.string(), z.unknown()).optional().describe('Structured DM metadata, including session_ref for replay correlation'),
       ...workspaceRoutingInputShape,
       ...identityOverrideInputShape,
     },
     outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, async ({ to, text, data, workspace_id, workspace_alias, as: asIdentity }) => {
+  }, async ({ to, text, attachments, data, workspace_id, workspace_alias, as: asIdentity }) => {
     const client = getAgentClient(workspaceRefFromArgs({ workspace_id, workspace_alias }), asIdentity);
-    const result = data === undefined
+    const options = sendOptions(attachments, data);
+    const result = options === undefined
       ? await client.dm(to, text)
-      : await client.dm(to, text, { data });
+      : await client.dm(to, text, options);
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
       structuredContent: result as unknown as Record<string, unknown>,
@@ -161,18 +169,31 @@ export function registerMessagingTools(
       participants: z.array(z.string()).describe('Array of agent names to include in the group conversation'),
       name: z.string().optional().describe('Optional display name for the group conversation (e.g. "Backend Team", "Project Alpha")'),
       text: z.string().describe('The first message to send to the group, which initiates the conversation'),
+      attachments: z.array(z.string()).optional().describe('File IDs to attach: from message.file.upload with a path or bytes, or from message.file.complete after a manual upload'),
       data: z.record(z.string(), z.unknown()).optional().describe('Structured first-message metadata, including session_ref for replay correlation'),
       ...workspaceRoutingInputShape,
       ...identityOverrideInputShape,
     },
     outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, async ({ participants, name, text, data, workspace_id, workspace_alias, as: asIdentity }) => {
+  }, async ({ participants, name, text, attachments, data, workspace_id, workspace_alias, as: asIdentity }) => {
     const client = getAgentClient(workspaceRefFromArgs({ workspace_id, workspace_alias }), asIdentity);
+    // Check attachments before creating the group: a bad file id would fail the
+    // first message after the conversation exists, stranding it.
+    if (attachments && new Set(attachments).size !== attachments.length) {
+      throw new Error('Attachment ids must be unique; nothing was sent.');
+    }
+    for (const fileId of attachments ?? []) {
+      const file = await client.files.get(fileId);
+      if (file.status !== 'complete') {
+        throw new Error(`Attachment ${fileId} is not a completed upload; nothing was sent.`);
+      }
+    }
     const conversation = await client.dms.createGroup({ participants, name });
-    const message = data === undefined
+    const options = sendOptions(attachments, data);
+    const message = options === undefined
       ? await client.dms.sendMessage(conversation.id, text)
-      : await client.dms.sendMessage(conversation.id, text, { data });
+      : await client.dms.sendMessage(conversation.id, text, options);
     const result = { conversation, message };
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],

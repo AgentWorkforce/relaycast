@@ -123,9 +123,13 @@ describe('node delivery contracts', () => {
   }
 
   it('dispatches to an http_push node with custom HMAC headers and manual ack semantics', async () => {
+    const fetchReceivers: unknown[] = [];
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
-      .mockResolvedValue(new Response('', { status: 202 }));
+      .mockImplementation(function (this: unknown) {
+        fetchReceivers.push(this);
+        return Promise.resolve(new Response('', { status: 202 }));
+      } as typeof globalThis.fetch);
     const ws = await createWorkspace(stack.app, 'http-node-manual');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
     const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
@@ -150,6 +154,9 @@ describe('node delivery contracts', () => {
     await waitForAssertion(() => expect(deliveryPosts(fetchMock)).toHaveLength(1));
     const [url, init] = deliveryPosts(fetchMock)[0];
     expect(url).toBe('https://receiver.example.test/relaycast');
+    // Workerd rejects an extracted global fetch with "Illegal invocation".
+    expect(fetchReceivers).not.toHaveLength(0);
+    expect(fetchReceivers.every((receiver) => receiver === globalThis)).toBe(true);
     // Cloudflare Workers rejects redirect:'error'; we use 'manual' and reject
     // any 3xx ourselves (see dispatchHttpPush) to keep the no-follow SSRF guard.
     expect(init.redirect).toBe('manual');

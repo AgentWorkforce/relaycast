@@ -56,10 +56,6 @@ class ObservingKv implements KeyValueStore {
   delete(key: string): Promise<void> {
     return this.inner.delete(key);
   }
-
-  increment(key: string, delta: number): Promise<number> {
-    return this.inner.increment(key, delta);
-  }
 }
 
 interface OutboxStack extends TestStack {

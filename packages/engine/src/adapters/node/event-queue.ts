@@ -12,6 +12,7 @@ import {
   type ClaimedEvent,
 } from '../../engine/eventQueue.js';
 import { pruneExpired, type PruneOptions } from '../../engine/retention.js';
+import { asCodedError } from '../../lib/httpError.js';
 
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const DEFAULT_BASE_BACKOFF_MS = 30_000;
@@ -41,15 +42,19 @@ export interface DurableEventQueueOptions {
    * `defaults.messageTtlDays` (self-host: `RELAYCAST_MESSAGE_TTL_DAYS`).
    */
   retention?: PruneOptions | false;
+  /** Platform fetch hardened for outbound webhooks (Node pins validated DNS answers). */
+  fetch?: typeof globalThis.fetch;
 }
 
 /**
  * Durable webhook delivery for self-host, replacing the Cloudflare Queue + DLQ.
  * `send` persists a `pending_events` outbox row first, then a background poller
  * claims due rows and fans them out via `deliverEvent` (HMAC signing and
- * retryable-vs-terminal classification unchanged). Success deletes the row;
- * terminal failures settle it as `failed`; retryable failures back off
+ * retryable-vs-terminal classification unchanged). Success settles the row as
+ * `completed`; terminal failures settle it as `failed`; retryable failures back off
  * exponentially and survive process restarts — `start()` resumes whatever is due.
+ * A platform SSRF-safe `fetch` is mandatory; `createNodeRuntime` supplies the
+ * DNS-pinning Node implementation.
  */
 export class DurableEventQueue implements EventQueue {
   private readonly pollIntervalMs: number;
@@ -59,6 +64,7 @@ export class DurableEventQueue implements EventQueue {
   private readonly batchSize: number;
   private readonly cleanupIntervalMs: number;
   private readonly retention: PruneOptions | false;
+  private readonly fetchImpl: typeof globalThis.fetch;
   private timer: ReturnType<typeof setInterval> | undefined;
   private polling = false;
   private stopped = false;
@@ -76,6 +82,10 @@ export class DurableEventQueue implements EventQueue {
     this.batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE;
     this.cleanupIntervalMs = options.cleanupIntervalMs ?? DEFAULT_CLEANUP_INTERVAL_MS;
     this.retention = options.retention ?? {};
+    if (!options.fetch) {
+      throw new Error('DurableEventQueue requires an SSRF-safe fetch implementation');
+    }
+    this.fetchImpl = options.fetch;
   }
 
   /**
@@ -143,7 +153,11 @@ export class DurableEventQueue implements EventQueue {
 
   private async process(event: ClaimedEvent): Promise<void> {
     try {
-      const summary = await deliverEvent(this.db, event.workspaceId, event.eventType, event.payload);
+      const summary = await deliverEvent(this.db, event.workspaceId, event.eventType, event.payload, {
+        eventId: event.id,
+        eventTimestamp: event.createdAt,
+        fetch: this.fetchImpl,
+      });
       if (summary.failed > 0) {
         // deliverEvent resolved with failures and no retryables — terminal
         // (non-408/429 4xx). Settle the row; retrying won't change the outcome.
@@ -169,7 +183,10 @@ export class DurableEventQueue implements EventQueue {
           settled: 'failed',
         });
       } else {
-        const backoff = Math.min(this.baseBackoffMs * 2 ** (event.attempts - 1), this.maxBackoffMs);
+        const diagnosticBackoff = asCodedError(err).diagnostics?.retry_after_ms;
+        const backoff = typeof diagnosticBackoff === 'number'
+          ? diagnosticBackoff
+          : Math.min(this.baseBackoffMs * 2 ** (event.attempts - 1), this.maxBackoffMs);
         await rescheduleEvent(this.db, event.id, message, backoff);
       }
     }

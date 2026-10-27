@@ -62,6 +62,92 @@ final class RelaycastTests: XCTestCase {
         }
     }
 
+    func testActionInvocationDecodesHostedInvocationIdentifier() throws {
+        // The hosted API identifies an invocation as `invocation_id` on the
+        // status-poll and completion routes; decoding it as `id` failed every
+        // action completion with "Invalid Relaycast API response".
+        let payload = Data("""
+        {
+          "invocation_id": "inv_215317590589313024",
+          "action_name": "add_rectangle",
+          "caller_id": "215317575185170432",
+          "caller_name": "board-driver",
+          "input": {"x": 120},
+          "output": {"text": "Added rectangle rect-1"},
+          "status": "completed",
+          "error": null,
+          "duration_ms": 42,
+          "created_at": "2026-08-18T03:55:13.000Z",
+          "completed_at": "2026-08-18T03:55:14.000Z"
+        }
+        """.utf8)
+
+        let decoded = try makeRelaycastDecoder().decode(ActionInvocation.self, from: payload)
+        XCTAssertEqual(decoded.invocationId, "inv_215317590589313024")
+        XCTAssertEqual(decoded.actionName, "add_rectangle")
+        XCTAssertEqual(decoded.status, "completed")
+        XCTAssertEqual(decoded.durationMs, 42)
+        XCTAssertEqual(decoded.completedAt, "2026-08-18T03:55:14.000Z")
+        XCTAssertEqual(decoded.output?["text"], .string("Added rectangle rect-1"))
+
+        let encoded = try JSONSerialization.jsonObject(with: makeRelaycastEncoder().encode(decoded)) as? [String: Any]
+        XCTAssertEqual(encoded?["invocation_id"] as? String, "inv_215317590589313024")
+        XCTAssertNil(encoded?["id"])
+        XCTAssertEqual(encoded?["duration_ms"] as? Int, 42)
+        XCTAssertEqual(encoded?["completed_at"] as? String, "2026-08-18T03:55:14.000Z")
+    }
+
+    func testActionInvocationAcceptsPlainIdAlias() throws {
+        let payload = Data("""
+        {"id": "inv_1", "status": "completed"}
+        """.utf8)
+
+        let decoded = try makeRelaycastDecoder().decode(ActionInvocation.self, from: payload)
+        XCTAssertEqual(decoded.invocationId, "inv_1")
+    }
+
+    /// `id` is a deprecated alias of `invocationId`. This test is deprecated so
+    /// reading the alias does not fail the suite under warnings-as-errors.
+    @available(*, deprecated)
+    func testActionInvocationKeepsDeprecatedIdAccessor() throws {
+        let decoder = makeRelaycastDecoder()
+        let hosted = Data(#"{"invocation_id":"inv_215317590589313024","status":"completed"}"#.utf8)
+        let alias = Data(#"{"id":"inv_1","status":"completed"}"#.utf8)
+        XCTAssertEqual(try decoder.decode(ActionInvocation.self, from: hosted).id, "inv_215317590589313024")
+        XCTAssertEqual(try decoder.decode(ActionInvocation.self, from: alias).id, "inv_1")
+    }
+
+    func testActionInvocationPrefersInvocationIdWhenBothKeysArePresent() throws {
+        let payload = Data("""
+        {"invocation_id": "inv_real", "id": "inv_alias", "status": "completed"}
+        """.utf8)
+
+        let decoded = try makeRelaycastDecoder().decode(ActionInvocation.self, from: payload)
+        XCTAssertEqual(decoded.invocationId, "inv_real")
+    }
+
+    func testActionInvocationDurationAllowsMissingNullAndZero() throws {
+        let decoder = makeRelaycastDecoder()
+        let missing = Data(#"{"invocation_id":"inv_1","status":"completed"}"#.utf8)
+        let nullDuration = Data(#"{"invocation_id":"inv_1","status":"completed","duration_ms":null}"#.utf8)
+        let zero = Data(#"{"invocation_id":"inv_1","status":"completed","duration_ms":0}"#.utf8)
+
+        XCTAssertNil(try decoder.decode(ActionInvocation.self, from: missing).durationMs)
+        XCTAssertNil(try decoder.decode(ActionInvocation.self, from: nullDuration).durationMs)
+        XCTAssertEqual(try decoder.decode(ActionInvocation.self, from: zero).durationMs, 0)
+    }
+
+    func testActionInvocationRejectsNegativeDuration() {
+        let payload = Data(#"{"invocation_id":"inv_1","status":"completed","duration_ms":-1}"#.utf8)
+
+        XCTAssertThrowsError(try makeRelaycastDecoder().decode(ActionInvocation.self, from: payload)) { error in
+            guard case DecodingError.dataCorrupted(let context) = error else {
+                return XCTFail("expected dataCorrupted, got \(error)")
+            }
+            XCTAssertTrue(context.debugDescription.contains("nonnegative"))
+        }
+    }
+
     func testHttpClientEncodesSnakeCaseAndOriginHeaders() async throws {
         let session = makeMockSession()
         let client = try HttpClient(
@@ -191,7 +277,6 @@ final class RelaycastTests: XCTestCase {
                     "id": "ws_1",
                     "name": "demo",
                     "system_prompt": NSNull(),
-                    "plan": "free",
                     "created_at": "2026-06-06T00:00:00Z",
                     "metadata": [:]
                 ]
@@ -289,7 +374,6 @@ final class RelaycastTests: XCTestCase {
                         "id": "ws_1",
                         "name": "demo",
                         "system_prompt": NSNull(),
-                        "plan": "free",
                         "created_at": "2026-06-06T00:00:00Z",
                         "metadata": [:]
                     ]
@@ -767,16 +851,25 @@ final class RelaycastTests: XCTestCase {
         MockURLProtocol.handler = { request in
             switch request.url?.path {
             case "/v1/dm/conversations/all":
+                let components = try XCTUnwrap(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false))
+                let query = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+                XCTAssertEqual(query["limit"], "500")
+                let isSecondPage = query["cursor"] == "dm_1"
+                let nextCursor: Any = isSecondPage ? NSNull() : "dm_1"
                 return jsonResponse([
                     "ok": true,
                     "data": [[
-                        "id": "dm_1",
-                        "channel_id": "ch_dm_1",
+                        "id": isSecondPage ? "dm_2" : "dm_1",
+                        "channel_id": isSecondPage ? "ch_dm_2" : "ch_dm_1",
                         "type": "dm",
-                        "participants": ["alice", "bob"],
+                        "participants": isSecondPage ? ["alice", "carol"] : ["alice", "bob"],
                         "last_message": ["text": "hi", "agent_name": "alice", "created_at": "2026-06-06T00:00:00Z"],
                         "message_count": 3
-                    ]]
+                    ]],
+                    "cursor": [
+                        "next": nextCursor,
+                        "has_more": !isSecondPage
+                    ]
                 ])
             case "/v1/dm/conversations/dm_1/messages":
                 let components = try XCTUnwrap(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false))
@@ -798,13 +891,42 @@ final class RelaycastTests: XCTestCase {
         }
 
         let conversations = try await relay.allDMConversations()
-        XCTAssertEqual(conversations.count, 1)
+        XCTAssertEqual(conversations.count, 2)
         XCTAssertEqual(conversations[0].participants, ["alice", "bob"])
+        XCTAssertEqual(conversations[1].participants, ["alice", "carol"])
         XCTAssertEqual(conversations[0].messageCount, 3)
 
         let messages = try await relay.dmMessages(conversationID: "dm_1", options: WorkspaceDMMessagesOptions(limit: 10))
         XCTAssertEqual(messages.count, 1)
         XCTAssertEqual(messages[0].agentName, "alice")
+    }
+
+    func testAllDMConversationsRejectsRepeatedCursor() async throws {
+        let relay = try RelayCast(
+            options: RelayCastOptions(apiKey: "rk_test", baseURL: "https://relay.test", retryPolicy: RetryPolicy(maxRetries: 0)),
+            session: makeMockSession()
+        )
+        var requestCount = 0
+        MockURLProtocol.handler = { request in
+            requestCount += 1
+            XCTAssertEqual(request.url?.path, "/v1/dm/conversations/all")
+            return jsonResponse([
+                "ok": true,
+                "data": [],
+                "cursor": ["next": "dm_repeat", "has_more": true]
+            ])
+        }
+
+        do {
+            _ = try await relay.allDMConversations()
+            XCTFail("Expected repeated cursor rejection")
+        } catch let error as RelayError {
+            guard case .invalidResponse(let message, _) = error else {
+                return XCTFail("Expected invalidResponse, got \(error)")
+            }
+            XCTAssertTrue(message.contains("pagination did not advance"))
+        }
+        XCTAssertEqual(requestCount, 2)
     }
 
     func testActivityFeed() async throws {

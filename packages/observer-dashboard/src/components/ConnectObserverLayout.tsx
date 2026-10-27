@@ -3,16 +3,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useEvent, useRelay } from '@relaycast/react';
+import type { WorkspaceDmConversation, WsClientEvent } from '@relaycast/sdk';
 import { MessageSquareText, ShieldCheck } from 'lucide-react';
 import {
+  classifyConnectObserverError,
   connectObserverExpiryDelay,
+  connectObserverRetryDelay,
   formatUtcTimestamp,
+  isConnectConversationGone,
   loadConnectConversationMessages,
   sanitizeConnectObserverText,
   type ConnectObservedMessage,
 } from '../lib/connect-observer';
+import { ConnectObserverTemporaryState } from './ConnectObserverTemporaryState';
 
-const REFRESH_INTERVAL_MS = 15_000;
+// Realtime events are the primary update path. This slower reconciliation
+// catches missed events without reloading the conversation list every 15s.
+const RECONCILIATION_INTERVAL_MS = 5 * 60_000;
+
+type ObserverRead = () => Promise<void>;
 
 export function ConnectObserverLayout() {
   const relay = useRelay();
@@ -24,54 +33,209 @@ export function ConnectObserverLayout() {
   const [expired, setExpired] = useState(Boolean(expiresAt && Date.parse(expiresAt) <= Date.now()));
   const messageCache = useRef(new Map<string, ConnectObservedMessage>());
   const newestByConversation = useRef(new Map<string, string>());
-  const refreshInFlight = useRef(false);
+  const conversationCache = useRef(new Map<string, WorkspaceDmConversation>());
+  const pendingConversationIds = useRef(new Set<string>());
+  const reconciliationPending = useRef(false);
+  const readInFlight = useRef(false);
+  // Temporary failures (rate limit, outage, network) retry with bounded
+  // backoff; once spent, polling pauses until the viewer asks again.
+  const [temporary, setTemporary] = useState<{ retrying: boolean } | null>(null);
   const hasLoadedHistory = useRef(false);
+  const retryAttempt = useRef(0);
+  const retryTimer = useRef<number | undefined>(undefined);
+  const retryRead = useRef<ObserverRead | null>(null);
+  const pausedAfterFailures = useRef(false);
+  // A rejected capability stays rejected: stop polling instead of re-sending it.
+  const revoked = useRef(false);
+  // While a backoff retry is scheduled, the live poll and realtime events wait
+  // for it, so a longer Retry-After is honoured and the budget is not spent early.
+  const retryPending = useRef(false);
+  const runReadRef = useRef<(read: ObserverRead) => void>(() => undefined);
+  const scheduleReconciliationRef = useRef<() => void>(() => undefined);
+  const flushPendingRef = useRef<() => void>(() => undefined);
 
-  const refresh = useCallback(async () => {
-    if (expired || refreshInFlight.current) return;
-    refreshInFlight.current = true;
-    try {
-      const conversations = await relay.allDmConversations();
-      // Read conversations sequentially so a large room does not burst through
-      // the workspace request budget. After the initial history walk, only
-      // messages newer than the remembered snowflake are requested.
-      for (const conversation of conversations) {
-        const previousNewest = newestByConversation.current.get(conversation.id);
-        const page = await loadConnectConversationMessages(relay, conversation, previousNewest);
-        for (const message of page) messageCache.current.set(message.id, message);
-        const newest = page.reduce<string | undefined>(
-          (candidate, message) => (candidate === undefined || message.id > candidate ? message.id : candidate),
-          previousNewest,
-        );
-        if (newest) newestByConversation.current.set(conversation.id, newest);
-      }
-      setMessages(
-        [...messageCache.current.values()].sort(
-          (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id),
-        ),
-      );
-      hasLoadedHistory.current = true;
-      setUnavailable(false);
-    } catch (error) {
-      // Keep already-loaded history visible while transient transport errors
-      // or rate limits recover. An initial failure must not look like an empty room.
-      const status = (error as { statusCode?: number } | null)?.statusCode;
-      if (status === 401 || status === 403 || status === 404 || !hasLoadedHistory.current) {
-        setUnavailable(true);
-      }
-    } finally {
-      setLoading(false);
-      refreshInFlight.current = false;
+  // A read that fails after unmount must not schedule a retry.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      window.clearTimeout(retryTimer.current);
+    };
+  }, []);
+
+  const publishMessages = useCallback(() => {
+    if (!mounted.current) return;
+    setMessages(
+      [...messageCache.current.values()].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id)),
+    );
+  }, []);
+
+  const dropConversation = useCallback((conversationId: string) => {
+    conversationCache.current.delete(conversationId);
+    newestByConversation.current.delete(conversationId);
+    for (const [id, message] of messageCache.current) {
+      if (message.conversationId === conversationId) messageCache.current.delete(id);
     }
-  }, [expired, relay]);
+  }, []);
+
+  const loadConversation = useCallback(
+    async (conversation: WorkspaceDmConversation): Promise<boolean> => {
+      const previousNewest = newestByConversation.current.get(conversation.id);
+      let page: ConnectObservedMessage[];
+      try {
+        page = await loadConnectConversationMessages(relay, conversation, previousNewest);
+      } catch (error) {
+        if (!isConnectConversationGone(error)) throw error;
+        // Access to this one conversation was narrowed: drop what it showed and
+        // keep observing the rest of the cached scope.
+        dropConversation(conversation.id);
+        return false;
+      }
+      conversationCache.current.set(conversation.id, conversation);
+      for (const message of page) messageCache.current.set(message.id, message);
+      const newest = page.reduce<string | undefined>(
+        (candidate, message) => (candidate === undefined || message.id > candidate ? message.id : candidate),
+        previousNewest,
+      );
+      if (newest) newestByConversation.current.set(conversation.id, newest);
+      return true;
+    },
+    [dropConversation, relay],
+  );
+
+  const reconcile = useCallback(async () => {
+    const conversations = await relay.allDmConversations();
+    const visibleConversationIds = new Set<string>();
+    // Read conversations sequentially so a large room does not burst through
+    // the workspace request budget. After the initial history walk, only
+    // messages newer than the remembered snowflake are requested.
+    for (const conversation of conversations) {
+      if (await loadConversation(conversation)) visibleConversationIds.add(conversation.id);
+    }
+    for (const conversationId of [...conversationCache.current.keys()]) {
+      if (!visibleConversationIds.has(conversationId)) dropConversation(conversationId);
+    }
+    publishMessages();
+    hasLoadedHistory.current = true;
+  }, [dropConversation, loadConversation, publishMessages, relay]);
+
+  const runRead = useCallback(
+    (read: ObserverRead) => {
+      if (!mounted.current || expired || readInFlight.current || pausedAfterFailures.current || revoked.current || retryPending.current)
+        return;
+      if (read === reconcile) reconciliationPending.current = false;
+      readInFlight.current = true;
+      void (async () => {
+        try {
+          await read();
+          if (!mounted.current) return;
+          retryRead.current = null;
+          retryAttempt.current = 0;
+          setTemporary(null);
+          setUnavailable(false);
+        } catch (error) {
+          if (!mounted.current) return;
+          if (classifyConnectObserverError(error) === 'revoked') {
+            revoked.current = true;
+            retryPending.current = false;
+            retryRead.current = null;
+            window.clearTimeout(retryTimer.current);
+            setUnavailable(true);
+          } else {
+            const retryAfterMs = (error as { retryAfterMs?: unknown } | null)?.retryAfterMs;
+            const delay = connectObserverRetryDelay(retryAttempt.current, typeof retryAfterMs === 'number' ? retryAfterMs : null);
+            retryAttempt.current += 1;
+            pausedAfterFailures.current = delay === null;
+            retryRead.current = read;
+            setTemporary({ retrying: delay !== null });
+            window.clearTimeout(retryTimer.current);
+            retryPending.current = delay !== null;
+            if (delay !== null) {
+              retryTimer.current = window.setTimeout(() => {
+                retryPending.current = false;
+                if (mounted.current) runReadRef.current(read);
+              }, delay);
+            }
+          }
+        } finally {
+          if (mounted.current) setLoading(false);
+          readInFlight.current = false;
+          if (reconciliationPending.current && !retryPending.current && !pausedAfterFailures.current && !revoked.current) {
+            void Promise.resolve().then(() => scheduleReconciliationRef.current());
+          } else if (pendingConversationIds.current.size > 0 && !retryPending.current && !pausedAfterFailures.current && !revoked.current) {
+            void Promise.resolve().then(() => flushPendingRef.current());
+          }
+        }
+      })();
+    },
+    [expired, reconcile],
+  );
+  runReadRef.current = runRead;
+
+  const scheduleReconciliation = useCallback(() => {
+    reconciliationPending.current = true;
+    if (!mounted.current || expired || readInFlight.current || retryPending.current || pausedAfterFailures.current || revoked.current)
+      return;
+    runRead(reconcile);
+  }, [expired, reconcile, runRead]);
+  scheduleReconciliationRef.current = scheduleReconciliation;
+
+  const flushPending = useCallback(() => {
+    if (
+      pendingConversationIds.current.size === 0 ||
+      reconciliationPending.current ||
+      !mounted.current ||
+      readInFlight.current ||
+      retryPending.current ||
+      pausedAfterFailures.current ||
+      revoked.current
+    )
+      return;
+    const conversationIds = [...pendingConversationIds.current];
+    pendingConversationIds.current.clear();
+    runRead(async () => {
+      let attempted = false;
+      for (const conversationId of conversationIds) {
+        const conversation = conversationCache.current.get(conversationId);
+        // Unknown conversations are discovered by bounded reconciliation. A
+        // realtime event does not contain the participant summary needed to
+        // render its messages safely.
+        if (!conversation) continue;
+        attempted = true;
+        await loadConversation(conversation);
+      }
+      if (attempted) publishMessages();
+    });
+  }, [loadConversation, publishMessages, runRead]);
+  flushPendingRef.current = flushPending;
+
+  const refreshConversation = useCallback(
+    (event: WsClientEvent) => {
+      if (!('conversationId' in event) || typeof event.conversationId !== 'string') return;
+      pendingConversationIds.current.add(event.conversationId);
+      flushPending();
+    },
+    [flushPending],
+  );
+
+  const retryNow = useCallback(() => {
+    const read = retryRead.current ?? reconcile;
+    window.clearTimeout(retryTimer.current);
+    retryPending.current = false;
+    retryAttempt.current = 0;
+    pausedAfterFailures.current = false;
+    setTemporary({ retrying: true });
+    runRead(read);
+  }, [reconcile, runRead]);
 
   useEffect(() => {
-    void refresh();
-    const interval = window.setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
+    scheduleReconciliation();
+    const interval = window.setInterval(scheduleReconciliation, RECONCILIATION_INTERVAL_MS);
     return () => window.clearInterval(interval);
-  }, [refresh]);
-  useEvent('dm.received', refresh);
-  useEvent('group_dm.received', refresh);
+  }, [scheduleReconciliation]);
+  useEvent('dm.received', refreshConversation);
+  useEvent('group_dm.received', refreshConversation);
 
   useEffect(() => {
     if (!expiresAt) return;
@@ -97,6 +261,10 @@ export function ConnectObserverLayout() {
 
   if (expired) return <TerminalState expired />;
   if (unavailable) return <TerminalState expired={false} />;
+  // Before any history loaded, a temporary failure must not look like an empty room.
+  if (temporary && !hasLoadedHistory.current) {
+    return <ConnectObserverTemporaryState retrying={temporary.retrying} onRetry={retryNow} />;
+  }
 
   return (
     <main className="brand-grid min-h-screen p-3 sm:p-6">
@@ -125,6 +293,19 @@ export function ConnectObserverLayout() {
               {messages.length} {messages.length === 1 ? 'message' : 'messages'}
             </span>
           </div>
+          {temporary ? (
+            <div
+              role="status"
+              className="flex items-center gap-3 border-b border-[var(--border-default)] px-5 py-2 text-xs text-[var(--text-muted)]"
+            >
+              {temporary.retrying ? 'Agent Relay is busy. Retrying to load new messages…' : 'Agent Relay is busy. New messages are paused.'}
+              {temporary.retrying ? null : (
+                <button type="button" onClick={retryNow} className="ml-auto font-semibold text-[var(--brand-primary)]">
+                  Try again
+                </button>
+              )}
+            </div>
+          ) : null}
           <div className="min-h-0 flex-1 overflow-y-auto bg-[color-mix(in_srgb,var(--surface-strong)_72%,transparent)] p-3 sm:p-5">
             {loading ? (
               <StateText>Loading room messages…</StateText>

@@ -29,7 +29,7 @@ import {
   fetchDirectDeliveryOutcomes,
   type DeliveryOutcomeRecords,
 } from './deliveryWrites.js';
-import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
+import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS, type MailboxConfig } from './mailboxConfig.js';
 import {
   type WorkspaceDeliveryPolicy,
 } from './workspaceDeliveryPolicy.js';
@@ -690,6 +690,7 @@ export async function sendDm(
   const mailbox = options.mailbox ?? {
     ttlMs: DEFAULT_MAILBOX_TTL_MS,
     depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
+    offlineExcludeMs: DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS,
   };
 
   let egressPayload: ReturnType<typeof a2aEngine.translateRelayToA2a> | undefined;
@@ -806,7 +807,15 @@ export async function sendDm(
     if (inboundId) writes.push(writeDb.insert(a2aInbound).values({ id: inboundId, workspaceId, messageId, fingerprint: inboundFingerprint, response: publicResult }));
     if (egressId) writes.push(writeDb.insert(a2aEgressContext).values({ id: egressId, messageId, response: publicResult }));
     if (persistWebhookOutbox) {
-      writes.push(writeDb.insert(pendingEvents).values({ id: messageId, workspaceId, eventType: 'dm.received', payload: eventData }));
+      writes.push(writeDb.insert(pendingEvents).values({
+        id: messageId,
+        workspaceId,
+        eventType: 'dm.received',
+        payload: eventData,
+        // Migration 0067 cannot change SQLite's existing column default; set
+        // the per-target retry headroom explicitly on this direct insert.
+        maxAttempts: 32,
+      }));
     }
     if (notificationsDurable) {
       writes.push(buildWorkspaceEventWrite(writeDb, workspaceId, { type: 'dm.received', payload: workspacePayload }));

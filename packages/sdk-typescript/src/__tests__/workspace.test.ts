@@ -3,11 +3,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
-function mockResponse(data: unknown, apiOk = true, status = 200) {
+function mockResponse(
+  data: unknown,
+  apiOk = true,
+  status = 200,
+  cursor?: { next: string | null; has_more: boolean },
+) {
   return Promise.resolve({
     ok: true,
     status,
-    json: () => Promise.resolve(apiOk ? { ok: true, data } : { ok: false, error: data }),
+    json: () => Promise.resolve(apiOk ? { ok: true, data, ...(cursor ? { cursor } : {}) } : { ok: false, error: data }),
   });
 }
 
@@ -72,16 +77,80 @@ describe('Relay workspace methods', () => {
     expect(url).toBe('https://cast.agentrelay.com/v1/activity?limit=5');
   });
 
-  it('allDmConversations() calls GET /v1/dm/conversations/all', async () => {
+  it('allDmConversations() uses bounded pages and aggregates the legacy full result', async () => {
     const { RelayCast } = await import('../relay.js');
     const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
-    mockFetch.mockImplementation(() => mockResponse([]));
-    await relay.allDmConversations();
+    const first = [{
+      id: 'dm_1', channel_id: 'channel_1', type: 'dm', participants: ['alice', 'bob'],
+      last_message: null, message_count: 1,
+    }];
+    const second = [{
+      id: 'dm_2', channel_id: 'channel_2', type: 'dm', participants: ['alice', 'carol'],
+      last_message: null, message_count: 1,
+    }];
+    mockFetch
+      .mockImplementationOnce(() => mockResponse(first, true, 200, { next: 'dm_1', has_more: true }))
+      .mockImplementationOnce(() => mockResponse(second, true, 200, { next: null, has_more: false }));
+    await expect(relay.allDmConversations()).resolves.toEqual([
+      {
+        id: 'dm_1', channelId: 'channel_1', type: 'dm', participants: ['alice', 'bob'],
+        lastMessage: null, messageCount: 1,
+      },
+      {
+        id: 'dm_2', channelId: 'channel_2', type: 'dm', participants: ['alice', 'carol'],
+        lastMessage: null, messageCount: 1,
+      },
+    ]);
 
-    const [url, init] = mockFetch.mock.calls[0]!;
-    expect(url).toBe('https://cast.agentrelay.com/v1/dm/conversations/all');
-    expect(init.method).toBe('GET');
+    expect(mockFetch.mock.calls.map(([url]) => url)).toEqual([
+      'https://cast.agentrelay.com/v1/dm/conversations/all?limit=500',
+      'https://cast.agentrelay.com/v1/dm/conversations/all?limit=500&cursor=dm_1',
+    ]);
+    expect(mockFetch.mock.calls.every(([, init]) => init.method === 'GET')).toBe(true);
+  });
+
+  it('allDmConversations() rejects a repeated pagination cursor', async () => {
+    const { RelayCast } = await import('../relay.js');
+    const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+    mockFetch.mockImplementation(() => (
+      mockResponse([], true, 200, { next: 'dm_repeat', has_more: true })
+    ));
+
+    await expect(relay.allDmConversations()).rejects.toThrow('pagination did not advance');
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('allDmConversations() bounds a 5,268-conversation workspace to 11 requests', async () => {
+    const { RelayCast } = await import('../relay.js');
+    const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+    const total = 5_268;
+    mockFetch.mockImplementation((url: string) => {
+      const requestUrl = new URL(url);
+      const cursor = requestUrl.searchParams.get('cursor');
+      const start = cursor ? Number(cursor.slice('dm_'.length)) : 0;
+      const end = Math.min(start + 500, total);
+      const data = Array.from({ length: end - start }, (_, offset) => {
+        const ordinal = start + offset + 1;
+        return {
+          id: `dm_${ordinal}`,
+          channel_id: `channel_${ordinal}`,
+          type: 'dm',
+          participants: ['alice', `peer_${ordinal}`],
+          last_message: null,
+          message_count: 1,
+        };
+      });
+      const next = end < total ? `dm_${end}` : null;
+      return mockResponse(data, true, 200, { next, has_more: next !== null });
+    });
+
+    const conversations = await relay.allDmConversations();
+
+    expect(conversations).toHaveLength(total);
+    expect(new Set(conversations.map(({ id }) => id)).size).toBe(total);
+    expect(mockFetch).toHaveBeenCalledTimes(11);
+    expect(mockFetch.mock.calls.every(([url]) => new URL(url).searchParams.get('limit') === '500')).toBe(true);
   });
 
   it('dmMessages() camelizes DM message fields', async () => {

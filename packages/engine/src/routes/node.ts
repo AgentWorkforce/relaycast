@@ -2,12 +2,13 @@ import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { FleetNodeTagSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
-import { requireAuth, requireWorkspaceRead, requireWorkspaceKey } from '../middleware/auth.js';
+import { requireAuth, requireNodeToken, requireWorkspaceRead, requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { parseIdempotencyKey } from '../middleware/idempotency.js';
 import { asCodedError, errorResponse } from '../lib/httpError.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
 import { sha256Hex } from '../lib/crypto.js';
+import { isValidStandardWebhookSecret } from '../lib/standardWebhook.js';
 import {
   jsonCreated,
   jsonError,
@@ -51,6 +52,7 @@ const deliveryAuthSchema = z.discriminatedUnion('type', [
     signed_payload: z.enum(['body', 'timestamp.body']).default('timestamp.body'),
     encoding: z.literal('hex').default('hex'),
     prefix: z.string().default('sha256='),
+    signature_scheme: z.literal('standard-webhooks').optional(),
   }),
 ]);
 
@@ -62,6 +64,18 @@ const httpDeliverySchema = z.object({
   // (EngineConfig.httpPushProxy). `url` stays the real destination; the engine
   // forwards through the proxy at dispatch time. See dispatchHttpPush.
   use_proxy: z.boolean().optional(),
+}).superRefine((delivery, ctx) => {
+  if (
+    delivery.auth.type === 'hmac_sha256'
+    && delivery.auth.signature_scheme === 'standard-webhooks'
+    && !isValidStandardWebhookSecret(delivery.auth.secret)
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['auth', 'secret'],
+      message: 'standard-webhooks requires a whsec_ secret that decodes to 24-64 bytes',
+    });
+  }
 });
 
 const createNodeSchema = z.object({
@@ -192,7 +206,8 @@ async function enrollNode(c: Context<AppEnv>, data: z.infer<typeof createNodeSch
       if (!url) {
         return jsonError(c, 'invalid_node_delivery', 'http_push nodes require delivery.url', 400);
       }
-      if (!isSafeExternalUrl(url, { strict: strictExternalUrl(c) })) {
+      const strict = strictExternalUrl(c);
+      if (!isSafeExternalUrl(url, { strict, requireHttps: strict })) {
         return jsonError(c, 'unsafe_node_delivery_url', 'delivery.url is not allowed', 400);
       }
     }
@@ -393,7 +408,7 @@ nodeRoutes.post('/nodes/:node/actions/:name/invoke', requireAuth, rateLimit, asy
       handler_node_id: result.handler_node_id,
     };
     await sendWebhookEvent(c, { type: 'action.invoked', workspaceId: workspace.id, data: eventData });
-    emitServerEvent(c, workspace.id, 'relaycast_server_action_invoked', {
+    emitServerEvent(c, workspace.id, 'action.invoked', {
       action_name: result.action_name,
       invocation_id: result.invocation_id,
       caller_agent_id: agent.id,
@@ -414,6 +429,7 @@ nodeRoutes.post('/nodes/:node/actions/:name/invoke', requireAuth, rateLimit, asy
             nodeConnections: c.get('engine').nodeConnections,
             environment: c.get('engine').config?.environment,
             httpPushProxy: c.get('engine').config?.httpPushProxy,
+            outboundWebhookFetch: c.get('engine').config?.outboundWebhookFetch,
             workspaceId: workspace.id,
           },
           {
@@ -455,6 +471,14 @@ nodeRoutes.delete('/nodes/:node/providers/:name', requireWorkspaceKey, rateLimit
 });
 
 // GET /v1/nodes/:name - single node roster entry
+// GET /v1/node/me - the node a node token belongs to. A service handed the
+// token (Cloud, recording who owns a node) proves which node it is without
+// holding the workspace key.
+nodeRoutes.get('/node/me', requireNodeToken, rateLimit, async (c) => {
+  const node = c.get('node')!;
+  return jsonOk(c, { id: node.id, name: node.name, workspace_id: c.get('workspace').id });
+});
+
 nodeRoutes.get('/nodes/:name', requireWorkspaceRead('nodes:read'), rateLimit, async (c) => {
   try {
     const db = c.get('db');

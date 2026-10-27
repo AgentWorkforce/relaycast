@@ -1,4 +1,4 @@
-import { eq, and, gt, lt, ne, sql, inArray, type SQL } from 'drizzle-orm';
+import { eq, and, exists, gt, lt, ne, sql, inArray, type SQL } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { agents, agentNodeBindings, agentRecoveryCredentials, channels, channelMembers, dmParticipants, actions, deliveries, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
@@ -217,6 +217,12 @@ export async function registerAgent(
     recoveryProofHash?: string;
     workUnitId?: string;
   },
+  /**
+   * Internal. Set only by the verifier-reclaim retry below, so that retry can
+   * never recurse more than once: the second attempt refuses the conflict
+   * rather than reclaiming again.
+   */
+  afterVerifierReclaim = false,
 ) {
   assertRegistrableAgentName(data.name);
   if (!hasValidRegistrationIdentity(data.metadata)) {
@@ -329,10 +335,60 @@ export async function registerAgent(
         updatedAt: now,
       }));
       return writes;
-    });
+      // Sequential execution would apply the node and agent inserts before the
+      // credential insert raises the verifier conflict, so the reclaim retry
+      // would then fail on the name it just orphaned. The writes were always
+      // meant to be one unit; the retry is what makes a partial apply
+      // observable, so it is required rather than assumed.
+    }, { requireAtomic: true });
     [agent] = results[1] as (typeof agents.$inferSelect)[];
   } catch (insertErr: unknown) {
     if (isRecoveryVerifierConstraintError(insertErr)) {
+      // The verifier is globally unique, and a caller deriving it
+      // deterministically from stable inputs presents the SAME value every
+      // time. Release tombstones an agent but leaves its credential enrolled,
+      // so once a name is released its owner can never register it again: each
+      // retry re-presents a verifier held by the tombstone and 409s forever.
+      // No client backoff clears that, and the holder is an identity that can
+      // never be recovered -- its name carries the reserved released marker,
+      // and recovery requires a name match.
+      //
+      // A conflict against a RELEASED holder is therefore residue, not a
+      // conflict. Drop it and let the registration proceed. A conflict against
+      // a LIVE identity is still refused, because reclaiming then would hand
+      // one agent's recovery authority to another.
+      const verifier = data.recoveryProofHash;
+      if (!afterVerifierReclaim && verifier) {
+        const reclaimed = await db
+          .delete(agentRecoveryCredentials)
+          .where(and(
+            eq(agentRecoveryCredentials.workspaceId, workspaceId),
+            eq(agentRecoveryCredentials.verifierHash, verifier),
+            // A subquery, not a prior read: between a read and this delete the
+            // holder could be recovered back to live, and the one thing this
+            // must never do is take a live identity's verifier.
+            exists(
+              db.select({ one: sql`1` })
+                .from(agents)
+                .where(and(
+                  eq(agents.id, agentRecoveryCredentials.agentId),
+                  eq(agents.workspaceId, agentRecoveryCredentials.workspaceId),
+                  eq(agents.status, RELEASED_AGENT_STATUS),
+                  // And it must be THIS name's own tombstone. Workspace plus
+                  // released status is not enough: it would let any new name in
+                  // the workspace take a different agent's verifier and inherit
+                  // recovery authority backed by that agent's proof. Reclaiming
+                  // `foo` must only ever consume what `foo` left behind, which
+                  // is the only case this feature exists for.
+                  eq(agents.name, sql`${data.name} || ${RELEASED_NAME_MARKER} || ${agents.id}`),
+                )),
+            ),
+          ))
+          .returning({ id: agentRecoveryCredentials.id });
+        // Retry once. The flag makes a second conflict terminal, so a verifier
+        // contended by two concurrent registrations cannot loop.
+        if (reclaimed.length > 0) return registerAgent(db, workspaceId, data, true);
+      }
       throw codedError(
         'Agent recovery proof verifier is already enrolled to another identity',
         'agent_recovery_proof_conflict',
@@ -368,7 +424,14 @@ export async function registerAgent(
   };
 }
 
-export async function listAgents(db: Db, workspaceId: string, status?: string) {
+export const AGENT_ROSTER_RECENCY_MS = 7 * 24 * 60 * 60 * 1000;
+
+export async function listAgents(
+  db: Db,
+  workspaceId: string,
+  status?: string,
+  options: { includeStale?: boolean; includeMetadata?: boolean } = {},
+) {
   // Filtering and serialization must use the same instant even if the SELECT
   // crosses a TTL boundary. Presence is derived; roster reads never sweep.
   const now = Date.now();
@@ -389,9 +452,29 @@ export async function listAgents(db: Db, workspaceId: string, status?: string) {
   } else if (requestedStatus && requestedStatus !== 'all') {
     conditions.push(eq(agents.status, requestedStatus));
   }
+  if ((!requestedStatus || requestedStatus === 'all') && !options.includeStale) {
+    conditions.push(sql`${agents.lastSeen} >= ${(now - AGENT_ROSTER_RECENCY_MS) / 1_000}`);
+  }
 
   const rows = await db
-    .select({ agent: agents, node: addressNodeSelection })
+    .select({
+      agent: {
+        id: agents.id,
+        name: agents.name,
+        type: agents.type,
+        status: agents.status,
+        persona: agents.persona,
+        capabilities: agents.capabilities,
+        createdAt: agents.createdAt,
+        lastSeen: agents.lastSeen,
+        // Installed desktop clients need provider/host/session metadata. Keep
+        // it by default; lean callers avoid reading or decoding the JSON blob.
+        metadata: options.includeMetadata === false
+          ? sql<Record<string, unknown>>`'{}'`.mapWith(agents.metadata)
+          : agents.metadata,
+      },
+      node: addressNodeSelection,
+    })
     .from(agents)
     .leftJoin(nodes, eq(nodes.id, agents.locationNodeId))
     // Released rows are tombstones retained only to keep history attributable;
@@ -495,6 +578,10 @@ export async function getAgentByName(db: Db, workspaceId: string, name: string) 
     created_at: agent.createdAt.toISOString(),
     last_seen: agent.lastSeen.toISOString(),
     metadata: agent.metadata,
+    // The node whose authenticated socket registered this agent; set once by
+    // the server and never patchable, unlike metadata.fleet. An agent
+    // registered over HTTP gets its own direct node here.
+    origin_node_id: agent.originNodeId ?? null,
     channels: memberships.map((m) => ({
       id: m.channelId,
       name: m.channelName,
@@ -747,10 +834,26 @@ export async function deleteAgent(db: Db, workspaceId: string, name: string) {
   return true;
 }
 
+/** Refresh transport activity, restoring only a status lost to liveness. */
+export function agentLivenessRefresh() {
+  return {
+    lastSeen: new Date(),
+    status: sql<string>`CASE WHEN ${agents.status} = 'offline'
+      THEN COALESCE(${agents.statusBeforeLivenessLoss}, ${agents.status})
+      ELSE ${agents.status} END`,
+    statusBeforeLivenessLoss: null,
+  };
+}
+
+/** Save the pre-loss work state; callers must exclude already-offline/tombstone rows. */
+export function agentLivenessLoss() {
+  return { status: 'offline', statusBeforeLivenessLoss: sql<string>`${agents.status}` };
+}
+
 export async function touchLastSeen(db: Db, agentId: string): Promise<void> {
   await db
     .update(agents)
-    .set({ lastSeen: new Date(), status: 'active' })
+    .set(agentLivenessRefresh())
     // Auth schedules this without awaiting it, so a heartbeat racing a release
     // can land after the tombstone and flip the row back to `active` — reviving
     // a released agent as a live roster member. A tombstone is terminal.
@@ -780,7 +883,7 @@ export async function sweepStaleAgents(db: Db, workspaceId?: string): Promise<nu
 
   const result = await db
     .update(agents)
-    .set({ status: 'offline' })
+    .set(agentLivenessLoss())
     // Sweep both 'active' and legacy 'online' agents during the transition period
     .where(stale)
     .returning({ id: agents.id });

@@ -10,12 +10,15 @@ export type {
   EnginePorts,
   EngineProviders,
   EngineConfig,
+  EngineLogRecord,
+  EngineLogExport,
   EngineDb,
   EngineEvent,
   RealtimeBus,
   ConnectionRegistry,
   UpgradeArgs,
   PresenceTracker,
+  RateLimitCheck,
   RateLimiter,
   RateLimitResult,
   FileStorage,
@@ -27,9 +30,10 @@ export type {
   AuthRequire,
   Workspace,
   Agent,
-  EntitlementsProvider,
-  PlanLimits,
-  UsageMetric,
+  AdmissionAction,
+  AdmissionContext,
+  AdmissionDenial,
+  AdmissionHooks,
   TelemetrySink,
   TelemetryEvent,
 } from './ports/index.js';
@@ -41,17 +45,12 @@ export { observerAllowsEvent, type ObserverToken } from './engine/observerToken.
 
 // OSS default providers (self-host). Cloud injects its own.
 export { SqliteApiKeyAuthProvider, hashToken } from './auth/index.js';
-export { StaticEntitlementsProvider, PLAN_LIMITS } from './providers/static-entitlements.js';
-// Usage-counter key contract. An `EntitlementsProvider` reads the counters the
-// engine writes, so it has to agree with the engine on the billing period the
-// key is scoped to — build the key with these rather than by hand.
-export {
-  getUsageMetric,
-  usageCounterKey,
-  usagePeriod,
-  usagePeriodResetAt,
-} from './engine/usage.js';
 export { NoopTelemetrySink } from './providers/noop-telemetry.js';
+export {
+  isValidStandardWebhookSecret,
+  signStandardWebhook,
+  verifyStandardWebhook,
+} from './lib/standardWebhook.js';
 
 // Database helpers + schema for adapters and migrations.
 export { getDb, healthCheck as dbHealthCheck } from './db/index.js';
@@ -81,7 +80,11 @@ export { runA2aHealthChecks } from './engine/a2a-health.js';
 // `sweepDueHttpPushDeliveries` is a deprecated alias kept for hosts (relaycast-
 // cloud) that still import the old name.
 export { sweepDueNodeDeliveries, sweepDueHttpPushDeliveries } from './routes/deliveryRouting.js';
-export { sweepExpiredDeliveries } from './routes/deliveryRouting.js';
+export { sweepExpiredDeliveries, sweepUnreachableDeliveries } from './routes/deliveryRouting.js';
+// Mention-index catch-up for 0075. `sweepExpiredDeliveries` advances it one
+// batch per call; hosts whose rotation reaches that sweep rarely can drive it
+// directly (bounded, idempotent, returns rows copied; 0 once complete).
+export { backfillMessageMentionFts, MESSAGE_MENTION_BACKFILL_BATCH } from './engine/inbox.js';
 export { deliverPendingToNode } from './engine/delivery.js';
 export { handleNodeReconnect } from './node-reconnect.js';
 export { handleAgentDisconnect } from './agent-disconnect.js';
@@ -128,9 +131,21 @@ export type { WorkspaceRetentionSettings } from './db/schema.js';
 export {
   reapExpiredWorkspaces,
   drainFileCleanup,
+  getWorkspaceExpiry,
   DEFAULT_WORKSPACE_REAP_LIMIT,
   DEFAULT_FILE_CLEANUP_LIMIT,
 } from './engine/workspace.js';
+
+// Expiry is enforced at authentication, not just by the reap. Hosts that
+// compose their own credential paths reuse these so an expired workspace stays
+// rejected whatever provider resolved it.
+export {
+  isWorkspaceExpired,
+  authenticateUnexpired,
+  workspaceExpiredAuthResult,
+  WORKSPACE_EXPIRED_CODE,
+  WORKSPACE_EXPIRED_MESSAGE,
+} from './auth/workspaceExpiry.js';
 
 // Durable workspace event log (observer plane): append + cursor reads over
 // `workspace_events`, and the shared append+stamp+publish helper used by every

@@ -27,12 +27,17 @@ import type {
   CreateSubscriptionRequest,
   CreateSubscriptionResponse,
   EventSubscription,
+  WebhookDelivery,
+  WebhookDeliveryStatus,
+  ReplayWebhookDeliveryResponse,
   ActivityItem,
   DmMessage,
   DmMessagePage,
   DmReceivedEvent,
   WorkspaceDmConversation,
   TokenRotateResponse,
+  RotateWorkspaceKeyRequest,
+  RotateWorkspaceKeyResponse,
   MessageListQuery,
   MessageCreatedEvent,
   MessageReadEvent,
@@ -96,9 +101,12 @@ import type {
   ConsoleCostStats,
   ThreadReplyEvent,
   WsClientEvent,
+  AgentExitedEvent,
   AgentStatusActiveEvent,
   AgentStatusChangedEvent,
   AgentStatusOfflineEvent,
+  NodeStatusOnlineEvent,
+  NodeStatusOfflineEvent,
   ChannelCreatedEvent,
   ChannelUpdatedEvent,
   ChannelArchivedEvent,
@@ -125,6 +133,7 @@ import {
   ApiResponseSchema,
   CreateWorkspaceResponseSchema,
   SessionMessagesResultSchema,
+  WorkspaceDmConversationSchema,
   WorkspaceLookupSchema,
 } from '@relaycast/types';
 import { ZodError } from 'zod';
@@ -414,6 +423,12 @@ export class RelayCast {
     agentStatusChanged: (handler: (e: AgentStatusChangedEvent) => void): (() => void) => this.onEvent('agent.status.changed', handler),
     agentActive:     (handler: (e: AgentStatusActiveEvent) => void): (() => void)  => this.onEvent('agent.status.active', handler),
     agentOffline:    (handler: (e: AgentStatusOfflineEvent) => void): (() => void) => this.onEvent('agent.status.offline', handler),
+    agentExited:     (handler: (e: AgentExitedEvent) => void): (() => void)     => this.onEvent('agent.exited', handler),
+    // Node liveness is published on this workspace stream (`/v1/ws`) and to
+    // webhooks. It is not delivered to an agent mailbox, so AgentClient does
+    // not expose these handlers.
+    nodeOnline:      (handler: (e: NodeStatusOnlineEvent) => void): (() => void) => this.onEvent('node.status.online', handler),
+    nodeOffline:     (handler: (e: NodeStatusOfflineEvent) => void): (() => void) => this.onEvent('node.status.offline', handler),
     channelCreated:  (handler: (e: ChannelCreatedEvent) => void): (() => void)  => this.onEvent('channel.created', handler),
     channelUpdated:  (handler: (e: ChannelUpdatedEvent) => void): (() => void)  => this.onEvent('channel.updated', handler),
     channelArchived: (handler: (e: ChannelArchivedEvent) => void): (() => void) => this.onEvent('channel.archived', handler),
@@ -753,6 +768,15 @@ export class RelayCast {
       this.reconnect(data, options),
     update: (data: UpdateWorkspaceRequest): Promise<Workspace> =>
       this.client.patch('/v1/workspace', data),
+    /**
+     * Replace the workspace API key. The response carries the replacement
+     * exactly once; persist it (do not print it). `graceSeconds` keeps the
+     * superseded key authenticatable for propagation — pass `0` when the old
+     * key may be compromised. Hosted deployments manage keys through the
+     * control plane and refuse this call.
+     */
+    rotateKey: (data?: RotateWorkspaceKeyRequest): Promise<RotateWorkspaceKeyResponse> =>
+      this.client.post('/v1/workspace/rotate-key', data ?? {}),
     delete: (workspaceId?: string): Promise<void> => workspaceId === undefined
       ? this.client.delete('/v1/workspace')
       : this.client.delete(`/v1/workspaces/${encodeURIComponent(workspaceId)}`),
@@ -854,6 +878,8 @@ export class RelayCast {
     list: (query?: AgentListQuery): Promise<Agent[]> => {
       const params: Record<string, string> = {};
       if (query?.status) params.status = query.status;
+      if (query?.includeStale !== undefined) params.include_stale = query.includeStale ? '1' : '0';
+      if (query?.includeMetadata !== undefined) params.include_metadata = query.includeMetadata ? '1' : '0';
       return this.client.get('/v1/agents', params);
     },
     get: (name: string): Promise<Agent> =>
@@ -961,6 +987,26 @@ export class RelayCast {
 
     delete: (id: string): Promise<void> =>
       this.client.delete(`/v1/subscriptions/${encodeURIComponent(id)}`),
+
+    deliveries: (
+      id: string,
+      query: { status?: WebhookDeliveryStatus; limit?: number } = {},
+    ): Promise<WebhookDelivery[]> => {
+      if (query.limit != null
+        && (!Number.isInteger(query.limit) || query.limit < 1 || query.limit > 100)) {
+        throw new RangeError('subscriptions.deliveries limit must be an integer from 1 to 100');
+      }
+      const params: Record<string, string> = {};
+      if (query.status) params.status = query.status;
+      if (query.limit != null) params.limit = String(query.limit);
+      return this.client.get(`/v1/subscriptions/${encodeURIComponent(id)}/deliveries`, params);
+    },
+
+    replayDelivery: (id: string, deliveryId: string): Promise<ReplayWebhookDeliveryResponse> =>
+      this.client.post(
+        `/v1/subscriptions/${encodeURIComponent(id)}/deliveries/${encodeURIComponent(deliveryId)}/replay`,
+        {},
+      ),
   };
 
   actions = {
@@ -1112,8 +1158,30 @@ export class RelayCast {
     return this.client.get('/v1/activity', params);
   };
 
-  allDmConversations = (): Promise<WorkspaceDmConversation[]> =>
-    this.client.get('/v1/dm/conversations/all');
+  allDmConversations = async (): Promise<WorkspaceDmConversation[]> => {
+    const conversations: WorkspaceDmConversation[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+
+    while (true) {
+      const page = await this.client.getEnvelope<WorkspaceDmConversation[]>(
+        '/v1/dm/conversations/all',
+        { limit: '500', ...(cursor ? { cursor } : {}) },
+        { schema: WorkspaceDmConversationSchema.array() },
+      );
+      conversations.push(...page.data);
+      if (!page.cursor?.hasMore) return conversations;
+
+      const next = page.cursor.next;
+      if (!next || seenCursors.has(next)) {
+        throw new RelayError('transport_error', 'DM conversation pagination did not advance', {
+          retryable: false,
+        });
+      }
+      seenCursors.add(next);
+      cursor = next;
+    }
+  };
 
   dmMessages = async (conversationId: string, opts?: { limit?: number; before?: string; after?: string }): Promise<DmMessage[]> => {
     const query: Record<string, string> = {};

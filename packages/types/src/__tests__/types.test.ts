@@ -2,7 +2,9 @@ import { describe, it, expect, expectTypeOf } from 'vitest';
 import {
   DeliverySchema,
   DeliveryItemSchema,
+  DeliveryFailedEventSchema,
   ServerEventSchema,
+  SessionMessageSchema,
   SessionMessagesResultSchema,
   WorkspaceSchema,
   CreateWorkspaceResponseSchema,
@@ -90,15 +92,8 @@ describe('Type definitions', () => {
     expectTypeOf<Workspace>().toHaveProperty('name');
     expectTypeOf<Workspace>().toHaveProperty('api_key_hash');
     expectTypeOf<Workspace>().toHaveProperty('system_prompt');
-    expectTypeOf<Workspace>().toHaveProperty('plan');
     expectTypeOf<Workspace>().toHaveProperty('created_at');
     expectTypeOf<Workspace>().toHaveProperty('metadata');
-  });
-
-  it('Workspace plan is a union type', () => {
-    expectTypeOf<'free'>().toMatchTypeOf<Workspace['plan']>();
-    expectTypeOf<'pro'>().toMatchTypeOf<Workspace['plan']>();
-    expectTypeOf<'enterprise'>().toMatchTypeOf<Workspace['plan']>();
   });
 
   it('defaults attribution fields for responses from pre-attribution engines', () => {
@@ -107,7 +102,6 @@ describe('Type definitions', () => {
       name: 'legacy',
       api_key_hash: 'hash',
       system_prompt: null,
-      plan: 'free',
       created_at: '2026-08-18T00:00:00.000Z',
       metadata: {},
     });
@@ -236,6 +230,25 @@ describe('Type definitions', () => {
     });
 
     expect(parsed.success).toBe(false);
+  });
+
+  it('keeps a recorded session sender address and allows it to be absent', () => {
+    const message = {
+      id: 'm',
+      channel_id: 'c',
+      channel_name: 'general',
+      conversation_id: null,
+      agent_id: 'a',
+      agent_name: 'ada',
+      thread_id: null,
+      text: 'hi',
+      blocks: null,
+      metadata: {},
+      has_attachments: false,
+      created_at: '2026-10-12T00:00:00.000Z',
+    };
+    expect(SessionMessageSchema.parse({ ...message, agent_address: 'ada@laptop' }).agent_address).toBe('ada@laptop');
+    expect(SessionMessageSchema.parse(message)).not.toHaveProperty('agent_address');
   });
 
   // ============================================
@@ -459,5 +472,13 @@ describe('Type definitions', () => {
     ]) {
       expect(ServerEventSchema.safeParse(event).success).toBe(true);
     }
+
+    expect(DeliveryFailedEventSchema.parse({
+      type: 'delivery.failed',
+      delivery_id: null,
+      message_id: 'm_1',
+      reason: 'recipient_offline',
+      retryable: false,
+    }).reason).toBe('recipient_offline');
   });
 });

@@ -4,6 +4,13 @@ import { and, eq } from 'drizzle-orm';
 import { AGENT_TOKEN_HASH_PATTERN, AgentTypeSchema, CliTypeSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { requireWorkspaceKey, requireAuth, requireAgentToken, requireSender, requireWorkspaceRead } from '../middleware/auth.js';
+import {
+  authenticateUnexpired,
+  isWorkspaceExpired,
+  WORKSPACE_EXPIRED_CODE,
+  WORKSPACE_EXPIRED_MESSAGE,
+} from '../auth/workspaceExpiry.js';
+import { getWorkspaceExpiry } from '../engine/workspace.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as agentEngine from '../engine/agent.js';
 import { agentRetentionSchema, retainAgents } from '../engine/agentRetention.js';
@@ -316,7 +323,7 @@ agentRoutes.post(
           metadata: nextMetadata,
         });
       }
-      emitServerEvent(c, workspace.id, 'relaycast_server_agent_registered', {
+      emitServerEvent(c, workspace.id, 'agent.registered', {
         agent_id: result.id,
         agent_name: result.name,
         agent_type: type ?? 'agent',
@@ -384,6 +391,12 @@ agentRoutes.post(
           && credential.agentId === parsed.data.expected_agent_id
           && credential.agentName === name
         ) {
+          // A recovery proof is a credential like any other: it must not keep
+          // identity recovery available past the workspace deadline (#464).
+          const workspace = await getWorkspaceExpiry(db, credential.workspaceId);
+          if (workspace && isWorkspaceExpired(workspace)) {
+            return jsonError(c, WORKSPACE_EXPIRED_CODE, WORKSPACE_EXPIRED_MESSAGE, 401);
+          }
           target = await identityTargetByName(db, credential.workspaceId, name);
           authority = 'work_unit_proof';
           actor = `work_unit:${credential.workUnitId ?? 'proof'}`;
@@ -393,8 +406,11 @@ agentRoutes.post(
         // alongside agent/workspace credentials. Workspace credentials still
         // fail below because they establish neither agent nor origin-node
         // authority; this only makes the explicit origin-node branch reachable.
-        const auth = await c.get('engine').auth.authenticate({ token, require: 'sender', db });
+        const auth = await authenticateUnexpired(c.get('engine').auth, { token, require: 'sender', db });
         if (!auth.ok) {
+          if (auth.code === WORKSPACE_EXPIRED_CODE) {
+            return jsonError(c, WORKSPACE_EXPIRED_CODE, WORKSPACE_EXPIRED_MESSAGE, 401);
+          }
           return jsonError(c, 'agent_recovery_not_authorized', 'Recovery credential was not accepted', 403);
         }
         target = await identityTargetByName(db, auth.workspace.id, name);
@@ -488,7 +504,7 @@ agentRoutes.post(
         node_id: parsed.data.node_id,
         audit_id: result.audit_id,
       });
-      emitServerEvent(c, workspace.id, 'relaycast_server_agent_identity_taken_over', {
+      emitServerEvent(c, workspace.id, 'agent.identity.taken.over', {
         agent_id: target.id,
         agent_name: target.name,
         audit_id: result.audit_id,
@@ -533,7 +549,7 @@ agentRoutes.post(
         nodeId: parsed.data.node_id,
         originActor: c.get('originActor'),
       });
-      emitServerEvent(c, workspace.id, 'relaycast_server_agent_token_revoked', {
+      emitServerEvent(c, workspace.id, 'agent.token.revoked', {
         agent_id: target.id,
         agent_name: target.name,
         audit_id: result.audit_id,
@@ -546,6 +562,12 @@ agentRoutes.post(
 );
 
 // GET /v1/agents - list agents
+const agentListQuerySchema = z.object({
+  status: z.string().optional(),
+  include_stale: z.enum(['0', '1']).transform(value => value === '1').optional(),
+  include_metadata: z.enum(['0', '1']).transform(value => value === '1').optional(),
+});
+
 agentRoutes.get(
   '/agents',
   requireWorkspaceRead('agents:read', { allowAgent: false, allowNode: false }),
@@ -554,9 +576,13 @@ agentRoutes.get(
     try {
       const db = c.get('db');
       const workspace = c.get('workspace');
-      const status = c.req.query('status');
+      const query = parseQueryParams(c, agentListQuerySchema, 'Invalid agent list query');
+      if (!query.ok) return query.response;
       const observer = getObserverTokenFromContext(c);
-      const agents = (await agentEngine.listAgents(db, workspace.id, status))
+      const agents = (await agentEngine.listAgents(db, workspace.id, query.data.status, {
+        includeStale: query.data.include_stale,
+        includeMetadata: query.data.include_metadata,
+      }))
         .filter((agent) => observerAllowsAgent(observer, agent.id));
       return jsonOk(c, agents);
     } catch (err: unknown) {
@@ -646,9 +672,11 @@ agentRoutes.patch(
         });
       }
       if (body.status !== undefined) {
-        await fanoutAgentStatus(c, updated, body.status);
+        // `updated.status` is derived presence. A stale `last_seen` reports
+        // offline even when the caller wrote `active`; the event must match.
+        await fanoutAgentStatus(c, updated, updated.status);
       }
-      emitServerEvent(c, workspace.id, 'relaycast_server_agent_updated', {
+      emitServerEvent(c, workspace.id, 'agent.updated', {
         agent_name: name,
         changed_status: typeof body?.status === 'string',
         changed_persona: typeof body?.persona === 'string',
@@ -723,7 +751,7 @@ agentRoutes.patch(
         status: updated.status,
         metadata: updated.metadata ?? {},
       });
-      emitServerEvent(c, workspace.id, 'relaycast_server_legacy_identity_claimed', {
+      emitServerEvent(c, workspace.id, 'legacy.identity.claimed', {
         agent_name: name,
       });
       return jsonOk(c, updated);
@@ -747,7 +775,7 @@ agentRoutes.delete(
       if (!deleted) {
         return agentNotFound(c, name);
       }
-      emitServerEvent(c, workspace.id, 'relaycast_server_agent_deleted', {
+      emitServerEvent(c, workspace.id, 'agent.deleted', {
         agent_name: name,
       });
       return jsonNoContent(c);
@@ -819,7 +847,7 @@ agentRoutes.post(
         workspaceId: workspace.id,
         data: eventData,
       });
-      emitServerEvent(c, workspace.id, 'relaycast_server_action_invoked', {
+      emitServerEvent(c, workspace.id, 'action.invoked', {
         action_name: result.action_name,
         invocation_id: result.invocation_id,
         caller_agent_id: callerAgent?.id ?? null,
@@ -1037,7 +1065,7 @@ agentRoutes.post(
         workspaceId: workspace.id,
         data: eventData,
       });
-      emitServerEvent(c, workspace.id, 'relaycast_server_action_invoked', {
+      emitServerEvent(c, workspace.id, 'action.invoked', {
         action_name: result.action_name,
         invocation_id: result.invocation_id,
         caller_agent_id: callerAgent?.id ?? null,

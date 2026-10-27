@@ -3,15 +3,20 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { RelayProvider } from '@relaycast/react';
-import { setAuth } from '../lib/auth';
+import { login } from '../lib/auth';
 import { resetActivityIfWorkspaceChanged } from '../lib/activity-store';
 import {
+  classifyConnectObserverStatus,
   connectObserverCapability,
+  connectObserverExpiryDelay,
   connectObserverIdentity,
+  connectObserverRetryDelay,
   connectObserverUrlWithoutCapability,
-  shouldScrubConnectObserverCapability,
+  parseRetryAfterMs,
   shouldInitializeConnectObserver,
+  shouldScrubConnectObserverCapability,
 } from '../lib/connect-observer';
+import { ConnectObserverTemporaryState } from './ConnectObserverTemporaryState';
 
 interface Session {
   apiKey: string;
@@ -32,6 +37,32 @@ export function RelaySessionProvider({
   const [session, setSession] = useState<Session | null>(null);
   const [checking, setChecking] = useState(true);
   const [accessFailure, setAccessFailure] = useState<'expired' | 'unavailable' | null>(null);
+  // A Connect open that failed for a temporary reason (rate limit, outage,
+  // network): retried in this tab with bounded backoff, never shown as revoked.
+  const [temporaryFailure, setTemporaryFailure] = useState<{ retrying: boolean } | null>(null);
+  const retryNow = useRef<() => void>(() => undefined);
+  // Not cleared by the effect's cleanup: stripping the capability re-runs the
+  // effect for the same identity, which must not cancel a pending retry.
+  const retryTimer = useRef<number | undefined>(undefined);
+  // An open that fails after unmount must not schedule a retry: it would later
+  // re-send the captured capability and could overwrite a newer session's cookies.
+  const mounted = useRef(true);
+  // Aborts the login/session request in flight, so a response that lands after
+  // unmount (or after another identity started) cannot apply its cookies.
+  const inFlight = useRef<AbortController | null>(null);
+  // The capability captured from the link, kept until the open settles: a
+  // Strict Mode effect replay (or remount) that aborted an unfinished open
+  // must be able to restart it after the URL was scrubbed.
+  const capturedCapability = useRef<string | null>(null);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      window.clearTimeout(retryTimer.current);
+      inFlight.current?.abort();
+    };
+  }, []);
   const requestSeq = useRef(0);
   const connectIdentity = useRef<string | null>(null);
   const previousMode = useRef<'workspace' | 'connect' | null>(null);
@@ -40,8 +71,14 @@ export function RelaySessionProvider({
     const observerIdParam = searchParams.get('observer_id');
     const queryKey = searchParams.get('key');
     const fragmentKey = mode === 'connect' ? new URLSearchParams(window.location.hash.slice(1)).get('key') : null;
-    const keyParam = connectObserverCapability(mode, queryKey, fragmentKey);
+    // Connect links are fragment-only. A query credential is rejected, never
+    // sent, and still scrubbed so it cannot linger in history or a referrer.
+    const acceptedKey = connectObserverCapability(mode, queryKey, fragmentKey);
     const expiresAt = searchParams.get('expires_at');
+    const urlHasCredential = queryKey !== null || fragmentKey !== null;
+    const resumesAbortedOpen = mode === 'connect' && !acceptedKey && !urlHasCredential && Boolean(inFlight.current?.signal.aborted)
+      && connectIdentity.current === connectObserverIdentity(observerIdParam, expiresAt);
+    const keyParam = acceptedKey ?? (resumesAbortedOpen ? capturedCapability.current : null);
     const priorMode = previousMode.current;
     previousMode.current = mode;
     if (shouldScrubConnectObserverCapability(mode, queryKey, fragmentKey)) {
@@ -60,13 +97,47 @@ export function RelaySessionProvider({
       connectIdentity.current = connectObserverIdentity(observerIdParam, expiresAt);
     }
     const seq = ++requestSeq.current;
+    if (mode === 'connect') capturedCapability.current = keyParam;
+    if (mode === 'connect' && keyParam) {
+      // Capture the capability above, then remove it before any asynchronous
+      // validation so success, rejection, expiry, and network failure all
+      // leave a non-replayable address-bar entry.
+      window.history.replaceState({}, '', connectObserverUrlWithoutCapability(window.location.href));
+    }
     // An identity change is an authorization boundary. Unmount the room view
     // immediately so its message cache cannot survive into another session.
     setChecking(true);
     setSession(null);
     setAccessFailure(null);
+    setTemporaryFailure(null);
+
+    // The capability lives only in this closure once stripped from the URL, so
+    // retries re-run the login here instead of asking for a reload.
+    window.clearTimeout(retryTimer.current);
+    inFlight.current?.abort();
+    let attempt = 0;
+    const failTemporarily = (retryAfterMs?: number | null) => {
+      if (seq !== requestSeq.current || !mounted.current) return;
+      const delay = connectObserverRetryDelay(attempt, retryAfterMs);
+      attempt += 1;
+      setTemporaryFailure({ retrying: delay !== null });
+      if (delay !== null) {
+        retryTimer.current = window.setTimeout(() => {
+          if (mounted.current) void initSession();
+        }, delay);
+      }
+    };
+    retryNow.current = () => {
+      window.clearTimeout(retryTimer.current);
+      attempt = 0;
+      setTemporaryFailure(null);
+      setChecking(true);
+      void initSession();
+    };
 
     async function initSession() {
+      const controller = new AbortController();
+      inFlight.current = controller;
       try {
         if (
           mode === 'connect' &&
@@ -87,14 +158,16 @@ export function RelaySessionProvider({
           return;
         }
         if (keyParam?.startsWith('rk_live_') || keyParam?.startsWith('ot_live_')) {
-          const success = await setAuth(
+          const result = await login(
             keyParam,
-            mode === 'connect' ? { connectObserverId: observerIdParam! } : undefined,
+            mode === 'connect' ? { connectObserverId: observerIdParam!, signal: controller.signal } : undefined,
           );
+          if (controller.signal.aborted) return;
           if (seq !== requestSeq.current) return;
-          if (!success) {
+          if (!result.ok) {
             if (mode === 'connect') {
-              setAccessFailure('unavailable');
+              if (result.failure === 'temporary') failTemporarily(result.retryAfterMs);
+              else setAccessFailure('unavailable');
               return;
             }
             router.replace('/login');
@@ -102,12 +175,13 @@ export function RelaySessionProvider({
           }
         }
 
-        const res = await fetch('/observer/api/auth/session');
-        if (seq !== requestSeq.current) return;
+        const res = await fetch('/observer/api/auth/session', { signal: controller.signal });
+        if (seq !== requestSeq.current || controller.signal.aborted) return;
 
         if (!res.ok) {
           if (mode === 'connect') {
-            setAccessFailure('unavailable');
+            if (classifyConnectObserverStatus(res.status) === 'temporary') failTemporarily(parseRetryAfterMs(res.headers.get('retry-after')));
+            else setAccessFailure('unavailable');
             return;
           }
           router.replace('/login');
@@ -124,6 +198,8 @@ export function RelaySessionProvider({
           // Drop another workspace's cached activity before this dashboard
           // mounts, so switching keys never hydrates stale cross-workspace events.
           resetActivityIfWorkspaceChanged(data.apiKey);
+          setTemporaryFailure(null);
+          capturedCapability.current = null;
           setSession({
             apiKey: data.apiKey,
             agentToken: data.agentToken,
@@ -141,9 +217,9 @@ export function RelaySessionProvider({
           router.replace('/login');
         }
       } catch {
-        if (seq !== requestSeq.current) return;
+        if (seq !== requestSeq.current || controller.signal.aborted) return;
         if (mode === 'connect') {
-          setAccessFailure('unavailable');
+          failTemporarily();
           return;
         }
         router.replace('/login');
@@ -156,8 +232,35 @@ export function RelaySessionProvider({
     initSession();
   }, [mode, router, searchParams]);
 
+  // A link that expires while temporary retries are paused must say so; the
+  // expiry check inside the open only runs when a retry does.
+  useEffect(() => {
+    const expiresAt = searchParams.get('expires_at');
+    if (!temporaryFailure || mode !== 'connect' || !expiresAt) return;
+    let timer: number | undefined;
+    const checkExpiry = () => {
+      const delay = connectObserverExpiryDelay(expiresAt);
+      if (delay === null) return;
+      if (delay <= 0) {
+        window.clearTimeout(retryTimer.current);
+        inFlight.current?.abort();
+        setTemporaryFailure(null);
+        setAccessFailure('expired');
+        return;
+      }
+      timer = window.setTimeout(checkExpiry, delay);
+    };
+    checkExpiry();
+    return () => window.clearTimeout(timer);
+  }, [mode, searchParams, temporaryFailure]);
+
   if (accessFailure) {
     return <ConnectObserverAccessState state={accessFailure} />;
+  }
+
+
+  if (temporaryFailure) {
+    return <ConnectObserverTemporaryState retrying={temporaryFailure.retrying} onRetry={() => retryNow.current()} />;
   }
 
   if (checking || !session) {

@@ -61,37 +61,41 @@ describe('errorResponse', () => {
     });
   });
 
-  it('does not expose SQL or bound parameters from uncoded server errors', async () => {
-    const response = errorResponse(
-      testContext(),
-      new Error('Failed query: insert into "workspaces" params: rk_live_secret_hash'),
-    );
+  it('re-throws uncoded server errors for the global handler', () => {
+    const error = new Error('Failed query: insert into "workspaces" params: rk_live_secret_hash');
+    const context = testContext();
 
-    expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({
-      ok: false,
-      error: {
-        code: 'internal_error',
-        message: 'Internal server error',
-      },
-    });
+    expect(() => errorResponse(context, error)).toThrow(error);
+    expect(context.json).not.toHaveBeenCalled();
   });
 
-  it('treats status 0 as 500 before redacting an uncoded error message', async () => {
-    const error = Object.assign(
-      new Error('Failed query: insert into "workspaces" params: rk_live_secret_hash'),
-      { status: 0 },
-    );
+  it('treats status 0 as 500 and re-throws an uncoded error', () => {
+    const error = Object.assign(new Error('Failed query: select 1'), { status: 0 });
+
+    expect(() => errorResponse(testContext(), error)).toThrow(error);
+  });
+
+  it('re-throws a non-Error throw as an Error so Hono passes it to onError', () => {
+    let thrown: unknown;
+    try {
+      errorResponse(testContext(), { message: 'D1_ERROR: D1 DB is overloaded.' });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toBe('D1_ERROR: D1 DB is overloaded.');
+  });
+
+  it('answers uncoded client errors in place', async () => {
+    const error = Object.assign(new Error('Not allowed'), { status: 403 });
 
     const response = errorResponse(testContext(), error);
 
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(403);
     await expect(response.json()).resolves.toEqual({
       ok: false,
-      error: {
-        code: 'internal_error',
-        message: 'Internal server error',
-      },
+      error: { code: 'internal_error', message: 'Not allowed' },
     });
   });
 
