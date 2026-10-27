@@ -2708,6 +2708,8 @@ async function restoreUnsentSpawnClaim(
     restoreRetryAfterAt: Date | null;
     restoreDispatchAttempts: number;
     restoreDispatchedNodeId: string | null;
+    /** False when this attempt reused a hold the caller will not release. */
+    clearSpawnReservation?: boolean;
   },
 ): Promise<void> {
   await db
@@ -2716,7 +2718,7 @@ async function restoreUnsentSpawnClaim(
       status: 'pending',
       dispatchedAt: null,
       dispatchedNodeId: claim.restoreDispatchedNodeId,
-      spawnReservedAt: null,
+      ...(claim.clearSpawnReservation === false ? {} : { spawnReservedAt: null }),
       retryAfterAt: claim.restoreRetryAfterAt,
       dispatchAttempts: claim.restoreDispatchAttempts,
     })
@@ -3016,6 +3018,11 @@ async function dispatchNodeInvocation(args: {
   observedDispatchAttempts?: number;
   /** `dispatched_node_id` observed on that row. Absent means unset. */
   observedDispatchedNodeId?: string | null;
+  /**
+   * The caller reused a capacity hold it will not release if this send fails.
+   * Restoring the claim must leave `spawn_reserved_at` set.
+   */
+  preserveSpawnReservation?: boolean;
   expectedNodeLivenessRevision?: number;
 }): Promise<{
   accepted: boolean;
@@ -3197,6 +3204,7 @@ async function dispatchNodeInvocation(args: {
       restoreRetryAfterAt: observedRetryAfterAt,
       restoreDispatchAttempts: observedDispatchAttempts,
       restoreDispatchedNodeId: args.observedDispatchedNodeId ?? null,
+      clearSpawnReservation: !args.preserveSpawnReservation,
     },
   );
   let sent = false;
@@ -3664,6 +3672,7 @@ export async function drainNodeInvocations(
         observedRetryAfterAt: row.retryAfterAt,
         observedDispatchAttempts: row.dispatchAttempts,
         observedDispatchedNodeId: row.dispatchedNodeId,
+        preserveSpawnReservation: reservationHeld && !reservedForDrain,
       });
       if (dispatched.accepted) {
         drained++;
@@ -3737,9 +3746,28 @@ export async function rescheduleNodeInvocation(
   }
   // Only release capacity the invocation actually holds. A shadowed spawn
   // dropped its native reservation at dispatch (spawnReservedAt is null), so it
-  // must not release capacity that now belongs to another spawn.
+  // must not release capacity that now belongs to another spawn. Clear the
+  // marker once so overlapping retries release that one hold, not every hold
+  // on the node.
   if (invocation.dispatchedNodeId && isSpawnInvocation(invocation.actionName) && invocation.spawnReservedAt) {
-    await releaseNodeCapacity(db, invocation.workspaceId, invocation.dispatchedNodeId);
+    const [releasedHold] = await db
+      .update(actionInvocations)
+      .set({ spawnReservedAt: null })
+      .where(and(
+        eq(actionInvocations.workspaceId, invocation.workspaceId),
+        eq(actionInvocations.id, invocation.id),
+        eq(actionInvocations.status, invocation.status),
+        eq(actionInvocations.dispatchAttempts, invocation.dispatchAttempts ?? 0),
+        retryAfterAtMatches(invocation.retryAfterAt ?? null),
+        eq(actionInvocations.spawnReservedAt, invocation.spawnReservedAt),
+        ...(opts.expectedNodeLivenessRevision !== undefined
+          ? [eq(actionInvocations.nodeLivenessRevision, opts.expectedNodeLivenessRevision)]
+          : []),
+      ))
+      .returning({ id: actionInvocations.id });
+    if (releasedHold) {
+      await releaseNodeCapacity(db, invocation.workspaceId, invocation.dispatchedNodeId);
+    }
   }
   // A shadowed spawn stays pinned to its node: while a `spawn:<harness>` shadow
   // is registered there, native capacity for that harness is unreachable — even
@@ -3965,7 +3993,9 @@ export async function rescheduleNodeInvocation(
     .where(and(
       eq(actionInvocations.workspaceId, invocation.workspaceId),
       eq(actionInvocations.id, invocation.id),
-      inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      eq(actionInvocations.status, invocation.status),
+      eq(actionInvocations.dispatchAttempts, invocation.dispatchAttempts ?? 0),
+      retryAfterAtMatches(invocation.retryAfterAt ?? null),
       ...(opts.expectedNodeLivenessRevision !== undefined
         ? [eq(actionInvocations.nodeLivenessRevision, opts.expectedNodeLivenessRevision)]
         : []),

@@ -200,7 +200,7 @@ describe('invocation claim before send', () => {
     });
     await db
       .update(nodes)
-      .set({ reservedAgents: 1 })
+      .set({ reservedAgents: 2 })
       .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_spawn_a')));
 
     await Promise.all([
@@ -219,8 +219,125 @@ describe('invocation claim before send', () => {
       .from(nodes)
       .where(eq(nodes.workspaceId, ws.workspaceId));
     const byId = new Map(reserved.map((node) => [node.id, node.reservedAgents]));
-    expect(byId.get('node_spawn_a')).toBe(0);
+    expect(byId.get('node_spawn_a')).toBe(1);
     expect(byId.get('node_spawn_b')).toBe(1);
+  });
+
+  it('does not let a losing retry clear a send that already claimed the only slot', async () => {
+    const ws = await createWorkspace(stack.app, 'spawn-claim-loser');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    await registerSpawnNode(stack, ws, 'node_spawn_loser_a', 'spawn-loser-a');
+    const sockB = await registerSpawnNode(stack, ws, 'node_spawn_loser_b', 'spawn-loser-b', 1);
+    const db = stack.runtime.handle.db;
+    const invocationId = 'inv_spawn_loser_retry';
+    const observedDeadline = new Date(Date.now() - 1_000);
+    await db.insert(actionInvocations).values({
+      id: invocationId,
+      workspaceId: ws.workspaceId,
+      actionName: 'spawn:claude',
+      invocationOrigin: 'builtin',
+      callerId: caller.agentId,
+      callerName: caller.name,
+      input: { cli: 'claude', name: 'worker-loser', task: 'hi' },
+      status: 'dispatched',
+      dispatchedAt: new Date(Date.now() - 60_000),
+      retryAfterAt: observedDeadline,
+      dispatchedNodeId: 'node_spawn_loser_a',
+      attemptedNodeIds: ['node_spawn_loser_a'],
+      dispatchAttempts: 1,
+      spawnReservedAt: new Date(Date.now() - 60_000),
+    });
+    await db
+      .update(nodes)
+      .set({ reservedAgents: 1 })
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_spawn_loser_a')));
+    const [invocation] = await db.select().from(actionInvocations).where(eq(actionInvocations.id, invocationId));
+
+    const realtime = stack.runtime.realtime;
+    const originalSend = realtime.sendToProvider.bind(realtime);
+    let releaseSend!: () => void;
+    const sendGate = new Promise<void>((resolve) => { releaseSend = resolve; });
+    let enteredSend!: () => void;
+    const sendEntered = new Promise<void>((resolve) => { enteredSend = resolve; });
+    vi.spyOn(realtime, 'sendToProvider').mockImplementation(async (...args) => {
+      enteredSend();
+      await sendGate;
+      return originalSend(...args);
+    });
+
+    const winner = rescheduleNodeInvocation(db, realtime, invocation!);
+    await sendEntered;
+    const loser = await rescheduleNodeInvocation(db, realtime, invocation!);
+    releaseSend();
+    const won = await winner;
+
+    expect(won).toBe(true);
+    expect(loser).toBe(false);
+    expect(sockB.ofType('action.invoke').filter((frame) => frame.invocation_id === invocationId)).toHaveLength(1);
+    const [row] = await db.select().from(actionInvocations).where(eq(actionInvocations.id, invocationId));
+    expect(row?.status).toBe('dispatched');
+    expect(row?.dispatchedNodeId).toBe('node_spawn_loser_b');
+    expect(row?.spawnReservedAt).toBeInstanceOf(Date);
+    expect(row?.dispatchAttempts).toBe(2);
+    const reserved = await db
+      .select({ id: nodes.id, reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(eq(nodes.workspaceId, ws.workspaceId));
+    const byId = new Map(reserved.map((node) => [node.id, node.reservedAgents]));
+    expect(byId.get('node_spawn_loser_a')).toBe(0);
+    expect(byId.get('node_spawn_loser_b')).toBe(1);
+  });
+
+  it('keeps an existing spawn hold when a drain send does not land', async () => {
+    const ws = await createWorkspace(stack.app, 'spawn-claim-held');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    const nodeId = 'node_spawn_held';
+    const sock = await registerSpawnNode(stack, ws, nodeId, 'spawn-held', 1);
+    const db = stack.runtime.handle.db;
+    const invocationId = 'inv_spawn_held_drain';
+    const heldAt = new Date(Date.now() - 30_000);
+    await db.insert(actionInvocations).values({
+      id: invocationId,
+      workspaceId: ws.workspaceId,
+      actionName: 'spawn:claude',
+      invocationOrigin: 'builtin',
+      callerId: caller.agentId,
+      callerName: caller.name,
+      input: { cli: 'claude', name: 'worker-held', task: 'hi' },
+      status: 'pending',
+      dispatchedNodeId: nodeId,
+      attemptedNodeIds: [nodeId],
+      dispatchAttempts: 1,
+      retryAfterAt: new Date(Date.now() - 1_000),
+      spawnReservedAt: heldAt,
+    });
+    await db
+      .update(nodes)
+      .set({ reservedAgents: 1 })
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, nodeId)));
+    const realtime = stack.runtime.realtime;
+    const rejected = vi.spyOn(realtime, 'sendToProvider').mockResolvedValueOnce(false);
+
+    await drainNodeInvocations(db, realtime, ws.workspaceId, nodeId);
+
+    expect(sock.ofType('action.invoke')).toHaveLength(0);
+    const [afterReject] = await db.select().from(actionInvocations).where(eq(actionInvocations.id, invocationId));
+    expect(afterReject?.status).toBe('pending');
+    expect(afterReject?.spawnReservedAt).toBeInstanceOf(Date);
+    const [held] = await db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, nodeId)));
+    expect(held?.reservedAgents).toBe(1);
+
+    rejected.mockRestore();
+    await drainNodeInvocations(db, realtime, ws.workspaceId, nodeId);
+    expect(sock.ofType('action.invoke').filter((frame) => frame.invocation_id === invocationId)).toHaveLength(1);
+    const [after] = await db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, nodeId)));
+    expect(after?.reservedAgents).toBe(1);
   });
 
   it('retries a dispatched agent-hosted action once', async () => {
@@ -367,6 +484,7 @@ async function registerSpawnNode(
   ws: { workspaceKey: string; workspaceId: string },
   nodeId: string,
   name: string,
+  maxAgents = 4,
 ): Promise<FakeSocket> {
   const create = await stack.app.request('/v1/nodes', {
     method: 'POST',
@@ -375,7 +493,7 @@ async function registerSpawnNode(
       node_id: nodeId,
       name,
       capabilities: ['spawn:claude'],
-      max_agents: 4,
+      max_agents: maxAgents,
       tags: ['test'],
       version: 'test-node',
     }),
@@ -390,7 +508,7 @@ async function registerSpawnNode(
     name,
     node_id: nodeId,
     capabilities: [{ name: 'spawn:claude', kind: 'spawn', metadata: { agent: 'claude' } }],
-    max_agents: 4,
+    max_agents: maxAgents,
     tags: ['test'],
     version: 'test-node',
     resume_cursor: null,
