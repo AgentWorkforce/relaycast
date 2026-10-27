@@ -15,11 +15,11 @@ export interface WorkspaceDeliveryPolicyConfig {
   reserve?: number;
   workspaces?: Record<string, { cap?: number; reserve?: number } | undefined>;
   /**
-   * Server-only async resolver for dynamic, request-time plans (e.g. a
-   * KV-backed effective plan lookup). When present it takes precedence over the
-   * static `cap`/`workspaces` fields, so a host whose plan is async does not
+   * Server-only async resolver for a dynamic, request-time policy (e.g. one
+   * keyed by the host's own tier for the workspace). When present it takes
+   * precedence over the static `cap`/`workspaces` fields, so a host does not
    * have to flatten every workspace into static config. Never source this from
    * a client request.
    */
-  resolve?: (workspace: { id: string; plan: string }) => Promise<WorkspaceDeliveryPolicy | undefined>;
+  resolve?: (workspace: { id: string }) => Promise<WorkspaceDeliveryPolicy | undefined>;
 }

@@ -2,10 +2,9 @@ import { safeTelemetrySink } from '../../ports/telemetry.js';
 import { randomBytes } from 'node:crypto';
 import type { EngineDeps, EngineConfig } from '../../ports/index.js';
 import type { AuthProvider } from '../../ports/auth.js';
-import type { EntitlementsProvider } from '../../ports/entitlements.js';
+import type { AdmissionHooks } from '../../ports/admission.js';
 import type { TelemetrySink } from '../../ports/telemetry.js';
 import { SqliteApiKeyAuthProvider } from '../../auth/index.js';
-import { StaticEntitlementsProvider } from '../../providers/static-entitlements.js';
 import { NoopTelemetrySink } from '../../providers/noop-telemetry.js';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from './database.js';
 import { InProcessRealtime } from './realtime.js';
@@ -54,8 +53,8 @@ export interface NodeRuntimeOptions {
   migrate?: boolean;
   /** Override the auth provider (default: built-in API-key auth). */
   auth?: AuthProvider;
-  /** Override the entitlements provider (default: static, kv-backed usage). */
-  entitlements?: EntitlementsProvider;
+  /** Host admission and metering hooks (default: none, every request is admitted). */
+  admission?: AdmissionHooks;
   /** Override the telemetry sink (default: no-op). */
   telemetry?: TelemetrySink;
   /** Engine config (environment, version, workspace-stream default, etc.). Persist `workspaceBootstrapSecret` for replay across restarts. */
@@ -161,7 +160,6 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
   webhookQueue.start();
 
   const auth = options.auth ?? new SqliteApiKeyAuthProvider();
-  const entitlements = options.entitlements ?? new StaticEntitlementsProvider(kv);
 
   // An explicit host-provided boundary is authoritative (the host may prune
   // outside this process). Otherwise report the same fallback the local Node
@@ -187,7 +185,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
     kv,
     webhookQueue,
     auth,
-    entitlements,
+    admission: options.admission,
     telemetry,
     config,
   };

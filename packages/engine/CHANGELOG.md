@@ -7,13 +7,24 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Patch]
+## [Unreleased - Major]
+
+### Added
+
+- `AdmissionHooks` (`EngineDeps.admission`, `createNodeRuntime({ admission })`, `startServer({ admission })`): `admit({ workspace, action })` refuses a `request` or `message` with an `AdmissionDenial` (`status`, `code`, `message`, `details`, `retryAt`); `committed(ctx)` reports each successful, non-replayed action; `rateLimitPerMinute(workspace)` overrides the per-minute ceiling. A hook that throws admits the request. A denied keyed message send still replays its stored receipt.
+- `EngineConfig.rateLimitPerMinute` (default 30,000).
 
 ### Fixed
 
 - A message trigger cannot invoke builtin `release`.
 - Overlapping dispatch of a spawn or agent-hosted action sends one frame and keeps one capacity reservation, including a timeout retry and a send that fails before the frame is accepted.
 - Raw JSON bodies sent to `POST /v1/hooks/:webhookId` (any object without `text`, `message`, `source`, `author` or `payload`, including `{}`) appear in the resulting channel message, capped at 16,000 characters. Their fields are rendered as text only: a third-party `session_ref` or `action_generated` no longer reaches message metadata, session validation or trigger suppression.
+
+### Removed
+
+- `EntitlementsProvider`, `PlanLimits`, `UpgradeGuidance`, `UsageMetric`, `StaticEntitlementsProvider`, `PLAN_LIMITS`, the `checkPlanLimit` / `checkMessageAllowance` middleware, and the usage-counter helpers (`usageCounterKey`, `getUsageMetric`, `lifetimeUsageCounterKey`, `getLifetimeUsageMetric`, `usagePeriod`, `usagePeriodResetAt`). The engine no longer writes `usage:*` KV counters. `KeyValueStore.increment` is removed; the port is `get`/`put`/`delete`.
+- The `workspaces.plan` column (migration `0077_drop_workspace_plan.sql`). A host that keeps tiers must copy the column into its own storage before applying it.
+- `WorkspaceDeliveryPolicyConfig.resolve` receives `{ id }`; it no longer gets `plan`.
 
 ## [11.1.0] - 2026-10-27
 

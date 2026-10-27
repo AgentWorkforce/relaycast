@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased - Major]
+
+### Changed
+
+- The engine has no plans, usage quotas or billing. Self-hosted workspaces are never quota-limited; every workspace has a per-minute request ceiling of 30,000 by default (`rateLimitPerMinute`). Hosting deployments add their own quotas through admission hooks, which refuse requests or message sends with the host's own error code.
 
 ### Fixed
 
@@ -26,6 +30,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Removed
 
+- `Workspace.plan` is gone from the API, `@relaycast/types`, and the Rust and Swift SDKs; migration `0077` drops the `workspaces.plan` column.
+- The engine no longer returns `plan_limit_exceeded`; a hosting deployment's admission policy returns its own codes.
 - The Python SDK (`relaycast-sdk`) is no longer developed or published from this repository.
 
 ## [11.1.1] - 2026-10-27
