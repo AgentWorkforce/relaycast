@@ -1,8 +1,8 @@
 import { and, eq, sql } from 'drizzle-orm';
-import type { FleetCapability } from '@relaycast/types';
+import type { FleetCapability, FleetSpawnErrorDetails } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import { agents, nodes } from '../db/schema.js';
-import { codedError } from '../lib/httpError.js';
+import { codedError, codedSpawnError } from '../lib/httpError.js';
 import { runAtomic } from '../ports/database.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -170,6 +170,43 @@ export interface PlacementResult {
   queued: boolean;
 }
 
+export function spawnPlacementError(
+  code: FleetSpawnErrorDetails['code'],
+  node: NodeRow | string,
+  capability: string,
+) {
+  const row = typeof node === 'string' ? null : node;
+  const name = typeof node === 'string' ? node : node.name;
+  const message = code === 'spawn_capacity_exceeded' ? `Node "${name}" is at capacity`
+    : code === 'capacity_changed' ? `Node "${name}" capacity changed before reservation`
+    : code === 'spawn_target_offline' ? `Node "${name}" is offline`
+    : code === 'spawn_harness_unavailable' ? `Node "${name}" does not provide ${capability}`
+    : `Node "${name}" is unavailable for spawn`;
+  return codedSpawnError({ code, message, node: name,
+    harness: capability.startsWith('spawn:') ? capability.slice(6) : null,
+    active: row?.activeAgents ?? null, reserved: row?.reservedAgents ?? null, max: row?.maxAgents ?? null,
+    observed_at: new Date().toISOString(), retryable: code !== 'spawn_harness_unavailable' });
+}
+
+/**
+ * The structured error for a spawn whose node refused a capacity reservation,
+ * classified from the node's current row: offline, handlers not live, full, or
+ * (when none of those holds any more) a capacity change that raced the claim.
+ */
+export async function spawnReservationRefusal(
+  db: Db,
+  workspaceId: string,
+  node: NodeRow | string,
+  capability: string,
+) {
+  const nodeId = typeof node === 'string' ? node : node.id;
+  const [current] = await db.select().from(nodes).where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+  const code = !current || !isNodeLive(current) ? 'spawn_target_offline'
+    : !current.handlersLive ? 'spawn_target_unavailable'
+    : !nodeHasCapacity(current) ? 'spawn_capacity_exceeded' : 'capacity_changed';
+  return spawnPlacementError(code, current ?? node, capability);
+}
+
 export async function reserveNodeCapacity(
   db: Db,
   workspaceId: string,
@@ -219,12 +256,11 @@ export async function claimSpawnNode(
   return runAtomic(db, async (tx) => {
     const chooseLiveCandidate = async (node: NodeRow | undefined): Promise<PlacementResult | null> => {
       if (!node) return null;
+      if (!isNodeLive(node)) throw spawnPlacementError('spawn_target_offline', node, capability);
+      if (!node.handlersLive) throw spawnPlacementError('spawn_target_unavailable', node, capability);
       if (!nodeHasCapability(node, capability) || excluded.has(node.id)) return null;
-      if (!isNodeLive(node) || !node.handlersLive) return { node, capability, queued: true };
       const reserved = await reserveNodeCapacity(tx, workspaceId, node.id);
-      if (!reserved) {
-        throw codedError(`Node "${node.name}" is at capacity`, 'handler_unavailable', 503);
-      }
+      if (!reserved) throw await spawnReservationRefusal(tx, workspaceId, node, capability);
       return { node: reserved, capability, queued: false };
     };
 
@@ -233,14 +269,13 @@ export async function claimSpawnNode(
         .select()
         .from(nodes)
         .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, request.preferredNodeId)));
+      if (!node) throw spawnPlacementError('spawn_target_unavailable', target ?? request.preferredNodeId, capability);
       const claimed = await chooseLiveCandidate(node ?? undefined);
       if (claimed) return claimed;
       if (node && excluded.has(node.id)) {
-        throw codedError(`Node "${node.name}" is unavailable for retry`, 'handler_unavailable', 503);
+        throw spawnPlacementError('spawn_target_unavailable', node, capability);
       }
-      if (node && nodeHasCapability(node, capability)) {
-        return { node, capability, queued: !isNodeLive(node) || !node.handlersLive };
-      }
+      throw spawnPlacementError('spawn_harness_unavailable', node, capability);
     }
 
     if (target === 'self') {
@@ -267,12 +302,12 @@ export async function claimSpawnNode(
       const claimed = await chooseLiveCandidate(node);
       if (claimed) return claimed;
       if (excluded.has(node.id)) {
-        throw codedError(`Node "${node.name}" is unavailable for retry`, 'handler_unavailable', 503);
+        throw spawnPlacementError('spawn_target_unavailable', node, capability);
       }
       if (!nodeHasCapability(node, capability)) {
-        throw codedError(`Node "${node.name}" does not provide ${capability}`, 'capability_mismatch', 409);
+        throw spawnPlacementError('spawn_harness_unavailable', node, capability);
       }
-      return { node, capability, queued: !isNodeLive(node) || !node.handlersLive };
+      throw spawnPlacementError('spawn_target_unavailable', node, capability);
     }
 
     if (target) {
@@ -281,17 +316,17 @@ export async function claimSpawnNode(
         .from(nodes)
         .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.name, target)));
       if (!node) {
-        throw codedError(`Node "${target}" not found`, 'node_not_found', 404);
+        throw spawnPlacementError('spawn_target_unavailable', target, capability);
       }
       const claimed = await chooseLiveCandidate(node);
       if (claimed) return claimed;
       if (excluded.has(node.id)) {
-        throw codedError(`Node "${node.name}" is unavailable for retry`, 'handler_unavailable', 503);
+        throw spawnPlacementError('spawn_target_unavailable', node, capability);
       }
       if (!nodeHasCapability(node, capability)) {
-        throw codedError(`Node "${target}" does not provide ${capability}`, 'capability_mismatch', 409);
+        throw spawnPlacementError('spawn_harness_unavailable', node, capability);
       }
-      return { node, capability, queued: !isNodeLive(node) || !node.handlersLive };
+      throw spawnPlacementError('spawn_target_unavailable', node, capability);
     }
 
     const rows = await tx.select().from(nodes).where(eq(nodes.workspaceId, workspaceId));
@@ -310,7 +345,9 @@ export async function claimSpawnNode(
       if (reserved) return { node: reserved, capability, queued: false };
     }
 
-    throw codedError(`No live node provides ${capability}`, 'handler_unavailable', 503);
+    const capable = rows.filter(node => nodeHasCapability(node, capability));
+    const full = capable.find(node => isNodeLive(node) && node.handlersLive && !nodeHasCapacity(node));
+    throw spawnPlacementError(full ? 'spawn_capacity_exceeded' : 'spawn_target_unavailable', full ?? 'unassigned', capability);
   });
 }
 

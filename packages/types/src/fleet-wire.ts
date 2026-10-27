@@ -31,6 +31,8 @@ export type FleetDeliveryMode = z.infer<typeof FleetDeliveryModeSchema>;
  * invokable action.
  */
 export const FLEET_DELIVERY_CURSOR_CAPABILITY = 'relay:delivery-cursor-v1';
+/** Server-authored node.register reply gate for structured spawn action errors. */
+export const FLEET_SPAWN_ERROR_DETAILS_CAPABILITY = 'relay:spawn-error-details-v1';
 
 /**
  * Capability metadata opt-in for authenticated caller provenance on
@@ -374,6 +376,20 @@ export const FleetActionResultOutputMessageSchema = z
   .superRefine(requireTaskResultFence);
 export type FleetActionResultOutputMessage = z.infer<typeof FleetActionResultOutputMessageSchema>;
 
+/** Stable, agent-visible terminal failure for one explicit spawn attempt. */
+export const FleetSpawnErrorDetailsSchema = z.object({
+  code: z.enum(['spawn_capacity_exceeded', 'spawn_target_unavailable', 'spawn_target_offline', 'spawn_harness_unavailable', 'capacity_changed']),
+  message: z.string().min(1),
+  node: z.string().min(1),
+  harness: z.string().nullable(),
+  active: z.number().int().nonnegative().nullable(),
+  reserved: z.number().int().nonnegative().nullable(),
+  max: z.number().int().nonnegative().nullable(),
+  observed_at: z.string().datetime(),
+  retryable: z.boolean(),
+}).strict();
+export type FleetSpawnErrorDetails = z.infer<typeof FleetSpawnErrorDetailsSchema>;
+
 export const FleetActionResultErrorMessageSchema = z
   .object({
     ...FleetRequestEnvelopeFields,
@@ -381,10 +397,16 @@ export const FleetActionResultErrorMessageSchema = z
     type: z.literal('action.result'),
     invocation_id: z.string(),
     error: z.string(),
+    error_details: FleetSpawnErrorDetailsSchema.optional(),
     output: z.never().optional(),
   })
   .strict()
   .superRefine(forbidOwnProperty('output'))
+  .superRefine((message, context) => {
+    if (message.error_details && message.error !== message.error_details.code) {
+      context.addIssue({ code: 'custom', path: ['error_details', 'code'], message: 'error_details.code must match error' });
+    }
+  })
   .superRefine(requireTaskResultFence);
 export type FleetActionResultErrorMessage = z.infer<typeof FleetActionResultErrorMessageSchema>;
 
@@ -442,6 +464,7 @@ export const NodeRegisterReplyDataSchema = z
     provider: FleetProviderIdentitySchema,
     accepted_capabilities: z.array(FleetCapabilityAcceptanceSchema),
     registration_contract: z.literal(NODE_REGISTRATION_CONTRACT_V1).optional(),
+    spawn_error_details_contract: z.literal(FLEET_SPAWN_ERROR_DETAILS_CAPABILITY).optional(),
   })
   .passthrough();
 export type NodeRegisterReplyData = z.infer<typeof NodeRegisterReplyDataSchema>;

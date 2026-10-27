@@ -17,6 +17,7 @@ import {
   FLEET_ACTION_CALLER_METADATA_KEY,
   FLEET_ACTION_CALLER_METADATA_VERSION,
   FLEET_DELIVERY_CURSOR_CAPABILITY,
+  FLEET_SPAWN_ERROR_DETAILS_CAPABILITY,
   NODE_REGISTRATION_CONTRACT_V1,
   parseFleetBrokerToRelaycastMessage,
 } from '@relaycast/types';
@@ -249,7 +250,10 @@ async function providerAdvertisesDeliveryCursor(
  * flush already sent. The registered value stands until the next
  * `node.register`.
  */
-const NEGOTIATED_PROTOCOL_CAPABILITIES: readonly string[] = [FLEET_DELIVERY_CURSOR_CAPABILITY];
+const NEGOTIATED_PROTOCOL_CAPABILITIES: readonly string[] = [
+  FLEET_DELIVERY_CURSOR_CAPABILITY,
+  FLEET_SPAWN_ERROR_DETAILS_CAPABILITY,
+];
 
 function isNegotiatedProtocolCapability(capability: FleetCapability): boolean {
   return NEGOTIATED_PROTOCOL_CAPABILITIES.includes(capability.name);
@@ -347,6 +351,7 @@ function publicNode(row: NodeRow, now?: number) {
     handlers_live: live && row.handlersLive,
     load: row.loadReported ? row.load : null,
     active_agents: row.activeAgents,
+    reserved_agents: row.reservedAgents ?? 0,
     // `active_agents` is only an authoritative live occupancy count while the
     // node is proven live within NODE_LIVENESS_TTL_MS. Once a node goes
     // offline, its last-reported value is frozen history: it can no longer
@@ -1194,7 +1199,7 @@ export async function settleNodeOffline(
         : []),
     ));
 
-  await rescheduleInvocationsForLostNode(db, registry, workspaceId, nodeId, { claimRevision });
+  await rescheduleInvocationsForLostNode(db, registry, workspaceId, nodeId, { claimRevision, completionDeps: opts.deps });
 
   if (opts.deps && opts.before && opts.before.status === 'online') {
     await emitNodeStatusEffects(opts.deps, workspaceId, {
@@ -2981,10 +2986,13 @@ export async function reconcileInventory(
     // Actual provider disconnect and invocation expiry retain their own recovery.
     if (liveInvocationIds.has(invocation.id) || requiresSpawnReadiness(invocation.input)) continue;
     try {
-      if (await rescheduleNodeInvocation(db, registry, invocation)) {
+      if (await rescheduleNodeInvocation(db, registry, invocation, { completionDeps, holdLaunchingSpawn: true })) {
         rescheduledInvocations++;
       }
     } catch {
+      // A spawn is never put back in a queue, and its reservation is never
+      // dropped without being released: leave it for the next pass.
+      if (invocation.actionName === 'spawn' || invocation.actionName.startsWith('spawn:')) continue;
       await db
         .update(actionInvocations)
         .set({
@@ -3375,6 +3383,11 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
         const cursorHandshake = acceptance.some(
           (capability) => capability.accepted && capability.name === FLEET_DELIVERY_CURSOR_CAPABILITY,
         );
+        const spawnErrorDetailsHandshake = acceptance.some(
+          (capability) => capability.accepted
+            && capability.name === FLEET_SPAWN_ERROR_DETAILS_CAPABILITY
+            && capability.kind === 'capacity',
+        );
         if (args.connectionId && args.registry.attachProvider) {
           const acceptedActions = new Set(
             acceptance
@@ -3404,6 +3417,11 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           args.connectionId,
           cursorHandshake ? 'agent_scoped' : 'immediate',
         );
+        const registrationBound = Boolean(
+          args.connectionId
+          && args.registry.providerNameForConnection?.(args.connectionId) === provider.name
+          && args.registry.isProviderAttached?.(args.workspaceId, args.nodeId, provider.name),
+        );
         sendControl(args.socket, {
           v: 1,
           id: requestId(message),
@@ -3413,12 +3431,15 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
             ...registered.node,
             provider: registered.provider,
             accepted_capabilities: acceptance,
+            // Production engines accept unknown capability names, so acceptance
+            // alone cannot tell an updated node that error_details is safe.
+            ...(registrationBound && spawnErrorDetailsHandshake
+              ? { spawn_error_details_contract: FLEET_SPAWN_ERROR_DETAILS_CAPABILITY }
+              : {}),
             // Only claim authenticated provider registration when this adapter
             // actually bound the connection. Echoed client capabilities are not
             // evidence of a server contract; legacy adapters omit the field.
-            ...(args.connectionId
-              && args.registry.providerNameForConnection?.(args.connectionId) === provider.name
-              && args.registry.isProviderAttached?.(args.workspaceId, args.nodeId, provider.name)
+            ...(registrationBound
               ? { registration_contract: NODE_REGISTRATION_CONTRACT_V1 }
               : {}),
           },
@@ -3428,8 +3449,8 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
         // node.status.online event. Isolated so its own failure can't either.
         await emitNodeOnlineTransition(args.completionDeps, args.workspaceId, priorStatus, registered.node)
           .catch((err) => console.error('[node.status] online event emission failed', err));
-        // Node is now marked online: flush any queued action.invoke frames so
-        // spawns queued while it was offline can reserve capacity and dispatch.
+        // Node is now marked online: flush any queued action.invoke frames.
+        // Spawns queued while it was offline fail here instead of starting.
         // Reconnect makes deferred work dispatchable too; bypass a retry delay
         // that may have been armed only because the prior socket was unavailable.
         await args.registry.drainNode(args.workspaceId, args.nodeId, { includeDeferred: true });
@@ -3740,6 +3761,7 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           {
             ...(Object.prototype.hasOwnProperty.call(message, 'output') ? { output: message.output } : {}),
             ...(message.error ? { error: message.error } : {}),
+            ...('error_details' in message && message.error_details ? { error_details: message.error_details } : {}),
           },
           args.completionDeps,
         );

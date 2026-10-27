@@ -1309,6 +1309,10 @@ components:
         active_agents:
           type: integer
           description: Managed-agent occupancy. Authoritative only while `live` is true; once a node goes offline this is a frozen historical value — see `active_agents_stale`.
+        reserved_agents:
+          type: integer
+          minimum: 0
+          description: In-flight spawn reservations, included in capacity checks with `active_agents`.
         active_agents_stale:
           type: boolean
           description: True whenever `live` is false, meaning `active_agents` is frozen history, not current occupancy.
@@ -5798,8 +5802,12 @@ paths:
         Invoke an action on a specific node. The engine resolves the action to
         the provider that registered it and dispatches over that provider's
         socket. A `spawn:<harness>` name with no shadow action falls through to
-        the node's native capacity. Fails fast with `handler_unavailable` when
-        the owning provider is offline unless the capability opted into queueing.
+        the node's native capacity. Spawns fail without queueing, retrying, or
+        rerouting when the selected node is offline, lacks the harness or live
+        provider, has no capacity, or loses the atomic capacity reservation.
+        Spawn error responses include code, message, node, harness, active,
+        reserved, max, observed_at, and retryable. Non-spawn actions retain
+        their registered queue policy.
         An action capability whose metadata contains
         `relay.action-caller: "v1"` receives the authenticated agent principal
         in optional `caller_id` / `caller_name` `action.invoke` fields, loaded

@@ -235,7 +235,7 @@ describe('reschedule targets the action-owning provider on the fallback node', (
     expect(bFleet.sock.ofType('action.invoke').at(-1)).toMatchObject({ invocation_id: invocationId, action: 'work' });
   });
 
-  it('releases native capacity when a spawn retry enters a provider shadow', async () => {
+  it('fails a lost-node spawn instead of retrying it into another node\'s provider shadow', async () => {
     const ws = await createWorkspace(stack.app, 'resched-shadow');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
     await enrollNode(ws.workspaceKey, 'node_a', 'alpha');
@@ -244,6 +244,10 @@ describe('reschedule targets the action-owning provider on the fallback node', (
     const aBroker = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'default', [{ name: 'spawn:claude', kind: 'capacity' }]);
     const bBroker = await attachProvider(ws.workspaceId, 'node_b', 'beta', 'default', [{ name: 'spawn:claude', kind: 'capacity' }]);
     const bPolicy = await attachProvider(ws.workspaceId, 'node_b', 'beta', 'policy', [{ name: 'spawn:claude', kind: 'action' }]);
+    const reserved = async (nodeId: string) => (await stack.runtime.handle.db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, nodeId))))[0].reservedAgents ?? 0;
 
     const invoke = await stack.app.request('/v1/nodes/alpha/actions/spawn:claude/invoke', {
       method: 'POST',
@@ -253,19 +257,36 @@ describe('reschedule targets the action-owning provider on the fallback node', (
     expect(invoke.status).toBe(201);
     const invocationId = (await invoke.json() as { data: { invocation_id: string } }).data.invocation_id;
     expect(aBroker.sock.ofType('action.invoke').at(-1)).toMatchObject({ invocation_id: invocationId, action: 'spawn:claude' });
+    expect(await reserved('node_a')).toBe(1);
     bBroker.sock.received.length = 0;
     bPolicy.sock.received.length = 0;
 
+    // Spawns are never retried on another node: the lost-node spawn fails and
+    // returns its slot rather than entering beta's shadow.
     const rescheduled = await rescheduleInvocationsForLostNode(stack.runtime.handle.db, stack.runtime.realtime, ws.workspaceId, 'node_a');
-    expect(rescheduled).toBe(1);
-    expect(bPolicy.sock.ofType('action.invoke').at(-1)).toMatchObject({ invocation_id: invocationId, action: 'spawn:claude' });
+    expect(rescheduled).toBe(0);
+    expect(bPolicy.sock.ofType('action.invoke')).toHaveLength(0);
     expect(bBroker.sock.ofType('action.invoke')).toHaveLength(0);
+    const [failed] = await stack.runtime.handle.db
+      .select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(failed).toEqual({ status: 'failed', error: 'spawn_target_unavailable' });
+    expect(await reserved('node_a')).toBe(0);
+    expect(await reserved('node_b')).toBe(0);
 
-    const [fallback] = await stack.runtime.handle.db
-      .select({ reservedAgents: nodes.reservedAgents })
-      .from(nodes)
-      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_b')));
-    expect(fallback.reservedAgents).toBe(0);
+    // A spawn placed on beta still enters the shadow and returns the native
+    // slot its placement reserved.
+    const shadowed = await stack.app.request('/v1/actions/spawn/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { cli: 'claude', name: 'worker-2', target_node: 'beta' } }),
+    });
+    expect(shadowed.status).toBe(201);
+    const shadowedId = (await shadowed.json() as { data: { invocation_id: string } }).data.invocation_id;
+    expect(bPolicy.sock.ofType('action.invoke').at(-1)).toMatchObject({ invocation_id: shadowedId, action: 'spawn:claude' });
+    expect(bBroker.sock.ofType('action.invoke')).toHaveLength(0);
+    expect(await reserved('node_b')).toBe(0);
   });
 
   it('fails once all non-queued owning providers are unavailable', async () => {
