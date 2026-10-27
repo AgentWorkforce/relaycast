@@ -56,7 +56,7 @@ import { routingRoutes } from './routes/routing.js';
  *
  * All infrastructure (database, realtime, presence, rate limiting, files,
  * key/value, outbound queue) and the open-core providers
- * (auth, entitlements, telemetry) are injected via {@link EngineDeps}. An
+ * (auth, admission, telemetry) are injected via {@link EngineDeps}. An
  * adapter supplies concrete implementations:
  *  - the Node in-process adapter for self-host (Node + SQLite), or
  *  - the Cloudflare Durable Object adapter for the hosted product (cloud repo).
@@ -76,7 +76,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     kv: deps.kv,
     webhookQueue: deps.webhookQueue,
     auth: deps.auth,
-    entitlements: deps.entitlements,
+    admission: deps.admission,
     telemetry: safeTelemetrySink(deps.telemetry ?? new NoopTelemetrySink()),
     config: deps.config ?? {},
   };

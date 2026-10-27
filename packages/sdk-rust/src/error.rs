@@ -23,8 +23,8 @@ pub enum RelayError {
         retry_after_ms: Option<u64>,
         /// The full parsed JSON error body the server returned, including any
         /// fields beyond `error.code`/`error.message` (for example the
-        /// top-level `plan`, `upgrade_available` and `upgrade_url` on
-        /// workspace admission 429s). `None` when the body was not JSON or the
+        /// fields a hosting control plane adds to its admission 429s, such as
+        /// `upgrade_url`). `None` when the body was not JSON or the
         /// error was constructed by the SDK itself.
         details: Option<serde_json::Value>,
     },

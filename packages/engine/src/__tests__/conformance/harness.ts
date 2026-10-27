@@ -9,7 +9,7 @@ import type { Hono } from 'hono';
 import { createEngine } from '../../engine.js';
 import { createNodeRuntime, type NodeRuntime, type EngineSocket } from '../../adapters/node/index.js';
 import type { AppEnv } from '../../env.js';
-import type { EngineConfig, EngineDb, EntitlementsProvider } from '../../ports/index.js';
+import type { AdmissionHooks, EngineConfig, EngineDb } from '../../ports/index.js';
 import type { AtomicWrite, TransactionCapability } from '../../ports/database.js';
 
 export interface TestStack {
@@ -52,7 +52,8 @@ export function makeNodeStack(options?: {
   workspaceBootstrapSecret?: string;
   workspaceBootstrapProofRequired?: boolean;
   allowWorkspaceKeyRotation?: boolean;
-  entitlements?: EntitlementsProvider;
+  admission?: AdmissionHooks;
+  rateLimitPerMinute?: number;
 }): TestStack {
   const tasks = new BackgroundTasks();
   observePresence();
@@ -79,8 +80,9 @@ export function makeNodeStack(options?: {
         workspaceBootstrapSecret: options?.workspaceBootstrapSecret ?? 'test-bootstrap-secret',
         workspaceBootstrapProofRequired: options?.workspaceBootstrapProofRequired,
         allowWorkspaceKeyRotation: options?.allowWorkspaceKeyRotation,
+        rateLimitPerMinute: options?.rateLimitPerMinute,
       },
-      entitlements: options?.entitlements,
+      admission: options?.admission,
       // Disable the auto-sweep timer; tests drive presence.sweep() explicitly.
       eventQueue: { pollIntervalMs: 0 },
       presence: { ttlMs: options?.ttlMs ?? 60_000, sweepIntervalMs: 0 },
