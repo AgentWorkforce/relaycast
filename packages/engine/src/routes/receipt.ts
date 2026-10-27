@@ -79,7 +79,7 @@ receiptRoutes.post(
         workspaceId: workspace.id,
         data: eventData,
       });
-      emitServerEvent(c, workspace.id, 'relaycast_server_message_read_marked', {
+      emitServerEvent(c, workspace.id, 'message.read.marked', {
         message_id: result.message_id,
         agent_id: result.agent_id,
       });

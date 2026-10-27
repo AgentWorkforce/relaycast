@@ -78,7 +78,7 @@ eventSubscriptionRoutes.post('/subscriptions', requireAuth, rateLimit, async (c)
       workspace.id,
       { events, filter, url, headers, secret: secret ?? undefined, signatureScheme: signature_scheme },
     );
-    emitServerEvent(c, workspace.id, 'relaycast_server_subscription_created', {
+    emitServerEvent(c, workspace.id, 'subscription.created', {
       subscription_id: result.id,
       event_count: result.events.length,
     });
@@ -197,7 +197,7 @@ eventSubscriptionRoutes.delete('/subscriptions/:id', requireAuth, rateLimit, asy
     if (!deleted) {
       return jsonNotFound(c, 'subscription_not_found', 'Subscription not found');
     }
-    emitServerEvent(c, workspace.id, 'relaycast_server_subscription_deleted', {
+    emitServerEvent(c, workspace.id, 'subscription.deleted', {
       subscription_id: c.req.param('id'),
     });
     return jsonNoContent(c);

@@ -21,6 +21,12 @@ pub enum RelayError {
         attempts: u32,
         /// Server-authoritative retry delay, when supplied in Retry-After.
         retry_after_ms: Option<u64>,
+        /// The full parsed JSON error body the server returned, including any
+        /// fields beyond `error.code`/`error.message` (for example the
+        /// fields a hosting control plane adds to its admission 429s, such as
+        /// `upgrade_url`). `None` when the body was not JSON or the
+        /// error was constructed by the SDK itself.
+        details: Option<serde_json::Value>,
     },
 
     /// An HTTP request error.
@@ -58,6 +64,7 @@ impl RelayError {
             request_id: None,
             attempts: 1,
             retry_after_ms: None,
+            details: None,
         }
     }
 
@@ -126,6 +133,18 @@ impl RelayError {
     pub fn attempts(&self) -> Option<u32> {
         match self {
             Self::Api { attempts, .. } => Some(*attempts),
+            _ => None,
+        }
+    }
+
+    /// Get the full parsed JSON error body the server returned, if this is an
+    /// API error that came from a JSON response.
+    ///
+    /// Use it to read server-supplied error metadata the typed fields do not
+    /// model, e.g. `details().and_then(|d| d.get("upgrade_available"))`.
+    pub fn details(&self) -> Option<&serde_json::Value> {
+        match self {
+            Self::Api { details, .. } => details.as_ref(),
             _ => None,
         }
     }

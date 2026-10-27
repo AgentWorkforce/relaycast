@@ -3,8 +3,6 @@ import { cookies } from 'next/headers';
 import { pickRememberedEngine, resolveRelayServerCandidatesFromRequest } from '../../../../lib/relay-server';
 import { revokeObserverStreamToken } from '../../../../lib/observer-token';
 
-export const runtime = 'edge';
-
 const COOKIE_NAME = 'relaycast_key';
 const AGENT_COOKIE_NAME = 'relaycast_agent_token';
 const WS_TOKEN_COOKIE_NAME = 'relaycast_ws_token';

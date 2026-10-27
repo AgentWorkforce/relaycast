@@ -1,7 +1,7 @@
 //! HTTP client for the RelayCast API.
 
 use reqwest::{header::HeaderMap, Client, Method, RequestBuilder};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
 use std::time::Duration;
 
 use crate::error::{RelayError, Result};
@@ -9,12 +9,33 @@ use crate::origin_actor::{
     sanitize_agent_relay_distinct_id, sanitize_origin_actor, AGENT_RELAY_DISTINCT_ID_HEADER,
     ORIGIN_ACTOR_HEADER,
 };
-use crate::types::ApiResponse;
+use crate::types::{ApiErrorInfo, Cursor};
 
 use crate::DEFAULT_BASE_URL;
 
 const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/sdk-rust";
+
+// Keep payload presence separate from its value: the server's jsonSuccess
+// helper returns `data: null`, while an absent data field is malformed.
+// Decode T only after checking ok, so error envelopes never need a payload
+// matching the successful response type.
+#[derive(Deserialize)]
+struct HttpResponse {
+    ok: bool,
+    #[serde(default, deserialize_with = "present_data")]
+    data: Option<serde_json::Value>,
+    error: Option<ApiErrorInfo>,
+    cursor: Option<Cursor>,
+}
+
+/// Preserve a present payload, including null; serde's field default handles absent data.
+fn present_data<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<serde_json::Value>, D::Error> {
+    serde_json::Value::deserialize(deserializer).map(Some)
+}
+
 // One entry per attempt. The delay for the final attempt is never used —
 // there is nothing left to wait for once retries are exhausted.
 const RETRY_BACKOFFS_MS: [u64; 3] = [200, 400, 800];
@@ -328,7 +349,7 @@ impl HttpClient {
             }
 
             let bytes = response.bytes().await?;
-            let json: ApiResponse<T> = match serde_json::from_slice(&bytes) {
+            let json: HttpResponse = match serde_json::from_slice(&bytes) {
                 Ok(json) => json,
                 Err(err) => {
                     // A non-JSON body from an error status (e.g. a gateway's
@@ -345,6 +366,7 @@ impl HttpClient {
                             request_id,
                             attempts,
                             retry_after_ms,
+                            details: None,
                         });
                     }
                     return Err(err.into());
@@ -363,6 +385,10 @@ impl HttpClient {
                     tokio::time::sleep(Duration::from_millis(admission_delay_ms)).await;
                     continue;
                 }
+                // Keep the whole body: servers attach metadata beyond
+                // code/message (e.g. plan and upgrade_available on admission
+                // 429s) that callers need to make their own decisions.
+                let details = serde_json::from_slice::<serde_json::Value>(&bytes).ok();
                 return Err(RelayError::Api {
                     code: error.code,
                     message: error.message,
@@ -370,19 +396,14 @@ impl HttpClient {
                     request_id,
                     attempts,
                     retry_after_ms,
+                    details,
                 });
             }
 
-            // Acknowledgement routes answer `{ "ok": true, "data": null }`, which
-            // serde reads as no data. Accept it wherever T itself admits null
-            // (`Value`, `()`, `Option<_>`), as the 204 path above does.
-            let data = match json.data {
-                Some(data) => data,
-                None => serde_json::from_value(serde_json::Value::Null).map_err(|_| {
-                    RelayError::InvalidResponse("Response missing data field".to_string())
-                })?,
-            };
-            return Ok((data, json.cursor));
+            let data = json.data.ok_or_else(|| {
+                RelayError::InvalidResponse("Response missing data field".to_string())
+            })?;
+            return Ok((serde_json::from_value(data)?, json.cursor));
         }
 
         unreachable!("the retry loop always returns on its final attempt")

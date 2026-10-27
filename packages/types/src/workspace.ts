@@ -47,7 +47,6 @@ export const WorkspaceSchema = z.object({
   id: z.string(),
   name: z.string(),
   system_prompt: z.string().nullable(),
-  plan: z.enum(['free', 'pro', 'enterprise']),
   created_at: z.string(),
   metadata: z.record(z.string(), z.unknown()),
   effective_retention: z.object({
@@ -190,6 +189,26 @@ export const TokenRotateResponseSchema = z.object({
   token_expires_at: z.string().datetime().optional(),
 });
 export type TokenRotateResponse = z.infer<typeof TokenRotateResponseSchema>;
+
+/** Longest accepted workspace-key grace: one hour, in seconds. */
+export const WORKSPACE_KEY_MAX_GRACE_SECONDS = 3600;
+
+export const RotateWorkspaceKeyRequestSchema = z.object({
+  /**
+   * How long the superseded key keeps authenticating, in seconds. Defaults to
+   * 60. `0` is the compromise mode — the old key is dead the moment the
+   * rotation commits.
+   */
+  grace_seconds: z.number().int().min(0).max(WORKSPACE_KEY_MAX_GRACE_SECONDS).optional(),
+});
+export type RotateWorkspaceKeyRequest = z.infer<typeof RotateWorkspaceKeyRequestSchema>;
+
+export const RotateWorkspaceKeyResponseSchema = z.object({
+  workspace_id: z.string(),
+  api_key: z.string(),
+  previous_key_expires_at: z.string().nullable(),
+});
+export type RotateWorkspaceKeyResponse = z.infer<typeof RotateWorkspaceKeyResponseSchema>;
 
 // --- Observer tokens ---
 

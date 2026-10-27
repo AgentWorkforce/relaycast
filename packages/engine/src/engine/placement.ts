@@ -139,7 +139,7 @@ function compareNodeCapacityLoad(a: NodeRow, b: NodeRow): number {
   // activeAgents instead of masquerading as perfectly idle.
   return Number(b.loadReported) - Number(a.loadReported)
     || (a.load - b.load)
-    || (a.activeAgents - b.activeAgents)
+    || ((a.activeAgents + (a.reservedAgents ?? 0)) - (b.activeAgents + (b.reservedAgents ?? 0)))
     || a.name.localeCompare(b.name);
 }
 

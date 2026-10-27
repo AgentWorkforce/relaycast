@@ -21,16 +21,15 @@ describe('workspace update telemetry', () => {
     });
     expect(response.status).toBe(200);
     const events = capture.mock.calls.map(([event]) => event)
-      .filter((event) => event.name === 'relaycast_server_workspace_updated');
+      .filter((event) => event.kind === 'workspace.updated');
     expect(events).toHaveLength(1);
-    expect(events[0].properties).toMatchObject({
-      workspace_id: ws.workspaceId,
+    expect(events[0].facts).toMatchObject({
       changed_name: 'name' in body,
       changed_system_prompt: false,
       changed_metadata: changedMetadata,
     });
-    expect(events[0].properties).not.toHaveProperty('metadata');
-    expect(events[0].properties).not.toHaveProperty('project');
+    expect(events[0].facts).not.toHaveProperty('metadata');
+    expect(events[0].facts).not.toHaveProperty('project');
     expect(JSON.stringify(events[0])).not.toContain('descriptive-value-not-in-event');
   });
 });

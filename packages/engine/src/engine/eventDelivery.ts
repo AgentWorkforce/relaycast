@@ -238,10 +238,12 @@ async function activeTargets(
   }));
 }
 
+/** Snapshot matching subscribers once, making new rows due at the delivery pass's clock. */
 async function initializePersistentDeliveries(
   db: Db,
   eventId: string,
   targets: DeliveryTarget[],
+  now: Date,
 ): Promise<boolean> {
   const [parent] = await db
     .select({ initialized: pendingEvents.webhookInitialized })
@@ -255,6 +257,9 @@ async function initializePersistentDeliveries(
       id: await stableDeliveryId(eventId, target.id),
       eventId,
       subscriptionId: target.id,
+      // Use this pass's clock so an insert crossing a second boundary is
+      // still due when compared with the time captured by deliverEvent.
+      nextAttemptAt: now,
     })));
     await db.insert(webhookDeliveries).values(values).onConflictDoNothing();
   }
@@ -444,7 +449,7 @@ export async function deliverEvent(
 
   const targets = (await activeTargets(db, workspaceId, eventType))
     .filter((target) => matchesFilter(target.filter, payload));
-  if (!await initializePersistentDeliveries(db, options.eventId, targets)) {
+  if (!await initializePersistentDeliveries(db, options.eventId, targets, now)) {
     // `eventId` identifies an outbox row. If that row was already pruned, an
     // at-least-once queue replay is stale; delivering without persistence here
     // would create new delivery ids and fan the event out a second time.

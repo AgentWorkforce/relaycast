@@ -35,6 +35,13 @@ export interface InProcessPresenceOptions {
  */
 export class InProcessPresence implements PresenceTracker {
   private readonly workspaces = new Map<string, Map<string, PresenceEntry>>();
+  /**
+   * Presence-only disconnects. Distinct from the online map: a node-hosted
+   * agent may never have heartbeated over HTTP, so removing a missing map
+   * entry would not stick once node liveness counts them. Heartbeat and
+   * {@link clearExplicitDisconnect} are the only ways out.
+   */
+  private readonly disconnected = new Map<string, Set<string>>();
   private readonly ttlMs: number;
   private timer: ReturnType<typeof setInterval> | undefined;
 
@@ -107,7 +114,32 @@ export class InProcessPresence implements PresenceTracker {
     ]);
   }
 
+  private disconnectedSet(workspaceId: string): Set<string> {
+    let set = this.disconnected.get(workspaceId);
+    if (!set) {
+      set = new Set();
+      this.disconnected.set(workspaceId, set);
+    }
+    return set;
+  }
+
+  private forgetDisconnect(workspaceId: string, agentId: string): void {
+    const set = this.disconnected.get(workspaceId);
+    if (!set) return;
+    set.delete(agentId);
+    if (set.size === 0) this.disconnected.delete(workspaceId);
+  }
+
+  async explicitlyDisconnected(workspaceId: string): Promise<readonly string[]> {
+    return [...(this.disconnected.get(workspaceId) ?? [])];
+  }
+
+  async clearExplicitDisconnect(workspaceId: string, agentId: string): Promise<void> {
+    this.forgetDisconnect(workspaceId, agentId);
+  }
+
   async heartbeat(workspaceId: string, agentId: string, agentName?: string): Promise<void> {
+    this.forgetDisconnect(workspaceId, agentId);
     const map = this.ws(workspaceId);
     const prev = map.get(agentId);
     const wasOffline = !prev || Date.now() - prev.ts >= this.ttlMs;
@@ -123,6 +155,10 @@ export class InProcessPresence implements PresenceTracker {
   async disconnect(workspaceId: string, agentId: string, agentName?: string): Promise<void> {
     const map = this.ws(workspaceId);
     const prev = map.get(agentId);
+    // Remember the hold even when the agent was never in the tracker. A
+    // node-hosted agent that only rides node liveness is in that state, and
+    // dropping the call would let the next presence read mark them online.
+    this.disconnectedSet(workspaceId).add(agentId);
     if (!prev) return;
     const name = agentName?.trim() || prev.name || agentId;
     map.delete(agentId);
