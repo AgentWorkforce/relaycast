@@ -34,6 +34,8 @@ export function createLookupPinnedHttpsFetch(lookup: LookupFunction): typeof glo
       headers[key] = value;
     });
     if (body && headers['content-length'] === undefined) headers['content-length'] = String(body.length);
+    // Response bodies are passed through undecoded, so ask for an unencoded one.
+    if (headers['accept-encoding'] === undefined) headers['accept-encoding'] = 'identity';
 
     return new Promise<Response>((resolve, reject) => {
       const client = httpsRequest(

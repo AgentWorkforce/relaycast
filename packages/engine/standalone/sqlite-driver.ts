@@ -88,7 +88,7 @@ class BunSqliteStatement {
   constructor(
     private readonly stmt: Statement,
     private readonly db: Database,
-    private readonly live?: Set<BunSqliteStatement>,
+    private readonly live?: LiveStatements,
   ) {
     live?.add(this);
   }
@@ -140,6 +140,54 @@ class BunSqliteStatement {
     if (this.live && !this.live.delete(this)) return;
     this.stmt.finalize();
   }
+
+  /** Finalize without consulting tracking (the connection is draining it). */
+  finalizeNative(): void {
+    this.stmt.finalize();
+  }
+}
+
+/**
+ * Weakly tracks a connection's prepared statements so `close()` can finalize
+ * the ones still reachable without keeping completed queries alive on a
+ * long-lived connection: a collected statement is finalized by bun:sqlite and
+ * its entry is dropped here.
+ */
+class LiveStatements {
+  readonly #refOf = new WeakMap<BunSqliteStatement, WeakRef<BunSqliteStatement>>();
+  readonly #byRef = new Set<WeakRef<BunSqliteStatement>>();
+  readonly #registry = new FinalizationRegistry<WeakRef<BunSqliteStatement>>((ref) => this.#byRef.delete(ref));
+
+  add(stmt: BunSqliteStatement): void {
+    const ref = new WeakRef(stmt);
+    this.#refOf.set(stmt, ref);
+    this.#byRef.add(ref);
+    this.#registry.register(stmt, ref, ref);
+  }
+
+  /** Stop tracking `stmt`; false when it was already released. */
+  delete(stmt: BunSqliteStatement): boolean {
+    const ref = this.#refOf.get(stmt);
+    if (!ref || !this.#byRef.delete(ref)) return false;
+    this.#refOf.delete(stmt);
+    this.#registry.unregister(ref);
+    return true;
+  }
+
+  /** Statements still reachable, removed from tracking. */
+  drain(): BunSqliteStatement[] {
+    const live: BunSqliteStatement[] = [];
+    for (const ref of this.#byRef) {
+      const stmt = ref.deref();
+      this.#registry.unregister(ref);
+      if (stmt) {
+        this.#refOf.delete(stmt);
+        live.push(stmt);
+      }
+    }
+    this.#byRef.clear();
+    return live;
+  }
 }
 
 export class BunSqliteDatabase {
@@ -152,7 +200,7 @@ export class BunSqliteDatabase {
    * connection with unfinalized statements stays open until they are collected;
    * better-sqlite3 finalizes them on `close()`, and so does this facade.
    */
-  readonly #live = new Set<BunSqliteStatement>();
+  readonly #live = new LiveStatements();
 
   constructor(path = ':memory:') {
     this.native = new Database(path, { create: true, strict: true });
@@ -253,9 +301,9 @@ export class BunSqliteDatabase {
 
   close(): this {
     if (this.#open) {
-      for (const stmt of [...this.#live]) {
+      for (const stmt of this.#live.drain()) {
         try {
-          stmt.finalize();
+          stmt.finalizeNative();
         } catch {
           // Already finalized natively; closing must not fail over it.
         }

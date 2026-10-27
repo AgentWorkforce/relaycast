@@ -180,6 +180,22 @@ describe('BunSqliteDatabase connection surface', () => {
     expect(db.open).toBe(false);
   });
 
+  it('finalizes outstanding statements on close, like better-sqlite3', () => {
+    const db = new BunSqliteDatabase(tempDb());
+    db.exec('CREATE TABLE t (id INTEGER PRIMARY KEY)');
+    expect(db.pragma('journal_mode', { simple: true })).toBeDefined();
+    const kept = db.prepare('SELECT count(*) AS n FROM t');
+    const done = db.prepare('SELECT 1 AS one');
+    expect(kept.get()).toEqual({ n: 0 });
+    done.finalize();
+    db.close();
+    // The facade finalized it, so the connection is really closed.
+    expect(() => kept.get()).toThrow();
+    // Finalizing after close (as drizzle may) is a no-op, not an error.
+    expect(() => kept.finalize()).not.toThrow();
+    expect(() => done.finalize()).not.toThrow();
+  });
+
   it('backs up to a file that reopens with the same rows', async () => {
     const path = tempDb();
     const db = new BunSqliteDatabase(path);
