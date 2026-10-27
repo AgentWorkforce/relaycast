@@ -10,6 +10,10 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 
 - `Workspace.plan`; servers no longer return it.
 
+### Fixed
+
+- `ActionInvocation` decodes hosted records keyed by `invocation_id` (a plain `id` still decodes) and keeps `id` as a deprecated alias of `invocationId`, so polling or completing an invocation no longer fails as an invalid API response. `completed_at` and nonnegative `duration_ms` are included.
+
 ## [10.0.2] - 2026-10-11
 
 ### Fixed
