@@ -3,7 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { drainNodeInvocations, rescheduleNodeInvocation, sweepTimedOutInvocations } from '../../engine/action.js';
 import { exclusiveClaimWrite } from '../../engine/invocationClaim.js';
 import { actionInvocations, actions, agents, nodes } from '../../db/schema.js';
-import { attachDirectNodeSocket, createWorkspace, FakeSocket, makeNodeStack, registerAgent, type TestStack } from './harness.js';
+import { attachDirectNodeSocket, createWorkspace, FakeSocket, injectUpdateFailure, makeNodeStack, registerAgent, stripTransactionCapability, type TestStack } from './harness.js';
 
 // Drain and the timeout sweep both select a due pending spawn and do not share
 // a lock. The pending claim has to make one of them the only sender, and the
@@ -221,6 +221,97 @@ describe('invocation claim before send', () => {
     const byId = new Map(reserved.map((node) => [node.id, node.reservedAgents]));
     expect(byId.get('node_spawn_a')).toBe(1);
     expect(byId.get('node_spawn_b')).toBe(1);
+  });
+
+  it('keeps the old spawn hold when releasing that node fails', async () => {
+    const ws = await createWorkspace(stack.app, 'spawn-claim-release-fails');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    await registerSpawnNode(stack, ws, 'node_spawn_release_a', 'spawn-release-a');
+    await registerSpawnNode(stack, ws, 'node_spawn_release_b', 'spawn-release-b');
+    const db = stack.runtime.handle.db;
+    const invocationId = 'inv_spawn_release_fails';
+    const heldAt = new Date(Date.now() - 60_000);
+    await db.insert(actionInvocations).values({
+      id: invocationId,
+      workspaceId: ws.workspaceId,
+      actionName: 'spawn:claude',
+      invocationOrigin: 'builtin',
+      callerId: caller.agentId,
+      callerName: caller.name,
+      input: { cli: 'claude', name: 'worker-release', task: 'hi' },
+      status: 'dispatched',
+      dispatchedAt: new Date(Date.now() - 60_000),
+      retryAfterAt: new Date(Date.now() - 1_000),
+      dispatchedNodeId: 'node_spawn_release_a',
+      attemptedNodeIds: ['node_spawn_release_a'],
+      dispatchAttempts: 1,
+      spawnReservedAt: heldAt,
+    });
+    await db
+      .update(nodes)
+      .set({ reservedAgents: 2 })
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_spawn_release_a')));
+    const [invocation] = await db.select().from(actionInvocations).where(eq(actionInvocations.id, invocationId));
+    const restore = injectUpdateFailure(db, nodes, 'capacity release failed', { times: 1 });
+
+    await expect(rescheduleNodeInvocation(db, stack.runtime.realtime, invocation!))
+      .rejects.toThrow('capacity release failed');
+    restore();
+
+    const [row] = await db.select().from(actionInvocations).where(eq(actionInvocations.id, invocationId));
+    expect(row?.spawnReservedAt).toBeInstanceOf(Date);
+    expect(row?.status).toBe('dispatched');
+    expect(row?.dispatchedNodeId).toBe('node_spawn_release_a');
+    const [node] = await db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_spawn_release_a')));
+    expect(node?.reservedAgents).toBe(2);
+  });
+
+  it('puts the spawn hold back when a non-transactional release fails', async () => {
+    const ws = await createWorkspace(stack.app, 'spawn-claim-release-d1');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    await registerSpawnNode(stack, ws, 'node_spawn_d1_a', 'spawn-d1-a');
+    await registerSpawnNode(stack, ws, 'node_spawn_d1_b', 'spawn-d1-b');
+    const db = stack.runtime.handle.db;
+    stripTransactionCapability(db);
+    const invocationId = 'inv_spawn_release_d1';
+    await db.insert(actionInvocations).values({
+      id: invocationId,
+      workspaceId: ws.workspaceId,
+      actionName: 'spawn:claude',
+      invocationOrigin: 'builtin',
+      callerId: caller.agentId,
+      callerName: caller.name,
+      input: { cli: 'claude', name: 'worker-d1', task: 'hi' },
+      status: 'dispatched',
+      dispatchedAt: new Date(Date.now() - 60_000),
+      retryAfterAt: new Date(Date.now() - 1_000),
+      dispatchedNodeId: 'node_spawn_d1_a',
+      attemptedNodeIds: ['node_spawn_d1_a'],
+      dispatchAttempts: 1,
+      spawnReservedAt: new Date(Date.now() - 60_000),
+    });
+    await db
+      .update(nodes)
+      .set({ reservedAgents: 2 })
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_spawn_d1_a')));
+    const [invocation] = await db.select().from(actionInvocations).where(eq(actionInvocations.id, invocationId));
+    const restore = injectUpdateFailure(db, nodes, 'capacity release failed', { times: 1 });
+
+    await expect(rescheduleNodeInvocation(db, stack.runtime.realtime, invocation!))
+      .rejects.toThrow('capacity release failed');
+    restore();
+
+    const [row] = await db.select().from(actionInvocations).where(eq(actionInvocations.id, invocationId));
+    expect(row?.spawnReservedAt).toBeInstanceOf(Date);
+    expect(row?.dispatchedNodeId).toBe('node_spawn_d1_a');
+    const [node] = await db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_spawn_d1_a')));
+    expect(node?.reservedAgents).toBe(2);
   });
 
   it('does not let a losing retry clear a send that already claimed the only slot', async () => {

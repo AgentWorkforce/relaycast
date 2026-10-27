@@ -3770,23 +3770,36 @@ export async function rescheduleNodeInvocation(
   // marker once so overlapping retries release that one hold, not every hold
   // on the node.
   if (invocation.dispatchedNodeId && isSpawnInvocation(invocation.actionName) && invocation.spawnReservedAt) {
-    const [releasedHold] = await db
-      .update(actionInvocations)
-      .set({ spawnReservedAt: null })
-      .where(and(
-        eq(actionInvocations.workspaceId, invocation.workspaceId),
-        eq(actionInvocations.id, invocation.id),
-        eq(actionInvocations.status, invocation.status),
-        eq(actionInvocations.dispatchAttempts, invocation.dispatchAttempts ?? 0),
-        retryAfterAtMatches(invocation.retryAfterAt ?? null),
-        eq(actionInvocations.spawnReservedAt, invocation.spawnReservedAt),
-        ...(opts.expectedNodeLivenessRevision !== undefined
-          ? [eq(actionInvocations.nodeLivenessRevision, opts.expectedNodeLivenessRevision)]
-          : []),
-      ))
-      .returning({ id: actionInvocations.id });
-    if (releasedHold) {
-      await releaseNodeCapacity(db, invocation.workspaceId, invocation.dispatchedNodeId);
+    const heldAt = invocation.spawnReservedAt;
+    const nodeId = invocation.dispatchedNodeId;
+    const holdWhere = and(
+      eq(actionInvocations.workspaceId, invocation.workspaceId),
+      eq(actionInvocations.id, invocation.id),
+      eq(actionInvocations.status, invocation.status),
+      eq(actionInvocations.dispatchAttempts, invocation.dispatchAttempts ?? 0),
+      retryAfterAtMatches(invocation.retryAfterAt ?? null),
+      ...(opts.expectedNodeLivenessRevision !== undefined
+        ? [eq(actionInvocations.nodeLivenessRevision, opts.expectedNodeLivenessRevision)]
+        : []),
+    );
+    try {
+      // Clear the marker and decrement together. A transaction rolls both
+      // back when the counter update throws. A handle without one can commit
+      // the clear first; the catch puts that marker back.
+      await runAtomic(db, async (tx) => {
+        const [releasedHold] = await tx
+          .update(actionInvocations)
+          .set({ spawnReservedAt: null })
+          .where(and(holdWhere, eq(actionInvocations.spawnReservedAt, heldAt)))
+          .returning({ id: actionInvocations.id });
+        if (releasedHold) await releaseNodeCapacity(tx, invocation.workspaceId, nodeId);
+      });
+    } catch (error) {
+      await db
+        .update(actionInvocations)
+        .set({ spawnReservedAt: heldAt })
+        .where(and(holdWhere, isNull(actionInvocations.spawnReservedAt)));
+      throw error;
     }
   }
   // A shadowed spawn stays pinned to its node: while a `spawn:<harness>` shadow
