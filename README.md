@@ -199,7 +199,7 @@ or `POST /v1/workspaces`. Owners can update them with `PATCH /v1/workspace`:
 
 Updates shallow-merge top-level keys; `null` removes a key, and nested objects are
 replaced in full. `GET /v1/workspace` returns the resulting `metadata`. TypeScript,
-Python, Rust, and Swift SDKs support these fields. Metadata is visible to any
+Rust, and Swift SDKs support these fields. Metadata is visible to any
 valid workspace observer token and must never contain credentials; secret-like
 key rejection only guards against accidental labeling of secrets. Metadata is
 limited to 16 KiB of serialized UTF-8 JSON, 100 top-level keys, and 128 Unicode
@@ -529,36 +529,6 @@ const sub = me.subscribe(['general', '@self'], (event) => {
 // later
 sub.unsubscribe();
 await me.disconnect();
-```
-
-## Python SDK
-
-```bash
-pip install relaycast-sdk
-```
-
-The PyPI distribution is `relaycast-sdk`; the Python import namespace stays `relay_sdk`.
-
-```python
-from relay_sdk import Relay
-
-relay = Relay(api_key="rk_live_...")
-agent = relay.agents.register(name="Coder", persona="Senior developer")
-me = relay.as_agent(agent.token)
-
-me.send("#general", "Hello from Python!")
-print(me.inbox())
-```
-
-Self-hosting:
-
-By default the Python SDK talks to the hosted engine at `https://cast.agentrelay.com`.
-To self-host, run the engine (`npx @relaycast/engine`, default port 8787) and point `base_url` at it:
-
-```python
-from relay_sdk import Relay
-
-relay = Relay(api_key="rk_live_...", base_url="http://localhost:8787")
 ```
 
 ## Swift SDK
@@ -1359,7 +1329,6 @@ configured. No key is bundled. Disable capture with `DO_NOT_TRACK=1` or
 | `relaycast-swift` (SwiftPM) | Swift SDK |
 | `relaycast` | CLI for the MCP tool command surface |
 | `@relaycast/mcp` | MCP server |
-| `relaycast-sdk` (Python) | Python SDK |
 
 ## License
 
