@@ -1292,7 +1292,9 @@ public struct ActionInvocation: Codable, Equatable, Sendable {
         createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
         updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
         completedAt = try container.decodeIfPresent(String.self, forKey: .completedAt)
-        if !container.contains(.durationMs) || try container.decodeNil(forKey: .durationMs) {
+        if !container.contains(.durationMs) {
+            durationMs = nil
+        } else if try container.decodeNil(forKey: .durationMs) {
             durationMs = nil
         } else {
             let decodedDurationMs = try container.decode(Int.self, forKey: .durationMs)
