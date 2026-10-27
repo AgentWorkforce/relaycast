@@ -12,7 +12,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+<<<<<<< HEAD
 - Routes that require an agent, node or observer token now answer `401 unauthorized` when the auth provider returns a result without that principal. Previously a host provider that answered a workspace key with a workspace-only result (for example from a cache) sent `POST /v1/agents/:name/rotate-token` into its handler with no agent, which failed with a 500.
+=======
+- `GET /v1/deliveries?status=<status>` now reads only the calling agent's rows (migration `0076` adds `idx_deliveries_agent_status_created`). It previously walked every row with that status in the workspace, which on large delivery histories could stall a shared database.
+>>>>>>> origin/main
 
 ## [11.0.0] - 2026-10-22
 

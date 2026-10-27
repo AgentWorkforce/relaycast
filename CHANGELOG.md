@@ -20,7 +20,11 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
+<<<<<<< HEAD
 - Agent-token routes answer 401 instead of 500 when a host auth provider returns a result without an agent.
+=======
+- Listing deliveries filtered by status no longer scans the whole workspace's delivery history.
+>>>>>>> origin/main
 
 ## [11.0.0] - 2026-10-22
 
