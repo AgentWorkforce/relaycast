@@ -90,9 +90,6 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
     return;
   }
 
-  const denial = await resolveAdmission(c, workspace, 'request');
-  if (denial) return admissionDeniedResponse(c, denial);
-
   const { admission, config, rateLimiter } = c.get('engine');
 
   // Apply route-specific multiplier if applicable
@@ -129,6 +126,10 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
     // Only the limiter backend failing is fail-open — a transient infra hiccup
     // shouldn't 500 the request (the limit was still computed above).
   }
+
+  // After the bucket, so a flood is throttled without reaching host admission.
+  const denial = await resolveAdmission(c, workspace, 'request');
+  if (denial) return admissionDeniedResponse(c, denial);
 
   await presenceRefresh(c, async () => {});
   await next();

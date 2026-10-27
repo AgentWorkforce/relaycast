@@ -278,6 +278,22 @@ describe('admission hooks', () => {
     }
   });
 
+  it('throttles before consulting host admission', async () => {
+    const admitted: string[] = [];
+    stack = makeNodeStack({
+      admission: { async admit({ action }) { admitted.push(action); return null; } },
+      rateLimitPerMinute: 1,
+    });
+    const ws = await createWorkspace(stack.app, 'throttle-first-ws');
+    admitted.length = 0;
+    const identity = () => (stack as TestStack).app.request('/v1/workspace', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    expect((await identity()).status).toBe(200);
+    expect((await identity()).status).toBe(429);
+    expect(admitted).toEqual(['request']);
+  });
+
   it('takes the per-workspace rate ceiling from the hook', async () => {
     stack = makeNodeStack({
       admission: { async rateLimitPerMinute() { return 1; } },
