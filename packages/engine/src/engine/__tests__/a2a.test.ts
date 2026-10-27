@@ -327,6 +327,14 @@ describe('translateRelayToA2a <-> translateA2aToRelay round-trip', () => {
       text: 'round trip',
       thread_id: 'rt-thread',
       attachments: [{ file_id: 'f-1', filename: 'note.md', content_type: 'text/markdown', size_bytes: 11 }],
+      metadata: {
+        'com.agentrelay.ratify': {
+          version: 1,
+          kind: 'proof_bundle',
+          correlation_id: 'rt-1',
+          bundle: '{"agent_id":"alice"}',
+        },
+      },
     };
 
     const back = translateA2aToRelay(translateRelayToA2a(dm));
@@ -336,6 +344,7 @@ describe('translateRelayToA2a <-> translateA2aToRelay round-trip', () => {
     expect(back.attachments).toEqual([
       { file_id: 'f-1', filename: 'note.md', content_type: 'text/markdown', size_bytes: 11 },
     ]);
+    expect(back.metadata).toEqual(dm.metadata);
     // The text gains a [file] marker line for the recovered file part.
     expect(back.text).toBe('round trip\n[file] note.md');
   });
@@ -439,6 +448,13 @@ describe('getWorkspaceAgentCard', () => {
     expect(card.documentation_url).toBe('https://github.com/AgentWorkforce/relaycast');
     expect(card.capabilities).toEqual({
       methods: ['message/send', 'message/stream', 'task/get', 'task/cancel'],
+      extensions: {
+        'com.agentrelay.ratify': {
+          versions: [1],
+          kinds: ['proof_bundle', 'revocation_list'],
+          max_proof_bundle_bytes: 131072,
+        },
+      },
     });
     expect(card.provider).toEqual({
       organization: 'Relaycast',
@@ -649,5 +665,119 @@ describe('GET /v1/a2a/directory', () => {
       { name: 'ReleaseAgent', kind: 'native' },
     ]);
     await expect(getDirectory('?skill=nope')).resolves.toEqual([]);
+  });
+});
+
+describe('workspace agent-card discovery', () => {
+  let stack: TestStack;
+
+  beforeEach(() => {
+    stack = makeNodeStack();
+  });
+
+  afterEach(() => stack.close());
+
+  it('serves the standard bare well-known path for a sole self-hosted workspace', async () => {
+    const ws = await createWorkspace(stack.app, 'borealis');
+    await registerAgent(stack.app, ws.workspaceKey, 'worker');
+
+    const response = await stack.app.request(
+      'https://relay.borealis.example/.well-known/agent-card.json',
+    );
+
+    expect(response.status).toBe(200);
+    const card = await response.json() as { provider?: Record<string, unknown> };
+    expect(card.provider).toMatchObject({
+      workspace_id: ws.workspaceId,
+      workspace_name: 'borealis',
+    });
+  });
+
+  it('keeps a valid hosted workspace subdomain authoritative', async () => {
+    const selected = await createWorkspace(stack.app, 'northwind');
+    await createWorkspace(stack.app, 'borealis');
+
+    const response = await stack.app.request(
+      'https://northwind.cast.example/.well-known/agent-card.json',
+    );
+
+    expect(response.status).toBe(200);
+    const card = await response.json() as { provider?: Record<string, unknown> };
+    expect(card.provider).toMatchObject({
+      workspace_id: selected.workspaceId,
+      workspace_name: 'northwind',
+    });
+  });
+
+  it('makes an explicit path workspace beat host inference on a multi-label authority', async () => {
+    const selected = await createWorkspace(stack.app, 'borealis');
+    await createWorkspace(stack.app, 'cast');
+
+    const response = await stack.app.request(
+      'https://cast.agentrelay.com/borealis/.well-known/agent-card.json',
+    );
+
+    expect(response.status).toBe(200);
+    const card = await response.json() as { provider?: Record<string, unknown> };
+    expect(card.provider).toMatchObject({
+      workspace_id: selected.workspaceId,
+      workspace_name: 'borealis',
+    });
+  });
+
+  it('does not replace an invalid path workspace with a valid host workspace', async () => {
+    await createWorkspace(stack.app, 'cast');
+
+    const response = await stack.app.request(
+      'https://cast.agentrelay.com/misspelled/.well-known/agent-card.json',
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'workspace_not_found' },
+    });
+  });
+
+  it('fails closed on a bare multi-tenant deployment instead of selecting a workspace', async () => {
+    await createWorkspace(stack.app, 'northwind');
+    await createWorkspace(stack.app, 'borealis');
+
+    const response = await stack.app.request(
+      'https://cast.agentrelay.com/.well-known/agent-card.json',
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'workspace_not_found' },
+    });
+  });
+
+  it('serves the sole workspace even when an unresolved host label was inferred', async () => {
+    // Host-label inference is a hosted convention, not caller intent, so a
+    // label that names no workspace does not suppress the single-tenant
+    // fallback — otherwise a self-host could never answer the standard path,
+    // since a conformant authority always yields some first label. The row cap
+    // is the boundary: the multi-tenant case above 404s on this same request.
+    await createWorkspace(stack.app, 'ratify-protocol');
+
+    const response = await stack.app.request(
+      'https://relay.ratifyprotocol.com/.well-known/agent-card.json',
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ name: 'ratify-protocol' });
+  });
+
+  it('does not hide an invalid explicit workspace selector behind the sole-workspace fallback', async () => {
+    await createWorkspace(stack.app, 'borealis');
+
+    const response = await stack.app.request(
+      'https://relay.borealis.example/.well-known/agent-card.json?workspace=misspelled',
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'workspace_not_found' },
+    });
   });
 });

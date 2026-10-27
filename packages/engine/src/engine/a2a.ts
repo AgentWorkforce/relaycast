@@ -9,6 +9,10 @@ import {
   A2aTaskStateSchema,
   JsonRpcRequestSchema,
   JsonRpcResponseSchema,
+  MAX_PROOF_BUNDLE_BYTES,
+  RATIFY_A2A_METADATA_KEY,
+  RATIFY_A2A_WIRE_VERSION,
+  RatifyA2aMetadataSchema,
   type A2aAgentCard,
   type A2aJsonRpcRequest,
   type A2aJsonRpcResponse,
@@ -23,7 +27,7 @@ import { z } from 'zod';
 import type { FileAttachment } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import { a2aAgents, agents, certifications } from '../db/schema.js';
-import { registerAgent, getAgentByName, updateAgent } from './agent.js';
+import { registerAgent, getAgentByName, updateAgent, updateAgentById } from './agent.js';
 import { rotateAgentToken } from './tokenRotate.js';
 import { createAndRunCertification } from './certify.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
@@ -50,6 +54,7 @@ const RelayDMSchema = z.object({
   created_at: z.string().optional(),
   thread_id: z.string().nullable().optional(),
   attachments: z.array(RelayFileAttachmentSchema).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 export {
@@ -61,6 +66,10 @@ export {
   A2aTaskStateSchema,
   JsonRpcRequestSchema,
   JsonRpcResponseSchema,
+  RatifyA2aMetadataSchema,
+  MAX_PROOF_BUNDLE_BYTES,
+  RATIFY_A2A_METADATA_KEY,
+  RATIFY_A2A_WIRE_VERSION,
 };
 
 export type {
@@ -81,6 +90,8 @@ export interface RegisterA2aAgentInput {
   agentCard?: A2aAgentCard;
   authScheme?: 'bearer' | 'api_key' | 'none';
   authCredential?: string;
+  /** Remote skill/agent that DMs to this proxy should address. */
+  targetAgent?: string;
 }
 
 export interface RegisterA2aAgentResult {
@@ -88,6 +99,13 @@ export interface RegisterA2aAgentResult {
   relayToken: string;
   webhookUrl: string;
   certification: 'level_0' | 'level_1';
+}
+
+export interface UpdateA2aAgentConnectionInput {
+  authScheme?: 'bearer' | 'api_key' | 'none';
+  authCredential?: string | null;
+  /** Remote skill/agent that DMs to this proxy should address. */
+  targetAgent?: string | null;
 }
 
 export interface A2aAgentRecord {
@@ -291,6 +309,16 @@ export async function registerA2aAgent(
   const agentCard = A2aAgentCardSchema.parse(resolvedCard);
   const externalUrl = normalizeBaseUrl(agentCard.url);
   const relayName = await deriveRelayName(agentCard);
+  const remoteSkillNames = new Set(agentCard.skills.flatMap((skill) => [skill.id, skill.name].filter(Boolean) as string[]));
+  if (input.targetAgent && !remoteSkillNames.has(input.targetAgent)) {
+    throw codedError(
+      `A2A target agent "${input.targetAgent}" is not advertised by the agent card`,
+      'a2a_target_agent_not_advertised',
+      400,
+    );
+  }
+  const targetAgent = input.targetAgent
+    ?? (agentCard.skills.length === 1 ? (agentCard.skills[0]!.id ?? agentCard.skills[0]!.name) : undefined);
 
   const [existing] = await db
     .select({ id: a2aAgents.id })
@@ -307,6 +335,7 @@ export async function registerA2aAgent(
     a2a_external_url: externalUrl,
     a2a_skills: agentCard.skills,
     a2a_active: true,
+    ...(targetAgent ? { a2a_target_agent: targetAgent } : {}),
   };
 
   // A prior removeA2aAgent soft-removes the A2A agent: it deletes the a2a_agents
@@ -599,24 +628,73 @@ export async function getA2aAgentByRelayName(
   return row ? formatA2aRecord(row) : null;
 }
 
+/**
+ * Complete or rotate the outbound half of an A2A registration.
+ *
+ * Reciprocal registration necessarily yields the second deployment's bearer
+ * token after the first registration row already exists. Updating that row is
+ * what lets both deployments authenticate sends without deleting proxies and
+ * invalidating the token the other side just stored.
+ */
+export async function updateA2aAgentConnection(
+  db: Db,
+  workspaceId: string,
+  relayName: string,
+  input: UpdateA2aAgentConnectionInput,
+): Promise<A2aAgentRecord | null> {
+  const agentRecord = await getA2aAgentByRelayName(db, workspaceId, relayName);
+  if (!agentRecord) return null;
+
+  if (input.targetAgent !== undefined && input.targetAgent !== null) {
+    const advertisedNames = new Set(
+      agentRecord.agent_card.skills.flatMap((skill) => [skill.id, skill.name].filter(Boolean) as string[]),
+    );
+    if (!advertisedNames.has(input.targetAgent)) {
+      throw codedError(
+        `A2A target agent "${input.targetAgent}" is not advertised by the agent card`,
+        'a2a_target_agent_not_advertised',
+        400,
+      );
+    }
+  }
+
+  await db
+    .update(a2aAgents)
+    .set({
+      ...(input.authScheme !== undefined ? { authScheme: input.authScheme } : {}),
+      ...(input.authCredential !== undefined ? { authCredential: input.authCredential } : {}),
+      updatedAt: new Date(),
+    })
+    .where(eq(a2aAgents.id, agentRecord.id));
+
+  if (input.targetAgent !== undefined) {
+    const metadata = { ...(agentRecord.relay_metadata ?? {}) };
+    if (input.targetAgent === null) {
+      delete metadata.a2a_target_agent;
+    } else {
+      metadata.a2a_target_agent = input.targetAgent;
+    }
+    await updateAgent(db, workspaceId, relayName, { metadata });
+  }
+
+  return getA2aAgentByRelayName(db, workspaceId, relayName);
+}
+
 export async function removeA2aAgent(db: Db, workspaceId: string, relayName: string): Promise<boolean> {
   const agentRecord = await getA2aAgentByRelayName(db, workspaceId, relayName);
   if (!agentRecord) return false;
 
   await db.delete(a2aAgents).where(eq(a2aAgents.id, agentRecord.id));
-  await db
-    .update(agents)
-    .set({
-      status: 'offline',
-      metadata: {
-        ...(agentRecord.relay_metadata ?? {}),
-        a2a: true,
-        a2a_active: false,
-      },
-    })
-    .where(eq(agents.id, agentRecord.relay_agent_id));
+  const updated = await updateAgentById(db, workspaceId, agentRecord.relay_agent_id, {
+    status: 'offline',
+    metadata: {
+      ...(agentRecord.relay_metadata ?? {}),
+      a2a: true,
+      a2a_active: false,
+    },
+  });
 
-  return true;
+  return updated !== null;
 }
 
 export function translateRelayToA2a(message: RelayDM): A2aJsonRpcRequest {
@@ -645,6 +723,7 @@ export function translateRelayToA2a(message: RelayDM): A2aJsonRpcRequest {
         role: 'user',
         context_id: relay.thread_id ?? undefined,
         parts,
+        metadata: relay.metadata,
       },
     },
   };
@@ -662,6 +741,7 @@ export function translateA2aToRelay(jsonRpc: A2aJsonRpcRequest | A2aJsonRpcRespo
       text: extractTextFromParts(message.parts),
       thread_id: message.context_id ?? null,
       attachments: extractAttachmentsFromParts(message.parts),
+      metadata: message.metadata,
     };
   }
 
@@ -677,15 +757,29 @@ export function translateA2aToRelay(jsonRpc: A2aJsonRpcRequest | A2aJsonRpcRespo
     text: parts.length > 0 ? extractTextFromParts(parts) : task?.status.message ?? '',
     thread_id: responseMessage?.context_id ?? task?.context_id ?? null,
     attachments: extractAttachmentsFromParts(parts),
+    metadata: responseMessage?.metadata,
   };
+}
+
+// Two waits of at most 30s plus three 15s attempts fit the 120s egress lease.
+function boundedRetryAfter(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const delay = /^\d+(?:\.\d+)?$/.test(value) ? Number(value) * 1000 : Date.parse(value) - Date.now();
+  return Number.isFinite(delay) ? Math.min(30_000, Math.max(0, delay)) : undefined;
 }
 
 export async function sendToExternalAgent(
   agentUrl: string,
   jsonRpcPayload: A2aJsonRpcRequest,
   auth?: { scheme?: 'bearer' | 'api_key' | 'none' | string | null; credential?: string | null },
+  beforeAttempt?: () => Promise<{ scheme: string | null; credential: string | null }>,
+  idempotencyKey?: string,
 ): Promise<A2aResponse> {
-  const request = JsonRpcRequestSchema.parse(jsonRpcPayload);
+  const parsedRequest = JsonRpcRequestSchema.safeParse(jsonRpcPayload);
+  if (!parsedRequest.success) {
+    throw codedError('Invalid A2A JSON-RPC request or metadata', 'invalid_a2a_request', 400);
+  }
+  const request = parsedRequest.data;
   const targetUrl = normalizeBaseUrl(agentUrl);
 
   if (!isSafeExternalUrl(targetUrl)) {
@@ -696,28 +790,55 @@ export async function sendToExternalAgent(
 
   for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt += 1) {
     try {
+      const attemptAuth = beforeAttempt ? await beforeAttempt() : auth;
+      // Current credentials are resolved coherently before this check; never
+      // construct auth headers or send credentialed cleartext HTTP.
+      if (new URL(targetUrl).protocol !== 'https:' && attemptAuth?.credential
+        && (attemptAuth.scheme === 'bearer' || attemptAuth.scheme === 'api_key')) {
+        throw codedError('Credentialed A2A targets require HTTPS', 'a2a_agent_url_forbidden', 400);
+      }
       const response = await globalThis.fetch(targetUrl, {
         method: 'POST',
+        redirect: 'manual',
+        signal: AbortSignal.timeout(15_000),
         headers: {
           'content-type': 'application/json',
           accept: 'application/json',
-          ...buildAuthHeaders(auth),
+          ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+          ...buildAuthHeaders(attemptAuth),
         },
         body: JSON.stringify(request),
+      }).catch(() => {
+        // Fetch rejects on timeout, abort and network failure. Keep local
+        // validation/parser errors out of this transport-only classification.
+        throw Object.assign(codedError('A2A transport unavailable', 'a2a_transport_unavailable', 502), { retryable: true });
       });
 
+      if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+        throw Object.assign(codedError('A2A upstream redirects are not allowed', 'a2a_redirect_forbidden', 502), { retryable: false });
+      }
       if (!response.ok) {
         const err = new Error(`A2A upstream returned ${response.status}`);
         Object.assign(err, {
           code: response.status >= 500 ? 'a2a_upstream_unavailable' : 'a2a_upstream_rejected',
           status: response.status >= 500 ? 502 : response.status,
-          retryable: response.status >= 500,
+          retryable: response.status >= 500 || response.status === 429,
+          retryAfterMs: response.status === 429 ? boundedRetryAfter(response.headers.get('Retry-After')) : undefined,
         });
         throw err;
       }
 
-      const payload = await response.json();
-      const parsedResponse = JsonRpcResponseSchema.parse(payload);
+      let payload: unknown;
+      try { payload = await response.json(); }
+      catch (error) {
+        if (error instanceof Error && ['TimeoutError', 'AbortError', 'TypeError'].includes(error.name)) {
+          throw Object.assign(codedError('A2A transport unavailable', 'a2a_transport_unavailable', 502), { retryable: true });
+        }
+        throw Object.assign(codedError('Invalid A2A upstream response', 'a2a_invalid_response', 502), { retryable: false });
+      }
+      const parsed = JsonRpcResponseSchema.safeParse(payload);
+      if (!parsed.success) throw Object.assign(codedError('Invalid A2A upstream response', 'a2a_invalid_response', 502), { retryable: false });
+      const parsedResponse = parsed.data;
 
       if (parsedResponse.error) {
         const err = new Error(parsedResponse.error.message);
@@ -741,7 +862,7 @@ export async function sendToExternalAgent(
       // ZodErrors, JSON-RPC errors, and 4xx responses are not retryable.
       const retryable = error instanceof Error && (error as Error & { retryable?: boolean }).retryable === true;
       if (!retryable || attempt === RETRY_DELAYS_MS.length) break;
-      await sleep(RETRY_DELAYS_MS[attempt]);
+      await sleep((error as Error & { retryAfterMs?: number }).retryAfterMs ?? RETRY_DELAYS_MS[attempt]);
     }
   }
 
@@ -861,6 +982,13 @@ export async function getWorkspaceAgentCard(
     },
     capabilities: {
       methods: ['message/send', 'message/stream', 'task/get', 'task/cancel'],
+      extensions: {
+        [RATIFY_A2A_METADATA_KEY]: {
+          versions: [RATIFY_A2A_WIRE_VERSION],
+          kinds: ['proof_bundle', 'revocation_list'],
+          max_proof_bundle_bytes: MAX_PROOF_BUNDLE_BYTES,
+        },
+      },
     },
     default_input_modes: ['text/plain', 'application/json'],
     default_output_modes: ['text/plain', 'application/json'],

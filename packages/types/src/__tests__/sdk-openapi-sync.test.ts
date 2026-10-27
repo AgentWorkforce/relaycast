@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-type SdkName = 'typescript' | 'rust' | 'python' | 'swift';
+type SdkName = 'typescript' | 'rust' | 'swift';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 const OPENAPI_PATH = path.join(REPO_ROOT, 'openapi.yaml');
@@ -11,17 +11,13 @@ const OPENAPI_PATH = path.join(REPO_ROOT, 'openapi.yaml');
 const SDK_SOURCE_ROOTS: Record<SdkName, string> = {
   typescript: path.join(REPO_ROOT, 'packages/sdk-typescript/src'),
   rust: path.join(REPO_ROOT, 'packages/sdk-rust/src'),
-  python: path.join(REPO_ROOT, 'packages/sdk-python/src/relay_sdk'),
   swift: path.join(REPO_ROOT, 'packages/sdk-swift/Sources'),
 };
 
-const SOURCE_EXTENSIONS = new Set(['.ts', '.tsx', '.rs', '.py', '.swift']);
+const SOURCE_EXTENSIONS = new Set(['.ts', '.tsx', '.rs', '.swift']);
 const IGNORED_SEGMENTS = new Set([
   '__tests__',
-  '__pycache__',
   '.build',
-  '.pytest_cache',
-  '.venv',
   'dist',
   'node_modules',
   'target',
@@ -30,6 +26,10 @@ const IGNORED_SEGMENTS = new Set([
 const NON_SDK_OPENAPI_PATHS = new Set([
   '/v1/health',
   '/v1/.well-known/agent-card.json',
+  // Path-scoped form of the same unauthenticated A2A discovery endpoint. Served
+  // for counterparties that name the workspace explicitly; like the bare form
+  // it is not an agent-SDK surface.
+  '/v1/{param}/.well-known/agent-card.json',
   '/v1/a2a/rpc',
   '/v1/a2a/webhook/{param}/{param}',
   // Provider integration endpoints are provisioned/called by relayfile-cloud,
@@ -44,13 +44,28 @@ const NON_SDK_OPENAPI_PATHS = new Set([
   // node-providers work; the engine surface ships first.
   '/v1/nodes/{param}/actions/{param}/invoke',
   '/v1/nodes/{param}/providers/{param}',
+  // Operator-only, one-time recovery for legacy registrations. Agent SDKs do
+  // not expose it because normal registration establishes the verifier.
+  '/v1/agents/{param}/legacy-identity',
+  // Workspace-admin maintenance is exposed by scripts/retain-agents.mts,
+  // not by the agent SDKs.
+  '/v1/agents/retention',
+  // Workspace-owner subscription provisioning, called by the Relay integration CLI.
+  '/v1/agents/{param}/subscription-channel',
+  // Node-token self lookup: a service handed a node token (Cloud's node claim)
+  // proves which node it is for. Agents never call it.
+  '/v1/node/me',
 ]);
 
 const CORE_SDK_PATHS = new Set([
   '/v1/agent',
+  '/v1/agent/recovery-credential',
   '/v1/agents',
   '/v1/agents/{param}',
+  '/v1/agents/{param}/recover',
+  '/v1/agents/{param}/revoke-token',
   '/v1/agents/{param}/rotate-token',
+  '/v1/agents/{param}/takeover',
   '/v1/agents/heartbeat',
   '/v1/agents/disconnect',
   '/v1/channels',

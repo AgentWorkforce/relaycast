@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "id": "0902-node-inventory-presence-isolation",
+  "kind": "bugfix",
+  "title": "Keep healthy node agents live when one inventory identity conflicts",
+  "runner": {
+    "command": ["node", "tests/relayflows/cases/0902-node-inventory-presence-isolation/run.mjs"]
+  },
+  "timeoutSeconds": 900,
+  "expected": {
+    "base": {
+      "outcome": "bug",
+      "signature": "one_inventory_conflict_expires_node_and_queues_deliveries"
+    },
+    "head": {
+      "outcome": "fixed",
+      "signature": "inventory_conflict_isolated_healthy_siblings_deliver"
+    }
+  }
+}

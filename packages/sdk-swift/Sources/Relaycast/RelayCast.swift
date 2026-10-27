@@ -51,11 +51,13 @@ public struct RelayCastOptions: Equatable, Sendable {
 }
 
 public struct WorkspaceBootstrapOptions: Equatable, Sendable {
+    public var metadata: [String: JSONValue]?
     public var apiKey: String?
     public var baseURL: String?
     public var agentRelayDistinctID: String?
 
-    public init(apiKey: String? = nil, baseURL: String? = nil, agentRelayDistinctID: String? = nil) {
+    public init(apiKey: String? = nil, baseURL: String? = nil, agentRelayDistinctID: String? = nil, metadata: [String: JSONValue]? = nil) {
+        self.metadata = metadata
         self.apiKey = apiKey
         self.baseURL = baseURL
         self.agentRelayDistinctID = agentRelayDistinctID
@@ -155,7 +157,7 @@ public final class RelayCast: @unchecked Sendable {
         let (workspace, _) = try await workspaceRequest(
             method: "POST",
             path: "/v1/workspaces",
-            body: CreateWorkspaceRequest(name: name),
+            body: CreateWorkspaceRequest(name: name, metadata: options.metadata),
             options: options
         ) as (CreateWorkspaceResponse, Int)
         return workspace
@@ -189,7 +191,7 @@ public final class RelayCast: @unchecked Sendable {
         let (workspace, status) = try await workspaceRequest(
             method: "POST",
             path: "/v1/workspaces",
-            body: CreateWorkspaceRequest(name: name),
+            body: CreateWorkspaceRequest(name: name, metadata: options.metadata),
             options: options
         ) as (CreateWorkspaceResponse, Int)
         return EnsureWorkspaceResponse(
@@ -217,22 +219,7 @@ public final class RelayCast: @unchecked Sendable {
     }
 
     public func registerOrRotate(_ data: RegisterAgentRequest) async throws -> CreateAgentResponse {
-        do {
-            return try await agents.register(data.createRequest)
-        } catch let error as RelayError {
-            let isConflict = error.statusCode == 409 || error.code == "agent_already_exists"
-            guard isConflict else { throw error }
-            let existing = try await agents.get(data.name)
-            let rotated = try await agents.rotateToken(existing.name)
-            rememberIdentity(agentID: existing.id, name: existing.name)
-            return CreateAgentResponse(
-                id: existing.id,
-                name: existing.name,
-                token: rotated.token,
-                status: existing.status,
-                createdAt: existing.createdAt ?? existing.lastSeen ?? ""
-            )
-        }
+        try await agents.register(data.createRequest)
     }
 
     public func resolveIdentity() async throws -> ResolvedIdentity {
@@ -350,7 +337,27 @@ public final class RelayCast: @unchecked Sendable {
     }
 
     public func allDMConversations() async throws -> [WorkspaceDMConversation] {
-        try await client.get("/v1/dm/conversations/all")
+        var conversations: [WorkspaceDMConversation] = []
+        var cursor: String?
+        var seenCursors: Set<String> = []
+
+        while true {
+            var query = ["limit": "500"]
+            if let cursor { query["cursor"] = cursor }
+            let page: (data: [WorkspaceDMConversation], cursor: Cursor?) = try await client.getWithCursor(
+                "/v1/dm/conversations/all",
+                query: query
+            )
+            conversations.append(contentsOf: page.data)
+            guard page.cursor?.hasMore == true else { return conversations }
+            guard let next = page.cursor?.next, !next.isEmpty else {
+                throw RelayError.invalidResponse("DM conversation pagination did not provide a next cursor", statusCode: nil)
+            }
+            guard seenCursors.insert(next).inserted else {
+                throw RelayError.invalidResponse("DM conversation pagination did not advance", statusCode: nil)
+            }
+            cursor = next
+        }
     }
 
     public func dmMessages(conversationID: String, options: WorkspaceDMMessagesOptions = WorkspaceDMMessagesOptions()) async throws -> [WorkspaceDMMessage] {
@@ -523,6 +530,22 @@ public final class RelayAgentsService: @unchecked Sendable {
         try await relay.client.post("/v1/agents/\(percentEncodePathComponent(name))/rotate-token", body: EmptyRequest())
     }
 
+    public func recover(_ name: String, data: RecoverAgentRequest) async throws -> AgentIdentityRecoveryResponse {
+        try await relay.client.post("/v1/agents/\(percentEncodePathComponent(name))/recover", body: data)
+    }
+
+    public func takeOver(_ name: String, data: TakeOverAgentRequest) async throws -> AgentIdentityRecoveryResponse {
+        try await relay.client.post("/v1/agents/\(percentEncodePathComponent(name))/takeover", body: data)
+    }
+
+    public func revokeToken(_ name: String, data: RevokeAgentTokenRequest) async throws -> AgentIdentityRevocationResponse {
+        try await relay.client.post("/v1/agents/\(percentEncodePathComponent(name))/revoke-token", body: data)
+    }
+
+    public func enrollRecoveryCredential(_ data: EnrollRecoveryCredentialRequest) async throws -> [String: JSONValue] {
+        try await relay.client.post("/v1/agent/recovery-credential", body: data)
+    }
+
     public func update(_ name: String, data: UpdateAgentRequest) async throws -> Agent {
         try await relay.client.patch("/v1/agents/\(percentEncodePathComponent(name))", body: data)
     }
@@ -659,8 +682,31 @@ public final class RelayNodesService: @unchecked Sendable {
         self.relay = relay
     }
 
-    public func create(_ request: CreateNodeRequest) async throws -> CreateNodeResponse {
-        try await relay.client.post("/v1/nodes", body: request)
+    public func create(
+        _ request: CreateNodeRequest,
+        currentToken: String? = nil,
+        idempotencyKey: String? = nil
+    ) async throws -> CreateNodeResponse {
+        if let currentToken, currentToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw RelayError.invalidRequest("currentToken must not be blank for node rotation")
+        }
+        if let idempotencyKey, idempotencyKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw RelayError.invalidRequest("idempotencyKey must not be blank for node rotation recovery")
+        }
+        if idempotencyKey != nil && currentToken == nil {
+            throw RelayError.invalidRequest("idempotencyKey requires currentToken for node rotation recovery")
+        }
+        var headers: [String: String] = [:]
+        if let currentToken { headers["X-Relaycast-Node-Token"] = currentToken }
+        return try await relay.client.post(
+            "/v1/nodes",
+            body: request,
+            options: RequestOptions(
+                headers: headers,
+                idempotencyKey: idempotencyKey,
+                retry: idempotencyKey != nil
+            )
+        )
     }
 
     public func list(_ query: NodeListQuery = NodeListQuery()) async throws -> [NodeRosterEntry] {

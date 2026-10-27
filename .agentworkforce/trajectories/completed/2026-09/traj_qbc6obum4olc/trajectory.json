@@ -1,0 +1,57 @@
+{
+  "id": "traj_qbc6obum4olc",
+  "version": 1,
+  "task": {
+    "title": "Implement hosted-safe anonymous workspace idempotency contract for issue #407",
+    "source": {
+      "system": "plain",
+      "id": "#407"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-09-10T02:26:31.596Z",
+  "completedAt": "2026-09-10T02:26:32.136Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-09-10T02:26:31.876Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_gus28ulr9uqi",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-09-10T02:26:31.876Z",
+      "endedAt": "2026-09-10T02:26:32.136Z",
+      "events": [
+        {
+          "ts": 1789007191877,
+          "type": "decision",
+          "content": "Use the high-entropy anonymous Idempotency-Key as the hosted recovery capability: Use the high-entropy anonymous Idempotency-Key as the hosted recovery capability",
+          "raw": {
+            "question": "Use the high-entropy anonymous Idempotency-Key as the hosted recovery capability",
+            "chosen": "Use the high-entropy anonymous Idempotency-Key as the hosted recovery capability",
+            "alternatives": [],
+            "reasoning": "Hosted clients cannot safely hold a deployment-wide secret; the server still needs that secret only for deterministic child API-key derivation, while opt-in self-host proof preserves the stricter deployment model."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Implemented hosted-safe anonymous workspace idempotency with opt-in self-host proof enforcement, SDK coverage, and Docker/replay/redaction verification.",
+    "approach": "Standard approach",
+    "confidence": 0.94
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "996ec342099968fef63bdc646f647e5820ba3d39",
+    "endRef": "996ec342099968fef63bdc646f647e5820ba3d39"
+  }
+}

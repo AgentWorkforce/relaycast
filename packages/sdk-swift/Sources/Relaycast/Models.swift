@@ -23,16 +23,17 @@ public struct Workspace: Codable, Equatable, Sendable {
     public let id: String
     public let name: String
     public let systemPrompt: String?
-    public let plan: String?
     public let createdAt: String
     public let metadata: [String: JSONValue]?
 }
 
 public struct CreateWorkspaceRequest: Codable, Equatable, Sendable {
     public var name: String
+    public var metadata: [String: JSONValue]?
 
-    public init(name: String) {
+    public init(name: String, metadata: [String: JSONValue]? = nil) {
         self.name = name
+        self.metadata = metadata
     }
 }
 
@@ -60,9 +61,13 @@ public struct UpdateWorkspaceRequest: Codable, Equatable, Sendable {
     public var name: String?
     public var systemPrompt: String?
 
-    public init(name: String? = nil, systemPrompt: String? = nil) {
+    /// Shallow merge into workspace metadata; top-level `.null` values delete keys.
+    public var metadata: [String: JSONValue]?
+
+    public init(name: String? = nil, systemPrompt: String? = nil, metadata: [String: JSONValue]? = nil) {
         self.name = name
         self.systemPrompt = systemPrompt
+        self.metadata = metadata
     }
 }
 
@@ -124,6 +129,77 @@ public struct WorkspaceDMMessage: Codable, Equatable, Sendable {
 public struct TokenRotateResponse: Codable, Equatable, Sendable {
     public let name: String
     public let token: String
+}
+
+public struct RecoverAgentRequest: Codable, Equatable, Sendable {
+    public var expectedAgentId: String
+    public var recoveryProof: String?
+    public var reason: String?
+    public var sessionRef: String?
+    public var nodeId: String?
+
+    public init(expectedAgentId: String, recoveryProof: String? = nil, reason: String? = nil, sessionRef: String? = nil, nodeId: String? = nil) {
+        self.expectedAgentId = expectedAgentId
+        self.recoveryProof = recoveryProof
+        self.reason = reason
+        self.sessionRef = sessionRef
+        self.nodeId = nodeId
+    }
+}
+
+public struct TakeOverAgentRequest: Codable, Equatable, Sendable {
+    public var expectedAgentId: String
+    public var actor: String
+    public var reason: String
+    public var sessionRef: String
+    public var nodeId: String
+
+    public init(expectedAgentId: String, actor: String, reason: String, sessionRef: String, nodeId: String) {
+        self.expectedAgentId = expectedAgentId
+        self.actor = actor
+        self.reason = reason
+        self.sessionRef = sessionRef
+        self.nodeId = nodeId
+    }
+}
+
+public struct RevokeAgentTokenRequest: Codable, Equatable, Sendable {
+    public var expectedAgentId: String
+    public var actor: String
+    public var reason: String
+    public var sessionRef: String?
+    public var nodeId: String?
+
+    public init(expectedAgentId: String, actor: String, reason: String, sessionRef: String? = nil, nodeId: String? = nil) {
+        self.expectedAgentId = expectedAgentId
+        self.actor = actor
+        self.reason = reason
+        self.sessionRef = sessionRef
+        self.nodeId = nodeId
+    }
+}
+
+public struct EnrollRecoveryCredentialRequest: Codable, Equatable, Sendable {
+    public var recoveryProofHash: String
+    public var workUnitId: String?
+
+    public init(recoveryProofHash: String, workUnitId: String? = nil) {
+        self.recoveryProofHash = recoveryProofHash
+        self.workUnitId = workUnitId
+    }
+}
+
+public struct AgentIdentityRecoveryResponse: Codable, Equatable, Sendable {
+    public let agentId: String
+    public let name: String
+    public let token: String
+    public let auditId: String
+}
+
+public struct AgentIdentityRevocationResponse: Codable, Equatable, Sendable {
+    public let agentId: String
+    public let name: String
+    public let auditId: String
 }
 
 public struct ObserverTokenFilters: Codable, Equatable, Sendable {
@@ -604,6 +680,14 @@ public struct CoreMessagePayload: Codable, Equatable, Sendable {
     public let text: String
     public let injectionMode: MessageInjectionMode?
     public let attachments: [FileAttachment]?
+    /// Caller-authored message metadata, passed through verbatim.
+    ///
+    /// Mirrors `metadata` on `CoreMessagePayloadSchema`. Without it a Swift
+    /// consumer decodes the payload successfully and silently loses the field,
+    /// which now carries delegated-authority proofs and signed revocation
+    /// lists on federated deliveries — data that cannot be reconstructed once
+    /// dropped.
+    public let metadata: [String: JSONValue]?
 }
 
 public struct MessageWithMeta: Codable, Equatable, Sendable {
@@ -1170,7 +1254,14 @@ public struct CompleteInvocationRequest: Codable, Equatable, Sendable {
 }
 
 public struct ActionInvocation: Codable, Equatable, Sendable {
-    public let id: String
+    /// The hosted API identifies an invocation as `invocation_id` on every
+    /// route that returns this record (invoke ack, status poll, completion),
+    /// matching ``InvokeActionResult``. A plain `id` is accepted as a decode
+    /// alias so a record echoed by another surface still decodes.
+    public let invocationId: String
+    /// Callers that already read `invocation.id` keep compiling. Prefer ``invocationId``.
+    @available(*, deprecated, renamed: "invocationId")
+    public var id: String { invocationId }
     public let actionName: String?
     public let status: String
     public let input: [String: JSONValue]?
@@ -1178,6 +1269,58 @@ public struct ActionInvocation: Codable, Equatable, Sendable {
     public let error: String?
     public let createdAt: String?
     public let updatedAt: String?
+    public let completedAt: String?
+    public let durationMs: Int?
+
+    private enum CodingKeys: String, CodingKey {
+        case invocationId, id, actionName, status, input, output, error, createdAt, updatedAt, completedAt, durationMs
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let invocationId = try container.decodeIfPresent(String.self, forKey: .invocationId) {
+            self.invocationId = invocationId
+        } else {
+            self.invocationId = try container.decode(String.self, forKey: .id)
+        }
+        actionName = try container.decodeIfPresent(String.self, forKey: .actionName)
+        status = try container.decode(String.self, forKey: .status)
+        input = try container.decodeIfPresent([String: JSONValue].self, forKey: .input)
+        output = try container.decodeIfPresent([String: JSONValue].self, forKey: .output)
+        error = try container.decodeIfPresent(String.self, forKey: .error)
+        createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
+        updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
+        completedAt = try container.decodeIfPresent(String.self, forKey: .completedAt)
+        if !container.contains(.durationMs) {
+            durationMs = nil
+        } else if try container.decodeNil(forKey: .durationMs) {
+            durationMs = nil
+        } else {
+            let decodedDurationMs = try container.decode(Int.self, forKey: .durationMs)
+            guard decodedDurationMs >= 0 else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .durationMs,
+                    in: container,
+                    debugDescription: "durationMs must be nonnegative"
+                )
+            }
+            durationMs = decodedDurationMs
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(invocationId, forKey: .invocationId)
+        try container.encodeIfPresent(actionName, forKey: .actionName)
+        try container.encode(status, forKey: .status)
+        try container.encodeIfPresent(input, forKey: .input)
+        try container.encodeIfPresent(output, forKey: .output)
+        try container.encodeIfPresent(error, forKey: .error)
+        try container.encodeIfPresent(createdAt, forKey: .createdAt)
+        try container.encodeIfPresent(updatedAt, forKey: .updatedAt)
+        try container.encodeIfPresent(completedAt, forKey: .completedAt)
+        try container.encodeIfPresent(durationMs, forKey: .durationMs)
+    }
 }
 
 // MARK: - Directory, routing, A2A, certification, console
@@ -1674,7 +1817,7 @@ public struct NodeRosterEntry: Codable, Equatable, Sendable {
     public let status: String
     public let live: Bool
     public let handlersLive: Bool
-    public let load: Double
+    public let load: Double?
     public let activeAgents: Int
     public let maxAgents: Int
     public let lastHeartbeatAt: String?
@@ -1757,6 +1900,7 @@ extension NodeDeliveryConfig: ExpressibleByDictionaryLiteral {
 public struct CreateNodeRequest: Codable, Equatable, Sendable {
     public let nodeId: String?
     public let name: String
+    public let machineId: String?
     public let kind: String?
     public let role: String?
     public let deliveryAdapter: String?
@@ -1766,9 +1910,10 @@ public struct CreateNodeRequest: Codable, Equatable, Sendable {
     public let tags: [String]?
     public let version: String?
 
-    public init(nodeId: String? = nil, name: String, kind: String? = nil, role: String? = nil, deliveryAdapter: String? = nil, delivery: NodeDeliveryConfig? = nil, capabilities: [String]? = nil, maxAgents: Int? = nil, tags: [String]? = nil, version: String? = nil) {
+    public init(nodeId: String? = nil, name: String, machineId: String? = nil, kind: String? = nil, role: String? = nil, deliveryAdapter: String? = nil, delivery: NodeDeliveryConfig? = nil, capabilities: [String]? = nil, maxAgents: Int? = nil, tags: [String]? = nil, version: String? = nil) {
         self.nodeId = nodeId
         self.name = name
+        self.machineId = machineId
         self.kind = kind
         self.role = role
         self.deliveryAdapter = deliveryAdapter
@@ -1793,7 +1938,7 @@ public struct CreateNodeResponse: Codable, Equatable, Sendable {
     public let status: String
     public let live: Bool
     public let handlersLive: Bool
-    public let load: Double
+    public let load: Double?
     public let activeAgents: Int
     public let maxAgents: Int
     public let lastHeartbeatAt: String?

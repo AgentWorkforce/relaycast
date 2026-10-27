@@ -1,5 +1,6 @@
 import type { workspaces, agents, nodes, observerTokens } from './db/schema.js';
 import type { Logger } from './lib/logger.js';
+import type { AdmissionDenial } from './ports/admission.js';
 import type {
   EngineDb,
   EnginePorts,
@@ -14,6 +15,7 @@ import type {
  * code reads infrastructure off `c.get('engine')` instead of `c.env.*` bindings.
  */
 export interface EngineRuntime extends EnginePorts, EngineProviders {
+  telemetry: NonNullable<EngineProviders["telemetry"]>;
   config: EngineConfig;
 }
 
@@ -21,6 +23,9 @@ export interface EngineRuntime extends EnginePorts, EngineProviders {
 export interface AppVariables {
   workspace: typeof workspaces.$inferSelect;
   agent: typeof agents.$inferSelect | undefined;
+  /** Hash of the credential actually presented and accepted for this request.
+   * May differ from agent.tokenHash during a previous-token grace window. */
+  agentCredentialHash: string | undefined;
   node: typeof nodes.$inferSelect | undefined;
   observerToken: typeof observerTokens.$inferSelect | undefined;
   db: EngineDb;
@@ -38,6 +43,12 @@ export interface AppVariables {
    * times per request). Unset until the first webhook-eligible mutation.
    */
   webhookSubscribersExist?: boolean;
+  /**
+   * Set by `admitMessage` when the host denied a send that carries an
+   * `Idempotency-Key`: the route still replays a stored receipt, and refuses
+   * only a fresh send with this denial.
+   */
+  messageAdmissionDenial?: AdmissionDenial;
   /** The injected ports + providers + config for this deployment. */
   engine: EngineRuntime;
 }

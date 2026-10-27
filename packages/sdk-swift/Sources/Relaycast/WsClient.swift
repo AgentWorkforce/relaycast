@@ -394,7 +394,7 @@ public final class WsClient: @unchecked Sendable {
             let heartbeat: [String: JSONValue] = [
                 "v": 1,
                 "type": "node.heartbeat",
-                "load": 0,
+                "load": .null,
                 "active_agents": 1,
                 "handlers_live": false,
                 "node_id": .string(registration.nodeId),

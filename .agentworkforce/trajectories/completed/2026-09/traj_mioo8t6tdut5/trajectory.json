@@ -1,0 +1,90 @@
+{
+  "id": "traj_mioo8t6tdut5",
+  "version": 1,
+  "task": {
+    "title": "Address PR 372 review feedback and prepare verified release",
+    "source": {
+      "system": "plain",
+      "id": "relaycast#372"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-09-05T20:20:04.174Z",
+  "completedAt": "2026-09-05T20:29:43.352Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-09-05T20:29:42.482Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_07bigxr4x01b",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-09-05T20:29:42.482Z",
+      "endedAt": "2026-09-05T20:29:43.352Z",
+      "events": [
+        {
+          "ts": 1788640182483,
+          "type": "decision",
+          "content": "Preserve explicit empty idempotency keys at the SDK transport boundary: Preserve explicit empty idempotency keys at the SDK transport boundary",
+          "raw": {
+            "question": "Preserve explicit empty idempotency keys at the SDK transport boundary",
+            "chosen": "Preserve explicit empty idempotency keys at the SDK transport boundary",
+            "alternatives": [],
+            "reasoning": "The server owns validation; dropping an empty key silently converts an intended crash-safe request into an unkeyed create."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1788640182912,
+          "type": "reflection",
+      "content": "Addressed every actionable first-round PR review item: SDK transport semantics, authenticated-owner documentation, OpenAPI response requirements, SemVer classification, and trajectory attribution. Full Node 20 build, lint, and test gates for commit 52dbe22e are green. Release metadata was aligned in commit 4cabc3e.",
+          "raw": {
+            "focalPoints": [
+              "review-closure",
+              "api-contract",
+              "release-readiness"
+            ],
+            "confidence": 0.95
+          },
+          "significance": "high",
+          "tags": [
+            "focal:review-closure",
+            "focal:api-contract",
+            "focal:release-readiness",
+            "confidence:0.95"
+          ]
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Hardened the first-round Relaycast workspace-create idempotency review patch across SDK transport, documentation, OpenAPI, SemVer metadata, and audit records; full Node 20 build, lint, and tests passed for commit 52dbe22e. Release metadata was aligned in commit 4cabc3e.",
+    "approach": "Standard approach",
+    "confidence": 0.95
+  },
+  "commits": [
+    "52dbe22e78c79cd069f6c5cbe2779c2eb7b568ff",
+    "4cabc3e31458ca8d26740087656d101f4490d08f"
+  ],
+  "filesChanged": [
+    "CHANGELOG.md",
+    "docs/sdk-setup-client.md",
+    "openapi.yaml",
+    "packages/engine/CHANGELOG.md",
+    "packages/sdk-typescript/CHANGELOG.md",
+    "packages/sdk-typescript/src/__tests__/relay.test.ts",
+    "packages/sdk-typescript/src/__tests__/setup.test.ts",
+    "packages/sdk-typescript/src/relay.ts",
+    "packages/sdk-typescript/src/setup.ts"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "129ecc6e025f1b08afcdfc8dfe125838689789be",
+    "endRef": "4cabc3e31458ca8d26740087656d101f4490d08f"
+  }
+}

@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
-import { requireAuth, requireAgentToken, requireWorkspaceRead } from '../middleware/auth.js';
+import { requireAuth, requireAgentToken, requireWorkspaceRead, requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as channelEngine from '../engine/channel.js';
 import { fanoutToChannel, fanoutToWorkspace } from './fanout.js';
@@ -89,7 +89,7 @@ channelRoutes.post(
         workspaceId: workspace.id,
         data: { ...result, created_by_name: agent?.name },
       });
-      emitServerEvent(c, workspace.id, 'relaycast_server_channel_created', {
+      emitServerEvent(c, workspace.id, 'channel.created', {
         channel_id: result.id,
         channel_name: result.name,
       });
@@ -186,7 +186,7 @@ channelRoutes.patch(
         workspaceId: workspace.id,
         data: { ...updated, channel_name: name },
       });
-      emitServerEvent(c, workspace.id, 'relaycast_server_channel_updated', {
+      emitServerEvent(c, workspace.id, 'channel.updated', {
         channel_id: updated.id,
         channel_name: updated.name,
       });
@@ -232,7 +232,7 @@ channelRoutes.patch(
         workspaceId: workspace.id,
         data: { ...updated, channel_name: name },
       });
-      emitServerEvent(c, workspace.id, 'relaycast_server_channel_topic_updated', {
+      emitServerEvent(c, workspace.id, 'channel.topic.updated', {
         channel_id: updated.id,
         channel_name: updated.name,
       });
@@ -273,7 +273,7 @@ channelRoutes.delete(
         workspaceId: workspace.id,
         data: { channel_name: name },
       });
-      emitServerEvent(c, workspace.id, 'relaycast_server_channel_archived', {
+      emitServerEvent(c, workspace.id, 'channel.archived', {
         channel_name: name,
       });
 
@@ -317,7 +317,7 @@ channelRoutes.post(
         workspaceId: workspace.id,
         data: { channel_name: name, agent_id: agent!.id, agent_name: agent!.name },
       });
-      emitServerEvent(c, workspace.id, 'relaycast_server_channel_joined', {
+      emitServerEvent(c, workspace.id, 'channel.joined', {
         channel_name: name,
         agent_id: agent!.id,
       });
@@ -363,7 +363,7 @@ channelRoutes.post(
         workspaceId: workspace.id,
         data: { channel_name: name, agent_id: agent!.id, agent_name: agent!.name },
       });
-      emitServerEvent(c, workspace.id, 'relaycast_server_channel_left', {
+      emitServerEvent(c, workspace.id, 'channel.left', {
         channel_name: name,
         agent_id: agent!.id,
       });
@@ -455,7 +455,7 @@ channelRoutes.post(
         workspaceId: workspace.id,
         data: { channel_name: name, agent_name: agentName, invited_by: agent?.name },
       });
-      emitServerEvent(c, workspace.id, 'relaycast_server_channel_invited', {
+      emitServerEvent(c, workspace.id, 'channel.invited', {
         channel_name: name,
         invited_agent_name: agentName,
       });
@@ -500,7 +500,7 @@ channelRoutes.post(
         workspaceId: workspace.id,
         data: { channel_name: name, agent_id: agent!.id, agent_name: agent!.name },
       });
-      emitServerEvent(c, workspace.id, 'relaycast_server_channel_muted', {
+      emitServerEvent(c, workspace.id, 'channel.muted', {
         channel_name: name,
         agent_id: agent!.id,
       });
@@ -545,7 +545,7 @@ channelRoutes.post(
         workspaceId: workspace.id,
         data: { channel_name: name, agent_id: agent!.id, agent_name: agent!.name },
       });
-      emitServerEvent(c, workspace.id, 'relaycast_server_channel_unmuted', {
+      emitServerEvent(c, workspace.id, 'channel.unmuted', {
         channel_name: name,
         agent_id: agent!.id,
       });
@@ -556,3 +556,12 @@ channelRoutes.post(
     }
   },
 );
+
+// Workspace owners provision routing without rotating or borrowing the recipient's token.
+channelRoutes.post('/agents/:name/subscription-channel', requireWorkspaceKey, rateLimit, async (c) => {
+  try {
+    return jsonOk(c, await channelEngine.ensureAgentSubscriptionChannel(c.get('db'), c.get('workspace').id, c.req.param('name')));
+  } catch (err: unknown) {
+    return errorResponse(c, err);
+  }
+});

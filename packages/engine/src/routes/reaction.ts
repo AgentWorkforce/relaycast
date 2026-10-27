@@ -96,6 +96,7 @@ reactionRoutes.post(
               nodeConnections: c.get('engine').nodeConnections,
               environment: c.get('engine').config?.environment,
               httpPushProxy: c.get('engine').config?.httpPushProxy,
+              outboundWebhookFetch: c.get('engine').config?.outboundWebhookFetch,
               workspaceId: workspace.id,
             },
             {
@@ -114,7 +115,7 @@ reactionRoutes.post(
         workspaceId: workspace.id,
         data: { ...eventData, channel_id },
       });
-      emitServerEvent(c, workspace.id, 'relaycast_server_reaction_added', {
+      emitServerEvent(c, workspace.id, 'reaction.added', {
         message_id: c.req.param('id'),
         emoji,
         channel_id: channel_id ?? null,
@@ -188,6 +189,7 @@ reactionRoutes.delete(
                 nodeConnections: c.get('engine').nodeConnections,
                 environment: c.get('engine').config?.environment,
                 httpPushProxy: c.get('engine').config?.httpPushProxy,
+                outboundWebhookFetch: c.get('engine').config?.outboundWebhookFetch,
                 workspaceId: workspace.id,
               },
               {
@@ -210,7 +212,7 @@ reactionRoutes.delete(
         workspaceId: workspace.id,
         data: eventData,
       });
-      emitServerEvent(c, workspace.id, 'relaycast_server_reaction_removed', {
+      emitServerEvent(c, workspace.id, 'reaction.removed', {
         message_id: c.req.param('id'),
         emoji: c.req.param('emoji'),
       });

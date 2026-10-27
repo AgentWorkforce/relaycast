@@ -10,11 +10,648 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased - Minor]
 
 ### Added
+
 - Added `GET /v1/a2a/directory` to discover native and registered A2A agents together, filter them by skill, tag, or text, and use the returned relay identity for one-hop engagement.
+
+### Fixed
+
+- `GET /v1/agents/presence` counts a node-hosted agent as online while its node and that agent's own provider are live, including agents that make no HTTP calls. Agents of a disconnected provider, agents a live node omits from its inventory, and agents that called `POST /v1/agents/disconnect` without deregistering stay offline.
+- A status patch broadcasts the same derived presence the response returns.
+
+## [12.0.0] - 2026-10-27
+
+### Added
+
+- `AdmissionHooks` (`EngineDeps.admission`, `createNodeRuntime({ admission })`, `startServer({ admission })`): `admit({ workspace, action })` refuses a `request` or `message` with an `AdmissionDenial` (`status`, `code`, `message`, `details`, `retryAt`); `committed(ctx)` reports each successful, non-replayed action; `rateLimitPerMinute(workspace)` overrides the per-minute ceiling. A hook that throws admits the request. A denied keyed message send still replays its stored receipt.
+- `EngineConfig.rateLimitPerMinute` (default 30,000).
+
+### Removed
+
+- `EntitlementsProvider`, `PlanLimits`, `UpgradeGuidance`, `UsageMetric`, `StaticEntitlementsProvider`, `PLAN_LIMITS`, the `checkPlanLimit` / `checkMessageAllowance` middleware, and the usage-counter helpers (`usageCounterKey`, `getUsageMetric`, `lifetimeUsageCounterKey`, `getLifetimeUsageMetric`, `usagePeriod`, `usagePeriodResetAt`). The engine no longer writes `usage:*` KV counters. `KeyValueStore.increment` is removed; the port is `get`/`put`/`delete`.
+- The `workspaces.plan` column (migration `0077_drop_workspace_plan.sql`). A host that keeps tiers must copy the column into its own storage before applying it.
+- `WorkspaceDeliveryPolicyConfig.resolve` receives `{ id }`; it no longer gets `plan`.
+
+## [11.1.0] - 2026-10-27
+
+### Added
+
+- `PLAN_LIMITS.trial` and `PlanLimits.lifetime_messages`: a one-time message allowance enforced on message sends by the new `checkMessageAllowance` middleware; only successful fresh sends are counted (idempotent replays neither count nor get refused), under the never-expiring `usage:<workspace>:messages:lifetime` key (`lifetimeUsageCounterKey`, `getLifetimeUsageMetric`).
+- Optional `EntitlementsProvider.getUpgradeGuidance(workspace, metric)` hook; its URL and action are returned on `plan_limit_exceeded` as `upgrade_url` / `upgrade_action`.
+- Standalone single-file `relaycast-engine` builds (`bun build --compile`, `bun:sqlite`) with the same flags and behaviour as the npm bin; the Node adapter now opens SQLite through a small driver seam, and better-sqlite3 remains the Node driver.
+- `relaycast-engine --version` / `-v` prints the engine version.
+- Outbound webhook DNS pinning also holds when the engine runs under Bun, whose `undici` shim ignores custom dispatchers.
+
+### Fixed
+
+- `GET /v1/deliveries?status=<status>` now reads only the calling agent's rows (migration `0076` adds `idx_deliveries_agent_status_created`). It previously walked every row with that status in the workspace, which on large delivery histories could stall a shared database.
+- Routes that require an agent, node or observer token now answer `401 unauthorized` when the auth provider returns a result without that principal. Previously a host provider that answered a workspace key with a workspace-only result (for example from a cache) sent `POST /v1/agents/:name/rotate-token` into its handler with no agent, which failed with a 500. Observer-readable routes apply the same check, so an observer token resolved without its observer identity no longer reads with the workspace's unscoped access.
+
+## [11.0.0] - 2026-10-22
+
+### Changed
+
+- Replace analytics envelopes with typed domain observations (`kind`, `facts`, `occurredAt`, workspace, sender, and authenticated provenance). Hosts now own event naming, identity, groups, profile policy, and log transport via a generic `logExport` callback. The optional observation sink defaults to a no-op and isolates callback failures.
+
+### Breaking changes
+
+- Hosts implementing `TelemetrySink.capture` must consume `EngineObservation` (`kind` and `facts`) instead of the analytics envelope (`name`, `distinctId`, `properties`, `groups`, `setOnce`, `processPersonProfile`). `TelemetryEvent` now aliases that observation type.
+- `EngineConfig.logExport` accepts an `EngineLogExport` callback instead of PostHog configuration. Hosts provide their own transport; `EngineLogRecord` defines the callback payload.
+- REST and WebSocket contracts are unchanged. Self-hosts using the default observation sink need no analytics adapter.
+
+## [10.6.5] - 2026-10-21
+
+
+### Fixed
+
+- Expose credential-authenticated actor provenance separately from event targets so hosts can verify analytics ownership; fingerprint presented credentials with SHA-256 independently of custom authentication storage. Public metadata cannot identify people.
+- The `0075` mention-index backfill no longer fails on D1 with "Cannot read properties of undefined (reading 'bind')". Each page was committed through drizzle's D1 `batch()`, which cannot bind raw parameterized statements, so the cursor never advanced and inbox stayed on the history scan. Page writes now run sequentially; the copy was already replay-safe.
+
+## [10.6.4] - 2026-10-21
+
+### Added
+
+- `backfillMessageMentionFts` and `MESSAGE_MENTION_BACKFILL_BATCH` are exported from the package root, so hosts can drive the `0075` mention-index copy from their own maintenance instead of waiting on one batch per delivery sweep. Each call copies at most one batch atomically with its cursor, is safe to repeat, and returns `0` once the copy is complete.
+
+### Migration
+
+- Apply `0074_delivery_active_location_node_index.sql` and `0075_message_mention_fts.sql` before updating the worker. The new sweep requires the partial index; mention indexing copies history in bounded maintenance batches while inbox retains its fallback until completion.
+
+### Fixed
+
+- `GET /v1/inbox` finds mention candidates through `messages_mention_fts` (migration `0075`) once that index has caught up, instead of a `LIKE` walk of the whole workspace history. The migration does not rebuild history; delivery sweeps copy it in bounded batches, replaying a batch is safe, and a failed copy does not skip delivery maintenance. Inbox keeps the workspace scan until the copy finishes. Results are unchanged.
+- The unreachable-node delivery sweep reads only active deliveries through the new partial index `idx_deliveries_active_location_node` (migration `0074`), not every delivery ever routed to a node.
+- Every response carries its request id in an `X-Request-Id` header (the header the Rust SDK reads), so client error reports stop showing `request_id: null`.
+- Per-node agent roster and inventory lookups are pinned to `idx_agents_location_node_fk` instead of walking every agent in the workspace.
+- Raw JSON bodies sent to `POST /v1/hooks/:webhookId` (any object without `text`, `message`, `source`, `author` or `payload`, including `{}`) appear in the resulting channel message, capped at 16,000 characters. Their fields are rendered as text only: a third-party `session_ref` or `action_generated` no longer reaches message metadata, session validation or trigger suppression.
+
+## [10.6.3] - 2026-10-19
+
+- Unlimited-capacity nodes retain explicitly reported load for placement; load ties count both active and reserved agents.
+
+
+## [10.6.2] - 2026-10-18
+
+### Changed
+
+- `PLAN_LIMITS.connect.api_calls` rises from 3,000,000 to 10,000,000 (equal to `pro`), sized for a full 10-seat room polling for its 7-day maximum life.
+
+## [10.6.1] - 2026-10-18
+
+### Fixed
+
+- `POST /v1/agents/spawn` accepts `cli: muse` and `cli: devin` through the shared CLI schema.
+- `inventory.sync`'s missing sweep leaves an agent bound while an open built-in release dispatched to that node and provider names it (and its `expected_agent_id`, when set), for up to the dispatch timeout. The release completion deactivates the binding and tombstones the agent; before, the sweep won the race and the completion failed with `agent_identity_mismatch`.
+
+## [10.6.0] - 2026-10-18
+
+### Added
+
+- `PLAN_LIMITS.connect`: a room-sized tier (10 agents, 3,000,000 `api_calls`, 100,000 messages, 1 GiB files, 1,200 requests/min) that a control plane can assign to short-lived collaboration workspaces.
+- `POST /v1/workspace/rotate-key` rotates the authenticated workspace's API key with a bounded `grace_seconds` continuity window for the superseded key (`0` for immediate compromise cutoff). Migration `0073_workspace_key_rotation.sql` adds the `previous_api_key_hash`/`previous_api_key_expires_at` grace slot and the `api_key_generation` ordering fence. `EngineConfig.allowWorkspaceKeyRotation` opts in (default off, so hosted deployments where a control plane owns the canonical key can never serve it).
+
+## [10.5.1] - 2026-10-16
+
+### Fixed
+
+- Offline fanout exclusion now treats a fresh direct-node heartbeat or matching broker-provider heartbeat as proof that a hosted agent remains reachable, so a quiet connected agent is not dropped merely because route heartbeats do not update `agents.last_seen`. Disconnected providers and inventory-confirmed exits no longer inherit another provider's liveness.
+
+## [10.5.0] - 2026-10-16
+
+### Added
+
+- `EngineConfig.mailbox.offlineExcludeMs` (and the matching per-workspace override) bounds how long an effectively-offline agent keeps receiving new channel/group-DM broadcast deliveries before fanout excludes it; defaults to 24h and accepts `0` to disable exclusion.
+
+### Fixed
+
+- `buildChannelDeliveryWrite`/`buildGroupDmDeliveryWrite` no longer insert a new delivery row for a recipient that has been offline past `offlineExcludeMs`, including stale persisted `active`/`online` rows, so a handful of dead agents can no longer exhaust a workspace's shared delivery-depth cap across repeated broadcasts. Idle `http_push` routes remain eligible because they have no socket-liveness signal. `DeliveryRejectionRecord.reason` gained `recipient_offline` alongside `depth_cap` to report the exclusion; 1:1 DM thread replies remain direct deliveries.
+
+## [10.4.2] - 2026-10-16
+
+### Fixed
+
+- `errorResponse` re-throws an error with no `code` that resolves to a 5xx, so it reaches `app.onError` (structured log, telemetry, and any host classifier chained in front of it) instead of being answered as a bare `500 internal_error` in the route. Coded errors and 4xx are still answered in place, with an unchanged body.
+- `app.onError` adds `error.request_id` to 5xx bodies, matching the `request_id` in the request logs.
+
+## [10.4.1] - 2026-10-15
+
+### Fixed
+
+- Newly initialized webhooks use the delivery pass's clock for their first due time, avoiding spurious retry failures when insertion crosses a clock tick.
+
+## [10.4.0] - 2026-10-13
+
+### Added
+
+- `origin_node_id` on agent detail responses and `GET /v1/node/me` for node tokens.
+
+## [10.3.2] - 2026-10-13
+
+### Fixed
+
+- Rescheduling a dispatched built-in release no longer issues a D1 read, so `inventory.sync` and the timeout sweep no longer spend one D1 round trip per open release on a node.
+
+## [10.3.1] - 2026-10-13
+
+### Fixed
+
+- A native spawn whose first `action.invoke` send failed is re-dispatched by its placed node's next register or drain instead of waiting for the 72-hour never-dispatched sweep. The row becomes drainable only once the send has settled unsent, and one drain claims it, so a reconnect cannot send it twice or double-count node capacity.
+
+## [10.3.0] - 2026-10-13
+
+### Added
+
+- `claimNodeOffline` / `settleNodeOffline` split the node-offline transition into a one-statement, revision-fenced claim and a resumable tail, so socket owners can release control admission immediately without same-second reconnects losing agents, providers, or newly dispatched work. `markNodeOffline` is unchanged for serialized callers.
+- Implicit direct-node `node.heartbeat` renews its bound agent’s durable roster and presence, acknowledging request IDs with `data.agent_presence` and `agent_id` only after success. The Node adapter wires this automatically; external node-control adapters can opt in with the optional `presence` port.
+
+### Fixed
+
+- Presence heartbeats preserve reported work states; expiry and node disconnect recovery restore only the state lost to liveness, without erasing an explicit offline report.
+- A capability-free `node.heartbeat` no longer pre-reads the provider row or the provider list: the provider write reads `max_agents` in place and the node aggregate folds into one correlated UPDATE, so a steady beat is two writes total.
+
+## [10.1.1] - 2026-10-12
+
+### Fixed
+
+- `POST /v1/messages/:id/replies`, thread reads, `GET /v1/messages/:id`, session reads, queued deliveries, and replayed `thread.reply` frames expose the server-resolved sender `agent_address` without leaking its internal metadata key. Observer `thread.reply` events keep that address on `message`. The field is omitted when the sender has no location node.
+
+## [10.1.0] - 2026-10-11
+
+### Added
+
+- `sweepUnreachableDeliveries` / `deadLetterUnreachableDeliveryBatch`: scheduled drain that dead-letters active deliveries routed (`location_node_id`) to `ws` nodes offline past a grace window (default 30m), emitting `delivery.failed` (`reason: 'node_unreachable'`) sender notices per batch — frees workspace delivery-depth capacity held by mail that can never dispatch, without waiting out the full TTL. `http_push`/`poll` routes and never-connected nodes are untouched.
+
+### Fixed
+
+- `GET /v1/agent` and `GET /v1/agents/<name>` have dedicated rate-limit buckets instead of sharing the workspace-wide `global` bucket; `GET /v1/agents/presence` keeps its tighter allowance and the roster listing is unchanged.
+- `registerAgent` reclaims a recovery verifier left enrolled by its own released tombstone, scoped to the same workspace and agent name; a verifier held by a live identity or a different name is still refused with `agent_recovery_proof_conflict`. Registration writes now require atomic execution.
+
+## [10.0.2] - 2026-10-11
+
+### Fixed
+
+- `agent.register` now groups its reads and writes into batched statement sets on batch-capable handles (D1), cutting roughly eleven sequential round-trips to three — reads, slot-reserve + identity insert, membership + bindings — under the node-control liveness deadline.
+- `GET /v1/dm/conversations/all` supports opt-in cursor pages of at most 500 conversations, internally chunked below D1's bind limit, while preserving the legacy unpaginated and observer response contracts.
+- `GET /v1/dm/conversations/all` applies an observer's conversation allowlist before participant and message enrichment, keeping narrowly scoped links fast in large workspaces.
+- `agent.register`'s cancelled-spawn tombstone check seeks a new composite index on `action_invocations` (`idx_action_invocations_spawn_canceled`, `workspace_id` + `dispatched_node_id`) instead of the whole `status = 'failed'` bucket — measured ~216k rows / ~1.8s per registration on hosted production, enough to breach the node liveness deadline and surface `d1_pressure` on every spawn.
+- The hosted stale-online-node reconcile scan (`status = 'online'` with no workspace predicate) now seeks a new partial covering index (`idx_nodes_online_liveness`) instead of full-scanning `nodes` on every maintenance tick.
+- `node.heartbeat` carrying an unchanged capability snapshot now issues a single provider write (folding upsert + liveness signal), skips `materializeProviderActions` behind a one-read drift check so out-of-band action deletions still self-heal, and folds `proven_live_at` into the aggregate node update — ~15 sequential statements per beat down to ~6 on the node liveness hot path that was breaching the 5s deadline into `d1_pressure`.
+
+## [10.0.1] - 2026-10-11
+
+### Fixed
+
+- `GET /v1/dm/conversations/all` reads participants, message counts and latest messages in D1-safe chunks, so a workspace with more than about 100 DM conversations no longer fails with `internal_error`.
+
+## [10.0.0] - 2026-10-11
+
+### Changed
+
+- `GET /v1/agents` without a status or with `status=all` now defaults to a seven-day `last_seen` window. `include_stale=1` opts out (default `0`); `include_metadata=0` skips stored metadata (default `1`). Explicit status filters and agent detail reads retain historical access; responses remain arrays.
+
+### Fixed
+
+- Thread reply pagination uses the existing thread index while preserving workspace filtering and decoded fields.
+## [9.2.0] - 2026-10-09
+
+### Added
+
+- `FileStorage.statObject` (optional port method), implemented by the Node adapter.
+- `listDeliveries` includes `message.attachments`.
+
+### Fixed
+
+- When the `FileStorage` adapter implements `statObject` (both bundled adapters do), `completeUpload` refuses a file with no or empty stored bytes (`409 upload_incomplete`) and records the stored size.
+- HTTP push delivery invokes the default Cloudflare Workers `fetch` through `globalThis`, avoiding workerd's `Illegal invocation` rejection while preserving manual redirect handling.
+
+## [9.1.0] - 2026-10-08
+
+### Fixed
+
+- Authentication rejects an expired workspace for every credential kind with `401 workspace_expired`, rather than admitting it until `reapExpiredWorkspaces` deletes the row. The built-in provider enforces it, and the engine re-checks every `AuthProvider` result so an injected hosting provider cannot admit an expired workspace; the node WebSocket upgrade, agent recovery by work-unit proof, and the inbound A2A webhook, which resolve their principal directly, gained their own gate.
+- The invocation sweeps no longer scan all of `action_invocations`. Migrations `0064_action_invocations_status_dispatched_index.sql`, `0065_action_invocations_task_deadline_any_status.sql`, and `0066_action_invocations_status_sweep_ranges.sql` add `(status, dispatched_at)`, `(status, retry_after_at)`, and partial `(status, json_extract(task_state, '$.deadline'))` indexes, and drop the interim deadline-only index from 0065. They change no data; apply them with the other engine migrations.
+
+### Added
+
+- `isWorkspaceExpired`, `authenticateUnexpired`, and `WORKSPACE_EXPIRED_CODE` for hosts composing their own auth paths, plus `getWorkspaceExpiry` for a minimal expiry read.
+- Outbound subscriptions and HTTP push HMAC auth can opt into Standard Webhooks signing.
+- Subscription delivery health and replay endpoints expose durable per-target retry/dead-letter state. Migration `0067_webhook_delivery_reliability.sql` adds the signature scheme, per-event initialization fence, delivery table, and retry headroom.
+
+### Changed
+
+- Production webhook delivery requires public HTTPS destinations, rejects IANA special-purpose DNS answers at connect time, and never follows redirects.
+- Failed subscriber deliveries retry independently on the 30s/2m/10m/30m/1h/2h schedule before dead-lettering attempt seven.
+
+## [9.0.0] - 2026-10-06
+
+### Changed
+
+- `runIdempotent` reads the stored record and the in-flight lock in one round trip and lets the lock expire instead of deleting it after a stored success: a fresh key now costs four serialized KV round trips instead of six. The post-lock record fence remains ahead of the operation so a concurrent completion is replayed instead of duplicated. Replay, conflicting-key rejection, in-progress rejection, interruption recovery, and retention bounds are unchanged.
+
+### Fixed
+
+- DM, channel, thread, and delivery attachment hydration splits large message-ID lookups into D1-safe chunks, so full 100-message history pages stay within Cloudflare D1's bound-parameter limit.
+- `GET /v1/dm/:conversation_id/messages` lets query failures reach the global error handler for exception telemetry and host-specific error classification.
+- `POST /v1/nodes` requires an established node's current token in `X-Relaycast-Node-Token` before rotating or modifying the row; workspace-key-only enrollment remains valid for genuinely new nodes and returns `409 node_token_proof_required` without mutation for existing rows. A high-entropy `Idempotency-Key` binds the prior proof and exact request for 24 hours so a retry after a lost committed response recovers the same replacement token without another mutation. Hosts must apply `0063_node_rotation_recovery.sql` before upgrading.
+- `POST /v1/dm` admits one idempotency claim and durable notification state atomically across direct and A2A routing, preventing concurrent retries on different server isolates from creating duplicate messages or losing post-commit recovery. Hosts must apply `0062_direct_dm_idempotency.sql` before upgrading.
+- `emitServerEvent` only accepts `SERVER_TELEMETRY_EVENTS` names and requires each event's required properties at compile time; `workspace_id` always comes from the `workspaceId` argument.
+- `GET /v1/webhooks` returns `workspace_id`, `channel_id`, `channel_name`, and `created_by` for SDK compatibility while retaining `channel` for existing REST clients.
+
+## [8.16.0] - 2026-10-01
+
+### Added
+
+- Workspace creation accepts public metadata; workspace updates merge top-level keys, with null deleting a key, while enforcing JSON size limits and rejecting secret-like keys.
+
+## [8.15.0] - 2026-10-01
+
+### Added
+
+- Server events belong to the acting agent's cloud user, carry sender fields and org/workspace groups, and fall back to a non-person workspace id; `TelemetryEvent` gains optional `groups`, `setOnce` and `processPersonProfile` for sinks.
+
+## [8.14.0] - 2026-09-30
+
+### Added
+
+- Node-provider action dispatch includes the durable authenticated caller identity on opted-in `action.invoke` frames, reloaded at the final send boundary; non-opted-in strict providers retain the prior wire shape.
+
+## [8.13.1] - 2026-09-30
+
+### Fixed
+
+- Register direct nodes with an optional machine prefix, persist later `machine_id` updates, and accept `@direct` as a legacy alias.
+
+## [8.13.0] - 2026-09-25
+
+### Added
+
+- `POST /v1/dm` accepts `address` (`agent@machine`) in place of `to`, delivering only while the agent is hosted on that machine (broker node name or `machine_id`, or `direct` for self-connected agents). Stale addresses return `404 address_not_found`, including a move that races the send; idempotent retries replay even after the agent moves; names containing `@` resolve, with `400 ambiguous_address` when two readings match.
+- Agent resources include `address` (null when the agent is not hosted anywhere, e.g. after its sandbox node is deleted); DM responses, `dm.received` deliveries, `GET /v1/deliveries` items, and DM history include the sender's `message.agent_address`.
+
+## [8.12.0] - 2026-09-24
+
+### Added
+
+- `observerAllowsEvent` and the `ObserverToken` type are exported from the package entry, so a realtime adapter hosted outside the engine can apply the same per-socket observer filter the Node adapter uses.
+
+### Fixed
+
+- The realtime `message.created` event includes the message `metadata` that `GET /v1/channels/:name/messages` already returns.
+
+## [8.11.7] - 2026-09-22
+
+### Fixed
+
+- Inventory reconciliation adopts a bound legacy `default` worker into its named broker only when the agent ID and node match and no live default provider owns it; conflicting claims still fail closed; adoption rechecks provider liveness and ignores future-dated default heartbeats.
+
+## [8.11.6] - 2026-09-20
+
+### Fixed
+
+- Irreversible agent release paths atomically dead-letter that recipient's active deliveries with `recipient agent released`, so tombstoned identities cannot hold workspace delivery-depth capacity until TTL. Release and deletion refuse adapters without atomic writes before changing identity, membership, or deliveries.
+
+## [8.11.5] - 2026-09-20
+
+### Fixed
+
+- Relayfile numeric PR subtree targets accept titled GitHub PR paths and related provider events carrying the exact stable PR reference.
+
+## [8.11.4] - 2026-09-19
+
+- Replay a reconnecting node's queued deliveries for every session its `inventory.sync` certifies, instead of only the sessions whose delivery readiness or provider routing changed during that sync. A cursor-negotiated connection gets no replay at `node.register` by contract, so the certification is its only reconnect-replay trigger; scoping it to a readiness transition stranded the whole outage backlog on any socket owner that already reported the listed identities as delivery-ready (a `NodeConnectionRegistry` whose ready-set is keyed per node and provider rather than per connection). Legacy immediate-delivery connections are unchanged — `node.register` still flushes the node to them, and a later sync replays only the identities it newly routed there. Which branch a connection takes is now the handshake `node.register` negotiated for that connection, read back from the registry through the new optional `NodeConnectionRegistry.providerDeliveryReadinessMode()`; a `node.heartbeat` roster refresh can no longer add or drop the `relay:delivery-cursor-v1` advertisement a registration settled, so a heartbeat between registration and certification can neither strand the backlog nor re-flush an immediate connection. Replay remains bounded, ordered by ascending `seq`, gated on per-identity delivery readiness, and deduped by the cumulative delivery cursor, so acked deliveries are never re-sent.
+- Push `context.update` events only to nodes that can hold a live socket, and at most four at a time. Channel, presence and agent-scoped fan-out previously targeted every node with an active binding, including offline ones; a workspace with thousands of offline nodes sent hundreds of node Durable Object fetches per channel join or presence change. Hosted, that fan-out runs in the background of the triggering request and starved the request's own write-admission lease release, which timed out and held the workspace's write or lifecycle lane for the full lease TTL (`workspace_busy`). Offline WebSocket nodes had no socket, so no event that was previously delivered is dropped. `draining` and `http_push` nodes stay eligible.
+
+## [8.11.0] - 2026-09-17
+
+- Scope usage counters to a UTC-month billing period (`usage:<wid>:<metric>:<period>`). The previous unscoped key accumulated for the lifetime of the workspace, so once it passed the plan's `api_calls` ceiling every authenticated route — including `GET /v1/workspace` — returned 429 `plan_limit_exceeded` with no window that ever cleared it. Entitlements providers reading these counters directly must use the period-scoped key; existing lifetime counters are abandoned, which is the reset.
+- Export `usageCounterKey`, `usagePeriod`, `usagePeriodResetAt`, and `getUsageMetric` so an out-of-tree `EntitlementsProvider` can read the counters the engine writes without rebuilding the key by hand.
+- Rate limit `GET /v1/workspace` in its own bucket instead of the workspace-wide `global` one, so data-plane traffic at its ceiling cannot starve the identity read.
+- Emit `Retry-After` and `X-RateLimit-Reset` on `rate_limit_exceeded` and `plan_limit_exceeded`, and `X-RateLimit-Reset` on throttled routes' successful responses.
+- Add optional `EntitlementsProvider.getUsageResetAt()` so a billing-backed provider can report its own period boundary for `Retry-After`; omitting it falls back to the engine's UTC-month period.
+- `RateLimiter.check` no longer counts a rejected request against its bucket, so a throttled caller's retries cannot inflate the count or hold the window open. `KeyValueStore.increment` takes an optional `ttlSeconds` applied when the key is created.
+- Persist task ownership and immutable final results with attempt/generation fencing, deadline failure, and replayable fleet receipts; migration 0060 adds task state and action execution mode.
+- Preserve server-owned `cloud:*` node tags set at enrollment when a broker node re-registers, and ignore `cloud:*` tags sent in `node.register` (logged as `[node.register] ignored server-owned tags`); only enrollment sets or clears them. The merge happens inside the register UPDATE, so a re-enroll that lands mid-registration is not reverted.
+- `GET /v1/inbox`: unread counts no longer include archived channels, and mentions are matched with the exact `@handle` token contract (escaped `\@x`, email addresses, and prefix/superstring text are not mentions); mention results are limited to live channels the agent has joined or DMs the agent participates in. Hosts must apply `0061_messages_workspace_length_id_index.sql` so mention keyset batches use `(workspace_id, length(id), id)`.
+
+## [8.10.1] - 2026-09-13
+
+- Fix deletion getting stuck for agents that never connected, while preserving protection for active agents.
+
+## [8.10.0] - 2026-09-13
+
+- Reject malformed or unsupported inbound webhook requests before admission; `message/send` and `message/stream` require a valid message.
+
+- Enforce workspace delivery capacity across HTTP producers with retryable 429 responses.
+- Expose the async workspace capacity resolver through public engine configuration.
+- Admit outbound A2A messages durably before transport and recover accepted sends without losing local notifications.
+- Send a stable HTTP Idempotency-Key on outbound retries and recovery.
+- Bound outbound transport retries and refuse credentialed HTTP, redirects, and invalid JSON/protocol responses.
+- Stop A2A recovery after source deletion or target registration/endpoint changes; clear terminal payloads.
+- Deduplicate inbound A2A messages, counters, and local effects through concurrent retries and KV failures.
+- Refuse new inbound A2A admission atomically when its authenticated registration or token changes.
+- Preserve completed inbound A2A retries from published 8.9.1 without duplicate admission.
+- Preserve numeric webhook IDs and the request message/response message-or-task fallback when an ID is omitted.
+- Preserve authenticated sender rejection notices without duplicating them on replay.
+- Keep completed DM/group-DM retries available during policy outages.
+- Bound accepted A2A retries to 24 hours; source pruning returns 410 within the window without recreating history.
+- Allow fresh inbound key reuse after SQL identity expiry, including a different payload, even when a stale completion cache remains.
+- Fail closed when a keyed idempotency operation requires a KV read but no store is configured.
+- Hosts must apply `0057_a2a_egress.sql` and schedule `sweepPendingA2aEgress(db)` for outbound recovery and bounded cleanup. Node recovery runs automatically and serializes sweeps.
+- Hosts must apply `0058_a2a_egress_context.sql`. Public response snapshots retain no transport credentials and are removed with source-message deletion, egress cleanup, or workspace deletion.
+- Hosts must apply `0059_a2a_inbound_admission.sql` for inbound identity and workspace lookup indexes. Source pruning scrubs response content while retaining only a bounded identity/fingerprint tombstone; expiry or workspace deletion removes it.
+
+## [8.9.1] - 2026-09-11
+
+- Keep channel member-count queries within D1 parameter limits for large workspaces.
+
+- Prevent recipient self-invitations from restoring a released subscription membership.
+
+### Fixed
+
+- Durable message replay preserves exact hyphenated mentions and webhook display names, and raw webhook deliveries use the same payload shape as live messages.
+- Subscription joins cannot recreate membership for an agent released during the request.
+
+## [8.9.0] - 2026-09-11
+
+### Added
+
+- Authenticated node registration replies identify the server admission contract so brokers can verify create-only provider binding, channel isolation, and guarded identity cleanup before spawning.
+
+### Fixed
+
+- `pruneExpired` accepts a host-owned `cursorStore` for bounded schema-free retention without the engine cursor table; scheduled node redrive accepts `wsBacklogLimit` per agent.
+- `listNodes`/`GET /v1/nodes` push `name`, `capability`, and a new `status` (`online`/`offline`) liveness selector into SQL instead of fetching the whole workspace roster and filtering in JS. `history=true` adds a bounded, non-truncating cursor pagination contract (`{ nodes, next_cursor }`, paged via `cursor`/`limit`, capped at 500/page) for explicit full-history reads. Without `history`, the response stays the legacy bare array. Roster entries add `active_agents_stale` (true once a node is offline) so `active_agents` is never read back as authoritative current occupancy. Added `idx_nodes_status_heartbeat` to keep the live-selection query indexed. An observer token's authorized `active_agents` count is computed with bounded, JSON-array-bound SQL joins instead of one `inArray`/`IN (...)` bind per visible node id, keeping every roster query under D1's 100-parameter limit regardless of page size or history/legacy path.
+- `POST /v1/agents/:name/events` durably replays identical `Idempotency-Key` retries and rejects conflicting payload reuse. Status mutations and their completion markers are applied atomically, so an interrupted status retry can finish without returning success against a stale agent row.
+- Migration `0056_session_event_status_completion.sql` reconciles pre-existing keyed status events without fabricating completion, recovering only rows proven older than the event and conservatively preserving rows touched by later status or liveness writers.
+
+## [8.8.0] - 2026-09-10
+
+### Added
+
+- Add `POST /v1/agents/retention` and `scripts/retain-agents.mts` for bounded, resumable reclamation of stale unowned identities; CLI `--limit` accepts 1–100 rows per page (default 100). Deletion is explicit and rechecks ownership, age, status, and history references atomically. Apply `0053_agent_retention_indexes.sql` before enabling it; see the [operator guide](../../docs/agent-retention.md).
+
+### Changed
+
+- Anonymous keyed workspace creation now uses the validated CSPRNG `Idempotency-Key` as its hosted-safe recovery capability; bootstrap secrets remain server-only derivation material, and self-host proof enforcement is opt-in.
+
+## [8.7.0] - 2026-09-09
+
+### Added
+
+- Node credentials can read status for spawn invocations dispatched to their own node, so served providers can await confirmed broker readiness without workspace credentials.
+
+- Agent registration accepts `auto_join_general: false` on HTTP and node control for isolated workers; recovery preserves existing memberships.
+
+- Node-control `agent.deregister` acknowledges requests with an ID after teardown, allowing brokers to confirm cleanup before deleting owned identities.
+- `POST /v1/agents/{name}/subscription-channel` provisions an exact identity-bound delivery channel without rotating recipient credentials.
+
+### Fixed
+
+- Thread replies resolve full hyphenated mentions; subscription setup rejects recipients released during membership creation.
+- Verified spawn checks the selected provider heartbeat, and inventory reconciliation honors only canonical `verify_ready` input. Empty explicit targets retain legacy spawn routing.
+
+- Relayfile messages expose provider payloads from Cloud sync envelopes, preserving titles, authors, and terminal PR state for subscribers.
+
+- Reserved per-agent subscription channels reject legacy foreign memberships with HTTP 409 before adoption.
+- Agent deletion invalidates cached membership so subscription route checks reflect the released identity.
+- Relayfile ingress preserves authenticated provider event semantics and resource references.
+- Hyphenated mentions resolve the full handle without waking a prefix agent.
+- Raw inbound webhooks now create durable agent deliveries.
+- Relayfile ingress and raw inbound hooks reject full mailboxes atomically with retry guidance, preserving unique events without partial delivery.
+- Explicit spawn targets are honored when a legacy global node alias exists, preserving its caller allowlist.
+
+## [8.6.1] - 2026-09-09
+
+### Fixed
+
+- Restore migration `0045_workspace_create_idempotency.sql` to its original published bytes and reject future edits across stable and prerelease NPM streams.
+
+## [8.6.0] - 2026-09-09
+
+### Added
+
+- Keyless workspace bootstrap creates now support deployment-scoped crash idempotency with deterministic credential recovery, atomic binding, digest conflicts, and deletion/expiry terminalization. An anonymous keyed create must present `X-Workspace-Bootstrap-Secret`, matched to the configured secret in constant time before any binding lookup, since the `Idempotency-Key` and request digest alone are caller-computable and not proof of identity. Callers must generate anonymous keys with a CSPRNG; the server enforces only a 32-character structural minimum and rejects shorter keys with `400 workspace_create_idempotency_key_too_weak` before any secret comparison or database work.
+- Keyed bootstrap fails closed on explicit invalid authorization and no longer falls back to a process-random secret; configure a stable deployment secret for replay across restarts.
+
+### Fixed
+
+- Self-hosted container deployments now forward the configured workspace bootstrap secret into the engine without logging it.
+
+## [8.5.5] - 2026-09-08
+
+### Fixed
+
+- Reconnect replay preserves each caller's result and skips deliveries acknowledged, expired, or handed to another provider before sending.
+- Roster reads skip released tombstones; active/online filters seek by workspace, status, and last-seen time.
+- Add migration `0051_node_foreign_key_indexes.sql` so node deletion uses child-key lookups for delivery, agent, binding, and provider foreign keys; preserve existing `SET NULL` and cascade behavior.
+
+### Migration
+
+- Adds `0052_agent_roster_index.sql`, a partial index on non-released agents. Existing indexes and roster response fields remain compatible.
+
+## [8.5.4] - 2026-09-08
+
+### Migration
+
+- Adds migration `0050_compact_maintenance_indexes.sql` to reduce upgrade storage pressure without deleting history. See the [rollout guide](../../docs/compact-maintenance-migrations.md) for migration and rollback requirements.
+
+## [8.5.3] - 2026-09-08
+
+### Fixed
+
+- Node replay hydrates 50-row indexed mailbox pages, coalesces identical triggers, and stops at failed lower sequences; fanout depth checks and initial redrive use predicate-matched indexes.
+- Retention examines bounded candidate pages with durable round-robin cursors and finite traversal fences, preserving workspace TTL overrides and event high-water marks. `batchLimit` now limits candidates (cap 200), `maxBatches` is capped at five, and `maxDurationMs` bounds admission of new pages (default 10s).
+- Scheduled delivery redrive runs at most four dispatch pipelines concurrently.
+- Replay removes its in-flight entry atomically with completion; corrupt retention cursors restart safely and invalid clocks fail clearly before mutation when a positive TTL is active.
+- Redrive scans bounded, resumable metadata windows through route- and workspace-matched indexes before expiry filtering and hydration. A rolling dispatch pool immediately reuses available slots.
+
+### Migration
+
+- Apply `0048_bounded_maintenance.sql` before upgrading: adds replay/retention indexes and the `maintenance_cursors` table. Existing history and TTL policies are unchanged.
+- Also apply append-only `0049_redrive_review_hardening.sql`: adds predicate-matched redrive indexes and explicitly named delivery/read-receipt lookup indexes instead of relying on SQLite autoindex names.
+
+## [8.5.2] - 2026-09-07
+
+### Fixed
+
+- Batched workspace-event appends allocate sequences with bounded index lookups, avoiding scans of retained event history that can overload busy databases.
+
+## [8.5.1] - 2026-09-07
+
+### Fixed
+
+- `GET /v1/agents?status=...` filters in SQL using derived presence, including stale active/online rows for offline queries and the exact five-minute boundary, without read-path writes.
+
+## [8.5.0] - 2026-09-06
+
+### Fixed
+
+- `POST /v1/agents/release` accepts `expected_token_hash` and atomically rejects stale generations with 409 `agent_release_generation_conflict` before dispatch or lifecycle mutation.
+- Node-controlled `agent.register` now acquires capacity before writing an agent while preserving `agent_already_exists` precedence, binds legacy migration tombstones to the exact node/provider/name tuple, treats unknown historical provider ownership conservatively, and requires `invocation_id` when an ID-less same-tuple worker cannot prove its generation.
+- Native `spawn` rejects a missing or empty `input.name` with 400 `invalid_spawn_request` before creating an invocation or reserving capacity.
+- Registered node-action dispatch and retries now atomically claim their exact `action_id`, route, and attempt before provider send and persist the accepted attempt generation at the socket owner; later retries and send-failure settlement are generation-guarded, pruning cannot retarget a name-only frame, and accepted work remains completable. Migration `0047_action_invocation_provider_acceptance.sql` stores the accepted attempt independently of the prunable action foreign key.
+
+## [8.4.0] - 2026-09-05
+
+### Added
+
+- Delegated workspace creates now recover the same child credential after response loss with an owner-scoped `Idempotency-Key`; conflicting replays fail closed and deletion/expiry terminalizes the binding.
+
+### Fixed
+
+- Keyed (idempotent) agent-action invocations whose host cannot deliver to the handler now fail with 503 `handler_unavailable` instead of 503 `idempotency_unavailable`.
+- An agent-action invocation is no longer reported as `handler_unavailable` when its handler reconnected and received it mid-request; the caller sees the live dispatch instead.
+
+## [8.3.1] - 2026-09-03
+
+### Added
+
+- `POST /v1/nodes` accepts `machine_id` and reuses the machine's existing `broker` node instead of adding a roster row, so a host that re-enrolls under a fresh name stops growing the roster. Only a node that proved it was alive and has since gone stale is reused, so live brokers, hosts that never heartbeated, and clones sharing a baked `machine_id` keep their own rows and credentials. An explicit `node_id` still pins identity, and roster entries now return `machine_id`.
+- Migration `0043_node_machine_id_index.sql` indexes `nodes(workspace_id, machine_id)`; migration `0044_node_proven_live_at.sql` adds `proven_live_at`, written only by an arriving heartbeat and cleared when a node's token is re-issued.
+
+### Fixed
+
+- Unkeyed agent-action invocations now report `handler_unavailable` and fail their durable row when the owner-side provider send misses, while still acknowledging work that completes between provider acceptance and dispatch bookkeeping.
+
+## [8.2.2] - 2026-09-02
+
+### Fixed
+
+- `inventory.sync` rejects stale or conflicting identity claims individually while renewing valid members, preventing one poisoned entry from expiring an entire node's healthy agents and queuing their deliveries. The missing-agent sweep now runs against every reported name, so a rejected-but-present member keeps its live row and is not marked `offline` with a false `agent.exited`. Successful `inventory.sync` replies now carry `rejected_agents` (count of members rejected in the batch) alongside the existing `rebound_agents`.
+- `sweepTimedOutInvocations` now fails `pending` invocations that never dispatched (`dispatch_attempts = 0`) and are older than `PENDING_INVOCATION_MAX_AGE_MS` (default 72h) with the distinguishing error `never_dispatched_expired`. The existing `handler_unavailable` TTL guard, which requires a dispatched handler connection to observe unreachable, still runs first; the age bound covers the never-dispatched shape it cannot see.
+- `POST /v1/actions/:name/invoke` atomically claims caller-scoped idempotency keys before provider dispatch, waits for a durable dispatch outcome, and replays the original invocation with its immutable handler and node identity, including locally completed releases.
+
+## [8.2.1] - 2026-08-24
+
+### Fixed
+
+- Steady node heartbeats no longer re-scan pending workspace invocations; drains now run when reconnect, handler-liveness, or capacity transitions make queued work dispatchable.
+- Agent reads derive presence without issuing cleanup writes, and migration `0042_d1_read_path_indexes.sql` indexes scheduled presence cleanup plus active, unexpired delivery reads.
+
+## [8.2.0] - 2026-08-21
+
+### Added
+
+- Migration `0039` records workspace creation provenance and usage classification; workspace-key metadata returns the complete attribution record while observer tokens receive identity-redacted provenance.
+
+## [8.1.3] - 2026-08-20
+
+### Fixed
+
+- Migration `0041_d1_hot_path_indexes.sql` adds a partial pending-invocation workspace index for node drains and a DM-channel lookup index for activity feeds, eliminating two production D1 scan hot paths.
+
+## [8.1.2] - 2026-08-19
+
+### Fixed
+
+- Activity-feed reads use `idx_messages_workspace` for newest-first results instead of sorting every message in the workspace.
+
+## [8.1.1] - 2026-08-19
+
+### Fixed
+
+- The scheduled expiry sweep drains up to fifty 50-row batches per invocation and batches failure fanout; migration `0040_delivery_retry_due_index.sql` adds the global partial retry index and should be applied after the expired backlog has drained.
+
+## [8.1.0] - 2026-08-19
+
+### Added
+
+- Fleet registration persists placement-safe repository keys as public node tags for placement readback.
+
+### Security
+
+- Registration derives `repo:` node tags only from `repo_keys` whenever that field is present. A registration carrying it, including as an empty list, drops every `repo:` tag supplied in `tags`, so a node cannot advertise a repository through a tag it made up. Non-`repo:` tags still round-trip, and registrations that omit `repo_keys` keep the pre-`repo_keys` tag-only behavior.
+
+## [8.0.7] - 2026-08-19
+
+### Added
+
+- Migration `0038` adds indexed `session_ref` message lookup and a payload-free session ledger; the API reports bounded replay slices and the live effective message-retention boundary without guessing when availability is unknown.
+
+## [8.0.6] - 2026-08-18
+
+### Added
+
+- Migration `0036` adds indexed workspace expiry. The engine adds bounded automatic reaping and authenticated `DELETE /v1/workspaces/:id`, with complete database and blob-storage deletion.
+- Migration `0037` adds upload-capability expiry metadata and a durable file-cleanup outbox. Workspace deletion commits its cleanup tombstones atomically with the database cascade, retries storage failures after commit, and retains each tombstone long enough to remove a late presigned upload.
+
+### Changed
+
+- `FileStorage` has an optional idempotent batch object-deletion capability; lifecycle deletion returns 503 before database changes when an adapter does not provide it. Queue/cron-backed hosts can use the exported `drainFileCleanup` helper directly; `reapExpiredWorkspaces` and the Node adapter also drain it automatically.
+
+## [8.0.5] - 2026-08-18
+
+### Fixed
+
+- Workspace creation now requires atomic storage for the workspace and default
+  channel, and classifies exhausted transient writes with a safe storage error.
+- Uncoded server errors no longer expose SQL statements or bound parameters in
+  API responses.
+
+## [8.0.3] - 2026-08-15
+
+### Fixed
+
+- Removing an agent that has authored messages now succeeds. The agent row is
+  retained so its messages keep their author, while the name is freed for reuse
+  and the old credential stops authenticating.
+- A removed or released agent is no longer a delivery target: its channel and
+  direct-message memberships are cleared with it.
+- A released agent can no longer be revived to `active` by a late heartbeat, and
+  id-scoped updates no longer resolve to a released row.
+
+## [8.0.1] - 2026-08-14
+
+### Fixed
+
+- DM conversation and unread-inbox enrichment batches large identifier sets below D1's bound-parameter ceiling, so long-lived agents no longer lose both read paths after accumulating more than 100 conversations.
+
+### Security
+
+- `PATCH /v1/agents/:name/legacy-identity` atomically claims an offline legacy agent's identity, while generic agent updates cannot overwrite the verifier.
+
+## [8.0.0] - 2026-08-10
+
+### Added
+
+- A2A registration accepts a remote `target_agent`; a connection update endpoint completes reciprocal credentials, and registered peer tokens can deliver versioned message metadata to local DMs with normal realtime delivery.
+
+### Fixed
+
+- Agent-card discovery resolves the workspace from an explicit `/:workspace/` path segment before host-label inference, and serves the sole workspace when a deployment has exactly one and no selector was given. Deployments with more than one workspace, and unresolved explicit selectors, return `workspace_not_found`.
+
+## [7.0.0] - 2026-08-07
+
+### Fixed
+
+- Node heartbeats now accept absent/null `load` and require `load_reported` before trusting a numeric measurement.
+- Migration `0034` leaves historical placeholder load values unreported.
+- `GET /v1/nodes` now returns null load until a direct node, or every constituent provider of a broker node, reports a genuine measurement.
+- Future-dated heartbeats no longer count as fresh.
+- Broker capacity remains unlimited when any constituent provider is unbounded.
+
+## [6.3.2] - 2026-08-02
+
+### Fixed
+
+- `sendDm` atomically reserves each deterministic 1:1 conversation ID for its workspace and sorted participant pair, so a collision returns `409 dm_conversation_id_collision` on every driver instead of resolving to another pair's conversation or failing with an uncaught database error. Migration `0033` adds `dm_conversation_reservations` and backfills existing 1:1 DMs; see the migration header for the pre-flight audit to run before applying it.
+
+## [6.3.1] - 2026-07-31
+
+### Fixed
+
+- `sendDm` re-resolving a 1:1 conversation now clears `dm_participants.left_at` for both participants instead of no-opping on conflict. A 1:1 with a departed participant previously resolved to the same conversation while its roster still showed the departure; the conversation id is unchanged either way, since it derives only from the workspace and the sorted agent pair.
+
+## [6.3.0] - 2026-07-28
+
+### Added
+- `extractActorIdentity(request)` reads caller-declared identity from the `X-Agent-Relay-Machine-Id` / `-User-Id` / `-Org-Id` / `-Org-Slug` headers, falling back to the matching `agent_relay_*` query params for WebSocket upgrades. Malformed or oversized values are dropped rather than truncated.
+- Server events carry `actor_machine_id` / `actor_user_id` / `actor_org_id` / `actor_org_slug` and `is_authenticated`, and key on the caller's user id when present (`actor_user_id ?? client_distinct_id ?? workspace_id`). Analytics dimensions only; they never affect authorization.
+
+## [6.2.0] - 2026-07-17
+
+### Added
 - Added durable `agent.exited` events on every node-hosted agent exit (deregistration, missing from an inventory sync, and release), delivered to the durable workspace event log, webhook subscribers, and the spawn caller's mailbox, and carrying `agent_id`, `agent_name`, `node_id`, `invocation_id`, and a `reason`.
 - Added durable `node.status.online` / `node.status.offline` events on node liveness transitions (offline carries a `reason` such as `liveness_timeout`, `disconnected`, or `deregistered`), delivered to the workspace event log and webhook subscribers.
-- Message retention remains opt-in (`pruneExpired` still defaults `messageTtlDays` to `null`). Self-host can now opt in to a deployment-wide message TTL: `startServer` accepts `eventQueue` (`DurableEventQueueOptions`, including `retention`), and the `relaycast-engine` CLI exposes `RELAYCAST_MESSAGE_TTL_DAYS` (positive = prune after N days; unset or `0`/negative = keep forever).
-- Exported the provider-attach arbitration policy from `@relaycast/engine/node-control`: `providerAttachDecision()` plus `PROVIDER_ATTACH_LIVENESS_MS`, so an out-of-process socket owner (a hosted NodeDO) mirrors the spec §3.1 decision from one source of truth instead of hand-copying the constant and logic.
 - `handleAgentDisconnect` accepts an optional `{ deregister?: boolean }` argument, and `POST /v1/agents/disconnect` accepts an optional `{ deregister?: boolean }` body.
 - `sweepTimedOutInvocations` accepts `handlerUnreachableTtlMs`/`completionDeps` and `@relaycast/engine/node-invocations` exports `ACTION_HANDLER_UNREACHABLE_TTL_MS`: an agent-handled invocation whose handler stays continuously unreachable for the TTL is failed with `handler_unavailable` and the caller receives `action.failed`. Migration `0032` adds `action_invocations.handler_unreachable_since` (the grace clock resets on recovery, so a brief handler restart never kills an in-flight invocation).
 
@@ -22,13 +659,32 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `handleAgentDisconnect` / `POST /v1/agents/disconnect` are presence-only by default for node-hosted agents: the active `agent_node_bindings` row and node slot are kept (deliveries keep flowing to the still-running session) instead of deactivating the binding and re-homing `location_node_id` to the offline direct node. Pass `deregister: true` for the previous full teardown. Skipped and re-homing paths now log at warn.
 
 ### Fixed
-- Provider-attach arbitration accepts an unbound provider regardless of a caller's last-seen timestamp instead of reporting a false live-instance conflict.
-- Moved delivery TTL expiry out of inbox reads into bounded scheduled D1-safe batches, keeping reads available through cleanup failures without duplicating sender failure notices.
 - `createNodeToken` (`POST /v1/nodes`) resolves the target node by `node_id` when supplied instead of by name: a matching id is rotated in place (renaming if `name` differs), a new id creates a new node, and a `name` held by a different node throws `node_name_conflict` (409) — matching `node.register` — instead of silently rotating and reshaping the other node. Name-only enrollment (no `node_id`) still rotates by name. A name that is empty or still `#`-prefixed after stripping the single reference `#` is rejected with `invalid_node_name` (400).
 - Cursor-negotiating node providers keep their delivery-ready agent set on a same-connection `node.register` re-register (`setProviderDeliveryReadiness` no longer resets it to empty), fixing silent message drops until the mailbox TTL when a broker reconnects without re-announcing every hosted agent. Readiness-skipped `ws.node.v1` deliveries now stamp `last_dispatch_error` + `next_attempt_at` (without counting a `dispatch_attempts`) so they are observable and retryable instead of a bare silent queued row.
 - The periodic delivery sweep now redrives queued ws-node rows, not just `http_push`: `fetchDueHttpPushDeliveryEvents`/`sweepDueHttpPushDeliveries` are renamed to `fetchDueNodeDeliveryEvents`/`sweepDueNodeDeliveries` (old names kept as deprecated aliases). Queued ws-node rows are redriven per agent in ascending `seq` order (stopping at the first undeliverable row so a later seq never outruns an earlier one), and a failed live `ws.node.v1` send now stamps `last_dispatch_error` + `next_attempt_at` (counting a `dispatch_attempts`), so a delivery whose single background dispatch was lost or failed retries with ~30s spacing until the node reconnects instead of dead-lettering after the mailbox TTL.
 - `POST /v1/actions` re-registers an existing action name as an idempotent refresh (200) of its description, handler, schemas, `available_to`, and `is_active` instead of a 500 unique-constraint error; residual races return 409 `action_name_conflict`. Moving the handler to a different agent, or `DELETE /v1/actions/:name`, terminally fails invocations still in flight toward the old handler and emits `action.failed` to their callers.
 - `POST /v1/actions/:name/invoke` fails fast with 503 `handler_unavailable` when the handler agent's connection is not live (unless the action opted into `queue`), instead of creating an invocation that pends forever toward a dead handler.
+
+## [6.1.0] - 2026-07-16
+
+### Added
+- Message retention remains opt-in (`pruneExpired` still defaults `messageTtlDays` to `null`). Self-host can now opt in to a deployment-wide message TTL: `startServer` accepts `eventQueue` (`DurableEventQueueOptions`, including `retention`), and the `relaycast-engine` CLI exposes `RELAYCAST_MESSAGE_TTL_DAYS` (positive = prune after N days; unset or `0`/negative = keep forever).
+
+### Fixed
+- Messages created by an inbound webhook (`POST /v1/hooks/:webhookId`) evaluate channel message triggers, so a trigger bound to an action fires for webhook-authored messages (with the webhook's caller name preserved on the invocation) instead of only for agent-authored ones.
+
+## [6.0.5] - 2026-07-13
+
+### Added
+- Exported the provider-attach arbitration policy from `@relaycast/engine/node-control`: `providerAttachDecision()` plus `PROVIDER_ATTACH_LIVENESS_MS`, so an out-of-process socket owner (a hosted NodeDO) mirrors the spec §3.1 decision from one source of truth instead of hand-copying the constant and logic.
+
+### Fixed
+- Provider-attach arbitration accepts an unbound provider regardless of a caller's last-seen timestamp instead of reporting a false live-instance conflict.
+
+## [6.0.4] - 2026-07-13
+
+### Fixed
+- Moved delivery TTL expiry out of inbox reads into bounded scheduled D1-safe batches, keeping reads available through cleanup failures without duplicating sender failure notices.
 
 ## [6.0.3] - 2026-07-12
 

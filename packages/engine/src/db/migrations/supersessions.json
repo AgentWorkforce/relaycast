@@ -1,0 +1,4 @@
+{
+  "0048_bounded_maintenance.sql": "0050_compact_maintenance_indexes.sql",
+  "0049_redrive_review_hardening.sql": "0050_compact_maintenance_indexes.sql"
+}

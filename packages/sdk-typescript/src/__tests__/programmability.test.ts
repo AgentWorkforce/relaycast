@@ -190,6 +190,51 @@ describe('Programmability SDK', () => {
       expect(url).toBe('https://cast.agentrelay.com/v1/subscriptions/sub_1');
       expect(init.method).toBe('DELETE');
     });
+
+    it('creates Standard Webhooks subscriptions with the snake_case wire field', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      mockFetch.mockImplementation(() => mockResponse({ id: 'sub_1' }));
+
+      await relay.subscriptions.create({
+        events: ['message.created'],
+        url: 'https://hook.example.com',
+        secret: 'whsec_test',
+        signatureScheme: 'standard-webhooks',
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(JSON.parse(init.body)).toMatchObject({ signature_scheme: 'standard-webhooks' });
+    });
+
+    it('lists delivery health and replays one delivery', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      mockFetch.mockImplementation(() => mockResponse([]));
+
+      await relay.subscriptions.deliveries('sub/1', { status: 'dead_letter', limit: 25 });
+      let [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/subscriptions/sub%2F1/deliveries?status=dead_letter&limit=25');
+      expect(init.method).toBe('GET');
+
+      mockFetch.mockClear();
+      mockFetch.mockImplementation(() => mockResponse({ id: 'whd_1', status: 'pending' }));
+      await relay.subscriptions.replayDelivery('sub/1', 'whd/1');
+      [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/subscriptions/sub%2F1/deliveries/whd%2F1/replay');
+      expect(init.method).toBe('POST');
+    });
+
+    it('rejects delivery-health limits outside the server contract', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      expect(() => relay.subscriptions.deliveries('sub_1', { limit: 0 }))
+        .toThrow('limit must be an integer from 1 to 100');
+      expect(() => relay.subscriptions.deliveries('sub_1', { limit: 101 }))
+        .toThrow('limit must be an integer from 1 to 100');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
   });
 
   // === Actions (workspace-level on Relay, invoke on AgentClient) ===
@@ -295,7 +340,34 @@ describe('Programmability SDK', () => {
       expect(url).toBe('https://cast.agentrelay.com/v1/actions/deploy/invoke');
       expect(init.method).toBe('POST');
       expect(init.headers.Authorization).toBe('Bearer at_live_agent123');
+      expect(init.headers['Idempotency-Key']).toBeTruthy();
+      expect(init.headers['X-Idempotency-Key']).toBe(init.headers['Idempotency-Key']);
       expect(JSON.parse(init.body)).toEqual({ input: { force: true } });
+    });
+
+    it('invoke() preserves one generated idempotency key across transport retries', async () => {
+      const me = new AgentClient(new HttpClient({
+        apiKey: 'at_live_agent123',
+        retryPolicy: { maxRetries: 1, backoffMs: 0, jitter: false },
+      }));
+
+      mockFetch
+        .mockRejectedValueOnce(new TypeError('response lost'))
+        .mockImplementationOnce(() => mockResponse({
+          invocation_id: 'inv_1',
+          action_name: 'deploy',
+          status: 'invoked',
+        }));
+
+      await me.actions.invoke('deploy', { force: true });
+
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      const firstHeaders = mockFetch.mock.calls[0]![1].headers;
+      const retryHeaders = mockFetch.mock.calls[1]![1].headers;
+      expect(firstHeaders['Idempotency-Key']).toBeTruthy();
+      expect(retryHeaders['Idempotency-Key']).toBe(firstHeaders['Idempotency-Key']);
+      expect(firstHeaders['X-Idempotency-Key']).toBe(firstHeaders['Idempotency-Key']);
+      expect(retryHeaders['X-Idempotency-Key']).toBe(firstHeaders['Idempotency-Key']);
     });
   });
 

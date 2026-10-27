@@ -1,4 +1,5 @@
 import type {
+  JsonValue,
   A2aAgentCard,
   A2aDirectoryEntry,
   A2aDirectoryQuery,
@@ -28,21 +29,29 @@ import type {
   CreateSubscriptionRequest,
   CreateSubscriptionResponse,
   EventSubscription,
+  WebhookDelivery,
+  WebhookDeliveryStatus,
+  ReplayWebhookDeliveryResponse,
   ActivityItem,
   DmMessage,
+  DmMessagePage,
   DmReceivedEvent,
   WorkspaceDmConversation,
   TokenRotateResponse,
+  RotateWorkspaceKeyRequest,
+  RotateWorkspaceKeyResponse,
   MessageListQuery,
   MessageCreatedEvent,
   MessageReadEvent,
   MessageReactedEvent,
   MessageUpdatedEvent,
   MessageWithMeta,
+  SessionMessagesResult,
   ReactionGroup,
   SpawnAgentRequest,
   SpawnAgentResponse,
   ReleaseAgentRequest,
+  ExactReleaseAgentRequest,
   ReleaseAgentResponse,
   RegisterA2aOptions,
   RegisterA2aResponse,
@@ -66,9 +75,14 @@ import type {
   ActionDefinition,
   RegisterActionRequest,
   BindAgentToNodeRequest,
+  CreateNodeOptions,
   CreateNodeRequest,
   CreateNodeResponse,
+  DeleteNodeOptions,
+  DeleteNodeResponse,
   NodeAgentBinding,
+  NodeHistoryPage,
+  NodeHistoryQuery,
   NodeListQuery,
   NodeRosterEntry,
   Trigger,
@@ -89,9 +103,12 @@ import type {
   ConsoleCostStats,
   ThreadReplyEvent,
   WsClientEvent,
+  AgentExitedEvent,
   AgentStatusActiveEvent,
   AgentStatusChangedEvent,
   AgentStatusOfflineEvent,
+  NodeStatusOnlineEvent,
+  NodeStatusOfflineEvent,
   ChannelCreatedEvent,
   ChannelUpdatedEvent,
   ChannelArchivedEvent,
@@ -114,22 +131,41 @@ import type {
   WsPermanentlyDisconnectedEvent,
   WsResyncedEvent,
 } from './types.js';
-import { ApiResponseSchema, CreateWorkspaceResponseSchema, WorkspaceLookupSchema } from '@relaycast/types';
+import {
+  ApiResponseSchema,
+  CreateWorkspaceResponseSchema,
+  SessionMessagesResultSchema,
+  WorkspaceDmConversationSchema,
+  WorkspaceLookupSchema,
+} from '@relaycast/types';
+import { ZodError } from 'zod';
 import { AgentClient, type AgentClientOptions } from './agent.js';
 import { HttpClient, type RetryPolicyInput } from './client.js';
 import { WsClient, type WsClientOptions, withInternalWsOrigin } from './ws.js';
 import { RelayError, relayErrorFromApi } from './errors.js';
 import {
-  appendLegacySuffix,
   emitCompatibilityTelemetry,
-  isNameConflictError,
+  type AgentIdentityRecoveryResponse,
+  type AgentIdentityRevocationResponse,
+  type EnrollRecoveryCredentialInput,
+  type RecoverAgentInput,
   type RegisterAgentInput,
   type RegisterOrRotateInput,
   type ResolvedIdentity,
+  type RevokeAgentTokenInput,
+  type TakeOverAgentInput,
 } from './identity.js';
 import { SDK_VERSION } from './version.js';
-import { AGENT_RELAY_DISTINCT_ID_HEADER, SDK_ORIGIN, sanitizeAgentRelayDistinctId } from './origin.js';
+import {
+  SDK_ORIGIN,
+  agentRelayIdentityHeaders,
+  resolveAgentRelayIdentity,
+} from './origin.js';
 import { camelizeKeys } from './casing.js';
+import {
+  toWorkspaceProvenanceInput,
+  type WorkspaceProvenanceOptions,
+} from './workspace-provenance.js';
 
 export interface RelayCastOptions {
   /**
@@ -153,17 +189,65 @@ export interface RelayCastOptions {
    * joined to Agent Relay CLI telemetry without sending user-identifying data.
    */
   agentRelayDistinctId?: string;
+  /**
+   * Optional Agent Relay Cloud user id of the signed-in operator, sent as
+   * `X-Agent-Relay-User-Id`. Doubles as the distinct id when
+   * `agentRelayDistinctId` is unset.
+   */
+  agentRelayUserId?: string;
+  /** Optional hashed machine id, sent as `X-Agent-Relay-Machine-Id`. */
+  agentRelayMachineId?: string;
+  /** Optional Agent Relay Cloud organization id, for group analytics. */
+  agentRelayOrgId?: string;
+  /** Optional organization slug, for readable analytics breakdowns. */
+  agentRelayOrgSlug?: string;
 }
 
-export interface WorkspaceBootstrapOptions {
+/** Identity fields accepted by the unauthenticated workspace bootstrap calls. */
+export interface WorkspaceIdentityOptions {
+  agentRelayDistinctId?: string;
+  agentRelayMachineId?: string;
+  agentRelayUserId?: string;
+  agentRelayOrgId?: string;
+  agentRelayOrgSlug?: string;
+}
+
+export interface WorkspaceBootstrapOptions extends WorkspaceIdentityOptions {
+  /** Application-defined JSON stored on the workspace. */
+  metadata?: Record<string, JsonValue>;
   apiKey?: string;
   baseUrl?: string;
-  agentRelayDistinctId?: string;
+  /** Explicit lifetime for a throwaway workspace; omit for persistence. */
+  expiresInSeconds?: number;
+  /** Creation context recorded once for hosted usage attribution. */
+  provenance?: WorkspaceProvenanceOptions;
+  /**
+   * Crash-safe workspace-create replay key (relaycast#371/#379).
+   *
+   * With `apiKey` set: any value is fine — the owner's API key is the
+   * authorization boundary, so this only needs to be unique per operation
+   * (e.g. a job id).
+   *
+   * Without `apiKey` (anonymous bootstrap): this is the reveal-once recovery
+   * capability, so it MUST be generated with a CSPRNG. Never derive it from a
+   * job id, timestamp, or counter. The server enforces only a 32-character
+   * structural minimum and cannot verify true randomness.
+   * `crypto.randomUUID()` is a good default.
+   */
+  idempotencyKey?: string;
+  /**
+   * Optional self-host proof for deployments configured with
+   * `workspaceBootstrapProofRequired`. Hosted callers must omit this: the
+   * deployment secret stays server-only and the CSPRNG `idempotencyKey` is the
+   * recovery capability. When supplied, callers must set `baseUrl` to an
+   * explicit self-hosted origin; this SDK refuses the hosted gateway. Ignored
+   * when `apiKey` is set.
+   */
+  bootstrapSecret?: string;
 }
 
-export interface WorkspaceLookupOptions {
+export interface WorkspaceLookupOptions extends WorkspaceIdentityOptions {
   baseUrl?: string;
-  agentRelayDistinctId?: string;
 }
 
 export interface AgentReconnectOptions {
@@ -198,6 +282,102 @@ function resolveWorkspaceLookupOptions(
   return options ?? {};
 }
 
+/** Minimum structural length for an anonymous bootstrap replay key. */
+export const MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH = 32;
+
+const HOSTED_GATEWAY_HOSTNAME = 'cast.agentrelay.com';
+const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
+
+export function validateAnonymousKeyedBootstrapDestination(value: string): URL {
+  let baseUrl: URL;
+  try {
+    baseUrl = new URL(value);
+  } catch {
+    throw new RelayError(
+      'transport_error',
+      'Anonymous keyed workspace bootstrap requires a valid baseUrl',
+      {
+        statusCode: 400,
+        retryable: false,
+        rawCode: 'workspace_create_bootstrap_base_url_required',
+      },
+    );
+  }
+
+  const hostname = baseUrl.hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase();
+  const isLoopbackHttp =
+    baseUrl.protocol === 'http:' && LOOPBACK_HOSTNAMES.has(hostname);
+  if (baseUrl.protocol !== 'https:' && !isLoopbackHttp) {
+    throw new RelayError(
+      'transport_error',
+      'Anonymous keyed workspace bootstrap requires an HTTPS self-hosted baseUrl (or loopback HTTP for local development)',
+      {
+        statusCode: 400,
+        retryable: false,
+        rawCode: 'workspace_create_bootstrap_base_url_required',
+      },
+    );
+  }
+
+  return baseUrl;
+}
+
+function validateWorkspaceBootstrapOptions(options: WorkspaceBootstrapOptions): void {
+  // Owner-scoped keys are bounded by the authenticated API key and may remain
+  // short. Anonymous keys are part of the recovery proof and must satisfy the
+  // same structural floor as the server before any request is sent.
+  if (
+    !options.apiKey &&
+    options.idempotencyKey !== undefined &&
+    options.idempotencyKey.length < MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH
+  ) {
+    throw new RelayError(
+      'transport_error',
+      `Anonymous Idempotency-Key must be at least ${MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH} characters`,
+      {
+        statusCode: 400,
+        retryable: false,
+        rawCode: 'workspace_create_idempotency_key_too_weak',
+      },
+    );
+  }
+
+  const anonymousKeyedBootstrap = !options.apiKey && options.idempotencyKey !== undefined;
+  if (anonymousKeyedBootstrap) {
+    validateAnonymousKeyedBootstrapDestination(
+      options.baseUrl ?? 'https://cast.agentrelay.com',
+    );
+  }
+
+  if (anonymousKeyedBootstrap && options.bootstrapSecret !== undefined) {
+    if (!options.baseUrl) {
+      throw new RelayError(
+        'transport_error',
+        'Anonymous keyed workspace bootstrap with a bootstrapSecret requires an explicit self-hosted baseUrl',
+        {
+          statusCode: 400,
+          retryable: false,
+          rawCode: 'workspace_create_bootstrap_base_url_required',
+        },
+      );
+    }
+
+    const baseUrl = validateAnonymousKeyedBootstrapDestination(options.baseUrl);
+    const hostname = baseUrl.hostname.replace(/\.$/, '').toLowerCase();
+    if (hostname === HOSTED_GATEWAY_HOSTNAME) {
+      throw new RelayError(
+        'transport_error',
+        'Anonymous keyed workspace bootstrap cannot send a bootstrapSecret to the hosted gateway',
+        {
+          statusCode: 400,
+          retryable: false,
+          rawCode: 'workspace_create_bootstrap_base_url_required',
+        },
+      );
+    }
+  }
+}
+
 export class RelayCast {
   private client: HttpClient;
   private ws: WsClient;
@@ -218,11 +398,7 @@ export class RelayCast {
         token: this.client.apiKey,
         baseUrl: this.client.baseUrl,
       },
-      {
-        client: this.client.originClient,
-        version: this.client.originVersion,
-        ...(this.client.originActor ? { originActor: this.client.originActor } : {}),
-      },
+      this.client.internalOrigin,
     ));
   }
 
@@ -249,6 +425,12 @@ export class RelayCast {
     agentStatusChanged: (handler: (e: AgentStatusChangedEvent) => void): (() => void) => this.onEvent('agent.status.changed', handler),
     agentActive:     (handler: (e: AgentStatusActiveEvent) => void): (() => void)  => this.onEvent('agent.status.active', handler),
     agentOffline:    (handler: (e: AgentStatusOfflineEvent) => void): (() => void) => this.onEvent('agent.status.offline', handler),
+    agentExited:     (handler: (e: AgentExitedEvent) => void): (() => void)     => this.onEvent('agent.exited', handler),
+    // Node liveness is published on this workspace stream (`/v1/ws`) and to
+    // webhooks. It is not delivered to an agent mailbox, so AgentClient does
+    // not expose these handlers.
+    nodeOnline:      (handler: (e: NodeStatusOnlineEvent) => void): (() => void) => this.onEvent('node.status.online', handler),
+    nodeOffline:     (handler: (e: NodeStatusOfflineEvent) => void): (() => void) => this.onEvent('node.status.offline', handler),
     channelCreated:  (handler: (e: ChannelCreatedEvent) => void): (() => void)  => this.onEvent('channel.created', handler),
     channelUpdated:  (handler: (e: ChannelUpdatedEvent) => void): (() => void)  => this.onEvent('channel.updated', handler),
     channelArchived: (handler: (e: ChannelArchivedEvent) => void): (() => void) => this.onEvent('channel.archived', handler),
@@ -294,24 +476,53 @@ export class RelayCast {
     name: string,
     options?: string | WorkspaceBootstrapOptions,
   ): Promise<{ data: CreateWorkspaceResponse; statusCode: number }> {
-    const { apiKey, baseUrl, agentRelayDistinctId: rawAgentRelayDistinctId } =
-      resolveWorkspaceBootstrapOptions(options);
+    const resolved = resolveWorkspaceBootstrapOptions(options);
+    validateWorkspaceBootstrapOptions(resolved);
+    const { apiKey, baseUrl } = resolved;
     const requestBaseUrl = baseUrl ?? 'https://cast.agentrelay.com';
-    const agentRelayDistinctId = sanitizeAgentRelayDistinctId(rawAgentRelayDistinctId);
+    const identity = resolveAgentRelayIdentity(resolved);
+    const anonymousKeyedBootstrap = !apiKey && resolved.idempotencyKey !== undefined;
+    const sendsBootstrapSecret =
+      anonymousKeyedBootstrap && resolved.bootstrapSecret !== undefined;
 
     const url = new URL('/v1/workspaces', requestBaseUrl);
     const res = await fetch(url.toString(), {
       method: 'POST',
+      ...(anonymousKeyedBootstrap ? { redirect: 'manual' as const } : {}),
       headers: {
         'Content-Type': 'application/json',
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        ...(resolved.idempotencyKey !== undefined
+          ? { 'Idempotency-Key': resolved.idempotencyKey }
+          : {}),
+        ...(sendsBootstrapSecret
+          ? { 'X-Workspace-Bootstrap-Secret': resolved.bootstrapSecret }
+          : {}),
         'X-SDK-Version': SDK_VERSION,
         'X-Relaycast-Origin-Client': SDK_ORIGIN.client,
         'X-Relaycast-Origin-Version': SDK_ORIGIN.version,
-        ...(agentRelayDistinctId ? { [AGENT_RELAY_DISTINCT_ID_HEADER]: agentRelayDistinctId } : {}),
+        ...agentRelayIdentityHeaders(identity),
       },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({
+        name,
+        ...(resolved.expiresInSeconds !== undefined
+          ? { expires_in_seconds: resolved.expiresInSeconds }
+          : {}),
+        ...(resolved.metadata !== undefined ? { metadata: resolved.metadata } : {}),
+        provenance: toWorkspaceProvenanceInput(resolved.provenance),
+      }),
     });
+
+    if (
+      anonymousKeyedBootstrap &&
+      (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400))
+    ) {
+      throw new RelayError(
+        'transport_error',
+        'Refusing to follow an anonymous bootstrap redirect',
+        { statusCode: res.status, retryable: false },
+      );
+    }
 
     let parsed: unknown;
     try {
@@ -347,10 +558,9 @@ export class RelayCast {
     name: string,
     options?: string | WorkspaceLookupOptions,
   ): Promise<WorkspaceLookup | null> {
-    const { baseUrl, agentRelayDistinctId: rawAgentRelayDistinctId } =
-      resolveWorkspaceLookupOptions(options);
-    const requestBaseUrl = baseUrl ?? 'https://cast.agentrelay.com';
-    const agentRelayDistinctId = sanitizeAgentRelayDistinctId(rawAgentRelayDistinctId);
+    const resolved = resolveWorkspaceLookupOptions(options);
+    const requestBaseUrl = resolved.baseUrl ?? 'https://cast.agentrelay.com';
+    const identity = resolveAgentRelayIdentity(resolved);
 
     const url = new URL(`/v1/workspaces/by-name/${encodeURIComponent(name)}`, requestBaseUrl);
     const res = await fetch(url.toString(), {
@@ -360,7 +570,7 @@ export class RelayCast {
         'X-SDK-Version': SDK_VERSION,
         'X-Relaycast-Origin-Client': SDK_ORIGIN.client,
         'X-Relaycast-Origin-Version': SDK_ORIGIN.version,
-        ...(agentRelayDistinctId ? { [AGENT_RELAY_DISTINCT_ID_HEADER]: agentRelayDistinctId } : {}),
+        ...agentRelayIdentityHeaders(identity),
       },
     });
 
@@ -429,24 +639,6 @@ export class RelayCast {
     };
   }
 
-  private async registerWithLegacySuffix(data: CreateAgentRequest): Promise<CreateAgentResponse> {
-    const maxAttempts = 5;
-    let candidateName = data.name;
-
-    for (let attempt = 0; attempt <= maxAttempts; attempt += 1) {
-      try {
-        return await this.agents.register({ ...data, name: candidateName });
-      } catch (err) {
-        if (!isNameConflictError(err) || attempt === maxAttempts) {
-          throw err;
-        }
-        candidateName = appendLegacySuffix(data.name);
-      }
-    }
-
-    throw new RelayError('transport_error', 'Failed to register agent identity after suffix retries');
-  }
-
   private registerTypedIdentity(
     type: RegisterIdentityType,
     data: RegisterTypedIdentityInput,
@@ -455,36 +647,15 @@ export class RelayCast {
   }
 
   async registerAgent(data: RegisterAgentInput): Promise<CreateAgentResponse> {
-    const { strict, ...request } = data;
-    if (strict) {
-      return this.agents.register(request);
-    }
-
-    emitCompatibilityTelemetry('agents.registerAgent.legacy_suffix', {
-      requested_name: data.name,
-    });
-    return this.registerWithLegacySuffix(request);
+    const { strict: _strict, ...request } = data;
+    return this.agents.register(request);
   }
 
   async registerOrRotate(data: RegisterOrRotateInput): Promise<CreateAgentResponse> {
-    try {
-      return await this.registerAgent({ ...data, strict: true });
-    } catch (err) {
-      if (isNameConflictError(err)) {
-        const agent = await this.agents.get(data.name);
-        const { token } = await this.agents.rotateToken(agent.name);
-        this.rememberIdentity(agent.id, agent.name);
-        const createdAt = agent.createdAt ?? agent.lastSeen;
-        return {
-          id: agent.id,
-          name: agent.name,
-          token,
-          status: agent.status,
-          createdAt,
-        };
-      }
-      throw err;
-    }
+    emitCompatibilityTelemetry('agents.registerOrRotate.deprecated', {
+      replacement: 'agents.register or agents.recover',
+    });
+    return this.registerAgent(data);
   }
 
   async resolveIdentity(): Promise<ResolvedIdentity> {
@@ -607,7 +778,18 @@ export class RelayCast {
       this.reconnect(data, options),
     update: (data: UpdateWorkspaceRequest): Promise<Workspace> =>
       this.client.patch('/v1/workspace', data),
-    delete: (): Promise<void> => this.client.delete('/v1/workspace'),
+    /**
+     * Replace the workspace API key. The response carries the replacement
+     * exactly once; persist it (do not print it). `graceSeconds` keeps the
+     * superseded key authenticatable for propagation — pass `0` when the old
+     * key may be compromised. Hosted deployments manage keys through the
+     * control plane and refuse this call.
+     */
+    rotateKey: (data?: RotateWorkspaceKeyRequest): Promise<RotateWorkspaceKeyResponse> =>
+      this.client.post('/v1/workspace/rotate-key', data ?? {}),
+    delete: (workspaceId?: string): Promise<void> => workspaceId === undefined
+      ? this.client.delete('/v1/workspace')
+      : this.client.delete(`/v1/workspaces/${encodeURIComponent(workspaceId)}`),
   };
 
   observerTokens = {
@@ -661,6 +843,40 @@ export class RelayCast {
     },
     reactions: (id: string): Promise<ReactionGroup[]> =>
       this.client.get(`/v1/messages/${encodeURIComponent(id)}/reactions`),
+    bySessionRef: async (
+      sessionRef: string,
+      opts?: { limit?: number; after?: string },
+    ): Promise<SessionMessagesResult> => {
+      const query: Record<string, string> = {};
+      if (opts?.limit != null) query.limit = String(opts.limit);
+      if (opts?.after) query.after = opts.after;
+      try {
+        return await this.client.get<SessionMessagesResult>(
+          `/v1/sessions/${encodeURIComponent(sessionRef)}/messages`,
+          query,
+          { schema: SessionMessagesResultSchema },
+        );
+      } catch (error) {
+        // Replay availability is fail-closed: transport/auth/server failures
+        // are unknown, never evidence that the session is retained.
+        return {
+          sessionRef,
+          availability: 'unknown',
+          reason: error instanceof ZodError ? 'response_invalid' : 'query_failed',
+          retention: {
+            policy: 'unknown',
+            messageTtlDays: null,
+            retainedSince: null,
+            source: 'unknown',
+            reason: 'boundary_unavailable',
+          },
+          sessionStartedAt: null,
+          sessionLastMessageAt: null,
+          messages: [],
+          page: { nextCursor: null, hasMore: false },
+        };
+      }
+    },
   };
 
   agents = {
@@ -672,14 +888,33 @@ export class RelayCast {
     list: (query?: AgentListQuery): Promise<Agent[]> => {
       const params: Record<string, string> = {};
       if (query?.status) params.status = query.status;
+      if (query?.includeStale !== undefined) params.include_stale = query.includeStale ? '1' : '0';
+      if (query?.includeMetadata !== undefined) params.include_metadata = query.includeMetadata ? '1' : '0';
       return this.client.get('/v1/agents', params);
     },
     get: (name: string): Promise<Agent> =>
       this.client.get(`/v1/agents/${encodeURIComponent(name)}`),
     me: (apiToken?: string): Promise<Agent> =>
       (apiToken ? this.client.withApiKey(apiToken) : this.client).get('/v1/agent'),
-    rotateToken: (name: string): Promise<TokenRotateResponse> =>
-      this.client.post(`/v1/agents/${encodeURIComponent(name)}/rotate-token`, {}),
+    rotateToken: (name: string, agentToken: string): Promise<TokenRotateResponse> =>
+      this.client.withApiKey(agentToken).post(`/v1/agents/${encodeURIComponent(name)}/rotate-token`, {}),
+    recover: async ({ name, ...data }: RecoverAgentInput): Promise<AgentIdentityRecoveryResponse> => {
+      const result = await this.client.post<AgentIdentityRecoveryResponse>(
+        `/v1/agents/${encodeURIComponent(name)}/recover`,
+        data,
+      );
+      this.rememberIdentity(result.agentId, result.name);
+      return result;
+    },
+    takeOver: ({ name, ...data }: TakeOverAgentInput): Promise<AgentIdentityRecoveryResponse> =>
+      this.client.post(`/v1/agents/${encodeURIComponent(name)}/takeover`, data),
+    revokeToken: ({ name, ...data }: RevokeAgentTokenInput): Promise<AgentIdentityRevocationResponse> =>
+      this.client.post(`/v1/agents/${encodeURIComponent(name)}/revoke-token`, data),
+    enrollRecoveryCredential: (
+      data: EnrollRecoveryCredentialInput,
+      agentToken: string,
+    ): Promise<{ agentId: string; enrolled: boolean }> =>
+      this.client.withApiKey(agentToken).post('/v1/agent/recovery-credential', data),
     update: (name: string, data: UpdateAgentRequest): Promise<Agent> =>
       this.client.patch(`/v1/agents/${encodeURIComponent(name)}`, data),
     delete: (name: string): Promise<void> =>
@@ -688,9 +923,9 @@ export class RelayCast {
       this.client.get('/v1/agents/presence'),
     registerOrGet: async (data: CreateAgentRequest): Promise<CreateAgentResponse> => {
       emitCompatibilityTelemetry('agents.registerOrGet.deprecated', {
-        replacement: 'agents.registerOrRotate',
+        replacement: 'agents.register or agents.recover',
       });
-      return this.registerOrRotate(data);
+      return this.agents.register(data);
     },
     registerAgent: (data: RegisterAgentInput): Promise<CreateAgentResponse> =>
       this.registerAgent(data),
@@ -702,6 +937,20 @@ export class RelayCast {
       this.client.post('/v1/agents/spawn', data),
     release: (data: ReleaseAgentRequest): Promise<ReleaseAgentResponse> =>
       this.client.post('/v1/agents/release', data),
+    /**
+     * Atomically release only the exact immutable agent identity. The key is
+     * deliberately mandatory: callers persist and reuse it across restarts.
+     */
+    releaseExact: (
+      data: ExactReleaseAgentRequest,
+      options: { idempotencyKey: string },
+    ): Promise<ReleaseAgentResponse> => {
+      const idempotencyKey = options.idempotencyKey.trim();
+      if (!idempotencyKey) throw new Error('idempotencyKey is required for exact agent release');
+      return this.client.post('/v1/agents/release-exact', data, {
+        headers: { 'Idempotency-Key': idempotencyKey },
+      });
+    },
     events: {
       emit: (name: string, data: EmitSessionEventRequest): Promise<SessionEvent> =>
         this.client.post(`/v1/agents/${encodeURIComponent(name)}/events`, data),
@@ -748,6 +997,26 @@ export class RelayCast {
 
     delete: (id: string): Promise<void> =>
       this.client.delete(`/v1/subscriptions/${encodeURIComponent(id)}`),
+
+    deliveries: (
+      id: string,
+      query: { status?: WebhookDeliveryStatus; limit?: number } = {},
+    ): Promise<WebhookDelivery[]> => {
+      if (query.limit != null
+        && (!Number.isInteger(query.limit) || query.limit < 1 || query.limit > 100)) {
+        throw new RangeError('subscriptions.deliveries limit must be an integer from 1 to 100');
+      }
+      const params: Record<string, string> = {};
+      if (query.status) params.status = query.status;
+      if (query.limit != null) params.limit = String(query.limit);
+      return this.client.get(`/v1/subscriptions/${encodeURIComponent(id)}/deliveries`, params);
+    },
+
+    replayDelivery: (id: string, deliveryId: string): Promise<ReplayWebhookDeliveryResponse> =>
+      this.client.post(
+        `/v1/subscriptions/${encodeURIComponent(id)}/deliveries/${encodeURIComponent(deliveryId)}/replay`,
+        {},
+      ),
   };
 
   actions = {
@@ -765,18 +1034,62 @@ export class RelayCast {
   };
 
   nodes = {
-    create: (data: CreateNodeRequest): Promise<CreateNodeResponse> =>
-      this.client.post('/v1/nodes', data),
+    create: (data: CreateNodeRequest, options?: CreateNodeOptions): Promise<CreateNodeResponse> => {
+      if (options?.currentToken !== undefined && !options.currentToken.trim()) {
+        throw new Error('currentToken must not be blank for node rotation');
+      }
+      if (options?.idempotencyKey !== undefined && !options.idempotencyKey.trim()) {
+        throw new Error('idempotencyKey must not be blank for node rotation recovery');
+      }
+      if (options?.idempotencyKey !== undefined && !options.currentToken) {
+        throw new Error('idempotencyKey requires currentToken for node rotation recovery');
+      }
+      const headers = {
+        ...(options?.currentToken ? { 'X-Relaycast-Node-Token': options.currentToken } : {}),
+        ...(options?.currentToken && options.idempotencyKey !== undefined
+          ? { 'Idempotency-Key': options.idempotencyKey }
+          : {}),
+      };
+      return this.client.post(
+        '/v1/nodes',
+        data,
+        Object.keys(headers).length > 0 ? { headers } : undefined,
+      );
+    },
 
     list: (query?: NodeListQuery): Promise<NodeRosterEntry[]> => {
       const params: Record<string, string> = {};
       if (query?.capability) params.capability = query.capability;
       if (query?.name) params.name = query.name;
+      if (query?.status) params.status = query.status;
+      return this.client.get('/v1/nodes', params);
+    },
+
+    // Explicit, bounded pagination contract for reading history (e.g. `--all`
+    // in the Relay CLI): pages through every matching row exactly once, no
+    // matter how many the workspace has retained, without silent truncation.
+    // Compatible callers keep using `list()`, which never returns this shape.
+    listHistory: (query?: NodeHistoryQuery): Promise<NodeHistoryPage> => {
+      const params: Record<string, string> = { history: 'true' };
+      if (query?.capability) params.capability = query.capability;
+      if (query?.name) params.name = query.name;
+      if (query?.status) params.status = query.status;
+      if (query?.cursor) params.cursor = query.cursor;
+      if (query?.limit !== undefined) params.limit = String(query.limit);
       return this.client.get('/v1/nodes', params);
     },
 
     get: (name: string): Promise<NodeRosterEntry> =>
       this.client.get(`/v1/nodes/${encodeURIComponent(name)}`),
+
+    delete: (name: string, options?: DeleteNodeOptions): Promise<DeleteNodeResponse> =>
+      this.client.request(
+        'DELETE',
+        `/v1/nodes/${encodeURIComponent(name)}`,
+        undefined,
+        options?.force ? { force: 'true' } : undefined,
+        { retry: false },
+      ),
 
     listAgents: (name: string): Promise<NodeAgentBinding[]> =>
       this.client.get(`/v1/nodes/${encodeURIComponent(name)}/agents`),
@@ -855,11 +1168,44 @@ export class RelayCast {
     return this.client.get('/v1/activity', params);
   };
 
-  allDmConversations = (): Promise<WorkspaceDmConversation[]> =>
-    this.client.get('/v1/dm/conversations/all');
+  allDmConversations = async (): Promise<WorkspaceDmConversation[]> => {
+    const conversations: WorkspaceDmConversation[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+
+    while (true) {
+      const page = await this.client.getEnvelope<WorkspaceDmConversation[]>(
+        '/v1/dm/conversations/all',
+        { limit: '500', ...(cursor ? { cursor } : {}) },
+        { schema: WorkspaceDmConversationSchema.array() },
+      );
+      conversations.push(...page.data);
+      if (!page.cursor?.hasMore) return conversations;
+
+      const next = page.cursor.next;
+      if (!next || seenCursors.has(next)) {
+        throw new RelayError('transport_error', 'DM conversation pagination did not advance', {
+          retryable: false,
+        });
+      }
+      seenCursors.add(next);
+      cursor = next;
+    }
+  };
 
   dmMessages = async (conversationId: string, opts?: { limit?: number; before?: string; after?: string }): Promise<DmMessage[]> => {
     const query: Record<string, string> = {};
+    if (opts?.limit !== undefined) query.limit = String(opts.limit);
+    if (opts?.before) query.before = opts.before;
+    if (opts?.after) query.after = opts.after;
+    return this.client.get(`/v1/dm/conversations/${encodeURIComponent(conversationId)}/messages`, query);
+  };
+
+  dmMessagePage = async (
+    conversationId: string,
+    opts?: { limit?: number; before?: string; after?: string },
+  ): Promise<DmMessagePage> => {
+    const query: Record<string, string> = { page: '1' };
     if (opts?.limit !== undefined) query.limit = String(opts.limit);
     if (opts?.before) query.before = opts.before;
     if (opts?.after) query.after = opts.after;

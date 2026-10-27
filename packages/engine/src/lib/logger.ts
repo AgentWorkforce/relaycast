@@ -1,35 +1,18 @@
 import type { Context } from 'hono';
 import type { AppEnv, EngineRuntime } from '../env.js';
+import type { EngineLogExport, EngineLogRecord } from '../ports/logging.js';
 
-type LogLevel = 'debug' | 'info' | 'warn' | 'error';
-type LogFields = Record<string, unknown>;
+type LogLevel = EngineLogRecord['level'];
+type LogFields = EngineLogRecord['fields'];
 
-const DEFAULT_POSTHOG_HOST = 'https://i.agentrelay.com';
 const DEFAULT_APP_VERSION = '0.1.0';
 const DEFAULT_SDK_VERSION = 'unknown';
-const SERVICE_NAME = 'relaycast-server';
-const LOGGER_SCOPE = 'relaycast.server.logger';
-
-const SEVERITY_BY_LEVEL: Record<LogLevel, number> = {
-  debug: 5,
-  info: 9,
-  warn: 13,
-  error: 17,
-};
-
-/**
- * Minimal logging config the engine needs — resolved from {@link EngineConfig}
- * by an adapter. Platform-agnostic: production logs are exported to a PostHog
- * OTLP endpoint via plain `fetch` only when `posthogApiKey` is set (cloud);
- * otherwise the logger writes to the console (self-host / dev).
- */
 export interface LoggerEnv {
   environment: string;
   appVersion?: string;
   appSemver?: string;
   sdkSemver?: string;
-  posthogApiKey?: string;
-  posthogHost?: string;
+  logExport?: EngineLogExport;
 }
 
 export interface Logger {
@@ -61,14 +44,8 @@ export function loggerEnvFromRuntime(runtime: EngineRuntime | undefined): Logger
     appVersion: config.appVersion,
     appSemver: config.appSemver,
     sdkSemver: config.sdkSemver,
-    posthogApiKey: config.logExport?.posthogApiKey,
-    posthogHost: config.logExport?.posthogHost,
+    logExport: config.logExport,
   };
-}
-
-function getPostHogHost(env: LoggerEnv): string {
-  const configured = env.posthogHost ?? DEFAULT_POSTHOG_HOST;
-  return configured.endsWith('/') ? configured.slice(0, -1) : configured;
 }
 
 function getAppVersion(env: LoggerEnv): string {
@@ -80,81 +57,6 @@ function getSdkVersion(env: LoggerEnv, request?: Request, explicit?: string): st
   const fromHeader = request?.headers.get('x-sdk-version');
   if (fromHeader) return fromHeader;
   return env.sdkSemver ?? DEFAULT_SDK_VERSION;
-}
-
-function toAttributeValue(value: unknown): { stringValue?: string; boolValue?: boolean; intValue?: string; doubleValue?: number } {
-  if (typeof value === 'string') return { stringValue: value };
-  if (typeof value === 'boolean') return { boolValue: value };
-  if (typeof value === 'number') {
-    if (Number.isFinite(value) && Number.isInteger(value)) return { intValue: String(value) };
-    if (Number.isFinite(value)) return { doubleValue: value };
-    return { stringValue: String(value) };
-  }
-  if (value === null) return { stringValue: 'null' };
-  if (value === undefined) return { stringValue: 'undefined' };
-  try {
-    return { stringValue: JSON.stringify(value) };
-  } catch {
-    return { stringValue: String(value) };
-  }
-}
-
-function metadataToAttributes(metadata: LogFields): Array<{ key: string; value: ReturnType<typeof toAttributeValue> }> {
-  return Object.entries(metadata).map(([key, value]) => ({
-    key,
-    value: toAttributeValue(value),
-  }));
-}
-
-async function sendToPostHog(
-  env: LoggerEnv,
-  level: LogLevel,
-  message: string,
-  metadata: LogFields,
-  appVersion: string,
-): Promise<void> {
-  const apiKey = env.posthogApiKey;
-  if (!apiKey) return;
-
-  const timestampNanos = `${Date.now()}000000`;
-  const payload = {
-    resourceLogs: [{
-      resource: {
-        attributes: [
-          { key: 'service.name', value: { stringValue: SERVICE_NAME } },
-          { key: 'service.version', value: { stringValue: appVersion } },
-          { key: 'deployment.environment', value: { stringValue: env.environment } },
-        ],
-      },
-      scopeLogs: [{
-        scope: { name: LOGGER_SCOPE, version: appVersion },
-        logRecords: [{
-          timeUnixNano: timestampNanos,
-          observedTimeUnixNano: timestampNanos,
-          severityNumber: SEVERITY_BY_LEVEL[level],
-          severityText: level.toUpperCase(),
-          body: { stringValue: message },
-          attributes: metadataToAttributes(metadata),
-        }],
-      }],
-    }],
-  };
-
-  try {
-    const response = await globalThis.fetch(`${getPostHogHost(env)}/i/v1/logs`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
-    if (!response.ok) {
-      // Best effort: ignore non-2xx response from logging backend.
-    }
-  } catch {
-    // Best effort: do not fail request handling if log export fails.
-  }
 }
 
 function writeConsole(level: LogLevel, source: string, message: string, metadata: LogFields): void {
@@ -190,16 +92,15 @@ export function createLogger(env: LoggerEnv, options: CreateLoggerOptions): Logg
       ...fields,
     };
 
-    // Always write to the console so logs are never silently lost — even in
-    // production, where the OTLP export can fail (network/misconfig) and
-    // swallows its own errors. When a PostHog key is configured we additionally
-    // export to the OTLP endpoint.
     writeConsole(level, options.source, message, metadata);
-    if (!env.posthogApiKey) return;
-
-    const promise = sendToPostHog(env, level, message, metadata, appVersion);
-    state.pending.add(promise);
-    void promise.finally(() => state.pending.delete(promise));
+    if (!env.logExport) return;
+    try {
+      const promise = Promise.resolve(env.logExport({ level, message, fields: metadata, occurredAt: new Date().toISOString() })).catch(() => {});
+      state.pending.add(promise);
+      void promise.then(() => state.pending.delete(promise));
+    } catch {
+      // A host transport must never alter request handling.
+    }
   };
 
   return {

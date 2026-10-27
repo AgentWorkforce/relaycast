@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
-import { agents, channels, messages, workspaces } from '../../db/schema.js';
+import { agents, channels, messageSessions, messages, webhooks, workspaces } from '../../db/schema.js';
 import { createWebhook, triggerWebhook } from '../inboundWebhook.js';
 import { publicMessageMetadata } from '../messageMetadata.js';
 
@@ -95,5 +95,56 @@ describe('triggerWebhook payload round-trip', () => {
     const metadata = await readMessageMetadata(db, result!.message_id);
     expect(publicMessageMetadata(metadata)).toEqual({ relayfile });
     expect(metadata.__relaycast_origin).toBe('inbound_webhook');
+  });
+
+  it('indexes session_ref from an authenticated webhook as replay evidence', async () => {
+    const { db } = track(openDb());
+    const base = await seedWorkspace(db);
+    const webhook = await createWebhook(db, base.ws, base.ch, { name: 'protected' }, base.agent);
+
+    const result = await triggerWebhook(db, webhook.webhook_id, webhook.token, {
+      text: 'trusted replay marker',
+      payload: { session_ref: 'protected-session' },
+    });
+
+    const [message] = await db
+      .select({ sessionRef: messages.sessionRef })
+      .from(messages)
+      .where(eq(messages.id, result!.message_id));
+    const ledger = await db
+      .select({ sessionRef: messageSessions.sessionRef })
+      .from(messageSessions)
+      .where(eq(messageSessions.workspaceId, base.ws));
+    expect(message).toBeDefined();
+    expect(message!.sessionRef).toBe('protected-session');
+    expect(ledger).toEqual([{ sessionRef: 'protected-session' }]);
+  });
+
+  it('preserves but does not index an unauthenticated webhook session_ref', async () => {
+    const { db } = track(openDb());
+    const base = await seedWorkspace(db);
+    const webhook = await createWebhook(db, base.ws, base.ch, { name: 'legacy-open' }, base.agent);
+    await db
+      .update(webhooks)
+      .set({ tokenHash: null })
+      .where(eq(webhooks.id, webhook.webhook_id));
+
+    const result = await triggerWebhook(db, webhook.webhook_id, null, {
+      text: 'untrusted replay marker',
+      payload: { session_ref: 'untrusted-session' },
+    });
+
+    const [message] = await db
+      .select({ metadata: messages.metadata, sessionRef: messages.sessionRef })
+      .from(messages)
+      .where(eq(messages.id, result!.message_id));
+    const ledger = await db
+      .select({ sessionRef: messageSessions.sessionRef })
+      .from(messageSessions)
+      .where(eq(messageSessions.workspaceId, base.ws));
+    expect(message).toBeDefined();
+    expect(publicMessageMetadata(message!.metadata)).toEqual({ session_ref: 'untrusted-session' });
+    expect(message!.sessionRef).toBeNull();
+    expect(ledger).toEqual([]);
   });
 });

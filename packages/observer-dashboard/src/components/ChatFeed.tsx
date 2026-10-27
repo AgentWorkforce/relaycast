@@ -1,9 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { useFollowLatest } from '../hooks/use-follow-latest';
 import { Hash, MessageSquare, UserRound } from 'lucide-react';
 import { useMessages, useRelay, sortMessagesChronologically } from '@relaycast/react';
 import { MessageCard } from './MessageCard';
+import { RunPanel } from './RunPanel';
+import { latestRelayflowRun } from '../lib/relayflow-run';
 import { cn } from '../lib/utils';
 import type { DmMessage, MessageWithMeta } from '@relaycast/sdk';
 
@@ -23,6 +26,7 @@ interface ChatFeedProps {
   className?: string;
 }
 
+/** Render the selected conversation inside its own bounded scroll pane. */
 export function ChatFeed({
   selectedChannel,
   selectedChannelMemberCount,
@@ -43,8 +47,8 @@ export function ChatFeed({
   const showMemberBadge = !!channelName;
 
   return (
-    <section className={cn('brand-card flex min-w-0 flex-1 flex-col overflow-hidden', className)}>
-      <div className="border-b border-[var(--border-default)] px-5 py-4">
+    <section className={cn('brand-card flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden', className)}>
+      <div className="shrink-0 border-b border-[var(--border-default)] px-5 py-4">
         <div className="flex items-center gap-2">
           {selectedChannel && !isDm ? (
             <Hash className="h-4 w-4 text-[var(--brand-primary)]" />
@@ -66,7 +70,7 @@ export function ChatFeed({
         </div>
       </div>
 
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto bg-[color-mix(in_srgb,var(--surface-strong)_72%,transparent)]">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-[color-mix(in_srgb,var(--surface-strong)_72%,transparent)]">
         {channelName ? (
           <ChannelMessages key={channelName} channel={channelName} scrollRef={scrollRef} onOpenThread={onOpenThread} mentionNames={mentionNames} onOpenAgent={onOpenAgent} />
         ) : dmId ? (
@@ -82,21 +86,19 @@ export function ChatFeed({
 /**
  * Pagination scaffolding shared by the channel and DM feeds: keeps the viewport
  * anchored while older messages are prepended, scrolls to the bottom only when
- * a new latest message arrives, and loads older pages when the top sentinel
- * becomes visible.
+ * a new latest message arrives while following the bottom, and loads older
+ * pages when the top sentinel becomes visible.
  */
 function usePaginatedFeed(
-  scrollRef: RefObject<HTMLDivElement>,
+  scrollRef: RefObject<HTMLDivElement | null>,
   sorted: MessageWithMeta[],
   loadOlderPage: () => Promise<number | null>,
 ) {
-  const bottomRef = useRef<HTMLDivElement>(null);
   const topRef = useRef<HTMLDivElement>(null);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const loadingMoreRef = useRef(false);
   const prependHeightRef = useRef<number | null>(null);
-  const didInitialScrollRef = useRef(false);
 
   const newestId = sorted[sorted.length - 1]?.id;
   const oldestId = sorted[0]?.id;
@@ -109,11 +111,7 @@ function usePaginatedFeed(
     prependHeightRef.current = null;
   }, [oldestId, scrollRef]);
 
-  useEffect(() => {
-    if (!newestId) return;
-    bottomRef.current?.scrollIntoView({ behavior: didInitialScrollRef.current ? 'smooth' : 'auto' });
-    didInitialScrollRef.current = true;
-  }, [newestId]);
+  useFollowLatest(scrollRef, newestId);
 
   const loadOlder = useCallback(async () => {
     if (loadingMoreRef.current) return;
@@ -154,9 +152,10 @@ function usePaginatedFeed(
     return () => observer.disconnect();
   }, [showSentinel, loadOlder, scrollRef]);
 
-  return { bottomRef, topRef, showSentinel, loadingMore };
+  return { topRef, showSentinel, loadingMore };
 }
 
+/** Render chronological messages and the sentinel for loading older pages. */
 function FeedList({
   sorted,
   feed,
@@ -183,20 +182,27 @@ function FeedList({
         const compact = prev !== null && prev.agentName === msg.agentName && new Date(msg.createdAt).getTime() - new Date(prev.createdAt).getTime() < 300000;
         return <MessageCard key={msg.id} message={msg} compact={compact} onOpenThread={onOpenThread} mentionNames={mentionNames} onOpenAgent={onOpenAgent} />;
       })}
-      <div ref={feed.bottomRef} />
     </div>
   );
 }
 
-function ChannelMessages({ channel, scrollRef, onOpenThread, mentionNames, onOpenAgent }: { channel: string; scrollRef: RefObject<HTMLDivElement>; onOpenThread?: (messageId: string) => void; mentionNames?: string[]; onOpenAgent?: (agentName: string | null) => void; }) {
+/** Render one channel's live feed and its newest valid relayflow snapshot. */
+function ChannelMessages({ channel, scrollRef, onOpenThread, mentionNames, onOpenAgent }: { channel: string; scrollRef: RefObject<HTMLDivElement | null>; onOpenThread?: (messageId: string) => void; mentionNames?: string[]; onOpenAgent?: (agentName: string | null) => void; }) {
   const { messages, loading, fetchMore } = useMessages(channel);
   const sorted = sortMessagesChronologically(messages);
   const feed = usePaginatedFeed(scrollRef, sorted, fetchMore);
 
+  const run = latestRelayflowRun(sorted);
+
   if (loading && sorted.length === 0) return <LoadingState label="Loading messages…" />;
   if (sorted.length === 0) return <EmptyState label="No messages yet" />;
 
-  return <FeedList sorted={sorted} feed={feed} onOpenThread={onOpenThread} mentionNames={mentionNames} onOpenAgent={onOpenAgent} />;
+  return (
+    <>
+      {run && <RunPanel run={run} />}
+      <FeedList sorted={sorted} feed={feed} onOpenThread={onOpenThread} mentionNames={mentionNames} onOpenAgent={onOpenAgent} />
+    </>
+  );
 }
 
 function toMessageWithMeta(m: DmMessage): MessageWithMeta {
@@ -218,7 +224,7 @@ function toMessageWithMeta(m: DmMessage): MessageWithMeta {
   };
 }
 
-function DmMessages({ conversationId, scrollRef, mentionNames, onOpenAgent }: { conversationId: string; scrollRef: RefObject<HTMLDivElement>; mentionNames?: string[]; onOpenAgent?: (agentName: string | null) => void; }) {
+function DmMessages({ conversationId, scrollRef, mentionNames, onOpenAgent }: { conversationId: string; scrollRef: RefObject<HTMLDivElement | null>; mentionNames?: string[]; onOpenAgent?: (agentName: string | null) => void; }) {
   const relay = useRelay();
   const [messages, setMessages] = useState<MessageWithMeta[]>([]);
   const [loading, setLoading] = useState(true);

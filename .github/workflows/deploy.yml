@@ -26,15 +26,15 @@ jobs:
       - run: npx turbo test
         env:
           DO_NOT_TRACK: '1'
+      - run: npm run test:container
 
-  deploy-observer-pages:
+  deploy-observer-dashboard:
     name: Deploy Observer Dashboard
     runs-on: ubuntu-latest
     needs: ci
     timeout-minutes: 20
     permissions:
       contents: read
-      deployments: write
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
@@ -42,14 +42,13 @@ jobs:
           build: 'true'
       - uses: ./.github/actions/deploy-observer-dashboard
         with:
-          branch: main
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
   deploy-observer-router:
     name: Deploy Observer Host Router
     runs-on: ubuntu-latest
-    needs: deploy-observer-pages
+    needs: deploy-observer-dashboard
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4

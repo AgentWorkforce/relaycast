@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { FleetWireJsonValueSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { errorResponse } from '../lib/httpError.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireSender } from '../middleware/auth.js';
+import { jsonIdempotentOk, parseIdempotencyKey } from '../middleware/idempotency.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as actionEngine from '../engine/action.js';
 import { emitInvocationCompletionEffects } from '../engine/invocationCompletion.js';
@@ -82,7 +83,7 @@ actionRoutes.post('/actions', requireAuth, rateLimit, async (c) => {
       completionDeps: c.get('engine'),
     });
 
-    emitServerEvent(c, workspace.id, 'relaycast_server_action_registered', {
+    emitServerEvent(c, workspace.id, 'action.registered', {
       action_name: action.name,
       handler_agent_name: parsed.data.handler_agent ?? null,
       handler_node_name: parsed.data.handler_node ?? null,
@@ -141,7 +142,7 @@ actionRoutes.delete('/actions/:name', requireAuth, rateLimit, async (c) => {
     if (!deleted) {
       return jsonNotFound(c, 'action_not_found', 'Action not found');
     }
-    emitServerEvent(c, workspace.id, 'relaycast_server_action_deleted', {
+    emitServerEvent(c, workspace.id, 'action.deleted', {
       action_name: c.req.param('name'),
     });
     return jsonNoContent(c);
@@ -166,11 +167,17 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
       return parsed.response;
     }
 
+    const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
+    if (idempotencyError) {
+      return jsonError(c, 'invalid_idempotency_key', idempotencyError, 400);
+    }
+
+    const actionName = c.req.param('name');
     const { nodeConnections } = c.get('engine');
     const result = await actionEngine.invokeAction(
       db,
       workspace.id,
-      c.req.param('name'),
+      actionName,
       {
         input: parsed.data.input,
         caller_id: agent.id,
@@ -178,8 +185,10 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
       },
       {
         nodeConnections,
+        idempotencyKey,
       },
     );
+    const replayed = actionEngine.wasInvocationReplayed(result);
 
     const eventData = {
       invocation_id: result.invocation_id,
@@ -189,26 +198,28 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
       handler_node_id: result.handler_node_id,
     };
 
-    await sendWebhookEvent(c, {
-      type: 'action.invoked',
-      workspaceId: workspace.id,
-      data: eventData,
-    });
-    emitServerEvent(c, workspace.id, 'relaycast_server_action_invoked', {
-      action_name: result.action_name,
-      invocation_id: result.invocation_id,
-      caller_agent_id: agent.id,
-    });
-    // Surface the invocation on the workspace observer stream so dashboards see
-    // actions happening (spawns, callbacks) and not just their completions.
-    // The completion side already publishes action.completed / action.failed.
-    runInBackground(
-      c,
-      fanoutToWorkspace(c, 'action.invoked', eventData),
-      'fanout action.invoked',
-    );
+    if (!replayed) {
+      await sendWebhookEvent(c, {
+        type: 'action.invoked',
+        workspaceId: workspace.id,
+        data: eventData,
+      });
+      emitServerEvent(c, workspace.id, 'action.invoked', {
+        action_name: result.action_name,
+        invocation_id: result.invocation_id,
+        caller_agent_id: agent.id,
+      });
+      // Surface the invocation on the workspace observer stream so dashboards see
+      // actions happening (spawns, callbacks) and not just their completions.
+      // The completion side already publishes action.completed / action.failed.
+      runInBackground(
+        c,
+        fanoutToWorkspace(c, 'action.invoked', eventData),
+        'fanout action.invoked',
+      );
+    }
 
-    return jsonCreated(c, result);
+    return jsonIdempotentOk(c, { status: 201, data: result, replayed });
   } catch (err: unknown) {
     const error = asCodedError(err);
     if (error.code === 'action_denied') {
@@ -227,6 +238,7 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
             nodeConnections: c.get('engine').nodeConnections,
             environment: c.get('engine').config?.environment,
             httpPushProxy: c.get('engine').config?.httpPushProxy,
+            outboundWebhookFetch: c.get('engine').config?.outboundWebhookFetch,
             workspaceId: workspace.id,
           },
           {
@@ -288,12 +300,15 @@ actionRoutes.post('/actions/:name/invocations/:id/complete', requireAuth, rateLi
 });
 
 // GET /v1/actions/:name/invocations/:id - get invocation status
-actionRoutes.get('/actions/:name/invocations/:id', requireAuth, rateLimit, async (c) => {
+actionRoutes.get('/actions/:name/invocations/:id', requireSender, rateLimit, async (c) => {
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
     const result = await actionEngine.getInvocation(db, workspace.id, c.req.param('name'), c.req.param('id'));
-    if (!result) {
+    // Served providers need their delegated broker's terminal spawn result.
+    // This does not grant node principals general workspace invocation access.
+    const node = c.get('node');
+    if (!result || (node && (result.action_name !== 'spawn' || result.dispatched_node_id !== node.id))) {
       return jsonNotFound(c, 'invocation_not_found', 'Invocation not found');
     }
     return jsonOk(c, result);

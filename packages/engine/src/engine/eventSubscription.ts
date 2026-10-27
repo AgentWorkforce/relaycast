@@ -19,6 +19,7 @@ export async function createSubscription(
     url: string;
     headers?: Record<string, string>;
     secret?: string;
+    signatureScheme?: 'legacy' | 'standard-webhooks';
   },
 ) {
   const id = `sub_${generateId()}`;
@@ -33,6 +34,7 @@ export async function createSubscription(
       url: data.url,
       headers: data.headers ?? null,
       secret: data.secret || null,
+      signatureScheme: data.signatureScheme ?? 'legacy',
     })
     .returning();
 
@@ -42,6 +44,7 @@ export async function createSubscription(
     filter: sub.filter as { channel?: string; mentions?: string } | null,
     url: sub.url,
     headers: redactHeaders(sub.headers as Record<string, string> | null),
+    signature_scheme: sub.signatureScheme,
     is_active: sub.isActive,
     created_at: sub.createdAt.toISOString(),
   };
@@ -59,6 +62,7 @@ export async function listSubscriptions(db: Db, workspaceId: string) {
     filter: r.filter as { channel?: string; mentions?: string } | null,
     url: r.url,
     headers: redactHeaders(r.headers as Record<string, string> | null),
+    signature_scheme: r.signatureScheme,
     is_active: r.isActive,
     created_at: r.createdAt.toISOString(),
   }));
@@ -83,6 +87,7 @@ export async function getSubscription(db: Db, workspaceId: string, subId: string
     filter: row.filter as { channel?: string; mentions?: string } | null,
     url: row.url,
     headers: redactHeaders(row.headers as Record<string, string> | null),
+    signature_scheme: row.signatureScheme,
     is_active: row.isActive,
     created_at: row.createdAt.toISOString(),
   };

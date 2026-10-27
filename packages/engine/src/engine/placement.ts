@@ -69,11 +69,56 @@ export function providerAttachDecision(input: ProviderAttachDecisionInput): Prov
 }
 
 export function isNodeLive(node: Pick<NodeRow, 'status' | 'lastHeartbeatAt'>, now = Date.now()): boolean {
+  const age = node.lastHeartbeatAt ? now - node.lastHeartbeatAt.getTime() : null;
   return (
     node.status === 'online' &&
-    !!node.lastHeartbeatAt &&
-    now - node.lastHeartbeatAt.getTime() <= NODE_LIVENESS_TTL_MS
+    age !== null &&
+    age >= 0 &&
+    age <= NODE_LIVENESS_TTL_MS
   );
+}
+
+/**
+ * Whether a row sharing a machine_id may be reused by a new enrollment.
+ *
+ * Reads `provenLiveAt`, NOT `lastHeartbeatAt`. That distinction is the whole
+ * point: `lastHeartbeatAt` is written by registration (`registerNode`,
+ * `upsertProvider`, `recomputeNodeAggregate`) and by disconnect cleanup
+ * (`markNodeOffline`, `markProviderOffline`, `markDirectNodeOfflineForAgent`)
+ * as well as by real heartbeats, so a node that registered and never sent one
+ * carries a timestamp indistinguishable from a node that did. Gating reuse on
+ * it would let a host that merely connected be treated as proven, and reuse
+ * rotates the row's token — a wrong answer silently revokes a credential
+ * another host is holding.
+ *
+ * `provenLiveAt` is written only by an arriving heartbeat frame, and cleared
+ * whenever enrollment re-issues the row's token, so a row that was just reused
+ * cannot be reused again until its new holder has proved itself.
+ *
+ * Reuse therefore needs all of: the node is not live; it has proved life at
+ * least once since its current credential was issued; and that proof is old
+ * enough that the host is gone. A proof timestamped in the future is rejected —
+ * it means the server clock moved backwards, and the node may still be running.
+ *
+ * Cost: a host that enrolls, or even registers, but never heartbeats is never
+ * deduped. Those rows have no proven holder to protect and are reclaimed by the
+ * roster reaper instead.
+ */
+export function isReusableForMachineMatch(
+  node: Pick<NodeRow, 'status' | 'lastHeartbeatAt' | 'provenLiveAt'>,
+  now = Date.now(),
+): boolean {
+  if (isNodeLive(node, now)) return false;
+  // A timestamp in the future on EITHER column means the server clock moved
+  // backwards. `isNodeLive` reports such a row as not live because it requires
+  // `age >= 0`, so without this a stale proof plus a future heartbeat would
+  // read as reusable while the broker is still running.
+  const heartbeat = node.lastHeartbeatAt?.getTime();
+  if (heartbeat !== undefined && heartbeat > now) return false;
+  const proven = node.provenLiveAt?.getTime();
+  if (proven === undefined) return false;
+  if (proven > now) return false;
+  return now - proven > NODE_LIVENESS_TTL_MS;
 }
 
 export function nodeHasCapability(node: Pick<NodeRow, 'capabilities'>, capability: string): boolean {
@@ -86,6 +131,16 @@ export function nodeHasCapability(node: Pick<NodeRow, 'capabilities'>, capabilit
 
 export function nodeHasCapacity(node: Pick<NodeRow, 'maxAgents' | 'activeAgents' | 'reservedAgents'>): boolean {
   return node.maxAgents === 0 || node.activeAgents + (node.reservedAgents ?? 0) < node.maxAgents;
+}
+
+function compareNodeCapacityLoad(a: NodeRow, b: NodeRow): number {
+  // Prefer measured load over unknown load, then preserve the existing
+  // utilization/count/name ordering. Unbounded nodes still participate via
+  // activeAgents instead of masquerading as perfectly idle.
+  return Number(b.loadReported) - Number(a.loadReported)
+    || (a.load - b.load)
+    || ((a.activeAgents + (a.reservedAgents ?? 0)) - (b.activeAgents + (b.reservedAgents ?? 0)))
+    || a.name.localeCompare(b.name);
 }
 
 function normalizeTarget(target: unknown): string | undefined {
@@ -248,7 +303,7 @@ export async function claimSpawnNode(
         node.handlersLive &&
         nodeHasCapacity(node),
       )
-      .sort((a, b) => (a.load - b.load) || (a.activeAgents - b.activeAgents) || a.name.localeCompare(b.name));
+      .sort(compareNodeCapacityLoad);
 
     for (const node of eligible) {
       const reserved = await reserveNodeCapacity(tx, workspaceId, node.id);
@@ -350,7 +405,7 @@ export async function chooseNodeForAction(
       node.handlersLive &&
       nodeHasCapacity(node),
     )
-    .sort((a, b) => (a.load - b.load) || (a.activeAgents - b.activeAgents) || a.name.localeCompare(b.name));
+    .sort(compareNodeCapacityLoad);
 
   const node = eligible[0];
   if (!node) {

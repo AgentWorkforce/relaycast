@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentClient, type AgentClientOptions } from '../agent.js';
 import { stableRelaycastEventId } from '../event-id.js';
 import { HttpClient } from '../client.js';
+import type { AgentExitedEvent } from '../types.js';
 
 class MockWebSocket {
   static readonly OPEN = 1;
@@ -113,6 +114,20 @@ describe('AgentClient WebSocket integration', () => {
     expect(url.searchParams.get('origin_version')).toBeDefined();
   });
 
+  it('keeps direct-node heartbeat load explicitly unreported', async () => {
+    const agent = createAgent();
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    const frames = ws.send.mock.calls.map(([raw]) => JSON.parse(String(raw)) as Record<string, unknown>);
+    const heartbeat = frames.find((frame) => frame.type === 'node.heartbeat');
+
+    expect(heartbeat).toMatchObject({ load: null, active_agents: 1, handlers_live: false });
+    expect(heartbeat).not.toHaveProperty('load_reported');
+  });
+
   it('connect() normalizes trailing slash base URL', async () => {
     const client = new HttpClient({
       apiKey: 'at_live_test',
@@ -210,18 +225,25 @@ describe('AgentClient WebSocket integration', () => {
         type: 'message.created',
         data: {
           id: 'm_1',
+          created_at: '2026-09-24T05:00:00.000Z',
           channel_name: 'general',
           agent_id: 'bot_1',
           from_name: 'Bot',
           text: 'hi',
           attachments: [],
+          metadata: { relayflow: { version: 1 } },
         },
       },
     });
 
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'message.created', channel: 'general' }),
+      expect.objectContaining({
+        type: 'message.created',
+        createdAt: '2026-09-24T05:00:00.000Z',
+        channel: 'general',
+        message: expect.objectContaining({ metadata: { relayflow: { version: 1 } } }),
+      }),
     );
     expect(ws.send).toHaveBeenCalledWith(JSON.stringify({
       v: 1,
@@ -282,6 +304,7 @@ describe('AgentClient WebSocket integration', () => {
       type: 'delivery.failed',
       deliveryId: null,
       messageId: 'm_1',
+      reason: 'depth_cap',
       retryable: false,
     }));
   });
@@ -337,6 +360,53 @@ describe('AgentClient WebSocket integration', () => {
     expect(handler).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'channel.created' }),
     );
+  });
+
+  it('on.agentExited camelizes the spawn-caller deliver frame', async () => {
+    const agent = createAgent();
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+
+    let received: AgentExitedEvent | undefined;
+    agent.on.agentExited((event) => {
+      received = event;
+    });
+
+    // emitAgentExitedEffects notifies the spawn caller through
+    // sendNodeDeliveriesToAgents: a synthetic seq-0 deliver frame whose
+    // payload is { type, data } with the snake_case event fields.
+    ws.simulateMessage({
+      v: 1,
+      type: 'deliver',
+      delivery_id: 'evt_agent_exited_agt_01J7FLEET000000000000101_none_deregistered_caller_1',
+      agent_id: 'caller_1',
+      agent: 'spawner',
+      msg_id: 'agt_01J7FLEET000000000000101_none_deregistered',
+      seq: 0,
+      mode: 'wait',
+      payload: {
+        type: 'agent.exited',
+        data: {
+          agent_id: 'agt_01J7FLEET000000000000101',
+          agent_name: 'claude-worker-7',
+          node_id: 'node_1',
+          invocation_id: null,
+          reason: 'deregistered',
+        },
+      },
+    });
+
+    expect(received).toEqual({
+      type: 'agent.exited',
+      agentId: 'agt_01J7FLEET000000000000101',
+      agentName: 'claude-worker-7',
+      nodeId: 'node_1',
+      invocationId: null,
+      reason: 'deregistered',
+    });
+    expect(agent.on).not.toHaveProperty('nodeOnline');
+    expect(agent.on).not.toHaveProperty('nodeOffline');
   });
 
   // --- subscribe / unsubscribe proxy ---
@@ -528,6 +598,51 @@ describe('AgentClient WebSocket integration', () => {
     expect(handler).toHaveBeenLastCalledWith(2);
   });
 
+  it('reuses the direct node token across reconnect attempts instead of minting per attempt', async () => {
+    const agent = createAgent();
+    const mints = () =>
+      mockFetch.mock.calls.filter(([url]) => String(url).endsWith('/v1/agent/node-token')).length;
+
+    agent.connect();
+    await nextSocket();
+    expect(mints()).toBe(1);
+
+    // Minting rotates the node token through the workspace's shared write lane, so an
+    // attempt that never opens must not mint again — otherwise write backpressure
+    // feeds itself and a reconnect loop saturates the lane it is already losing.
+    for (const [index, delayMs] of [[0, 1000], [1, 2000]] as const) {
+      MockWebSocket.instances[index]!.simulateClose();
+      await vi.advanceTimersByTimeAsync(delayMs);
+      await nextSocket(index + 1);
+      expect(mints()).toBe(1);
+    }
+
+    // Reuse stays bounded so a token the server no longer accepts is still replaced.
+    MockWebSocket.instances[2]!.simulateClose();
+    await vi.advanceTimersByTimeAsync(4000);
+    await nextSocket(3);
+    expect(mints()).toBe(2);
+  });
+
+  it('keeps a single minted token while a connection that opens keeps flapping', async () => {
+    const agent = createAgent();
+    const mints = () =>
+      mockFetch.mock.calls.filter(([url]) => String(url).endsWith('/v1/agent/node-token')).length;
+
+    agent.connect();
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const socket = await nextSocket(attempt);
+      socket.simulateOpen();
+      // `open` is emitted only after node registration is sent, so let that settle:
+      // reaching a usable connection is what marks the cached token good.
+      await vi.advanceTimersByTimeAsync(0);
+      socket.simulateClose();
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+
+    expect(mints()).toBe(1);
+  });
+
   it('on.permanentlyDisconnected fires with attempt count', async () => {
     const agent = createAgent({
       ws: { maxReconnectAttempts: 0, reconnectJitter: false },
@@ -654,41 +769,134 @@ describe('AgentClient WebSocket integration', () => {
     expect(handler).toHaveBeenCalledTimes(2);
   });
 
-  // --- error: call before connect ---
+  // --- handlers registered before connect() ---
 
-  it('on.messageCreated throws if called before connect()', () => {
+  it('on.messageCreated registered before connect() does not throw and fires after connecting', async () => {
     const agent = createAgent();
-    expect(() => agent.on.messageCreated(vi.fn())).toThrow(
-      'WebSocket not connected. Call connect() first.',
-    );
+    const handler = vi.fn();
+
+    expect(() => agent.on.messageCreated(handler)).not.toThrow();
+
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    ws.simulateMessage({
+      type: 'message.created',
+      channel: 'general',
+      message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] },
+    });
+
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it('on.connected throws if called before connect()', () => {
+  it('on.connected registered before connect() fires once the socket opens', async () => {
     const agent = createAgent();
-    expect(() => agent.on.connected(vi.fn())).toThrow(
-      'WebSocket not connected. Call connect() first.',
-    );
+    const handler = vi.fn();
+
+    agent.on.connected(handler);
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await Promise.resolve();
+
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it('on.reconnecting throws if called before connect()', () => {
+  it('on.reconnecting registered before connect() fires with attempt count', async () => {
     const agent = createAgent();
-    expect(() => agent.on.reconnecting(vi.fn())).toThrow(
-      'WebSocket not connected. Call connect() first.',
-    );
+    const handler = vi.fn();
+
+    agent.on.reconnecting(handler);
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    ws.simulateClose();
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(1);
   });
 
-  it('on.permanentlyDisconnected throws if called before connect()', () => {
-    const agent = createAgent();
-    expect(() => agent.on.permanentlyDisconnected(vi.fn())).toThrow(
-      'WebSocket not connected. Call connect() first.',
-    );
+  it('on.permanentlyDisconnected registered before connect() fires with attempt count', async () => {
+    const agent = createAgent({
+      ws: { maxReconnectAttempts: 0, reconnectJitter: false },
+    });
+    const handler = vi.fn();
+
+    agent.on.permanentlyDisconnected(handler);
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    ws.simulateClose();
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(0);
   });
 
-  it('on.any throws if called before connect()', () => {
+  it('on.any registered before connect() receives events once connected', async () => {
     const agent = createAgent();
-    expect(() => agent.on.any(vi.fn())).toThrow(
-      'WebSocket not connected. Call connect() first.',
-    );
+    const handler = vi.fn();
+
+    agent.on.any(handler);
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await Promise.resolve();
+    ws.simulateMessage({
+      type: 'message.created',
+      channel: 'general',
+      message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] },
+    });
+
+    // open + message.created
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  it('registering handlers before connect() does not itself open a WebSocket', () => {
+    const agent = createAgent();
+    agent.on.messageCreated(vi.fn());
+    agent.on.connected(vi.fn());
+    agent.on.any(vi.fn());
+
+    expect(MockWebSocket.instances).toHaveLength(0);
+  });
+
+  it('does not reopen after permanent disconnection until disconnect()', async () => {
+    const agent = createAgent({
+      ws: { maxReconnectAttempts: 0, reconnectJitter: false },
+    });
+    const handler = vi.fn();
+    agent.on.messageCreated(handler);
+
+    agent.connect();
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    ws.simulateClose();
+
+    expect(MockWebSocket.instances).toHaveLength(1);
+
+    agent.connect();
+    agent.subscribe(['general'], vi.fn());
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(MockWebSocket.instances).toHaveLength(1);
+
+    const p = agent.disconnect();
+    await vi.advanceTimersByTimeAsync(200);
+    await p;
+
+    agent.connect();
+    const ws2 = await nextSocket(1);
+    ws2.simulateOpen();
+    ws2.simulateMessage({
+      type: 'message.created',
+      channel: 'general',
+      message: { id: 'm_2', agent_name: 'Bot', text: 'again', attachments: [] },
+    });
+
+    // disconnect() drops the previous transport, including handlers attached to it.
+    expect(handler).not.toHaveBeenCalled();
+    expect(MockWebSocket.instances).toHaveLength(2);
   });
 
   // --- unsubscribe function ---

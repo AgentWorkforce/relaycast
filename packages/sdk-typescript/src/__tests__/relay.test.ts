@@ -67,6 +67,100 @@ describe('RelayCast', () => {
     expect(() => new RelayCast({} as any)).toThrow('RelayCast apiKey is required');
   });
 
+  it('must-fire: reports a failed session query as unknown, never retained', async () => {
+    const { RelayCast } = await import('../relay.js');
+    const relay = new RelayCast({
+      apiKey: 'rk_live_test123',
+      retryPolicy: { maxRetries: 0 },
+    });
+    mockFetch.mockImplementation(() => mockResponse(
+      { code: 'internal_error', message: 'query failed' },
+      false,
+      503,
+    ));
+
+    const result = await relay.messages.bySessionRef('session-1');
+
+    expect(result.availability).toBe('unknown');
+    expect(result.availability).not.toBe('retained');
+    expect(result.messages).toEqual([]);
+  });
+
+  it('must-fire: treats retained availability with an unknown boundary as unknown', async () => {
+    const { RelayCast } = await import('../relay.js');
+    const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+    mockFetch.mockImplementation(() => mockResponse({
+      session_ref: 'session-1',
+      availability: 'retained',
+      retention: {
+        policy: 'unknown',
+        message_ttl_days: null,
+        retained_since: null,
+        source: 'unknown',
+        reason: 'boundary_unavailable',
+      },
+      session_started_at: '2026-08-18T00:00:00.000Z',
+      session_last_message_at: '2026-08-18T00:01:00.000Z',
+      messages: [],
+      page: { next_cursor: null, has_more: false },
+    }));
+
+    const result = await relay.messages.bySessionRef('session-1');
+
+    expect(result.availability).toBe('unknown');
+    expect(result.availability).not.toBe('retained');
+    expect(result.reason).toBe('response_invalid');
+  });
+
+  it('must-not-fire: resolves a retained session with bounded cursor options', async () => {
+    const { RelayCast } = await import('../relay.js');
+    const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+    mockFetch.mockImplementation(() => mockResponse({
+      session_ref: 'session/one',
+      availability: 'retained',
+      retention: {
+        policy: 'window',
+        message_ttl_days: 30,
+        retained_since: '2026-07-19T00:00:00.000Z',
+        source: 'workspace_override',
+      },
+      session_started_at: '2026-08-18T00:00:00.000Z',
+      session_last_message_at: '2026-08-18T00:01:00.000Z',
+      messages: [{
+        id: '2',
+        channel_id: '1',
+        channel_name: 'general',
+        conversation_id: null,
+        agent_id: '3',
+        agent_name: 'writer',
+        thread_id: null,
+        text: 'hello',
+        blocks: null,
+        metadata: { session_ref: 'session/one' },
+        has_attachments: false,
+        created_at: '2026-08-18T00:00:00.000Z',
+      }],
+      page: { next_cursor: null, has_more: false },
+    }));
+
+    const result = await relay.messages.bySessionRef('session/one', {
+      limit: 10,
+      after: '1',
+    });
+
+    const requested = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    expect(requested.pathname).toBe('/v1/sessions/session%2Fone/messages');
+    expect(requested.searchParams.get('limit')).toBe('10');
+    expect(requested.searchParams.get('after')).toBe('1');
+    expect(result).toMatchObject({
+      sessionRef: 'session/one',
+      availability: 'retained',
+      retention: { messageTtlDays: 30, retainedSince: expect.any(String) },
+      messages: [{ channelId: '1', metadata: { session_ref: 'session/one' } }],
+      page: { nextCursor: null, hasMore: false },
+    });
+  });
+
   describe('workspace realtime', () => {
     it('connect() opens /v1/ws with an observer token and SDK origin metadata', async () => {
       const { RelayCast } = await import('../relay.js');
@@ -427,6 +521,16 @@ describe('RelayCast', () => {
       expect(url).toBe('https://cast.agentrelay.com/v1/agents?status=active');
     });
 
+    it('list() preserves false values and maps roster controls to wire flags', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      mockFetch.mockImplementation(() => mockResponse([]));
+      await relay.agents.list({ status: 'all', includeStale: true, includeMetadata: false });
+      expect(mockFetch.mock.calls[0]![0]).toBe('https://cast.agentrelay.com/v1/agents?status=all&include_stale=1&include_metadata=0');
+      await relay.agents.list({ includeStale: false, includeMetadata: true });
+      expect(mockFetch.mock.calls[1]![0]).toBe('https://cast.agentrelay.com/v1/agents?include_stale=0&include_metadata=1');
+    });
+
     it('get() calls GET /v1/agents/:name with URL encoding', async () => {
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
@@ -436,6 +540,28 @@ describe('RelayCast', () => {
 
       const [url] = mockFetch.mock.calls[0]!;
       expect(url).toBe('https://cast.agentrelay.com/v1/agents/a%2Fb');
+    });
+
+    it('release() sends the token-generation guard as snake_case', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      const expectedTokenHash = 'a'.repeat(64);
+
+      mockFetch.mockImplementation(() => mockResponse({ status: 'completed' }));
+      await relay.agents.release({
+        name: 'Worker',
+        deleteAgent: true,
+        expectedTokenHash,
+      });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/agents/release');
+      expect(init.method).toBe('POST');
+      expect(init.body).toBe(JSON.stringify({
+        name: 'Worker',
+        delete_agent: true,
+        expected_token_hash: expectedTokenHash,
+      }));
     });
   });
 
@@ -743,6 +869,285 @@ describe('RelayCast', () => {
     });
   });
 
+  describe('nodes', () => {
+    it('create() sends current-token proof in a header and not the JSON body', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      mockFetch.mockImplementation(() => mockResponse({
+        id: 'node_1', name: 'renamed', token: 'nt_live_new',
+      }, true, 201));
+
+      await relay.nodes.create(
+        { nodeId: 'node_1', name: 'renamed', version: 'v2' },
+        {
+          currentToken: 'nt_live_current',
+          idempotencyKey: 'node-rotation-00000000-0000-4000-8000-000000000001',
+        },
+      );
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/nodes');
+      expect(init.headers['X-Relaycast-Node-Token']).toBe('nt_live_current');
+      expect(init.headers['Idempotency-Key']).toBe('node-rotation-00000000-0000-4000-8000-000000000001');
+      expect(JSON.parse(init.body)).toEqual({ node_id: 'node_1', name: 'renamed', version: 'v2' });
+    });
+
+    it('create() rejects a recovery key without current-token proof before sending', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      expect(() => relay.nodes.create(
+        { name: 'new-node' },
+        { idempotencyKey: 'node-rotation-00000000-0000-4000-8000-000000000001' },
+      )).toThrow('idempotencyKey requires currentToken');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('create() rejects an empty recovery key before sending', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      for (const idempotencyKey of ['', ' \t']) {
+        expect(() => relay.nodes.create(
+          { nodeId: 'node_1', name: 'renamed', version: 'v2' },
+          { currentToken: 'nt_live_current', idempotencyKey },
+        )).toThrow('idempotencyKey must not be blank');
+      }
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('create() rejects a blank current token before sending', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      for (const currentToken of ['', ' \t']) {
+        expect(() => relay.nodes.create(
+          { nodeId: 'node_1', name: 'renamed', version: 'v2' },
+          { currentToken },
+        )).toThrow('currentToken must not be blank');
+      }
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('list() with status builds the query and camelizes stale roster fields', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse([
+        {
+          id: 'node_1',
+          name: 'node-one',
+          kind: 'ws',
+          role: 'direct',
+          machine_id: null,
+          delivery_adapter: 'ws',
+          delivery: null,
+          capabilities: [],
+          tags: [],
+          version: '1.0.0',
+          status: 'offline',
+          live: false,
+          handlers_live: false,
+          load: null,
+          active_agents: 3,
+          active_agents_stale: true,
+          max_agents: 5,
+          last_heartbeat_at: '2026-09-10T00:00:00.000Z',
+          created_at: '2026-09-01T00:00:00.000Z',
+        },
+      ]));
+
+      const result = await relay.nodes.list({ status: 'offline' });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/nodes?status=offline');
+      expect(init.method).toBe('GET');
+      expect(result).toEqual([
+        expect.objectContaining({
+          id: 'node_1',
+          name: 'node-one',
+          activeAgents: 3,
+          activeAgentsStale: true,
+          lastHeartbeatAt: '2026-09-10T00:00:00.000Z',
+        }),
+      ]);
+    });
+
+    it('list() with capability and name filters builds the combined query', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse([]));
+      await relay.nodes.list({ capability: 'gpu', name: 'node/one', status: 'online' });
+
+      const [url] = mockFetch.mock.calls[0]!;
+      const requested = new URL(String(url));
+      expect(requested.pathname).toBe('/v1/nodes');
+      expect(requested.searchParams.get('capability')).toBe('gpu');
+      expect(requested.searchParams.get('name')).toBe('node/one');
+      expect(requested.searchParams.get('status')).toBe('online');
+    });
+
+    it('list() omits query params entirely when no filters are given', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse([]));
+      await relay.nodes.list();
+
+      const [url] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/nodes');
+    });
+
+    it('listHistory() sets history=true, forwards cursor/limit, and maps next_cursor to nextCursor', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse({
+        nodes: [
+          {
+            id: 'node_2',
+            name: 'node-two',
+            kind: 'http_push',
+            role: 'broker',
+            machine_id: 'machine_1',
+            delivery_adapter: 'http_push',
+            delivery: null,
+            capabilities: [],
+            tags: [],
+            version: '1.0.0',
+            status: 'offline',
+            live: false,
+            handlers_live: false,
+            load: null,
+            active_agents: 2,
+            active_agents_stale: true,
+            max_agents: 10,
+            last_heartbeat_at: '2026-09-09T00:00:00.000Z',
+            created_at: '2026-09-01T00:00:00.000Z',
+          },
+        ],
+        next_cursor: 'cursor_abc',
+      }));
+
+      const result = await relay.nodes.listHistory({
+        capability: 'gpu',
+        name: 'node',
+        status: 'offline',
+        cursor: 'cursor_prev',
+        limit: 50,
+      });
+
+      const requested = new URL(String(mockFetch.mock.calls[0]?.[0]));
+      expect(requested.pathname).toBe('/v1/nodes');
+      expect(requested.searchParams.get('history')).toBe('true');
+      expect(requested.searchParams.get('capability')).toBe('gpu');
+      expect(requested.searchParams.get('name')).toBe('node');
+      expect(requested.searchParams.get('status')).toBe('offline');
+      expect(requested.searchParams.get('cursor')).toBe('cursor_prev');
+      expect(requested.searchParams.get('limit')).toBe('50');
+
+      expect(result).toEqual({
+        nodes: [
+          expect.objectContaining({
+            id: 'node_2',
+            activeAgents: 2,
+            activeAgentsStale: true,
+          }),
+        ],
+        nextCursor: 'cursor_abc',
+      });
+    });
+
+    it('listHistory() maps a null next_cursor to a null nextCursor', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse({ nodes: [], next_cursor: null }));
+
+      const result = await relay.nodes.listHistory();
+
+      const [url] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/nodes?history=true');
+      expect(result).toEqual({ nodes: [], nextCursor: null });
+    });
+
+    it('delete() URL-encodes the node name, forwards force, and returns cascade details', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse({
+        id: 'node_1',
+        name: 'node/one',
+        deleted: true,
+        cascaded_actions: 2,
+      }));
+
+      const result = await relay.nodes.delete('node/one', { force: true });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/nodes/node%2Fone?force=true');
+      expect(init.method).toBe('DELETE');
+      expect(result).toEqual({
+        id: 'node_1',
+        name: 'node/one',
+        deleted: true,
+        cascadedActions: 2,
+      });
+    });
+
+    it('delete() omits the force query by default', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse({
+        id: 'node_1',
+        name: 'node-one',
+        deleted: true,
+        cascaded_actions: 0,
+      }));
+
+      await relay.nodes.delete('node-one');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/nodes/node-one');
+      expect(init.method).toBe('DELETE');
+    });
+
+    it('delete() does not replay an ambiguous transport failure', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({
+        apiKey: 'rk_live_test123',
+        retryPolicy: { maxRetries: 2, backoffMs: 0, jitter: false },
+      });
+      mockFetch.mockRejectedValue(new Error('response lost'));
+
+      await expect(relay.nodes.delete('node-one')).rejects.toMatchObject({
+        code: 'transport_error',
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('delete() does not replay a retryable server response', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({
+        apiKey: 'rk_live_test123',
+        retryPolicy: { maxRetries: 2, backoffMs: 0, jitter: false },
+      });
+      mockFetch.mockImplementation(() => mockResponse(
+        { code: 'internal_error', message: 'response unavailable' },
+        false,
+        503,
+      ));
+
+      await expect(relay.nodes.delete('node-one')).rejects.toMatchObject({
+        code: 'transport_error',
+        status: 503,
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('error handling', () => {
     it('throws RelayError on API error', async () => {
       const { RelayCast } = await import('../relay.js');
@@ -832,6 +1237,31 @@ describe('RelayCast', () => {
       expect(mockFetch).toHaveBeenCalledTimes(2);
     });
 
+    it('bounds an excessive Retry-After delay before an automatic retry', async () => {
+      vi.useFakeTimers();
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({
+        apiKey: 'rk_live_test123',
+        retryPolicy: { maxRetries: 1, backoffMs: 0, jitter: false, retryOn: [503] },
+      });
+
+      mockFetch
+        .mockImplementationOnce(() => Promise.resolve({
+          ok: false,
+          status: 503,
+          headers: new Headers({ 'Retry-After': '86400' }),
+          json: () => Promise.resolve({ ok: false, error: { code: 'database_overloaded', message: 'busy' } }),
+        }))
+        .mockImplementationOnce(() => mockResponse({ id: 'ws_1' }, true, 200));
+
+      const promise = relay.workspace.info();
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(promise).resolves.toEqual({ id: 'ws_1' });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
     it('accepts retry policy overrides via RelayCast constructor options', async () => {
       vi.useFakeTimers();
       const { RelayCast } = await import('../relay.js');
@@ -859,11 +1289,11 @@ describe('RelayCast', () => {
   });
 
   describe('workspace.delete', () => {
-    it('delete() calls DELETE /v1/workspace', async () => {
+    it('delete() keeps using the legacy workspace endpoint', async () => {
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
-      mockFetch.mockImplementation(() =>
+      mockFetch.mockImplementationOnce(() =>
         Promise.resolve({ ok: true, status: 204, json: () => Promise.resolve(undefined) }),
       );
       await relay.workspace.delete();
@@ -871,6 +1301,22 @@ describe('RelayCast', () => {
       const [url, init] = mockFetch.mock.calls[0]!;
       expect(url).toBe('https://cast.agentrelay.com/v1/workspace');
       expect(init.method).toBe('DELETE');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('delete(id) skips workspace lookup', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({ ok: true, status: 204, json: () => Promise.resolve(undefined) }),
+      );
+
+      await relay.workspace.delete('ws/explicit');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/workspaces/ws%2Fexplicit');
+      expect(init.method).toBe('DELETE');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -974,7 +1420,7 @@ describe('RelayCast', () => {
       const [url, init] = mockFetch.mock.calls[0]!;
       expect(url).toBe('https://cast.agentrelay.com/v1/workspaces');
       expect(init.method).toBe('POST');
-      expect(init.body).toBe(JSON.stringify({ name: 'My Workspace' }));
+      expect(init.body).toBe(JSON.stringify({ name: 'My Workspace', provenance: { source: 'sdk' } }));
       expect(init.headers.Authorization).toBeUndefined();
       expect(init.headers['X-Relaycast-Origin-Client']).toBe('@relaycast/sdk');
       expect(init.headers['X-Relaycast-Origin-Version']).toBeDefined();
@@ -1002,6 +1448,314 @@ describe('RelayCast', () => {
       expect(url).toBe('http://localhost:3000/v1/workspaces');
     });
 
+    it('forwards an explicit expiry and returns the deadline', async () => {
+      const { RelayCast } = await import('../relay.js');
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 201,
+          json: () => Promise.resolve({
+            ok: true,
+            data: {
+              workspace_id: 'ws_ephemeral',
+              api_key: 'rk_live_ephemeral',
+              created_at: '2024-01-01',
+              expires_at: '2024-01-01T01:00:00.000Z',
+            },
+          }),
+        }),
+      );
+
+      const result = await RelayCast.createWorkspace('CI Run', {
+        expiresInSeconds: 3_600,
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.body).toBe(JSON.stringify({
+        name: 'CI Run',
+        expires_in_seconds: 3_600,
+        provenance: { source: 'sdk' },
+      }));
+      expect(result.expiresAt).toBe('2024-01-01T01:00:00.000Z');
+    });
+
+    it('forwards the owner-scoped idempotency key for delegated creates', async () => {
+      const { RelayCast } = await import('../relay.js');
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 201,
+          json: () => Promise.resolve({
+            ok: true,
+            data: { workspace_id: 'ws_child', api_key: 'rk_live_child', created_at: '2024-01-01' },
+          }),
+        }),
+      );
+
+      await RelayCast.createWorkspace('child', {
+        apiKey: 'rk_live_parent',
+        idempotencyKey: 'cloud-job-371',
+        baseUrl: 'http://localhost:3000',
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.headers.Authorization).toBe('Bearer rk_live_parent');
+      expect(init.headers['Idempotency-Key']).toBe('cloud-job-371');
+      expect(init.redirect).toBeUndefined();
+    });
+
+    it('forwards the bootstrap secret proof for anonymous keyed creates', async () => {
+      const { RelayCast } = await import('../relay.js');
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 201,
+          json: () => Promise.resolve({
+            ok: true,
+            data: { workspace_id: 'ws_bootstrap', api_key: 'rk_live_bootstrap', created_at: '2024-01-01' },
+          }),
+        }),
+      );
+
+      await RelayCast.createWorkspace('bootstrap-child', {
+        idempotencyKey: 'bootstrap-run-1-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e',
+        bootstrapSecret: 'deployment-secret',
+        baseUrl: 'http://localhost:3000',
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.headers.Authorization).toBeUndefined();
+      expect(init.headers['Idempotency-Key']).toBe('bootstrap-run-1-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e');
+      expect(init.headers['X-Workspace-Bootstrap-Secret']).toBe('deployment-secret');
+    });
+
+    it('uses a high-entropy key at the hosted gateway without sending a deployment secret', async () => {
+      const { RelayCast } = await import('../relay.js');
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 201,
+          json: () => Promise.resolve({
+            ok: true,
+            data: { workspace_id: 'ws_hosted', api_key: 'rk_live_hosted', created_at: '2024-01-01' },
+          }),
+        }),
+      );
+
+      await RelayCast.createWorkspace('hosted-child', {
+        idempotencyKey: 'hosted-run-407-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e',
+      });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/workspaces');
+      expect(init.headers['Idempotency-Key']).toBe('hosted-run-407-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e');
+      expect(init.headers['X-Workspace-Bootstrap-Secret']).toBeUndefined();
+      expect(init.redirect).toBe('manual');
+    });
+
+    it('does not follow a key-only anonymous bootstrap redirect to another origin', async () => {
+      const { RelayCast } = await import('../relay.js');
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: false,
+          status: 307,
+          type: 'opaqueredirect',
+          headers: new Headers({ Location: 'https://redirected.example/v1/workspaces' }),
+          json: () => Promise.resolve({}),
+        }),
+      );
+
+      await expect(RelayCast.createWorkspace('hosted-child', {
+        idempotencyKey: 'hosted-run-408-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e',
+      })).rejects.toMatchObject({
+        code: 'transport_error',
+        statusCode: 307,
+      });
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.redirect).toBe('manual');
+    });
+
+    it('rejects a key-only anonymous bootstrap over remote plaintext HTTP', async () => {
+      const { RelayCast } = await import('../relay.js');
+
+      await expect(RelayCast.createWorkspace('hosted-child', {
+        idempotencyKey: 'hosted-run-408-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e',
+        baseUrl: 'http://self-host.example',
+      })).rejects.toMatchObject({
+        rawCode: 'workspace_create_bootstrap_base_url_required',
+        statusCode: 400,
+      });
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('rejects a short anonymous key before making a request', async () => {
+      const { RelayCast } = await import('../relay.js');
+
+      await expect(RelayCast.createWorkspace('bootstrap-child', {
+        idempotencyKey: 'bootstrap:run-1',
+        bootstrapSecret: 'deployment-secret',
+        baseUrl: 'http://localhost:3000',
+      })).rejects.toMatchObject({
+        statusCode: 400,
+        rawCode: 'workspace_create_idempotency_key_too_weak',
+      });
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('never sends an anonymous bootstrap secret without an explicit self-hosted base URL', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const options = {
+        idempotencyKey: 'bootstrap-run-1-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e',
+        bootstrapSecret: 'self-host-deployment-secret',
+      };
+
+      await expect(RelayCast.createWorkspace('bootstrap-child', options)).rejects.toMatchObject({
+        statusCode: 400,
+        rawCode: 'workspace_create_bootstrap_base_url_required',
+      });
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('never sends an anonymous bootstrap secret to an explicit hosted gateway URL', async () => {
+      const { RelayCast } = await import('../relay.js');
+
+      await expect(RelayCast.createWorkspace('bootstrap-child', {
+        idempotencyKey: 'bootstrap-run-1-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e',
+        bootstrapSecret: 'self-host-deployment-secret',
+        baseUrl: 'https://CAST.AGENTRELAY.COM./',
+      })).rejects.toMatchObject({
+        statusCode: 400,
+        rawCode: 'workspace_create_bootstrap_base_url_required',
+      });
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it.each(['ftp:', 'custom:'])('never sends an anonymous bootstrap secret to a %s URL', async (protocol) => {
+      const { RelayCast } = await import('../relay.js');
+
+      await expect(RelayCast.createWorkspace('bootstrap-child', {
+        idempotencyKey: 'bootstrap-run-1-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e',
+        bootstrapSecret: 'self-host-deployment-secret',
+        baseUrl: `${protocol}//self-host.example`,
+      })).rejects.toMatchObject({
+        statusCode: 400,
+        rawCode: 'workspace_create_bootstrap_base_url_required',
+      });
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('never sends an anonymous bootstrap secret over remote plaintext HTTP', async () => {
+      const { RelayCast } = await import('../relay.js');
+
+      await expect(RelayCast.createWorkspace('bootstrap-child', {
+        idempotencyKey: 'bootstrap-run-1-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e',
+        bootstrapSecret: 'self-host-deployment-secret',
+        baseUrl: 'http://self-host.example',
+      })).rejects.toMatchObject({
+        statusCode: 400,
+        rawCode: 'workspace_create_bootstrap_base_url_required',
+      });
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('does not forward a bootstrap secret proof for an authenticated create', async () => {
+      const { RelayCast } = await import('../relay.js');
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 201,
+          json: () => Promise.resolve({
+            ok: true,
+            data: { workspace_id: 'ws_child', api_key: 'rk_live_child', created_at: '2024-01-01' },
+          }),
+        }),
+      );
+
+      await RelayCast.createWorkspace('child', {
+        apiKey: 'rk_live_parent',
+        idempotencyKey: 'cloud-job-371',
+        // An authenticated caller has no reason to also present a bootstrap
+        // secret; passing one anyway must not leak it onto the wire, since
+        // the owner-scoped path never checks it.
+        bootstrapSecret: 'unused-secret',
+        baseUrl: 'http://localhost:3000',
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.headers['X-Workspace-Bootstrap-Secret']).toBeUndefined();
+    });
+
+    it('does not forward a bootstrap secret proof for an unkeyed anonymous create', async () => {
+      const { RelayCast } = await import('../relay.js');
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 201,
+          json: () => Promise.resolve({
+            ok: true,
+            data: { workspace_id: 'ws_child', api_key: 'rk_live_child', created_at: '2024-01-01' },
+          }),
+        }),
+      );
+
+      await RelayCast.createWorkspace('child', {
+        bootstrapSecret: 'must-not-leave-the-process',
+        baseUrl: 'http://localhost:3000',
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.headers['X-Workspace-Bootstrap-Secret']).toBeUndefined();
+    });
+
+    it('does not silently downgrade an explicitly empty idempotency key', async () => {
+      const { RelayCast } = await import('../relay.js');
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: false,
+          status: 400,
+          json: () => Promise.resolve({
+            ok: false,
+            error: { code: 'invalid_idempotency_key', message: 'Idempotency-Key must not be empty' },
+          }),
+        }),
+      );
+
+      await expect(RelayCast.createWorkspace('child', {
+        apiKey: 'rk_live_parent',
+        idempotencyKey: '',
+        baseUrl: 'http://localhost:3000',
+      })).rejects.toMatchObject({ statusCode: 400 });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.headers['Idempotency-Key']).toBe('');
+    });
+
+    it('forwards explicit creation provenance', async () => {
+      const { RelayCast } = await import('../relay.js');
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 201,
+          json: () => Promise.resolve({
+            ok: true,
+            data: { workspace_id: 'ws_ci', api_key: 'rk_live_ci', created_at: '2024-01-01' },
+          }),
+        }),
+      );
+
+      await RelayCast.createWorkspace('CI', {
+        provenance: { source: 'ci', originId: 'github:AgentWorkforce/relay/actions/runs/123', classification: 'internal' },
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(JSON.parse(init.body)).toEqual({
+        name: 'CI',
+        provenance: { source: 'ci', origin_id: 'github:AgentWorkforce/relay/actions/runs/123', classification: 'internal' },
+      });
+    });
+
     it('sends Agent Relay distinct id when supplied', async () => {
       const { RelayCast } = await import('../relay.js');
 
@@ -1026,6 +1780,61 @@ describe('RelayCast', () => {
       expect(init.headers['X-Agent-Relay-Distinct-Id']).toBe('abc123def4567890');
     });
 
+    it('forwards the cloud user and org identity headers', async () => {
+      const { RelayCast } = await import('../relay.js');
+
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 201,
+          json: () =>
+            Promise.resolve({
+              ok: true,
+              data: { workspace_id: 'ws_1', api_key: 'rk_live_new', created_at: '2024-01-01' },
+            }),
+        }),
+      );
+
+      await RelayCast.createWorkspace('Test', {
+        baseUrl: 'http://localhost:3000',
+        agentRelayUserId: 'usr_abc123',
+        agentRelayOrgId: 'org_xyz789',
+        agentRelayOrgSlug: 'agentworkforce',
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.headers['X-Agent-Relay-User-Id']).toBe('usr_abc123');
+      expect(init.headers['X-Agent-Relay-Org-Id']).toBe('org_xyz789');
+      expect(init.headers['X-Agent-Relay-Org-Slug']).toBe('agentworkforce');
+      // A signed-in user id doubles as the distinct id so callers need only one.
+      expect(init.headers['X-Agent-Relay-Distinct-Id']).toBe('usr_abc123');
+    });
+
+    it('drops a malformed user id rather than forwarding it', async () => {
+      const { RelayCast } = await import('../relay.js');
+
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 201,
+          json: () =>
+            Promise.resolve({
+              ok: true,
+              data: { workspace_id: 'ws_1', api_key: 'rk_live_new', created_at: '2024-01-01' },
+            }),
+        }),
+      );
+
+      await RelayCast.createWorkspace('Test', {
+        baseUrl: 'http://localhost:3000',
+        agentRelayUserId: 'usr\r\nX-Inject: bad',
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.headers['X-Agent-Relay-User-Id']).toBeUndefined();
+      expect(init.headers['X-Agent-Relay-Distinct-Id']).toBeUndefined();
+    });
+
     it('returns an existing workspace on idempotent duplicate create', async () => {
       const { RelayCast } = await import('../relay.js');
 
@@ -1036,7 +1845,7 @@ describe('RelayCast', () => {
           json: () =>
             Promise.resolve({
               ok: true,
-              data: { workspace_id: 'ws_existing', created_at: '2024-01-02' },
+              data: { workspace_id: 'ws_existing', api_key: 'rk_live_existing', created_at: '2024-01-02' },
             }),
         }),
       );
@@ -1045,6 +1854,7 @@ describe('RelayCast', () => {
         RelayCast.createWorkspace('Dup', { apiKey: 'rk_live_existing', baseUrl: 'http://localhost:3000' }),
       ).resolves.toEqual({
         workspaceId: 'ws_existing',
+        apiKey: 'rk_live_existing',
         createdAt: '2024-01-02',
       });
 
@@ -1160,7 +1970,7 @@ describe('RelayCast', () => {
           json: () =>
             Promise.resolve({
               ok: true,
-              data: { workspace_id: 'ws_existing', created_at: '2024-01-02' },
+              data: { workspace_id: 'ws_existing', api_key: 'rk_live_existing', created_at: '2024-01-02' },
             }),
         }),
       );
@@ -1173,6 +1983,7 @@ describe('RelayCast', () => {
         existed: true,
         name: 'Taken Workspace',
         workspaceId: 'ws_existing',
+        apiKey: 'rk_live_existing',
         createdAt: '2024-01-02',
       });
       expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -1193,25 +2004,17 @@ describe('RelayCast', () => {
       expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
-    it('falls back to get + rotateToken on agent_already_exists', async () => {
+    it('fails closed on agent_already_exists', async () => {
       const { RelayCast } = await import('../relay.js');
+      const { RelayError } = await import('../client.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
-      mockFetch
-        .mockImplementationOnce(() =>
-          mockResponse({ code: 'agent_already_exists', message: 'exists' }, false, 409),
-        )
-        .mockImplementationOnce(() =>
-          mockResponse({ id: 'a_1', name: 'Bot', status: 'online', created_at: '2024-01-01' }),
-        )
-        .mockImplementationOnce(() =>
-          mockResponse({ token: 'at_live_rotated' }),
-        );
+      mockFetch.mockImplementation(() =>
+        mockResponse({ code: 'agent_already_exists', message: 'exists' }, false, 409),
+      );
 
-      const result = await relay.agents.registerOrGet({ name: 'Bot' });
-      expect(result.token).toBe('at_live_rotated');
-      expect(result.name).toBe('Bot');
-      expect(mockFetch).toHaveBeenCalledTimes(3);
+      await expect(relay.agents.registerOrGet({ name: 'Bot' })).rejects.toBeInstanceOf(RelayError);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
     it('rethrows non-conflict errors', async () => {
@@ -1479,6 +2282,52 @@ describe('RelayCast', () => {
       expect(url).toBe('https://cast.agentrelay.com/v1/agent');
       expect(init.method).toBe('GET');
       expect(init.headers.Authorization).toBe('Bearer at_live_agent123');
+    });
+  });
+
+  describe('exact agent release', () => {
+    it('preserves the caller key across an overload retry and exposes Retry-After', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({
+        apiKey: 'rk_live_test123',
+        retryPolicy: { maxRetries: 1, backoffMs: 300, jitter: false },
+      });
+      mockFetch
+        .mockImplementationOnce(() => Promise.resolve({
+          ok: false,
+          status: 503,
+          headers: new Headers({ 'Retry-After': '0.001' }),
+          json: () => Promise.resolve({ ok: false, error: { code: 'database_overloaded', message: 'busy' } }),
+        }))
+        .mockImplementationOnce(() => mockResponse({
+          invocation_id: 'inv_exact_1', action_name: 'release', handler_agent_id: null,
+          handler_node_id: null, dispatched_node_id: null, input: {}, status: 'completed', created_at: '2026-01-01T00:00:00.000Z',
+        }, true, 201));
+
+      vi.useFakeTimers();
+      const release = relay.agents.releaseExact(
+        { name: 'worker', expectedAgentId: 'agent_exact_1', deleteAgent: true },
+        { idempotencyKey: 'release-exact-key' },
+      );
+      await vi.advanceTimersByTimeAsync(1);
+      await release;
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      for (const [, init] of mockFetch.mock.calls) {
+        expect(init.headers['Idempotency-Key']).toBe('release-exact-key');
+      }
+    });
+
+    it('does not replay the legacy unkeyed release after an ambiguous 503', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123', retryPolicy: { maxRetries: 2, backoffMs: 0, jitter: false } });
+      mockFetch.mockImplementation(() => Promise.resolve({
+        ok: false,
+        status: 503,
+        headers: new Headers({ 'Retry-After': '1' }),
+        json: () => Promise.resolve({ ok: false, error: { code: 'database_overloaded', message: 'busy' } }),
+      }));
+      await expect(relay.agents.release({ name: 'worker' })).rejects.toMatchObject({ retryAfterMs: 1000, status: 503 });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
   });
 });

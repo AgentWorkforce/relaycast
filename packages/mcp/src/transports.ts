@@ -52,7 +52,7 @@ async function bootstrapOneWorkspace(
 
     // If no valid token, register or rotate
     if (!token) {
-      const result = await relay.agents.registerOrRotate({
+      const result = await relay.agents.register({
         name: agentName,
         type: 'agent',
       });
@@ -113,7 +113,7 @@ async function bootstrapWorkspaces(
  * Reads from stdin, writes to stdout.
  */
 export async function startStdio(options: McpServerOptions): Promise<void> {
-  let effectiveOptions = { ...options, telemetryTransport: 'stdio' as const };
+  let effectiveOptions = { ...options, telemetryTransport: 'stdio' as const, localFiles: options.localFiles ?? true };
 
   const hasAgentToken = Boolean(options.agentToken);
   const hasWorkspaces = Boolean(options.workspaces?.length);
@@ -212,6 +212,8 @@ export function createHttpHandler(baseOptions: McpServerOptions, lifecycle?: Ses
       const mcpServer = createRelayMcpServer({
         ...baseOptions,
         telemetryTransport: 'http',
+        // Remote clients must never read or write files on this host.
+        localFiles: false,
         telemetry,
       });
 

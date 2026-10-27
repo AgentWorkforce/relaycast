@@ -2,7 +2,12 @@ import { z } from 'zod';
 
 export const WebhookSchema = z.object({
   id: z.string(),
+  workspace_id: z.string(),
   name: z.string(),
+  channel_id: z.string(),
+  channel_name: z.string(),
+  created_by: z.string().nullable().optional(),
+  // Kept for clients using the original REST response shape.
   channel: z.string(),
   url: z.string(),
   created_at: z.string(),

@@ -479,18 +479,7 @@ impl WsClient {
                         }
                         _ = ping_interval.tick() => {
                             let ping = if let Some(registration) = &node_registration {
-                                serde_json::json!({
-                                    "v": 1,
-                                    "type": "node.heartbeat",
-                                    "load": 0,
-                                    "active_agents": 1,
-                                    "handlers_live": false,
-                                    "node_id": registration.node_id,
-                                    "name": registration.name,
-                                    "capabilities": [],
-                                    "max_agents": 1,
-                                    "version": SDK_VERSION,
-                                })
+                                node_heartbeat(registration)
                             } else {
                                 serde_json::json!({"type": "ping"})
                             };
@@ -597,6 +586,28 @@ fn reconnect_delay_ms(attempt: u32, max_delay_ms: u64) -> u64 {
     delay.min(max_delay_ms.max(1_000))
 }
 
+fn node_heartbeat(registration: &NodeRegistration) -> serde_json::Value {
+    serde_json::json!({
+        "v": 1,
+        "type": "node.heartbeat",
+        "load": null,
+        "active_agents": 1,
+        "handlers_live": false,
+        "node_id": registration.node_id,
+        "name": registration.name,
+        "capabilities": [],
+        "max_agents": 1,
+        "version": SDK_VERSION,
+    })
+}
+
+// The error type is `tungstenite::Error`, fixed by the `Sink` bound this
+// function is generic over, and Rust 1.98's tightened `result_large_err`
+// threshold now flags it. Boxing would mean allocating on a path that only ever
+// forwards `write.send()`, and would change the signature of an external
+// crate's error for every caller — so the size is acknowledged rather than
+// worked around.
+#[allow(clippy::result_large_err)]
 async fn send_node_register<S>(
     write: &mut S,
     registration: &NodeRegistration,
@@ -726,7 +737,7 @@ fn truncate_str(s: &str, max_chars: usize) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_node_message, truncate_str};
+    use super::{node_heartbeat, normalize_node_message, truncate_str, NodeRegistration};
     use crate::types::WsEvent;
     use serde_json::json;
 
@@ -742,6 +753,18 @@ mod tests {
     #[test]
     fn truncate_str_returns_short_strings_unchanged() {
         assert_eq!(truncate_str("hello", 200), "hello");
+    }
+
+    #[test]
+    fn direct_node_heartbeat_keeps_load_unreported() {
+        let heartbeat = node_heartbeat(&NodeRegistration {
+            node_id: "node_1".to_string(),
+            name: "direct-alice".to_string(),
+            agent_name: "alice".to_string(),
+        });
+
+        assert_eq!(heartbeat.get("load"), Some(&serde_json::Value::Null));
+        assert!(heartbeat.get("load_reported").is_none());
     }
 
     #[test]

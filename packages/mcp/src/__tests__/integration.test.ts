@@ -76,7 +76,6 @@ describe('MCP → SDK → HTTP integration', () => {
           id: 'ws_info',
           name,
           system_prompt: null,
-          plan: 'free',
           created_at: new Date().toISOString(),
           metadata: {},
         };
@@ -302,7 +301,7 @@ describe('MCP → SDK → HTTP integration', () => {
     await client.callTool({ name: 'workspace.create', arguments: { name: 'project-alpha' } });
     const req = findReq((r) => r.url.endsWith('/v1/workspaces') && r.method === 'POST');
     expect(req).toBeDefined();
-    expect(req!.body).toEqual({ name: 'project-alpha' });
+    expect(req!.body).toEqual({ name: 'project-alpha', provenance: { source: 'mcp' } });
   });
 
   it('workspace.set_key switches workspace-level auth for agent.list', async () => {
@@ -460,10 +459,18 @@ describe('MCP → SDK → HTTP integration', () => {
     expect(req!.body).toMatchObject({ to: 'Alice', text: 'Hi' });
   });
 
-  it('message.dm.list → GET /v1/dm/conversations', async () => {
+  it('message.dm.list → GET /v1/dm/conversations without limit', async () => {
     await client.callTool({ name: 'message.dm.list', arguments: {} });
     const req = findReq((r) => r.url.includes('/dm/conversations'));
     expect(req).toBeDefined();
+    expect(new URL(req!.url).searchParams.has('limit')).toBe(false);
+  });
+
+  it('message.dm.list → GET /v1/dm/conversations with limit', async () => {
+    await client.callTool({ name: 'message.dm.list', arguments: { limit: 25 } });
+    const req = findReq((r) => r.url.includes('/dm/conversations'));
+    expect(req).toBeDefined();
+    expect(req!.url).toContain('limit=25');
   });
 
   it('message.dm.send_group → POST /v1/dm/group then POST /v1/dm/:id/messages', async () => {

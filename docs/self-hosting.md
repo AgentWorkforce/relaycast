@@ -16,9 +16,10 @@ of hosted infrastructure and account management.
 
 ## 1. Prerequisites
 
-- **Node.js ≥ 20** (`node -v`).
-- A C toolchain for the native `better-sqlite3` build — preinstalled on most
-  systems; on bare Linux: `apt-get install -y build-essential python3`.
+- **Node.js ≥ 20** (`node -v`) and a C toolchain for the native
+  `better-sqlite3` build (on bare Linux: `apt-get install -y build-essential
+  python3`) — **or** the [standalone binary](#standalone-binary-no-nodejs),
+  which needs neither.
 - A writable directory for the SQLite file and uploaded files.
 - An open TCP port (default `8787`).
 
@@ -42,6 +43,32 @@ npm install -g @relaycast/engine
 relaycast-engine --db ./relaycast.db --port 8787
 ```
 
+### Standalone binary (no Node.js)
+
+Each GitHub release attaches a single-file `relaycast-engine` executable per
+platform, so a machine needs no Node.js, npm, compiler, or native addon:
+`relaycast-engine-<version>-<os>-<arch>` (`.exe` on Windows) for `linux-x64`,
+`linux-arm64`, `linux-musl-x64`, `linux-musl-arm64`, `darwin-x64`,
+`darwin-arm64`, and `windows-x64`, each with a `.sha256` file.
+
+```bash
+V=<version>   # a release that carries binaries
+T=linux-x64   # your platform
+base=https://github.com/AgentWorkforce/relaycast/releases/download/v$V
+curl -fsSLO "$base/relaycast-engine-$V-$T" -O "$base/relaycast-engine-$V-$T.sha256"
+sha256sum -c "relaycast-engine-$V-$T.sha256"   # macOS: shasum -a 256 -c
+chmod +x "relaycast-engine-$V-$T"
+./relaycast-engine-$V-$T --db ./relaycast.db --port 8787
+```
+
+It takes the same flags and environment variables as the npm bin, and
+`--version` prints the engine version. The binary embeds Bun and uses its
+built-in SQLite. glibc builds need glibc 2.17 or newer; the musl builds need
+`libstdc++` (`apk add libstdc++` on Alpine). The macOS and Windows binaries are
+not yet signed by a developer certificate, so a browser download may need
+`xattr -d com.apple.quarantine <file>` on macOS or a SmartScreen confirmation on
+Windows (`curl` downloads are not quarantined).
+
 On start it migrates the database (idempotent), then serves on the port and prints
 a hint for creating your first workspace:
 
@@ -64,12 +91,64 @@ Flags take precedence over environment variables.
 | `--base-url <url>` | — | `http://localhost:<port>` | Public origin. **Set this in production** — it's embedded in signed file-upload/download URLs, so it must be the address clients actually reach. |
 | `--env <name>` | `RELAYCAST_ENV` | `production` | Environment label used in logs. |
 | — | `RELAYCAST_MESSAGE_TTL_DAYS` | unset (keep forever) | Opt in to pruning message history after this many days. Unset, `0`, or negative keeps messages forever. Per-workspace `retention` settings override this; operational tables (deliveries, message logs) prune at 90 days regardless. |
+| — | `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` | unset (fail closed) | Stable server-only derivation secret for anonymous keyed workspace retries. Generate once with `openssl rand -hex 32` and persist it across restarts. |
+| — | `RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED` | `false` | Optional self-host policy requiring callers to prove the derivation secret. Leave unset for hosted-safe anonymous retries. |
 
 **Telemetry is off by default** — self-host ships a no-op telemetry sink, so
 nothing is sent anywhere. (There is no PostHog/analytics in self-host.)
 
 Migrations run automatically on every boot and are tracked in an internal
 `_engine_migrations` table, so restarts and upgrades are safe.
+
+### Anonymous keyed workspace retries
+
+An anonymous `POST /v1/workspaces` with `Idempotency-Key` needs
+`RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` so a retry after a response loss can
+recover the same workspace credential. Generate the secret once:
+
+```bash
+export RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET="$(openssl rand -hex 32)"
+```
+
+Store the result in your secret manager or a mode-600 environment file and
+reuse that exact value for every restart of the same deployment. Never commit
+it, put it in a Dockerfile, pass it as a command-line argument, or print it in
+logs. The server only passes it to the HMAC derivation path and never logs or
+stores it.
+
+The caller does **not** receive this deployment-wide secret. Its high-entropy
+`Idempotency-Key` is the narrowly scoped recovery capability: use one CSPRNG
+key for each logical create/retry sequence and keep it unchanged when retrying.
+The server uses the secret only to derive the returned child key. This is the
+hosted-safe default and keeps the server secret out of SDKs, CLIs, and logs.
+
+If every anonymous keyed caller is trusted with the deployment secret, a
+self-host can opt into the former proof requirement with
+`RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED=true`. In that mode callers must
+send `X-Workspace-Bootstrap-Secret: <the same secret>`; missing or mismatched
+proof returns `401 workspace_create_bootstrap_secret_invalid` before binding
+lookup. Do not enable this mode for arbitrary hosted clients.
+
+Generate the replay key once per logical create/retry sequence with a CSPRNG;
+keep it unchanged when retrying (a v4 UUID or 16 random bytes encoded as hex
+is suitable):
+
+```bash
+BOOTSTRAP_IDEMPOTENCY_KEY="$(openssl rand -hex 16)"
+
+curl -s -XPOST http://localhost:8787/v1/workspaces \
+  -H 'content-type: application/json' \
+  -H "Idempotency-Key: ${BOOTSTRAP_IDEMPOTENCY_KEY}" \
+  -d '{"name":"my-team"}'
+```
+
+If the variable is omitted or empty, keyed anonymous creates return
+`503 workspace_create_idempotency_unavailable` before creating a workspace;
+unkeyed creates and authenticated-owner idempotency remain available. This is
+intentional fail-closed behavior. Existing anonymous bindings also cannot be
+replayed after a secret change, because deriving a different child key would
+not be safe; rotate only after outstanding retries have drained, or accept
+that old bindings will fail closed with a conflict.
 
 ---
 
@@ -185,9 +264,17 @@ relaycast-engine --db /var/lib/relaycast/relaycast.db --port 8787 \
 
 **systemd** (`/etc/systemd/system/relaycast.service`):
 
+Create the environment file before starting the service:
+
+```bash
+sudo install -d -m 0755 /etc/relaycast
+sudo sh -c 'umask 077; printf "%s\\n" "RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET=$(openssl rand -hex 32)" > /etc/relaycast/relaycast.env'
+```
+
 ```ini
 [Service]
 ExecStart=/usr/local/bin/relaycast-engine --db /var/lib/relaycast/relaycast.db --port 8787 --base-url https://relay.example.com
+EnvironmentFile=-/etc/relaycast/relaycast.env
 Restart=always
 User=relaycast
 WorkingDirectory=/var/lib/relaycast
@@ -195,24 +282,39 @@ WorkingDirectory=/var/lib/relaycast
 WantedBy=multi-user.target
 ```
 
-**Docker** (build your own image — no official image is published yet):
-
-```dockerfile
-FROM node:20-bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential python3 \
- && rm -rf /var/lib/apt/lists/*
-RUN npm install -g @relaycast/engine
-VOLUME /data
-WORKDIR /data
-EXPOSE 8787
-ENV RELAYCAST_DB_PATH=/data/relaycast.db PORT=8787
-ENTRYPOINT ["relaycast-engine"]
-```
+**Docker Compose** (builds the repository image locally; no registry image is
+published):
 
 ```bash
-docker build -t relaycast .
-docker run -p 8787:8787 -v "$PWD/data:/data" relaycast --base-url https://relay.example.com
+umask 077
+test ! -e .env || { echo '.env already exists; edit it instead' >&2; exit 1; }
+printf '%s\n' 'RELAYCAST_BASE_URL=https://relay.example.com' > .env
+printf '%s\n' "RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET=$(openssl rand -hex 32)" >> .env
+chmod 600 .env
+docker compose build --pull
+docker compose up -d
 ```
+
+The Compose file passes `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` through when it
+is present in `.env`; leaving it unset keeps the fail-closed behavior described
+above. For a direct Docker run, use `--env-file` with the same persisted
+variable.
+
+**`docker compose config` prints resolved secrets in plaintext.** Compose
+resolves `${VAR}` references from `.env` before rendering its config output,
+so `docker compose config` (used for debugging or CI validation) includes the
+literal `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` value in what it prints. Never
+paste that output into a ticket, chat message, or log you don't control, and
+prefer redacting or piping it through something that strips the value (for
+example `docker compose config | sed 's/RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET:.*/RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: <redacted>/'`)
+before sharing it.
+
+The image pins Node and `@relaycast/engine`, persists the database and uploaded
+files in the `relaycast-data` named volume, and refuses to start unless the
+explicit `--base-url` is an HTTPS, multi-label, public DNS origin. IP literals,
+loopback names, and the special-use `.local` namespace are rejected. See
+[`RUNBOOK.md`](../RUNBOOK.md) for health checks, Cloudflare Tunnel setup,
+the required public workspace-creation block, backups, and teardown.
 
 ---
 
@@ -220,9 +322,14 @@ docker run -p 8787:8787 -v "$PWD/data:/data" relaycast --base-url https://relay.
 
 - **Back up the SQLite file** (and the files directory) before upgrading. With the
   server stopped, copy `relaycast.db` (and `-wal`/`-shm` if present).
-- **Upgrade**: `npm install -g @relaycast/engine@latest` (or bump the Docker base),
-  then restart. New migrations apply automatically on boot; already-applied ones
-  are skipped.
+- **Upgrade**: for a global install, run
+  `npm install -g @relaycast/engine@<tested-version>`. For the repository image,
+  update the exact dependency and package version in `docker/package.json`, its
+  lockfile, the `RELAYCAST_ENGINE_VERSION` default in `Dockerfile`, and the
+  expected version in `RUNBOOK.md` only after confirming federation peers use
+  the same version. The image build fails if the Docker version and package pin
+  differ. Rebuild after changing all pins. New migrations apply automatically
+  on boot; already-applied ones are skipped.
 - Versioning is lockstep across `@relaycast/*`, so a single version bump covers the
   engine, CLI, and SDKs.
 
@@ -242,8 +349,8 @@ Be honest with yourself about what self-host is and isn't:
 - **In-process background work.** Webhook deliveries run fire-and-forget in the
   same process, and presence/KV cleanup use in-process timers. They don't
   survive a restart mid-flight.
-- **Counters reset on restart.** Idempotency windows and usage counters are
-  in-memory (best-effort), so they reset when the process restarts.
+- **Idempotency windows reset on restart.** They are in-memory (best-effort),
+  so they reset when the process restarts.
 - **Workspace-stream overrides reset on restart.** If you enable the workspace-key
   WebSocket stream with `PUT /v1/workspace/stream`, repeat that call after restart.
 - **Restart resets live realtime sequences.** A restart loses in-memory
@@ -253,7 +360,7 @@ Be honest with yourself about what self-host is and isn't:
 
 | | Self-host | Hosted |
 |---|---|---|
-| Billing / plan entitlements | static, effectively unlimited single tier | Stripe-backed per-workspace |
+| Billing / usage quotas | none (per-minute rate ceiling only) | per-workspace, through admission hooks |
 | Multi-tenant admin / org management | — | yes |
 | Horizontal scaling / multi-region | single process | Durable Objects + edge |
 | Managed backups & SLA | you operate the SQLite file + process | managed |

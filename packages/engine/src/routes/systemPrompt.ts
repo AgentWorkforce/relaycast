@@ -38,7 +38,7 @@ systemPromptRoutes.put('/workspace/system-prompt', requireWorkspaceKey, rateLimi
 
     if (reset === true || prompt === null) {
       const result = await systemPromptEngine.setSystemPrompt(db, workspace.id, null);
-      emitServerEvent(c, workspace.id, 'relaycast_server_system_prompt_updated', {
+      emitServerEvent(c, workspace.id, 'system.prompt.updated', {
         operation: 'reset',
       });
       return jsonOk(c, result);
@@ -49,7 +49,7 @@ systemPromptRoutes.put('/workspace/system-prompt', requireWorkspaceKey, rateLimi
     }
 
     const result = await systemPromptEngine.setSystemPrompt(db, workspace.id, prompt);
-    emitServerEvent(c, workspace.id, 'relaycast_server_system_prompt_updated', {
+    emitServerEvent(c, workspace.id, 'system.prompt.updated', {
       operation: 'set',
     });
     return jsonOk(c, result);

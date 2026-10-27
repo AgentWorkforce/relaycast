@@ -56,6 +56,7 @@ receiptRoutes.post(
                 nodeConnections: c.get('engine').nodeConnections,
                 environment: c.get('engine').config?.environment,
                 httpPushProxy: c.get('engine').config?.httpPushProxy,
+                outboundWebhookFetch: c.get('engine').config?.outboundWebhookFetch,
                 workspaceId: workspace.id,
               },
               {
@@ -78,7 +79,7 @@ receiptRoutes.post(
         workspaceId: workspace.id,
         data: eventData,
       });
-      emitServerEvent(c, workspace.id, 'relaycast_server_message_read_marked', {
+      emitServerEvent(c, workspace.id, 'message.read.marked', {
         message_id: result.message_id,
         agent_id: result.agent_id,
       });

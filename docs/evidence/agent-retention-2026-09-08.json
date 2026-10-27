@@ -1,0 +1,295 @@
+{
+  "recorded_at": "2026-09-08T18:22:56.441973+00:00",
+  "production": {
+    "database": "relaycast-cloud",
+    "source": "read-only D1 queries using engine retention SQL",
+    "retention_days": 7,
+    "cutoff": "2026-09-01T18:15:12.000Z",
+    "dry_run": true,
+    "complete": false,
+    "pages": 17,
+    "scanned": 1700,
+    "counts": {
+      "not_offline": 8,
+      "recent_or_unknown": 434,
+      "ownership_protected": 1256,
+      "history_unverified": 2,
+      "history_referenced": 0,
+      "eligible": 0
+    },
+    "deleted": 0,
+    "stop_reason": "D1 HTTP 429; cursor saved locally; no further automatic retries",
+    "scope_note": "Partial traversal of the target workspace. Zero eligible is not a whole-workspace reclaim estimate. Required indexes are not deployed; two otherwise unowned rows remain history_unverified.",
+    "initial_read_only_inventory": {
+      "registry_rows": 5665,
+      "persisted_offline": 4737,
+      "offline_or_released_last_seen_before_2026_09_01_utc": 2836
+    },
+    "per_page": [
+      {
+        "scanned": 100,
+        "counts": {
+          "not_offline": 0,
+          "recent_or_unknown": 0,
+          "ownership_protected": 100,
+          "history_unverified": 0,
+          "history_referenced": 0,
+          "eligible": 0
+        },
+        "deleted": 0
+      },
+      {
+        "scanned": 100,
+        "counts": {
+          "not_offline": 0,
+          "recent_or_unknown": 1,
+          "ownership_protected": 99,
+          "history_unverified": 0,
+          "history_referenced": 0,
+          "eligible": 0
+        },
+        "deleted": 0
+      },
+      {
+        "scanned": 100,
+        "counts": {
+          "not_offline": 0,
+          "recent_or_unknown": 25,
+          "ownership_protected": 75,
+          "history_unverified": 0,
+          "history_referenced": 0,
+          "eligible": 0
+        },
+        "deleted": 0
+      },
+      {
+        "scanned": 100,
+        "counts": {
+          "not_offline": 4,
+          "recent_or_unknown": 90,
+          "ownership_protected": 6,
+          "history_unverified": 0,
+          "history_referenced": 0,
+          "eligible": 0
+        },
+        "deleted": 0
+      },
+      {
+        "scanned": 100,
+        "counts": {
+          "not_offline": 2,
+          "recent_or_unknown": 25,
+          "ownership_protected": 73,
+          "history_unverified": 0,
+          "history_referenced": 0,
+          "eligible": 0
+        },
+        "deleted": 0
+      },
+      {
+        "scanned": 100,
+        "counts": {
+          "not_offline": 1,
+          "recent_or_unknown": 8,
+          "ownership_protected": 91,
+          "history_unverified": 0,
+          "history_referenced": 0,
+          "eligible": 0
+        },
+        "deleted": 0
+      },
+      {
+        "scanned": 100,
+        "counts": {
+          "not_offline": 0,
+          "recent_or_unknown": 23,
+          "ownership_protected": 77,
+          "history_unverified": 0,
+          "history_referenced": 0,
+          "eligible": 0
+        },
+        "deleted": 0
+      },
+      {
+        "scanned": 100,
+        "counts": {
+          "not_offline": 0,
+          "recent_or_unknown": 29,
+          "ownership_protected": 71,
+          "history_unverified": 0,
+          "history_referenced": 0,
+          "eligible": 0
+        },
+        "deleted": 0
+      },
+      {
+        "scanned": 100,
+        "counts": {
+          "not_offline": 0,
+          "recent_or_unknown": 17,
+          "ownership_protected": 83,
+          "history_unverified": 0,
+          "history_referenced": 0,
+          "eligible": 0
+        },
+        "deleted": 0
+      },
+      {
+        "scanned": 100,
+        "counts": {
+          "not_offline": 1,
+          "recent_or_unknown": 26,
+          "ownership_protected": 73,
+          "history_unverified": 0,
+          "history_referenced": 0,
+          "eligible": 0
+        },
+        "deleted": 0
+      },
+      {
+        "scanned": 100,
+        "counts": {
+          "not_offline": 0,
+          "recent_or_unknown": 53,
+          "ownership_protected": 47,
+          "history_unverified": 0,
+          "history_referenced": 0,
+          "eligible": 0
+        },
+        "deleted": 0
+      },
+      {
+        "scanned": 100,
+        "counts": {
+          "not_offline": 0,
+          "recent_or_unknown": 7,
+          "ownership_protected": 92,
+          "history_unverified": 1,
+          "history_referenced": 0,
+          "eligible": 0
+        },
+        "deleted": 0
+      },
+      {
+        "scanned": 100,
+        "counts": {
+          "not_offline": 0,
+          "recent_or_unknown": 0,
+          "ownership_protected": 100,
+          "history_unverified": 0,
+          "history_referenced": 0,
+          "eligible": 0
+        },
+        "deleted": 0
+      },
+      {
+        "scanned": 100,
+        "counts": {
+          "not_offline": 0,
+          "recent_or_unknown": 30,
+          "ownership_protected": 70,
+          "history_unverified": 0,
+          "history_referenced": 0,
+          "eligible": 0
+        },
+        "deleted": 0
+      },
+      {
+        "scanned": 100,
+        "counts": {
+          "not_offline": 0,
+          "recent_or_unknown": 49,
+          "ownership_protected": 51,
+          "history_unverified": 0,
+          "history_referenced": 0,
+          "eligible": 0
+        },
+        "deleted": 0
+      },
+      {
+        "scanned": 100,
+        "counts": {
+          "not_offline": 0,
+          "recent_or_unknown": 24,
+          "ownership_protected": 76,
+          "history_unverified": 0,
+          "history_referenced": 0,
+          "eligible": 0
+        },
+        "deleted": 0
+      },
+      {
+        "scanned": 100,
+        "counts": {
+          "not_offline": 0,
+          "recent_or_unknown": 27,
+          "ownership_protected": 72,
+          "history_unverified": 1,
+          "history_referenced": 0,
+          "eligible": 0
+        },
+        "deleted": 0
+      }
+    ]
+  },
+  "synthetic_local_fixture": {
+    "source": "scripts/test-support/seed-agent-retention.mjs; not production",
+    "preview": {
+      "type": "summary",
+      "dry_run": true,
+      "complete": true,
+      "pages": 27,
+      "scanned": 2628,
+      "eligible": 2500,
+      "deleted": 0,
+      "skipped_changed": 0,
+      "not_offline": 33,
+      "recent_or_unknown": 25,
+      "ownership_protected": 50,
+      "history_unverified": 0,
+      "history_referenced": 20,
+      "next_cursor": null
+    },
+    "delete_first_page": {
+      "type": "summary",
+      "dry_run": false,
+      "complete": false,
+      "pages": 1,
+      "scanned": 100,
+      "eligible": 100,
+      "deleted": 100,
+      "skipped_changed": 0,
+      "not_offline": 0,
+      "recent_or_unknown": 0,
+      "ownership_protected": 0,
+      "history_unverified": 0,
+      "history_referenced": 0
+    },
+    "delete_resumed": {
+      "type": "summary",
+      "dry_run": false,
+      "complete": true,
+      "pages": 26,
+      "scanned": 2528,
+      "eligible": 2400,
+      "deleted": 2400,
+      "skipped_changed": 0,
+      "not_offline": 33,
+      "recent_or_unknown": 25,
+      "ownership_protected": 50,
+      "history_unverified": 0,
+      "history_referenced": 20,
+      "next_cursor": null
+    },
+    "remaining_registry_rows": 128
+  },
+  "validation": {
+    "engine_tests_passed": 66,
+    "retention_tests_passed": 18,
+    "engine_build": "passed",
+    "engine_lint": "passed",
+    "cli_typecheck": "passed",
+    "cli_lint": "passed",
+    "openapi_parse": "passed"
+  }
+}

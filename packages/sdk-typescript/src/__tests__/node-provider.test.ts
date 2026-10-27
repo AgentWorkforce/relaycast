@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NodeProviderClient } from '../node-provider.js';
+import {
+  FLEET_ACTION_CALLER_METADATA_KEY,
+  FLEET_ACTION_CALLER_METADATA_VERSION,
+} from '@relaycast/types';
 
 /**
  * A fake node-ws server: captures frames the client sends and lets the test
@@ -111,7 +115,12 @@ describe('NodeProviderClient', () => {
     expect(register).toMatchObject({ type: 'node.register', name: 'alpha', node_id: 'node_a' });
     expect(register.provider).toMatchObject({ name: 'py' });
     expect((register.provider as { instance_id: string }).instance_id).toBeTruthy();
-    expect(register.capabilities).toEqual([{ name: 'run-etl' }]);
+    expect(register.capabilities).toEqual([{
+      name: 'run-etl',
+      metadata: {
+        [FLEET_ACTION_CALLER_METADATA_KEY]: FLEET_ACTION_CALLER_METADATA_VERSION,
+      },
+    }]);
 
     sock.emit(acceptAll(register));
     await expect(node.whenRegistered()).resolves.toBeTruthy();
@@ -151,9 +160,15 @@ describe('NodeProviderClient', () => {
   });
 
   it('runs a handler on action.invoke and replies with the output', async () => {
+    let handlerContext: unknown;
     const node = new NodeProviderClient({
       ...baseOptions,
-      capabilities: { 'run-etl': async (input: unknown) => ({ echoed: input }) },
+      capabilities: {
+        'run-etl': async (input: unknown, context) => {
+          handlerContext = context;
+          return { echoed: input };
+        },
+      },
     });
     node.serve();
     const sock = newSocket();
@@ -161,8 +176,21 @@ describe('NodeProviderClient', () => {
     sock.emit(acceptAll(sock.lastRegister()));
     await node.whenRegistered();
 
-    sock.emit({ v: 1, type: 'action.invoke', invocation_id: 'inv-1', action: 'run-etl', input: { rows: 3 } });
+    sock.emit({
+      v: 1,
+      type: 'action.invoke',
+      invocation_id: 'inv-1',
+      action: 'run-etl',
+      caller_id: 'agent-caller',
+      caller_name: 'listener',
+      input: { rows: 3 },
+    });
     await vi.waitFor(() => expect(sock.sentOfType('action.result')).toHaveLength(1));
+    expect(handlerContext).toMatchObject({
+      invocationId: 'inv-1',
+      callerAgentId: 'agent-caller',
+      callerAgentName: 'listener',
+    });
     expect(sock.sentOfType('action.result').at(-1)).toEqual({
       v: 1,
       type: 'action.result',
@@ -205,8 +233,8 @@ describe('NodeProviderClient', () => {
     expect(sock.sentOfType('action.result').at(-1)).toMatchObject({ invocation_id: 'inv-x', error: expect.stringContaining('nope') });
   });
 
-  it('sends provider-scoped heartbeats while serving', async () => {
-    const node = new NodeProviderClient({ ...baseOptions, heartbeatIntervalMs: 1_000 });
+  it('sends provider-scoped heartbeats without inventing finite-capacity load', async () => {
+    const node = new NodeProviderClient({ ...baseOptions, maxAgents: 4, heartbeatIntervalMs: 1_000 });
     node.serve();
     const sock = newSocket();
     sock.open();
@@ -215,7 +243,8 @@ describe('NodeProviderClient', () => {
 
     await vi.advanceTimersByTimeAsync(1_000);
     const hb = sock.sentOfType('node.heartbeat').at(-1)!;
-    expect(hb).toMatchObject({ provider: { name: 'py' }, load: 0, active_agents: 0, handlers_live: true });
+    expect(hb).toMatchObject({ provider: { name: 'py' }, active_agents: 0, handlers_live: true });
+    expect(hb).not.toHaveProperty('load');
     expect(hb).not.toHaveProperty('last_heartbeat_at');
   });
 

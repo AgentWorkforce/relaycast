@@ -10,7 +10,195 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased - Minor]
 
 ### Added
+
 - Added `RelayCast.listA2aDirectory({ skill?, tag?, q? })` for unified native and registered A2A agent discovery.
+
+### Fixed
+
+- `agent.on.*` no longer throws when registered before `connect()`; handlers attach immediately and fire once the socket opens.
+- `agent.exited`, `node.status.online`, and `node.status.offline` have camelCase SDK types (`AgentExitedEvent`, `NodeStatusOnlineEvent`, `NodeStatusOfflineEvent`). `on.agentExited` is on `AgentClient` and `RelayCast`. `on.nodeOnline` and `on.nodeOffline` are on `RelayCast` only: the engine publishes node liveness to the workspace stream and webhooks, and `AgentClient`'s `/v1/node/ws` socket never receives it. Previously these events had no SDK type, so consumers reached for the snake_case raw type from `@relaycast/types` and read `undefined` off the camelized payload.
+
+## [10.6.1] - 2026-10-18
+
+### Fixed
+
+- `relay.agents.spawn()` accepts `muse` and `devin` in its typed `cli` field.
+
+## [10.6.0] - 2026-10-18
+
+### Added
+
+- `relay.workspace.rotateKey()` for workspace-key self-rollover; the replacement key is returned once and should be persisted, never printed.
+
+## [10.5.0] - 2026-10-16
+
+### Added
+
+- `delivery.failed` event handlers receive the server rejection `reason`, including `recipient_offline` and `depth_cap`.
+
+## [10.0.2] - 2026-10-11
+
+### Fixed
+
+- `allDmConversations()` follows bounded server cursors and still returns the complete conversation array, with a malformed-cursor progress guard.
+
+## [10.0.0] - 2026-10-11
+
+### Changed
+
+- `agents.list()` accepts `includeStale` (default `false`) and `includeMetadata` (default `true`), mapped to HTTP `include_stale` / `include_metadata` flags. `status: 'all'` is supported; default/all rosters include only agents seen within seven days unless `includeStale: true` is supplied.
+
+## [9.1.0] - 2026-10-08
+
+### Added
+
+- Subscriptions and HTTP push node delivery can opt into Standard Webhooks signing.
+- `subscriptions.deliveries()` lists per-event delivery health.
+- `subscriptions.replayDelivery()` replays failed or dead-lettered deliveries.
+
+## [9.0.0] - 2026-10-06
+
+### Added
+
+- `nodes.create(request, { currentToken, idempotencyKey })` sends current-node proof without placing the credential in JSON and can reuse a high-entropy operation key to recover a committed rotation after a lost response.
+
+## [8.16.0] - 2026-10-01
+
+### Added
+
+- Workspace creation and setup accept application-defined metadata; workspace updates shallow-merge metadata and delete keys whose values are null.
+
+## [8.14.0] - 2026-09-30
+
+### Added
+
+- `NodeProviderClient` negotiates caller-provenance support per action, and `NodeHandlerContext` exposes the authenticated caller as `callerAgentId` and `callerAgentName` when present.
+
+## [8.13.0] - 2026-09-25
+
+### Added
+
+- `agent.sendTo(address, text)` sends a DM to an `agent@machine` address (`POST /v1/dm` with `address`).
+
+## [8.12.0] - 2026-09-24
+
+### Fixed
+
+- Direct-node `message.created` events preserve public message metadata and the server creation timestamp, matching workspace WebSocket delivery.
+
+## [8.11.1] - 2026-09-17
+
+### Fixed
+
+- `AgentClient.connect()` reuses its direct node token across reconnect attempts rather than calling `POST /v1/agent/node-token` on every attempt. The cached token is replaced after three consecutive attempts that never reach a usable connection, and the counter resets once one does, so a healthy client mints once per session while a client holding a rejected token still recovers.
+
+## [8.9.0] - 2026-09-11
+
+### Added
+
+- `nodes.list()` accepts `status: 'online' | 'offline'` to select on the engine's server-filtered liveness query instead of fetching the full roster. `NodeRosterEntry.activeAgentsStale` is `true` whenever `live` is `false`, so a frozen historical occupancy count is never treated as current.
+- `nodes.listHistory()` reads the bounded, paginated `history=true` contract (`{ nodes, nextCursor }`) for an explicit full-roster read without silent truncation, however many rows the workspace has retained.
+
+## [8.8.0] - 2026-09-10
+
+### Changed
+
+- `RelayCast.createWorkspace()` can replay anonymous hosted creation with a CSPRNG `idempotencyKey` without accepting or transmitting a deployment-wide secret.
+
+### Fixed
+
+- Anonymous keyed workspace bootstrap rejects remote HTTP and redirects, preventing its recovery capability from reaching another origin.
+- `agents.releaseExact()` preserves its caller-held idempotency key across retries, exposes server `Retry-After`, and legacy unkeyed release is no longer replayed automatically.
+
+## [8.6.0] - 2026-09-09
+
+### Changed
+
+- Workspace bootstrap `idempotencyKey` can now be used without an existing `apiKey` to recover an anonymous create safely.
+
+## [8.5.1] - 2026-09-07
+
+### Added
+
+- `relay.nodes.delete(name, { force? })` removes a node and returns its cascade details; the safe default refuses online nodes and nodes with hosted actions, and the SDK does not replay ambiguous failures.
+
+## [8.5.0] - 2026-09-06
+
+### Added
+
+- `agents.release()` accepts `expectedTokenHash` for generation-safe cleanup.
+
+## [8.4.0] - 2026-09-05
+
+### Added
+
+- `RelayCast.createWorkspace()` and `RelaycastSetup.createWorkspace()` accept `idempotencyKey` for crash-safe delegated workspace creation retries.
+
+## [8.2.2] - 2026-09-02
+
+### Fixed
+
+- `actions.invoke()` preserves one generated idempotency key across automatic HTTP retries.
+
+## [8.2.0] - 2026-08-21
+
+### Added
+
+- Workspace bootstrap options accept camelCase creation provenance and default SDK-created workspaces to `source: "sdk"`.
+
+## [8.0.7] - 2026-08-19
+
+### Added
+
+- `relay.messages.bySessionRef()` resolves bounded replay slices and converts lookup failures to explicit unknown availability.
+
+### Fixed
+
+- Channel posts, thread replies, and group-DM messages now forward structured `data` metadata consistently with direct DMs.
+
+## [8.0.6] - 2026-08-18
+
+### Added
+
+- Workspace creation accepts `expiresInSeconds` and returns the resulting expiry timestamp.
+- `workspace.delete(id)` uses the id-scoped deletion endpoint, while the no-argument form keeps using the legacy endpoint for compatibility with older engines.
+
+## [8.0.1] - 2026-08-14
+
+### Fixed
+
+- `AgentClient.dms.conversations({ limit })` forwards the optional server-side result limit used by MCP DM-list callers.
+
+## [8.0.0] - 2026-08-10
+
+### Added
+
+- `AgentClient.dm()` accepts structured `data` and returns public DM metadata, enabling versioned A2A extensions such as Ratify proofs and revocations.
+
+### Changed
+
+- `data` and `metadata` are now passed through verbatim, like `headers`, `input` and `input_schema`, instead of being snake_cased on send and camelCased on read. Their keys are caller-authored data: rewriting them corrupted any document whose field names are meaningful, and made signed payloads unverifiable — a `RevocationList` whose `revoked_certs` arrived as `revokedCerts` cannot be reconstructed, so its signature fails.
+
+  Scope of the change: only **multi-word** keys differ, and only for callers reading or writing these fields through this SDK. A reader who previously saw `nodeId` for a stored `node_id` now sees `node_id`. Callers who wrote camelCase keys and read them back unchanged are unaffected, and callers who deliberately wrote snake_case keys were already getting a different key back — for them this is a fix.
+
+## [7.0.0] - 2026-08-07
+
+### Changed
+
+- `NodeRosterEntry.load` is now `number | null`; provider and direct-agent heartbeats no longer label placeholder utilization as measured.
+
+## [6.3.0] - 2026-07-28
+
+### Added
+- Client and workspace-bootstrap options accept `agentRelayMachineId`, `agentRelayUserId`, `agentRelayOrgId`, and `agentRelayOrgSlug`, sent as `X-Agent-Relay-*` headers on HTTP and as `agent_relay_*` query params on WebSocket upgrades. `agentRelayUserId` doubles as the distinct id when `agentRelayDistinctId` is unset; the machine id is always sent alongside the distinct id, never instead of it.
+
+### Fixed
+- Identity now reaches WebSocket connections, not just HTTP requests: `RelayCast` never forwarded it to its observer socket, and `AgentClient` forwarded only the distinct id to its `/v1/node/ws` socket, so agent sessions reported `ws_session_started` as unauthenticated.
+- A malformed higher-priority identity value no longer shadows a valid lower-priority one; each source is validated before it wins.
+
+## [6.2.0] - 2026-07-17
+
+### Added
 - `AgentClient.disconnect()` and `presence.markOffline()` accept an optional `{ deregister?: boolean }`. By default the disconnect is presence-only for node-hosted agents; pass `{ deregister: true }` to tear down the node binding and re-home the agent to its direct node.
 
 ### Fixed
