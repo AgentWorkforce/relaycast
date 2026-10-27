@@ -22,6 +22,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - A message trigger cannot invoke builtin `release`.
 - Overlapping dispatch of a spawn or agent-hosted action sends one frame and keeps one capacity reservation, including a timeout retry and a send that fails before the frame is accepted.
+- Raw JSON inbound webhook bodies (including `{}`) appear in the delivered message instead of a generic event line. Their fields are rendered as text only and never read as message metadata.
 
 ## [11.1.0] - 2026-10-27
 
@@ -62,7 +63,6 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Inbox mention lookup uses a workspace-scoped index after its bounded backfill completes; delivery sweeps and per-node agent reads avoid full-history scans that stalled the shared database and surfaced as `database_overloaded`.
 - Every response includes its request id in the `X-Request-Id` header.
-- Raw JSON inbound webhook bodies (including `{}`) appear in the delivered message instead of a generic event line. Their fields are rendered as text only and never read as message metadata.
 
 ## [10.6.3] - 2026-10-19
 

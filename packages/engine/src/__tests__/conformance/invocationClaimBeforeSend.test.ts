@@ -484,6 +484,59 @@ describe('invocation claim before send', () => {
     expect(row?.providerAcceptedAttempt).toBe(row?.dispatchAttempts);
   });
 
+  it('retries an invoked agent-hosted action once', async () => {
+    const ws = await createWorkspace(stack.app, 'agent-claim-invoked');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    const handler = await registerAgent(stack.app, ws.workspaceKey, 'handler');
+    const { sock, nodeId } = await attachDirectNodeSocket(stack, ws.workspaceId, handler);
+    const db = stack.runtime.handle.db;
+    await db
+      .update(agents)
+      .set({ locationType: 'via_node', locationNodeId: nodeId, providerName: 'default', status: 'active' })
+      .where(eq(agents.id, handler.agentId));
+    await db.insert(actions).values({
+      id: 'act_claim_invoked',
+      workspaceId: ws.workspaceId,
+      name: 'echo',
+      description: 'invoked retry',
+      handlerAgentId: handler.agentId,
+    });
+    const invocationId = 'inv_agent_claim_invoked';
+    await db.insert(actionInvocations).values({
+      id: invocationId,
+      workspaceId: ws.workspaceId,
+      actionId: 'act_claim_invoked',
+      actionName: 'echo',
+      invocationOrigin: 'registered_action',
+      callerId: caller.agentId,
+      callerName: caller.name,
+      handlerAgentId: handler.agentId,
+      handlerNodeId: nodeId,
+      input: { value: 1 },
+      status: 'invoked',
+      dispatchedAt: new Date(Date.now() - 60_000),
+      retryAfterAt: new Date(Date.now() - 5_000),
+      dispatchedNodeId: nodeId,
+      dispatchedProvider: 'default',
+      dispatchAttempts: 1,
+      providerAcceptedAttempt: 1,
+      attemptedNodeIds: [nodeId],
+    });
+    const [invocation] = await db.select().from(actionInvocations).where(eq(actionInvocations.id, invocationId));
+
+    await Promise.all([
+      rescheduleNodeInvocation(db, stack.runtime.realtime, invocation!),
+      rescheduleNodeInvocation(db, stack.runtime.realtime, invocation!),
+    ]);
+
+    const frames = sock.ofType('action.invoke').filter((frame) => frame.invocation_id === invocationId);
+    expect(frames).toHaveLength(1);
+    const [row] = await db.select().from(actionInvocations).where(eq(actionInvocations.id, invocationId));
+    expect(row?.status).toBe('dispatched');
+    expect(row?.dispatchAttempts).toBe(2);
+    expect(row?.providerAcceptedAttempt).toBe(row?.dispatchAttempts);
+  });
+
   it('releases a spawn claim when the send throws and a later drain sends once', async () => {
     const ws = await createWorkspace(stack.app, 'spawn-claim-throw');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');

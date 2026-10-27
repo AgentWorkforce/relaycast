@@ -83,10 +83,10 @@ export interface AgentActionProviderAuthorization {
    */
   retryAfterAt?: Date | null;
   /**
-   * Status the caller observed. A timeout retry of a `dispatched` row passes
-   * `dispatched`. Absent means a fresh `pending` row.
+   * Status the caller observed. A timeout or `handler_unavailable` retry passes
+   * `dispatched` or `invoked`. Absent means a fresh `pending` row.
    */
-  claimStatus?: 'pending' | 'dispatched';
+  claimStatus?: 'pending' | 'dispatched' | 'invoked';
   /** `retry_after_at` the caller observed. Absent means it was unset. */
   observedRetryAfterAt?: Date | null;
   /** `dispatch_attempts` the caller observed. Absent means zero. */

@@ -3728,7 +3728,7 @@ function observedInvocationClaim(invocation: {
   observedDispatchAttempts?: number;
   observedDispatchedNodeId?: string | null;
 } {
-  if (invocation.status !== 'pending' && invocation.status !== 'dispatched') return {};
+  if (invocation.status !== 'pending' && invocation.status !== 'dispatched' && invocation.status !== 'invoked') return {};
   return {
     claimStatus: invocation.status,
     observedRetryAfterAt: invocation.retryAfterAt ?? null,
@@ -3922,7 +3922,7 @@ export async function rescheduleNodeInvocation(
           const expectedActionId = invocation.invocationOrigin === 'registered_action'
             ? invocation.actionId
             : null;
-          const queuedClaim = invocation.status === 'pending' || invocation.status === 'dispatched'
+          const queuedClaim = invocation.status === 'pending' || invocation.status === 'dispatched' || invocation.status === 'invoked'
             ? exclusiveClaimWrite({
               observedStatus: invocation.status,
               observedRetryAfterAt: invocation.retryAfterAt ?? null,

@@ -2,7 +2,7 @@ import { eq, isNull, type SQL } from 'drizzle-orm';
 import { actionInvocations } from '../db/schema.js';
 
 /** Status a pre-send claim observed on the invocation row. */
-export type InvocationClaimStatus = 'pending' | 'dispatched';
+export type InvocationClaimStatus = 'pending' | 'dispatched' | 'invoked';
 
 /**
  * `retry_after_at` is stored as unix seconds. Two deadlines in the same
