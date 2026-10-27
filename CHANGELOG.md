@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Major]
+
+### Removed
+
+- The Python SDK (`relaycast-sdk`) is no longer developed or published from this repository.
 
 ## [11.1.0] - 2026-10-27
 
