@@ -22,7 +22,7 @@ describe('idempotency storage requirements', () => {
 
   it('requires readable storage without failing an accepted operation on completion loss', async () => {
     const operation = vi.fn(async () => 'committed');
-    const kv = { get: vi.fn(async () => null), put: vi.fn(async (_key: string, _value: string) => {}), delete: vi.fn(async () => {}), increment: vi.fn(async () => 1) };
+    const kv = { get: vi.fn(async () => null), put: vi.fn(async (_key: string, _value: string) => {}), delete: vi.fn(async () => {}) };
     kv.put.mockImplementation(async (key) => { if (!key.endsWith(':lock')) throw new Error('completion loss'); });
     await expect(runIdempotent({ ...identity, requireKvRead: true, kv, operation }))
       .resolves.toMatchObject({ data: 'committed', replayed: false });
