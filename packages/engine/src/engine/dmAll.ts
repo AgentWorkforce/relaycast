@@ -13,6 +13,21 @@ import { publicMessageMetadata } from './messageMetadata.js';
 
 type Db = ReturnType<typeof getDb>;
 
+export const DM_CONVERSATION_PAGE_MAX_LIMIT = 500;
+
+interface DmConversationRow {
+  id: string;
+  dmType: string;
+  name: string | null;
+  channelId: string;
+  createdAt: Date;
+}
+
+export interface DmConversationPage {
+  conversations: WorkspaceDmConversation[];
+  nextCursor: string | null;
+}
+
 export function dmMessagePageLimit(limit?: number): number {
   return Math.min(Math.max(limit || 50, 1), 100);
 }
@@ -23,8 +38,19 @@ export function dmFilteredCountConversationChunkSize(agentFilterCount: number): 
   return Math.max(1, D1_SAFE_IN_QUERY_CHUNK_SIZE - Math.min(agentFilterCount, DM_COUNT_AGENT_CHUNK_SIZE));
 }
 
-export async function listAllDmConversations(db: Db, workspaceId: string): Promise<WorkspaceDmConversation[]> {
-  const conversations = await db
+export async function listAllDmConversations(
+  db: Db,
+  workspaceId: string,
+  opts: { conversationIds?: string[] } = {},
+): Promise<WorkspaceDmConversation[]> {
+  const scopedConversationIds = opts.conversationIds === undefined
+    ? undefined
+    : [...new Set(opts.conversationIds)];
+  if (scopedConversationIds?.length === 0) {
+    return [];
+  }
+
+  const selectConversations = (conversationIds?: string[]) => db
     .select({
       id: dmConversations.id,
       dmType: dmConversations.dmType,
@@ -33,8 +59,59 @@ export async function listAllDmConversations(db: Db, workspaceId: string): Promi
       createdAt: dmConversations.createdAt,
     })
     .from(dmConversations)
-    .where(eq(dmConversations.workspaceId, workspaceId));
+    .where(and(
+      eq(dmConversations.workspaceId, workspaceId),
+      ...(conversationIds ? [inArray(dmConversations.id, conversationIds)] : []),
+    ));
 
+  // Observer capabilities commonly expose only one conversation in a large
+  // workspace. Apply that scope before any participant/message enrichment so
+  // unauthorized conversations are never loaded. Chunk high-cardinality
+  // capabilities to retain D1's bound-parameter safety.
+  const conversations = scopedConversationIds
+    ? await queryInChunks(scopedConversationIds, selectConversations)
+    : await selectConversations();
+
+  return enrichDmConversations(db, conversations);
+}
+
+export async function listDmConversationsPage(
+  db: Db,
+  workspaceId: string,
+  opts: { limit?: number; cursor?: string } = {},
+): Promise<DmConversationPage> {
+  const limit = Math.min(
+    Math.max(opts.limit ?? DM_CONVERSATION_PAGE_MAX_LIMIT, 1),
+    DM_CONVERSATION_PAGE_MAX_LIMIT,
+  );
+  const rows = await db
+    .select({
+      id: dmConversations.id,
+      dmType: dmConversations.dmType,
+      name: dmConversations.name,
+      channelId: dmConversations.channelId,
+      createdAt: dmConversations.createdAt,
+    })
+    .from(dmConversations)
+    .where(and(
+      eq(dmConversations.workspaceId, workspaceId),
+      ...(opts.cursor ? [gt(dmConversations.id, opts.cursor)] : []),
+    ))
+    .orderBy(dmConversations.id)
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const conversations = rows.slice(0, limit);
+  return {
+    conversations: await enrichDmConversations(db, conversations),
+    nextCursor: hasMore ? conversations.at(-1)?.id ?? null : null,
+  };
+}
+
+async function enrichDmConversations(
+  db: Db,
+  conversations: DmConversationRow[],
+): Promise<WorkspaceDmConversation[]> {
   if (conversations.length === 0) {
     return [];
   }
@@ -42,42 +119,44 @@ export async function listAllDmConversations(db: Db, workspaceId: string): Promi
   const conversationIds = conversations.map((convo) => convo.id);
   const channelIds = conversations.map((convo) => convo.channelId);
 
-  const participantRows = await db
+  // A workspace can hold more DM conversations than D1 binds in one statement
+  // (100 parameters), so every IN lookup below runs in D1-safe chunks.
+  // Grouping by channel within a chunk is complete: one channel's rows never
+  // span chunks.
+  const participantRows = await queryInChunks(conversationIds, (chunk) => db
     .select({
       conversationId: dmParticipants.conversationId,
       agentName: agents.name,
     })
     .from(dmParticipants)
     .innerJoin(agents, eq(dmParticipants.agentId, agents.id))
-    .where(inArray(dmParticipants.conversationId, conversationIds));
+    .where(inArray(dmParticipants.conversationId, chunk)));
 
-  const messageCounts = await db
+  const messageCounts = await queryInChunks(channelIds, (chunk) => db
     .select({ channelId: messages.channelId, count: sql<number>`count(*)` })
     .from(messages)
-    .where(inArray(messages.channelId, channelIds))
-    .groupBy(messages.channelId);
+    .where(inArray(messages.channelId, chunk))
+    .groupBy(messages.channelId));
 
-  const latestMessageIds = await db
+  const latestMessageIds = await queryInChunks(channelIds, (chunk) => db
     .select({ channelId: messages.channelId, lastId: sql<string>`max(${messages.id})` })
     .from(messages)
-    .where(inArray(messages.channelId, channelIds))
-    .groupBy(messages.channelId);
+    .where(inArray(messages.channelId, chunk))
+    .groupBy(messages.channelId));
 
   const lastIds = latestMessageIds.map((row) => row.lastId).filter(Boolean);
-  const latestMessages = lastIds.length > 0
-    ? await db
-      .select({
-        id: messages.id,
-        channelId: messages.channelId,
-        body: messages.body,
-        createdAt: messages.createdAt,
-        agentId: messages.agentId,
-        agentName: agents.name,
-      })
-      .from(messages)
-      .innerJoin(agents, eq(messages.agentId, agents.id))
-      .where(inArray(messages.id, lastIds))
-    : [];
+  const latestMessages = await queryInChunks(lastIds, (chunk) => db
+    .select({
+      id: messages.id,
+      channelId: messages.channelId,
+      body: messages.body,
+      createdAt: messages.createdAt,
+      agentId: messages.agentId,
+      agentName: agents.name,
+    })
+    .from(messages)
+    .innerJoin(agents, eq(messages.agentId, agents.id))
+    .where(inArray(messages.id, chunk)));
 
   const participantsByConversation = new Map<string, string[]>();
   for (const row of participantRows) {

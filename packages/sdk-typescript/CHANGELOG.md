@@ -9,6 +9,36 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [10.6.1] - 2026-10-18
+
+### Fixed
+
+- `relay.agents.spawn()` accepts `muse` and `devin` in its typed `cli` field.
+
+## [10.6.0] - 2026-10-18
+
+### Added
+
+- `relay.workspace.rotateKey()` for workspace-key self-rollover; the replacement key is returned once and should be persisted, never printed.
+
+## [10.5.0] - 2026-10-16
+
+### Added
+
+- `delivery.failed` event handlers receive the server rejection `reason`, including `recipient_offline` and `depth_cap`.
+
+## [10.0.2] - 2026-10-11
+
+### Fixed
+
+- `allDmConversations()` follows bounded server cursors and still returns the complete conversation array, with a malformed-cursor progress guard.
+
+## [10.0.0] - 2026-10-11
+
+### Changed
+
+- `agents.list()` accepts `includeStale` (default `false`) and `includeMetadata` (default `true`), mapped to HTTP `include_stale` / `include_metadata` flags. `status: 'all'` is supported; default/all rosters include only agents seen within seven days unless `includeStale: true` is supplied.
+
 ## [9.1.0] - 2026-10-08
 
 ### Added

@@ -2,7 +2,7 @@ import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { FleetNodeTagSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
-import { requireAuth, requireWorkspaceRead, requireWorkspaceKey } from '../middleware/auth.js';
+import { requireAuth, requireNodeToken, requireWorkspaceRead, requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { parseIdempotencyKey } from '../middleware/idempotency.js';
 import { asCodedError, errorResponse } from '../lib/httpError.js';
@@ -408,7 +408,7 @@ nodeRoutes.post('/nodes/:node/actions/:name/invoke', requireAuth, rateLimit, asy
       handler_node_id: result.handler_node_id,
     };
     await sendWebhookEvent(c, { type: 'action.invoked', workspaceId: workspace.id, data: eventData });
-    emitServerEvent(c, workspace.id, 'relaycast_server_action_invoked', {
+    emitServerEvent(c, workspace.id, 'action.invoked', {
       action_name: result.action_name,
       invocation_id: result.invocation_id,
       caller_agent_id: agent.id,
@@ -471,6 +471,14 @@ nodeRoutes.delete('/nodes/:node/providers/:name', requireWorkspaceKey, rateLimit
 });
 
 // GET /v1/nodes/:name - single node roster entry
+// GET /v1/node/me - the node a node token belongs to. A service handed the
+// token (Cloud, recording who owns a node) proves which node it is without
+// holding the workspace key.
+nodeRoutes.get('/node/me', requireNodeToken, rateLimit, async (c) => {
+  const node = c.get('node')!;
+  return jsonOk(c, { id: node.id, name: node.name, workspace_id: c.get('workspace').id });
+});
+
 nodeRoutes.get('/nodes/:name', requireWorkspaceRead('nodes:read'), rateLimit, async (c) => {
   try {
     const db = c.get('db');

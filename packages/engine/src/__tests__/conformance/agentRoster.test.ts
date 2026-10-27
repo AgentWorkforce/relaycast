@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AGENT_LIVENESS_TTL_MS, RELEASED_AGENT_STATUS, listAgents } from '../../engine/agent.js';
+import { AGENT_LIVENESS_TTL_MS, AGENT_ROSTER_RECENCY_MS, RELEASED_AGENT_STATUS, listAgents } from '../../engine/agent.js';
 import { createWorkspace, makeNodeStack, type TestStack } from './harness.js';
+
+// bun:sqlite (the standalone binary's driver, under `npm run test:bun`) has no
+// user-defined SQL functions, which this visit-counting probe relies on.
+const userFunctions = !process.versions.bun;
 
 // SQLite stores last_seen in whole seconds. Exercise both the exact TTL
 // boundary and fractional-second request times, which must expire that row.
@@ -140,8 +144,78 @@ describe('agent roster read contract', () => {
   });
 });
 
+describe('agent roster recency and projection', () => {
+  it('bounds default/all reads in SQL, preserves desktop metadata, and leaves history accessible', async () => {
+    const stack = makeNodeStack();
+    const { workspaceId, workspaceKey } = await createWorkspace(stack.app, 'recent-roster');
+    const other = await createWorkspace(stack.app, 'other-recent-roster');
+    const sqlite = stack.runtime.handle.sqlite;
+    const cutoff = (NOW - AGENT_ROSTER_RECENCY_MS) / 1_000;
+    const metadata = { cli: 'codex', host: 'finn-mini', session_id: 'session', objective: 'investigate', padding: 'x'.repeat(10_000) };
+    const insert = sqlite.prepare(`INSERT INTO agents(id, workspace_id, name, token_hash, status, last_seen, metadata)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`);
+    for (const scope of [workspaceId, other.workspaceId]) {
+      for (const [name, status, lastSeen] of [
+        ['old', 'offline', cutoff - 1], ['boundary', 'offline', cutoff],
+        ['recent', 'active', NOW / 1_000], ['released', 'released', NOW / 1_000],
+      ] as const) insert.run(scope + name, scope, name, scope + name, status, lastSeen, JSON.stringify(metadata));
+    }
+    const prepare = sqlite.prepare.bind(sqlite);
+    const queries: string[] = [];
+    const materialized: number[] = [];
+    vi.spyOn(sqlite, 'prepare').mockImplementation((source: string) => {
+      const statement = prepare(source);
+      if (/from "agents"/i.test(source)) {
+        queries.push(source);
+        const all = statement.all.bind(statement);
+        vi.spyOn(statement, 'all').mockImplementation((...params: unknown[]) => {
+          const rows = all(...params);
+          materialized.push(rows.length);
+          return rows;
+        });
+      }
+      return statement;
+    });
+    sqlite.pragma('query_only = ON');
+    vi.spyOn(Date, 'now').mockReturnValue(NOW);
+    const read = async (query = '') => {
+      const response = await stack.app.request(`/v1/agents${query}`, { headers: { authorization: `Bearer ${workspaceKey}` } });
+      expect(response.status).toBe(200);
+      const body = await response.json() as { data: Array<{ name: string; metadata: Record<string, unknown> }> };
+      return body.data;
+    };
+    try {
+      for (const query of ['', '?status=all', '?status=all&include_stale=0']) {
+        const rows = await read(query);
+        expect(rows.map(row => row.name).sort()).toEqual(['boundary', 'recent']);
+        expect(rows.every(row => JSON.stringify(row.metadata) === JSON.stringify(metadata))).toBe(true);
+        expect(materialized.at(-1)).toBe(2);
+        expect(queries.at(-1)).not.toMatch(/token_hash|session_ref|delivery_seq/);
+      }
+      expect((await read('?status=all&include_stale=1')).map(row => row.name).sort()).toEqual(['boundary', 'old', 'recent']);
+      expect(materialized.at(-1)).toBe(3);
+      expect((await read('?status=offline')).map(row => row.name).sort()).toEqual(['boundary', 'old']);
+      const lean = await read('?include_metadata=0');
+      expect(lean.every(row => JSON.stringify(row.metadata) === '{}')).toBe(true);
+      expect(queries.at(-1)).not.toContain('"agents"."metadata"');
+      expect((await read('?include_metadata=1'))[0].metadata).toEqual(metadata);
+      vi.mocked(Date.now).mockReturnValue(NOW + 1);
+      expect((await read()).map(row => row.name)).toEqual(['recent']);
+      const historical = await stack.app.request('/v1/agents/old', { headers: { authorization: `Bearer ${workspaceKey}` } });
+      expect(historical.status).toBe(200);
+      for (const query of ['include_stale=true', 'include_metadata=false']) {
+        const invalid = await stack.app.request(`/v1/agents?${query}`, { headers: { authorization: `Bearer ${workspaceKey}` } });
+        expect(invalid.status).toBe(400);
+      }
+    } finally {
+      vi.restoreAllMocks();
+      await stack.close();
+    }
+  });
+});
+
 describe('agent roster row visits', () => {
-  it('skips released history and seeks live status ranges within one workspace', async () => {
+  it.skipIf(!userFunctions)('skips released history and seeks live status ranges within one workspace', async () => {
     const stack = makeNodeStack();
     const { workspaceId, workspaceKey } = await createWorkspace(stack.app, 'roster-row-visits');
     const other = await createWorkspace(stack.app, 'other-row-visits');

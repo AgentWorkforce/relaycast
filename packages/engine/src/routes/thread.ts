@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAuth, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { assertMessageAllowance, checkMessageAllowance } from '../middleware/planLimits.js';
 import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as threadEngine from '../engine/thread.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
@@ -36,6 +37,7 @@ threadRoutes.post(
   '/messages/:id/replies',
   requireAuth,
   rateLimit,
+  checkMessageAllowance,
   async (c) => {
     try {
       const db = c.get('db');
@@ -73,15 +75,17 @@ threadRoutes.post(
         status: 201,
         fingerprint: JSON.stringify({ parentId, text, blocks, data }),
         kv: c.get('engine').kv,
-        operation: () =>
-          threadEngine.postReply(
+        operation: () => {
+          assertMessageAllowance(c);
+          return threadEngine.postReply(
             db,
             workspace.id,
             parentId,
             agentId,
             { text, blocks, data },
             { mailbox, workspaceDeliveryPolicy },
-          ),
+          );
+        },
         afterOperation: async (data) => {
           await sendWebhookEvent(c, {
             type: 'thread.reply',
@@ -124,7 +128,7 @@ threadRoutes.post(
           );
         }
 
-        emitServerEvent(c, workspace.id, 'relaycast_server_thread_reply_created', {
+        emitServerEvent(c, workspace.id, 'thread.reply.created', {
           message_id: publicReplyData.id,
           parent_message_id: parentId,
           channel_id: publicReplyData.channel_id ?? null,

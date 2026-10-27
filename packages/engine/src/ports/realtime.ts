@@ -93,6 +93,8 @@ export interface AgentActionProviderAuthorization {
   observedDispatchAttempts?: number;
   /** Stamp `spawn_reserved_at` when this caller holds a capacity reservation. */
   reservationHeld?: boolean;
+  /** Optional lost-node retry generation; the socket owner must CAS it. */
+  expectedNodeLivenessRevision?: number;
 }
 
 /** Exact token-generation proof for a release accepted by the socket owner. */

@@ -109,6 +109,7 @@ describe('selectEngineForKey', () => {
       rejectedAny: true,
       inconclusiveAny: false,
       observerTokenId: null,
+      retryAfterMs: null,
     });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -140,6 +141,7 @@ describe('selectEngineForKey', () => {
       rejectedAny: true,
       inconclusiveAny: false,
       observerTokenId: null,
+      retryAfterMs: null,
     });
   });
 
@@ -160,7 +162,19 @@ describe('selectEngineForKey', () => {
       rejectedAny: true,
       inconclusiveAny: true,
       observerTokenId: null,
+      retryAfterMs: null,
     });
+  });
+
+  it('keeps the longest Retry-After an inconclusive engine asked for', async () => {
+    mockFetch(
+      new Response(null, { status: 429, headers: { 'Retry-After': '45' } }),
+      new Response(null, { status: 503, headers: { 'Retry-After': '10' } }),
+    );
+
+    await expect(
+      selectEngineForKey(['https://cast.agentrelay.com', 'https://relay.example.com'], 'ot_live_secret'),
+    ).resolves.toMatchObject({ baseUrl: null, inconclusiveAny: true, retryAfterMs: 45_000 });
   });
 
   it('keeps network failures inconclusive when no engine accepts the key', async () => {
@@ -177,6 +191,7 @@ describe('selectEngineForKey', () => {
       rejectedAny: true,
       inconclusiveAny: true,
       observerTokenId: null,
+      retryAfterMs: null,
     });
   });
 

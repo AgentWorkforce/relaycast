@@ -56,6 +56,9 @@ const NON_SDK_OPENAPI_PATHS = new Set([
   '/v1/agents/retention',
   // Workspace-owner subscription provisioning, called by the Relay integration CLI.
   '/v1/agents/{param}/subscription-channel',
+  // Node-token self lookup: a service handed a node token (Cloud's node claim)
+  // proves which node it is for. Agents never call it.
+  '/v1/node/me',
 ]);
 
 const CORE_SDK_PATHS = new Set([

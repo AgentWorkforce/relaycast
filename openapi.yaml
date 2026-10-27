@@ -10,11 +10,18 @@ info:
     Authenticated routes are throttled two ways, and the error code says which.
     `rate_limit_exceeded` is the per-minute ceiling: it always clears inside the
     window, so `Retry-After` is at most 60 and retrying works.
-    `plan_limit_exceeded` is the plan's API-call quota for the current billing
-    period, which resets only at the period boundary; `Retry-After` reports that
-    boundary and is normally far beyond any retry budget, so treat it as terminal
-    instead of retrying. Both carry `Retry-After` and `X-RateLimit-Reset`, and
-    successful responses carry `X-RateLimit-Limit`/`X-RateLimit-Remaining`.
+    `plan_limit_exceeded` is a plan quota: the API-call quota for the current
+    billing period, which resets only at the period boundary (`Retry-After`
+    reports that boundary and is normally far beyond any retry budget, so treat
+    it as terminal instead of retrying), or a one-time message allowance (the
+    hosted `trial` plan's 100 messages), which never resets and carries no
+    `Retry-After`. Its error carries `metric`, `plan`, `limit`, `usage`,
+    `upgrade_url` and `upgrade_action` (`sign_in` or `upgrade`; both null when
+    the deployment has no upgrade path). The per-minute ceiling and period
+    quotas carry `Retry-After` and `X-RateLimit-Reset`; a spent one-time
+    allowance carries neither. Idempotent replays of earlier sends still
+    succeed after it is spent and never count against it. Successful
+    responses carry `X-RateLimit-Limit`/`X-RateLimit-Remaining`.
     `GET /workspace` is limited in its own bucket so the identity read used for
     credential validation and launch preflight stays reachable when the
     workspace's data-plane traffic is at its ceiling.
@@ -90,38 +97,33 @@ info:
     legacy strict frame shape. Providers must treat an absent `caller_id` as no
     authenticated caller; `caller_name` is informational and never authority.
 
-    Telemetry attribution (optional, all requests):
+    Origin and correlation hints (optional, all requests):
 
-    Clients may declare who is driving a request so server-side product
-    telemetry can attribute it. These are analytics dimensions only — they
-    never affect authentication, authorization, or routing, and are safe to
-    omit entirely.
+    These caller-declared values are untrusted observational hints. They never
+    establish authentication, authorization, analytics ownership, or routing.
+    Hosts own analytics policy; public metadata and caller identity hints do not
+    select a person in engine observations.
 
     | Header | Query parameter | Meaning |
     | --- | --- | --- |
-    | `X-Relaycast-Origin-Actor` | `origin_actor` | UA-style path identifying the caller, `{app}/{type}[/{name}]` (e.g. `agent-relay-cli/agent/claude-code`). Supersedes the former `X-Relaycast-Harness`. |
-    | `X-Agent-Relay-Distinct-Id` | `agent_relay_distinct_id` | Analytics person key for the caller. |
-    | `X-Agent-Relay-Machine-Id` | `agent_relay_machine_id` | Anonymous hashed id of the host machine. Sent alongside the distinct id, not instead of it. |
-    | `X-Agent-Relay-User-Id` | `agent_relay_user_id` | Signed-in user id from the calling product's own account system. Used as the person key when the acting agent has no `metadata.cloud_user_id`. |
-    | `X-Agent-Relay-Org-Id` | `agent_relay_org_id` | Organization id, for per-customer rollups. |
-    | `X-Agent-Relay-Org-Slug` | `agent_relay_org_slug` | Human-readable organization slug. |
+    | `X-Relaycast-Origin-Actor` | `origin_actor` | UA-style caller path, `{app}/{type}[/{name}]` (e.g. `agent-relay-cli/agent/claude-code`). |
+    | `X-Agent-Relay-Distinct-Id` | `agent_relay_distinct_id` | Caller-declared correlation id. |
+    | `X-Agent-Relay-Machine-Id` | `agent_relay_machine_id` | Caller-declared machine id. |
+    | `X-Agent-Relay-User-Id` | `agent_relay_user_id` | Caller-declared user id. |
+    | `X-Agent-Relay-Org-Id` | `agent_relay_org_id` | Caller-declared organization id. |
+    | `X-Agent-Relay-Org-Slug` | `agent_relay_org_slug` | Caller-declared organization slug. |
 
-    The person key is the acting agent's `metadata.cloud_user_id` when set,
-    then `X-Agent-Relay-User-Id`, then `X-Agent-Relay-Distinct-Id`. Without any
-    of them the event belongs to the workspace and creates no person. Organization
-    and workspace groups come from the workspace's `metadata.cloud_org_id` and
-    `metadata.cloud_workspace_id`.
+    Query parameters support WebSocket upgrades (`/v1/ws`, `/v1/node/ws`);
+    the header takes precedence when both are present.
 
-    The query-parameter forms exist for WebSocket upgrades (`/v1/ws`,
-    `/v1/node/ws`), where browsers cannot set custom headers; the header wins
-    when both are present.
+    Origin actor values are trimmed, lowercased, and capped at 128 characters.
+    Allowed characters are ASCII letters, digits, spaces, and `._-/():=;,+@`.
+    Missing or invalid values become `unknown`.
 
-    Values must match `[A-Za-z0-9._:-]+` and stay within 120 characters for the
-    org slug, 128 for the rest. A value that fails either rule is ignored, and
-    only that dimension is dropped — the request itself is unaffected. Identity
-    values are never truncated to fit: a shortened id would be a different id
-    and could attribute usage to the wrong person or organization.
-    (`X-Agent-Relay-Distinct-Id` predates this rule and still truncates at 128.)
+    Correlation ids are trimmed and must match `[A-Za-z0-9._:-]+`. The org slug
+    limit is 120 characters; the other ids have a 128-character limit. Invalid
+    or oversized values are ignored without rejecting the request, except that
+    `X-Agent-Relay-Distinct-Id` is truncated at 128 characters.
   version: 1.0.0
   contact:
     name: Relaycast
@@ -162,10 +164,11 @@ components:
     Throttled:
       description: >-
         Throttled. `rate_limit_exceeded` is the per-minute ceiling and always
-        clears inside the window; `plan_limit_exceeded` is the billing-period
-        quota and only clears when the period rolls over. `Retry-After` is
-        authoritative for both — treat a value beyond your retry budget as
-        terminal rather than retrying it.
+        clears inside the window; `plan_limit_exceeded` is either the
+        billing-period quota, which only clears when the period rolls over, or a
+        spent one-time message allowance, which never clears and carries no
+        `Retry-After`. When present, `Retry-After` is authoritative — treat a
+        value beyond your retry budget as terminal rather than retrying it.
       headers:
         Retry-After:
           description: Seconds to wait before retrying.
@@ -264,6 +267,10 @@ components:
         key:
           type: string
           description: Workspace API key (only returned on creation)
+        plan:
+          type: string
+          enum: [trial, free, connect, pro, enterprise, selfhost]
+          description: Stored plan that sets the workspace's usage limits. `connect` is sized for short-lived collaboration rooms. `trial` adds a one-time 100-message allowance.
         created_at:
           type: string
           format: date-time
@@ -379,6 +386,15 @@ components:
           description: Agent token (only returned on registration)
         metadata:
           type: object
+        origin_node_id:
+          type: string
+          nullable: true
+          description: >-
+            The node whose authenticated connection registered this agent, set
+            once by the server; an agent registered over HTTP gets its own
+            direct node. Unlike `metadata.fleet`, it cannot be patched, so use
+            it to decide which node spawned an agent. Present on agent detail
+            responses.
         created_at:
           type: string
           format: date-time
@@ -621,6 +637,9 @@ components:
         agent_name:
           type: string
           description: Authenticated sender name, or trusted inbound webhook display author for webhook-originated messages.
+        agent_address:
+          type: string
+          description: Sender's `agent@machine` address at send time when the server recorded one. Omitted when the sender has no location node.
         agent_type:
           type: string
           enum: [agent, human, system]
@@ -753,6 +772,9 @@ components:
           type: string
         agent_name:
           type: string
+        agent_address:
+          type: string
+          description: Sender's `agent@machine` address at send time when the server recorded one. Omitted when the sender has no location node.
         thread_id:
           type: string
           nullable: true
@@ -847,7 +869,7 @@ components:
           description: Sender identity type for the DM message actor
         agent_address:
           type: string
-          description: Sender's `agent@machine` address at send time; reply with `address` on `POST /dm`
+          description: Sender's `agent@machine` address at send time when the server recorded one. Omitted when the sender has no location node. Reply with `address` on `POST /dm`.
         text:
           type: string
         injection_mode:
@@ -909,7 +931,7 @@ components:
           description: Sender identity type for the message actor
         agent_address:
           type: string
-          description: Sender's `agent@machine` address at send time; reply with `address` on `POST /dm`
+          description: Sender's `agent@machine` address at send time when the server recorded one. Omitted when the sender has no location node. Reply with `address` on `POST /dm`.
         text:
           type: string
         injection_mode:
@@ -1108,7 +1130,7 @@ components:
                   nullable: true
                 agent_address:
                   type: string
-                  description: Sender's `agent@machine` at send time; present on direct messages
+                  description: Sender's `agent@machine` address at send time when the server recorded one, on direct messages and thread replies. Omitted when the sender has no location node.
                 text:
                   type: string
                 thread_id:
@@ -1293,7 +1315,7 @@ components:
           nullable: true
           minimum: 0
           maximum: 1
-          description: Normalized managed-agent capacity utilization. Null unless a direct node, or every constituent provider of a broker node, explicitly reports a genuine measurement.
+          description: Explicitly measured normalized utilization (0–1), including machine utilization on unlimited nodes. Null unless a direct node, or every constituent provider of a broker node, explicitly reports a genuine measurement.
         active_agents:
           type: integer
           description: Managed-agent occupancy. Authoritative only while `live` is true; once a node goes offline this is a frozen historical value — see `active_agents_stale`.
@@ -1303,7 +1325,7 @@ components:
         max_agents:
           type: integer
           minimum: 0
-          description: Maximum managed agents. Zero means unlimited capacity.
+          description: Maximum managed agents. Zero means unlimited capacity; active and reserved agents remain counted. Null is not accepted.
         last_heartbeat_at:
           type: string
           format: date-time
@@ -1732,6 +1754,36 @@ components:
             `workspace_expired` with HTTP 401.
         message:
           type: string
+        metric:
+          type: string
+          enum: [messages, agents, file_bytes, api_calls]
+          description: On `plan_limit_exceeded`, the limited usage metric.
+        plan:
+          type: string
+          description: On `plan_limit_exceeded`, the effective plan whose limit was reached.
+        limit:
+          type: number
+          description: On `plan_limit_exceeded`, the limit that was reached.
+        usage:
+          type: number
+          description: On `plan_limit_exceeded`, current usage of `metric`.
+        upgrade_url:
+          type: string
+          nullable: true
+          description: >-
+            On `plan_limit_exceeded`: where the caller can lift the limit (sign
+            in or upgrade). Null when the deployment has no upgrade path.
+        upgrade_action:
+          type: string
+          nullable: true
+          enum: [sign_in, upgrade]
+          description: On `plan_limit_exceeded`, what `upgrade_url` offers.
+        request_id:
+          type: string
+          description: >-
+            Present on unexpected server errors (5xx). Identifies the request in
+            the server logs; quote it when reporting the error. Every response
+            also carries this id in the `X-Request-Id` header.
 
     SuccessResponse:
       type: object
@@ -1741,6 +1793,15 @@ components:
           enum: [true]
         data:
           type: object
+        cursor:
+          type: object
+          required: [next, has_more]
+          properties:
+            next:
+              type: string
+              nullable: true
+            has_more:
+              type: boolean
 
     ErrorResponse:
       type: object
@@ -2366,6 +2427,19 @@ paths:
         Mint a node token for the authenticated agent's implicit direct node.
         Agent SDKs use this token to connect to `/v1/node/ws`; agent tokens do
         not open realtime WebSockets directly.
+        On an implicit direct-node socket, `node.heartbeat` renews the bound
+        agent's durable roster activity and presence. A heartbeat with an `id`
+        receives a correlated `reply` with `ok: true` and
+        `data: { agent_presence: true, agent_id: "<bound-agent-id>" }` only after
+        renewal succeeds. Heartbeats preserve explicit work states; only a status
+        replaced by a recorded liveness loss is restored. A later explicit status
+        write, including offline-to-offline, supersedes automatic recovery.
+        Existing offline rows without liveness provenance remain offline.
+        Clients may omit REST heartbeats while fresh matching
+        acknowledgements arrive; absent acknowledgements require REST fallback.
+        Broker heartbeats do not renew hosted agents' presence. External node
+        adapters must pass the HTTP PresenceTracker to node control to enable
+        these acknowledgements.
       tags:
         - Agents
         - Nodes
@@ -2462,6 +2536,11 @@ paths:
         active or legacy online rows are returned as offline. Reads do not write
         to the database; durable cleanup runs separately. Status filters are
         applied in SQL against derived presence, with online aliasing active.
+        The default roster and status=all include only unreleased agents whose
+        last_seen is within seven days. include_stale=1 restores the historical
+        roster; explicit status filters are not limited by this window.
+        Metadata is included by default for desktop compatibility;
+        include_metadata=0 returns metadata={} without reading its stored blob.
         Observer tokens require `agents:read`.
       tags:
         - Agents
@@ -2474,6 +2553,20 @@ paths:
           schema:
             type: string
             enum: [active, idle, blocked, waiting, offline, online, all]
+        - name: include_stale
+          in: query
+          description: Include older identities in the default/all roster.
+          schema:
+            type: string
+            enum: ['0', '1']
+            default: '0'
+        - name: include_metadata
+          in: query
+          description: Return agent metadata; 0 returns an empty object.
+          schema:
+            type: string
+            enum: ['0', '1']
+            default: '1'
       responses:
         '200':
           description: List of agents
@@ -2964,7 +3057,7 @@ paths:
                   description: Unique name for the new agent
                 cli:
                   type: string
-                  enum: [claude, codex, gemini, aider, goose, opencode, grok]
+                  enum: [claude, codex, gemini, aider, goose, opencode, grok, muse, devin]
                   description: Which AI CLI tool to use
                 task:
                   type: string
@@ -3939,7 +4032,8 @@ paths:
         `@`: every `@` is tried as the separator. `direct` never matches a
         broker; a broker named `direct` is addressed by its `machine_id`.
         Agents learn addresses from `address` on agent resources and from
-        `message.agent_address` on DMs they receive.
+        `message.agent_address` on DMs and thread replies when the server
+        recorded one. The field is omitted when the sender has no location node.
       tags:
         - Direct Messages
       security:
@@ -4328,6 +4422,81 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: >-
+            The request does not authenticate as the agent. `error.code` is
+            `agent_token_invalid` for an unknown or rotated-out agent token,
+            `node_token_forbidden` or `observer_token_forbidden` for those token
+            kinds, `workspace_expired` past the workspace's `expires_at`, and
+            `unauthorized` otherwise: a missing header, a workspace key, or a
+            credential the auth provider resolves without an agent identity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /workspace/rotate-key:
+    post:
+      summary: Rotate workspace API key
+      description: >-
+        Self-rollover for the authenticated workspace. The response carries the
+        replacement key exactly once — persist it, do not log or print it. The
+        superseded key keeps authenticating for `grace_seconds` (default 60) so
+        peers and in-flight callers survive the cutover; `grace_seconds: 0` is
+        the compromise mode and kills the old key immediately. The route is
+        opt-in (`allowWorkspaceKeyRotation` in engine config) and off by
+        default; deployments where a control plane owns the canonical key leave
+        it unset and see `workspace_key_rotation_disabled`.
+      tags:
+        - Workspaces
+      security:
+        - workspaceKey: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                grace_seconds:
+                  type: integer
+                  minimum: 0
+                  maximum: 3600
+                  description: >-
+                    Seconds the superseded key remains authenticatable.
+                    Defaults to 60.
+      responses:
+        '200':
+          description: Workspace key rotated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      workspace_id:
+                        type: string
+                      api_key:
+                        type: string
+                        description: >-
+                          The replacement workspace key, revealed exactly once.
+                      previous_key_expires_at:
+                        type: string
+                        format: date-time
+                        nullable: true
+        '401':
+          description: Authentication required
+        '403':
+          description: Workspace key rotation is disabled on this deployment
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/Throttled'
 
   /workspace/system-prompt:
     get:
@@ -4484,12 +4653,32 @@ paths:
   /dm/conversations/all:
     get:
       summary: List all workspace DM conversations
-      description: Workspace-admin view of all DM conversations. Observer tokens require `dms:read` and DM filters.
+      description: >
+        Workspace-admin view of DM conversations. Without pagination parameters,
+        the legacy response includes every conversation. Supplying `limit` or
+        `cursor` enables stable, bounded pages and returns the continuation in
+        the standard top-level response cursor. Observer tokens require
+        `dms:read`, retain their full allowlisted response, and ignore these
+        workspace pagination parameters.
       tags:
         - Direct Messages
       security:
         - workspaceKey: []
         - observerToken: []
+      parameters:
+        - name: limit
+          in: query
+          description: Enables bounded pagination. A blank value uses the 500-item default; non-blank values cannot exceed 500.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+        - name: cursor
+          in: query
+          description: Conversation id returned in the previous response cursor.
+          schema:
+            type: string
+            minLength: 1
       responses:
         '200':
           description: Workspace DM conversations
@@ -5378,6 +5567,47 @@ paths:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
 
+  /node/me:
+    get:
+      summary: Get the calling node
+      description: >-
+        The node a node token belongs to: its id, name and workspace. A service
+        handed a node token uses it to prove which node the token is for,
+        without the workspace key.
+      tags:
+        - Nodes
+      security:
+        - nodeToken: []
+      responses:
+        '200':
+          description: The calling node
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, data]
+                properties:
+                  ok:
+                    type: boolean
+                    enum: [true]
+                  data:
+                    type: object
+                    required: [id, name, workspace_id]
+                    properties:
+                      id:
+                        type: string
+                        description: The node's id (as `origin_node_id` reports it).
+                      name:
+                        type: string
+                        description: The node's name; `GET /nodes/{name}` reads it.
+                      workspace_id:
+                        type: string
+        '401':
+          description: Missing, invalid or non-node token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /nodes/{name}:
     get:
       summary: Get node
@@ -5706,7 +5936,13 @@ paths:
   /triggers:
     post:
       summary: Create message trigger
-      description: Create a declarative message trigger that invokes an action when matched.
+      description: >-
+        Create a declarative message trigger that invokes an action when matched.
+        A message trigger cannot invoke the builtin `release` action. When
+        `action_name` is `release` and no registered action uses that name, the
+        match fails with `action_not_found` and does not release an agent. Builtin
+        `release` stays on `POST /v1/actions/{name}/invoke` and the
+        `/v1/agents/release` endpoints.
       tags:
         - Triggers
       security:
@@ -5737,7 +5973,9 @@ paths:
                     actions, then node actions with workspace-global aliases, then plain
                     node-scoped actions. A node-scoped match dispatches to its owning node.
                     Ties select one action deterministically by action ID; triggers do not
-                    fan out.
+                    fan out. The builtin `release` action is excluded: a trigger whose
+                    name is `release` and that does not match a registered action fails
+                    with `action_not_found` instead of releasing an agent.
                 enabled:
                   type: boolean
       responses:
@@ -5826,7 +6064,9 @@ paths:
                     actions, then node actions with workspace-global aliases, then plain
                     node-scoped actions. A node-scoped match dispatches to its owning node.
                     Ties select one action deterministically by action ID; triggers do not
-                    fan out.
+                    fan out. The builtin `release` action is excluded: a trigger whose
+                    name is `release` and that does not match a registered action fails
+                    with `action_not_found` instead of releasing an agent.
                 enabled:
                   type: boolean
       responses:

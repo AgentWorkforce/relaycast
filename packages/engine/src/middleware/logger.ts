@@ -107,6 +107,9 @@ function statusClass(statusCode: number): string {
 export const loggerMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
   const requestId = randomUuid();
   c.set('requestId', requestId);
+  // Clients (the Rust SDK reads `x-request-id`) can quote any response,
+  // including a host-level 503, against the logs below.
+  c.header('X-Request-Id', requestId);
   const requestHeaders = c.req.raw.headers;
   const clientName = deriveClientName(requestHeaders);
   const originInfo = extractOriginInfo(c.req.raw, clientName);

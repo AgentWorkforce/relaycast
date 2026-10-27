@@ -4,6 +4,7 @@ import type { AppEnv } from '../env.js';
 import { errorResponse } from '../lib/httpError.js';
 import { requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { assertMessageAllowance, checkMessageAllowance } from '../middleware/planLimits.js';
 import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as groupDmEngine from '../engine/groupDm.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
@@ -68,7 +69,7 @@ groupDmRoutes.post(
         agent!.id,
         { participants, name },
       );
-      emitServerEvent(c, workspace.id, 'relaycast_server_group_dm_created', {
+      emitServerEvent(c, workspace.id, 'group.dm.created', {
         conversation_id: result.id,
         participant_count: result.participants.length,
       });
@@ -84,6 +85,7 @@ groupDmRoutes.post(
   '/dm/:conversation_id/messages',
   requireAgentToken,
   rateLimit,
+  checkMessageAllowance,
   async (c) => {
     try {
       const db = c.get('db');
@@ -159,8 +161,9 @@ groupDmRoutes.post(
         fingerprint,
         compatibleFingerprints: legacyFingerprint === fingerprint ? [] : [legacyFingerprint],
         kv: c.get('engine').kv,
-        operation: async () =>
-          groupDmEngine.postGroupMessage(
+        operation: async () => {
+          assertMessageAllowance(c);
+          return groupDmEngine.postGroupMessage(
             db,
             workspace.id,
             conversationId,
@@ -172,7 +175,8 @@ groupDmRoutes.post(
               mode,
             },
             { mailbox, workspaceDeliveryPolicy: await resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace) },
-          ),
+          );
+        },
         afterOperation: async (data) => {
           await sendWebhookEvent(c, {
             type: 'group_dm.received',
@@ -209,7 +213,7 @@ groupDmRoutes.post(
           );
         }
 
-        emitServerEvent(c, workspace.id, 'relaycast_server_group_dm_message_sent', {
+        emitServerEvent(c, workspace.id, 'group.dm.message.sent', {
           conversation_id: publicGroupData.conversation_id,
           message_id: publicGroupData.id,
           from_agent_id: agent!.id,
@@ -247,7 +251,7 @@ groupDmRoutes.post(
         agentCtx!.id,
         agentName,
       );
-      emitServerEvent(c, workspace.id, 'relaycast_server_group_dm_participant_added', {
+      emitServerEvent(c, workspace.id, 'group.dm.participant.added', {
         conversation_id: conversationId,
         agent_name: agentName,
         invited_by_agent_id: agentCtx!.id,
@@ -276,7 +280,7 @@ groupDmRoutes.delete(
         conversationId,
         agent!.id,
       );
-      emitServerEvent(c, workspace.id, 'relaycast_server_group_dm_participant_removed', {
+      emitServerEvent(c, workspace.id, 'group.dm.participant.removed', {
         conversation_id: conversationId,
         agent_id: agent!.id,
       });

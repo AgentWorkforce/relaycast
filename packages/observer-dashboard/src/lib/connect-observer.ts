@@ -89,3 +89,65 @@ export async function loadConnectConversationMessages(
   }
   return messages;
 }
+
+/**
+ * Why a Connect observer read or login failed. `revoked` is the link itself:
+ * the engine rejected or no longer recognises the capability (400/401/403/404).
+ * Everything else (429, 5xx, a network error, no status) is `temporary`: the
+ * link may be fine and the workspace busy, so it must not look revoked.
+ */
+export type ConnectObserverFailure = 'revoked' | 'temporary';
+
+export function classifyConnectObserverStatus(status: number | null | undefined): ConnectObserverFailure {
+  return status === 400 || status === 401 || status === 403 || status === 404 ? 'revoked' : 'temporary';
+}
+
+export function classifyConnectObserverError(error: unknown): ConnectObserverFailure {
+  const status = (error as { statusCode?: unknown } | null)?.statusCode;
+  return classifyConnectObserverStatus(typeof status === 'number' ? status : null);
+}
+
+/** Automatic retries after a temporary failure; then the page waits for "Try again". */
+export const CONNECT_OBSERVER_MAX_RETRIES = 5;
+const CONNECT_OBSERVER_RETRY_BASE_MS = 2_000;
+const CONNECT_OBSERVER_RETRY_MAX_MS = 30_000;
+
+/**
+ * Delay before automatic retry `attempt` (0-based): 2s, 4s, 8s, 16s, 30s, or
+ * the server's Retry-After when it is longer. A quota reset can be days away,
+ * so the server's deadline is kept, limited only by the browser timer range
+ * (a later retry just reads a fresh Retry-After). Null once retries are spent,
+ * so a busy workspace is not polled indefinitely.
+ */
+export function connectObserverRetryDelay(attempt: number, retryAfterMs?: number | null): number | null {
+  if (attempt >= CONNECT_OBSERVER_MAX_RETRIES) return null;
+  const backoff = Math.min(CONNECT_OBSERVER_RETRY_BASE_MS * 2 ** attempt, CONNECT_OBSERVER_RETRY_MAX_MS);
+  const serverDelay = typeof retryAfterMs === 'number' && Number.isFinite(retryAfterMs) && retryAfterMs > 0
+    ? Math.min(retryAfterMs, MAX_BROWSER_TIMEOUT_MS)
+    : 0;
+  return Math.max(backoff, serverDelay);
+}
+
+/**
+ * A `Retry-After` header as milliseconds: delta-seconds or an HTTP date.
+ * Null when absent, malformed or not in the future.
+ */
+export function parseRetryAfterMs(value: string | null | undefined, now = Date.now()): number | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) {
+    const ms = Number(trimmed) * 1000;
+    return ms > 0 ? ms : null;
+  }
+  const date = Date.parse(trimmed);
+  return Number.isFinite(date) && date > now ? date - now : null;
+}
+
+/**
+ * The engine answers 404 `dm_conversation_not_found` when one conversation is
+ * no longer visible to the observer (its filter was narrowed between listing
+ * and reading). The capability is still valid for the others.
+ */
+export function isConnectConversationGone(error: unknown): boolean {
+  return (error as { rawCode?: unknown } | null)?.rawCode === 'dm_conversation_not_found';
+}

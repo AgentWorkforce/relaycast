@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { assertMessageAllowance, checkMessageAllowance } from '../middleware/planLimits.js';
 import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import { sha256Hex } from '../lib/crypto.js';
 import * as dmEngine from '../engine/dm.js';
@@ -44,6 +45,7 @@ dmRoutes.post(
   '/dm',
   requireAgentToken,
   rateLimit,
+  checkMessageAllowance,
   async (c) => {
     try {
       const db = c.get('db');
@@ -109,7 +111,7 @@ dmRoutes.post(
       });
 
       // `data.to` is the resolved recipient name; `to` may be a raw address.
-      const trackDmSent = (data: { conversation_id: string; id: string; to?: string }) => emitServerEvent(c, workspace.id, 'relaycast_server_dm_sent', {
+      const trackDmSent = (data: { conversation_id: string; id: string; to?: string }) => emitServerEvent(c, workspace.id, 'dm.sent', {
         conversation_id: data.conversation_id,
         message_id: data.id,
         from_agent_id: agent!.id,
@@ -130,6 +132,7 @@ dmRoutes.post(
         ttlSecondsForResult: (result) => result._idempotency_ttl_seconds,
         kv: c.get('engine').kv,
         operation: async () => {
+          assertMessageAllowance(c);
           const hasWebhookSubscriptions = await shouldEnqueueWebhookEvent(c, workspace.id, 'dm.received');
           return dmEngine.sendDm(db, workspace.id, agent!.id, {
             to,
