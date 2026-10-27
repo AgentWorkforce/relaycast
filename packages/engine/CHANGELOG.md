@@ -20,6 +20,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Deleting a large workspace (over 2,000 bulk rows) no longer runs as one cascading transaction. It stops authenticating at once (`workspace_expired`), and its rows are drained in bounded, paced statements (`reapWorkspace`, the expired-workspace reaper). Small workspaces keep the atomic delete. `deleteWorkspace` now returns `{ deferred }`, and the background reap after workspace creation is capped at 250 ms.
 - Inbound webhooks (`POST /v1/hooks/:webhookId`) of an expired or deleted workspace now return `404` instead of accepting messages.
 
+### Fixed
+
+- `GET /v1/deliveries?status=<status>` now reads only the calling agent's rows (migration `0076` adds `idx_deliveries_agent_status_created`). It previously walked every row with that status in the workspace, which on large delivery histories could stall a shared database.
+
 ## [11.0.0] - 2026-10-22
 
 ### Changed

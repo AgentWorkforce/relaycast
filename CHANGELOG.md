@@ -26,6 +26,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Deleting a large workspace no longer stalls the database for every other tenant: its data is removed in bounded background steps after it stops authenticating.
 
+### Fixed
+
+- Listing deliveries filtered by status no longer scans the whole workspace's delivery history.
+
 ## [11.0.0] - 2026-10-22
 
 ### Changed
