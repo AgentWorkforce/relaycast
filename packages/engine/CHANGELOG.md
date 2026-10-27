@@ -11,6 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- A node-completed release is accepted when that node already deregistered the agent (a relay broker sends `agent.deregister` before `action.result`), instead of failing with `agent_release_generation_conflict`. A release whose agent has since been bound to a different node is still refused.
 - `GET /v1/agents/presence` counts a node-hosted agent as online while its node and that agent's own provider are live, including agents that make no HTTP calls. Agents of a disconnected provider, agents a live node omits from its inventory, and agents that called `POST /v1/agents/disconnect` without deregistering stay offline.
 - A status patch broadcasts the same derived presence the response returns.
 
