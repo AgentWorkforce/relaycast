@@ -22,9 +22,8 @@ const config = {
   workspaceDelivery: {
     resolve: async (workspace) => {
       const id: string = workspace.id;
-      const plan: string = workspace.plan;
       await Promise.resolve();
-      return id && plan === 'enterprise' ? { cap: 5000, reserve: 0 } : undefined;
+      return id.startsWith('ws_') ? { cap: 5000, reserve: 0 } : undefined;
     },
   },
 } satisfies EngineConfig;

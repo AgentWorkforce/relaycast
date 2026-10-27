@@ -1012,7 +1012,7 @@ describe('observer tokens', () => {
     });
     expect(asObserver.status).toBe(200);
     const asObserverBody = await asObserver.json() as {
-      data: { id: string; name: string; plan: unknown; system_prompt: unknown; metadata: unknown };
+      data: { id: string; name: string; system_prompt: unknown; metadata: unknown };
     };
     expect(asObserverBody.data.id).toBe(ws.workspaceId);
     expect(asObserverBody.data).not.toHaveProperty('token');

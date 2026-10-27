@@ -277,7 +277,6 @@ final class RelaycastTests: XCTestCase {
                     "id": "ws_1",
                     "name": "demo",
                     "system_prompt": NSNull(),
-                    "plan": "free",
                     "created_at": "2026-06-06T00:00:00Z",
                     "metadata": [:]
                 ]
@@ -375,7 +374,6 @@ final class RelaycastTests: XCTestCase {
                         "id": "ws_1",
                         "name": "demo",
                         "system_prompt": NSNull(),
-                        "plan": "free",
                         "created_at": "2026-06-06T00:00:00Z",
                         "metadata": [:]
                     ]

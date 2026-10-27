@@ -59,7 +59,6 @@ function tracingKv(recordKey: string): TracingKv {
       store.set(key, value);
     }),
     delete: (key) => run('delete', key, () => { store.delete(key); }),
-    increment: async () => { throw new Error('increment is not part of the idempotency path'); },
   };
   return kv;
 }
