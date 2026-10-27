@@ -48,7 +48,9 @@ export { StaticEntitlementsProvider, PLAN_LIMITS } from './providers/static-enti
 // engine writes, so it has to agree with the engine on the billing period the
 // key is scoped to — build the key with these rather than by hand.
 export {
+  getLifetimeUsageMetric,
   getUsageMetric,
+  lifetimeUsageCounterKey,
   usageCounterKey,
   usagePeriod,
   usagePeriodResetAt,

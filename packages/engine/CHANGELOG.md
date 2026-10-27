@@ -8,7 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
+
+### Added
+
+- `PLAN_LIMITS.trial` and `PlanLimits.lifetime_messages`: a one-time message allowance enforced on message sends by the new `checkMessageAllowance` middleware; only successful fresh sends are counted (idempotent replays neither count nor get refused), under the never-expiring `usage:<workspace>:messages:lifetime` key (`lifetimeUsageCounterKey`, `getLifetimeUsageMetric`).
+- Optional `EntitlementsProvider.getUpgradeGuidance(workspace, metric)` hook; its URL and action are returned on `plan_limit_exceeded` as `upgrade_url` / `upgrade_action`.
 
 ### Fixed
 

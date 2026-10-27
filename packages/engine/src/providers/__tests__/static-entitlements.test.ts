@@ -27,6 +27,24 @@ describe('StaticEntitlementsProvider', () => {
     expect(PLAN_LIMITS.connect!.api_calls).toBeLessThanOrEqual(PLAN_LIMITS.pro!.api_calls);
   });
 
+  it('gives the anonymous trial a one-time 100-message allowance and no wider limit than free', async () => {
+    const provider = new StaticEntitlementsProvider(undefined, 'free');
+    const trial = await provider.getLimits(workspace('trial'));
+    expect(trial).toBe(PLAN_LIMITS.trial);
+    expect(trial.lifetime_messages).toBe(100);
+    for (const metric of ['messages', 'agents', 'file_bytes', 'api_calls', 'rate_per_min'] as const) {
+      expect(trial[metric]).toBeLessThanOrEqual(PLAN_LIMITS.free![metric]);
+    }
+  });
+
+  it('keeps every other tier free of a lifetime allowance', () => {
+    for (const plan of ['free', 'connect', 'pro', 'enterprise', 'selfhost']) {
+      expect(PLAN_LIMITS[plan]!.lifetime_messages).toBeUndefined();
+    }
+    expect(PLAN_LIMITS.free!.messages).toBe(10_000);
+    expect(PLAN_LIMITS.selfhost!.messages).toBe(Infinity);
+  });
+
   it('falls back to the default plan for an unknown plan', async () => {
     const provider = new StaticEntitlementsProvider(undefined, 'free');
     expect(await provider.getLimits(workspace('platinum'))).toBe(PLAN_LIMITS.free);

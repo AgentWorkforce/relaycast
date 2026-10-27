@@ -50,3 +50,24 @@ export async function getUsageMetric(kv: KeyValueStore, workspaceId: string, met
   const value = await kv.get(usageCounterKey(workspaceId, metric));
   return parseInt(value || '0', 10) || 0;
 }
+
+/**
+ * Lifetime (never-resetting) counter key, for one-time allowances such as the
+ * hosted anonymous trial's `lifetime_messages`. The fixed `lifetime` suffix
+ * keeps it in the same `usage:` namespace as the period counters (hosts route
+ * that prefix to durable storage) without ever colliding with a `YYYY-MM`
+ * period.
+ */
+export function lifetimeUsageCounterKey(workspaceId: string, metric: string): string {
+  return `usage:${workspaceId}:${metric}:lifetime`;
+}
+
+export async function incrementLifetimeUsage(kv: KeyValueStore, workspaceId: string, metric: string, amount: number = 1): Promise<number> {
+  // No TTL: the allowance must not reset when a storage expiry fires.
+  return kv.increment(lifetimeUsageCounterKey(workspaceId, metric), amount);
+}
+
+export async function getLifetimeUsageMetric(kv: KeyValueStore, workspaceId: string, metric: string): Promise<number> {
+  const value = await kv.get(lifetimeUsageCounterKey(workspaceId, metric));
+  return parseInt(value || '0', 10) || 0;
+}

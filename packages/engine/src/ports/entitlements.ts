@@ -10,6 +10,30 @@ export interface PlanLimits {
   api_calls: number;
   /** Global requests-per-minute ceiling, fed into the rate limiter. */
   rate_per_min: number;
+  /**
+   * One-time message allowance that never resets. When set to a finite number,
+   * message sends (channel posts, DMs, group DMs, thread replies) are refused
+   * with `plan_limit_exceeded` once the workspace has sent this many messages
+   * over its whole lifetime. Unset (or `Infinity`) means no lifetime cap — the
+   * case for every tier except a hosted anonymous trial.
+   */
+  lifetime_messages?: number;
+}
+
+/**
+ * Where a workspace that hit a limit should go next. Returned by
+ * {@link EntitlementsProvider.getUpgradeGuidance} and surfaced on the
+ * `plan_limit_exceeded` error body as `upgrade_url` / `upgrade_action`.
+ */
+export interface UpgradeGuidance {
+  /** An absolute URL the caller can open to lift the limit. */
+  url: string;
+  /** `sign_in` when signing in (free) lifts the limit, `upgrade` when a paid plan does. */
+  action: 'sign_in' | 'upgrade';
+  /** Effective plan name to report, when it differs from the stored `workspace.plan`. */
+  plan?: string;
+  /** One sentence appended to the error message, e.g. how to sign in. */
+  hint?: string;
 }
 
 /**
@@ -36,4 +60,12 @@ export interface EntitlementsProvider {
    * UTC-month period.
    */
   getUsageResetAt?(workspaceId: string, metric: UsageMetric): Promise<number>;
+
+  /**
+   * Where a workspace that hit `metric`'s limit can lift it (sign in, upgrade).
+   * Optional: self-host deployments have no upgrade path, and an absent or
+   * failing hook only omits `upgrade_url` from the error — it never changes
+   * the limit decision.
+   */
+  getUpgradeGuidance?(workspace: Workspace, metric: UsageMetric): Promise<UpgradeGuidance | null>;
 }
