@@ -19,7 +19,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Deleting a large workspace (over 2,000 bulk rows) no longer runs as one cascading transaction. It stops authenticating at once (`workspace_expired`), and its rows are drained in bounded, paced statements (`reapWorkspace`, the expired-workspace reaper). Small workspaces keep the atomic delete. `deleteWorkspace` now returns `{ deferred }`, and the background reap after workspace creation is capped at 250 ms.
 - Inbound webhooks (`POST /v1/hooks/:webhookId`) of an expired or deleted workspace now return `404` instead of accepting messages.
-- A node socket opened before its workspace expired or was deleted can no longer `node.register` or `agent.register` into it: those frames now get a `workspace_expired` error.
+- A node socket opened before its workspace expired or was deleted can no longer `node.register`, `agent.register`, `agent.recover` or `node.spawn` into it: those frames now get a `workspace_expired` error. Frames that settle work already in flight are still accepted.
 
 ## [11.1.0] - 2026-10-27
 

@@ -3367,9 +3367,15 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
   // check, the provider-row upsert, or the aggregate recompute.
   return serializeNodeOp(args.workspaceId, args.nodeId, async () => {
   try {
-    // Only identity-creating frames: heartbeats are the hot path, and a
-    // heartbeat into a deleted workspace creates nothing.
-    if (message.type === 'node.register' || message.type === 'agent.register') {
+    // Only frames that create identity or start work: heartbeats are the hot
+    // path and create nothing, and completing work already in flight
+    // (`action.accept` / `action.result`, `delivery.ack`) must still settle.
+    if (
+      message.type === 'node.register'
+      || message.type === 'agent.register'
+      || message.type === 'agent.recover'
+      || message.type === 'node.spawn'
+    ) {
       await assertWorkspaceUnexpired(args.db, args.workspaceId);
     }
     switch (message.type) {

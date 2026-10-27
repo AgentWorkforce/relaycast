@@ -97,7 +97,7 @@ describe('bounded workspace deletion', () => {
     expect(count('messages', ws.workspaceId)).toBe(0);
   });
 
-  it('rejects agent registration from a node socket opened before the workspace was deleted', async () => {
+  it('rejects registration and new work from a node socket opened before the workspace was deleted', async () => {
     const ws = await createWorkspace(stack.app, 'bounded-node-socket');
     const created = await stack.app.request('/v1/nodes', {
       method: 'POST',
@@ -128,6 +128,14 @@ describe('bounded workspace deletion', () => {
 
     expect(socket.ofType('error').at(-1)).toMatchObject({ id: 'agent', code: 'workspace_expired' });
     expect(stack.runtime.handle.sqlite.prepare("SELECT count(*) AS n FROM agents WHERE workspace_id = ? AND name = 'late-agent'")
+      .get(ws.workspaceId)).toEqual({ n: 0 });
+
+    // Nor start new work there, or revive an agent the drain is removing.
+    await send({ v: 1, id: 'spawn', type: 'node.spawn', input: { cli: 'claude', name: 'late-worker' } });
+    expect(socket.ofType('error').at(-1)).toMatchObject({ id: 'spawn', code: 'workspace_expired' });
+    await send({ v: 1, id: 'recover', type: 'agent.recover', name: 'late-agent', expected_agent_id: 'agent_gone' });
+    expect(socket.ofType('error').at(-1)).toMatchObject({ id: 'recover', code: 'workspace_expired' });
+    expect(stack.runtime.handle.sqlite.prepare('SELECT count(*) AS n FROM action_invocations WHERE workspace_id = ?')
       .get(ws.workspaceId)).toEqual({ n: 0 });
   });
 
