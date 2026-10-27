@@ -978,7 +978,9 @@ async fn agent_heartbeat_uses_presence_endpoint() {
 
     Mock::given(method("POST"))
         .and(path("/v1/agents/heartbeat"))
-        .respond_with(ok(json!({})))
+        .and(header("authorization", "Bearer at_live_test"))
+        .and(body_json(json!({})))
+        .respond_with(ok(json!(null)))
         .expect(1)
         .mount(&server)
         .await;
@@ -1518,6 +1520,82 @@ async fn dm_conversation_participants_returns_workspace_conversation_members() {
         .await
         .expect("missing conversation should return empty vec");
     assert!(missing.is_empty());
+}
+
+#[tokio::test]
+async fn all_dm_conversations_aggregates_bounded_pages() {
+    let server = MockServer::start().await;
+    let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+        .expect("failed to create relay client");
+
+    Mock::given(method("GET"))
+        .and(path("/v1/dm/conversations/all"))
+        .and(query_param("limit", "500"))
+        .and(query_param_is_missing("cursor"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "ok": true,
+            "data": [{
+                "id": "conv_1", "type": "dm", "participants": ["alice", "bob"],
+                "message_count": 1, "last_message": null
+            }],
+            "cursor": { "next": "conv_1", "has_more": true }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/dm/conversations/all"))
+        .and(query_param("limit", "500"))
+        .and(query_param("cursor", "conv_1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "ok": true,
+            "data": [{
+                "id": "conv_2", "type": "dm", "participants": ["alice", "carol"],
+                "message_count": 1, "last_message": null
+            }],
+            "cursor": { "next": null, "has_more": false }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let conversations = relay
+        .all_dm_conversations()
+        .await
+        .expect("all_dm_conversations failed");
+    assert_eq!(
+        conversations
+            .iter()
+            .map(|conversation| conversation.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["conv_1", "conv_2"]
+    );
+}
+
+#[tokio::test]
+async fn all_dm_conversations_rejects_a_repeated_cursor() {
+    let server = MockServer::start().await;
+    let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+        .expect("failed to create relay client");
+
+    Mock::given(method("GET"))
+        .and(path("/v1/dm/conversations/all"))
+        .and(query_param("limit", "500"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "ok": true,
+            "data": [],
+            "cursor": { "next": "dm_repeat", "has_more": true }
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let result = relay.all_dm_conversations().await;
+    assert!(matches!(
+        result,
+        Err(RelayError::InvalidResponse(message))
+            if message.contains("pagination did not advance")
+    ));
 }
 
 #[tokio::test]
@@ -2651,6 +2729,7 @@ async fn nodes_and_triggers_use_expected_endpoints() {
         .create_node(CreateNodeRequest {
             node_id: None,
             name: "http-node".to_string(),
+            machine_id: None,
             kind: Some("http_push".to_string()),
             role: None,
             delivery_adapter: None,
@@ -2679,6 +2758,71 @@ async fn nodes_and_triggers_use_expected_endpoints() {
     assert_eq!(created.node.kind.as_deref(), Some("http_push"));
     assert_eq!(created.node.role.as_deref(), Some("direct"));
     assert_eq!(created.token, "nt_live_test");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/nodes"))
+        .and(header("x-relaycast-node-token", "nt_live_current"))
+        .and(header(
+            "idempotency-key",
+            "node-rotation-00000000-0000-4000-8000-000000000001",
+        ))
+        .and(body_json(json!({
+            "node_id": "node_http",
+            "name": "renamed",
+            "machine_id": "machine_http"
+        })))
+        .respond_with(
+            api_error(503, "database_overloaded", "retry keyed node rotation")
+                .insert_header("Retry-After", "0"),
+        )
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/nodes"))
+        .and(header("x-relaycast-node-token", "nt_live_current"))
+        .and(header(
+            "idempotency-key",
+            "node-rotation-00000000-0000-4000-8000-000000000001",
+        ))
+        .and(body_json(json!({
+            "node_id": "node_http",
+            "name": "renamed",
+            "machine_id": "machine_http"
+        })))
+        .respond_with(ok(json!({
+            "id": "node_http", "name": "renamed", "kind": "http_push", "role": "direct",
+            "delivery_adapter": "http.basic.v1", "delivery": null, "capabilities": [], "tags": [],
+            "version": "unknown", "status": "offline", "live": false, "handlers_live": false,
+            "load": 0, "active_agents": 0, "max_agents": 1, "last_heartbeat_at": null,
+            "created_at": "2026-01-01T00:00:00.000Z", "token": "nt_live_rotated"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let rotated = relay
+        .create_node_with_rotation_recovery(
+            CreateNodeRequest {
+                node_id: Some("node_http".to_string()),
+                name: "renamed".to_string(),
+                machine_id: Some("machine_http".to_string()),
+                kind: None,
+                role: None,
+                delivery_adapter: None,
+                delivery: None,
+                capabilities: None,
+                max_agents: None,
+                tags: None,
+                version: None,
+            },
+            "nt_live_current",
+            "node-rotation-00000000-0000-4000-8000-000000000001",
+        )
+        .await
+        .expect("create_node_with_current_token failed");
+    assert_eq!(rotated.node.name, "renamed");
+    assert_eq!(rotated.token, "nt_live_rotated");
 
     Mock::given(method("GET"))
         .and(path("/v1/nodes"))

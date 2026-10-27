@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, vi } from 'vitest';
 import { BackgroundTasks } from '../backgroundTasks.js';
 import { DurableEventQueue } from '../../adapters/node/event-queue.js';
@@ -6,7 +9,7 @@ import type { Hono } from 'hono';
 import { createEngine } from '../../engine.js';
 import { createNodeRuntime, type NodeRuntime, type EngineSocket } from '../../adapters/node/index.js';
 import type { AppEnv } from '../../env.js';
-import type { EngineConfig, EngineDb, EntitlementsProvider } from '../../ports/index.js';
+import type { AdmissionHooks, EngineConfig, EngineDb } from '../../ports/index.js';
 import type { AtomicWrite, TransactionCapability } from '../../ports/database.js';
 
 export interface TestStack {
@@ -48,10 +51,15 @@ export function makeNodeStack(options?: {
   httpPushProxy?: EngineConfig['httpPushProxy'];
   workspaceBootstrapSecret?: string;
   workspaceBootstrapProofRequired?: boolean;
-  entitlements?: EntitlementsProvider;
+  allowWorkspaceKeyRotation?: boolean;
+  admission?: AdmissionHooks;
+  rateLimitPerMinute?: number;
 }): TestStack {
   const tasks = new BackgroundTasks();
   observePresence();
+  // Blobs go to a per-stack temp dir that close() removes, not the checkout.
+  // Created before any global patching so a failure here leaves nothing behind.
+  const fileDir = mkdtempSync(join(tmpdir(), 'relaycast-conformance-files-'));
   // start() launches poll() before createNodeRuntime returns. Capture that exact
   // promise; calling poll() again would return early while it is already busy.
   const poll = DurableEventQueue.prototype.poll;
@@ -62,6 +70,7 @@ export function makeNodeStack(options?: {
   try {
     runtime = createNodeRuntime({
       dbPath: ':memory:',
+      fileDir,
       baseUrl: 'http://localhost:0',
       migrate: true,
       config: {
@@ -70,22 +79,38 @@ export function makeNodeStack(options?: {
         httpPushProxy: options?.httpPushProxy,
         workspaceBootstrapSecret: options?.workspaceBootstrapSecret ?? 'test-bootstrap-secret',
         workspaceBootstrapProofRequired: options?.workspaceBootstrapProofRequired,
+        allowWorkspaceKeyRotation: options?.allowWorkspaceKeyRotation,
+        rateLimitPerMinute: options?.rateLimitPerMinute,
       },
-      entitlements: options?.entitlements,
+      admission: options?.admission,
       // Disable the auto-sweep timer; tests drive presence.sweep() explicitly.
       eventQueue: { pollIntervalMs: 0 },
       presence: { ttlMs: options?.ttlMs ?? 60_000, sweepIntervalMs: 0 },
     });
+  } catch (err) {
+    rmSync(fileDir, { recursive: true, force: true });
+    throw err;
   } finally {
     DurableEventQueue.prototype.poll = poll;
   }
   contextTasks.set(runtime.deps.db, tasks);
-  const queuePoll = runtime.webhookQueue.poll.bind(runtime.webhookQueue);
-  runtime.webhookQueue.poll = () => tasks.track(queuePoll());
-  const drainNode = runtime.realtime.drainNode.bind(runtime.realtime);
-  runtime.realtime.drainNode = (...args) => tasks.track(drainNode(...args));
-  const app = createEngine(runtime.deps);
-  tasks.bind(app);
+  let app: Hono<AppEnv>;
+  try {
+    const queuePoll = runtime.webhookQueue.poll.bind(runtime.webhookQueue);
+    runtime.webhookQueue.poll = () => tasks.track(queuePoll());
+    const drainNode = runtime.realtime.drainNode.bind(runtime.realtime);
+    runtime.realtime.drainNode = (...args) => tasks.track(drainNode(...args));
+    app = createEngine(runtime.deps);
+    tasks.bind(app);
+  } catch (err) {
+    // No stack is registered yet, so close() would never run: release here.
+    try {
+      runtime.close();
+    } finally {
+      rmSync(fileDir, { recursive: true, force: true });
+    }
+    throw err;
+  }
   let closing: Promise<void> | undefined;
   const stack: TestStack = {
     app, runtime,
@@ -100,6 +125,7 @@ export function makeNodeStack(options?: {
           runtime.close();
         } finally {
           stacks.delete(stack);
+          rmSync(fileDir, { recursive: true, force: true });
         }
       }
     })(),

@@ -2,10 +2,13 @@ import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { FleetNodeTagSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
-import { requireAuth, requireWorkspaceRead, requireWorkspaceKey } from '../middleware/auth.js';
+import { requireAuth, requireNodeToken, requireWorkspaceRead, requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { parseIdempotencyKey } from '../middleware/idempotency.js';
 import { asCodedError, errorResponse } from '../lib/httpError.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
+import { sha256Hex } from '../lib/crypto.js';
+import { isValidStandardWebhookSecret } from '../lib/standardWebhook.js';
 import {
   jsonCreated,
   jsonError,
@@ -23,6 +26,7 @@ import { fanoutToWorkspace } from './fanout.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
+import { canonicalJson } from '../engine/messageMetadata.js';
 import {
   getObserverTokenFromContext,
   normalizeObserverFilters,
@@ -48,6 +52,7 @@ const deliveryAuthSchema = z.discriminatedUnion('type', [
     signed_payload: z.enum(['body', 'timestamp.body']).default('timestamp.body'),
     encoding: z.literal('hex').default('hex'),
     prefix: z.string().default('sha256='),
+    signature_scheme: z.literal('standard-webhooks').optional(),
   }),
 ]);
 
@@ -59,6 +64,18 @@ const httpDeliverySchema = z.object({
   // (EngineConfig.httpPushProxy). `url` stays the real destination; the engine
   // forwards through the proxy at dispatch time. See dispatchHttpPush.
   use_proxy: z.boolean().optional(),
+}).superRefine((delivery, ctx) => {
+  if (
+    delivery.auth.type === 'hmac_sha256'
+    && delivery.auth.signature_scheme === 'standard-webhooks'
+    && !isValidStandardWebhookSecret(delivery.auth.secret)
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['auth', 'secret'],
+      message: 'standard-webhooks requires a whsec_ secret that decodes to 24-64 bytes',
+    });
+  }
 });
 
 const createNodeSchema = z.object({
@@ -118,7 +135,8 @@ function observerAgentIdsFilter(observer: ObserverContext): string[] | undefined
   return normalizeObserverFilters(observer.filters).agent_ids;
 }
 
-// POST /v1/nodes - enroll or rotate a node token (workspace-key only)
+// POST /v1/nodes - workspace-key enrollment; established rows also require
+// proof of the current node token.
 nodeRoutes.post('/nodes', requireWorkspaceKey, rateLimit, async (c) => {
   try {
     const parsed = await parseJsonBody(c, createNodeSchema, 'invalid node body');
@@ -142,7 +160,36 @@ nodeRoutes.post('/nodes', requireWorkspaceKey, rateLimit, async (c) => {
 
 async function enrollNode(c: Context<AppEnv>, data: z.infer<typeof createNodeSchema>): Promise<Response> {
   try {
-    const existing = await nodeEngine.resolveNodeForEnroll(c.get('db'), c.get('workspace').id, data);
+    const currentNodeToken = c.req.header('X-Relaycast-Node-Token');
+    const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
+    if (idempotencyError) {
+      return jsonError(c, 'invalid_idempotency_key', idempotencyError, 400);
+    }
+    if (idempotencyKey && !currentNodeToken) {
+      return jsonError(
+        c,
+        'node_rotation_idempotency_requires_current_token',
+        'Node rotation Idempotency-Key requires X-Relaycast-Node-Token proof',
+        400,
+      );
+    }
+    if (currentNodeToken && idempotencyKey && idempotencyKey.length < 32) {
+      return jsonError(
+        c,
+        'node_rotation_idempotency_key_too_weak',
+        'Node rotation Idempotency-Key must be at least 32 characters and generated with a CSPRNG',
+        400,
+      );
+    }
+    const expectedTokenHash = currentNodeToken
+      ? await c.get('engine').auth.hashToken(currentNodeToken)
+      : undefined;
+    const existing = await nodeEngine.resolveNodeForEnroll(
+      c.get('db'),
+      c.get('workspace').id,
+      data,
+      expectedTokenHash,
+    );
     const kind = data.kind ?? (existing?.kind as z.infer<typeof nodeKindSchema> | undefined) ?? 'ws';
     const role = data.role
       ?? (existing?.role as z.infer<typeof nodeRoleSchema> | undefined)
@@ -159,19 +206,37 @@ async function enrollNode(c: Context<AppEnv>, data: z.infer<typeof createNodeSch
       if (!url) {
         return jsonError(c, 'invalid_node_delivery', 'http_push nodes require delivery.url', 400);
       }
-      if (!isSafeExternalUrl(url, { strict: strictExternalUrl(c) })) {
+      const strict = strictExternalUrl(c);
+      if (!isSafeExternalUrl(url, { strict, requireHttps: strict })) {
         return jsonError(c, 'unsafe_node_delivery_url', 'delivery.url is not allowed', 400);
       }
     }
     if (role === 'direct' && (data.max_agents ?? existing?.maxAgents ?? 1) !== 1) {
       return jsonError(c, 'direct_node_capacity_exceeded', 'direct nodes can bind at most one agent', 400);
     }
+    const rotationRecovery = existing && currentNodeToken && idempotencyKey
+      ? await (async () => {
+          const requestDigest = await sha256Hex(canonicalJson(data));
+          const replacementDigest = await sha256Hex(canonicalJson([
+            'node-token-rotation-v1',
+            c.get('workspace').id,
+            currentNodeToken,
+            idempotencyKey,
+            requestDigest,
+          ]));
+          return {
+            replacementToken: `nt_live_${replacementDigest.slice(0, 48)}`,
+            idempotencyKeyHash: await sha256Hex(idempotencyKey),
+            requestDigest,
+          };
+        })()
+      : undefined;
     const result = await nodeEngine.createNodeToken(c.get('db'), c.get('workspace').id, {
       ...data,
       kind,
       role,
       delivery: delivery && !('success' in delivery) ? delivery : null,
-    });
+    }, { expectedTokenHash, rotationRecovery });
     return jsonCreated(c, result);
   } catch (err: unknown) {
     return errorResponse(c, err);
@@ -343,7 +408,7 @@ nodeRoutes.post('/nodes/:node/actions/:name/invoke', requireAuth, rateLimit, asy
       handler_node_id: result.handler_node_id,
     };
     await sendWebhookEvent(c, { type: 'action.invoked', workspaceId: workspace.id, data: eventData });
-    emitServerEvent(c, workspace.id, 'relaycast_server_action_invoked', {
+    emitServerEvent(c, workspace.id, 'action.invoked', {
       action_name: result.action_name,
       invocation_id: result.invocation_id,
       caller_agent_id: agent.id,
@@ -364,6 +429,7 @@ nodeRoutes.post('/nodes/:node/actions/:name/invoke', requireAuth, rateLimit, asy
             nodeConnections: c.get('engine').nodeConnections,
             environment: c.get('engine').config?.environment,
             httpPushProxy: c.get('engine').config?.httpPushProxy,
+            outboundWebhookFetch: c.get('engine').config?.outboundWebhookFetch,
             workspaceId: workspace.id,
           },
           {
@@ -405,6 +471,14 @@ nodeRoutes.delete('/nodes/:node/providers/:name', requireWorkspaceKey, rateLimit
 });
 
 // GET /v1/nodes/:name - single node roster entry
+// GET /v1/node/me - the node a node token belongs to. A service handed the
+// token (Cloud, recording who owns a node) proves which node it is without
+// holding the workspace key.
+nodeRoutes.get('/node/me', requireNodeToken, rateLimit, async (c) => {
+  const node = c.get('node')!;
+  return jsonOk(c, { id: node.id, name: node.name, workspace_id: c.get('workspace').id });
+});
+
 nodeRoutes.get('/nodes/:name', requireWorkspaceRead('nodes:read'), rateLimit, async (c) => {
   try {
     const db = c.get('db');

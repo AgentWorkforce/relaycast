@@ -240,4 +240,4 @@ Single owner per file. Workers MUST coordinate in `#wf-sdk-setup-client` before 
 
 ## 5. Out of scope (do not implement)
 
-Everything in source-spec §"Future Work", plus: token auto-refresh, `defaultAgentName`, `JoinWorkspaceOptions.agentName`, `Relay.agents`, `msw` dependency, build-time `X-SDK-Version` injection, Python SDK changes, server-side changes.
+Everything in source-spec §"Future Work", plus: token auto-refresh, `defaultAgentName`, `JoinWorkspaceOptions.agentName`, `Relay.agents`, `msw` dependency, build-time `X-SDK-Version` injection, server-side changes.

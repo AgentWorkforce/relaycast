@@ -6,6 +6,13 @@ import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { a2aAgents, a2aInbound, agents, messages, workspaces } from '../db/schema.js';
 import { requireAuth, hashToken } from '../middleware/auth.js';
+import {
+  authenticateUnexpired,
+  isWorkspaceExpired,
+  WORKSPACE_EXPIRED_CODE,
+  WORKSPACE_EXPIRED_MESSAGE,
+} from '../auth/workspaceExpiry.js';
+import { getWorkspaceExpiry } from '../engine/workspace.js';
 import { asCodedError, codedError, errorResponse, type CodedError } from '../lib/httpError.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { buildIdempotencyStorageKey, runIdempotent } from '../middleware/idempotency.js';
@@ -39,7 +46,7 @@ const sqlInboundCompletionSchema = z.object({
 
 // KV is only an advisory completion cache. Public content and the replay
 // decision belong to SQL, where source pruning can scrub them atomically.
-async function receiveIdempotently(c: Context<AppEnv>, options: Omit<Parameters<typeof runIdempotent<dmEngine.SendDmResult>>[0], 'operation'> & {
+async function receiveIdempotently(c: Context<AppEnv>, options: Omit<Parameters<typeof runIdempotent<dmEngine.SendDmResult>>[0], 'operation' | 'ttlSecondsForResult'> & {
   operation: (legacyInbound?: unknown) => Promise<dmEngine.SendDmResult>;
 }) {
   const inboundId = options.key
@@ -57,8 +64,12 @@ async function receiveIdempotently(c: Context<AppEnv>, options: Omit<Parameters<
         // SQL absence was verified above. Source pruning retains a SQL
         // tombstone; only expiry cleanup removes that identity. A delayed KV
         // completion cannot extend its window or reject a new fingerprint.
-        // sendDm rechecks SQL atomically if another admission races this read.
+        // The matching short-lived KV lock is advisory for the generic HTTP
+        // path too; it must not block a fresh admission after the authoritative
+        // SQL identity expires. sendDm rechecks SQL atomically if another
+        // admission races either read.
         if (key === completionKey && raw && sqlInboundCompletionSchema.safeParse(JSON.parse(raw)).success) return null;
+        if (key === `${completionKey}:lock`) return null;
         return raw;
       };
       const value = Reflect.get(target, property);
@@ -342,7 +353,7 @@ async function resolveWorkspaceFromAuth(c: Context<AppEnv>): Promise<{ id: strin
   if (!authHeader?.startsWith('Bearer ')) return null;
 
   const token = authHeader.slice(7);
-  const result = await c.get('engine').auth.authenticate({
+  const result = await authenticateUnexpired(c.get('engine').auth, {
     token,
     require: 'any',
     db: c.get('db'),
@@ -665,6 +676,12 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
     const tokenHash = token ? await hashToken(token) : null;
     if (!tokenHash || tokenHash !== relayAgent.tokenHash) {
       return jsonError(c, 'unauthorized', 'Missing or invalid bearer token', 401);
+    }
+    // The webhook matches the agent token directly rather than through the
+    // auth provider, so it needs its own expiry gate (relaycast#464).
+    const workspace = await getWorkspaceExpiry(db, relayAgent.workspaceId);
+    if (workspace && isWorkspaceExpired(workspace)) {
+      return jsonError(c, WORKSPACE_EXPIRED_CODE, WORKSPACE_EXPIRED_MESSAGE, 401);
     }
 
     const rawPayload = await c.req.json();

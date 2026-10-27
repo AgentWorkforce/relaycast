@@ -40,6 +40,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## Product attribution
+
+Identify your product on workspace requests and inherited agent HTTP/WebSocket traffic:
+
+```rust
+use relaycast::{RelayCast, RelayCastOptions, AgentClient, ClientOptions};
+
+let relay = RelayCast::new(
+    RelayCastOptions::new("rk_live_xxx").with_origin("relay-desktop", "1.2.3")
+)?;
+let agent = relay.as_agent("at_live_xxx")?;
+
+// Standalone agent clients accept the same metadata through HTTP options.
+let standalone = AgentClient::with_options(
+    ClientOptions::new("at_live_xxx").with_origin("relay-desktop", "1.2.3")
+)?;
+```
+
+Anonymous workspace calls take their own origin options because they run before a
+workspace client exists:
+
+```rust
+use relaycast::{RelayCast, WorkspaceBootstrapOptions, WorkspaceLookupOptions, WorkspaceProvenance};
+
+let created = RelayCast::create_workspace_with_options(
+    "my-workspace",
+    WorkspaceBootstrapOptions::new(WorkspaceProvenance::sdk())
+        .with_origin("relay-desktop", "1.2.3"),
+).await?;
+let existing = RelayCast::lookup_workspace_with_options(
+    "my-workspace",
+    WorkspaceLookupOptions::new().with_origin("relay-desktop", "1.2.3"),
+).await?;
+```
+
+Without overrides, the origin remains `@relaycast/sdk-rust` with the crate version.
+Token replacement and `reconnect_agent` preserve these values.
+
 ## Features
 
 ### Workspace Operations
@@ -298,12 +336,29 @@ use relaycast::{RelayError, Result};
 async fn example() -> Result<()> {
     match relay.get_agent("nonexistent").await {
         Ok(agent) => println!("Found: {}", agent.name),
-        Err(RelayError::Api { code, message, status }) => {
+        Err(RelayError::Api { code, message, status, .. }) => {
             println!("API error {}: {} (HTTP {})", code, message, status);
         }
         Err(e) => println!("Other error: {}", e),
     }
     Ok(())
+}
+```
+
+`RelayError::details()` returns the server's full JSON error body, including
+fields the typed variant does not model. Workspace admission 429s, for
+example, say whether an upgrade would help:
+
+```rust
+if let Err(err) = relay.get_agent("worker").await {
+    if err.is_rate_limited() {
+        let upgrade = err
+            .details()
+            .and_then(|body| body.get("upgrade_available"))
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        println!("busy; upgrade available: {upgrade}");
+    }
 }
 ```
 

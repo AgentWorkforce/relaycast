@@ -88,7 +88,6 @@ describe('multi-agent wsBridge lifecycle', () => {
             id: auth === 'Bearer rk_live_beta' ? 'ws_beta' : 'ws_alpha',
             name: auth === 'Bearer rk_live_beta' ? 'Beta Workspace' : 'Alpha Workspace',
             system_prompt: null,
-            plan: 'free',
             created_at: new Date().toISOString(),
             metadata: {},
           },

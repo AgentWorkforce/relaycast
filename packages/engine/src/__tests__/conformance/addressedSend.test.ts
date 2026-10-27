@@ -3,6 +3,9 @@ import { eq } from 'drizzle-orm';
 import { attachFakeBatch, makeNodeStack, createWorkspace, registerAgent, FakeSocket, type TestStack } from './harness.js';
 import { agents, messages, nodes } from '../../db/schema.js';
 import { addressSplits, SENDER_ADDRESS_METADATA_KEY } from '../../engine/address.js';
+import { canonicalJson } from '../../engine/messageMetadata.js';
+import { sha256Hex } from '../../lib/crypto.js';
+import { buildIdempotencyStorageKey } from '../../middleware/idempotency.js';
 
 type Json = Record<string, unknown>;
 
@@ -13,7 +16,11 @@ type Json = Record<string, unknown>;
  */
 describe('addressed send', () => {
   let stack: TestStack;
-  beforeEach(() => { stack = makeNodeStack({ ttlMs: 60_000 }); });
+  let enrolledNodeTokens: Map<string, string>;
+  beforeEach(() => {
+    stack = makeNodeStack({ ttlMs: 60_000 });
+    enrolledNodeTokens = new Map();
+  });
   afterEach(async () => {
     await stack.close();
   });
@@ -25,15 +32,23 @@ describe('addressed send', () => {
     machineId?: string,
     tags: string[] = [],
   ) {
+    const tokenKey = `${ws.workspaceId}:${nodeId}`;
+    const currentToken = enrolledNodeTokens.get(tokenKey);
     const enroll = await stack.app.request('/v1/nodes', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+        ...(currentToken ? { 'X-Relaycast-Node-Token': currentToken } : {}),
+      },
       body: JSON.stringify({
         node_id: nodeId, name, ...(machineId ? { machine_id: machineId } : {}), tags,
         capabilities: ['spawn:claude'], max_agents: 4, version: 'test-node',
       }),
     });
     expect(enroll.status).toBe(201);
+    const created = (await enroll.json()) as { data: { token: string } };
+    enrolledNodeTokens.set(tokenKey, created.data.token);
 
     const sock = new FakeSocket();
     const handle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, nodeId, sock);
@@ -159,6 +174,27 @@ describe('addressed send', () => {
     expect(await stack.runtime.deps.db.select().from(messages).where(eq(messages.body, 'raced'))).toHaveLength(0);
   });
 
+  it('rejects a stale direct machine address when node.register changes its machine ID before admission', async () => {
+    const { alice, bob } = await seed();
+    const nodeId = `node_direct_${alice.agentId}`;
+    await stack.runtime.deps.db.update(nodes).set({ machineId: 'old-machine' }).where(eq(nodes.id, nodeId));
+    const sqlite = stack.runtime.handle.sqlite;
+    let changed = false;
+    attachFakeBatch(stack, stack.runtime.deps.db, async () => {
+      if (changed) return;
+      changed = true;
+      sqlite.prepare('UPDATE nodes SET machine_id = ? WHERE id = ?').run('new-machine', nodeId);
+    });
+
+    const stale = await send(bob.token, 'alice@old-machine', { text: 'stale address' });
+    expect(changed).toBe(true);
+    expect(stale.status).toBe(404);
+    expect(await errorCode(stale)).toBe('address_not_found');
+    expect(await stack.runtime.deps.db.select().from(messages).where(eq(messages.body, 'stale address'))).toHaveLength(0);
+    expect((await send(bob.token, 'alice@new-machine', { text: 'current address' })).status).toBe(201);
+    expect((await send(bob.token, 'alice@direct', { text: 'legacy alias' })).status).toBe(201);
+  });
+
   it('routes to the agent by node name and by machine_id, delivering on that machine', async () => {
     const { alice, laptop } = await seed();
 
@@ -195,6 +231,68 @@ describe('addressed send', () => {
     expect(await errorCode(await send(alice.token, 'bob@direct', { text: 'x' }))).toBe('address_not_found');
     // A self-connected agent is not on any named machine.
     expect(await errorCode(await send(bob.token, 'alice@laptop', { text: 'x' }))).toBe('address_not_found');
+  });
+
+  it('returns unique readable addresses at registration for direct nodes on one computer', async () => {
+    const ws = await createWorkspace(stack.app, 'desktop-registration');
+    const register = async (name: string, prefix: string) => {
+      const response = await stack.app.request('/v1/agents', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+        body: JSON.stringify({ name, direct_machine_prefix: prefix }),
+      });
+      return { status: response.status, body: await response.json() as { data: { id: string; address: string } } };
+    };
+    const first = await register('desktop-one', 'khaliqs-macbook-pro');
+    const second = await register('desktop-two', 'khaliqs-macbook-pro');
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(first.body.data.address).toBe(`desktop-one@khaliqs-macbook-pro-${first.body.data.id}`);
+    expect(second.body.data.address).toBe(`desktop-two@khaliqs-macbook-pro-${second.body.data.id}`);
+    expect(first.body.data.address).not.toBe(second.body.data.address);
+    expect((await register('bad-prefix', 'Khaliq’s MacBook')).status).toBe(400);
+  });
+
+  it('publishes a direct node machine_id and keeps @direct as a delivery alias', async () => {
+    const { ws, alice, bob } = await seed();
+    const nodeId = `node_direct_${alice.agentId}`;
+    const sock = new FakeSocket();
+    const handle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, nodeId, sock);
+    await handle.handleMessage(JSON.stringify({
+      v: 1, type: 'node.register', node_id: nodeId, name: `direct-${alice.agentId}`,
+      machine_id: 'khaliqs-macbook-pro-a1b2c3', capabilities: [], max_agents: 1,
+      tags: ['implicit', 'direct', 'sdk'], version: 'relay-desktop/test',
+    }));
+    expect(sock.ofType('reply').at(-1)?.ok).toBe(true);
+    const roster = await stack.app.request('/v1/agents', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    expect(JSON.stringify(await roster.json())).toContain('alice@khaliqs-macbook-pro-a1b2c3');
+    expect((await send(bob.token, 'alice@khaliqs-macbook-pro-a1b2c3', { text: 'new address' })).status).toBe(201);
+    expect((await send(bob.token, 'alice@direct', { text: 'old address' })).status).toBe(201);
+    await handle.handleMessage(JSON.stringify({
+      v: 1, type: 'node.register', node_id: nodeId, name: `direct-${alice.agentId}`,
+      machine_id: 'khaliqs-macbook-pro-a1b2c3', capabilities: [], max_agents: 1,
+      tags: ['implicit', 'direct', 'sdk'], version: 'relay-desktop/test',
+    }));
+    expect((await send(bob.token, 'alice@khaliqs-macbook-pro-a1b2c3', { text: 'after restart' })).status).toBe(201);
+  });
+
+  it('publishes a replyable legacy alias for a direct machine ID containing @', async () => {
+    const { ws, alice, bob } = await seed();
+    const nodeId = `node_direct_${alice.agentId}`;
+    await stack.runtime.deps.db.update(nodes).set({ machineId: 'ops@example.com' }).where(eq(nodes.id, nodeId));
+    const example = await enrollBroker(ws, 'node_example', 'example.com');
+    await registerOnNode(example, 'alice@ops');
+
+    const roster = await stack.app.request('/v1/agents', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    const entries = ((await roster.json()) as { data: Array<{ name: string; address: string }> }).data;
+    expect(entries.find((entry) => entry.name === 'alice')?.address).toBe('alice@direct');
+    expect(await errorCode(await send(bob.token, 'alice@ops@example.com', { text: 'ambiguous' })))
+      .toBe('ambiguous_address');
+    expect((await send(bob.token, 'alice@direct', { text: 'replyable' })).status).toBe(201);
   });
 
   it('rejects addresses that do not match the agent, without revealing which part failed', async () => {
@@ -352,6 +450,44 @@ describe('addressed send', () => {
       // Nothing was accepted under the key yet, so a valid address is not a reuse conflict.
       expect((await send(alice.token, 'bob@laptop', { text: 'x' }, key)).status).toBe(201);
     });
+
+    it('replays equivalent nested metadata regardless of object key order', async () => {
+      const { ws, alice } = await seed();
+      const idempotencyKey = 'retry-canonical-data';
+      const key = { 'Idempotency-Key': idempotencyKey };
+      const originalData = { outer: { beta: 2, alpha: 1 }, tail: true };
+      const first = await send(alice.token, 'bob@laptop', {
+        text: 'same metadata',
+        data: originalData,
+      }, key);
+      expect(first.status).toBe(201);
+      const firstId = ((await first.json()) as { data: { id: string } }).data.id;
+
+      const storageKey = await buildIdempotencyStorageKey(
+        ws.workspaceId, alice.agentId, 'dm:direct', idempotencyKey,
+      );
+      const storedRaw = await stack.runtime.deps.kv.get(storageKey);
+      const stored = JSON.parse(storedRaw!) as { fingerprint: string; fingerprints: string[] };
+      const legacyFingerprint = JSON.stringify({
+        to: 'bob@laptop', address: 'bob@laptop', text: 'same metadata',
+        data_sha256: await sha256Hex(JSON.stringify(originalData)),
+      });
+      const canonicalFingerprint = JSON.stringify({
+        to: 'bob@laptop', address: 'bob@laptop', text: 'same metadata',
+        data_sha256: await sha256Hex(canonicalJson(originalData)),
+      });
+      // This is the exact comparison the prior engine performs after rollback.
+      expect(stored.fingerprint).toBe(legacyFingerprint);
+      expect(stored.fingerprints).toEqual([canonicalFingerprint]);
+
+      const replay = await send(alice.token, 'bob@laptop', {
+        text: 'same metadata',
+        data: { tail: true, outer: { alpha: 1, beta: 2 } },
+      }, key);
+      expect(replay.status).toBe(201);
+      expect(((await replay.json()) as { data: { id: string } }).data.id).toBe(firstId);
+      expect(await stack.runtime.deps.db.select().from(messages)).toHaveLength(1);
+    });
   });
 
   describe('address discovery', () => {
@@ -412,6 +548,86 @@ describe('addressed send', () => {
       const message = ((await res.json()) as { data: { message: Json } }).data.message;
       expect(message.agent_address).toBe('alice@direct');
       expect(message.metadata).toEqual({ topic: 'x', injection_mode: 'wait' });
+    });
+
+    it.each([
+      { description: 'server metadata', data: { topic: 'thread' } },
+      {
+        description: 'a spoofed sender address',
+        data: { [SENDER_ADDRESS_METADATA_KEY]: 'mallory@elsewhere', topic: 'thread' },
+      },
+    ])('carries the thread reply sender address with $description', async ({ data }) => {
+      const { ws, alice, bob } = await seed();
+      const dm = await send(alice.token, 'bob@laptop', { text: 'reply to me' });
+      expect(dm.status).toBe(201);
+      const sent = (await dm.json()) as { data: { message: { id: string } } };
+      const sessionRef = 'thread-reply-sender-address';
+
+      const response = await stack.app.request(`/v1/messages/${sent.data.message.id}/replies`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+        body: JSON.stringify({ text: 'ownership proof', data: { ...data, session_ref: sessionRef } }),
+      });
+      expect(response.status).toBe(201);
+      const reply = (await response.json()) as { data: Json };
+      expect(reply.data.agent_address).toBe('bob@laptop');
+      expect(reply.data.metadata).toEqual({ topic: 'thread', session_ref: sessionRef });
+
+      const queued = (await (await stack.app.request('/v1/deliveries', {
+        headers: { authorization: `Bearer ${alice.token}` },
+      })).json()) as { data: Array<{ message: Json }> };
+      expect(queued.data).toHaveLength(1);
+      expect(queued.data[0].message.agent_address).toBe('bob@laptop');
+
+      const thread = (await (await stack.app.request(`/v1/messages/${sent.data.message.id}/replies`, {
+        headers: { authorization: `Bearer ${alice.token}` },
+      })).json()) as { data: { parent: Json; replies: Json[] } };
+      expect(thread.data.parent.agent_address).toBe('alice@direct');
+      expect(thread.data.parent.metadata).not.toHaveProperty(SENDER_ADDRESS_METADATA_KEY);
+      expect(thread.data.replies[0].agent_address).toBe('bob@laptop');
+      expect(thread.data.replies[0].metadata).toEqual({ topic: 'thread', session_ref: sessionRef });
+
+      const read = await stack.app.request(`/v1/messages/${reply.data.id}`, {
+        headers: { authorization: `Bearer ${alice.token}` },
+      });
+      expect(read.status).toBe(200);
+      const message = (await read.json()) as { data: Json };
+      expect(message.data.agent_address).toBe('bob@laptop');
+      expect(message.data.metadata).not.toHaveProperty(SENDER_ADDRESS_METADATA_KEY);
+
+      const session = await stack.app.request(`/v1/sessions/${sessionRef}/messages`, {
+        headers: { authorization: `Bearer ${ws.workspaceKey}` },
+      });
+      expect(session.status).toBe(200);
+      const sessionBody = (await session.json()) as { data: { messages: Json[] } };
+      expect(sessionBody.data.messages).toEqual([
+        expect.objectContaining({
+          id: reply.data.id,
+          agent_address: 'bob@laptop',
+          text: 'ownership proof',
+        }),
+      ]);
+      expect(sessionBody.data.messages[0]?.metadata).not.toHaveProperty(SENDER_ADDRESS_METADATA_KEY);
+    });
+
+    it('omits the sender address for an unhosted thread reply', async () => {
+      const { alice, bob } = await seed();
+      const parentResponse = await send(alice.token, 'bob@laptop', { text: 'reply to me' });
+      expect(parentResponse.status).toBe(201);
+      const parent = (await parentResponse.json()) as { data: { message: { id: string } } };
+
+      await stack.runtime.deps.db.update(agents)
+        .set({ locationNodeId: null })
+        .where(eq(agents.id, bob.agentId));
+
+      const response = await stack.app.request(`/v1/messages/${parent.data.message.id}/replies`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+        body: JSON.stringify({ text: 'from nowhere' }),
+      });
+      expect(response.status).toBe(201);
+      const reply = (await response.json()) as { data: Json };
+      expect(reply.data).not.toHaveProperty('agent_address');
     });
   });
 });

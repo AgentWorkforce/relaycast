@@ -78,6 +78,17 @@ describe('RelaycastSetup', () => {
     expect(JSON.parse(init.body)).toEqual({ name: 'Acme Ops', provenance: { source: 'sdk' } });
   });
 
+  it('createWorkspace() forwards metadata without changing user keys', async () => {
+    const { RelaycastSetup } = await import('../setup.js');
+    mockFetch.mockImplementation(() => jsonResponse({
+      ok: true,
+      data: { workspace_id: 'ws_1', api_key: 'rk_live_test', created_at: '2026-10-01' },
+    }, 201));
+    const metadata = { project_id: 'p1', nested: { camelKey: null } };
+    await new RelaycastSetup().createWorkspace({ name: 'Test', metadata });
+    expect(JSON.parse(mockFetch.mock.calls[0]![1].body).metadata).toEqual(metadata);
+  });
+
   it('createWorkspace() forwards explicit provenance', async () => {
     const { RelaycastSetup } = await import('../setup.js');
     mockFetch.mockImplementation(() =>
@@ -292,7 +303,9 @@ describe('RelaycastSetup', () => {
       }, 500),
     );
 
-    const setup = new RelaycastSetup();
+    // A 500 is retriable; without this the default jittered backoff (up to
+    // ~5.25s across three retries) races the 5s test timeout.
+    const setup = new RelaycastSetup({ retry: { maxRetries: 0 } });
 
     await expect(setup.createWorkspace({ name: 'Broken' })).rejects.toMatchObject({
       constructor: RelaycastApiError,

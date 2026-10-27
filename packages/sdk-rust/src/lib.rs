@@ -355,6 +355,7 @@ pub use types::{
     ConsoleWindowQuery,
     // Workspace lookup
     WorkspaceLookup,
+    WorkspaceLookupOptions,
 };
 
 /// SDK version.

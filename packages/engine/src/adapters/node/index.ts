@@ -1,10 +1,10 @@
+import { safeTelemetrySink } from '../../ports/telemetry.js';
 import { randomBytes } from 'node:crypto';
 import type { EngineDeps, EngineConfig } from '../../ports/index.js';
 import type { AuthProvider } from '../../ports/auth.js';
-import type { EntitlementsProvider } from '../../ports/entitlements.js';
+import type { AdmissionHooks } from '../../ports/admission.js';
 import type { TelemetrySink } from '../../ports/telemetry.js';
 import { SqliteApiKeyAuthProvider } from '../../auth/index.js';
-import { StaticEntitlementsProvider } from '../../providers/static-entitlements.js';
 import { NoopTelemetrySink } from '../../providers/noop-telemetry.js';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from './database.js';
 import { InProcessRealtime } from './realtime.js';
@@ -20,6 +20,7 @@ import { sendNodePresenceContext } from '../../engine/nodeContext.js';
 import { createDeliveryMaintenanceRunner } from './delivery-maintenance.js';
 import { sweepPendingA2aEgress } from '../../engine/a2aEgress.js';
 import { reapExpiredWorkspaces } from '../../engine/workspace.js';
+import { createNodeOutboundWebhookFetch } from './ssrf-fetch.js';
 
 export {
   InProcessRealtime,
@@ -52,8 +53,8 @@ export interface NodeRuntimeOptions {
   migrate?: boolean;
   /** Override the auth provider (default: built-in API-key auth). */
   auth?: AuthProvider;
-  /** Override the entitlements provider (default: static, kv-backed usage). */
-  entitlements?: EntitlementsProvider;
+  /** Host admission and metering hooks (default: none, every request is admitted). */
+  admission?: AdmissionHooks;
   /** Override the telemetry sink (default: no-op). */
   telemetry?: TelemetrySink;
   /** Engine config (environment, version, workspace-stream default, etc.). Persist `workspaceBootstrapSecret` for replay across restarts. */
@@ -100,7 +101,13 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
   }
   const db = handle.db;
 
-  const telemetry = options.telemetry ?? new NoopTelemetrySink();
+  const telemetry = safeTelemetrySink(options.telemetry ?? new NoopTelemetrySink());
+  const testEnvironment = options.config?.environment === 'test';
+  const testFetch: typeof globalThis.fetch = (input, init) => globalThis.fetch(input, init);
+  const outboundWebhookFetch = options.config?.outboundWebhookFetch
+    ?? (testEnvironment
+      ? testFetch
+      : createNodeOutboundWebhookFetch(options.config?.httpPushProxy?.url));
   const realtime = new InProcessRealtime(db);
   const upstreamOnPresenceEvent = options.presence?.onPresenceEvent;
   const presence = new InProcessPresence(realtime, {
@@ -115,7 +122,15 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
       // so a slow or black-holed http_push receiver must not stall them. WS
       // context sends are in-memory; the http_push POST runs detached.
       void sendNodePresenceContext(
-        { db, nodeConnections: realtime, realtime, workspaceId, environment: options.config?.environment, httpPushProxy: options.config?.httpPushProxy },
+        {
+          db,
+          nodeConnections: realtime,
+          realtime,
+          workspaceId,
+          environment: options.config?.environment,
+          httpPushProxy: options.config?.httpPushProxy,
+          outboundWebhookFetch,
+        },
         {
           subjectAgentId,
           event: eventType,
@@ -128,6 +143,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
       ).catch(() => {});
     },
   });
+  realtime.setPresenceTracker(presence);
   const rateLimiter = new InProcessRateLimiter();
   const kv = new InProcessKeyValueStore();
   const fileStorage = new LocalFileStorage(
@@ -138,13 +154,12 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
   const webhookQueue = new DurableEventQueue(
     db,
     (err, ctx) => telemetry.captureException(err, ctx),
-    options.eventQueue,
+    { ...options.eventQueue, fetch: options.eventQueue?.fetch ?? outboundWebhookFetch },
   );
   // Resume any deliveries left over from a previous process (the outbox's point).
   webhookQueue.start();
 
   const auth = options.auth ?? new SqliteApiKeyAuthProvider();
-  const entitlements = options.entitlements ?? new StaticEntitlementsProvider(kv);
 
   // An explicit host-provided boundary is authoritative (the host may prune
   // outside this process). Otherwise report the same fallback the local Node
@@ -155,6 +170,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
     : retentionOptions?.defaults?.messageTtlDays ?? null;
   const config: EngineConfig = {
     ...options.config,
+    outboundWebhookFetch,
     retention: options.config?.retention ?? { messageTtlDays },
   };
 
@@ -169,7 +185,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
     kv,
     webhookQueue,
     auth,
-    entitlements,
+    admission: options.admission,
     telemetry,
     config,
   };

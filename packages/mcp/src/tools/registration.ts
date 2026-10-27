@@ -113,6 +113,58 @@ function createRegisteredAgent(agentName: string, agentToken: string): Registere
   return { agentName, agentToken };
 }
 
+type RotateWorkspaceKeyResponse = {
+  workspace_id?: string;
+  workspaceId?: string;
+  api_key?: string;
+  apiKey?: string;
+  previous_key_expires_at?: string | null;
+};
+
+/**
+ * POST /v1/workspace/rotate-key on the serving engine. Self-serve rotation
+ * is opt-in server-side (`allowWorkspaceKeyRotation`): a hosted deployment
+ * answers 403 `workspace_key_rotation_disabled` and the key must instead be
+ * rotated through the control plane that owns it.
+ */
+async function rotateWorkspaceKey(
+  apiKey: string,
+  graceSeconds: number | undefined,
+  baseUrl?: string,
+): Promise<RotateWorkspaceKeyResponse> {
+  const response = await fetch(
+    `${normalizeBaseUrl(baseUrl)}/v1/workspace/rotate-key`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(
+        graceSeconds === undefined ? {} : { grace_seconds: graceSeconds },
+      ),
+    },
+  );
+
+  const payload = (await response
+    .json()
+    .catch(() => null)) as ApiOk<RotateWorkspaceKeyResponse> | ApiErr | null;
+  if (!payload || typeof payload !== 'object' || !('ok' in payload)) {
+    throw new Error(
+      `Invalid response while rotating workspace key (HTTP ${response.status})`,
+    );
+  }
+  if (!payload.ok) {
+    const code =
+      (payload as ApiErr & { error?: { code?: string } }).error?.code ??
+      (payload as ApiErr).error?.message;
+    throw new Error(
+      `Workspace key rotation failed: ${typeof code === 'string' ? code : `HTTP ${response.status}`}`,
+    );
+  }
+  return payload.data;
+}
+
 export function registerRegistrationTools(
   server: McpServer,
   getRelay: (
@@ -228,7 +280,89 @@ export function registerRegistrationTools(
     },
   );
 
-  // Tool 3: agent.register
+  // Tool 3: workspace.rotate_key — the customer-facing rotation command.
+  // Rotates the session's workspace key, persists the replacement into the
+  // session's workspace context (the agent token keeps working — rotation
+  // preserves identities and sessions), and returns a REDACTED result: the
+  // new key is stored, never printed into tool output or transcripts.
+  server.registerTool(
+    'workspace.rotate_key',
+    {
+      title: 'Rotate Workspace Key',
+      description:
+        'Rotate the current workspace API key. The replacement key is stored in this session automatically — it is never shown in the response, so it cannot leak into transcripts or logs. The superseded key keeps working for grace_seconds (default 60, max 3600); pass 0 to revoke it immediately after a compromise. Your agent registration, channels, and in-flight sessions are preserved. Only available on deployments with workspace key rotation enabled; hosted workspaces rotate through the managing control plane instead.',
+      inputSchema: {
+        grace_seconds: z
+          .number()
+          .int()
+          .min(0)
+          .max(3600)
+          .optional()
+          .describe('Seconds the superseded key keeps authenticating (default 60). 0 revokes it immediately — compromise/revoke mode.'),
+      },
+      outputSchema: {
+        rotated: z.boolean(),
+        workspace_id: z.string().nullable(),
+        grace_seconds: z.number().nullable(),
+        previous_key_expires_at: z.string().nullable().describe('ISO timestamp after which the old key stops authenticating; null when grace is 0 or unsupported'),
+        message: z.string(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    },
+    async ({ grace_seconds }) => {
+      const session = getSession();
+      requireWorkspaceKey(session);
+      const currentKey = session.workspaceKey!;
+
+      const rotated = await rotateWorkspaceKey(
+        currentKey,
+        grace_seconds,
+        baseUrl,
+      );
+      const newKey = rotated.api_key ?? rotated.apiKey;
+      if (!newKey || typeof newKey !== 'string') {
+        throw new Error(
+          'Workspace key rotation succeeded upstream but returned no replacement key',
+        );
+      }
+
+      // Protected persistence: carry the session's saved context (agent
+      // identity and tokens survive rotation) forward under the new key, then
+      // drop the copy indexed by the superseded one.
+      const priorContext = session.workspaces.get(currentKey);
+      if (session.agentToken && session.agentName) {
+        saveWorkspaceContext(session, newKey, session.agentToken, session.agentName, {
+          workspaceName: priorContext?.workspaceName,
+          workspaceLabel: priorContext?.workspaceLabel,
+        });
+      } else if (priorContext) {
+        session.workspaces.set(newKey, {
+          ...priorContext,
+          workspaceKey: newKey,
+          wsBridge: null,
+          subscriptions: null,
+          wsInitAttempted: false,
+        });
+      }
+      session.workspaces.delete(currentKey);
+      setSession({ workspaceKey: newKey });
+
+      const result = {
+        rotated: true,
+        workspace_id: rotated.workspace_id ?? rotated.workspaceId ?? null,
+        grace_seconds: grace_seconds ?? 60,
+        previous_key_expires_at: rotated.previous_key_expires_at ?? null,
+        message:
+          'Workspace key rotated. The new key is stored in this session; the previous key is revoked at the time shown. Never display or log workspace keys.',
+      };
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        structuredContent: result,
+      };
+    },
+  );
+
+  // Tool 4: agent.register
   server.registerTool(
     'agent.register',
     {
@@ -355,22 +489,29 @@ export function registerRegistrationTools(
     {
       title: 'List Agents',
       description:
-        'Retrieve all agents registered in the current workspace. Returns each agent\'s name, type, persona, and online/offline status. Use the optional status filter to find only agents that are currently connected or disconnected.',
+        'Retrieve agents registered in the current workspace. The default/all roster includes agents seen within seven days; include_stale retrieves older identities. Use include_metadata=false for a lean roster or a status filter for connection status.',
       inputSchema: {
         status: z
-          .enum(['online', 'offline'])
+          .enum(['online', 'offline', 'all'])
           .optional()
           .describe('Filter agents by connection status: "online" for currently connected agents, "offline" for disconnected ones'),
+        include_stale: z.boolean().optional().describe('Include identities last seen more than seven days ago in the default/all roster'),
+        include_metadata: z.boolean().optional().describe('Include agent metadata (default true); false returns metadata={} without loading the stored blob'),
       },
       outputSchema: {
         agents: z.array(z.object({}).passthrough()).describe('Array of registered agent objects with name, type, persona, and status'),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    async ({ status }) => {
+    async ({ status, include_stale, include_metadata }) => {
       requireWorkspaceKey(getSession());
       const relay = getRelay();
-      const agents = await relay.agents.list(status ? { status } : undefined);
+      const query = {
+        ...(status !== undefined ? { status } : {}),
+        ...(include_stale !== undefined ? { includeStale: include_stale } : {}),
+        ...(include_metadata !== undefined ? { includeMetadata: include_metadata } : {}),
+      };
+      const agents = await relay.agents.list(Object.keys(query).length ? query : undefined);
       return {
         content: [{ type: 'text', text: JSON.stringify(agents, null, 2) }],
         structuredContent: { agents: agents as unknown as Record<string, unknown>[] },

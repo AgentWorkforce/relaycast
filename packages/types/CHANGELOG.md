@@ -9,6 +9,96 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [12.0.0] - 2026-10-27
+
+### Removed
+
+- `WorkspaceSchema.plan`.
+
+## [11.1.0] - 2026-10-27
+
+### Added
+
+- Workspace `plan` accepts `trial`.
+
+## [10.6.1] - 2026-10-18
+
+### Fixed
+
+- `CliTypeSchema`, `CliType`, and `SpawnAgentRequest` now accept `muse` and `devin`, alongside existing `opencode` and `grok` values.
+
+## [10.6.0] - 2026-10-18
+
+### Added
+
+- `WorkspaceSchema.plan` accepts `connect` and `selfhost` (the self-host default, which the schema previously rejected).
+- `RotateWorkspaceKeyRequest` / `RotateWorkspaceKeyResponse` wire schemas and the `relaycast_server_workspace_key_rotated` telemetry event.
+
+## [10.5.0] - 2026-10-16
+
+### Added
+
+- `DeliveryFailedEvent.reason` preserves server rejection reasons such as `recipient_offline` and `depth_cap` for SDK event handlers.
+
+## [10.4.0] - 2026-10-13
+
+### Added
+
+- `Agent.origin_node_id`: the node that registered an agent (agent detail only).
+
+## [10.1.1] - 2026-10-12
+
+### Added
+
+- `MessageWithMeta.agent_address` and `SessionMessage.agent_address` are optional. Each is present when the server recorded the sender's `agent@machine` address, including on thread replies, and omitted when the sender has no location node. Session replay parsing keeps a recorded address.
+
+## [10.0.0] - 2026-10-11
+
+### Changed
+
+- `AgentListQuerySchema` accepts `status: online | offline | away | active | idle | blocked | waiting | all` and optional boolean `include_stale` / `include_metadata` fields. HTTP encodes those flags as `0` or `1`; omitted flags use recent discovery and include metadata.
+
+## [9.2.0] - 2026-10-09
+
+### Added
+
+- `DeliveryMessageSchema.attachments` (optional `FileAttachment[]`).
+
+## [9.1.0] - 2026-10-08
+
+### Added
+
+- Subscriptions and HTTP push node auth support selecting the Standard Webhooks signature scheme.
+- Webhook delivery types expose durable delivery status and replay responses.
+
+## [9.0.0] - 2026-10-06
+
+### Added
+
+- `ServerTelemetryRequiredProperty<E>` exposes the properties `parseInternalTelemetryEvent` requires for each server telemetry event.
+
+### Fixed
+
+- `WebhookSchema` and `Webhook` include required `workspace_id`, `channel_id`, and `channel_name` plus optional nullable `created_by`; manually constructed webhook values must include the required identity fields.
+
+## [8.16.0] - 2026-10-01
+
+### Added
+
+- Workspace create/update requests accept public JSON metadata validated by `WorkspaceMetadataSchema` (16 KiB, 100 top-level keys, 128 Unicode code points per key, eight nested object/array levels below the root; secret-like keys rejected).
+
+## [8.15.0] - 2026-10-01
+
+### Added
+
+- `internalTelemetryEventSchema` accepts optional `groups`, `set_once` and `process_person_profile`; `TelemetrySenderProperties`, `TelemetryGroups` and `TelemetryPersonSetOnce` describe them.
+
+## [8.14.0] - 2026-09-30
+
+### Added
+
+- Opted-in node-provider `action.invoke` frames may carry authenticated `caller_id` and `caller_name` provenance; exported metadata constants identify protocol version `v1`.
+
 ## [8.13.0] - 2026-09-25
 
 ### Added

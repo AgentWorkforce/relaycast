@@ -6,6 +6,36 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 
 ## [Unreleased]
 
+## [12.0.0] - 2026-10-27
+
+### Removed
+
+- `Workspace.plan`; servers no longer return it.
+
+### Fixed
+
+- `ActionInvocation` decodes hosted records keyed by `invocation_id` (a plain `id` still decodes) and keeps `id` as a deprecated alias of `invocationId`, so polling or completing an invocation no longer fails as an invalid API response. `completed_at` and nonnegative `duration_ms` are included.
+
+## [10.0.2] - 2026-10-11
+
+### Fixed
+
+- `allDMConversations()` follows bounded server cursors and still returns the complete conversation array, with a malformed-cursor progress guard.
+
+## [9.0.0] - 2026-10-06
+
+### Added
+
+- `CreateNodeRequest.machineId` and `nodes.create(request, currentToken:idempotencyKey:)` support machine-aware enrollment and recoverable rotation without placing credentials in JSON; unkeyed creates are never replayed after an ambiguous failure.
+
+### Changed
+
+- Automatic retries default to idempotent HTTP methods or requests carrying an idempotency key; unkeyed `POST` and `PATCH` requests are sent once unless a caller explicitly enables retries.
+
+## [8.16.0] - 2026-10-01
+
+- Workspace creation accepts arbitrary JSON metadata, and updates shallow merge metadata with top-level null values deleting keys.
+
 ## [7.0.0] - 2026-08-07
 
 - `NodeRosterEntry.load` is optional; provider and direct-agent heartbeats no longer label placeholder utilization as measured.

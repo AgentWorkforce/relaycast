@@ -23,11 +23,18 @@ function canonicalJsonValue(value: unknown): unknown {
   return value;
 }
 
+/** Stable JSON for request identity: object keys are recursively sorted while
+ * array order and JSON scalar semantics are preserved.
+ */
+export function canonicalJson(value: unknown): string {
+  return JSON.stringify(canonicalJsonValue(value));
+}
+
 /** Stable digest input for the exact public metadata persisted on a message. */
 export function canonicalUserMessageMetadata(
   metadata: Record<string, unknown> | null | undefined,
 ): string {
-  return JSON.stringify(canonicalJsonValue(sanitizeUserMessageMetadata(metadata)));
+  return canonicalJson(sanitizeUserMessageMetadata(metadata));
 }
 
 export function publicMessageMetadata(

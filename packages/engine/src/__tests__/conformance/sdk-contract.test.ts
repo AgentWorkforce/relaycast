@@ -670,6 +670,20 @@ describe('SDK v8 service contract', () => {
     expect(created.data.url).toContain(`/v1/hooks/${created.data.webhook_id}`);
     expect(created.data.token).toMatch(/^wh_live_/);
 
+    const list = await stack.app.request('/v1/webhooks', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    expect(list.status).toBe(200);
+    const listed = await list.json() as { data: Array<Record<string, unknown>> };
+    expect(listed.data[0]).toMatchObject({
+      id: created.data.webhook_id,
+      workspace_id: ws.workspaceId,
+      channel_name: 'general',
+      channel: 'general',
+    });
+    expect(listed.data[0].channel_id).toEqual(expect.any(String));
+    expect(listed.data[0].created_by).toEqual(expect.any(String));
+
     const missingAuth = await stack.app.request(`/v1/hooks/${created.data.webhook_id}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -683,6 +697,16 @@ describe('SDK v8 service contract', () => {
       body: JSON.stringify({ message: 'deploy started', author: 'CI' }),
     });
     expect(wrongAuth.status).toBe(401);
+
+    const rawEvent = { event: 'task.updated', task: { id: 'roma-42', title: 'Review changes' } };
+    const rawTrigger = await stack.app.request(`/v1/hooks/${created.data.webhook_id}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${created.data.token}` },
+      body: JSON.stringify(rawEvent),
+    });
+    expect(rawTrigger.status).toBe(201);
+    const rawTriggered = await rawTrigger.json() as { data: { text: string } };
+    expect(rawTriggered.data.text).toContain(JSON.stringify(rawEvent));
 
     await stack.runtime.deps.db
       .update(webhooks)
@@ -803,6 +827,8 @@ describe('SDK v8 service contract', () => {
           'Content-Type': 'text/plain',
           'x-relay-event': 'spoofed',
           'X-Relay-Timestamp': 'spoofed',
+          'X-Forward-To': 'https://internal.example.test',
+          'X-Proxy-Auth': 'attacker-controlled',
         },
         secret: 'shared-secret',
       }),
@@ -825,7 +851,9 @@ describe('SDK v8 service contract', () => {
     expectRedactedHeaders(getBody.data.headers);
 
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }));
-    await deliverEvent(stack.runtime.deps.db, ws.workspaceId, 'message.created', { text: 'hello' });
+    await deliverEvent(stack.runtime.deps.db, ws.workspaceId, 'message.created', { text: 'hello' }, {
+      fetch: fetchMock as typeof globalThis.fetch,
+    });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -835,6 +863,8 @@ describe('SDK v8 service contract', () => {
     expect(headers['X-Relay-Event']).toBe('message.created');
     expect(headers['x-relay-event']).toBeUndefined();
     expect(headers['X-Relay-Timestamp']).not.toBe('spoofed');
+    expect(headers['X-Forward-To']).toBeUndefined();
+    expect(headers['X-Proxy-Auth']).toBeUndefined();
     expect(headers['X-Relay-Signature']).toMatch(/^sha256=[0-9a-f]{64}$/);
   });
 

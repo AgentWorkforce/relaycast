@@ -8,6 +8,7 @@ import type {
   UpgradeArgs,
   NodeUpgradeArgs,
 } from '../../ports/realtime.js';
+import type { PresenceTracker } from '../../ports/presence.js';
 import type { ObserverToken } from '../../ports/auth.js';
 import { and, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { EngineDb } from '../../ports/database.js';
@@ -59,6 +60,8 @@ interface NodeConn {
   instanceId?: string;
   /** Null means legacy/immediate; a set means cursor-gated ready identities. */
   deliveryReadyAgentIds?: Set<string> | null;
+  /** Exact actions that negotiated authenticated caller provenance on this socket. */
+  callerAwareActions?: ReadonlySet<string>;
   lastSeen: number;
 }
 
@@ -82,6 +85,11 @@ interface QueuedNodeMessage {
   message: Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }>;
 }
 
+interface ActionCallerSnapshot {
+  callerId: string | null;
+  callerName: string | null;
+}
+
 /**
  * Single-process, in-memory implementation of the workspace observer stream and
  * node-control stream. Agent runtime traffic is intentionally node-only:
@@ -103,6 +111,13 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
   private connectionSeq = 0;
 
   constructor(private readonly db: EngineDb) {}
+
+  private presence: PresenceTracker | undefined;
+
+  /** Wire the HTTP presence tracker into direct-node heartbeat acknowledgements. */
+  setPresenceTracker(presence: PresenceTracker): void {
+    this.presence = presence;
+  }
 
   setNodeCompletionDeps(deps: InvocationCompletionDeps): void {
     this.nodeCompletionDeps = deps;
@@ -277,7 +292,11 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
         return false;
       }
       const [authorized] = await this.db
-        .select({ id: actionInvocations.id })
+        .select({
+          id: actionInvocations.id,
+          callerId: actionInvocations.callerId,
+          callerName: actionInvocations.callerName,
+        })
         .from(actionInvocations)
         .innerJoin(agents, and(
           eq(agents.workspaceId, workspaceId),
@@ -338,7 +357,12 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       // rotation cannot interleave after acceptance but before the frame is
       // handed to the provider. Remote owners implement this proof inside
       // their own serialized send boundary.
-      return this.sendToProviderUnchecked(workspaceId, nodeId, providerName, message);
+      return this.sendToProviderUnchecked(
+        workspaceId,
+        nodeId,
+        providerName,
+        this.actionInvokeWithCaller(workspaceId, nodeId, providerName, message, authorized),
+      );
     }
 
     // V1 carried no dispatch-attempt generation. Reject it explicitly so an
@@ -384,13 +408,22 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
               AND ${actions.isActive} = 1
           )`,
         ))
-        .returning({ id: actionInvocations.id });
+        .returning({
+          id: actionInvocations.id,
+          callerId: actionInvocations.callerId,
+          callerName: actionInvocations.callerName,
+        });
       if (!accepted) return false;
 
       // No await occurs after the exact identity update resumes and before the
       // synchronous socket handoff. A prune/replacement must therefore win
       // before authorization or after this frame has already been accepted.
-      return this.sendToProviderUnchecked(workspaceId, nodeId, providerName, message);
+      return this.sendToProviderUnchecked(
+        workspaceId,
+        nodeId,
+        providerName,
+        this.actionInvokeWithCaller(workspaceId, nodeId, providerName, message, accepted),
+      );
     }
 
     if (
@@ -430,6 +463,9 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
         inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked']),
         eq(actionInvocations.handlerAgentId, authorization.handlerAgentId),
         eq(actionInvocations.handlerNodeId, nodeId),
+        ...(authorization.expectedNodeLivenessRevision !== undefined
+          ? [eq(actionInvocations.nodeLivenessRevision, authorization.expectedNodeLivenessRevision)]
+          : []),
         sql`EXISTS (
           SELECT 1 FROM ${actions}
           INNER JOIN ${agents}
@@ -447,7 +483,11 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
             AND ${actions.isActive} = 1
         )`,
       ))
-      .returning({ id: actionInvocations.id });
+      .returning({
+        id: actionInvocations.id,
+        callerId: actionInvocations.callerId,
+        callerName: actionInvocations.callerName,
+      });
     if (!accepted) return false;
 
     // No await occurs between the acceptance CAS above resuming and
@@ -456,7 +496,31 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     // `action.invoke` is never rejected by the send itself here (an
     // unreachable provider queues it), so a recorded attempt always has a
     // frame behind it.
-    return this.sendToProviderUnchecked(workspaceId, nodeId, providerName, message);
+    return this.sendToProviderUnchecked(
+      workspaceId,
+      nodeId,
+      providerName,
+      this.actionInvokeWithCaller(workspaceId, nodeId, providerName, message, accepted),
+    );
+  }
+
+  private actionInvokeWithCaller(
+    workspaceId: string,
+    nodeId: string,
+    providerName: string,
+    message: Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }>,
+    snapshot: ActionCallerSnapshot,
+  ): Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }> {
+    // Discard fields supplied by earlier layers. Only the snapshot returned by
+    // the final authorization statement is allowed to authenticate a caller.
+    const { caller_id: _callerId, caller_name: _callerName, ...base } = message;
+    const connection = this.providerConnection(this.nodeKey(workspaceId, nodeId), providerName);
+    if (!connection?.callerAwareActions?.has(message.action) || !snapshot.callerId) return base;
+    return {
+      ...base,
+      caller_id: snapshot.callerId,
+      ...(snapshot.callerName ? { caller_name: snapshot.callerName } : {}),
+    };
   }
 
   private async sendToProviderUnchecked(
@@ -556,6 +620,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     providerName: string,
     instanceId: string,
     connectionId: string,
+    callerAwareActions: readonly string[] = [],
   ): void {
     const conn = this.nodeConnections.get(connectionId);
     if (!conn) return;
@@ -603,6 +668,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     }
     conn.providerName = providerName;
     conn.instanceId = instanceId;
+    conn.callerAwareActions = new Set(callerAwareActions);
     conn.lastSeen = Date.now();
     providers.set(providerName, connectionId);
   }
@@ -695,6 +761,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       if (conn) {
         conn.providerName = undefined;
         conn.deliveryReadyAgentIds = undefined;
+        conn.callerAwareActions = undefined;
       }
     }
     this.nodeQueues.delete(this.providerQueueKey(nodeKey, providerName));
@@ -772,6 +839,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
           db: this.db,
           registry: this,
           completionDeps: this.nodeCompletionDeps,
+          presence: this.presence,
           workspaceId,
           nodeId,
           socket,

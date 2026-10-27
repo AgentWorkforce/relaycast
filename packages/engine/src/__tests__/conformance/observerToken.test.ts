@@ -48,7 +48,13 @@ async function uploadCompletedFile(stack: TestStack, token: string, filename: st
     }),
   });
   expect(upload.status).toBe(201);
-  const uploadBody = await upload.json() as { data: { id: string } };
+  const uploadBody = await upload.json() as { data: { id: string; upload_url: string } };
+  const put = await stack.runtime.fileHandler(new Request(uploadBody.data.upload_url, {
+    method: 'PUT',
+    headers: { 'content-type': 'text/plain' },
+    body: 'hello world\n',
+  }));
+  expect(put.status).toBe(200);
   const complete = await stack.app.request(`/v1/files/${uploadBody.data.id}/complete`, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}` },
@@ -1006,7 +1012,7 @@ describe('observer tokens', () => {
     });
     expect(asObserver.status).toBe(200);
     const asObserverBody = await asObserver.json() as {
-      data: { id: string; name: string; plan: unknown; system_prompt: unknown; metadata: unknown };
+      data: { id: string; name: string; system_prompt: unknown; metadata: unknown };
     };
     expect(asObserverBody.data.id).toBe(ws.workspaceId);
     expect(asObserverBody.data).not.toHaveProperty('token');

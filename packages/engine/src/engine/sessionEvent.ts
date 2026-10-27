@@ -319,6 +319,8 @@ export async function applyStatusEventEffect(
   return { claimed, mutated: claimed && mutated };
 }
 
+// This v1 digest text is persisted. Build it directly because JSON.stringify
+// reorders integer-like object keys numerically instead of lexically.
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
   if (value && typeof value === 'object') {

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   orderByRemembered,
+  observerBindingMatches,
   pickRememberedEngine,
   resolveRelayServerCandidatesFromHost,
   selectEngineForKey,
@@ -107,6 +108,8 @@ describe('selectEngineForKey', () => {
       reachedAny: true,
       rejectedAny: true,
       inconclusiveAny: false,
+      observerTokenId: null,
+      retryAfterMs: null,
     });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -137,6 +140,8 @@ describe('selectEngineForKey', () => {
       reachedAny: true,
       rejectedAny: true,
       inconclusiveAny: false,
+      observerTokenId: null,
+      retryAfterMs: null,
     });
   });
 
@@ -156,7 +161,20 @@ describe('selectEngineForKey', () => {
       reachedAny: true,
       rejectedAny: true,
       inconclusiveAny: true,
+      observerTokenId: null,
+      retryAfterMs: null,
     });
+  });
+
+  it('keeps the longest Retry-After an inconclusive engine asked for', async () => {
+    mockFetch(
+      new Response(null, { status: 429, headers: { 'Retry-After': '45' } }),
+      new Response(null, { status: 503, headers: { 'Retry-After': '10' } }),
+    );
+
+    await expect(
+      selectEngineForKey(['https://cast.agentrelay.com', 'https://relay.example.com'], 'ot_live_secret'),
+    ).resolves.toMatchObject({ baseUrl: null, inconclusiveAny: true, retryAfterMs: 45_000 });
   });
 
   it('keeps network failures inconclusive when no engine accepts the key', async () => {
@@ -172,6 +190,8 @@ describe('selectEngineForKey', () => {
       reachedAny: true,
       rejectedAny: true,
       inconclusiveAny: true,
+      observerTokenId: null,
+      retryAfterMs: null,
     });
   });
 
@@ -184,5 +204,26 @@ describe('selectEngineForKey', () => {
       'https://self-hosted.example.com/v1/workspace',
       expect.any(Object)
     );
+  });
+
+  it('returns the authoritative observer id from an accepted observer credential', async () => {
+    mockFetch(
+      Response.json({ data: { id: 'workspace-a', observer_token_id: 'ot_room_a' } }),
+    );
+
+    await expect(
+      selectEngineForKey(['https://cast.agentrelay.com'], 'ot_live_secret'),
+    ).resolves.toMatchObject({
+      baseUrl: 'https://cast.agentrelay.com',
+      observerTokenId: 'ot_room_a',
+    });
+  });
+});
+
+describe('observerBindingMatches', () => {
+  it('requires the authenticated observer record to match the room link', () => {
+    expect(observerBindingMatches('ot_room_a', 'ot_room_a')).toBe(true);
+    expect(observerBindingMatches('ot_room_a', 'ot_room_b')).toBe(false);
+    expect(observerBindingMatches('ot_room_a', null)).toBe(false);
   });
 });

@@ -5,6 +5,7 @@ import { agents } from '../db/schema.js';
 import type { AppEnv } from '../env.js';
 import { requireSender, requireWorkspaceKey, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { admitMessage, assertMessageAdmitted } from '../middleware/admission.js';
 import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as messageEngine from '../engine/message.js';
 import * as channelEngine from '../engine/channel.js';
@@ -24,7 +25,7 @@ import {
 } from '../engine/observerToken.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
-import { emitServerEvent } from '../lib/serverTelemetry.js';
+import { emitServerEvent, type TelemetryActor } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
 import {
   jsonError,
@@ -77,6 +78,7 @@ messageRoutes.post(
   '/channels/:name/messages',
   requireSender,
   rateLimit,
+  admitMessage,
   async (c) => {
     try {
       const db = c.get('db');
@@ -105,30 +107,29 @@ messageRoutes.post(
       // Resolve the sender. An agent token posts as itself; a node token posts
       // as `from`, an agent resolved strictly within the node's workspace (so a
       // node credential can never attribute a message to another workspace).
-      let senderAgentId: string;
-      let senderAgentName: string;
+      let sender: TelemetryActor;
       if (agent) {
         if (from !== undefined) {
           return jsonError(c, 'from_not_allowed', '"from" is only valid with a node token', 400);
         }
-        senderAgentId = agent.id;
-        senderAgentName = agent.name;
+        sender = agent;
       } else if (node) {
         if (!from) {
           return jsonError(c, 'from_required', 'A node token must set "from" (an agent name in the node workspace)', 400);
         }
         const [fromAgent] = await db
-          .select({ id: agents.id, name: agents.name })
+          .select({ id: agents.id, name: agents.name, type: agents.type, metadata: agents.metadata })
           .from(agents)
           .where(and(eq(agents.workspaceId, workspace.id), eq(agents.name, from)));
         if (!fromAgent) {
           return jsonNotFound(c, 'agent_not_found', `Agent "${from}" not found in this workspace`);
         }
-        senderAgentId = fromAgent.id;
-        senderAgentName = fromAgent.name;
+        sender = fromAgent;
       } else {
         return jsonError(c, 'agent_token_required', 'Agent or node token required to post messages', 403);
       }
+      const senderAgentId = sender.id;
+      const senderAgentName = sender.name;
 
       const mailbox = resolveMailboxConfig(c.get('engine').config, workspace.id);
       const workspaceDeliveryPolicy = await resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace);
@@ -146,15 +147,17 @@ messageRoutes.post(
         status: 201,
         fingerprint: JSON.stringify({ channelId: channel.id, text, blocks, attachments, data, content_type, mode, from }),
         kv: c.get('engine').kv,
-        operation: () =>
-          messageEngine.postMessage(
+        operation: () => {
+          assertMessageAdmitted(c);
+          return messageEngine.postMessage(
             db,
             workspace.id,
             channel.id,
             senderAgentId,
             { text, blocks, attachments, data, content_type, mode },
             { mailbox, workspaceDeliveryPolicy },
-          ),
+          );
+        },
         afterOperation: async (data) => {
           await sendWebhookEvent(c, {
             type: 'message.created',
@@ -192,12 +195,12 @@ messageRoutes.post(
           );
         }
 
-        emitServerEvent(c, workspace.id, 'relaycast_server_message_created', {
+        emitServerEvent(c, workspace.id, 'message.created', {
           channel_id: channel.id,
           message_id: String(publicData.id),
           message_kind: publicData.thread_id ? 'thread_reply' : 'channel_message',
           has_attachments: Boolean(publicData.has_attachments),
-        });
+        }, { actor: sender });
 
         runInBackground(
           c,

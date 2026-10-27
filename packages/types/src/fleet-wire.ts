@@ -32,6 +32,15 @@ export type FleetDeliveryMode = z.infer<typeof FleetDeliveryModeSchema>;
  */
 export const FLEET_DELIVERY_CURSOR_CAPABILITY = 'relay:delivery-cursor-v1';
 
+/**
+ * Capability metadata opt-in for authenticated caller provenance on
+ * `action.invoke`. Engines must omit the additive caller fields unless the
+ * exact action capability advertises this value, keeping older strict wire
+ * parsers compatible during rolling upgrades.
+ */
+export const FLEET_ACTION_CALLER_METADATA_KEY = 'relay.action-caller';
+export const FLEET_ACTION_CALLER_METADATA_VERSION = 'v1';
+
 const FleetWireEnvelopeFields = {
   v: FleetWireVersionSchema,
 } as const;
@@ -191,7 +200,8 @@ export const FleetNodeHeartbeatMessageSchema = z
     // synthetic `default` provider. Load/active_agents/handlers_live describe
     // the sending provider, and the node figures aggregate across providers.
     provider: FleetProviderIdentitySchema.optional(),
-    // Capacity utilization is absent/null until the provider has a genuine
+    // Normalized utilization (0–1, including machine utilization for unlimited
+    // providers) is absent/null until the provider has a genuine
     // measurement. Numeric values from legacy clients remain accepted for wire
     // compatibility but are only trusted when load_reported is explicitly true.
     load: z.number().finite().min(0).max(1).nullable().optional(),
@@ -480,6 +490,8 @@ export const FleetActionInvokeMessageSchema = z
     action: z.string(),
     agent_id: z.string().optional(),
     agent_name: z.string().optional(),
+    caller_id: z.string().optional(),
+    caller_name: z.string().optional(),
     input: FleetWireJsonValueSchema,
     task_execution: FleetTaskExecutionSchema.optional(),
   })

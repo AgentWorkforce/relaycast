@@ -7,7 +7,68 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- `agent.on.*` no longer throws when registered before `connect()`; handlers attach immediately and fire once the socket opens.
+- `agent.exited`, `node.status.online`, and `node.status.offline` have camelCase SDK types (`AgentExitedEvent`, `NodeStatusOnlineEvent`, `NodeStatusOfflineEvent`). `on.agentExited` is on `AgentClient` and `RelayCast`. `on.nodeOnline` and `on.nodeOffline` are on `RelayCast` only: the engine publishes node liveness to the workspace stream and webhooks, and `AgentClient`'s `/v1/node/ws` socket never receives it. Previously these events had no SDK type, so consumers reached for the snake_case raw type from `@relaycast/types` and read `undefined` off the camelized payload.
+
+## [10.6.1] - 2026-10-18
+
+### Fixed
+
+- `relay.agents.spawn()` accepts `muse` and `devin` in its typed `cli` field.
+
+## [10.6.0] - 2026-10-18
+
+### Added
+
+- `relay.workspace.rotateKey()` for workspace-key self-rollover; the replacement key is returned once and should be persisted, never printed.
+
+## [10.5.0] - 2026-10-16
+
+### Added
+
+- `delivery.failed` event handlers receive the server rejection `reason`, including `recipient_offline` and `depth_cap`.
+
+## [10.0.2] - 2026-10-11
+
+### Fixed
+
+- `allDmConversations()` follows bounded server cursors and still returns the complete conversation array, with a malformed-cursor progress guard.
+
+## [10.0.0] - 2026-10-11
+
+### Changed
+
+- `agents.list()` accepts `includeStale` (default `false`) and `includeMetadata` (default `true`), mapped to HTTP `include_stale` / `include_metadata` flags. `status: 'all'` is supported; default/all rosters include only agents seen within seven days unless `includeStale: true` is supplied.
+
+## [9.1.0] - 2026-10-08
+
+### Added
+
+- Subscriptions and HTTP push node delivery can opt into Standard Webhooks signing.
+- `subscriptions.deliveries()` lists per-event delivery health.
+- `subscriptions.replayDelivery()` replays failed or dead-lettered deliveries.
+
+## [9.0.0] - 2026-10-06
+
+### Added
+
+- `nodes.create(request, { currentToken, idempotencyKey })` sends current-node proof without placing the credential in JSON and can reuse a high-entropy operation key to recover a committed rotation after a lost response.
+
+## [8.16.0] - 2026-10-01
+
+### Added
+
+- Workspace creation and setup accept application-defined metadata; workspace updates shallow-merge metadata and delete keys whose values are null.
+
+## [8.14.0] - 2026-09-30
+
+### Added
+
+- `NodeProviderClient` negotiates caller-provenance support per action, and `NodeHandlerContext` exposes the authenticated caller as `callerAgentId` and `callerAgentName` when present.
 
 ## [8.13.0] - 2026-09-25
 

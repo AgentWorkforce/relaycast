@@ -609,6 +609,13 @@ describe('workspace lifecycle', () => {
     const upload = await uploadResponse.json() as {
       data: { id: string; upload_url: string; expires_at: string };
     };
+    // Completion requires stored bytes; the late PUT below re-uses the same URL.
+    const firstPut = await stack.runtime.fileHandler(new Request(upload.data.upload_url, {
+      method: 'PUT',
+      headers: { 'content-type': 'text/plain' },
+      body: 'once',
+    }));
+    expect(firstPut.status).toBe(200);
     const completeResponse = await stack.app.request(`/v1/files/${upload.data.id}/complete`, {
       method: 'POST',
       headers: { authorization: `Bearer ${agent.token}` },
@@ -829,10 +836,14 @@ describe('workspace lifecycle', () => {
     const withoutDirectCascade = coverage.filter((table) => table.on_delete !== 'CASCADE');
 
     expect(stack.runtime.handle.sqlite.pragma('foreign_keys', { simple: true })).toBe(1);
-    expect(coverage).toHaveLength(34);
+    expect(coverage).toHaveLength(36);
     expect(coverage).toContainEqual({ table_name: 'a2a_inbound', on_delete: 'CASCADE' });
     expect(coverage).toContainEqual({ table_name: 'a2a_egress', on_delete: 'CASCADE' });
+    expect(coverage).toContainEqual({ table_name: 'direct_dm_idempotency', on_delete: 'CASCADE' });
+    // messages_mention_fts is external content of messages. Workspace delete
+    // cascades to messages, and the message delete trigger drops the FTS row.
     expect(withoutDirectCascade).toEqual([
+      { table_name: 'messages_mention_fts', on_delete: null },
       { table_name: 'workspace_create_idempotency', on_delete: null },
       { table_name: 'workspace_events', on_delete: null },
     ]);

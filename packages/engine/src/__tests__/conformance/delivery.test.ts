@@ -28,7 +28,11 @@ import { deliverPendingToNode, handleNodeReconnect } from '../../index.js';
  */
 describe('durable delivery api', () => {
   let stack: TestStack;
-  beforeEach(() => { stack = makeNodeStack({ ttlMs: 60_000 }); });
+  let enrolledNodeTokens: Map<string, string>;
+  beforeEach(() => {
+    stack = makeNodeStack({ ttlMs: 60_000 });
+    enrolledNodeTokens = new Map();
+  });
   afterEach(async () => {
     await stack.close();
   });
@@ -89,9 +93,15 @@ describe('durable delivery api', () => {
         { name: FLEET_DELIVERY_CURSOR_CAPABILITY, kind: 'capacity' },
       ]
       : [{ name: 'spawn:claude', kind: 'capacity' }];
+    const tokenKey = `${ws.workspaceId}:${id}`;
+    const currentToken = enrolledNodeTokens.get(tokenKey);
     const create = await stack.app.request('/v1/nodes', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+        ...(currentToken ? { 'X-Relaycast-Node-Token': currentToken } : {}),
+      },
       body: JSON.stringify({
         node_id: id,
         name,
@@ -102,6 +112,8 @@ describe('durable delivery api', () => {
       }),
     });
     expect(create.status).toBe(201);
+    const created = (await create.json()) as { data: { token: string } };
+    enrolledNodeTokens.set(tokenKey, created.data.token);
 
     const sock = new FakeSocket();
     const handle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, id, sock);
@@ -361,6 +373,27 @@ describe('durable delivery api', () => {
         LIMIT 50`)
       .all(ws.workspaceId, bob.agentId) as Array<{ detail: string }>;
     expect(plan.some((step) => step.detail.includes('idx_deliveries_agent_active_created'))).toBe(true);
+  });
+
+  it('serves an explicit-status listing with an agent-scoped seek, never a workspace status walk', async () => {
+    const { ws, bob } = await seed();
+    for (const status of ['dead_lettered', 'acked', 'failed', 'queued', 'delivered']) {
+      const plan = stack.runtime.handle.sqlite
+        // Same projection as listDeliveries: an id-only query could be served
+        // by a different (covering) index and pass for the wrong reason.
+        .prepare(`EXPLAIN QUERY PLAN
+          SELECT * FROM deliveries
+          WHERE workspace_id = ?
+            AND agent_id = ?
+            AND status = ?
+          ORDER BY created_at, id
+          LIMIT 50`)
+        .all(ws.workspaceId, bob.agentId, status) as Array<{ detail: string }>;
+      const details = plan.map((step) => step.detail).join(' | ');
+      expect(details, status).toContain('idx_deliveries_agent_status_created');
+      // Already in the requested order: no sort that would force a full read before LIMIT.
+      expect(details, status).not.toContain('TEMP B-TREE');
+    }
   });
 
   it('rejects a malformed JSON fail body with 400 (no state change)', async () => {
@@ -1684,7 +1717,7 @@ describe('durable delivery api', () => {
       channelId,
       alice.agentId,
       { text: 'reroute me' },
-      { mailbox: { ttlMs: 60_000, depthCap: 1_000 } },
+      { mailbox: { ttlMs: 60_000, depthCap: 1_000, offlineExcludeMs: 24 * 60 * 60 * 1000 } },
     );
 
     expect(result._deliveries).toHaveLength(1);
@@ -2469,6 +2502,10 @@ describe('durable delivery api', () => {
     await stack.settle();
     const live = latestDeliverOfType(node.sock, 'thread.reply');
     expect(live).toMatchObject({ msg_id: messageId });
+    expect(live.payload).toMatchObject({
+      type: 'thread.reply',
+      data: { agent_address: 'alice@direct' },
+    });
 
     await node.handle.handleClose();
     const reconnected = await enrollAndAttachNode(ws, { id: node.id, name: node.name });
@@ -2614,7 +2651,7 @@ describe('durable delivery api', () => {
   });
 
   it('does not dead-letter an acked delivery after TTL expiry', async () => {
-    stack.runtime.deps.config!.mailbox = { deliveryTtlMs: 1, depthCap: 1000 };
+    stack.runtime.deps.config!.mailbox = { deliveryTtlMs: 60_000, depthCap: 1000 };
 
     const { ws, alice, bob } = await seed();
     const { sock: aliceSock } = await attachDirectNodeSocket(stack, ws.workspaceId, alice);

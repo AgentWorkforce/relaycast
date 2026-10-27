@@ -59,10 +59,14 @@ public struct ClientOptions: Equatable, Sendable {
 public struct RequestOptions: Equatable, Sendable {
     public var headers: [String: String]
     public var idempotencyKey: String?
+    /// Override automatic retry behavior for this request. Leave nil to use
+    /// the client's existing policy.
+    public var retry: Bool?
 
-    public init(headers: [String: String] = [:], idempotencyKey: String? = nil) {
+    public init(headers: [String: String] = [:], idempotencyKey: String? = nil, retry: Bool? = nil) {
         self.headers = headers
         self.idempotencyKey = idempotencyKey
+        self.retry = retry
     }
 }
 
@@ -121,6 +125,20 @@ public final class HttpClient: @unchecked Sendable {
         try await request("GET", path: path, body: Optional<EmptyRequest>.none, query: query, options: options)
     }
 
+    func getWithCursor<T: Decodable>(
+        _ path: String,
+        query: [String: String] = [:],
+        options: RequestOptions = RequestOptions()
+    ) async throws -> (data: T, cursor: Cursor?) {
+        try await requestWithCursor(
+            "GET",
+            path: path,
+            body: Optional<EmptyRequest>.none,
+            query: query,
+            options: options
+        )
+    }
+
     public func post<T: Decodable, Body: Encodable>(
         _ path: String,
         body: Body,
@@ -167,6 +185,17 @@ public final class HttpClient: @unchecked Sendable {
         query: [String: String] = [:],
         options: RequestOptions = RequestOptions()
     ) async throws -> T {
+        try await requestWithCursor(method, path: path, body: body, query: query, options: options).data
+    }
+
+    private func requestWithCursor<T: Decodable, Body: Encodable>(
+        _ method: String,
+        path: String,
+        body: Body? = nil,
+        query: [String: String] = [:],
+        options: RequestOptions = RequestOptions()
+    ) async throws -> (data: T, cursor: Cursor?) {
+        let shouldRetry = options.retry ?? isRetrySafe(method: method, idempotencyKey: options.idempotencyKey)
         var attempt = 0
 
         while true {
@@ -177,7 +206,9 @@ public final class HttpClient: @unchecked Sendable {
                     throw RelayError.transport(message: "Relaycast response was not HTTP", statusCode: nil, retryable: true, cause: nil)
                 }
 
-                if retryPolicy.retryOn.contains(http.statusCode), attempt < retryPolicy.maxRetries {
+                if shouldRetry,
+                   retryPolicy.retryOn.contains(http.statusCode),
+                   attempt < retryPolicy.maxRetries {
                     let delay = retryDelayMilliseconds(policy: retryPolicy, attempt: attempt, response: http)
                     attempt += 1
                     try await sleep(milliseconds: delay)
@@ -188,7 +219,7 @@ public final class HttpClient: @unchecked Sendable {
                     guard let empty = EmptyResponse() as? T else {
                         throw RelayError.missingData("Relaycast returned no content")
                     }
-                    return empty
+                    return (empty, nil)
                 }
 
                 let envelope: ApiResponse<T>
@@ -205,18 +236,18 @@ public final class HttpClient: @unchecked Sendable {
                 }
 
                 if let value = envelope.data {
-                    return value
+                    return (value, envelope.cursor)
                 }
 
                 if let empty = EmptyResponse() as? T {
-                    return empty
+                    return (empty, envelope.cursor)
                 }
 
                 throw RelayError.missingData("Relaycast API response was missing data")
             } catch let error as RelayError {
                 throw error
             } catch {
-                if attempt < retryPolicy.maxRetries {
+                if shouldRetry, attempt < retryPolicy.maxRetries {
                     let delay = retryDelayMilliseconds(policy: retryPolicy, attempt: attempt, response: nil)
                     attempt += 1
                     try await sleep(milliseconds: delay)
@@ -291,6 +322,15 @@ public final class HttpClient: @unchecked Sendable {
         items.append(contentsOf: query.map { URLQueryItem(name: snakeCase($0.key), value: $0.value) })
         components?.queryItems = items
         return components?.url
+    }
+}
+
+private func isRetrySafe(method: String, idempotencyKey: String?) -> Bool {
+    switch method.uppercased() {
+    case "GET", "HEAD", "OPTIONS", "PUT", "DELETE":
+        return true
+    default:
+        return idempotencyKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
 }
 

@@ -75,6 +75,8 @@ export interface AgentActionProviderAuthorization {
   handlerAgentId: string;
   /** False when a queued attempt was already counted before this delivery. */
   recordAttempt: boolean;
+  /** Optional lost-node retry generation; the socket owner must CAS it. */
+  expectedNodeLivenessRevision?: number;
 }
 
 /** Exact token-generation proof for a release accepted by the socket owner. */
@@ -154,6 +156,13 @@ export interface NodeConnectionRegistry {
    * still owns the route. The owner also records acceptance before resolving
    * when the selected authorization kind requires it.
    *
+   * Before the final synchronous socket write, the owner must discard any
+   * caller fields already present on the supplied frame, re-read the
+   * invocation's live caller FK, and add caller_id/caller_name only when the
+   * exact provider action advertises `relay.action-caller: v1`. This must also
+   * hold for queued/reconnected dispatch so deleted callers and stale frame
+   * snapshots never retain authentication authority.
+   *
    * Optional for adapter source compatibility, but agent-hosted dispatch fails
    * closed when it is absent. This prevents an older remote adapter from
    * silently accepting a callback or option that it cannot enforce.
@@ -211,6 +220,7 @@ export interface NodeConnectionRegistry {
     providerName: string,
     instanceId: string,
     connectionId: string,
+    callerAwareActions?: readonly string[],
   ): void;
 
   /**

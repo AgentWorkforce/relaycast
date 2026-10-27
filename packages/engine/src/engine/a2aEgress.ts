@@ -1,5 +1,5 @@
 import { and, eq, or, sql, lte, inArray, asc } from 'drizzle-orm';
-import { a2aAgents, a2aEgress, a2aInbound, messages, agents } from '../db/schema.js';
+import { a2aAgents, a2aEgress, a2aInbound, directDmIdempotency, messages, agents } from '../db/schema.js';
 import { runAtomicWrites, type EngineDb } from '../ports/database.js';
 import { randomUuid } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
@@ -7,11 +7,24 @@ import { sendToExternalAgent } from './a2a.js';
 
 /** Same finite retry horizon as HTTP idempotency; payloads never dispatch after it. */
 export const A2A_EGRESS_RETRY_WINDOW_MS = 24 * 60 * 60 * 1000;
+export const DIRECT_DM_IDEMPOTENCY_CLEANUP_BATCH_SIZE = 500;
 const batchLimit = (limit: number) => Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.floor(limit))) : 20;
+const directClaimBatchLimit = (limit: number) => Number.isFinite(limit)
+  ? Math.max(1, Math.min(1_000, Math.floor(limit)))
+  : DIRECT_DM_IDEMPOTENCY_CLEANUP_BATCH_SIZE;
 const expired = (intent: typeof a2aEgress.$inferSelect) => intent.createdAt.getTime() + A2A_EGRESS_RETRY_WINDOW_MS <= Date.now();
 const notRetained = () => codedError('Accepted A2A message is no longer retained', 'a2a_message_not_retained', 410);
 const targetGone = () => codedError('Accepted A2A target no longer registered at its original endpoint', 'a2a_target_gone', 410);
 const windowExpired = () => codedError('Accepted A2A retry window expired', 'a2a_egress_expired', 410);
+
+const cleanupEligible = (now: Date) => and(
+  lte(a2aEgress.createdAt, new Date(now.getTime() - A2A_EGRESS_RETRY_WINDOW_MS)),
+  or(
+    sql`${a2aEgress.leaseUntil} IS NULL`,
+    lte(a2aEgress.leaseUntil, now),
+    sql`${a2aEgress.status} != 'sending'`,
+  ),
+);
 
 async function validateSource(db: EngineDb, intent: typeof a2aEgress.$inferSelect) {
   if (expired(intent)) throw windowExpired();
@@ -94,13 +107,43 @@ export async function dispatchA2aEgress(db: EngineDb, id: string): Promise<void>
  * After deletion a key is fresh, as with the existing HTTP idempotency contract.
  */
 export async function cleanupA2aEgress(db: EngineDb, limit = 20): Promise<number> {
-  const eligible = and(
-    lte(a2aEgress.createdAt, new Date(Date.now() - A2A_EGRESS_RETRY_WINDOW_MS)),
-    or(sql`${a2aEgress.leaseUntil} IS NULL`, lte(a2aEgress.leaseUntil, new Date()), sql`${a2aEgress.status} != 'sending'`),
-  );
-  const candidates = db.select({ id: a2aEgress.id }).from(a2aEgress).where(eligible)
+  const candidates = db.select({ id: a2aEgress.id }).from(a2aEgress).where(cleanupEligible(new Date()))
     .orderBy(asc(a2aEgress.createdAt), asc(a2aEgress.id)).limit(batchLimit(limit));
   const deleted = await db.delete(a2aEgress).where(inArray(a2aEgress.id, candidates)).returning({ id: a2aEgress.id });
+  return deleted.length;
+}
+
+/** Remove one expired request identity before the caller admits a fresh use of
+ * its key. A live transport lease wins the race and keeps the row until a
+ * later retry or maintenance pass.
+ */
+export async function expireA2aEgressForReuse(
+  db: EngineDb,
+  id: string,
+  now = new Date(),
+): Promise<boolean> {
+  const deleted = await db.delete(a2aEgress)
+    .where(and(eq(a2aEgress.id, id), cleanupEligible(now)))
+    .returning({ id: a2aEgress.id });
+  return deleted.length > 0;
+}
+
+/** Bounded cleanup for transport-independent DM request claims. Once the
+ * 24-hour replay window ends, the same caller key is intentionally fresh.
+ */
+export async function cleanupDirectDmIdempotency(
+  db: EngineDb,
+  limit = DIRECT_DM_IDEMPOTENCY_CLEANUP_BATCH_SIZE,
+  now = new Date(),
+): Promise<number> {
+  const expired = db.select({ id: directDmIdempotency.id })
+    .from(directDmIdempotency)
+    .where(lte(directDmIdempotency.createdAt, new Date(now.getTime() - A2A_EGRESS_RETRY_WINDOW_MS)))
+    .orderBy(asc(directDmIdempotency.createdAt), asc(directDmIdempotency.id))
+    .limit(directClaimBatchLimit(limit));
+  const deleted = await db.delete(directDmIdempotency)
+    .where(inArray(directDmIdempotency.id, expired))
+    .returning({ id: directDmIdempotency.id });
   return deleted.length;
 }
 
@@ -115,6 +158,10 @@ export async function sweepPendingA2aEgress(db: EngineDb, limit = 20): Promise<{
     try { await dispatchA2aEgress(db, intent.id); } catch { failed++; }
   }
   await cleanupA2aEgress(db, limit);
+  // Direct request claims arrive on every keyed /v1/dm call and are unrelated
+  // to the small transport retry budget. Give them their own bounded batch so
+  // a rotating hosted cron cannot accumulate snapshots beyond message retention.
+  await cleanupDirectDmIdempotency(db, DIRECT_DM_IDEMPOTENCY_CLEANUP_BATCH_SIZE);
   const inboundExpired = db.select({ id: a2aInbound.id }).from(a2aInbound)
     .where(lte(a2aInbound.createdAt, new Date(Date.now() - A2A_EGRESS_RETRY_WINDOW_MS)))
     .orderBy(asc(a2aInbound.createdAt), asc(a2aInbound.id)).limit(batchLimit(limit));

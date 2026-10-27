@@ -9,7 +9,7 @@
  *  - **Ports** — infrastructure the engine needs (db, realtime, presence, rate
  *    limiting, file blobs, key/value).
  *  - **Providers** — the open-core "hosting" seam the cloud layer overrides
- *    (auth, entitlements/billing, telemetry). Each ships an OSS default.
+ *    (auth, admission, telemetry). Each ships an OSS default or is optional.
  */
 export type {
   EngineDb,
@@ -42,11 +42,14 @@ export type {
   Agent,
 } from './auth.js';
 export type {
-  EntitlementsProvider,
-  PlanLimits,
-  UsageMetric,
-} from './entitlements.js';
-export type { TelemetrySink, TelemetryEvent } from './telemetry.js';
+  AdmissionAction,
+  AdmissionContext,
+  AdmissionDenial,
+  AdmissionHooks,
+} from './admission.js';
+export { ENGINE_OBSERVATION_FACTS } from './telemetry.js';
+export type { TelemetrySink, TelemetryEvent, EngineObservation, EngineObservationKind, EngineObservationFacts } from './telemetry.js';
+export type { EngineLogRecord, EngineLogExport } from './logging.js';
 
 import type { EngineDb } from './database.js';
 import type { RealtimeBus, ConnectionRegistry, NodeConnectionRegistry } from './realtime.js';
@@ -56,8 +59,9 @@ import type { FileStorage } from './files.js';
 import type { KeyValueStore } from './kv.js';
 import type { EventQueue } from './event-queue.js';
 import type { AuthProvider } from './auth.js';
-import type { EntitlementsProvider } from './entitlements.js';
+import type { AdmissionHooks } from './admission.js';
 import type { TelemetrySink } from './telemetry.js';
+import type { EngineLogExport } from './logging.js';
 
 /** Infrastructure ports the engine reads off the request context. */
 export interface EnginePorts {
@@ -75,8 +79,9 @@ export interface EnginePorts {
 /** The open-core hosting seam — each has an OSS default in `../auth`, etc. */
 export interface EngineProviders {
   auth: AuthProvider;
-  entitlements: EntitlementsProvider;
-  telemetry: TelemetrySink;
+  /** Host admission and metering hooks. Omitted: every request is admitted. */
+  admission?: AdmissionHooks;
+  telemetry?: TelemetrySink;
 }
 
 /** Everything `createEngine` needs. */
@@ -94,6 +99,12 @@ export interface EngineConfig {
   appVersion?: string;
   appSemver?: string;
   sdkSemver?: string;
+  /**
+   * HTTPS-only outbound webhook transport. Hosted adapters provide an
+   * equivalent connector; the Node adapter defaults to DNS validation and IP
+   * pinning at socket-connect time to prevent DNS rebinding.
+   */
+  outboundWebhookFetch?: typeof globalThis.fetch;
   /**
    * Effective deployment-wide retention fallback. Adapters must provide an
    * explicit value (`null` means never prune); omission is reported as unknown
@@ -123,6 +134,23 @@ export interface EngineConfig {
    */
   workspaceBootstrapProofRequired?: boolean;
   /**
+   * Per-workspace requests-per-minute ceiling. Default 30,000.
+   * `AdmissionHooks.rateLimitPerMinute` overrides it per workspace.
+   */
+  rateLimitPerMinute?: number;
+  /**
+   * Opt-in for the self-serve `POST /v1/workspace/rotate-key` route. Defaults
+   * to disabled: the route mints a live workspace credential, so a deployment
+   * must explicitly allow it. Hosted deployments — where the canonical key is
+   * owned by an external control plane and this store only holds a pushed
+   * copy — must leave it unset: a key minted here would be unknown to the
+   * canonical store, and that store's repair path would clobber or resurrect
+   * credentials. Such deployments rotate through the control plane's own
+   * authorized flow, which pushes the result over the internal key-update
+   * channel.
+   */
+  allowWorkspaceKeyRotation?: boolean;
+  /**
    * Optional egress proxy for http_push node delivery. When set, nodes that
    * register with `delivery.use_proxy: true` have their webhook POST routed
    * through this forwarder instead of hitting the destination directly — the
@@ -135,15 +163,8 @@ export interface EngineConfig {
     url?: string;
     secret?: string;
   };
-  /**
-   * When set, the structured logger exports prod logs to a PostHog OTLP endpoint
-   * via plain fetch (no posthog-node dependency). Self-host leaves this unset and
-   * logs to the console only; cloud wires it from its secrets.
-   */
-  logExport?: {
-    posthogApiKey?: string;
-    posthogHost?: string;
-  };
+  /** Optional host-owned log transport. Console output remains enabled. */
+  logExport?: EngineLogExport;
   /**
    * Bounded durable mailbox tuning. Hosted adapters may provide workspace
    * overrides; self-host defaults to one hour TTL and 1000 in-flight deliveries
@@ -152,9 +173,16 @@ export interface EngineConfig {
   mailbox?: {
     deliveryTtlMs?: number;
     depthCap?: number;
+    /**
+     * Broadcast fanout stops creating new deliveries for a recipient once it
+     * has been continuously offline longer than this. Defaults to 24h; set to
+     * zero to disable offline exclusion.
+     */
+    offlineExcludeMs?: number;
     workspaces?: Record<string, {
       deliveryTtlMs?: number;
       depthCap?: number;
+      offlineExcludeMs?: number;
     }>;
   };
   /**

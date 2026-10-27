@@ -297,11 +297,17 @@ async (c) => {
           'relayfile inbound deliveries',
         );
       }
-      emitServerEvent(c, workspaceId, 'relaycast_server_relayfile_inbound_delivered', {
-        channel_id: channelId,
-        message_id: result.data.message_id,
-        provider,
-      });
+      runInBackground(
+        c,
+        (async () => {
+          emitServerEvent(c, workspaceId, 'relayfile.inbound.delivered', {
+            channel_id: channelId,
+            message_id: result.data.message_id,
+            provider,
+          }, {});
+        })(),
+        'emit relayfile inbound telemetry',
+      );
     }
 
     return jsonCreated(c, { replayed: result.replayed, message_id: result.data.message_id });
