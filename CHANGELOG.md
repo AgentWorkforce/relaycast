@@ -22,6 +22,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Self-hosted engines now serve `DELETE /v1/nodes/:name`, so `relay.nodes.delete()` can prune dead nodes from a self-hosted roster instead of returning 404.
 
+### Fixed
+
+- Listing deliveries filtered by status no longer scans the whole workspace's delivery history.
+
 ## [11.0.0] - 2026-10-22
 
 ### Changed

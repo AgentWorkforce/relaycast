@@ -13,6 +13,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - `DELETE /v1/nodes/:name` deletes a node by id (exact id first) or name, returning `{ id, name, deleted, cascaded_actions }`. It refuses an online node (`node_online`) or one hosting actions (`node_has_actions`) unless `force=true`, and returns `node_delete_conflict` when a heartbeat or action registration lands mid-delete.
 
+### Fixed
+
+- `GET /v1/deliveries?status=<status>` now reads only the calling agent's rows (migration `0076` adds `idx_deliveries_agent_status_created`). It previously walked every row with that status in the workspace, which on large delivery histories could stall a shared database.
+
 ## [11.0.0] - 2026-10-22
 
 ### Changed
