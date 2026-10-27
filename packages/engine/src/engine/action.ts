@@ -1105,7 +1105,24 @@ async function dispatchNodeProviderInvocation(args: {
     }
     return { accepted, pending: true };
   }
-  return dispatchNodeInvocation({ ...args });
+  // The row may already be dispatched. A native spawn claim has to match that
+  // generation; the fresh-row defaults (pending, no attempts) would lose.
+  const [claimRow] = await args.db
+    .select({
+      status: actionInvocations.status,
+      retryAfterAt: actionInvocations.retryAfterAt,
+      dispatchAttempts: actionInvocations.dispatchAttempts,
+      dispatchedNodeId: actionInvocations.dispatchedNodeId,
+    })
+    .from(actionInvocations)
+    .where(and(
+      eq(actionInvocations.workspaceId, args.workspaceId),
+      eq(actionInvocations.id, args.invocationId),
+    ));
+  return dispatchNodeInvocation({
+    ...args,
+    ...(claimRow ? observedInvocationClaim(claimRow) : {}),
+  });
 }
 
 async function dispatchRelease(args: {
