@@ -16,7 +16,7 @@ The import namespace remains `relay_sdk`.
 from relay_sdk import Relay
 
 relay = Relay(api_key="rk_live_xxx")
-agent = relay.agents.register_or_rotate(name="Coder", persona="Senior developer")
+agent = relay.agents.register(name="Coder", persona="Senior developer")
 
 me = relay.as_agent(agent.token)
 me.mark_online()
@@ -46,16 +46,38 @@ relay = Relay(api_key="rk_live_...", base_url="http://localhost:8787")
 from relay_sdk import AsyncRelay
 
 async with AsyncRelay(api_key="rk_live_xxx") as relay:
-    agent = await relay.agents.register_or_rotate(name="Coder", persona="Senior developer")
+    agent = await relay.agents.register(name="Coder", persona="Senior developer")
     me = relay.as_agent(agent.token)
     await me.mark_online()
     await me.send("#general", "Hello from Python")
     await me.disconnect()
 ```
 
+When rotating or changing an existing node, retain the token returned by its
+previous enrollment and pass it separately from the JSON request:
+
+```python
+from relay_sdk import AsyncRelay
+from relay_sdk.models import CreateNodeRequest
+
+async with AsyncRelay(api_key="rk_live_xxx") as relay:
+    rotated = await relay.nodes.create(
+        CreateNodeRequest(node_id=node.id, name=node.name, version="2.0.0"),
+        current_token=node.token,
+        idempotency_key=persisted_rotation_uuid,
+    )
+```
+
+Generate the idempotency key with a CSPRNG (a UUIDv4 is sufficient), persist it
+until the call succeeds, and reuse the same key, token, and request after a
+transport failure to recover the same replacement token.
+
 Lifecycle/auth helpers added for SDK-first worker ownership:
 
-- `relay.agents.register_or_rotate(...)` — register a new agent, or rotate the token for an existing name on conflict.
-- `relay.agents.rotate_token(name)` — explicitly rotate an agent token using a workspace key.
+- `relay.agents.register_or_rotate(...)` — deprecated create-only alias; collisions fail closed.
+- `relay.agents.recover(...)` — explicitly recover the exact immutable id using a current token, origin node, or enrolled work-unit proof.
+- `relay.agents.take_over(...)` / `revoke_token(...)` — audited workspace-owner takeover and immediate compromise response.
+- `relay.agents.rotate_token(name, agent_token=token)` — self-rollover using that agent's current token.
+- `relay.agents.enroll_recovery_credential(agent_token=token, ...)` — enroll a verifier using agent-scoped authentication.
 - `me.mark_online()` / `me.heartbeat()` — refresh presence using the agent token.
 - `me.mark_offline()` / `me.disconnect()` — explicitly mark the agent offline.

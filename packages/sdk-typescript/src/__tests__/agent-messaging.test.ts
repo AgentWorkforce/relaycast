@@ -79,6 +79,21 @@ describe('AgentClient', () => {
       expect(init.body).toBe(JSON.stringify({ text: 'hello', mode: 'steer' }));
     });
 
+    it('forwards session metadata for channel messages', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ id: 'm_1' }));
+
+      await me.send('#general', 'hello', {
+        data: { session_ref: 'session-1' },
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.body).toBe(JSON.stringify({
+        text: 'hello',
+        data: { session_ref: 'session-1' },
+        mode: 'wait',
+      }));
+    });
+
     it('forwards Idempotency-Key when provided', async () => {
       mockFetch.mockImplementation(() => mockResponse({ id: 'm_1' }));
 
@@ -101,6 +116,20 @@ describe('AgentClient', () => {
       expect(typeof generated).toBe('string');
       expect(generated.length).toBeGreaterThan(0);
       expect(headers['X-Idempotency-Key']).toBe(generated);
+    });
+
+    it('forwards session metadata for thread replies', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ id: 'm_2' }));
+
+      await me.reply('m_1', 'reply', {
+        data: { session_ref: 'session-1' },
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.body).toBe(JSON.stringify({
+        text: 'reply',
+        data: { session_ref: 'session-1' },
+      }));
     });
   });
 
@@ -223,6 +252,19 @@ describe('AgentClient', () => {
     });
   });
 
+  describe('sendTo()', () => {
+    it('sends an addressed DM via POST /v1/dm', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ id: 'dm_1' }));
+
+      await me.sendTo('Worker-1@laptop', 'hi');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/dm');
+      expect(init.method).toBe('POST');
+      expect(init.body).toBe(JSON.stringify({ address: 'Worker-1@laptop', text: 'hi', mode: 'wait' }));
+    });
+  });
+
   describe('dm()', () => {
     it('sends DM via POST /v1/dm', async () => {
       mockFetch.mockImplementation(() => mockResponse({ id: 'dm_1' }));
@@ -251,6 +293,20 @@ describe('AgentClient', () => {
 
       const [, init] = mockFetch.mock.calls[0]!;
       expect(init.body).toBe(JSON.stringify({ to: 'Worker-1', text: 'hi', attachments: ['file_1', 'file_2'], mode: 'wait' }));
+    });
+
+    it('forwards session metadata when provided', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ id: 'dm_1' }));
+
+      await me.dm('Worker-1', 'hi', { data: { session_ref: 'session-1' } });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.body).toBe(JSON.stringify({
+        to: 'Worker-1',
+        text: 'hi',
+        data: { session_ref: 'session-1' },
+        mode: 'wait',
+      }));
     });
 
     it('forwards Idempotency-Key when provided', async () => {
@@ -386,6 +442,21 @@ describe('AgentClient', () => {
 
       const [, init] = mockFetch.mock.calls[0]!;
       expect(init.body).toBe(JSON.stringify({ text: 'hello', attachments: ['file_1'], mode: 'steer' }));
+    });
+
+    it('sendMessage() forwards session metadata', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ id: 'm_2' }));
+
+      await me.dms.sendMessage('c_1', 'hello', {
+        data: { session_ref: 'session-1' },
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.body).toBe(JSON.stringify({
+        text: 'hello',
+        data: { session_ref: 'session-1' },
+        mode: 'wait',
+      }));
     });
 
     it('sendMessage() forwards Idempotency-Key when provided', async () => {

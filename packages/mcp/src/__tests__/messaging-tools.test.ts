@@ -39,6 +39,37 @@ describe('messaging tools', () => {
     expect(result.content).toBeDefined();
   });
 
+  it('forwards session metadata through every message-producing tool', async () => {
+    const data = { session_ref: 'session-1' };
+    mockAgentClient.send.mockResolvedValue({ id: 'msg1' });
+    mockAgentClient.reply.mockResolvedValue({ id: 'reply1' });
+    mockAgentClient.dm.mockResolvedValue({ id: 'dm1' });
+    mockAgentClient.dms.createGroup.mockResolvedValue({ id: 'conv1' });
+    mockAgentClient.dms.sendMessage.mockResolvedValue({ id: 'group1' });
+
+    await client.callTool({
+      name: 'message.post',
+      arguments: { channel: 'general', text: 'channel', data },
+    });
+    await client.callTool({
+      name: 'message.reply',
+      arguments: { message_id: 'msg1', text: 'thread', data },
+    });
+    await client.callTool({
+      name: 'message.dm.send',
+      arguments: { to: 'bot2', text: 'direct', data },
+    });
+    await client.callTool({
+      name: 'message.dm.send_group',
+      arguments: { participants: ['a', 'b'], text: 'group', data },
+    });
+
+    expect(mockAgentClient.send).toHaveBeenCalledWith('general', 'channel', { data });
+    expect(mockAgentClient.reply).toHaveBeenCalledWith('msg1', 'thread', { data });
+    expect(mockAgentClient.dm).toHaveBeenCalledWith('bot2', 'direct', { data });
+    expect(mockAgentClient.dms.sendMessage).toHaveBeenCalledWith('conv1', 'group', { data });
+  });
+
   it('get_messages calls messages()', async () => {
     mockAgentClient.messages.mockResolvedValue([]);
     await client.callTool({ name: 'message.list', arguments: { channel: 'general' } });

@@ -30,10 +30,13 @@ pub struct Cursor {
 pub struct Workspace {
     pub id: String,
     pub name: String,
+    /// Legacy field; current engines omit this private value from responses.
+    #[serde(default)]
     pub api_key_hash: String,
     pub system_prompt: Option<String>,
     pub plan: String,
     pub created_at: String,
+    #[serde(default)]
     pub metadata: serde_json::Map<String, serde_json::Value>,
 }
 
@@ -44,12 +47,187 @@ pub struct CreateWorkspaceResponse {
     pub created_at: String,
 }
 
+/// Options for an unauthenticated workspace bootstrap request.
+///
+/// `idempotency_key` is a reveal-once recovery capability for anonymous
+/// creation. Generate it with a CSPRNG and persist it for the logical create
+/// operation; it is sent to hosted Relaycast without any deployment secret.
+#[derive(Clone)]
+pub struct WorkspaceBootstrapOptions {
+    pub base_url: Option<String>,
+    /// Product identifier for origin attribution; defaults to the Rust SDK.
+    pub origin_client: Option<String>,
+    /// Product version for origin attribution; defaults to the crate version.
+    pub origin_version: Option<String>,
+    pub provenance: WorkspaceProvenance,
+    /// Optional application metadata with arbitrary JSON values.
+    pub metadata: Option<serde_json::Map<String, serde_json::Value>>,
+    pub idempotency_key: Option<String>,
+    /// Optional shared-secret proof for a self-host that explicitly requires
+    /// `X-Workspace-Bootstrap-Secret`.
+    ///
+    /// Leave this unset for hosted Relaycast. The SDK refuses to send it to
+    /// the hosted gateway, and only sends it with an idempotency key to an
+    /// explicit self-hosted origin.
+    pub bootstrap_secret: Option<String>,
+}
+
+impl std::fmt::Debug for WorkspaceBootstrapOptions {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WorkspaceBootstrapOptions")
+            .field("base_url", &self.base_url)
+            .field("origin_client", &self.origin_client)
+            .field("origin_version", &self.origin_version)
+            .field("provenance", &self.provenance)
+            .field(
+                "metadata",
+                &self.metadata.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "idempotency_key",
+                &self.idempotency_key.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "bootstrap_secret",
+                &self.bootstrap_secret.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
+}
+
+impl WorkspaceBootstrapOptions {
+    pub fn new(provenance: WorkspaceProvenance) -> Self {
+        Self {
+            base_url: None,
+            origin_client: None,
+            origin_version: None,
+            provenance,
+            metadata: None,
+            idempotency_key: None,
+            bootstrap_secret: None,
+        }
+    }
+
+    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = Some(base_url.into());
+        self
+    }
+
+    /// Set the product identifier and version sent on workspace creation.
+    pub fn with_origin(
+        mut self,
+        origin_client: impl Into<String>,
+        origin_version: impl Into<String>,
+    ) -> Self {
+        self.origin_client = Some(origin_client.into());
+        self.origin_version = Some(origin_version.into());
+        self
+    }
+
+    pub fn with_metadata(mut self, metadata: serde_json::Map<String, serde_json::Value>) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
+    pub fn with_idempotency_key(mut self, idempotency_key: impl Into<String>) -> Self {
+        self.idempotency_key = Some(idempotency_key.into());
+        self
+    }
+
+    /// Add a proof only for an opt-in self-hosted bootstrap deployment.
+    ///
+    /// This is intentionally optional: hosted anonymous bootstrap uses the
+    /// high-entropy idempotency key alone and must not receive a deployment
+    /// secret from the caller.
+    pub fn with_bootstrap_secret(mut self, bootstrap_secret: impl Into<String>) -> Self {
+        self.bootstrap_secret = Some(bootstrap_secret.into());
+        self
+    }
+}
+
+/// Options for an unauthenticated workspace lookup request.
+#[derive(Debug, Clone, Default)]
+pub struct WorkspaceLookupOptions {
+    pub base_url: Option<String>,
+    /// Product identifier for origin attribution; defaults to the Rust SDK.
+    pub origin_client: Option<String>,
+    /// Product version for origin attribution; defaults to the crate version.
+    pub origin_version: Option<String>,
+}
+
+impl WorkspaceLookupOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = Some(base_url.into());
+        self
+    }
+
+    /// Set the product identifier and version sent on workspace lookup.
+    pub fn with_origin(
+        mut self,
+        origin_client: impl Into<String>,
+        origin_version: impl Into<String>,
+    ) -> Self {
+        self.origin_client = Some(origin_client.into());
+        self.origin_version = Some(origin_version.into());
+        self
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceCreationSource {
+    Api,
+    Sdk,
+    Cli,
+    Mcp,
+    Ci,
+    Relayflow,
+    Dashboard,
+    Other,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceUsageClassification {
+    Internal,
+    External,
+    Unknown,
+}
+
+/// Creation context recorded once for hosted usage attribution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceProvenance {
+    pub source: WorkspaceCreationSource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub classification: Option<WorkspaceUsageClassification>,
+}
+
+impl WorkspaceProvenance {
+    pub fn sdk() -> Self {
+        Self {
+            source: WorkspaceCreationSource::Sdk,
+            origin_id: None,
+            classification: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct UpdateWorkspaceRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
+    /// Shallow merge into workspace metadata; top-level null values delete keys.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,6 +311,61 @@ pub struct WorkspaceDmMessage {
 pub struct TokenRotateResponse {
     pub name: String,
     pub token: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RecoverAgentRequest {
+    pub expected_agent_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovery_proof: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TakeOverAgentRequest {
+    pub expected_agent_id: String,
+    pub actor: String,
+    pub reason: String,
+    pub session_ref: String,
+    pub node_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RevokeAgentTokenRequest {
+    pub expected_agent_id: String,
+    pub actor: String,
+    pub reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EnrollRecoveryCredentialRequest {
+    pub recovery_proof_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work_unit_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentIdentityRecoveryResponse {
+    pub agent_id: String,
+    pub name: String,
+    pub token: String,
+    pub audit_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentIdentityRevocationResponse {
+    pub agent_id: String,
+    pub name: String,
+    pub audit_id: String,
 }
 
 // === Observer tokens ===
@@ -322,6 +555,20 @@ pub struct ReleaseAgentRequest {
     pub reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delete_agent: Option<bool>,
+}
+
+/// Immutable-identity release reconciliation request. The operation is only
+/// accepted by `/v1/agents/release-exact` with a caller-held Idempotency-Key.
+#[derive(Debug, Clone, Serialize)]
+pub struct ExactReleaseAgentRequest {
+    pub name: String,
+    pub expected_agent_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delete_agent: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_token_hash: Option<String>,
 }
 
 pub type ReleaseAgentResponse = InvokeActionResult;
@@ -1947,6 +2194,8 @@ pub struct CreateNodeRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_id: Option<String>,
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub machine_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

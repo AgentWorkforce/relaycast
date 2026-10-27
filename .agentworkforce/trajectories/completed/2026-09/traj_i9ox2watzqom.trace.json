@@ -1,0 +1,181 @@
+{
+  "version": "1.0.0",
+  "id": "3777f51a-242f-4034-9392-11543ae0483e",
+  "timestamp": "2026-09-09T05:58:26.416Z",
+  "trajectory": "traj_i9ox2watzqom",
+  "files": [
+    {
+      "path": ".agentworkforce/trajectories/active/traj_i9ox2watzqom/trajectory.json",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 66,
+              "revision": "5bb8337168296b2ba77d50015f5f9eb459347e45"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": ".github/workflows/publish-npm.yml",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 93,
+              "end_line": 101,
+              "revision": "5bb8337168296b2ba77d50015f5f9eb459347e45"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "CHANGELOG.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 16,
+              "end_line": 26,
+              "revision": "5bb8337168296b2ba77d50015f5f9eb459347e45"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "package.json",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 10,
+              "end_line": 16,
+              "revision": "5bb8337168296b2ba77d50015f5f9eb459347e45"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/CHANGELOG.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 7,
+              "end_line": 17,
+              "revision": "5bb8337168296b2ba77d50015f5f9eb459347e45"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/db/migrations/0045_workspace_create_idempotency.sql",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 5,
+              "revision": "5bb8337168296b2ba77d50015f5f9eb459347e45"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/check-published-engine-migrations.mjs",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 198,
+              "revision": "5bb8337168296b2ba77d50015f5f9eb459347e45"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/check-published-engine-migrations.test.mjs",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 146,
+              "revision": "5bb8337168296b2ba77d50015f5f9eb459347e45"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/release-workflow-contract.test.mjs",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 2,
+              "end_line": 12,
+              "revision": "5bb8337168296b2ba77d50015f5f9eb459347e45"
+            },
+            {
+              "start_line": 129,
+              "end_line": 143,
+              "revision": "5bb8337168296b2ba77d50015f5f9eb459347e45"
+            },
+            {
+              "start_line": 207,
+              "end_line": 226,
+              "revision": "5bb8337168296b2ba77d50015f5f9eb459347e45"
+            },
+            {
+              "start_line": 268,
+              "end_line": 280,
+              "revision": "5bb8337168296b2ba77d50015f5f9eb459347e45"
+            },
+            {
+              "start_line": 385,
+              "end_line": 403,
+              "revision": "5bb8337168296b2ba77d50015f5f9eb459347e45"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

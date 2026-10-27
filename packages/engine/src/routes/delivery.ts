@@ -13,6 +13,7 @@ import {
   parseOptionalJsonBody,
   parseQueryParams,
 } from '../lib/httpResponse.js';
+import { resolveWorkspaceDeliveryPolicyFor, WorkspaceDeliveryCapacityError } from '../engine/workspaceDeliveryPolicy.js';
 import { ListDeliveriesQuerySchema, FailDeliveryRequestSchema, DeferDeliveryRequestSchema } from '@relaycast/types';
 
 export const deliveryRoutes = new Hono<AppEnv>();
@@ -143,10 +144,19 @@ deliveryRoutes.post(
       const workspace = c.get('workspace');
       const agent = c.get('agent');
       const id = c.req.param('id');
-      const result = await deliveryEngine.deferDelivery(db, workspace.id, agent!.id, id, {
-        availableAt: new Date(parsed.data.available_at),
-        reason: parsed.data.reason,
-      });
+      let result: Awaited<ReturnType<typeof deliveryEngine.deferDelivery>>;
+      try {
+        result = await deliveryEngine.deferDelivery(db, workspace.id, agent!.id, id, {
+          availableAt: new Date(parsed.data.available_at),
+          reason: parsed.data.reason,
+          workspacePolicy: await resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace),
+        });
+      } catch (error) {
+        if (error instanceof WorkspaceDeliveryCapacityError) {
+          return errorResponse(c, error);
+        }
+        throw error;
+      }
       if (!result) {
         return jsonNotFound(c, 'delivery_not_found', 'Delivery not found');
       }

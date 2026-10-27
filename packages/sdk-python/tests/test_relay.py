@@ -7,6 +7,7 @@ import httpx
 import respx
 
 from relay_sdk import Relay, AsyncRelay, AgentClient, AsyncAgentClient
+from relay_sdk.errors import RelayError
 from relay_sdk.models import (
     BindAgentToNodeRequest,
     CreateNodeRequest,
@@ -173,7 +174,7 @@ class TestRelay:
             return_value=ok({"token": "at_rotated"})
         )
         r = Relay(KEY, base_url=BASE)
-        rotated = r.agents.rotate_token("Coder")
+        rotated = r.agents.rotate_token("Coder", agent_token="at_live_current")
         assert rotated.token == "at_rotated"
         assert route.called
 
@@ -210,6 +211,7 @@ class TestRelay:
         created = r.nodes.create(
             CreateNodeRequest(
                 name="http-node",
+                machine_id="machine-http",
                 kind="http_push",
                 delivery=HttpPushNodeDelivery(
                     url="https://receiver.example.test/relaycast",
@@ -223,12 +225,18 @@ class TestRelay:
                         prefix="sig=",
                     ),
                 ),
-            )
+            ),
+            current_token="nt_live_current",
+            idempotency_key="node-rotation-00000000-0000-4000-8000-000000000001",
         )
         assert created.kind == "http_push"
         assert created.token == "nt_live_test"
         create_body = json.loads(create_route.calls[0].request.content)
+        assert create_body["machine_id"] == "machine-http"
         assert create_body["delivery"]["auth"]["signature_header"] == "X-Custom-Signature"
+        assert "current_token" not in create_body
+        assert create_route.calls[0].request.headers["X-Relaycast-Node-Token"] == "nt_live_current"
+        assert create_route.calls[0].request.headers["Idempotency-Key"] == "node-rotation-00000000-0000-4000-8000-000000000001"
 
         list_route = respx.get(f"{BASE}/v1/nodes").mock(return_value=ok([NODE_DATA]))
         nodes = r.nodes.list(capability="code")
@@ -253,6 +261,53 @@ class TestRelay:
         )
         assert r.nodes.unbind_agent("http-node", "billing-agent") is None
         assert unbind_route.called
+
+    @respx.mock
+    def test_nodes_unkeyed_rotation_does_not_retry_ambiguous_5xx(self):
+        create_route = respx.post(f"{BASE}/v1/nodes").mock(
+            return_value=httpx.Response(
+                503,
+                json={"ok": False, "error": {"code": "overloaded", "message": "try later"}},
+            )
+        )
+        r = Relay(KEY, base_url=BASE)
+        with pytest.raises(RelayError) as error:
+            r.nodes.create(
+                CreateNodeRequest(node_id="node_1", name="http-node"),
+                current_token="nt_live_current",
+            )
+        assert error.value.status == 503
+        assert create_route.call_count == 1
+
+    @respx.mock
+    def test_nodes_recovery_key_requires_current_token(self):
+        create_route = respx.post(f"{BASE}/v1/nodes")
+        r = Relay(KEY, base_url=BASE)
+        with pytest.raises(ValueError, match="requires current_token"):
+            r.nodes.create(
+                CreateNodeRequest(name="new-node"),
+                idempotency_key="node-rotation-00000000-0000-4000-8000-000000000001",
+            )
+        assert create_route.call_count == 0
+
+    @respx.mock
+    def test_nodes_reject_blank_rotation_credentials_before_request(self):
+        create_route = respx.post(f"{BASE}/v1/nodes")
+        r = Relay(KEY, base_url=BASE)
+
+        for current_token, idempotency_key in [
+            ("", None),
+            (" \t", None),
+            ("nt_live_current", ""),
+            ("nt_live_current", " \t"),
+        ]:
+            with pytest.raises(ValueError, match="must not be blank"):
+                r.nodes.create(
+                    CreateNodeRequest(node_id="node_1", name="http-node"),
+                    current_token=current_token,
+                    idempotency_key=idempotency_key,
+                )
+        assert create_route.call_count == 0
 
     @respx.mock
     def test_observer_tokens_create_list_update_rotate_and_revoke(self):
@@ -295,24 +350,62 @@ class TestRelay:
         assert created.token == "at_xxx"
 
     @respx.mock
+    def test_agents_explicit_identity_recovery_routes(self):
+        recover = respx.post(f"{BASE}/v1/agents/Coder/recover").mock(
+            return_value=ok({"agent_id": "a1", "name": "Coder", "token": "at_new", "audit_id": "aid_1"})
+        )
+        takeover = respx.post(f"{BASE}/v1/agents/Coder/takeover").mock(
+            return_value=ok({"agent_id": "a1", "name": "Coder", "token": "at_owner", "audit_id": "aid_2"})
+        )
+        revoke = respx.post(f"{BASE}/v1/agents/Coder/revoke-token").mock(
+            return_value=ok({"agent_id": "a1", "name": "Coder", "audit_id": "aid_3"})
+        )
+        enroll = respx.post(f"{BASE}/v1/agent/recovery-credential").mock(
+            return_value=ok({"agent_id": "a1", "enrolled": True})
+        )
+        r = Relay(KEY, base_url=BASE)
+
+        assert r.agents.recover(
+            "Coder", expected_agent_id="a1", recovery_proof="proof"
+        )["token"] == "at_new"
+        r.agents.take_over(
+            "Coder", expected_agent_id="a1", actor="owner", reason="lost proof",
+            session_ref="incident-1", node_id="node-1",
+        )
+        r.agents.revoke_token(
+            "Coder", expected_agent_id="a1", actor="owner", reason="compromise"
+        )
+        r.agents.enroll_recovery_credential(
+            agent_token="at_live_current", recovery_proof_hash="a" * 64, work_unit_id="job-1"
+        )
+
+        assert json.loads(recover.calls[0].request.content) == {
+            "expected_agent_id": "a1", "recovery_proof": "proof"
+        }
+        assert json.loads(takeover.calls[0].request.content) == {
+            "expected_agent_id": "a1", "actor": "owner", "reason": "lost proof",
+            "session_ref": "incident-1", "node_id": "node-1",
+        }
+        assert json.loads(revoke.calls[0].request.content) == {
+            "expected_agent_id": "a1", "actor": "owner", "reason": "compromise"
+        }
+        assert json.loads(enroll.calls[0].request.content) == {
+            "recovery_proof_hash": "a" * 64, "work_unit_id": "job-1"
+        }
+        assert enroll.calls[0].request.headers["authorization"] == "Bearer at_live_current"
+
+    @respx.mock
     @pytest.mark.parametrize("error_code", ["agent_already_exists", "name_conflict"])
-    def test_agents_register_or_rotate_rotates_existing_agent(self, error_code):
+    def test_agents_register_or_rotate_fails_closed_on_existing_agent(self, error_code):
         respx.post(f"{BASE}/v1/agents").mock(
             return_value=httpx.Response(
                 409,
                 json={"ok": False, "error": {"code": error_code, "message": "exists"}},
             )
         )
-        get_route = respx.get(f"{BASE}/v1/agents/Coder").mock(return_value=ok(AGENT_DATA))
-        rotate_route = respx.post(f"{BASE}/v1/agents/Coder/rotate-token").mock(
-            return_value=ok({"token": "at_rotated"})
-        )
         r = Relay(KEY, base_url=BASE)
-        created = r.agents.register_or_rotate("Coder")
-        assert created.id == "a1"
-        assert created.token == "at_rotated"
-        assert get_route.called
-        assert rotate_route.called
+        with pytest.raises(RelayError):
+            r.agents.register_or_rotate("Coder")
 
     def test_as_agent_returns_agent_client(self):
         r = Relay(KEY, base_url=BASE, agent_relay_distinct_id="abc123def4567890")
@@ -374,7 +467,7 @@ class TestAsyncRelay:
     async def test_agents_rotate_token(self):
         respx.post(f"{BASE}/v1/agents/Coder/rotate-token").mock(return_value=ok({"token": "at_rotated"}))
         async with AsyncRelay(KEY, base_url=BASE) as r:
-            rotated = await r.agents.rotate_token("Coder")
+            rotated = await r.agents.rotate_token("Coder", agent_token="at_live_current")
             assert rotated.token == "at_rotated"
 
     @pytest.mark.asyncio
@@ -415,18 +508,62 @@ class TestAsyncRelay:
             created = await r.nodes.create(
                 CreateNodeRequest(
                     name="http-node",
+                    machine_id="machine-http",
                     kind="http_push",
                     delivery=HttpPushNodeDelivery(url="https://receiver.example.test/relaycast"),
-                )
+                ),
+                current_token="nt_live_current",
+                idempotency_key="node-rotation-00000000-0000-4000-8000-000000000001",
             )
             binding = await r.nodes.bind_agent(
                 "http-node",
                 BindAgentToNodeRequest(agent_name="billing-agent"),
             )
         assert created.token == "nt_live_test"
+        assert create_route.calls[0].request.headers["X-Relaycast-Node-Token"] == "nt_live_current"
+        assert create_route.calls[0].request.headers["Idempotency-Key"] == "node-rotation-00000000-0000-4000-8000-000000000001"
+        assert json.loads(create_route.calls[0].request.content)["machine_id"] == "machine-http"
+        assert "current_token" not in json.loads(create_route.calls[0].request.content)
         assert binding.agent_name == "billing-agent"
         assert create_route.called
         assert bind_route.called
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_nodes_async_unkeyed_rotation_does_not_retry_ambiguous_5xx(self):
+        create_route = respx.post(f"{BASE}/v1/nodes").mock(
+            return_value=httpx.Response(
+                503,
+                json={"ok": False, "error": {"code": "overloaded", "message": "try later"}},
+            )
+        )
+        async with AsyncRelay(KEY, base_url=BASE) as r:
+            with pytest.raises(RelayError) as error:
+                await r.nodes.create(
+                    CreateNodeRequest(node_id="node_1", name="http-node"),
+                    current_token="nt_live_current",
+                )
+        assert error.value.status == 503
+        assert create_route.call_count == 1
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_nodes_async_reject_blank_rotation_credentials_before_request(self):
+        create_route = respx.post(f"{BASE}/v1/nodes")
+        async with AsyncRelay(KEY, base_url=BASE) as r:
+            for current_token, idempotency_key in [
+                ("", None),
+                (" \t", None),
+                ("nt_live_current", ""),
+                ("nt_live_current", " \t"),
+            ]:
+                with pytest.raises(ValueError, match="must not be blank"):
+                    await r.nodes.create(
+                        CreateNodeRequest(node_id="node_1", name="http-node"),
+                        current_token=current_token,
+                        idempotency_key=idempotency_key,
+                    )
+        assert create_route.call_count == 0
 
     @pytest.mark.asyncio
     @respx.mock
@@ -442,19 +579,16 @@ class TestAsyncRelay:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("error_code", ["agent_already_exists", "name_conflict"])
     @respx.mock
-    async def test_agents_register_or_rotate_rotates_existing_agent(self, error_code):
+    async def test_agents_register_or_rotate_fails_closed_on_existing_agent(self, error_code):
         respx.post(f"{BASE}/v1/agents").mock(
             return_value=httpx.Response(
                 409,
                 json={"ok": False, "error": {"code": error_code, "message": "exists"}},
             )
         )
-        respx.get(f"{BASE}/v1/agents/Coder").mock(return_value=ok(AGENT_DATA))
-        respx.post(f"{BASE}/v1/agents/Coder/rotate-token").mock(return_value=ok({"token": "at_rotated"}))
         async with AsyncRelay(KEY, base_url=BASE) as r:
-            created = await r.agents.register_or_rotate("Coder")
-            assert created.id == "a1"
-            assert created.token == "at_rotated"
+            with pytest.raises(RelayError):
+                await r.agents.register_or_rotate("Coder")
 
     @pytest.mark.asyncio
     async def test_as_agent_returns_async_client(self):

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isSafeExternalUrl } from "../ssrf.js";
+import { isGlobalIpAddress, isSafeExternalUrl, resolveSafeExternalUrl } from "../ssrf.js";
 
 /**
  * `isSafeExternalUrl` is the single SSRF guard applied before every outbound
@@ -7,9 +7,8 @@ import { isSafeExternalUrl } from "../ssrf.js";
  *   - non-strict (default): only the scheme is enforced (permissive self-host).
  *   - strict: additionally rejects loopback / link-local / private hosts.
  *
- * The strict host check is intentionally literal (no DNS resolution), so it
- * cannot defend against DNS rebinding — that is documented, expected behavior
- * and is deliberately NOT asserted against here.
+ * `resolveSafeExternalUrl` validates every DNS answer; the Node connector runs
+ * the same address classifier inside its connect-time lookup callback.
  */
 
 describe("isSafeExternalUrl — non-strict (default)", () => {
@@ -170,26 +169,22 @@ describe("isSafeExternalUrl — strict mode", () => {
     }
   });
 
-  describe("KNOWN GAPS — non-globally-routable ranges the guard does NOT block today (allowed)", () => {
-    // These addresses are NOT globally routable, so a hardened deployment would
-    // ideally reject them in strict mode. The guard does not block them today,
-    // and these tests PIN that current behavior so the gap is unmistakably
-    // intentional-for-now, not an oversight. If the guard is later hardened to
-    // cover these ranges, move the relevant entry into the corresponding
-    // "rejected" block and flip the expectation to `false`.
-    const allowed: string[] = [
-      // KNOWN GAP: deprecated IPv6 site-local fec0::/10 (RFC 3879). The IPv6
-      // check only matches link-local fe80::/10 via the fe8/fe9/fea/feb
-      // prefixes, so fec0:: falls through and is allowed in strict mode.
+  describe("additional IANA special-purpose ranges (rejected)", () => {
+    const blocked: string[] = [
       "http://[fec0::1]",
-      // KNOWN GAP: CGNAT / shared address space 100.64.0.0/10 (RFC 6598). The
-      // IPv4 range check has no case for the 100.64–100.127 second octet, so
-      // this non-globally-routable address is allowed in strict mode.
       "http://100.64.0.1",
+      "http://100.127.255.254",
+      "http://192.0.2.1",
+      "http://198.18.0.1",
+      "http://198.51.100.1",
+      "http://203.0.113.1",
+      "http://[2001:db8::1]",
+      "http://[::ffff:127.0.0.1]",
+      "http://[::ffff:10.0.0.1]",
     ];
-    for (const url of allowed) {
-      it(`currently accepts ${url}`, () => {
-        expect(isSafeExternalUrl(url, { strict: true })).toBe(true);
+    for (const url of blocked) {
+      it(`rejects ${url}`, () => {
+        expect(isSafeExternalUrl(url, { strict: true })).toBe(false);
       });
     }
   });
@@ -233,6 +228,55 @@ describe("isSafeExternalUrl — strict mode", () => {
     expect(isSafeExternalUrl("http://LOCALHOST", { strict: true })).toBe(false);
     expect(isSafeExternalUrl("http://App.LocalHost", { strict: true })).toBe(false);
     expect(isSafeExternalUrl("http://Svc.INTERNAL", { strict: true })).toBe(false);
+  });
+});
+
+describe("resolved and connect-time address policy", () => {
+  it("requires HTTPS when requested", () => {
+    expect(isSafeExternalUrl("http://example.com", { strict: true, requireHttps: true })).toBe(false);
+    expect(isSafeExternalUrl("https://example.com", { strict: true, requireHttps: true })).toBe(true);
+  });
+
+  it("rejects a hostname when any DNS answer is non-global", async () => {
+    await expect(resolveSafeExternalUrl(
+      "https://hooks.example.com/relay",
+      async () => [{ address: "93.184.216.34", family: 4 }, { address: "10.0.0.7", family: 4 }],
+      { strict: true, requireHttps: true },
+    )).resolves.toBeNull();
+  });
+
+  it("resolves in strict mode by default", async () => {
+    await expect(resolveSafeExternalUrl(
+      "https://hooks.example.com/relay",
+      async () => ["127.0.0.1"],
+    )).resolves.toBeNull();
+  });
+
+  it("accepts a hostname only when every DNS answer is global", async () => {
+    await expect(resolveSafeExternalUrl(
+      "https://hooks.example.com/relay",
+      async () => ["93.184.216.34", "2606:4700:4700::1111"],
+      { strict: true, requireHttps: true },
+    )).resolves.toBeInstanceOf(URL);
+  });
+
+  it("classifies IPv4-mapped IPv6 using the embedded IPv4 address", () => {
+    expect(isGlobalIpAddress("::ffff:8.8.8.8")).toBe(true);
+    expect(isGlobalIpAddress("::ffff:169.254.169.254")).toBe(false);
+  });
+
+  it("classifies IPv4-transition prefixes using their embedded address", () => {
+    expect(isGlobalIpAddress("64:ff9b::808:808")).toBe(true);
+    expect(isGlobalIpAddress("64:ff9b::a00:1")).toBe(false);
+    expect(isGlobalIpAddress("2002:0808:0808::")).toBe(true);
+    expect(isGlobalIpAddress("2002:0a00:0001::")).toBe(false);
+  });
+
+  it("accepts only global-unicast IPv6 outside explicit special ranges", () => {
+    expect(isGlobalIpAddress("2606:4700:4700::1111")).toBe(true);
+    expect(isGlobalIpAddress("4000::1")).toBe(false);
+    expect(isGlobalIpAddress("2001:100::1")).toBe(false);
+    expect(isGlobalIpAddress("3fff::1")).toBe(false);
   });
 });
 

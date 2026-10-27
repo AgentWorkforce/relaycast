@@ -1,6 +1,7 @@
 import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { jsonError, jsonMalformedBody } from './httpResponse.js';
+import { PlanLimitExceededError } from './planLimitError.js';
 
 /**
  * Errors thrown inside the engine optionally carry a stable error `code` and an
@@ -11,6 +12,8 @@ import { jsonError, jsonMalformedBody } from './httpResponse.js';
 export interface CodedError extends Error {
   code?: string;
   status?: number;
+  diagnostics?: Record<string, unknown>;
+  clientSafe?: true;
 }
 
 /**
@@ -32,15 +35,40 @@ export function asCodedError(err: unknown): CodedError {
 
 /** Build an `Error` carrying a stable `code` and HTTP `status` (no cast at the call site). */
 export function codedError(message: string, code: string, status: number): CodedError {
-  return Object.assign(new Error(message), { code, status });
+  return Object.assign(new Error(message), { code, status, clientSafe: true as const });
 }
 
-interface ErrorResponseOptions {
-  includeCause?: boolean;
+const SAFE_DIAGNOSTIC_FIELDS = new Set([
+  'attempts',
+  'operation',
+  'storage_error',
+]);
+
+/** Select primitive, explicitly allowlisted fields for logs and telemetry. */
+export function safeErrorDiagnostics(error: CodedError): Record<string, string | number | boolean> {
+  const safe: Record<string, string | number | boolean> = {};
+  for (const [key, value] of Object.entries(error.diagnostics ?? {})) {
+    if (
+      SAFE_DIAGNOSTIC_FIELDS.has(key) &&
+      (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean')
+    ) {
+      safe[key] = value;
+    }
+  }
+  return safe;
 }
 
-function messageWithCause(error: CodedError) {
-  return error.message;
+function effectiveHttpStatus(error: CodedError): number {
+  return error.status || 500;
+}
+
+export function safeClientErrorMessage(
+  error: CodedError,
+  status = effectiveHttpStatus(error),
+): string {
+  return status >= 500 && error.clientSafe !== true && !error.code
+    ? 'Internal server error'
+    : error.message;
 }
 
 /**
@@ -49,16 +77,29 @@ function messageWithCause(error: CodedError) {
  * `as ContentfulStatusCode` cast that Hono's typed status requires, behind a
  * real `instanceof` narrowing instead of the unchecked `err as Error & {...}`
  * assertion that was duplicated across every route handler.
+ *
+ * An error with no `code` that resolves to a 5xx is not an expected outcome of
+ * the route, so it is re-thrown to the app's `onError` rather than answered
+ * here. That handler logs it and records telemetry (answering here dropped
+ * both), and a host can chain a classifier in front of it: the hosted gateway
+ * maps D1 overload to a retryable `503 database_overloaded` with Retry-After,
+ * which a 500 answered here never reached. The client body is the same either
+ * way. Only route handlers call this, so a throw always reaches `onError`.
  */
-export function errorResponse(c: Context, err: unknown, options: ErrorResponseOptions = {}) {
+export function errorResponse(c: Context, err: unknown) {
+  if (err instanceof PlanLimitExceededError) return c.json(err.body, 429);
   const error = asCodedError(err);
+  if (error.code === 'workspace_delivery_depth_exceeded') c.header('Retry-After', '30');
   if (err instanceof SyntaxError) {
     return jsonMalformedBody(c);
   }
+  const status = effectiveHttpStatus(error);
+  // Throw the normalized Error: Hono hands only `Error` instances to `onError`.
+  if (!error.code && status >= 500) throw error;
   return jsonError(
     c,
     error.code || 'internal_error',
-    options.includeCause ? messageWithCause(error) : error.message,
-    (error.status || 500) as ContentfulStatusCode,
+    safeClientErrorMessage(error, status),
+    status as ContentfulStatusCode,
   );
 }

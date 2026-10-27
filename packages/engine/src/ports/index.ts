@@ -44,9 +44,12 @@ export type {
 export type {
   EntitlementsProvider,
   PlanLimits,
+  UpgradeGuidance,
   UsageMetric,
 } from './entitlements.js';
-export type { TelemetrySink, TelemetryEvent } from './telemetry.js';
+export { ENGINE_OBSERVATION_FACTS } from './telemetry.js';
+export type { TelemetrySink, TelemetryEvent, EngineObservation, EngineObservationKind, EngineObservationFacts } from './telemetry.js';
+export type { EngineLogRecord, EngineLogExport } from './logging.js';
 
 import type { EngineDb } from './database.js';
 import type { RealtimeBus, ConnectionRegistry, NodeConnectionRegistry } from './realtime.js';
@@ -58,6 +61,7 @@ import type { EventQueue } from './event-queue.js';
 import type { AuthProvider } from './auth.js';
 import type { EntitlementsProvider } from './entitlements.js';
 import type { TelemetrySink } from './telemetry.js';
+import type { EngineLogExport } from './logging.js';
 
 /** Infrastructure ports the engine reads off the request context. */
 export interface EnginePorts {
@@ -76,7 +80,7 @@ export interface EnginePorts {
 export interface EngineProviders {
   auth: AuthProvider;
   entitlements: EntitlementsProvider;
-  telemetry: TelemetrySink;
+  telemetry?: TelemetrySink;
 }
 
 /** Everything `createEngine` needs. */
@@ -95,11 +99,51 @@ export interface EngineConfig {
   appSemver?: string;
   sdkSemver?: string;
   /**
+   * HTTPS-only outbound webhook transport. Hosted adapters provide an
+   * equivalent connector; the Node adapter defaults to DNS validation and IP
+   * pinning at socket-connect time to prevent DNS rebinding.
+   */
+  outboundWebhookFetch?: typeof globalThis.fetch;
+  /**
+   * Effective deployment-wide retention fallback. Adapters must provide an
+   * explicit value (`null` means never prune); omission is reported as unknown
+   * so a hosted deployment can never accidentally advertise replay coverage.
+   * Per-workspace `workspaces.retention` overrides this value.
+   */
+  retention?: {
+    messageTtlDays?: number | null;
+  };
+  /**
    * Master secret used to derive relayfile -> relaycast inbound HMAC secrets.
    * Hosted adapters wire this from their internal secret; self-host can omit it
    * to disable the relayfile inbound bridge.
    */
   relayfileInboundSecret?: string;
+  /**
+   * Deployment secret used to derive credentials for anonymous, keyed
+   * workspace bootstrap creates. Hosts should persist this value so a replay
+   * after a process restart recovers the same child credential.
+   */
+  workspaceBootstrapSecret?: string;
+  /**
+   * Require callers of anonymous keyed workspace creation to prove knowledge
+   * of `workspaceBootstrapSecret`. This optional self-host hardening mode is
+   * off for hosted deployments, where the high-entropy Idempotency-Key is the
+   * narrowly scoped recovery capability and the secret remains server-only.
+   */
+  workspaceBootstrapProofRequired?: boolean;
+  /**
+   * Opt-in for the self-serve `POST /v1/workspace/rotate-key` route. Defaults
+   * to disabled: the route mints a live workspace credential, so a deployment
+   * must explicitly allow it. Hosted deployments — where the canonical key is
+   * owned by an external control plane and this store only holds a pushed
+   * copy — must leave it unset: a key minted here would be unknown to the
+   * canonical store, and that store's repair path would clobber or resurrect
+   * credentials. Such deployments rotate through the control plane's own
+   * authorized flow, which pushes the result over the internal key-update
+   * channel.
+   */
+  allowWorkspaceKeyRotation?: boolean;
   /**
    * Optional egress proxy for http_push node delivery. When set, nodes that
    * register with `delivery.use_proxy: true` have their webhook POST routed
@@ -113,15 +157,8 @@ export interface EngineConfig {
     url?: string;
     secret?: string;
   };
-  /**
-   * When set, the structured logger exports prod logs to a PostHog OTLP endpoint
-   * via plain fetch (no posthog-node dependency). Self-host leaves this unset and
-   * logs to the console only; cloud wires it from its secrets.
-   */
-  logExport?: {
-    posthogApiKey?: string;
-    posthogHost?: string;
-  };
+  /** Optional host-owned log transport. Console output remains enabled. */
+  logExport?: EngineLogExport;
   /**
    * Bounded durable mailbox tuning. Hosted adapters may provide workspace
    * overrides; self-host defaults to one hour TTL and 1000 in-flight deliveries
@@ -130,9 +167,26 @@ export interface EngineConfig {
   mailbox?: {
     deliveryTtlMs?: number;
     depthCap?: number;
+    /**
+     * Broadcast fanout stops creating new deliveries for a recipient once it
+     * has been continuously offline longer than this. Defaults to 24h; set to
+     * zero to disable offline exclusion.
+     */
+    offlineExcludeMs?: number;
     workspaces?: Record<string, {
       deliveryTtlMs?: number;
       depthCap?: number;
+      offlineExcludeMs?: number;
     }>;
   };
+  /**
+   * Server-owned workspace delivery-growth policy. Bounds the aggregate active
+   * delivery backlog so a single large fanout cannot exceed the configured cap.
+   * Hosted adapters supply the *effective configured* cap (and an optional
+   * within-cap reserve); self-host leaves it unset and applies no workspace
+   * guard. Never derived from a client request.
+   */
+  workspaceDelivery?: import('./workspaceDelivery.js').WorkspaceDeliveryPolicyConfig;
 }
+
+export type { WorkspaceDeliveryPolicy, WorkspaceDeliveryPolicyConfig } from './workspaceDelivery.js';

@@ -1,3 +1,4 @@
+import * as deliveryEngine from '../../engine/delivery.js';
 import { createHmac } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
@@ -60,6 +61,7 @@ describe('node delivery contracts', () => {
     expect(res.status).toBe(201);
     return (await res.json()) as {
       data: {
+        token: string;
         name: string;
         kind: string;
         role: string;
@@ -86,22 +88,9 @@ describe('node delivery contracts', () => {
     return res;
   }
 
-  async function waitForAssertion(
-    assertion: () => void | Promise<void>,
-    timeoutMs = 1_000,
-  ) {
-    const started = Date.now();
-    let lastError: unknown;
-    while (Date.now() - started < timeoutMs) {
-      try {
-        await assertion();
-        return;
-      } catch (err) {
-        lastError = err;
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
-    }
-    throw lastError;
+  async function waitForAssertion(assertion: () => void | Promise<void>) {
+    await stack.settle();
+    await assertion();
   }
 
   // http_push nodes also receive ephemeral events (presence/status, reactions,
@@ -134,9 +123,13 @@ describe('node delivery contracts', () => {
   }
 
   it('dispatches to an http_push node with custom HMAC headers and manual ack semantics', async () => {
+    const fetchReceivers: unknown[] = [];
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
-      .mockResolvedValue(new Response('', { status: 202 }));
+      .mockImplementation(function (this: unknown) {
+        fetchReceivers.push(this);
+        return Promise.resolve(new Response('', { status: 202 }));
+      } as typeof globalThis.fetch);
     const ws = await createWorkspace(stack.app, 'http-node-manual');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
     const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
@@ -161,6 +154,9 @@ describe('node delivery contracts', () => {
     await waitForAssertion(() => expect(deliveryPosts(fetchMock)).toHaveLength(1));
     const [url, init] = deliveryPosts(fetchMock)[0];
     expect(url).toBe('https://receiver.example.test/relaycast');
+    // Workerd rejects an extracted global fetch with "Illegal invocation".
+    expect(fetchReceivers).not.toHaveLength(0);
+    expect(fetchReceivers.every((receiver) => receiver === globalThis)).toBe(true);
     // Cloudflare Workers rejects redirect:'error'; we use 'manual' and reject
     // any 3xx ourselves (see dispatchHttpPush) to keep the no-follow SSRF guard.
     expect(init.redirect).toBe('manual');
@@ -639,6 +635,7 @@ describe('node delivery contracts', () => {
       headers: {
         'content-type': 'application/json',
         authorization: `Bearer ${ws.workspaceKey}`,
+        'X-Relaycast-Node-Token': node.data.token,
       },
       body: JSON.stringify({ name: node.data.name }),
     });
@@ -959,21 +956,31 @@ describe('node delivery contracts', () => {
 
     // The redrive sweep only POSTs the durable message; no agent activity fires
     // ephemeral events here, so a plain hang-all mock isolates the claim check.
-    let releaseFetch: ((response: Response) => void) | undefined;
+    let releaseFetch!: (response: Response) => void;
+    const response = new Promise<Response>((resolve) => { releaseFetch = resolve; });
+    let entered!: () => void;
+    const fetchEntered = new Promise<void>((resolve) => { entered = resolve; });
+    let duplicate!: () => void;
+    const duplicateFetch = new Promise<void>((resolve) => { duplicate = resolve; });
     fetchMock.mockReset();
-    fetchMock.mockImplementation(() => new Promise<Response>((resolve) => {
-      releaseFetch = resolve;
-    }));
+    fetchMock.mockImplementation(() => {
+      entered();
+      if (fetchMock.mock.calls.length > 1) duplicate();
+      return response;
+    });
 
     const sweep1 = sweepDueHttpPushDeliveries(stack.runtime.deps, { now: new Date() });
     const sweep2 = sweepDueHttpPushDeliveries(stack.runtime.deps, { now: new Date() });
 
-    await waitForAssertion(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-
-    releaseFetch?.(new Response('', { status: 202 }));
-    await Promise.all([sweep1, sweep2]);
+    try {
+      await fetchEntered;
+      // The losing sweep must finish while the winning POST is still blocked.
+      await Promise.race([sweep1, sweep2, duplicateFetch]);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseFetch(new Response('', { status: 202 }));
+      await Promise.all([sweep1, sweep2]);
+    }
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -1001,34 +1008,48 @@ describe('node delivery contracts', () => {
       .set({ status: 'queued', nextAttemptAt: null, dispatchAttempts: 0, deliveredAt: null, ackedAt: null })
       .where(and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId)));
 
-    let releaseFetch: ((response: Response) => void) | undefined;
+    let releaseFetch!: (response: Response) => void;
+    const response = new Promise<Response>((resolve) => { releaseFetch = resolve; });
+    let entered!: () => void;
+    const fetchEntered = new Promise<void>((resolve) => { entered = resolve; });
+    let duplicate!: () => void;
+    const duplicateFetch = new Promise<void>((resolve) => { duplicate = resolve; });
     fetchMock.mockReset();
-    fetchMock.mockImplementation(() => new Promise<Response>((resolve) => {
-      releaseFetch = resolve;
-    }));
+    fetchMock.mockImplementation(() => {
+      entered();
+      if (fetchMock.mock.calls.length > 1) duplicate();
+      return response;
+    });
 
     const sweep1 = sweepDueHttpPushDeliveries(stack.runtime.deps, { now: new Date() });
     const sweep2 = sweepDueHttpPushDeliveries(stack.runtime.deps, { now: new Date() });
 
-    await waitForAssertion(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-
-    releaseFetch?.(new Response('', { status: 202 }));
-    await Promise.all([sweep1, sweep2]);
+    try {
+      await fetchEntered;
+      // The losing sweep must finish while the winning POST is still blocked.
+      await Promise.race([sweep1, sweep2, duplicateFetch]);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseFetch(new Response('', { status: 202 }));
+      await Promise.all([sweep1, sweep2]);
+    }
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('does not let a slow http_push receiver block self-connected recipients', async () => {
     // Only the durable message POST hangs; ephemeral event POSTs (presence)
     // resolve immediately so the single hung message delivery stays isolated.
-    let releaseFetch: ((response: Response) => void) | undefined;
+    let releaseFetch!: (response: Response) => void;
+    const response = new Promise<Response>((resolve) => { releaseFetch = resolve; });
+    let entered!: () => void;
+    const fetchEntered = new Promise<void>((resolve) => { entered = resolve; });
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
       .mockImplementation((async (_url: unknown, init?: RequestInit) => {
         const headers = init?.headers as Record<string, string> | undefined;
         if (headers?.['X-Relaycast-Event'] === 'message.created') {
-          return new Promise<Response>((resolve) => { releaseFetch = resolve; });
+          entered();
+          return response;
         }
         return new Response('', { status: 202 });
       }) as typeof globalThis.fetch);
@@ -1044,6 +1065,15 @@ describe('node delivery contracts', () => {
       (await bindAgent(ws.workspaceKey, node.data.name, 'bob')).status,
     ).toBe(201);
 
+    const markDelivered = deliveryEngine.markDeliveriesDelivered;
+    let delivered!: () => void;
+    const recipientDelivered = new Promise<void>((resolve) => { delivered = resolve; });
+    vi.spyOn(deliveryEngine, 'markDeliveriesDelivered').mockImplementation(async (...args) => {
+      const result = await markDelivered(...args);
+      delivered();
+      return result;
+    });
+
     const post = await stack.app.request('/v1/channels/general/messages', {
       method: 'POST',
       headers: {
@@ -1054,8 +1084,10 @@ describe('node delivery contracts', () => {
     });
     expect(post.status).toBe(201);
 
-    await waitForAssertion(() => expect(deliveryPosts(fetchMock)).toHaveLength(1));
-    await waitForAssertion(async () => {
+    try {
+      // The WS recipient commits delivery while the HTTP recipient stays gated.
+      await Promise.all([recipientDelivered, fetchEntered]);
+      expect(deliveryPosts(fetchMock)).toHaveLength(1);
       expect(deliverFramesOfType(carolSock, 'message.created')).toEqual([
         expect.objectContaining({
           type: 'deliver',
@@ -1075,9 +1107,10 @@ describe('node delivery contracts', () => {
       expect(
         ((await carolQueue.json()) as { data: Array<{ status: string }> }).data,
       ).toEqual([expect.objectContaining({ status: 'delivered' })]);
-    });
-
-    releaseFetch?.(new Response('', { status: 202 }));
+    } finally {
+      releaseFetch?.(new Response('', { status: 202 }));
+      await stack.settle();
+    }
     await waitForAssertion(async () => {
       const bobQueue = await stack.app.request('/v1/deliveries', {
         headers: { authorization: `Bearer ${bob.token}` },

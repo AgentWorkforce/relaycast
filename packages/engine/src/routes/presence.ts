@@ -38,7 +38,7 @@ presenceRoutes.post('/agents/heartbeat', requireAgentToken, rateLimit, async (c)
     const agent = c.get('agent')!;
     const workspace = c.get('workspace');
     await c.get('engine').presence.heartbeat(workspace.id, agent.id, agent.name);
-    emitServerEvent(c, workspace.id, 'relaycast_server_presence_heartbeat', {
+    emitServerEvent(c, workspace.id, 'presence.heartbeat', {
       agent_id: agent.id,
       agent_name: agent.name,
     });
@@ -67,7 +67,7 @@ presenceRoutes.post('/agents/disconnect', requireAgentToken, rateLimit, async (c
     await handleAgentDisconnect(db, workspace.id, agent.id, { deregister: parsed.data.deregister, deps: engine });
     await presence.disconnect(workspace.id, agent.id, agent.name);
 
-    emitServerEvent(c, workspace.id, 'relaycast_server_presence_disconnected', {
+    emitServerEvent(c, workspace.id, 'presence.disconnected', {
       agent_id: agent.id,
       agent_name: agent.name,
     });

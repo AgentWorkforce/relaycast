@@ -15,10 +15,7 @@
  */
 const chains = new Map<string, Promise<unknown>>();
 
-export function serializeNodeOp<T>(workspaceId: string, nodeId: string, fn: () => Promise<T>): Promise<T> {
-  // Collision-safe key: ids are free-form and may contain any separator, so
-  // encode the tuple rather than joining on a character.
-  const key = JSON.stringify([workspaceId, nodeId]);
+function runSerialized<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const prev = chains.get(key) ?? Promise.resolve();
   const run = prev.then(fn, fn);
   const tail = run.then(() => undefined, () => undefined);
@@ -27,4 +24,29 @@ export function serializeNodeOp<T>(workspaceId: string, nodeId: string, fn: () =
     if (chains.get(key) === tail) chains.delete(key);
   });
   return run;
+}
+
+export function serializeNodeOp<T>(workspaceId: string, nodeId: string, fn: () => Promise<T>): Promise<T> {
+  // Collision-safe key: ids are free-form and may contain any separator, so
+  // encode the tuple rather than joining on a character. The leading tag keeps
+  // node keys and machine keys in separate namespaces.
+  return runSerialized(JSON.stringify(['node', workspaceId, nodeId]), fn);
+}
+
+/**
+ * Serialize enrollments that key on the same machine.
+ *
+ * `resolveNodeForEnroll`'s machine lookup and the insert that follows are not
+ * one atomic step, and the supporting index is deliberately non-unique (the
+ * roster already holds many rows per machine, and direct nodes are meant to
+ * repeat), so two concurrent first-enrollments of one machine could each miss
+ * the lookup and each insert.
+ *
+ * Same-process only, exactly like `serializeNodeOp`: it closes the race within
+ * an isolate, not across them. A duplicate that still slips through is
+ * self-correcting rather than harmful -- the machine lookup resolves
+ * oldest-first, so the next enrollment converges on the earliest row.
+ */
+export function serializeMachineEnroll<T>(workspaceId: string, machineId: string, fn: () => Promise<T>): Promise<T> {
+  return runSerialized(JSON.stringify(['machine', workspaceId, machineId]), fn);
 }

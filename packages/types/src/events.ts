@@ -48,6 +48,7 @@ export type ChannelMessagePayload = z.infer<typeof ChannelMessagePayloadSchema>;
 export const MessageCreatedEventSchema = z.object({
   id: z.string().uuid(),
   type: z.literal('message.created'),
+  created_at: z.string().optional(),
   channel: z.string(),
   message: ChannelMessagePayloadSchema,
 });
@@ -334,6 +335,7 @@ export const DeliveryFailedEventSchema = z.object({
   type: z.literal('delivery.failed'),
   delivery_id: z.string().nullable(),
   message_id: z.string(),
+  reason: z.string().nullable().optional(),
   error: z.string().nullable().optional(),
   retryable: z.boolean().nullable().optional(),
 });

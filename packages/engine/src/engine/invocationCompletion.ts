@@ -1,12 +1,12 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { transformForClient } from './wsTransform.js';
 import { enqueueEvent } from './eventQueue.js';
-import { actionInvocations } from '../db/schema.js';
+import { actionInvocations, nodes } from '../db/schema.js';
 import type { EngineDb } from '../ports/database.js';
 import type { EngineDeps } from '../ports/index.js';
 import { sendNodeDeliveriesToAgents } from './nodeDeliver.js';
-import { appendAndPublishWorkspaceEvent } from './workspaceEvents.js';
+import { appendAndPublishWorkspaceEvent, appendAndPublishWorkspaceEventWhen } from './workspaceEvents.js';
 
 export type InvocationCompletionDeps = Pick<EngineDeps, 'db' | 'realtime' | 'webhookQueue' | 'nodeConnections' | 'config'>;
 
@@ -53,6 +53,7 @@ export async function emitInvocationCompletionEffects(
         workspaceId,
         environment: deps.config?.environment,
         httpPushProxy: deps.config?.httpPushProxy,
+        outboundWebhookFetch: deps.config?.outboundWebhookFetch,
       }, {
         agentIds: [result.caller_id],
         event: eventType,
@@ -184,6 +185,7 @@ export async function emitAgentExitedEffects(
         workspaceId,
         environment: deps.config?.environment,
         httpPushProxy: deps.config?.httpPushProxy,
+        outboundWebhookFetch: deps.config?.outboundWebhookFetch,
       }, {
         agentIds: [callerId],
         event: eventType,
@@ -217,6 +219,8 @@ export interface NodeStatusInput {
   nodeName: string | null;
   /** Only meaningful for `offline`; omitted for `online`. */
   reason?: NodeOfflineReason;
+  /** Emit this offline event only while the claimed liveness epoch is current. */
+  claimRevision?: number;
 }
 
 /**
@@ -238,13 +242,31 @@ export async function emitNodeStatusEffects(
   const event = buildEvent(eventType, workspaceId, eventData);
   const payload = transformForClient(event);
 
-  await Promise.allSettled([
-    appendAndPublishWorkspaceEvent(
+  if (input.status === 'offline' && input.claimRevision !== undefined) {
+    const appended = await appendAndPublishWorkspaceEventWhen(
       { db: deps.db, realtime: deps.realtime },
       workspaceId,
       { type: eventType, payload },
-    ),
-  ]);
+      sql`EXISTS (
+        SELECT 1 FROM ${nodes}
+        WHERE ${nodes.workspaceId} = ${workspaceId}
+          AND ${nodes.id} = ${input.nodeId}
+          AND ${nodes.status} = 'offline'
+          AND ${nodes.livenessRevision} = ${input.claimRevision}
+      )`,
+    );
+    // A reconnect won the database race. Its online event is authoritative;
+    // publishing this older offline transition afterward would invert history.
+    if (!appended) return;
+  } else {
+    await Promise.allSettled([
+      appendAndPublishWorkspaceEvent(
+        { db: deps.db, realtime: deps.realtime },
+        workspaceId,
+        { type: eventType, payload },
+      ),
+    ]);
+  }
 
   await enqueueAndSendWebhook(deps, workspaceId, eventType, eventData);
 }

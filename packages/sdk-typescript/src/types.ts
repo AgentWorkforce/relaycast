@@ -314,6 +314,8 @@ export type NodeDeliveryAuth =
     signedPayload?: 'body' | 'timestamp.body';
     encoding?: 'hex';
     prefix?: string;
+    /** Use Standard Webhooks headers/signing; requires a 24-64 byte `whsec_` secret. */
+    signatureScheme?: 'standard-webhooks';
   };
 
 export interface HttpPushNodeDelivery {
@@ -334,6 +336,8 @@ export interface NodeRosterEntry {
   name: string;
   kind: NodeKind | string;
   role: NodeRole | string;
+  /** Host machine this node runs on; null when nothing reported one. */
+  machineId: string | null;
   deliveryAdapter: string;
   delivery: Record<string, unknown> | null;
   capabilities: NodeCapability[];
@@ -345,6 +349,13 @@ export interface NodeRosterEntry {
   /** Managed-agent capacity utilization in [0,1], or null when unreported. */
   load: number | null;
   activeAgents: number;
+  /**
+   * `activeAgents` is only an authoritative live occupancy count while
+   * `live` is true. Once a node goes offline its last-reported value is
+   * frozen history — it cannot change and must not be read as current
+   * capacity. `true` whenever `live` is `false`.
+   */
+  activeAgentsStale: boolean;
   maxAgents: number;
   lastHeartbeatAt: string | null;
   createdAt: string;
@@ -353,6 +364,13 @@ export interface NodeRosterEntry {
 export interface CreateNodeRequest {
   nodeId?: string;
   name: string;
+  /**
+   * Stable id of the host machine. Enrollment's key of last resort, after
+   * `nodeId` and `name`: a host that keeps no `nodeId` and renames itself on
+   * each boot rotates its existing `broker` node instead of adding a roster
+   * row. Never matches `direct` nodes — one machine runs many of those.
+   */
+  machineId?: string;
   kind?: NodeKind;
   role?: NodeRole;
   deliveryAdapter?: string;
@@ -363,8 +381,39 @@ export interface CreateNodeRequest {
   version?: string;
 }
 
+export interface CreateNodeOptions {
+  /**
+   * The node's current token. Required when `CreateNodeRequest` resolves an
+   * established node by id, name, or machine id; sent only in the
+   * `X-Relaycast-Node-Token` header and never serialized into the JSON body.
+   */
+  currentToken?: string;
+  /**
+   * CSPRNG-generated operation key (at least 32 characters). Reuse it with the
+   * same current token and request body to recover the replacement token after
+   * a lost response.
+   */
+  idempotencyKey?: string;
+}
+
 export interface CreateNodeResponse extends NodeRosterEntry {
   token: string;
+}
+
+export interface DeleteNodeOptions {
+  /**
+   * Explicitly detach an online node or delete a node that hosts registered
+   * actions. Omit this for the safe default, which refuses either case.
+   */
+  force?: boolean;
+}
+
+export interface DeleteNodeResponse {
+  id: string;
+  name: string;
+  deleted: true;
+  /** Number of node-hosted actions removed by the deletion. */
+  cascadedActions: number;
 }
 
 export interface NodeAgentBinding {
@@ -391,6 +440,31 @@ export interface BindAgentToNodeRequest {
 export interface NodeListQuery {
   capability?: string;
   name?: string;
+  /**
+   * Pushed into the roster's SQL query. Omitted: unfiltered by liveness
+   * (legacy default). `'online'` is the server-filtered live-Fleet path —
+   * it never reads or returns history, however large the workspace's
+   * roster has grown. `'offline'` selects everything else and, without
+   * `history`, is not paginated: prefer {@link RelayClient.nodes.listHistory}
+   * for a bounded read of a large dead roster.
+   */
+  status?: 'online' | 'offline';
+}
+
+export interface NodeHistoryQuery {
+  capability?: string;
+  name?: string;
+  status?: 'online' | 'offline';
+  /** Resume point from a previous page's `nextCursor`. Omit to start from the beginning. */
+  cursor?: string | null;
+  /** Page size, clamped server-side to a fixed maximum. */
+  limit?: number;
+}
+
+export interface NodeHistoryPage {
+  nodes: NodeRosterEntry[];
+  /** Pass back as `cursor` to fetch the next page; `null` once every row has been visited. */
+  nextCursor: string | null;
 }
 
 export interface Trigger {
@@ -589,11 +663,19 @@ export type CreateWorkspaceResponse = Camelize<Raw.CreateWorkspaceResponse>;
 export type WorkspaceLookup = Camelize<Raw.WorkspaceLookup>;
 export type SendDmResponse = Camelize<Raw.SendDmResponse>;
 export type DmMessage = Camelize<Raw.DmMessage>;
+export interface DmMessagePage {
+  messages: DmMessage[];
+  nextBefore: string | null;
+  exhausted: boolean;
+}
 export type DmConversationSummary = Camelize<Raw.DmConversationSummary>;
 export type DmConversationParticipant = Camelize<Raw.DmConversationParticipant>;
 export type DmLastMessage = Camelize<Raw.DmLastMessage>;
 export type DmReceivedEvent = Camelize<Raw.DmReceivedEvent>;
 export type EventSubscription = Camelize<Raw.EventSubscription>;
+export type WebhookDelivery = Camelize<Raw.WebhookDelivery>;
+export type WebhookDeliveryStatus = Raw.WebhookDeliveryStatus;
+export type ReplayWebhookDeliveryResponse = Camelize<Raw.ReplayWebhookDeliveryResponse>;
 export type FileInfo = Camelize<Raw.FileInfo>;
 export type CompleteUploadResponse = Camelize<Raw.CompleteUploadResponse>;
 export type FileUploadedEvent = Camelize<Raw.FileUploadedEvent>;
@@ -614,6 +696,7 @@ export type MessageReactedEvent = Camelize<Raw.MessageReactedEvent>;
 export type SearchMessageResult = Camelize<Raw.SearchMessageResult>;
 export type MessageUpdatedEvent = Camelize<Raw.MessageUpdatedEvent>;
 export type MessageWithMeta = Camelize<Raw.MessageWithMeta>;
+export type SessionMessagesResult = Camelize<Raw.SessionMessagesResult>;
 export type PostMessageRequest = Camelize<Raw.PostMessageRequest>;
 export type AddedReaction = Camelize<Raw.AddedReaction>;
 export type ReactionGroup = Camelize<Raw.ReactionGroup>;
@@ -621,7 +704,10 @@ export type ReadReceipt = Camelize<Raw.ReadReceipt>;
 export type ReaderInfo = Camelize<Raw.ReaderInfo>;
 export type RelaycastMessageEvent = Camelize<Raw.RelaycastMessageEvent>;
 export type ReleaseAgentRequest = Camelize<Raw.ReleaseAgentRequest>;
+export type ExactReleaseAgentRequest = Camelize<Raw.ExactReleaseAgentRequest>;
 export type ReleaseAgentResponse = Camelize<Raw.ReleaseAgentResponse>;
+export type RotateWorkspaceKeyRequest = Camelize<Raw.RotateWorkspaceKeyRequest>;
+export type RotateWorkspaceKeyResponse = Camelize<Raw.RotateWorkspaceKeyResponse>;
 export type SendDmRequest = Camelize<Raw.SendDmRequest>;
 export type SetSystemPromptRequest = Camelize<Raw.SetSystemPromptRequest>;
 export type SpawnAgentRequest = Camelize<Raw.SpawnAgentRequest>;
@@ -693,3 +779,4 @@ type _AssertObserverTokenFilters = Assert<Equals<ObserverTokenFilters, Camelize<
 type _AssertCreateObserverTokenRequest = Assert<Equals<CreateObserverTokenRequest, Camelize<Raw.CreateObserverTokenRequest>>>;
 type _AssertUpdateObserverTokenRequest = Assert<Equals<UpdateObserverTokenRequest, Camelize<Raw.UpdateObserverTokenRequest>>>;
 type _AssertObserverToken = Assert<Equals<ObserverToken, Camelize<Raw.ObserverToken>>>;
+type _AssertSessionMessagesResult = Assert<Equals<SessionMessagesResult, Camelize<Raw.SessionMessagesResult>>>;

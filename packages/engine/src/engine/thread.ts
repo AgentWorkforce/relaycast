@@ -1,6 +1,6 @@
 import { eq, and, sql, lt, gt } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { messages, channels, agents, dmConversations } from '../db/schema.js';
+import { messages, channels, agents, dmConversations, nodes } from '../db/schema.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { generateId } from './snowflake.js';
 import {
@@ -11,8 +11,16 @@ import {
   type DeliveryOutcomeRecords,
 } from './deliveryWrites.js';
 import { displayAgentName, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
-import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
+import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS, type MailboxConfig } from './mailboxConfig.js';
+import type { WorkspaceDeliveryPolicy } from './workspaceDeliveryPolicy.js';
 import { codedError } from '../lib/httpError.js';
+import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
+import {
+  addressNodeSelection,
+  formatAgentAddress,
+  SENDER_ADDRESS_METADATA_KEY,
+  senderAddressField,
+} from './address.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -22,7 +30,7 @@ export async function postReply(
   parentId: string,
   agentId: string,
   data: { text: string; blocks?: unknown[] | null; data?: Record<string, unknown> | null },
-  options: { mailbox?: MailboxConfig } = {},
+  options: { mailbox?: MailboxConfig; workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy } = {},
 ) {
   // Get the parent message
   const [parent] = await db
@@ -39,13 +47,25 @@ export async function postReply(
 
   const [ch] = await db.select({ name: channels.name }).from(channels).where(eq(channels.id, parent.channelId));
   const [dmConversation] = await db
-    .select({ id: dmConversations.id })
+    .select({ id: dmConversations.id, dmType: dmConversations.dmType })
     .from(dmConversations)
     .where(eq(dmConversations.channelId, parent.channelId));
 
+  const [agent] = await db
+    .select({ name: agents.name, node: addressNodeSelection })
+    .from(agents)
+    .leftJoin(nodes, eq(nodes.id, agents.locationNodeId))
+    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId)));
+  const senderAddress = agent?.name ? formatAgentAddress(agent.name, agent.node) : null;
+
   const replyId = generateId();
-  const metadata = sanitizeUserMessageMetadata(data.data);
-  const mentionPattern = /(?:^|\s)@(\w+)/g;
+  const metadata = {
+    ...sanitizeUserMessageMetadata(data.data),
+    ...(senderAddress ? { [SENDER_ADDRESS_METADATA_KEY]: senderAddress } : {}),
+  };
+  const sessionRef = requireSessionRefFromMetadata(metadata);
+  const createdAt = new Date();
+  const mentionPattern = /(?:^|\s)@([\w-]+)/g;
   const mentionedHandles = new Set<string>();
   for (let match = mentionPattern.exec(data.text); match !== null; match = mentionPattern.exec(data.text)) {
     mentionedHandles.add(match[1]);
@@ -53,9 +73,8 @@ export async function postReply(
   const mailbox = options.mailbox ?? {
     ttlMs: DEFAULT_MAILBOX_TTL_MS,
     depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
+    offlineExcludeMs: DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS,
   };
-
-  const [agent] = await db.select({ name: agents.name }).from(agents).where(eq(agents.id, agentId));
 
   // Durable writes run as one atomic unit when the adapter supports it; fanout
   // stays in routes. Delivery recipients are derived by the insert-select
@@ -73,10 +92,20 @@ export async function postReply(
           body: data.text,
           blocks: data.blocks || null,
           metadata,
+          sessionRef,
           hasAttachments: false,
+          createdAt,
         })
         .returning(),
     ];
+
+    const sessionWrite = buildMessageSessionWrite(
+      writeDb,
+      workspaceId,
+      sessionRef,
+      createdAt,
+    );
+    if (sessionWrite) writes.push(sessionWrite);
 
     writes.push(
       dmConversation
@@ -88,6 +117,9 @@ export async function postReply(
           mode: 'immediate',
           ttlMs: mailbox.ttlMs,
           depthCap: mailbox.depthCap,
+          offlineExcludeMs: mailbox.offlineExcludeMs,
+          excludeLongOffline: dmConversation.dmType !== '1:1',
+          workspacePolicy: options.workspaceDeliveryPolicy,
         })
         : buildChannelDeliveryWrite(writeDb, {
           workspaceId,
@@ -97,25 +129,30 @@ export async function postReply(
           mode: 'immediate',
           ttlMs: mailbox.ttlMs,
           depthCap: mailbox.depthCap,
+          offlineExcludeMs: mailbox.offlineExcludeMs,
           reason: 'thread-reply',
           mentionHandles: Array.from(mentionedHandles),
+          workspacePolicy: options.workspaceDeliveryPolicy,
         }),
     );
 
     return writes;
-  });
+  }, { requireAtomic: Boolean(options.workspaceDeliveryPolicy) });
   const [reply] = results[0] as (typeof messages.$inferSelect)[];
   const deliveryOutcomes: DeliveryOutcomeRecords = dmConversation
     ? await fetchGroupDeliveryOutcomes(db, {
       messageId: replyId,
       conversationId: dmConversation.id,
       senderAgentId: agentId,
+      offlineExcludeMs: mailbox.offlineExcludeMs,
+      excludeLongOffline: dmConversation.dmType !== '1:1',
     })
     : await fetchChannelDeliveryOutcomes(db, {
       messageId: replyId,
       channelId: parent.channelId,
       senderAgentId: agentId,
       mentionHandles: Array.from(mentionedHandles),
+      offlineExcludeMs: mailbox.offlineExcludeMs,
     });
 
   return {
@@ -125,6 +162,7 @@ export async function postReply(
     ...(dmConversation ? { conversation_id: dmConversation.id } : {}),
     agent_id: reply.agentId,
     agent_name: agent?.name || 'unknown',
+    ...senderAddressField(reply.metadata),
     thread_id: reply.threadId,
     text: reply.body,
     blocks: (reply.blocks as unknown[] | null) || null,
@@ -188,18 +226,20 @@ export async function getThread(
 
   const replies = await db
     .select({
-      id: messages.id,
-      channelId: messages.channelId,
-      agentId: messages.agentId,
+      id: sql`${messages.id}`.mapWith(messages.id),
+      channelId: sql`${messages.channelId}`.mapWith(messages.channelId),
+      agentId: sql`${messages.agentId}`.mapWith(messages.agentId),
       agentName: agents.name,
-      threadId: messages.threadId,
-      body: messages.body,
-      blocks: messages.blocks,
-      metadata: messages.metadata,
-      hasAttachments: messages.hasAttachments,
-      createdAt: messages.createdAt,
+      threadId: sql`${messages.threadId}`.mapWith(messages.threadId),
+      body: sql`${messages.body}`.mapWith(messages.body),
+      blocks: sql`${messages.blocks}`.mapWith(messages.blocks),
+      metadata: sql`${messages.metadata}`.mapWith(messages.metadata),
+      hasAttachments: sql`${messages.hasAttachments}`.mapWith(messages.hasAttachments),
+      createdAt: sql`${messages.createdAt}`.mapWith(messages.createdAt),
     })
-    .from(messages)
+    // SQLite can otherwise prefer the workspace/id index and scan unrelated
+    // history. This existing index seeks the thread and supports id pagination.
+    .from(sql`${messages} INDEXED BY idx_messages_thread`)
     .leftJoin(agents, eq(messages.agentId, agents.id))
     .where(and(...conditions))
     .orderBy(sql`${messages.id} ASC`)
@@ -211,6 +251,7 @@ export async function getThread(
       channel_id: parent.channelId,
       agent_id: parent.agentId,
       agent_name: displayAgentName(parent.metadata, parent.agentName),
+      ...senderAddressField(parent.metadata),
       text: parent.body,
       blocks: (parent.blocks as unknown[] | null) || null,
       metadata: publicMessageMetadata(parent.metadata),
@@ -224,6 +265,7 @@ export async function getThread(
       channel_id: r.channelId,
       agent_id: r.agentId,
       agent_name: displayAgentName(r.metadata, r.agentName),
+      ...senderAddressField(r.metadata),
       thread_id: r.threadId,
       text: r.body,
       blocks: (r.blocks as unknown[] | null) || null,

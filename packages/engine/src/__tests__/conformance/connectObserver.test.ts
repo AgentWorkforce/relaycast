@@ -1,0 +1,401 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { eq } from 'drizzle-orm';
+import { messages, observerTokens, workspaces } from '../../db/schema.js';
+import { dmFilteredCountConversationChunkSize, dmMessagePageLimit } from '../../engine/dmAll.js';
+import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
+
+async function mintConnectObserver(
+  stack: TestStack,
+  workspaceKey: string,
+  name: string,
+  filters: { include_dms: true; agent_ids?: string[]; dm_conversation_ids?: string[] } = { include_dms: true },
+) {
+  const response = await stack.app.request('/v1/observer-tokens', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${workspaceKey}`,
+    },
+    body: JSON.stringify({
+      name,
+      scopes: ['stream:read', 'dms:read'],
+      filters,
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+    }),
+  });
+  expect(response.status).toBe(201);
+  const body = (await response.json()) as {
+    data: { id: string; token: string };
+  };
+  return body.data;
+}
+
+async function sendDm(stack: TestStack, token: string, to: string, text: string) {
+  const response = await stack.app.request('/v1/dm', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ to, text }),
+  });
+  expect(response.status).toBe(201);
+  return (await response.json()) as {
+    data: { conversation_id: string };
+  };
+}
+
+describe('Relay Connect observer capability', () => {
+  let stack: TestStack;
+
+  beforeEach(() => {
+    stack = makeNodeStack();
+  });
+  afterEach(() => stack.close());
+
+  it('lists more DM conversations than one D1 statement can bind, for the workspace and an observer', async () => {
+    const room = await createWorkspace(stack.app, 'connect-many-dms');
+    await stack.runtime.deps.db
+      .update(workspaces)
+      .set({ plan: 'enterprise' })
+      .where(eq(workspaces.id, room.workspaceId));
+    const alice = await registerAgent(stack.app, room.workspaceKey, 'alice');
+    const peers = Array.from({ length: 505 }, (_, index) => `peer-${String(index).padStart(3, '0')}`);
+    const conversationIds: string[] = [];
+    for (const peer of peers) {
+      await registerAgent(stack.app, room.workspaceKey, peer);
+      const dm = await sendDm(stack, alice.token, peer, `hello ${peer}`);
+      conversationIds.push(dm.data.conversation_id);
+    }
+    const observer = await mintConnectObserver(
+      stack,
+      room.workspaceKey,
+      'connect-many-dms-observer',
+      { include_dms: true, dm_conversation_ids: conversationIds },
+    );
+    const scopedObserver = await mintConnectObserver(
+      stack,
+      room.workspaceKey,
+      'connect-one-dm-observer',
+      { include_dms: true, dm_conversation_ids: [conversationIds[0]!] },
+    );
+
+    // Emulate D1's 100-bound-parameter ceiling against the SQL Drizzle emits.
+    const sqlite = stack.runtime.handle.sqlite;
+    const prepare = sqlite.prepare.bind(sqlite);
+    sqlite.prepare = ((source: string) => {
+      const parameterCount = (source.match(/\?/g) ?? []).length;
+      if (parameterCount > 100) {
+        throw new Error(`D1_ERROR: too many SQL variables at offset 100 (${parameterCount})`);
+      }
+      return prepare(source);
+    }) as typeof sqlite.prepare;
+
+    const legacyResponse = await stack.app.request('/v1/dm/conversations/all', {
+      headers: { authorization: `Bearer ${room.workspaceKey}` },
+    });
+    expect(legacyResponse.status).toBe(200);
+    const legacyBody = (await legacyResponse.json()) as { data: Array<{ id: string }>; cursor?: unknown };
+    expect(legacyBody.data).toHaveLength(peers.length);
+    expect(legacyBody.cursor).toBeUndefined();
+
+    const workspaceListingSql: string[] = [];
+    sqlite.prepare = ((source: string) => {
+      workspaceListingSql.push(source);
+      return prepare(source);
+    }) as typeof sqlite.prepare;
+    const firstPage = await stack.app.request('/v1/dm/conversations/all?limit=500', {
+      headers: { authorization: `Bearer ${room.workspaceKey}` },
+    });
+    expect(firstPage.status).toBe(200);
+    const firstPageBody = (await firstPage.json()) as {
+      data: Array<{ id: string; participants: string[]; message_count: number; last_message: { text: string } | null }>;
+      cursor: { next: string; has_more: boolean };
+    };
+    expect(firstPageBody.data).toHaveLength(500);
+    expect(firstPageBody.cursor).toEqual({
+      next: firstPageBody.data.at(-1)?.id,
+      has_more: true,
+    });
+    const firstPageListingQueries = workspaceListingSql.filter((source) => (
+      source.includes('from "dm_conversations"')
+      || source.includes('from "dm_participants"')
+      || source.includes('from "messages"')
+    ));
+    // One page selector plus four enrichment lookups, each internally split
+    // into six D1-safe chunks for 500 conversations.
+    expect(firstPageListingQueries).toHaveLength(25);
+
+    sqlite.prepare = prepare as typeof sqlite.prepare;
+    const secondPage = await stack.app.request(
+      `/v1/dm/conversations/all?cursor=${encodeURIComponent(firstPageBody.cursor.next)}`,
+      { headers: { authorization: `Bearer ${room.workspaceKey}` } },
+    );
+    expect(secondPage.status).toBe(200);
+    const secondPageBody = (await secondPage.json()) as {
+      data: Array<{ id: string; participants: string[]; message_count: number; last_message: { text: string } | null }>;
+      cursor: { next: string | null; has_more: boolean };
+    };
+    expect(secondPageBody.data).toHaveLength(peers.length - firstPageBody.data.length);
+    expect(secondPageBody.cursor).toEqual({ next: null, has_more: false });
+    expect(new Set([...firstPageBody.data, ...secondPageBody.data].map(({ id }) => id))).toEqual(
+      new Set(conversationIds),
+    );
+
+    const blankLimitResponse = await stack.app.request('/v1/dm/conversations/all?limit=', {
+      headers: { authorization: `Bearer ${room.workspaceKey}` },
+    });
+    expect(blankLimitResponse.status).toBe(200);
+    await expect(blankLimitResponse.json()).resolves.toMatchObject({
+      data: expect.arrayContaining(firstPageBody.data.map(({ id }) => expect.objectContaining({ id }))),
+      cursor: { has_more: true },
+    });
+
+    const observerResponse = await stack.app.request('/v1/dm/conversations/all?limit=100', {
+      headers: { authorization: `Bearer ${observer.token}` },
+    });
+    expect(observerResponse.status).toBe(200);
+    const observerBody = (await observerResponse.json()) as {
+      data: Array<{ participants: string[]; message_count: number; last_message: { text: string } | null }>;
+      cursor?: unknown;
+    };
+    expect(observerBody.data).toHaveLength(peers.length);
+    expect(observerBody.cursor).toBeUndefined();
+    for (const conversation of observerBody.data) {
+      const peer = conversation.participants.find((name) => name !== 'alice')!;
+      expect(conversation.participants).toContain('alice');
+      expect(conversation.message_count).toBe(1);
+      expect(conversation.last_message?.text).toBe(`hello ${peer}`);
+    }
+
+    const preparedSql: string[] = [];
+    sqlite.prepare = ((source: string) => {
+      preparedSql.push(source);
+      return prepare(source);
+    }) as typeof sqlite.prepare;
+    let scopedResponse: Response;
+    try {
+      scopedResponse = await stack.app.request('/v1/dm/conversations/all', {
+        headers: { authorization: `Bearer ${scopedObserver.token}` },
+      });
+    } finally {
+      sqlite.prepare = prepare as typeof sqlite.prepare;
+    }
+    expect(scopedResponse.status).toBe(200);
+    const scopedBody = (await scopedResponse.json()) as {
+      data: Array<{ id: string; participants: string[]; message_count: number; last_message: { text: string } | null }>;
+    };
+    expect(scopedBody.data).toEqual([
+      expect.objectContaining({
+        id: conversationIds[0],
+        participants: ['alice', peers[0]],
+        message_count: 1,
+        last_message: expect.objectContaining({ text: `hello ${peers[0]}` }),
+      }),
+    ]);
+
+    const dmListingQueries = preparedSql.filter((source) => (
+      source.includes('from "dm_conversations"')
+      || source.includes('from "dm_participants"')
+      || source.includes('from "messages"')
+    ));
+    expect(dmListingQueries).toHaveLength(5);
+    expect(dmListingQueries[0]).toContain('"dm_conversations"."id" in (?)');
+  });
+
+  it('opens one room, reads historical and new DMs, and fails closed for writes, other rooms, expiry, revocation, and room deletion', async () => {
+    expect(dmMessagePageLimit(101)).toBe(100);
+    const eightAgentConversationChunk = dmFilteredCountConversationChunkSize(8);
+    expect(Math.ceil(91 / eightAgentConversationChunk)).toBe(2);
+    // Two workspace predicates plus a created_after predicate remain outside
+    // the shared IN-clause budget and still stay below D1's 100-bind ceiling.
+    expect(eightAgentConversationChunk + 8 + 3).toBeLessThanOrEqual(100);
+    const roomA = await createWorkspace(stack.app, 'connect-room-a');
+    const roomB = await createWorkspace(stack.app, 'connect-room-b');
+    const alice = await registerAgent(stack.app, roomA.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, roomA.workspaceKey, 'bob');
+    await registerAgent(stack.app, roomA.workspaceKey, 'carol');
+    const mallory = await registerAgent(stack.app, roomB.workspaceKey, 'mallory');
+    await registerAgent(stack.app, roomB.workspaceKey, 'victor');
+
+    const historicalA = await sendDm(stack, alice.token, 'bob', 'historical room A');
+    const privateB = await sendDm(stack, mallory.token, 'victor', 'private room B');
+    const observer = await mintConnectObserver(stack, roomA.workspaceKey, 'connect-observer-a');
+
+    const open = await stack.app.request('/v1/workspace', {
+      headers: { authorization: `Bearer ${observer.token}` },
+    });
+    expect(open.status).toBe(200);
+    await expect(open.json()).resolves.toMatchObject({
+      data: { id: roomA.workspaceId, observer_token_id: observer.id },
+    });
+
+    await sendDm(stack, alice.token, 'bob', 'new room A');
+    const conversations = await stack.app.request('/v1/dm/conversations/all?limit=100', {
+      headers: { authorization: `Bearer ${observer.token}` },
+    });
+    expect(conversations.status).toBe(200);
+    const conversationBody = (await conversations.json()) as {
+      data: Array<{ id: string; participants: string[] }>;
+    };
+    expect(conversationBody.data).toHaveLength(1);
+    expect(conversationBody.data[0]).toMatchObject({
+      id: historicalA.data.conversation_id,
+      participants: ['alice', 'bob'],
+    });
+
+    const history = await stack.app.request(
+      `/v1/dm/conversations/${historicalA.data.conversation_id}/messages?limit=100&page=1`,
+      { headers: { authorization: `Bearer ${observer.token}` } },
+    );
+    expect(history.status).toBe(200);
+    const historyBody = (await history.json()) as {
+      data: {
+        messages: Array<{ agent_name: string; created_at: string; text: string }>;
+        exhausted: boolean;
+        next_before: string | null;
+      };
+    };
+    expect(historyBody.data.messages.map((message) => message.text)).toEqual(
+      expect.arrayContaining(['historical room A', 'new room A']),
+    );
+    expect(historyBody.data.messages.every((message) => message.agent_name === 'alice')).toBe(true);
+    expect(
+      historyBody.data.messages.every(
+        (message) => Number.isFinite(Date.parse(message.created_at)) && message.created_at.endsWith('Z'),
+      ),
+    ).toBe(true);
+    expect(historyBody.data.messages.map((message) => message.text)).not.toContain('private room B');
+    expect(historyBody.data.exhausted).toBe(true);
+
+    // Pagination metadata is based on the raw page, so an agent filter cannot
+    // make an empty visible page look exhausted while older allowed rows exist.
+    await sendDm(stack, bob.token, 'alice', 'newest hidden by agent filter');
+    const secondConversation = await sendDm(stack, alice.token, 'carol', 'visible in a second conversation');
+    const aliceOnly = await mintConnectObserver(
+      stack,
+      roomA.workspaceKey,
+      'connect-observer-alice-only',
+      { include_dms: true, agent_ids: [alice.agentId] },
+    );
+    const filteredConversations = await stack.app.request('/v1/dm/conversations/all', {
+      headers: { authorization: `Bearer ${aliceOnly.token}` },
+    });
+    expect(filteredConversations.status).toBe(200);
+    const filteredConversationBody = (await filteredConversations.json()) as {
+      data: Array<{ id: string; last_message: unknown; message_count: number }>;
+    };
+    expect(filteredConversationBody.data).toHaveLength(2);
+    expect(filteredConversationBody.data.find(({ id }) => id === historicalA.data.conversation_id)).toMatchObject({
+      last_message: null,
+      message_count: 2,
+    });
+    expect(filteredConversationBody.data.find(({ id }) => id === secondConversation.data.conversation_id)).toMatchObject({
+      message_count: 1,
+    });
+    const hiddenRawPage = await stack.app.request(
+      `/v1/dm/conversations/${historicalA.data.conversation_id}/messages?limit=1&page=1`,
+      { headers: { authorization: `Bearer ${aliceOnly.token}` } },
+    );
+    const hiddenRawPageBody = (await hiddenRawPage.json()) as {
+      data: { messages: unknown[]; next_before: string; exhausted: boolean };
+    };
+    expect(hiddenRawPageBody.data).toMatchObject({ messages: [], exhausted: false });
+    const olderAllowedPage = await stack.app.request(
+      `/v1/dm/conversations/${historicalA.data.conversation_id}/messages?limit=1&page=1&before=${hiddenRawPageBody.data.next_before}`,
+      { headers: { authorization: `Bearer ${aliceOnly.token}` } },
+    );
+    await expect(olderAllowedPage.json()).resolves.toMatchObject({
+      data: { messages: [{ agent_name: 'alice' }] },
+    });
+
+    const dmMessagesBeforeWrites = await stack.runtime.deps.db
+      .select()
+      .from(messages)
+      .where(eq(messages.workspaceId, roomA.workspaceId));
+
+    const sendDenied = await stack.app.request('/v1/dm', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${observer.token}`,
+      },
+      body: JSON.stringify({ to: 'bob', text: 'observer must not send' }),
+    });
+    expect(sendDenied.status).toBe(401);
+    await expect(sendDenied.json()).resolves.toMatchObject({
+      error: { code: 'observer_token_forbidden' },
+    });
+
+    const replyDenied = await stack.app.request(`/v1/dm/${historicalA.data.conversation_id}/messages`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${observer.token}`,
+      },
+      body: JSON.stringify({ text: 'observer must not reply' }),
+    });
+    expect(replyDenied.status).toBe(401);
+    await expect(replyDenied.json()).resolves.toMatchObject({
+      error: { code: 'observer_token_forbidden' },
+    });
+
+    const dmMessagesAfterWrites = await stack.runtime.deps.db
+      .select()
+      .from(messages)
+      .where(eq(messages.workspaceId, roomA.workspaceId));
+    expect(dmMessagesAfterWrites).toHaveLength(dmMessagesBeforeWrites.length);
+
+    const crossRoom = await stack.app.request(
+      `/v1/dm/conversations/${privateB.data.conversation_id}/messages?limit=100`,
+      { headers: { authorization: `Bearer ${observer.token}` } },
+    );
+    expect(crossRoom.status).toBe(404);
+
+    await stack.runtime.deps.db
+      .update(observerTokens)
+      .set({ expiresAt: new Date(Date.now() - 1_000) })
+      .where(eq(observerTokens.id, observer.id));
+    expect(
+      (
+        await stack.app.request('/v1/workspace', {
+          headers: { authorization: `Bearer ${observer.token}` },
+        })
+      ).status,
+    ).toBe(401);
+
+    const revoked = await mintConnectObserver(stack, roomA.workspaceKey, 'connect-observer-revoked');
+    expect(
+      (
+        await stack.app.request(`/v1/observer-tokens/${revoked.id}`, {
+          method: 'DELETE',
+          headers: { authorization: `Bearer ${roomA.workspaceKey}` },
+        })
+      ).status,
+    ).toBe(204);
+    expect(
+      (
+        await stack.app.request('/v1/workspace', {
+          headers: { authorization: `Bearer ${revoked.token}` },
+        })
+      ).status,
+    ).toBe(401);
+
+    const ended = await mintConnectObserver(stack, roomA.workspaceKey, 'connect-observer-ended');
+    expect(
+      (
+        await stack.app.request(`/v1/workspaces/${roomA.workspaceId}`, {
+          method: 'DELETE',
+          headers: { authorization: `Bearer ${roomA.workspaceKey}` },
+        })
+      ).status,
+    ).toBe(204);
+    expect(
+      (
+        await stack.app.request('/v1/workspace', {
+          headers: { authorization: `Bearer ${ended.token}` },
+        })
+      ).status,
+    ).toBe(401);
+  });
+});

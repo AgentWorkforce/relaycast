@@ -5,6 +5,15 @@ import { getActiveObserverTokenByHash } from '../engine/observerToken.js';
 import type { AuthProvider, AuthResult, AuthRequire } from '../ports/auth.js';
 import type { EngineDb } from '../ports/database.js';
 import { parseAuthToken, validateTokenRequirement } from './tokenKind.js';
+import { isWorkspaceExpired, workspaceExpiredAuthResult } from './workspaceExpiry.js';
+
+export {
+  isWorkspaceExpired,
+  authenticateUnexpired,
+  workspaceExpiredAuthResult,
+  WORKSPACE_EXPIRED_CODE,
+  WORKSPACE_EXPIRED_MESSAGE,
+} from './workspaceExpiry.js';
 
 /** SHA-256 hash of a raw token to its stored form. */
 export function hashToken(token: string): Promise<string> {
@@ -13,6 +22,19 @@ export function hashToken(token: string): Promise<string> {
 
 function unauthorized(message: string, code = 'unauthorized'): AuthResult {
   return { ok: false, status: 401, code, message };
+}
+
+/**
+ * Admit a resolved workspace only while it is live. An expiring workspace is a
+ * room boundary for its callers, so every credential that resolves to it stops
+ * working at `expires_at` rather than at the next reap.
+ */
+function resolved(
+  workspace: typeof workspaces.$inferSelect,
+  extra: Omit<Extract<AuthResult, { ok: true }>, 'ok' | 'workspace'> = {},
+): AuthResult {
+  if (isWorkspaceExpired(workspace)) return workspaceExpiredAuthResult();
+  return { ok: true, workspace, ...extra };
 }
 
 /**
@@ -43,9 +65,22 @@ export class SqliteApiKeyAuthProvider implements AuthProvider {
     const hash = await hashToken(token);
 
     if (parsedToken.kind === 'workspace') {
-      const [workspace] = await db.select().from(workspaces).where(eq(workspaces.apiKeyHash, hash));
+      // Current slot first — same shape as the agent-token lookup below.
+      let [workspace] = await db.select().from(workspaces).where(eq(workspaces.apiKeyHash, hash));
+      if (!workspace) {
+        // Superseded key inside its rotation grace window. A rotation with
+        // zero grace writes no usable previous slot, so a compromised key
+        // never lands here.
+        [workspace] = await db
+          .select()
+          .from(workspaces)
+          .where(and(
+            eq(workspaces.previousApiKeyHash, hash),
+            gt(workspaces.previousApiKeyExpiresAt, new Date()),
+          ));
+      }
       if (!workspace) return unauthorized('Invalid API key');
-      return { ok: true, workspace };
+      return resolved(workspace);
     }
 
     if (parsedToken.kind === 'agent') {
@@ -54,9 +89,9 @@ export class SqliteApiKeyAuthProvider implements AuthProvider {
       let [agent] = await db.select().from(agents).where(eq(agents.tokenHash, hash));
       if (!agent) {
         // Fall back to the previous slot inside its grace window. This is the
-        // credential a caller that lost a `registerOrRotate` race was handed
-        // (relay#1542); it must remain live long enough for that caller to
-        // upgrade to a persistent session.
+        // credential a caller that lost a concurrent self-rollover race was
+        // handed (relay#1542); it must remain live long enough for that caller
+        // to upgrade to a persistent session.
         [agent] = await db
           .select()
           .from(agents)
@@ -65,7 +100,7 @@ export class SqliteApiKeyAuthProvider implements AuthProvider {
       if (!agent) return unauthorized('Invalid agent token', 'agent_token_invalid');
       const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, agent.workspaceId));
       if (!workspace) return unauthorized('Workspace not found');
-      return { ok: true, workspace, agent };
+      return resolved(workspace, { agent });
     }
 
     if (parsedToken.kind === 'node') {
@@ -73,7 +108,7 @@ export class SqliteApiKeyAuthProvider implements AuthProvider {
       if (!node) return unauthorized('Invalid node token', 'node_token_invalid');
       const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, node.workspaceId));
       if (!workspace) return unauthorized('Workspace not found');
-      return { ok: true, workspace, node };
+      return resolved(workspace, { node });
     }
 
     if (parsedToken.kind === 'observer') {
@@ -81,7 +116,7 @@ export class SqliteApiKeyAuthProvider implements AuthProvider {
       if (!observerToken) return unauthorized('Invalid observer token', 'observer_token_invalid');
       const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, observerToken.workspaceId));
       if (!workspace) return unauthorized('Workspace not found');
-      return { ok: true, workspace, observerToken };
+      return resolved(workspace, { observerToken });
     }
 
     return unauthorized('Invalid token format');

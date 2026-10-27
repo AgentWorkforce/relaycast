@@ -1,0 +1,58 @@
+{
+  "id": "compact_dl1hgc4cqlsu",
+  "version": 1,
+  "type": "compacted",
+  "compactedAt": "2026-09-07T15:54:52.126Z",
+  "sourceTrajectories": [
+    "traj_irrccigczu15"
+  ],
+  "dateRange": {
+    "start": "2026-09-07T15:45:37.000Z",
+    "end": "2026-09-07T15:54:41.906Z"
+  },
+  "summary": {
+    "totalDecisions": 2,
+    "totalEvents": 2,
+    "uniqueAgents": [
+      "default"
+    ]
+  },
+  "decisionGroups": [
+    {
+      "category": "database",
+      "decisions": [
+        {
+          "question": "Drain all tracked work and retain early rejections; always close SQLite in finally",
+          "chosen": "Drain all tracked work and retain early rejections; always close SQLite in finally",
+          "reasoning": "Regression tests demonstrated early drain completion, discarded failures, and leaked SQLite handles.",
+          "fromTrajectory": "traj_irrccigczu15"
+        }
+      ]
+    },
+    {
+      "category": "naming",
+      "decisions": [
+        {
+          "question": "Observe a named invocation retry boundary instead of global timer delays",
+          "chosen": "Observe a named invocation retry boundary instead of global timer delays",
+          "reasoning": "Fault injection proved an unrelated 10ms timer falsely passed the old helper; named real-time bounds diagnose missing signals and frozen cleanup.",
+          "fromTrajectory": "traj_irrccigczu15"
+        }
+      ]
+    }
+  ],
+  "keyLearnings": [],
+  "keyFindings": [],
+  "filesAffected": [
+    "docs/testing/pr-382-review-followup.md",
+    "packages/engine/src/__tests__/backgroundTasks.test.ts",
+    "packages/engine/src/__tests__/backgroundTasks.ts",
+    "packages/engine/src/__tests__/conformance/harness.test.ts",
+    "packages/engine/src/__tests__/conformance/harness.ts",
+    "packages/engine/src/routes/__tests__/webhookOutbox.test.ts",
+    "scripts/test-support/signals.ts"
+  ],
+  "commits": [
+    "54e203b"
+  ]
+}

@@ -6,6 +6,7 @@ import type {
   ActionInvocation,
   CompleteInvocationRequest,
   CreateNodeResponse,
+  DeleteNodeResponse,
   InvokeActionResult,
   DirectoryAgent,
   DirectorySearchResult,
@@ -49,6 +50,8 @@ describe('AgentClient return types', () => {
       .toEqualTypeOf<Promise<RoutingConfig>>();
     expectTypeOf<ReturnType<RelayCast['nodes']['create']>>()
       .toEqualTypeOf<Promise<CreateNodeResponse>>();
+    expectTypeOf<ReturnType<RelayCast['nodes']['delete']>>()
+      .toEqualTypeOf<Promise<DeleteNodeResponse>>();
     expectTypeOf<ReturnType<RelayCast['nodes']['listAgents']>>()
       .toEqualTypeOf<Promise<NodeAgentBinding[]>>();
     expectTypeOf<ReturnType<RelayCast['nodes']['bindAgent']>>()

@@ -21,6 +21,23 @@ export async function hmacSha256Hex(payload: string, secret: string): Promise<st
   return bytesToHex(new Uint8Array(signature));
 }
 
+/**
+ * Constant-time equality for caller-presented secrets (e.g. a bootstrap
+ * secret proof header). Both inputs are hashed to a fixed-length digest
+ * first so the comparison cost never varies with the length of an
+ * attacker-controlled input, then compared byte-by-byte without
+ * short-circuiting so it also never varies with how many leading bytes
+ * matched.
+ */
+export async function constantTimeEqual(a: string, b: string): Promise<boolean> {
+  const [digestA, digestB] = await Promise.all([sha256Hex(a), sha256Hex(b)]);
+  let diff = 0;
+  for (let i = 0; i < digestA.length; i += 1) {
+    diff |= digestA.charCodeAt(i) ^ digestB.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
 export function randomHex(byteLength: number): string {
   const bytes = new Uint8Array(byteLength);
   globalThis.crypto.getRandomValues(bytes);

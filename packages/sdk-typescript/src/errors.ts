@@ -13,6 +13,8 @@ export interface RelayErrorOptions {
   retryable?: boolean;
   rawCode?: string;
   cause?: unknown;
+  /** Authoritative delay supplied by the server, when present. */
+  retryAfterMs?: number;
 }
 
 const RAW_CODE_MAP: Record<string, RelayErrorCode> = {
@@ -77,6 +79,7 @@ export class RelayError extends Error {
   readonly statusCode?: number;
   readonly rawCode?: string;
   readonly status: number;
+  readonly retryAfterMs?: number;
 
   constructor(code: RelayErrorCode, message: string, options: RelayErrorOptions = {}) {
     super(message);
@@ -86,6 +89,7 @@ export class RelayError extends Error {
     this.rawCode = options.rawCode;
     this.retryable = options.retryable ?? relayErrorRetryable(code, options.statusCode);
     this.status = options.statusCode ?? 0;
+    this.retryAfterMs = options.retryAfterMs;
     if (options.cause !== undefined) {
       (this as { cause?: unknown }).cause = options.cause;
     }
@@ -96,7 +100,8 @@ export function relayErrorFromApi(
   rawCode: string | undefined,
   message: string,
   statusCode?: number,
+  retryAfterMs?: number,
 ): RelayError {
   const code = normalizeRelayErrorCode(rawCode, statusCode);
-  return new RelayError(code, message, { statusCode, rawCode });
+  return new RelayError(code, message, { statusCode, rawCode, retryAfterMs });
 }

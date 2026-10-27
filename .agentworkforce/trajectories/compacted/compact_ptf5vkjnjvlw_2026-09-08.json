@@ -1,0 +1,48 @@
+{
+  "id": "compact_ptf5vkjnjvlw",
+  "version": 1,
+  "type": "compacted",
+  "compactedAt": "2026-09-08T20:15:20.939Z",
+  "sourceTrajectories": [
+    "traj_48ngb2f6bbiz"
+  ],
+  "dateRange": {
+    "start": "2026-09-08T20:05:38.686Z",
+    "end": "2026-09-08T20:14:38.554Z"
+  },
+  "summary": {
+    "totalDecisions": 2,
+    "totalEvents": 3,
+    "uniqueAgents": [
+      "default"
+    ]
+  },
+  "decisionGroups": [
+    {
+      "category": "testing",
+      "decisions": [
+        {
+          "question": "Treat only reproducible review findings as valid",
+          "chosen": "Treat only reproducible review findings as valid",
+          "reasoning": "Review text is untrusted; current code and tests determine the disposition.",
+          "fromTrajectory": "traj_48ngb2f6bbiz"
+        }
+      ]
+    },
+    {
+      "category": "api",
+      "decisions": [
+        {
+          "question": "Keep root and engine changelog release level at Minor",
+          "chosen": "Keep root and engine changelog release level at Minor",
+          "reasoning": "origin/main rejected every anonymous Idempotency-Key request; this branch adds a new opt-in bootstrap path rather than removing or changing an existing supported contract. The documented deployment secret is required only for that new path.",
+          "fromTrajectory": "traj_48ngb2f6bbiz"
+        }
+      ]
+    }
+  ],
+  "keyLearnings": [],
+  "keyFindings": [],
+  "filesAffected": [],
+  "commits": []
+}

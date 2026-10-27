@@ -88,6 +88,72 @@ describe('delivery sequence high-water migration', () => {
       .toEqual({ seq: 8 });
   });
 });
+
+describe('session event status completion migration', () => {
+  it('marks only historical keyed status events for ambiguous replay reconciliation', () => {
+    const sqlite = new Database(':memory:');
+    handles.push(sqlite);
+    sqlite.exec(`
+      CREATE TABLE agents (
+        id TEXT PRIMARY KEY,
+        created_at INTEGER NOT NULL,
+        last_seen INTEGER NOT NULL,
+        status TEXT NOT NULL
+      );
+      CREATE TABLE session_events (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}',
+        created_at INTEGER NOT NULL,
+        idempotency_key_hash TEXT,
+        request_digest TEXT
+      );
+      INSERT INTO agents (id, created_at, last_seen, status)
+      VALUES ('agent_1', 1600000000, 1700000000, 'active');
+      INSERT INTO session_events
+        (id, workspace_id, agent_id, type, created_at, idempotency_key_hash)
+      VALUES
+        ('keyed_status', 'ws_1', 'agent_1', 'status.blocked', 1700000001, 'hash-1'),
+        ('keyed_changed', 'ws_1', 'agent_1', 'status.changed', 1700000002, 'hash-2'),
+        ('keyed_non_status', 'ws_1', 'agent_1', 'tool.called', 1700000003, 'hash-3'),
+        ('unkeyed_status', 'ws_1', 'agent_1', 'status.active', 1700000004, NULL);
+    `);
+
+    const migration = readFileSync(
+      new URL('../../../db/migrations/0056_session_event_status_completion.sql', import.meta.url),
+      'utf8',
+    );
+    sqlite.exec(migration);
+    sqlite.prepare(`
+      INSERT INTO session_events
+        (id, workspace_id, agent_id, type, created_at, idempotency_key_hash)
+      VALUES ('post_migration_status', 'ws_1', 'agent_1', 'status.idle', 1700000005, 'hash-5')
+    `).run();
+
+    expect(sqlite.prepare(`
+      SELECT id, status_applied_at, status_legacy_pending
+      FROM session_events
+      ORDER BY id
+    `).all()).toEqual([
+      { id: 'keyed_changed', status_applied_at: null, status_legacy_pending: 1 },
+      { id: 'keyed_non_status', status_applied_at: null, status_legacy_pending: 0 },
+      { id: 'keyed_status', status_applied_at: null, status_legacy_pending: 1 },
+      { id: 'post_migration_status', status_applied_at: null, status_legacy_pending: 0 },
+      { id: 'unkeyed_status', status_applied_at: null, status_legacy_pending: 0 },
+    ]);
+    expect(sqlite.prepare(`SELECT status_updated_at FROM agents WHERE id = 'agent_1'`).get())
+      .toEqual({ status_updated_at: 1700000000 });
+
+    sqlite.prepare(`UPDATE agents SET last_seen = 1700000010 WHERE id = 'agent_1'`).run();
+    const touched = sqlite.prepare(`SELECT status_updated_at FROM agents WHERE id = 'agent_1'`).get() as {
+      status_updated_at: number;
+    };
+    expect(touched.status_updated_at).toBeGreaterThanOrEqual(1700000000);
+    expect(touched.status_updated_at).toBeLessThanOrEqual(Math.floor(Date.now() / 1_000) + 1);
+  });
+});
 describe('action invocation provider migration', () => {
   it('backfills action-owned and legacy node dispatches without claiming undispatched work', () => {
     const sqlite = new Database(':memory:');
@@ -168,5 +234,281 @@ describe('action invocation provider migration', () => {
       { id: 'release_named', dispatched_provider: 'go' },
       { id: 'shadow_spawn', dispatched_provider: 'policy' },
     ]);
+  });
+});
+
+describe('action invocation handler snapshot migration', () => {
+  it('adds an immutable nullable handler identity without rewriting existing invocations', () => {
+    const sqlite = new Database(':memory:');
+    handles.push(sqlite);
+    sqlite.exec(`
+      CREATE TABLE action_invocations (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        action_name TEXT NOT NULL
+      );
+      INSERT INTO action_invocations (id, workspace_id, action_name)
+      VALUES ('inv_existing', 'ws_1', 'summarize');
+    `);
+
+    const migration = readFileSync(
+      new URL('../../../db/migrations/0042_action_invocation_handler_snapshot.sql', import.meta.url),
+      'utf8',
+    );
+    sqlite.exec(migration);
+
+    expect(sqlite.prepare(`
+      SELECT id, handler_agent_id, handler_node_id
+      FROM action_invocations
+    `).all()).toEqual([{
+      id: 'inv_existing',
+      handler_agent_id: null,
+      handler_node_id: null,
+    }]);
+  });
+});
+
+describe('action invocation origin migration', () => {
+  it('preserves registered provenance and fails ambiguous open invocations closed', () => {
+    const sqlite = new Database(':memory:');
+    handles.push(sqlite);
+    sqlite.exec(`
+      CREATE TABLE nodes (
+        id TEXT PRIMARY KEY,
+        reserved_agents INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE action_invocations (
+        id TEXT PRIMARY KEY,
+        action_id TEXT DEFAULT NULL,
+        action_name TEXT NOT NULL,
+        status TEXT NOT NULL,
+        error TEXT DEFAULT NULL,
+        dispatched_node_id TEXT DEFAULT NULL,
+        spawn_reserved_at INTEGER DEFAULT NULL,
+        completed_at INTEGER DEFAULT NULL
+      );
+      INSERT INTO nodes (id, reserved_agents) VALUES ('node_a', 2);
+      INSERT INTO action_invocations
+        (id, action_id, action_name, status, dispatched_node_id, spawn_reserved_at)
+      VALUES
+        ('registered_release', 'action_release', 'release', 'dispatched', NULL, NULL),
+        ('legacy_open_release', NULL, 'release', 'pending', NULL, NULL),
+        ('legacy_completed_release', NULL, 'release', 'completed', NULL, NULL),
+        ('legacy_spawn', NULL, 'spawn', 'pending', 'node_a', 1700000000),
+        ('registered_spawn', 'action_spawn', 'spawn', 'pending', 'node_a', 1700000001);
+    `);
+
+    const migration = readFileSync(
+      new URL('../../../db/migrations/0046_action_invocation_origin.sql', import.meta.url),
+      'utf8',
+    );
+    sqlite.exec(migration);
+
+    expect(sqlite.prepare(`
+      SELECT id, invocation_origin, status, error, completed_at IS NOT NULL AS completed
+      FROM action_invocations
+      ORDER BY id
+    `).all()).toEqual([
+      {
+        id: 'legacy_completed_release',
+        invocation_origin: 'legacy_unknown',
+        status: 'completed',
+        error: null,
+        completed: 0,
+      },
+      {
+        id: 'legacy_open_release',
+        invocation_origin: 'legacy_unknown',
+        status: 'failed',
+        error: 'invocation_origin_unavailable',
+        completed: 1,
+      },
+      {
+        id: 'legacy_spawn',
+        invocation_origin: 'legacy_unknown',
+        status: 'failed',
+        error: 'invocation_origin_unavailable',
+        completed: 1,
+      },
+      {
+        id: 'registered_release',
+        invocation_origin: 'registered_action',
+        status: 'dispatched',
+        error: null,
+        completed: 0,
+      },
+      {
+        id: 'registered_spawn',
+        invocation_origin: 'registered_action',
+        status: 'pending',
+        error: null,
+        completed: 0,
+      },
+    ]);
+
+    expect(sqlite.prepare(`
+      SELECT reserved_agents FROM nodes WHERE id = 'node_a'
+    `).get()).toEqual({ reserved_agents: 1 });
+    expect(sqlite.prepare(`
+      SELECT id, spawn_reserved_at FROM action_invocations
+      WHERE id IN ('legacy_spawn', 'registered_spawn')
+      ORDER BY id
+    `).all()).toEqual([
+      { id: 'legacy_spawn', spawn_reserved_at: null },
+      { id: 'registered_spawn', spawn_reserved_at: 1700000001 },
+    ]);
+
+    expect(() => sqlite.exec(`
+      INSERT INTO action_invocations
+        (id, action_name, status, invocation_origin)
+      VALUES ('invalid_origin', 'release', 'pending', 'invented');
+    `)).toThrow();
+  });
+});
+
+describe('action invocation provider acceptance migration', () => {
+  it('preserves accepted historical generations without claiming pending work', () => {
+    const sqlite = new Database(':memory:');
+    handles.push(sqlite);
+    sqlite.exec(`
+      CREATE TABLE action_invocations (
+        id TEXT PRIMARY KEY,
+        action_id TEXT DEFAULT NULL,
+        invocation_origin TEXT NOT NULL,
+        status TEXT NOT NULL,
+        dispatch_attempts INTEGER NOT NULL DEFAULT 0
+      );
+      INSERT INTO action_invocations
+        (id, action_id, invocation_origin, status, dispatch_attempts)
+      VALUES
+        ('accepted_dispatched', 'action_1', 'registered_action', 'dispatched', 2),
+        ('accepted_invoked', 'action_2', 'registered_action', 'invoked', 1),
+        ('pending_registered', 'action_3', 'registered_action', 'pending', 1),
+        ('builtin_dispatched', NULL, 'builtin', 'dispatched', 3),
+        ('unattempted_registered', 'action_4', 'registered_action', 'dispatched', 0);
+    `);
+
+    const migration = readFileSync(
+      new URL('../../../db/migrations/0047_action_invocation_provider_acceptance.sql', import.meta.url),
+      'utf8',
+    );
+    sqlite.exec(migration);
+
+    expect(sqlite.prepare(`
+      SELECT id, provider_accepted_attempt
+      FROM action_invocations
+      ORDER BY id
+    `).all()).toEqual([
+      { id: 'accepted_dispatched', provider_accepted_attempt: 2 },
+      { id: 'accepted_invoked', provider_accepted_attempt: 1 },
+      { id: 'builtin_dispatched', provider_accepted_attempt: null },
+      { id: 'pending_registered', provider_accepted_attempt: null },
+      { id: 'unattempted_registered', provider_accepted_attempt: null },
+    ]);
+  });
+});
+
+describe('session_ref lookup migration', () => {
+  it('backfills the indexed key and durable payload-free session ledger', () => {
+    const sqlite = new Database(':memory:');
+    handles.push(sqlite);
+    sqlite.exec(`
+      PRAGMA foreign_keys = ON;
+      CREATE TABLE workspaces (id TEXT PRIMARY KEY);
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        metadata TEXT DEFAULT '{}',
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE webhooks (
+        id TEXT PRIMARY KEY,
+        token_hash TEXT
+      );
+      INSERT INTO workspaces (id) VALUES ('ws_1');
+      INSERT INTO webhooks (id, token_hash) VALUES
+        ('hook_open', NULL),
+        ('hook_protected', 'hashed-secret');
+      INSERT INTO messages (id, workspace_id, metadata, created_at) VALUES
+        ('100', 'ws_1', '{"session_ref":"session-1"}', 10),
+        ('200', 'ws_1', '{"session_ref":"session-1"}', 20),
+        ('300', 'ws_1', '{"session_ref":42}', 30),
+        ('400', 'ws_1', '{}', 40),
+        ('500', 'ws_1', '{"session_ref":"emoji-😀"}', 50),
+        ('600', 'ws_1', '{"session_ref":"untrusted","__relaycast_origin":"inbound_webhook","__relaycast_webhook_id":"hook_open"}', 60),
+        ('700', 'ws_1', '{"session_ref":"trusted","__relaycast_origin":"inbound_webhook","__relaycast_webhook_id":"hook_protected"}', 70),
+        ('750', 'ws_1', '{"session_ref":"relayfile-session","__relaycast_origin":"inbound_webhook","__relaycast_webhook_id":"relayfile:slack"}', 75);
+    `);
+    sqlite.prepare(
+      'INSERT INTO messages (id, workspace_id, metadata, created_at) VALUES (?, ?, ?, ?)',
+    ).run('800', 'ws_1', JSON.stringify({ session_ref: '😀'.repeat(256) }), 80);
+
+    const migration = readFileSync(
+      new URL('../../../db/migrations/0038_session_ref_lookup.sql', import.meta.url),
+      'utf8',
+    );
+    sqlite.exec(migration);
+
+    expect(sqlite.prepare(`
+      SELECT id, session_ref
+      FROM messages
+      ORDER BY id
+    `).all()).toEqual([
+      { id: '100', session_ref: 'session-1' },
+      { id: '200', session_ref: 'session-1' },
+      { id: '300', session_ref: null },
+      { id: '400', session_ref: null },
+      { id: '500', session_ref: 'emoji-😀' },
+      { id: '600', session_ref: null },
+      { id: '700', session_ref: 'trusted' },
+      { id: '750', session_ref: 'relayfile-session' },
+      { id: '800', session_ref: null },
+    ]);
+    expect(sqlite.prepare(`
+      SELECT workspace_id, session_ref, first_message_at, last_message_at, start_is_known
+      FROM message_sessions
+      ORDER BY session_ref
+    `).all()).toEqual([
+      {
+        workspace_id: 'ws_1',
+        session_ref: 'emoji-😀',
+        first_message_at: 50,
+        last_message_at: 50,
+        start_is_known: 0,
+      },
+      {
+        workspace_id: 'ws_1',
+        session_ref: 'relayfile-session',
+        first_message_at: 75,
+        last_message_at: 75,
+        start_is_known: 0,
+      },
+      {
+        workspace_id: 'ws_1',
+        session_ref: 'session-1',
+        first_message_at: 10,
+        last_message_at: 20,
+        start_is_known: 0,
+      },
+      {
+        workspace_id: 'ws_1',
+        session_ref: 'trusted',
+        first_message_at: 70,
+        last_message_at: 70,
+        start_is_known: 0,
+      },
+    ]);
+
+    const indexedPlan = sqlite.prepare(`
+      EXPLAIN QUERY PLAN
+      SELECT id
+      FROM messages
+      WHERE workspace_id = ? AND session_ref = ?
+      ORDER BY length(id), id
+      LIMIT 10
+    `).all('ws_1', 'session-1') as Array<{ detail: string }>;
+    expect(indexedPlan.map((row) => row.detail).join('\n')).toContain(
+      'idx_messages_workspace_session',
+    );
   });
 });

@@ -37,12 +37,8 @@ describe('providerAttachDecision matches InProcessRealtime.providerAttachConflic
     stack = makeNodeStack();
   });
   afterEach(async () => {
-    // `attachNodeSocket` fires a best-effort `drainNode` (a detached DB read);
-    // let it settle on a real macrotask before closing the connection so its
-    // query can't land on a closed database.
+    await stack.close();
     vi.useRealTimers();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    stack.close();
   });
 
   // Bind an incumbent provider instance (lastSeen = T0), then return the id of a

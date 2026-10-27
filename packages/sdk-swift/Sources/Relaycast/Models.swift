@@ -30,9 +30,11 @@ public struct Workspace: Codable, Equatable, Sendable {
 
 public struct CreateWorkspaceRequest: Codable, Equatable, Sendable {
     public var name: String
+    public var metadata: [String: JSONValue]?
 
-    public init(name: String) {
+    public init(name: String, metadata: [String: JSONValue]? = nil) {
         self.name = name
+        self.metadata = metadata
     }
 }
 
@@ -60,9 +62,13 @@ public struct UpdateWorkspaceRequest: Codable, Equatable, Sendable {
     public var name: String?
     public var systemPrompt: String?
 
-    public init(name: String? = nil, systemPrompt: String? = nil) {
+    /// Shallow merge into workspace metadata; top-level `.null` values delete keys.
+    public var metadata: [String: JSONValue]?
+
+    public init(name: String? = nil, systemPrompt: String? = nil, metadata: [String: JSONValue]? = nil) {
         self.name = name
         self.systemPrompt = systemPrompt
+        self.metadata = metadata
     }
 }
 
@@ -124,6 +130,77 @@ public struct WorkspaceDMMessage: Codable, Equatable, Sendable {
 public struct TokenRotateResponse: Codable, Equatable, Sendable {
     public let name: String
     public let token: String
+}
+
+public struct RecoverAgentRequest: Codable, Equatable, Sendable {
+    public var expectedAgentId: String
+    public var recoveryProof: String?
+    public var reason: String?
+    public var sessionRef: String?
+    public var nodeId: String?
+
+    public init(expectedAgentId: String, recoveryProof: String? = nil, reason: String? = nil, sessionRef: String? = nil, nodeId: String? = nil) {
+        self.expectedAgentId = expectedAgentId
+        self.recoveryProof = recoveryProof
+        self.reason = reason
+        self.sessionRef = sessionRef
+        self.nodeId = nodeId
+    }
+}
+
+public struct TakeOverAgentRequest: Codable, Equatable, Sendable {
+    public var expectedAgentId: String
+    public var actor: String
+    public var reason: String
+    public var sessionRef: String
+    public var nodeId: String
+
+    public init(expectedAgentId: String, actor: String, reason: String, sessionRef: String, nodeId: String) {
+        self.expectedAgentId = expectedAgentId
+        self.actor = actor
+        self.reason = reason
+        self.sessionRef = sessionRef
+        self.nodeId = nodeId
+    }
+}
+
+public struct RevokeAgentTokenRequest: Codable, Equatable, Sendable {
+    public var expectedAgentId: String
+    public var actor: String
+    public var reason: String
+    public var sessionRef: String?
+    public var nodeId: String?
+
+    public init(expectedAgentId: String, actor: String, reason: String, sessionRef: String? = nil, nodeId: String? = nil) {
+        self.expectedAgentId = expectedAgentId
+        self.actor = actor
+        self.reason = reason
+        self.sessionRef = sessionRef
+        self.nodeId = nodeId
+    }
+}
+
+public struct EnrollRecoveryCredentialRequest: Codable, Equatable, Sendable {
+    public var recoveryProofHash: String
+    public var workUnitId: String?
+
+    public init(recoveryProofHash: String, workUnitId: String? = nil) {
+        self.recoveryProofHash = recoveryProofHash
+        self.workUnitId = workUnitId
+    }
+}
+
+public struct AgentIdentityRecoveryResponse: Codable, Equatable, Sendable {
+    public let agentId: String
+    public let name: String
+    public let token: String
+    public let auditId: String
+}
+
+public struct AgentIdentityRevocationResponse: Codable, Equatable, Sendable {
+    public let agentId: String
+    public let name: String
+    public let auditId: String
 }
 
 public struct ObserverTokenFilters: Codable, Equatable, Sendable {
@@ -1807,6 +1884,7 @@ extension NodeDeliveryConfig: ExpressibleByDictionaryLiteral {
 public struct CreateNodeRequest: Codable, Equatable, Sendable {
     public let nodeId: String?
     public let name: String
+    public let machineId: String?
     public let kind: String?
     public let role: String?
     public let deliveryAdapter: String?
@@ -1816,9 +1894,10 @@ public struct CreateNodeRequest: Codable, Equatable, Sendable {
     public let tags: [String]?
     public let version: String?
 
-    public init(nodeId: String? = nil, name: String, kind: String? = nil, role: String? = nil, deliveryAdapter: String? = nil, delivery: NodeDeliveryConfig? = nil, capabilities: [String]? = nil, maxAgents: Int? = nil, tags: [String]? = nil, version: String? = nil) {
+    public init(nodeId: String? = nil, name: String, machineId: String? = nil, kind: String? = nil, role: String? = nil, deliveryAdapter: String? = nil, delivery: NodeDeliveryConfig? = nil, capabilities: [String]? = nil, maxAgents: Int? = nil, tags: [String]? = nil, version: String? = nil) {
         self.nodeId = nodeId
         self.name = name
+        self.machineId = machineId
         self.kind = kind
         self.role = role
         self.deliveryAdapter = deliveryAdapter

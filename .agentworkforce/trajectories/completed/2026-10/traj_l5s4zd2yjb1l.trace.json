@@ -1,0 +1,154 @@
+{
+  "version": "1.0.0",
+  "id": "ab7dcbbd-42fc-4091-8f26-bda60a534c5d",
+  "timestamp": "2026-10-11T19:59:41.267Z",
+  "trajectory": "traj_l5s4zd2yjb1l",
+  "files": [
+    {
+      "path": ".agentworkforce/trajectories/active/traj_l5s4zd2yjb1l/trajectory.json",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 46,
+              "revision": "f3ac4f180262d6e0fb1be65790590978884308b2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": ".agentworkforce/trajectories/completed/2026-10/traj_8xat4ug6944x/summary.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 25,
+              "revision": "f3ac4f180262d6e0fb1be65790590978884308b2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": ".agentworkforce/trajectories/completed/2026-10/traj_8xat4ug6944x/trajectory.json",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 8,
+              "end_line": 16,
+              "revision": "f3ac4f180262d6e0fb1be65790590978884308b2"
+            },
+            {
+              "start_line": 24,
+              "end_line": 30,
+              "revision": "f3ac4f180262d6e0fb1be65790590978884308b2"
+            },
+            {
+              "start_line": 49,
+              "end_line": 60,
+              "revision": "f3ac4f180262d6e0fb1be65790590978884308b2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "CHANGELOG.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 22,
+              "end_line": 28,
+              "revision": "f3ac4f180262d6e0fb1be65790590978884308b2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/CHANGELOG.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 12,
+              "end_line": 18,
+              "revision": "f3ac4f180262d6e0fb1be65790590978884308b2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/db/__tests__/taskMigration.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 32,
+              "end_line": 38,
+              "revision": "f3ac4f180262d6e0fb1be65790590978884308b2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/db/migrations/0068_spawn_canceled_index.sql",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 13,
+              "revision": "f3ac4f180262d6e0fb1be65790590978884308b2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/engine/__tests__/spawnTombstoneIndex.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 75,
+              "revision": "f3ac4f180262d6e0fb1be65790590978884308b2"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

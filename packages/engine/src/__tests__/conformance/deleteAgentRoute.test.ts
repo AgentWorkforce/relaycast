@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
-import { agents, channelMembers, messages } from '../../db/schema.js';
+import { agents, channelMembers, deliveries, messages } from '../../db/schema.js';
 
 /**
  * `DELETE /v1/agents/:name` -> `agentEngine.deleteAgent` was the last release
@@ -48,7 +48,16 @@ describe('DELETE /v1/agents/:name preserves attributed history', () => {
   it('removes an agent that has authored messages, keeping the attribution', async () => {
     const ws = await createWorkspace(stack.app, 'route-delete-with-history');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'talkative');
+    const sender = await registerAgent(stack.app, ws.workspaceKey, 'sender');
     await post(target.token, 'this message must keep its author');
+    await post(sender.token, 'this queued delivery must stop consuming capacity');
+
+    expect(
+      await stack.runtime.deps.db
+        .select({ status: deliveries.status })
+        .from(deliveries)
+        .where(eq(deliveries.agentId, target.agentId)),
+    ).toContainEqual({ status: 'queued' });
 
     const res = await removeAgent(ws.workspaceKey, target.name);
     expect(res.status).toBeLessThan(300);
@@ -60,6 +69,27 @@ describe('DELETE /v1/agents/:name preserves attributed history', () => {
         .from(agents)
         .where(and(eq(agents.workspaceId, ws.workspaceId), eq(agents.name, target.name))),
     ).toHaveLength(0);
+
+    // A tombstoned recipient can never ACK its old queue. Settle those rows
+    // immediately so they stop consuming the workspace delivery-depth cap.
+    expect(
+      await stack.runtime.deps.db
+        .select({
+          status: deliveries.status,
+          error: deliveries.error,
+          retryable: deliveries.retryable,
+          deadLetteredAt: deliveries.deadLetteredAt,
+        })
+        .from(deliveries)
+        .where(eq(deliveries.agentId, target.agentId)),
+    ).toEqual([
+      expect.objectContaining({
+        status: 'dead_lettered',
+        error: 'recipient agent released',
+        retryable: false,
+        deadLetteredAt: expect.any(Date),
+      }),
+    ]);
 
     // The row survives as a tombstone so history keeps its author.
     const [tombstone] = await stack.runtime.deps.db

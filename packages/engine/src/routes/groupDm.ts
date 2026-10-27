@@ -4,15 +4,19 @@ import type { AppEnv } from '../env.js';
 import { errorResponse } from '../lib/httpError.js';
 import { requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { assertMessageAllowance, checkMessageAllowance } from '../middleware/planLimits.js';
 import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as groupDmEngine from '../engine/groupDm.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
+import { resolveWorkspaceDeliveryPolicyFor } from '../engine/workspaceDeliveryPolicy.js';
 import { publishWorkspaceEvent } from './fanout.js';
 import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
 import { buildGroupDmReceivedEventData } from '../engine/deliveryWire.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
+import { sha256Hex } from '../lib/crypto.js';
+import { canonicalUserMessageMetadata } from '../engine/messageMetadata.js';
 import {
   jsonCreated,
   jsonError,
@@ -31,6 +35,7 @@ const createGroupDmSchema = z.object({
 const postGroupDmMessageSchema = z.object({
   text: z.string().min(1),
   attachments: z.array(z.string()).optional(),
+  data: z.record(z.string(), z.unknown()).nullable().optional(),
   mode: z.enum(['wait', 'steer']).default('wait'),
 });
 
@@ -64,7 +69,7 @@ groupDmRoutes.post(
         agent!.id,
         { participants, name },
       );
-      emitServerEvent(c, workspace.id, 'relaycast_server_group_dm_created', {
+      emitServerEvent(c, workspace.id, 'group.dm.created', {
         conversation_id: result.id,
         participant_count: result.participants.length,
       });
@@ -80,6 +85,7 @@ groupDmRoutes.post(
   '/dm/:conversation_id/messages',
   requireAgentToken,
   rateLimit,
+  checkMessageAllowance,
   async (c) => {
     try {
       const db = c.get('db');
@@ -89,18 +95,21 @@ groupDmRoutes.post(
         const hasTextIssue = failure.error.issues.some((issue) => issue.path[0] === 'text');
         const hasModeIssue = failure.error.issues.some((issue) => issue.path[0] === 'mode');
         const hasAttachmentsIssue = failure.error.issues.some((issue) => issue.path[0] === 'attachments');
+        const hasDataIssue = failure.error.issues.some((issue) => issue.path[0] === 'data');
         return hasTextIssue
           ? 'text is required'
           : hasModeIssue
             ? 'mode must be one of: wait, steer'
             : hasAttachmentsIssue
               ? 'attachments must be an array of file ids'
+              : hasDataIssue
+                ? 'data must be an object'
               : 'invalid group dm body';
       });
       if (!parsed.ok) {
         return parsed.response;
       }
-      const { text, attachments, mode } = parsed.data;
+      const { text, attachments, data, mode } = parsed.data;
       const normalizedAttachments = attachments && attachments.length > 0 ? attachments : undefined;
 
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
@@ -110,6 +119,35 @@ groupDmRoutes.post(
 
       const conversationId = c.req.param('conversation_id');
       const mailbox = resolveMailboxConfig(c.get('engine').config, workspace.id);
+      const canonicalMetadata = canonicalUserMessageMetadata({
+        ...(data ?? {}),
+        injection_mode: mode,
+      });
+      const defaultMetadata = canonicalUserMessageMetadata({ injection_mode: mode });
+      const fingerprintBody = {
+        conversationId,
+        text,
+        ...(normalizedAttachments ? { attachments: normalizedAttachments } : {}),
+        ...(canonicalMetadata !== defaultMetadata
+          ? { data_sha256: await sha256Hex(canonicalMetadata) }
+          : {}),
+      };
+      // Records written before canonical metadata hashing remain replayable for
+      // their 24-hour TTL. New records always store the canonical fingerprint.
+      const legacyFingerprintBody = {
+        conversationId,
+        text,
+        ...(normalizedAttachments ? { attachments: normalizedAttachments } : {}),
+        ...(data !== undefined
+          ? { data_sha256: await sha256Hex(JSON.stringify(data)) }
+          : {}),
+      };
+      const fingerprint = mode === 'steer'
+        ? JSON.stringify({ ...fingerprintBody, mode })
+        : JSON.stringify(fingerprintBody);
+      const legacyFingerprint = mode === 'steer'
+        ? JSON.stringify({ ...legacyFingerprintBody, mode })
+        : JSON.stringify(legacyFingerprintBody);
       const toGroupDmReceivedEventData = (data: Awaited<ReturnType<typeof groupDmEngine.postGroupMessage>>) => buildGroupDmReceivedEventData(data, {
         fromName: agent!.name,
       });
@@ -120,12 +158,12 @@ groupDmRoutes.post(
         scope: `dm-group-message:${conversationId}`,
         key: idempotencyKey,
         status: 201,
-        fingerprint: mode === 'steer'
-          ? JSON.stringify({ conversationId, text, ...(normalizedAttachments ? { attachments: normalizedAttachments } : {}), mode })
-          : JSON.stringify({ conversationId, text, ...(normalizedAttachments ? { attachments: normalizedAttachments } : {}) }),
+        fingerprint,
+        compatibleFingerprints: legacyFingerprint === fingerprint ? [] : [legacyFingerprint],
         kv: c.get('engine').kv,
-        operation: () =>
-          groupDmEngine.postGroupMessage(
+        operation: async () => {
+          assertMessageAllowance(c);
+          return groupDmEngine.postGroupMessage(
             db,
             workspace.id,
             conversationId,
@@ -133,10 +171,12 @@ groupDmRoutes.post(
             {
               text,
               attachments: normalizedAttachments,
+              data,
               mode,
             },
-            { mailbox },
-          ),
+            { mailbox, workspaceDeliveryPolicy: await resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace) },
+          );
+        },
         afterOperation: async (data) => {
           await sendWebhookEvent(c, {
             type: 'group_dm.received',
@@ -173,7 +213,7 @@ groupDmRoutes.post(
           );
         }
 
-        emitServerEvent(c, workspace.id, 'relaycast_server_group_dm_message_sent', {
+        emitServerEvent(c, workspace.id, 'group.dm.message.sent', {
           conversation_id: publicGroupData.conversation_id,
           message_id: publicGroupData.id,
           from_agent_id: agent!.id,
@@ -211,7 +251,7 @@ groupDmRoutes.post(
         agentCtx!.id,
         agentName,
       );
-      emitServerEvent(c, workspace.id, 'relaycast_server_group_dm_participant_added', {
+      emitServerEvent(c, workspace.id, 'group.dm.participant.added', {
         conversation_id: conversationId,
         agent_name: agentName,
         invited_by_agent_id: agentCtx!.id,
@@ -240,7 +280,7 @@ groupDmRoutes.delete(
         conversationId,
         agent!.id,
       );
-      emitServerEvent(c, workspace.id, 'relaycast_server_group_dm_participant_removed', {
+      emitServerEvent(c, workspace.id, 'group.dm.participant.removed', {
         conversation_id: conversationId,
         agent_id: agent!.id,
       });

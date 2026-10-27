@@ -2,16 +2,17 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import {
   orderByRemembered,
+  observerBindingMatches,
   pickRememberedEngine,
   resolveRelayServerCandidatesFromRequest,
+  retryAfterHeader,
   selectEngineForKey,
 } from '../../../../lib/relay-server';
-
-export const runtime = 'edge';
 
 const COOKIE_NAME = 'relaycast_key';
 const AGENT_COOKIE_NAME = 'relaycast_agent_token';
 const WS_TOKEN_COOKIE_NAME = 'relaycast_ws_token';
+const CONNECT_OBSERVER_ID_COOKIE_NAME = 'relaycast_connect_observer_id';
 const ENGINE_COOKIE_NAME = 'relaycast_engine';
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 
@@ -28,38 +29,30 @@ export async function GET(request: NextRequest) {
   const wsToken = cookieStore.get(WS_TOKEN_COOKIE_NAME)?.value;
 
   if (!apiKey) {
-    return NextResponse.json(
-      { authenticated: false },
-      { status: 401 }
-    );
+    return NextResponse.json({ authenticated: false }, { status: 401 });
   }
 
   const candidates = resolveRelayServerCandidatesFromRequest(request);
-  const remembered = pickRememberedEngine(
-    cookieStore.get(ENGINE_COOKIE_NAME)?.value,
-    candidates
-  );
-  const {
-    baseUrl,
-    rejectedAny,
-    inconclusiveAny,
-  } = await selectEngineForKey(
+  const remembered = pickRememberedEngine(cookieStore.get(ENGINE_COOKIE_NAME)?.value, candidates);
+  const { baseUrl, rejectedAny, inconclusiveAny, observerTokenId, retryAfterMs } = await selectEngineForKey(
     orderByRemembered(candidates, remembered),
-    apiKey
+    apiKey,
   );
 
   if (!baseUrl) {
     if (!rejectedAny || inconclusiveAny) {
       return NextResponse.json(
         { authenticated: false, error: 'Unable to validate session' },
-        { status: 503 }
+        { status: 503, headers: retryAfterHeader(retryAfterMs) },
       );
     }
 
-    return NextResponse.json(
-      { authenticated: false },
-      { status: 401 }
-    );
+    return NextResponse.json({ authenticated: false }, { status: 401 });
+  }
+
+  const connectObserverId = cookieStore.get(CONNECT_OBSERVER_ID_COOKIE_NAME)?.value ?? null;
+  if (!observerBindingMatches(connectObserverId, observerTokenId)) {
+    return NextResponse.json({ authenticated: false }, { status: 401 });
   }
 
   if (baseUrl !== remembered) {
@@ -82,6 +75,7 @@ export async function GET(request: NextRequest) {
     // A workspace-key session with no ws token (mint failed, or a session
     // created before this cookie existed) has no live stream until next login.
     wsToken: wsToken ?? null,
+    connectObserverId,
     baseUrl,
   });
 }

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import quote
+from ipaddress import ip_address
+from urllib.parse import quote, urlsplit
 
 from .agent import AgentClient, AsyncAgentClient
 from .client import AsyncHttpClient, HttpClient
-from .errors import RelayError
 from .models import (
     A2aAgentCard,
     A2aAgentRecord,
@@ -34,6 +34,8 @@ from .models import (
     Agent,
     CreateAgentRequest,
     CreateAgentResponse,
+    CreateWorkspaceRequest,
+    CreateWorkspaceResponse,
     CreateObserverTokenRequest,
     ObserverToken,
     PublishToDirectoryRequest,
@@ -47,8 +49,41 @@ def _enc(value: str) -> str:
     return quote(value, safe="")
 
 
-def _is_duplicate_agent_error(err: RelayError) -> bool:
-    return err.status == 409 and err.code in {"agent_already_exists", "name_conflict"}
+def _validate_node_rotation_options(
+    current_token: str | None, idempotency_key: str | None,
+) -> None:
+    if current_token is not None and not current_token.strip():
+        raise ValueError("current_token must not be blank for node rotation")
+    if idempotency_key is not None and not idempotency_key.strip():
+        raise ValueError("idempotency_key must not be blank for node rotation recovery")
+    if idempotency_key is not None and current_token is None:
+        raise ValueError("idempotency_key requires current_token for node rotation recovery")
+
+
+def _workspace_create_headers(
+    idempotency_key: str | None, api_key: str | None, base_url: str | None,
+) -> dict[str, str]:
+    if idempotency_key is None:
+        return {}
+    # Preserve authenticated keys exactly, including an explicitly empty key,
+    # so the API owns invalid_idempotency_key errors as in the TypeScript SDK.
+    if not api_key:
+        if len(idempotency_key) < 32:
+            raise ValueError("Anonymous idempotency_key must be at least 32 characters")
+        if len(idempotency_key) > 255 or not all("!" <= char <= "~" for char in idempotency_key):
+            raise ValueError("idempotency_key must contain 1-255 visible ASCII characters")
+        destination = urlsplit(base_url or "https://cast.agentrelay.com")
+        host = destination.hostname or ""
+        loopback = host.lower() == "localhost"
+        try:
+            loopback = loopback or ip_address(host).is_loopback
+        except ValueError:
+            pass
+        if not host or destination.username is not None or destination.password is not None or not (
+            destination.scheme == "https" or (destination.scheme == "http" and loopback)
+        ):
+            raise ValueError("Anonymous keyed workspace creation requires HTTPS or loopback HTTP")
+    return {"Idempotency-Key": idempotency_key}
 
 
 class _WorkspaceNamespace:
@@ -61,12 +96,18 @@ class _WorkspaceNamespace:
         result = self._client.get("/v1/workspace")
         return Workspace.model_validate(result)
 
-    def update(self, *, name: str | None = None, system_prompt: str | None = None) -> Workspace:
+    def update(
+        self, *, name: str | None = None, system_prompt: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> Workspace:
+        """Update workspace fields; metadata shallow-merges, with null values deleting keys."""
         body: dict[str, Any] = {}
         if name is not None:
             body["name"] = name
         if system_prompt is not None:
             body["system_prompt"] = system_prompt
+        if metadata is not None:
+            body["metadata"] = metadata
         result = self._client.patch("/v1/workspace", body)
         return Workspace.model_validate(result)
 
@@ -84,12 +125,16 @@ class _AgentsNamespace:
         type: str | None = None,
         persona: str | None = None,
         metadata: dict[str, Any] | None = None,
+        recovery_proof_hash: str | None = None,
+        work_unit_id: str | None = None,
     ) -> CreateAgentResponse:
         data = CreateAgentRequest(
             name=name,
             type=type,  # type: ignore[arg-type]
             persona=persona,
             metadata=metadata,
+            recovery_proof_hash=recovery_proof_hash,
+            work_unit_id=work_unit_id,
         )
         result = self._client.post("/v1/agents", data.model_dump(exclude_none=True))
         return CreateAgentResponse.model_validate(result)
@@ -101,21 +146,17 @@ class _AgentsNamespace:
         type: str | None = None,
         persona: str | None = None,
         metadata: dict[str, Any] | None = None,
+        recovery_proof_hash: str | None = None,
+        work_unit_id: str | None = None,
     ) -> CreateAgentResponse:
-        try:
-            return self.register(name, type=type, persona=persona, metadata=metadata)
-        except RelayError as err:
-            if not _is_duplicate_agent_error(err):
-                raise
-
-        agent = self.get(name)
-        rotated = self.rotate_token(agent.name)
-        return CreateAgentResponse(
-            id=agent.id,
-            name=agent.name,
-            token=rotated.token,
-            status=agent.status,
-            created_at=agent.created_at,
+        """Deprecated create-only alias; collisions fail closed."""
+        return self.register(
+            name,
+            type=type,
+            persona=persona,
+            metadata=metadata,
+            recovery_proof_hash=recovery_proof_hash,
+            work_unit_id=work_unit_id,
         )
 
     def list(self, *, status: str | None = None) -> list[Agent]:
@@ -129,9 +170,86 @@ class _AgentsNamespace:
         result = self._client.get(f"/v1/agents/{_enc(name)}")
         return Agent.model_validate(result)
 
-    def rotate_token(self, name: str) -> TokenRotateResponse:
-        result = self._client.post(f"/v1/agents/{_enc(name)}/rotate-token", {})
+    def rotate_token(self, name: str, *, agent_token: str) -> TokenRotateResponse:
+        with self._client.with_api_key(agent_token) as client:
+            result = client.post(f"/v1/agents/{_enc(name)}/rotate-token", {})
         return TokenRotateResponse.model_validate(result)
+
+    def recover(
+        self,
+        name: str,
+        *,
+        expected_agent_id: str,
+        recovery_proof: str | None = None,
+        reason: str | None = None,
+        session_ref: str | None = None,
+        node_id: str | None = None,
+    ) -> dict[str, Any]:
+        body = {
+            "expected_agent_id": expected_agent_id,
+            "recovery_proof": recovery_proof,
+            "reason": reason,
+            "session_ref": session_ref,
+            "node_id": node_id,
+        }
+        return self._client.post(
+            f"/v1/agents/{_enc(name)}/recover",
+            {key: value for key, value in body.items() if value is not None},
+        )
+
+    def take_over(
+        self,
+        name: str,
+        *,
+        expected_agent_id: str,
+        actor: str,
+        reason: str,
+        session_ref: str,
+        node_id: str,
+    ) -> dict[str, Any]:
+        return self._client.post(f"/v1/agents/{_enc(name)}/takeover", {
+            "expected_agent_id": expected_agent_id,
+            "actor": actor,
+            "reason": reason,
+            "session_ref": session_ref,
+            "node_id": node_id,
+        })
+
+    def revoke_token(
+        self,
+        name: str,
+        *,
+        expected_agent_id: str,
+        actor: str,
+        reason: str,
+        session_ref: str | None = None,
+        node_id: str | None = None,
+    ) -> dict[str, Any]:
+        body = {
+            "expected_agent_id": expected_agent_id,
+            "actor": actor,
+            "reason": reason,
+            "session_ref": session_ref,
+            "node_id": node_id,
+        }
+        return self._client.post(
+            f"/v1/agents/{_enc(name)}/revoke-token",
+            {key: value for key, value in body.items() if value is not None},
+        )
+
+    def enroll_recovery_credential(
+        self,
+        *,
+        agent_token: str,
+        recovery_proof_hash: str,
+        work_unit_id: str | None = None,
+    ) -> dict[str, Any]:
+        body = {"recovery_proof_hash": recovery_proof_hash, "work_unit_id": work_unit_id}
+        with self._client.with_api_key(agent_token) as client:
+            return client.post(
+                "/v1/agent/recovery-credential",
+                {key: value for key, value in body.items() if value is not None},
+            )
 
     def delete(self, name: str) -> None:
         self._client.delete(f"/v1/agents/{_enc(name)}")
@@ -146,8 +264,24 @@ class _NodesNamespace:
     def __init__(self, client: HttpClient) -> None:
         self._client = client
 
-    def create(self, data: CreateNodeRequest) -> CreateNodeResponse:
-        result = self._client.post("/v1/nodes", data.model_dump(exclude_none=True))
+    def create(
+        self,
+        data: CreateNodeRequest,
+        *,
+        current_token: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> CreateNodeResponse:
+        _validate_node_rotation_options(current_token, idempotency_key)
+        headers = {
+            **({"X-Relaycast-Node-Token": current_token} if current_token is not None else {}),
+            **({"Idempotency-Key": idempotency_key} if idempotency_key is not None else {}),
+        }
+        result = self._client.post(
+            "/v1/nodes",
+            data.model_dump(exclude_none=True),
+            headers=headers or None,
+            retry=idempotency_key is not None,
+        )
         return CreateNodeResponse.model_validate(result)
 
     def list(self, *, capability: str | None = None, name: str | None = None) -> list[NodeRosterEntry]:
@@ -216,6 +350,27 @@ class Relay:
         me.send("#general", "Hello from Python")
     """
 
+    @staticmethod
+    def create_workspace(
+        name: str, *, metadata: dict[str, Any] | None = None,
+        api_key: str | None = None, base_url: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> CreateWorkspaceResponse:
+        """Create a workspace; automatic retries require an idempotency key.
+
+        Anonymous keys are reveal-once recovery capabilities: generate with a
+        CSPRNG (for example uuid.uuid4()), and retain the key for safe retries.
+        An owner api_key scopes delegated keys to that owner.
+        """
+        headers = _workspace_create_headers(idempotency_key, api_key, base_url)
+        data = CreateWorkspaceRequest(name=name, metadata=metadata)
+        with HttpClient(api_key or "", base_url) as client:
+            result = client.request(
+                "POST", "/v1/workspaces", data.model_dump(exclude_none=True),
+                headers=headers, retry=idempotency_key is not None,
+            )
+        return CreateWorkspaceResponse.model_validate(result)
+
     def __init__(
         self,
         api_key: str | None = None,
@@ -248,8 +403,17 @@ class Relay:
         type: str | None = None,
         persona: str | None = None,
         metadata: dict[str, Any] | None = None,
+        recovery_proof_hash: str | None = None,
+        work_unit_id: str | None = None,
     ) -> CreateAgentResponse:
-        return self.agents.register(name, type=type, persona=persona, metadata=metadata)
+        return self.agents.register(
+            name,
+            type=type,
+            persona=persona,
+            metadata=metadata,
+            recovery_proof_hash=recovery_proof_hash,
+            work_unit_id=work_unit_id,
+        )
 
     def register_or_rotate(
         self,
@@ -398,12 +562,18 @@ class _AsyncWorkspaceNamespace:
         result = await self._client.get("/v1/workspace")
         return Workspace.model_validate(result)
 
-    async def update(self, *, name: str | None = None, system_prompt: str | None = None) -> Workspace:
+    async def update(
+        self, *, name: str | None = None, system_prompt: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> Workspace:
+        """Update workspace fields; metadata shallow-merges, with null values deleting keys."""
         body: dict[str, Any] = {}
         if name is not None:
             body["name"] = name
         if system_prompt is not None:
             body["system_prompt"] = system_prompt
+        if metadata is not None:
+            body["metadata"] = metadata
         result = await self._client.patch("/v1/workspace", body)
         return Workspace.model_validate(result)
 
@@ -421,12 +591,16 @@ class _AsyncAgentsNamespace:
         type: str | None = None,
         persona: str | None = None,
         metadata: dict[str, Any] | None = None,
+        recovery_proof_hash: str | None = None,
+        work_unit_id: str | None = None,
     ) -> CreateAgentResponse:
         data = CreateAgentRequest(
             name=name,
             type=type,  # type: ignore[arg-type]
             persona=persona,
             metadata=metadata,
+            recovery_proof_hash=recovery_proof_hash,
+            work_unit_id=work_unit_id,
         )
         result = await self._client.post("/v1/agents", data.model_dump(exclude_none=True))
         return CreateAgentResponse.model_validate(result)
@@ -438,21 +612,17 @@ class _AsyncAgentsNamespace:
         type: str | None = None,
         persona: str | None = None,
         metadata: dict[str, Any] | None = None,
+        recovery_proof_hash: str | None = None,
+        work_unit_id: str | None = None,
     ) -> CreateAgentResponse:
-        try:
-            return await self.register(name, type=type, persona=persona, metadata=metadata)
-        except RelayError as err:
-            if not _is_duplicate_agent_error(err):
-                raise
-
-        agent = await self.get(name)
-        rotated = await self.rotate_token(agent.name)
-        return CreateAgentResponse(
-            id=agent.id,
-            name=agent.name,
-            token=rotated.token,
-            status=agent.status,
-            created_at=agent.created_at,
+        """Deprecated create-only alias; collisions fail closed."""
+        return await self.register(
+            name,
+            type=type,
+            persona=persona,
+            metadata=metadata,
+            recovery_proof_hash=recovery_proof_hash,
+            work_unit_id=work_unit_id,
         )
 
     async def list(self, *, status: str | None = None) -> list[Agent]:
@@ -466,9 +636,86 @@ class _AsyncAgentsNamespace:
         result = await self._client.get(f"/v1/agents/{_enc(name)}")
         return Agent.model_validate(result)
 
-    async def rotate_token(self, name: str) -> TokenRotateResponse:
-        result = await self._client.post(f"/v1/agents/{_enc(name)}/rotate-token", {})
+    async def rotate_token(self, name: str, *, agent_token: str) -> TokenRotateResponse:
+        async with self._client.with_api_key(agent_token) as client:
+            result = await client.post(f"/v1/agents/{_enc(name)}/rotate-token", {})
         return TokenRotateResponse.model_validate(result)
+
+    async def recover(
+        self,
+        name: str,
+        *,
+        expected_agent_id: str,
+        recovery_proof: str | None = None,
+        reason: str | None = None,
+        session_ref: str | None = None,
+        node_id: str | None = None,
+    ) -> dict[str, Any]:
+        body = {
+            "expected_agent_id": expected_agent_id,
+            "recovery_proof": recovery_proof,
+            "reason": reason,
+            "session_ref": session_ref,
+            "node_id": node_id,
+        }
+        return await self._client.post(
+            f"/v1/agents/{_enc(name)}/recover",
+            {key: value for key, value in body.items() if value is not None},
+        )
+
+    async def take_over(
+        self,
+        name: str,
+        *,
+        expected_agent_id: str,
+        actor: str,
+        reason: str,
+        session_ref: str,
+        node_id: str,
+    ) -> dict[str, Any]:
+        return await self._client.post(f"/v1/agents/{_enc(name)}/takeover", {
+            "expected_agent_id": expected_agent_id,
+            "actor": actor,
+            "reason": reason,
+            "session_ref": session_ref,
+            "node_id": node_id,
+        })
+
+    async def revoke_token(
+        self,
+        name: str,
+        *,
+        expected_agent_id: str,
+        actor: str,
+        reason: str,
+        session_ref: str | None = None,
+        node_id: str | None = None,
+    ) -> dict[str, Any]:
+        body = {
+            "expected_agent_id": expected_agent_id,
+            "actor": actor,
+            "reason": reason,
+            "session_ref": session_ref,
+            "node_id": node_id,
+        }
+        return await self._client.post(
+            f"/v1/agents/{_enc(name)}/revoke-token",
+            {key: value for key, value in body.items() if value is not None},
+        )
+
+    async def enroll_recovery_credential(
+        self,
+        *,
+        agent_token: str,
+        recovery_proof_hash: str,
+        work_unit_id: str | None = None,
+    ) -> dict[str, Any]:
+        body = {"recovery_proof_hash": recovery_proof_hash, "work_unit_id": work_unit_id}
+        async with self._client.with_api_key(agent_token) as client:
+            return await client.post(
+                "/v1/agent/recovery-credential",
+                {key: value for key, value in body.items() if value is not None},
+            )
 
     async def delete(self, name: str) -> None:
         await self._client.delete(f"/v1/agents/{_enc(name)}")
@@ -483,8 +730,24 @@ class _AsyncNodesNamespace:
     def __init__(self, client: AsyncHttpClient) -> None:
         self._client = client
 
-    async def create(self, data: CreateNodeRequest) -> CreateNodeResponse:
-        result = await self._client.post("/v1/nodes", data.model_dump(exclude_none=True))
+    async def create(
+        self,
+        data: CreateNodeRequest,
+        *,
+        current_token: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> CreateNodeResponse:
+        _validate_node_rotation_options(current_token, idempotency_key)
+        headers = {
+            **({"X-Relaycast-Node-Token": current_token} if current_token is not None else {}),
+            **({"Idempotency-Key": idempotency_key} if idempotency_key is not None else {}),
+        }
+        result = await self._client.post(
+            "/v1/nodes",
+            data.model_dump(exclude_none=True),
+            headers=headers or None,
+            retry=idempotency_key is not None,
+        )
         return CreateNodeResponse.model_validate(result)
 
     async def list(self, *, capability: str | None = None, name: str | None = None) -> list[NodeRosterEntry]:
@@ -553,6 +816,27 @@ class AsyncRelay:
             await me.send("#general", "Hello from Python")
     """
 
+    @staticmethod
+    async def create_workspace(
+        name: str, *, metadata: dict[str, Any] | None = None,
+        api_key: str | None = None, base_url: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> CreateWorkspaceResponse:
+        """Create a workspace; automatic retries require an idempotency key.
+
+        Anonymous keys are reveal-once recovery capabilities: generate with a
+        CSPRNG (for example uuid.uuid4()), and retain the key for safe retries.
+        An owner api_key scopes delegated keys to that owner.
+        """
+        headers = _workspace_create_headers(idempotency_key, api_key, base_url)
+        data = CreateWorkspaceRequest(name=name, metadata=metadata)
+        async with AsyncHttpClient(api_key or "", base_url) as client:
+            result = await client.request(
+                "POST", "/v1/workspaces", data.model_dump(exclude_none=True),
+                headers=headers, retry=idempotency_key is not None,
+            )
+        return CreateWorkspaceResponse.model_validate(result)
+
     def __init__(
         self,
         api_key: str | None = None,
@@ -585,8 +869,17 @@ class AsyncRelay:
         type: str | None = None,
         persona: str | None = None,
         metadata: dict[str, Any] | None = None,
+        recovery_proof_hash: str | None = None,
+        work_unit_id: str | None = None,
     ) -> CreateAgentResponse:
-        return await self.agents.register(name, type=type, persona=persona, metadata=metadata)
+        return await self.agents.register(
+            name,
+            type=type,
+            persona=persona,
+            metadata=metadata,
+            recovery_proof_hash=recovery_proof_hash,
+            work_unit_id=work_unit_id,
+        )
 
     async def register_or_rotate(
         self,

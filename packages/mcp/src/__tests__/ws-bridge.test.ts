@@ -28,7 +28,7 @@ vi.mock('@relaycast/sdk/internal', () => {
   const createInternalRelayCast = vi.fn().mockImplementation(() => ({
     as: vi.fn(),
     agents: {
-      registerOrRotate: vi.fn().mockImplementation(async ({ name }: { name: string }) => ({
+      register: vi.fn().mockImplementation(async ({ name }: { name: string }) => ({
         agent: { name },
         token:
           name === 'BetaBot'

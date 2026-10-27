@@ -10,6 +10,8 @@ export type {
   EnginePorts,
   EngineProviders,
   EngineConfig,
+  EngineLogRecord,
+  EngineLogExport,
   EngineDb,
   EngineEvent,
   RealtimeBus,
@@ -34,10 +36,31 @@ export type {
   TelemetryEvent,
 } from './ports/index.js';
 
+// The one filter that decides what a scoped observer token may see on the
+// workspace stream. A realtime adapter that fans events out to observer sockets
+// must apply it per socket — the Cloudflare stream lives outside this package.
+export { observerAllowsEvent, type ObserverToken } from './engine/observerToken.js';
+
 // OSS default providers (self-host). Cloud injects its own.
 export { SqliteApiKeyAuthProvider, hashToken } from './auth/index.js';
 export { StaticEntitlementsProvider, PLAN_LIMITS } from './providers/static-entitlements.js';
+// Usage-counter key contract. An `EntitlementsProvider` reads the counters the
+// engine writes, so it has to agree with the engine on the billing period the
+// key is scoped to — build the key with these rather than by hand.
+export {
+  getLifetimeUsageMetric,
+  getUsageMetric,
+  lifetimeUsageCounterKey,
+  usageCounterKey,
+  usagePeriod,
+  usagePeriodResetAt,
+} from './engine/usage.js';
 export { NoopTelemetrySink } from './providers/noop-telemetry.js';
+export {
+  isValidStandardWebhookSecret,
+  signStandardWebhook,
+  verifyStandardWebhook,
+} from './lib/standardWebhook.js';
 
 // Database helpers + schema for adapters and migrations.
 export { getDb, healthCheck as dbHealthCheck } from './db/index.js';
@@ -46,6 +69,18 @@ export * as schema from './db/schema.js';
 
 // Webhook delivery + scheduled-task helpers adapters wire to their queue/cron.
 export { deliverEvent } from './engine/eventDelivery.js';
+export {
+  resolveWorkspaceDeliveryPolicy,
+  resolveWorkspaceDeliveryPolicyFor,
+  workspaceGrowthLimit,
+  workspaceActiveDepthSql,
+  WorkspaceDeliveryCapacityError,
+} from './engine/workspaceDeliveryPolicy.js';
+export type {
+  WorkspaceDeliveryPolicy,
+  WorkspaceDeliveryPolicyConfig,
+  DeliveryAudience,
+} from './engine/workspaceDeliveryPolicy.js';
 export { runA2aHealthChecks } from './engine/a2a-health.js';
 
 // Node delivery redrive: queue/cron-backed deployments call this from a
@@ -55,7 +90,11 @@ export { runA2aHealthChecks } from './engine/a2a-health.js';
 // `sweepDueHttpPushDeliveries` is a deprecated alias kept for hosts (relaycast-
 // cloud) that still import the old name.
 export { sweepDueNodeDeliveries, sweepDueHttpPushDeliveries } from './routes/deliveryRouting.js';
-export { sweepExpiredDeliveries } from './routes/deliveryRouting.js';
+export { sweepExpiredDeliveries, sweepUnreachableDeliveries } from './routes/deliveryRouting.js';
+// Mention-index catch-up for 0075. `sweepExpiredDeliveries` advances it one
+// batch per call; hosts whose rotation reaches that sweep rarely can drive it
+// directly (bounded, idempotent, returns rows copied; 0 once complete).
+export { backfillMessageMentionFts, MESSAGE_MENTION_BACKFILL_BATCH } from './engine/inbox.js';
 export { deliverPendingToNode } from './engine/delivery.js';
 export { handleNodeReconnect } from './node-reconnect.js';
 export { handleAgentDisconnect } from './agent-disconnect.js';
@@ -86,12 +125,37 @@ export type { ClaimedEvent, SweptEvent } from './engine/eventQueue.js';
 // scheduled handler.
 export {
   pruneExpired,
+  resolveEffectiveMessageRetention,
   DEFAULT_DELIVERY_TTL_DAYS,
   DEFAULT_MESSAGE_LOG_TTL_DAYS,
   DEFAULT_WORKSPACE_EVENT_TTL_DAYS,
 } from './engine/retention.js';
 export type { PruneOptions, PruneResult, RetentionDefaults } from './engine/retention.js';
+export type { RetentionCursorStore, RowidRetentionState } from './engine/rowidRetention.js';
 export type { WorkspaceRetentionSettings } from './db/schema.js';
+
+// Whole-workspace expiry is opt-in at creation and uses only the stored,
+// non-null deadline as its deletion predicate. Hosts may call this from cron;
+// the Node adapter also runs it on its local maintenance interval. Blob cleanup
+// is a durable post-commit outbox: hosts must drain it from the same schedule.
+export {
+  reapExpiredWorkspaces,
+  drainFileCleanup,
+  getWorkspaceExpiry,
+  DEFAULT_WORKSPACE_REAP_LIMIT,
+  DEFAULT_FILE_CLEANUP_LIMIT,
+} from './engine/workspace.js';
+
+// Expiry is enforced at authentication, not just by the reap. Hosts that
+// compose their own credential paths reuse these so an expired workspace stays
+// rejected whatever provider resolved it.
+export {
+  isWorkspaceExpired,
+  authenticateUnexpired,
+  workspaceExpiredAuthResult,
+  WORKSPACE_EXPIRED_CODE,
+  WORKSPACE_EXPIRED_MESSAGE,
+} from './auth/workspaceExpiry.js';
 
 // Durable workspace event log (observer plane): append + cursor reads over
 // `workspace_events`, and the shared append+stamp+publish helper used by every
@@ -112,3 +176,11 @@ export {
   snowflakeIdLowerBound,
   SnowflakeGenerator,
 } from './engine/snowflake.js';
+
+export {
+  dispatchA2aEgress,
+  sweepPendingA2aEgress,
+  cleanupA2aEgress,
+  cleanupDirectDmIdempotency,
+  A2A_EGRESS_RETRY_WINDOW_MS,
+} from './engine/a2aEgress.js';

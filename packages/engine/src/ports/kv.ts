@@ -17,6 +17,12 @@ export interface KeyValueStore {
    * counters were previously a racy get→parse→put read-modify-write that lost
    * concurrent increments. Adapters must implement this without a lost-update
    * window (the Cloudflare adapter routes it through a Durable Object).
+   *
+   * `ttlSeconds` sets the expiry when the key is first created (an existing
+   * key keeps its expiry, so a counter isn't extended by its own traffic).
+   * Adapters that can't express a TTL may ignore it: period-scoped counters
+   * carry their period in the key, so ignoring it only leaks a dead key rather
+   * than breaking the reset.
    */
-  increment(key: string, delta: number): Promise<number>;
+  increment(key: string, delta: number, ttlSeconds?: number): Promise<number>;
 }

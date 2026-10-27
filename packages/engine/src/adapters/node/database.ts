@@ -1,10 +1,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import Database, { type RunResult } from 'better-sqlite3';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
-import * as schema from '../../db/schema.js';
+import type { RunResult } from 'better-sqlite3';
+import { planMigrations } from '../../db/migrationPlan.js';
+import { sqliteDriver, type SqliteConnection } from './sqlite-driver.js';
+import { loadMigrationSource } from './migration-source.js';
 import type { EngineDb, TransactionCapability } from '../../ports/database.js';
 
 /**
@@ -16,8 +14,12 @@ export type NodeEngineDb = EngineDb<RunResult> & TransactionCapability;
 
 export interface SqliteDbHandle {
   db: NodeEngineDb;
-  /** The raw better-sqlite3 connection (for migrations, pragmas, backups). */
-  sqlite: Database.Database;
+  /**
+   * The raw SQLite connection (for migrations, pragmas, backups). better-sqlite3
+   * on Node; a better-sqlite3-compatible `bun:sqlite` facade in the standalone
+   * binary.
+   */
+  sqlite: SqliteConnection;
 }
 
 /**
@@ -30,9 +32,9 @@ export interface SqliteDbHandle {
  * is preserved, so {@link NodeEngineDb} stays precisely typed.
  */
 export function getSqliteDb(path: string): SqliteDbHandle {
-  const sqlite = new Database(path);
+  const sqlite = sqliteDriver.open(path);
   configureSqlite(sqlite, { enableWal: true });
-  const db = drizzle(sqlite, { schema }) as unknown as NodeEngineDb;
+  const db = sqliteDriver.drizzle(sqlite) as NodeEngineDb;
 
   // `:memory:` databases are connection-local: a transaction and a raw write
   // share the same connection, so there is no cross-connection lock contention
@@ -66,7 +68,7 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
  * `:memory:` transaction capability: interactive transactions on the shared
  * connection, serialized so concurrent callers don't interleave `BEGIN`s.
  */
-function attachMemoryTransaction(db: NodeEngineDb, sqlite: Database.Database): void {
+function attachMemoryTransaction(db: NodeEngineDb, sqlite: SqliteConnection): void {
   let txTail: Promise<unknown> = Promise.resolve();
   db.withTransaction = <T>(fn: (tx: EngineDb) => Promise<T>): Promise<T> => {
     const run = async (): Promise<T> => {
@@ -148,10 +150,10 @@ function withFileWriteGate(db: NodeEngineDb, path: string): NodeEngineDb {
   // detects this capability and prefers it over a batch.
   db.withTransaction = <T>(fn: (tx: EngineDb) => Promise<T>): Promise<T> =>
     runGated(async () => {
-      const txSqlite = new Database(path);
+      const txSqlite = sqliteDriver.open(path);
       try {
         configureSqlite(txSqlite);
-        const txDb = drizzle(txSqlite, { schema }) as unknown as EngineDb;
+        const txDb = sqliteDriver.drizzle(txSqlite) as EngineDb;
         txSqlite.exec('BEGIN IMMEDIATE');
         try {
           const result = await fn(txDb);
@@ -273,25 +275,12 @@ function gatePreparedStatement<P extends object>(prepared: P, runGated: WriteGat
 }
 
 function configureSqlite(
-  sqlite: Database.Database,
+  sqlite: SqliteConnection,
   options: { enableWal?: boolean } = {},
 ): void {
   if (options.enableWal) sqlite.pragma('journal_mode = WAL');
   sqlite.pragma('foreign_keys = ON');
   sqlite.pragma('busy_timeout = 5000');
-}
-
-function migrationsDir(): string {
-  // dist/adapters/node/database.js -> dist/db/migrations
-  const here = dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    join(here, '../../db/migrations'),
-    join(here, '../../../src/db/migrations'),
-  ];
-  for (const dir of candidates) {
-    if (existsSync(dir)) return dir;
-  }
-  return candidates[0];
 }
 
 /**
@@ -311,24 +300,21 @@ export function runMigrations(handle: SqliteDbHandle): { applied: string[] } {
       .map((r) => (r as { name: string }).name),
   );
 
-  const dir = migrationsDir();
-  const files = readdirSync(dir)
-    .filter((f) => f.endsWith('.sql'))
-    .sort();
+  const source = loadMigrationSource();
+  const pending = planMigrations(source.files, done, source.supersessions);
 
   const applied: string[] = [];
   const insert = sqlite.prepare(
     `INSERT INTO _engine_migrations (name, applied_at) VALUES (?, ?)`,
   );
 
-  for (const file of files) {
-    if (done.has(file)) continue;
+  for (const file of pending) {
     // drizzle-kit separates statements with `--> statement-breakpoint`; SQLite's
     // `exec` runs the whole script. Apply the DDL and record the migration as
     // applied in one transaction so a crash mid-migration can't leave the schema
     // changed but unrecorded (which would replay and fail on the next boot).
     // drizzle migrations never contain their own BEGIN/COMMIT, so this won't nest.
-    const ddl = readFileSync(join(dir, file), 'utf8').replace(/-->\s*statement-breakpoint/g, '');
+    const ddl = source.read(file).replace(/-->\s*statement-breakpoint/g, '');
     const applyOne = sqlite.transaction(() => {
       sqlite.exec(ddl);
       insert.run(file, Math.floor(Date.now() / 1000));

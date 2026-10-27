@@ -1,14 +1,24 @@
 import type { EntitlementsProvider, PlanLimits, UsageMetric, Workspace } from '../ports/index.js';
 import type { KeyValueStore } from '../ports/kv.js';
+import { getUsageMetric, usagePeriodResetAt } from '../engine/usage.js';
 
 /**
  * The default plan limits, lifted from the original `middleware/planLimits.ts`.
  * Self-host deployments typically run the `selfhost` tier (everything
- * unlimited); the free/pro/enterprise tiers are kept so the same code serves a
+ * unlimited); the trial/free/connect/pro/enterprise tiers are kept so the same code serves a
  * tiered deployment if a workspace's `plan` column is set.
  */
 export const PLAN_LIMITS: Record<string, PlanLimits> = {
+  // Hosted anonymous trial: a workspace created without signing in. A one-time
+  // 100-message allowance (`lifetime_messages`, never resets) is enough to prove
+  // agents on two machines can talk; signing in moves the workspace to `free`.
+  // The other limits match `free` so the trial is only ever narrower.
+  trial: { messages: 100, lifetime_messages: 100, agents: 5, file_bytes: 100 * 1024 * 1024, api_calls: 100_000, rate_per_min: 300 },
   free: { messages: 10_000, agents: 5, file_bytes: 100 * 1024 * 1024, api_calls: 100_000, rate_per_min: 300 },
+  // Short-lived collaboration rooms (Relay Connect): a handful of seats that
+  // poll their inbox continuously, so api_calls dominates while messages stay
+  // low. Sized for a two-seat room polling every few seconds for a full month.
+  connect: { messages: 100_000, agents: 10, file_bytes: 1024 * 1024 * 1024, api_calls: 10_000_000, rate_per_min: 1200 },
   pro: { messages: 1_000_000, agents: 100, file_bytes: 50 * 1024 * 1024 * 1024, api_calls: 10_000_000, rate_per_min: 6000 },
   enterprise: { messages: Infinity, agents: Infinity, file_bytes: 500 * 1024 * 1024 * 1024, api_calls: Infinity, rate_per_min: 30000 },
   selfhost: { messages: Infinity, agents: Infinity, file_bytes: Infinity, api_calls: Infinity, rate_per_min: 30000 },
@@ -17,8 +27,9 @@ export const PLAN_LIMITS: Record<string, PlanLimits> = {
 /**
  * Static, table-driven entitlements — the self-host default. Resolves limits
  * from {@link PLAN_LIMITS} keyed by `workspace.plan`, and reads usage counters
- * from the key/value store (the same `usage:<wid>:<metric>` keys the usage
- * tracker increments). The cloud product injects a billing-backed provider.
+ * from the key/value store (the same `usage:<wid>:<metric>:<period>` keys the
+ * usage tracker increments, so both agree on the current billing period). The
+ * cloud product injects a billing-backed provider.
  */
 export class StaticEntitlementsProvider implements EntitlementsProvider {
   constructor(
@@ -34,10 +45,13 @@ export class StaticEntitlementsProvider implements EntitlementsProvider {
   async getUsage(workspaceId: string, metric: UsageMetric): Promise<number> {
     if (!this.kv) return 0;
     try {
-      const raw = await this.kv.get(`usage:${workspaceId}:${metric}`);
-      return parseInt(raw || '0', 10) || 0;
+      return await getUsageMetric(this.kv, workspaceId, metric);
     } catch {
       return 0;
     }
+  }
+
+  async getUsageResetAt(): Promise<number> {
+    return usagePeriodResetAt();
   }
 }

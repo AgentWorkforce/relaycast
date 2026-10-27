@@ -1,4 +1,5 @@
-import { eq, and, sql, inArray } from 'drizzle-orm';
+import { eq, and, sql, inArray, ne } from 'drizzle-orm';
+import { z } from 'zod';
 import type { getDb } from '../db/index.js';
 import { channels, channelMembers, agents } from '../db/schema.js';
 import { generateId } from './snowflake.js';
@@ -7,12 +8,58 @@ import { codedError } from '../lib/httpError.js';
 
 type Db = ReturnType<typeof getDb>;
 
+const SUBSCRIPTION_CHANNEL_PREFIX = 'agent-events-';
+const subscriptionChannelMetadataSchema = z.object({
+  subscription_agent_id: z.string().min(1),
+});
+
+function assertSubscriptionRecipient(channel: { name: string; metadata: unknown }, agentId: string) {
+  if (!channel.name.startsWith(SUBSCRIPTION_CHANNEL_PREFIX)) return;
+  const metadata = subscriptionChannelMetadataSchema.safeParse(channel.metadata);
+  if (!metadata.success || metadata.data.subscription_agent_id !== agentId) {
+    throw codedError('Only the subscription recipient may join this channel', 'subscription_recipient_only', 403);
+  }
+}
+
+/** Owner-managed delivery route. Identity IDs prevent a recreated name inheriting old subscriptions. */
+export async function ensureAgentSubscriptionChannel(db: Db, workspaceId: string, agentName: string) {
+  const [agent] = await db.select().from(agents).where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, agentName)));
+  if (!agent || agent.status === 'released') throw codedError('Recipient agent not found', 'agent_not_found', 404);
+  const name = `${SUBSCRIPTION_CHANNEL_PREFIX}${agent.id}`;
+  await db.insert(channels).values({
+    id: generateId(), workspaceId, name,
+    metadata: { subscription_agent_id: agent.id },
+  }).onConflictDoNothing();
+  const [channel] = await db.select().from(channels).where(and(eq(channels.workspaceId, workspaceId), eq(channels.name, name)));
+  assertSubscriptionRecipient(channel, agent.id);
+  if (channel.isArchived) throw codedError('Subscription channel is archived', 'channel_archived', 409);
+  const [foreignMember] = await db.select({ agentId: channelMembers.agentId }).from(channelMembers)
+    .where(and(eq(channelMembers.channelId, channel.id), ne(channelMembers.agentId, agent.id))).limit(1);
+  if (foreignMember) throw codedError('Existing subscription channel has another recipient', 'subscription_channel_conflict', 409);
+
+  // Recheck the identity in the INSERT, serialized with tombstoning/removal.
+  // A release between the lookup and this write must never rejoin a tombstone.
+  await db.run(sql`INSERT INTO channel_members (channel_id, agent_id, role)
+    SELECT ${channel.id}, id, 'owner' FROM agents
+    WHERE id = ${agent.id} AND name = ${agentName} AND status != 'released'
+    ON CONFLICT DO NOTHING`);
+  const [recipient] = await db.select({ agentId: agents.id }).from(channelMembers)
+    .innerJoin(agents, eq(agents.id, channelMembers.agentId))
+    .where(and(eq(channelMembers.channelId, channel.id), eq(agents.id, agent.id), eq(agents.name, agentName), ne(agents.status, 'released'))).limit(1);
+  if (!recipient) throw codedError('Recipient agent was released during subscription setup', 'agent_not_found', 404);
+  await invalidateChannelCache(workspaceId, name);
+  return getChannel(db, workspaceId, name);
+}
+
 export async function createChannel(
   db: Db,
   workspaceId: string,
   data: { name: string; topic?: string; metadata?: Record<string, unknown> },
   creatorAgentId?: string,
 ) {
+  if (data.name.startsWith(SUBSCRIPTION_CHANNEL_PREFIX)) {
+    throw codedError('Channel prefix is reserved for agent subscriptions', 'reserved_channel_name', 400);
+  }
   // Validate channel name: lowercase alphanumeric + hyphens
   if (!/^[a-z0-9][a-z0-9-]*$/.test(data.name)) {
     throw codedError('Channel name must be lowercase alphanumeric and hyphens, starting with a letter or number', 'invalid_channel_name', 400);
@@ -62,6 +109,16 @@ export async function createChannel(
   };
 }
 
+/**
+ * Bind parameters per member-count statement.
+ *
+ * Cloudflare D1 allows 100 per statement (measured: 100 succeeds, 101 fails with
+ * "too many SQL variables", code 7500). Deliberately below that ceiling rather
+ * than at it, so a caller-side predicate gaining one more bound value does not
+ * silently reintroduce the failure.
+ */
+const MEMBER_COUNT_CHUNK = 90;
+
 export async function listChannels(
   db: Db,
   workspaceId: string,
@@ -95,14 +152,24 @@ export async function listChannels(
 
   const channelIds = rows.map((ch) => ch.id);
 
-  // Batch: member counts
-  const memberCounts = await db
-    .select({ channelId: channelMembers.channelId, count: sql<number>`count(*)` })
-    .from(channelMembers)
-    .where(inArray(channelMembers.channelId, channelIds))
-    .groupBy(channelMembers.channelId);
-
-  const memberCountMap = new Map(memberCounts.map((r) => [r.channelId, r.count]));
+  // Member counts, chunked to stay under the statement bind-parameter ceiling.
+  //
+  // This previously fanned every channel id into one `inArray`, one bind each and
+  // no upper bound. Cloudflare D1 caps a statement at 100 bind parameters, so any
+  // workspace past that failed EVERY call with "too many SQL variables"
+  // (SQLITE_ERROR 7500) — surfacing to callers as an opaque 500, because that is
+  // not a D1-overload error and so is not converted to a retryable response.
+  // Observed in production on a workspace holding 111 non-DM channels.
+  const memberCountMap = new Map<string, number>();
+  for (let offset = 0; offset < channelIds.length; offset += MEMBER_COUNT_CHUNK) {
+    const chunk = channelIds.slice(offset, offset + MEMBER_COUNT_CHUNK);
+    const counts = await db
+      .select({ channelId: channelMembers.channelId, count: sql<number>`count(*)` })
+      .from(channelMembers)
+      .where(inArray(channelMembers.channelId, chunk))
+      .groupBy(channelMembers.channelId);
+    for (const row of counts) memberCountMap.set(row.channelId, row.count);
+  }
 
   return rows.map((ch) => ({
     id: ch.id,
@@ -116,8 +183,10 @@ export async function listChannels(
 }
 
 export async function getChannel(db: Db, workspaceId: string, name: string) {
-  // Check in-memory cache first
-  const cached = await getCachedChannel(workspaceId, name);
+  // Subscription membership is a launch/lifecycle proof. Read it live even when
+  // a node lifecycle release bypasses the normal channel mutation handlers.
+  const cacheable = !name.startsWith(SUBSCRIPTION_CHANNEL_PREFIX);
+  const cached = cacheable ? await getCachedChannel(workspaceId, name) : null;
   if (cached) return cached;
 
   const [channel] = await db
@@ -160,7 +229,7 @@ export async function getChannel(db: Db, workspaceId: string, name: string) {
   };
 
   // Populate cache
-  await setCachedChannel(workspaceId, name, result);
+  if (cacheable) await setCachedChannel(workspaceId, name, result);
 
   return result;
 }
@@ -184,6 +253,9 @@ export async function updateChannel(
     throw codedError('Cannot update an archived channel', 'channel_archived', 400);
   }
 
+  if (name.startsWith(SUBSCRIPTION_CHANNEL_PREFIX) && updates.metadata !== undefined) {
+    throw codedError('Subscription routing metadata is immutable', 'subscription_metadata_immutable', 403);
+  }
   const setClause: Record<string, unknown> = {};
   if (updates.topic !== undefined) setClause.topic = updates.topic;
   if (updates.metadata !== undefined) setClause.metadata = updates.metadata;
@@ -236,6 +308,18 @@ export async function archiveChannel(db: Db, workspaceId: string, name: string) 
   return true;
 }
 
+async function insertLiveSubscriptionMember(db: Db, workspaceId: string, channelId: string, agentId: string) {
+  // Serialize the liveness check with release's membership removal.
+  await db.run(sql`INSERT INTO channel_members (channel_id, agent_id, role)
+    SELECT ${channelId}, id, 'member' FROM agents
+    WHERE id = ${agentId} AND workspace_id = ${workspaceId} AND status != 'released'
+    ON CONFLICT DO NOTHING`);
+  const [recipient] = await db.select({ id: agents.id }).from(channelMembers)
+    .innerJoin(agents, eq(agents.id, channelMembers.agentId))
+    .where(and(eq(channelMembers.channelId, channelId), eq(agents.id, agentId), ne(agents.status, 'released'))).limit(1);
+  if (!recipient) throw codedError('Subscription recipient was released', 'agent_not_found', 404);
+}
+
 export async function joinChannel(
   db: Db,
   workspaceId: string,
@@ -260,6 +344,8 @@ export async function joinChannel(
     throw codedError('Cannot join an archived channel', 'channel_archived', 400);
   }
 
+  assertSubscriptionRecipient(channel, agentId);
+
   // Check if already a member
   const [existing] = await db
     .select()
@@ -275,11 +361,11 @@ export async function joinChannel(
     return { channel: channelName, agent_id: agentId, already_member: true };
   }
 
-  await db.insert(channelMembers).values({
-    channelId: channel.id,
-    agentId,
-    role: 'member',
-  });
+  if (channel.name.startsWith(SUBSCRIPTION_CHANNEL_PREFIX)) {
+    await insertLiveSubscriptionMember(db, workspaceId, channel.id, agentId);
+  } else {
+    await db.insert(channelMembers).values({ channelId: channel.id, agentId, role: 'member' });
+  }
 
   await invalidateChannelCache(workspaceId, channelName);
 
@@ -409,6 +495,8 @@ export async function inviteAgent(
     throw codedError(`Agent "${inviteeAgentName}" not found`, 'agent_not_found', 404);
   }
 
+  assertSubscriptionRecipient(channel, invitee.id);
+
   // Check if already a member
   const [existing] = await db
     .select()
@@ -421,11 +509,15 @@ export async function inviteAgent(
     );
 
   if (!existing) {
-    await db.insert(channelMembers).values({
-      channelId: channel.id,
-      agentId: invitee.id,
-      role: 'member',
-    });
+    if (channel.name.startsWith(SUBSCRIPTION_CHANNEL_PREFIX)) {
+      await insertLiveSubscriptionMember(db, workspaceId, channel.id, invitee.id);
+    } else {
+      await db.insert(channelMembers).values({
+        channelId: channel.id,
+        agentId: invitee.id,
+        role: 'member',
+      });
+    }
     await invalidateChannelCache(workspaceId, channelName);
   }
 

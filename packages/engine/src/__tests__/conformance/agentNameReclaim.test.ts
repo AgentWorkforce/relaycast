@@ -1,19 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { createWorkspace, FakeSocket, makeNodeStack, type TestStack } from './harness.js';
-import { agents } from '../../db/schema.js';
-import { AGENT_LIVENESS_TTL_MS, AGENT_RECLAIM_GRACE_MS } from '../../engine/agent.js';
+import { agentNodeBindings, agents, nodes } from '../../db/schema.js';
+import type { TransactionCapability } from '../../ports/database.js';
 
 /**
- * Who may take an agent's name and be issued a token for it.
- *
- * `registerAgentViaNode` overwrites `token_hash` on conflict, so a permitted
- * reclaim is a full credential handover: the incumbent's token stops working
- * and the claiming node is handed a live one for the same row. The guard on
- * that decision therefore reads observed silence (`last_seen`) rather than the
- * `status` column, which `sweepStaleAgents` rewrites on every roster read.
+ * Registration is create-only. Recovery is a distinct, proof-carrying action:
+ * an authenticated node must match both the server-owned origin and immutable
+ * agent id. Liveness, status, and possession of a colliding name are not proof.
  */
-describe('agent name reclaim across nodes', () => {
+describe('agent identity recovery across nodes', () => {
   let stack: TestStack;
   beforeEach(() => { stack = makeNodeStack(); });
   afterEach(() => stack.close());
@@ -33,27 +29,30 @@ describe('agent name reclaim across nodes', () => {
         capabilities: ['spawn:claude'], max_agents: 4, tags: ['test'], version: 'v0',
       }),
     });
-    expect(enrolled.status).toBe(201);
+    if (enrolled.status !== 201) {
+      throw new Error(`node enrollment failed: ${enrolled.status} ${await enrolled.text()}`);
+    }
     const sock = new FakeSocket();
     const handle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, nodeId, sock);
     await handle.handleMessage(JSON.stringify({
-      v: 1, type: 'node.register', name, node_id: nodeId,
+      v: 1, id: `node-${nodeId}`, type: 'node.register', name, node_id: nodeId,
       capabilities: [{ name: 'spawn:claude', kind: 'capacity' }],
       max_agents: 4, tags: ['test'], version: 'v1', resume_cursor: null,
     }));
     await handle.handleMessage(JSON.stringify({
-      v: 1, type: 'node.heartbeat', load: 0, active_agents: 0, handlers_live: true,
+      v: 1, id: `heartbeat-${nodeId}`, type: 'node.heartbeat',
+      load: 0, active_agents: 0, handlers_live: true,
     }));
     return { sock, handle };
   }
 
-  async function registerViaNode(
+  async function send(
     node: { sock: FakeSocket; handle: { handleMessage(raw: string): Promise<void> } },
-    name: string,
+    message: Record<string, unknown>,
   ) {
-    await node.handle.handleMessage(JSON.stringify({
-      v: 1, type: 'agent.register', name, resumable: true,
-    }));
+    const id = String(message.id);
+    await node.handle.handleMessage(JSON.stringify({ v: 1, ...message }));
+    return node.sock.received.findLast((frame) => frame.id === id);
   }
 
   async function agentRow(workspaceId: string, name: string) {
@@ -61,6 +60,7 @@ describe('agent name reclaim across nodes', () => {
       .select({
         id: agents.id,
         tokenHash: agents.tokenHash,
+        previousTokenHash: agents.previousTokenHash,
         locationNodeId: agents.locationNodeId,
         status: agents.status,
       })
@@ -69,90 +69,116 @@ describe('agent name reclaim across nodes', () => {
     return row;
   }
 
-  /** Backdate observed activity without touching anything else. */
-  async function silentFor(agentId: string, ms: number) {
-    await db().update(agents).set({ lastSeen: new Date(Date.now() - ms) }).where(eq(agents.id, agentId));
-  }
-
-  it('a roster read does not make a recently-active agent reclaimable by another node', async () => {
-    const ws = await createWorkspace(stack.app, 'reclaim-roster-read');
+  it('refuses a colliding register from every node without mutating the identity', async () => {
+    const ws = await createWorkspace(stack.app, 'register-create-only');
     const alpha = await bringNodeOnline(ws, 'node_alpha', 'alpha');
     const beta = await bringNodeOnline(ws, 'node_beta', 'beta');
 
-    await registerViaNode(alpha, 'contested');
+    const created = await send(alpha, { id: 'create', type: 'agent.register', name: 'contested' });
+    expect(created).toMatchObject({ type: 'reply', ok: true });
     const before = await agentRow(ws.workspaceId, 'contested');
-    expect(before.locationNodeId).toBe('node_alpha');
 
-    // Silent long enough to be absent from the roster, far short of the
-    // reclaim grace. This is the ordinary state of a working agent between
-    // bursts of activity.
-    await silentFor(before.id, AGENT_LIVENESS_TTL_MS * 2);
+    await db().update(agents).set({
+      status: 'offline',
+      lastSeen: new Date('2000-01-01T00:00:00.000Z'),
+    }).where(eq(agents.id, before.id));
 
-    // A plain roster read. This sweeps, so it rewrites `status` — which is
-    // exactly the write that used to widen the reclaim guard.
-    const roster = await stack.app.request('/v1/agents', {
-      headers: { authorization: `Bearer ${ws.workspaceKey}` },
-    });
-    expect(roster.status).toBe(200);
-    const swept = await agentRow(ws.workspaceId, 'contested');
-    // Confirm the read really did flip the column, so this test cannot pass
-    // by the sweep silently not running.
-    expect(swept.status).toBe('offline');
-
-    // A foreign node now claims the name.
-    await registerViaNode(beta, 'contested');
+    for (const [id, node] of [['same-origin', alpha], ['foreign-origin', beta]] as const) {
+      const collision = await send(node, { id, type: 'agent.register', name: 'contested' });
+      expect(collision).toMatchObject({ type: 'error', ok: false, code: 'agent_already_exists' });
+    }
 
     const after = await agentRow(ws.workspaceId, 'contested');
-    expect(after.locationNodeId).toBe('node_alpha');
-    expect(after.tokenHash).toBe(before.tokenHash);
-    expect(after.id).toBe(before.id);
+    expect(after).toEqual({ ...before, status: 'offline' });
   });
 
-  it('an agent silent beyond the reclaim grace can be reclaimed by another node', async () => {
-    const ws = await createWorkspace(stack.app, 'reclaim-after-grace');
+  it('lets only the origin node recover the exact immutable identity', async () => {
+    const ws = await createWorkspace(stack.app, 'recover-origin-proof');
     const alpha = await bringNodeOnline(ws, 'node_alpha', 'alpha');
     const beta = await bringNodeOnline(ws, 'node_beta', 'beta');
 
-    await registerViaNode(alpha, 'abandoned');
-    const before = await agentRow(ws.workspaceId, 'abandoned');
-    await silentFor(before.id, AGENT_RECLAIM_GRACE_MS + 60_000);
-
-    await registerViaNode(beta, 'abandoned');
-
-    // The grace window must expire into something, or a name stranded by a
-    // dead node would be unrecoverable.
-    const after = await agentRow(ws.workspaceId, 'abandoned');
-    expect(after.locationNodeId).toBe('node_beta');
-    expect(after.tokenHash).not.toBe(before.tokenHash);
-  });
-
-  it('the owning node can re-register its own agent inside the grace window', async () => {
-    const ws = await createWorkspace(stack.app, 'reclaim-own-node');
-    const alpha = await bringNodeOnline(ws, 'node_alpha', 'alpha');
-
-    await registerViaNode(alpha, 'restarted');
+    await send(alpha, { id: 'create', type: 'agent.register', name: 'restarted' });
     const before = await agentRow(ws.workspaceId, 'restarted');
-    await silentFor(before.id, AGENT_LIVENESS_TTL_MS * 2);
 
-    // This test passes both before and after the guard change, deliberately.
-    // It does not assert new behaviour — it pins a DECISION.
-    //
-    // The alternative considered for the reclaim guard was to drop the status
-    // disjunct entirely and gate on node identity alone. That was rejected
-    // because it takes hostages: an agent whose broker node dies and respawns
-    // elsewhere could never reclaim its own name, and there is no recovery
-    // path for a stranded name short of relaycast#309's tombstone. A guard
-    // that protects an identity by making it unrecoverable has traded one
-    // outage for another.
-    //
-    // So this asserts the honest caller's path stays open. Anyone later
-    // "simplifying" the owning-node disjunct away turns this red, and finds
-    // this comment, rather than discovering the consequence in production.
-    await registerViaNode(alpha, 'restarted');
+    const foreign = await send(beta, {
+      id: 'foreign', type: 'agent.recover', name: 'restarted', expected_agent_id: before.id,
+    });
+    expect(foreign).toMatchObject({ type: 'error', ok: false, code: 'agent_recovery_not_authorized' });
+
+    const stale = await send(alpha, {
+      id: 'stale', type: 'agent.recover', name: 'restarted', expected_agent_id: 'agent_stale',
+    });
+    expect(stale).toMatchObject({ type: 'error', ok: false, code: 'agent_recovery_not_authorized' });
+    expect(await agentRow(ws.workspaceId, 'restarted')).toEqual(before);
+
+    const recovered = await send(alpha, {
+      id: 'recover', type: 'agent.recover', name: 'restarted', expected_agent_id: before.id,
+      session_ref: 'session-restarted', resumable: true,
+    });
+    expect(recovered).toMatchObject({
+      type: 'reply', ok: true,
+      data: { agent_id: before.id, name: 'restarted' },
+    });
+    expect((recovered?.data as { token?: string }).token).toMatch(/^at_live_/);
 
     const after = await agentRow(ws.workspaceId, 'restarted');
     expect(after.id).toBe(before.id);
     expect(after.locationNodeId).toBe('node_alpha');
-    expect(after.status).toBe('active');
+    expect(after.tokenHash).not.toBe(before.tokenHash);
+    expect(after.previousTokenHash).toBe(before.tokenHash);
+  });
+
+  it('leaves D1 state untouched when the origin node is at capacity', async () => {
+    const ws = await createWorkspace(stack.app, 'recover-capacity-d1');
+    const alpha = await bringNodeOnline(ws, 'node_alpha', 'alpha');
+    await bringNodeOnline(ws, 'node_beta', 'beta');
+    await send(alpha, { id: 'create', type: 'agent.register', name: 'capacity-worker' });
+    const created = await agentRow(ws.workspaceId, 'capacity-worker');
+
+    await db().update(agentNodeBindings).set({ status: 'inactive' }).where(and(
+      eq(agentNodeBindings.agentId, created.id),
+      eq(agentNodeBindings.nodeId, 'node_alpha'),
+    ));
+    await db().insert(agentNodeBindings).values({
+      id: 'anb_capacity_d1',
+      workspaceId: ws.workspaceId,
+      agentId: created.id,
+      nodeId: 'node_beta',
+      status: 'active',
+      sessionRef: 'before-capacity-recovery',
+      priority: 0,
+    });
+    await db().update(agents).set({
+      status: 'offline',
+      locationNodeId: 'node_beta',
+      sessionRef: 'before-capacity-recovery',
+    }).where(eq(agents.id, created.id));
+    await db().update(nodes).set({ maxAgents: 1, activeAgents: 1 }).where(and(
+      eq(nodes.workspaceId, ws.workspaceId),
+      eq(nodes.id, 'node_alpha'),
+    ));
+
+    const before = await agentRow(ws.workspaceId, 'capacity-worker');
+    delete (db() as unknown as Partial<TransactionCapability>).withTransaction;
+    const rejected = await send(alpha, {
+      id: 'capacity-recover',
+      type: 'agent.recover',
+      name: 'capacity-worker',
+      expected_agent_id: created.id,
+    });
+    expect(rejected).toMatchObject({
+      type: 'error',
+      ok: false,
+      code: 'node_capacity_exceeded',
+    });
+    expect(await agentRow(ws.workspaceId, 'capacity-worker')).toEqual(before);
+    const bindings = await db()
+      .select({ nodeId: agentNodeBindings.nodeId, status: agentNodeBindings.status })
+      .from(agentNodeBindings)
+      .where(eq(agentNodeBindings.agentId, created.id));
+    expect(bindings).toEqual(expect.arrayContaining([
+      { nodeId: 'node_alpha', status: 'inactive' },
+      { nodeId: 'node_beta', status: 'active' },
+    ]));
   });
 });

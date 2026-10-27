@@ -1,0 +1,82 @@
+{
+  "id": "traj_pvmp3ibl8vur",
+  "version": 1,
+  "task": {
+    "title": "Make action idempotency claim durable before dispatch",
+    "source": {
+      "system": "plain",
+      "id": "AgentWorkforce/relaycast#355"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-08-24T00:14:44.344Z",
+  "completedAt": "2026-08-24T00:24:22.560Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-08-24T00:14:44.555Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_iqme40j488d4",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-08-24T00:14:44.555Z",
+      "endedAt": "2026-08-24T00:24:22.560Z",
+      "events": [
+        {
+          "ts": 1787530484556,
+          "type": "decision",
+          "content": "Use the action_invocations primary key as the durable pre-dispatch claim: Use the action_invocations primary key as the durable pre-dispatch claim",
+          "raw": {
+            "question": "Use the action_invocations primary key as the durable pre-dispatch claim",
+            "chosen": "Use the action_invocations primary key as the durable pre-dispatch claim",
+            "alternatives": [],
+            "reasoning": "Derive an invocation id from SHA-256(workspace, authenticated caller, action name, Idempotency-Key), insert that invocation row with ON CONFLICT DO NOTHING before placement/provider dispatch, and replay the existing row on conflict. The database primary key is atomic across isolates and survives KV/result-write failure; it also makes a second payload under the same scoped key an explicit 409. This replaces the post-dispatch KV record whose write-failure window CodeRabbit correctly identified. The at-most-once trade-off is that an isolate death after the claim insert but before dispatch can leave a pending invocation for existing reconciliation/TTL handling, but a retry cannot execute the provider twice."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1787531062390,
+          "type": "reflection",
+          "content": "CodeRabbit's atomicity finding replaced the initial post-dispatch KV record with a deterministic action_invocations primary-key claim inserted before dispatch. Concurrent keyed spawn and registered-action tests prove one row and one provider frame even when KV writes fail; every keyed replay waits for a durable dispatch or terminal outcome, and immutable handler/node identity survives action takeover, native-spawn races, and local or concurrent release replay. Payload comparison is canonical, and replay-only webhook, telemetry, observer, placement, and capacity effects are suppressed.",
+          "raw": {
+            "focalPoints": [
+              "durable-claim",
+              "concurrency",
+              "spawn",
+              "kv-failure",
+              "verification"
+            ],
+            "adjustments": "Superseded the non-atomic KV coordinator after review; documented the stronger durable pre-dispatch contract and corrected the original trajectory.",
+            "confidence": 0.96
+          },
+          "significance": "high",
+          "tags": [
+            "focal:durable-claim",
+            "focal:concurrency",
+            "focal:spawn",
+            "focal:kv-failure",
+            "focal:verification",
+            "confidence:0.96"
+          ]
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Replaced action-invoke's post-dispatch KV idempotency record with an atomic durable invocation-row claim before provider dispatch. Same-key concurrency and lost-response retries replay one invocation, mismatched payloads fail 409, and SDK retries preserve one key.",
+    "approach": "Review-driven durability correction with incident-specific concurrency and failure-injection regressions",
+    "confidence": 0.96
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "4280772c86160cbc19109fc3e0b214dd5f6bdd7c",
+    "endRef": "4280772c86160cbc19109fc3e0b214dd5f6bdd7c"
+  }
+}

@@ -1,3 +1,4 @@
+import { parseMessageMentions } from './mentions.js';
 import { eq, and, sql, isNull, lt, gt, inArray } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { messages, agents, reactions, readReceipts, messageAttachments } from '../db/schema.js';
@@ -9,9 +10,12 @@ import {
   fetchChannelDeliveryOutcomes,
   type DeliveryOutcomeRecords,
 } from './deliveryWrites.js';
+import { senderAddressField } from './address.js';
 import { displayAgentName, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
-import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
+import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS, type MailboxConfig } from './mailboxConfig.js';
+import type { WorkspaceDeliveryPolicy } from './workspaceDeliveryPolicy.js';
 import { fetchAttachmentsBatch, resolveSendAttachments, type AttachmentRow } from './attachments.js';
+import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -28,23 +32,21 @@ export async function postMessage(
     content_type?: string;
     mode?: 'wait' | 'steer';
   },
-  options: { mailbox?: MailboxConfig } = {},
+  options: { mailbox?: MailboxConfig; workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy } = {},
 ) {
   const startedAtMs = Date.now();
   const messageId = generateId();
 
-  // Parse @mentions from text without treating email domains as handles.
-  const mentionPattern = /(?:^|\s)@(\w+)/g;
-  const mentionedHandles = new Set<string>();
-  for (let match = mentionPattern.exec(data.text); match !== null; match = mentionPattern.exec(data.text)) {
-    mentionedHandles.add(match[1]);
-  }
+  const mentionedHandles = new Set(parseMessageMentions(data.text));
 
   const metadata = sanitizeUserMessageMetadata(data.data);
+  const sessionRef = requireSessionRefFromMetadata(metadata);
+  const createdAt = new Date();
 
   const mailbox = options.mailbox ?? {
     ttlMs: DEFAULT_MAILBOX_TTL_MS,
     depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
+    offlineExcludeMs: DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS,
   };
 
   const [attachments, [agent]] = await Promise.all([
@@ -68,10 +70,20 @@ export async function postMessage(
           body: data.text,
           blocks: data.blocks || null,
           metadata,
+          sessionRef,
           hasAttachments,
+          createdAt,
         })
         .returning(),
     ];
+
+    const sessionWrite = buildMessageSessionWrite(
+      writeDb,
+      workspaceId,
+      sessionRef,
+      createdAt,
+    );
+    if (sessionWrite) writes.push(sessionWrite);
 
     if (attachments.length > 0) {
       const attachmentValues = attachments.map((attachment, idx) => ({
@@ -91,7 +103,9 @@ export async function postMessage(
         mode: data.mode === 'steer' ? 'next-tool-call' : 'immediate',
         ttlMs: mailbox.ttlMs,
         depthCap: mailbox.depthCap,
+        offlineExcludeMs: mailbox.offlineExcludeMs,
         mentionHandles: Array.from(mentionedHandles),
+        workspacePolicy: options.workspaceDeliveryPolicy,
       }),
     );
 
@@ -115,13 +129,14 @@ export async function postMessage(
     );
 
     return writes;
-  });
+  }, { requireAtomic: Boolean(options.workspaceDeliveryPolicy) });
   const [message] = results[0] as (typeof messages.$inferSelect)[];
   const deliveryOutcomes: DeliveryOutcomeRecords = await fetchChannelDeliveryOutcomes(db, {
     messageId,
     channelId,
     senderAgentId: agentId,
     mentionHandles: Array.from(mentionedHandles),
+    offlineExcludeMs: mailbox.offlineExcludeMs,
   });
 
   return {
@@ -252,6 +267,7 @@ export async function getMessages(
     channel_id: row.channelId,
     agent_id: row.agentId,
     agent_name: displayAgentName(row.metadata, row.agentName),
+    ...senderAddressField(row.metadata),
     text: row.body,
     blocks: (row.blocks as unknown[] | null) || null,
     metadata: publicMessageMetadata(row.metadata),
@@ -313,6 +329,7 @@ export async function getMessage(db: Db, workspaceId: string, messageId: string)
     channel_id: row.channelId,
     agent_id: row.agentId,
     agent_name: displayAgentName(row.metadata, row.agentName),
+    ...senderAddressField(row.metadata),
     text: row.body,
     blocks: (row.blocks as unknown[] | null) || null,
     metadata: publicMessageMetadata(row.metadata),

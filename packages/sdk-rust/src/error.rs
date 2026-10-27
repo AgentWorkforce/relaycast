@@ -14,6 +14,19 @@ pub enum RelayError {
         message: String,
         /// The HTTP status code.
         status: u16,
+        /// Correlation/request id echoed by the server, when it sent one.
+        request_id: Option<String>,
+        /// Number of HTTP attempts made (including the one that produced this
+        /// error) before it was returned to the caller.
+        attempts: u32,
+        /// Server-authoritative retry delay, when supplied in Retry-After.
+        retry_after_ms: Option<u64>,
+        /// The full parsed JSON error body the server returned, including any
+        /// fields beyond `error.code`/`error.message` (for example the
+        /// top-level `plan`, `upgrade_available` and `upgrade_url` on
+        /// workspace admission 429s). `None` when the body was not JSON or the
+        /// error was constructed by the SDK itself.
+        details: Option<serde_json::Value>,
     },
 
     /// An HTTP request error.
@@ -48,6 +61,10 @@ impl RelayError {
             code: code.into(),
             message: message.into(),
             status,
+            request_id: None,
+            attempts: 1,
+            retry_after_ms: None,
+            details: None,
         }
     }
 
@@ -98,6 +115,44 @@ impl RelayError {
     pub fn code(&self) -> Option<&str> {
         match self {
             Self::Api { code, .. } => Some(code),
+            _ => None,
+        }
+    }
+
+    /// Get the correlation/request id the server echoed back, if this is an
+    /// API error and the server sent one.
+    pub fn request_id(&self) -> Option<&str> {
+        match self {
+            Self::Api { request_id, .. } => request_id.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// Get the number of HTTP attempts made before this API error was
+    /// returned to the caller.
+    pub fn attempts(&self) -> Option<u32> {
+        match self {
+            Self::Api { attempts, .. } => Some(*attempts),
+            _ => None,
+        }
+    }
+
+    /// Get the full parsed JSON error body the server returned, if this is an
+    /// API error that came from a JSON response.
+    ///
+    /// Use it to read server-supplied error metadata the typed fields do not
+    /// model, e.g. `details().and_then(|d| d.get("upgrade_available"))`.
+    pub fn details(&self) -> Option<&serde_json::Value> {
+        match self {
+            Self::Api { details, .. } => details.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Get the server-authoritative retry delay, when present.
+    pub fn retry_after_ms(&self) -> Option<u64> {
+        match self {
+            Self::Api { retry_after_ms, .. } => *retry_after_ms,
             _ => None,
         }
     }

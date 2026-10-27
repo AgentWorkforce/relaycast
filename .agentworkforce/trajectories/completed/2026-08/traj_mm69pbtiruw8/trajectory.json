@@ -1,0 +1,103 @@
+{
+  "id": "traj_mm69pbtiruw8",
+  "version": 1,
+  "task": {
+    "title": "Implement workspace lifecycle for issue 336"
+  },
+  "status": "completed",
+  "startedAt": "2026-08-18T09:33:52.274Z",
+  "completedAt": "2026-08-18T09:48:01.156Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-08-18T09:36:44.789Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_c0uygc351ax8",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-08-18T09:36:44.789Z",
+      "endedAt": "2026-08-18T09:48:01.156Z",
+      "events": [
+        {
+          "ts": 1787045804790,
+          "type": "decision",
+          "content": "Implement both lifecycle halves: retain DELETE /workspace, add DELETE /workspaces/:id, and add explicit expires_at TTL reaping: Implement both lifecycle halves: retain DELETE /workspace, add DELETE /workspaces/:id, and add explicit expires_at TTL reaping",
+          "raw": {
+            "question": "Implement both lifecycle halves: retain DELETE /workspace, add DELETE /workspaces/:id, and add explicit expires_at TTL reaping",
+            "chosen": "Implement both lifecycle halves: retain DELETE /workspace, add DELETE /workspaces/:id, and add explicit expires_at TTL reaping",
+            "alternatives": [],
+            "reasoning": "D1 enforces ON DELETE CASCADE; a nullable caller-supplied expiry is the only safe automatic deletion predicate, while names, age, message count, and agent count are ambiguous."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1787046464092,
+          "type": "reflection",
+          "content": "The resulting implementation scope includes authenticated id-scoped deletion, explicit workspace expiry, bounded automatic reaping, SDK support, E2E adoption, documentation, and lifecycle tests. This trajectory does not contain trace events proving test, build, or lint execution.",
+          "raw": {
+            "focalPoints": [
+              "deletion-safety",
+              "D1-cascades",
+              "expiry-predicate",
+              "verification"
+            ],
+            "confidence": 0.75
+          },
+          "significance": "high",
+          "tags": [
+            "focal:deletion-safety",
+            "focal:D1-cascades",
+            "focal:expiry-predicate",
+            "focal:verification",
+            "confidence:0.75"
+          ]
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Added authenticated id-scoped workspace deletion, explicit TTL creation and bounded reaping, SDK/types support, E2E TTL adoption, migration, documentation, and lifecycle/cascade tests.",
+    "approach": "Standard approach",
+    "confidence": 0.75
+  },
+  "commits": [
+    "c1bb456b7de57b9dbe1c9c12759a93fa977a9edf"
+  ],
+  "filesChanged": [
+    ".agentworkforce/trajectories/completed/2026-08/traj_mm69pbtiruw8/summary.md",
+    ".agentworkforce/trajectories/completed/2026-08/traj_mm69pbtiruw8/trajectory.json",
+    "CHANGELOG.md",
+    "README.md",
+    "openapi.yaml",
+    "packages/engine/CHANGELOG.md",
+    "packages/engine/src/__tests__/conformance/workspaceLifecycle.test.ts",
+    "packages/engine/src/adapters/node/index.ts",
+    "packages/engine/src/db/migrations/0036_workspace_expiry.sql",
+    "packages/engine/src/db/schema.ts",
+    "packages/engine/src/engine/workspace.ts",
+    "packages/engine/src/index.ts",
+    "packages/engine/src/routes/workspace.ts",
+    "packages/sdk-typescript/CHANGELOG.md",
+    "packages/sdk-typescript/src/__tests__/relay.test.ts",
+    "packages/sdk-typescript/src/__tests__/setup.test.ts",
+    "packages/sdk-typescript/src/relay.ts",
+    "packages/sdk-typescript/src/setup-types.ts",
+    "packages/sdk-typescript/src/setup.ts",
+    "packages/types/CHANGELOG.md",
+    "packages/types/src/__tests__/types.test.ts",
+    "packages/types/src/workspace.ts",
+    "scripts/e2e-actions.ts",
+    "scripts/e2e-sdk-setup-client.ts",
+    "scripts/e2e.ts"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "3374966534c408d3656c0a8701dd98d82216576b",
+    "endRef": "c1bb456b7de57b9dbe1c9c12759a93fa977a9edf"
+  }
+}

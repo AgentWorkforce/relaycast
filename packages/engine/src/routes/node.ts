@@ -1,10 +1,14 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { z } from 'zod';
+import { FleetNodeTagSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
-import { requireAuth, requireWorkspaceRead, requireWorkspaceKey } from '../middleware/auth.js';
+import { requireAuth, requireNodeToken, requireWorkspaceRead, requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { parseIdempotencyKey } from '../middleware/idempotency.js';
 import { asCodedError, errorResponse } from '../lib/httpError.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
+import { sha256Hex } from '../lib/crypto.js';
+import { isValidStandardWebhookSecret } from '../lib/standardWebhook.js';
 import {
   jsonCreated,
   jsonError,
@@ -15,13 +19,14 @@ import {
   parseOptionalJsonBody,
 } from '../lib/httpResponse.js';
 import * as nodeEngine from '../engine/node.js';
-import { serializeNodeOp } from '../engine/nodeLock.js';
+import { serializeNodeOp, serializeMachineEnroll } from '../engine/nodeLock.js';
 import * as actionEngine from '../engine/action.js';
 import { sendNodeDeliveriesToAgents } from '../engine/nodeDeliver.js';
 import { fanoutToWorkspace } from './fanout.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
+import { canonicalJson } from '../engine/messageMetadata.js';
 import {
   getObserverTokenFromContext,
   normalizeObserverFilters,
@@ -47,6 +52,7 @@ const deliveryAuthSchema = z.discriminatedUnion('type', [
     signed_payload: z.enum(['body', 'timestamp.body']).default('timestamp.body'),
     encoding: z.literal('hex').default('hex'),
     prefix: z.string().default('sha256='),
+    signature_scheme: z.literal('standard-webhooks').optional(),
   }),
 ]);
 
@@ -58,18 +64,33 @@ const httpDeliverySchema = z.object({
   // (EngineConfig.httpPushProxy). `url` stays the real destination; the engine
   // forwards through the proxy at dispatch time. See dispatchHttpPush.
   use_proxy: z.boolean().optional(),
+}).superRefine((delivery, ctx) => {
+  if (
+    delivery.auth.type === 'hmac_sha256'
+    && delivery.auth.signature_scheme === 'standard-webhooks'
+    && !isValidStandardWebhookSecret(delivery.auth.secret)
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['auth', 'secret'],
+      message: 'standard-webhooks requires a whsec_ secret that decodes to 24-64 bytes',
+    });
+  }
 });
 
 const createNodeSchema = z.object({
   node_id: z.string().min(1).optional(),
   name: z.string().min(1),
+  // Dedupe key for re-enrollment: a host that keeps no node_id gets a fresh
+  // name each boot, and without this every boot minted another roster row.
+  machine_id: z.string().min(1).optional(),
   kind: nodeKindSchema.optional(),
   role: nodeRoleSchema.optional(),
   delivery_adapter: z.string().min(1).optional(),
   delivery: z.record(z.string(), z.unknown()).nullable().optional(),
   capabilities: z.array(z.string().min(1)).optional(),
   max_agents: z.number().int().nonnegative().optional(),
-  tags: z.array(z.string()).optional(),
+  tags: z.array(FleetNodeTagSchema).optional(),
   version: z.string().optional(),
 });
 
@@ -97,7 +118,6 @@ function strictExternalUrl(c: Parameters<typeof jsonError>[0]): boolean {
   return environment !== 'test';
 }
 
-type NodeRosterEntry = Awaited<ReturnType<typeof nodeEngine.listNodes>>[number];
 type NodeAgentBinding = NonNullable<Awaited<ReturnType<typeof nodeEngine.listNodeAgents>>>[number];
 type ObserverContext = ReturnType<typeof getObserverTokenFromContext>;
 
@@ -109,39 +129,74 @@ function filterNodeAgentsForObserver(observer: ObserverContext, bindings: NodeAg
   return bindings.filter((binding) => observerAllowsAgent(observer, binding.agent_id));
 }
 
-async function filterNodesForObserver(
-  db: Parameters<typeof nodeEngine.listNodes>[0],
-  workspaceId: string,
-  observer: ObserverContext,
-  roster: NodeRosterEntry[],
-): Promise<NodeRosterEntry[]> {
-  if (!observerHasAgentFilter(observer)) return roster;
-  const visible: NodeRosterEntry[] = [];
-  for (const node of roster) {
-    const bindings = await nodeEngine.listNodeAgents(db, workspaceId, node.name);
-    const visibleBindings = bindings ? filterNodeAgentsForObserver(observer, bindings) : [];
-    if (visibleBindings.length > 0) {
-      visible.push({ ...node, active_agents: visibleBindings.length });
-    }
-  }
-  return visible;
+/** The observer's authorized agent ids, or `undefined` when unfiltered/absent. */
+function observerAgentIdsFilter(observer: ObserverContext): string[] | undefined {
+  if (!observer) return undefined;
+  return normalizeObserverFilters(observer.filters).agent_ids;
 }
 
-// POST /v1/nodes - enroll or rotate a node token (workspace-key only)
+// POST /v1/nodes - workspace-key enrollment; established rows also require
+// proof of the current node token.
 nodeRoutes.post('/nodes', requireWorkspaceKey, rateLimit, async (c) => {
   try {
     const parsed = await parseJsonBody(c, createNodeSchema, 'invalid node body');
     if (!parsed.ok) {
       return parsed.response;
     }
-    const existing = await nodeEngine.resolveNodeForEnroll(c.get('db'), c.get('workspace').id, parsed.data);
-    const kind = parsed.data.kind ?? (existing?.kind as z.infer<typeof nodeKindSchema> | undefined) ?? 'ws';
-    const role = parsed.data.role
+    // Machine-keyed enrollment resolves then writes, so concurrent first
+    // enrollments of one machine must not interleave between those steps. Only
+    // broker requests key on the machine, so only they need the queue: direct
+    // hosts stay independent rather than queueing behind each other on a box
+    // running many of them.
+    const machineId = parsed.data.machine_id;
+    const machineKeyed = machineId !== undefined && nodeEngine.requestedNodeRole(parsed.data) === 'broker';
+    return machineKeyed
+      ? serializeMachineEnroll(c.get('workspace').id, machineId, () => enrollNode(c, parsed.data))
+      : enrollNode(c, parsed.data);
+  } catch (err: unknown) {
+    return errorResponse(c, err);
+  }
+});
+
+async function enrollNode(c: Context<AppEnv>, data: z.infer<typeof createNodeSchema>): Promise<Response> {
+  try {
+    const currentNodeToken = c.req.header('X-Relaycast-Node-Token');
+    const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
+    if (idempotencyError) {
+      return jsonError(c, 'invalid_idempotency_key', idempotencyError, 400);
+    }
+    if (idempotencyKey && !currentNodeToken) {
+      return jsonError(
+        c,
+        'node_rotation_idempotency_requires_current_token',
+        'Node rotation Idempotency-Key requires X-Relaycast-Node-Token proof',
+        400,
+      );
+    }
+    if (currentNodeToken && idempotencyKey && idempotencyKey.length < 32) {
+      return jsonError(
+        c,
+        'node_rotation_idempotency_key_too_weak',
+        'Node rotation Idempotency-Key must be at least 32 characters and generated with a CSPRNG',
+        400,
+      );
+    }
+    const expectedTokenHash = currentNodeToken
+      ? await c.get('engine').auth.hashToken(currentNodeToken)
+      : undefined;
+    const existing = await nodeEngine.resolveNodeForEnroll(
+      c.get('db'),
+      c.get('workspace').id,
+      data,
+      expectedTokenHash,
+    );
+    const kind = data.kind ?? (existing?.kind as z.infer<typeof nodeKindSchema> | undefined) ?? 'ws';
+    const role = data.role
       ?? (existing?.role as z.infer<typeof nodeRoleSchema> | undefined)
-      ?? (kind === 'ws' || (parsed.data.max_agents !== undefined && parsed.data.max_agents > 1) ? 'broker' : 'direct');
-    const deliveryInput = parsed.data.delivery === undefined
+      ?? (kind === 'ws' || (data.max_agents !== undefined && data.max_agents > 1) ? 'broker' : 'direct');
+    const deliveryInput = data.delivery === undefined
       ? existing?.deliveryConfig ?? null
-      : parsed.data.delivery;
+      : data.delivery;
     const delivery = normalizeDelivery(kind, deliveryInput);
     if (delivery && 'success' in delivery && !delivery.success) {
       return jsonError(c, 'invalid_node_delivery', 'invalid node delivery body', 400);
@@ -151,40 +206,85 @@ nodeRoutes.post('/nodes', requireWorkspaceKey, rateLimit, async (c) => {
       if (!url) {
         return jsonError(c, 'invalid_node_delivery', 'http_push nodes require delivery.url', 400);
       }
-      if (!isSafeExternalUrl(url, { strict: strictExternalUrl(c) })) {
+      const strict = strictExternalUrl(c);
+      if (!isSafeExternalUrl(url, { strict, requireHttps: strict })) {
         return jsonError(c, 'unsafe_node_delivery_url', 'delivery.url is not allowed', 400);
       }
     }
-    if (role === 'direct' && (parsed.data.max_agents ?? existing?.maxAgents ?? 1) !== 1) {
+    if (role === 'direct' && (data.max_agents ?? existing?.maxAgents ?? 1) !== 1) {
       return jsonError(c, 'direct_node_capacity_exceeded', 'direct nodes can bind at most one agent', 400);
     }
+    const rotationRecovery = existing && currentNodeToken && idempotencyKey
+      ? await (async () => {
+          const requestDigest = await sha256Hex(canonicalJson(data));
+          const replacementDigest = await sha256Hex(canonicalJson([
+            'node-token-rotation-v1',
+            c.get('workspace').id,
+            currentNodeToken,
+            idempotencyKey,
+            requestDigest,
+          ]));
+          return {
+            replacementToken: `nt_live_${replacementDigest.slice(0, 48)}`,
+            idempotencyKeyHash: await sha256Hex(idempotencyKey),
+            requestDigest,
+          };
+        })()
+      : undefined;
     const result = await nodeEngine.createNodeToken(c.get('db'), c.get('workspace').id, {
-      ...parsed.data,
+      ...data,
       kind,
       role,
       delivery: delivery && !('success' in delivery) ? delivery : null,
-    });
+    }, { expectedTokenHash, rotationRecovery });
     return jsonCreated(c, result);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
-});
+}
 
-// GET /v1/nodes?capability=&name= - node roster
+const nodeStatusSchema = z.enum(['online', 'offline']);
+
+// GET /v1/nodes?capability=&name=&status=&history=&cursor=&limit= - node roster
+//
+// Default (no `history`): a bare array, matching every caller written before
+// this selector existed. `status=online` (or `offline`) now pushes a
+// liveness predicate into SQL instead of fetching the whole table and
+// filtering in JS — this is the server-filtered live-Fleet path a default
+// `fleet nodes` call should use so it never downloads history.
+//
+// `history=true`: switches to the bounded, paginated contract
+// (`{ nodes, next_cursor }`) for an explicit full-roster read (`--all`).
+// `cursor`/`limit` page through it without silent truncation, however many
+// historical rows the workspace has retained.
 nodeRoutes.get('/nodes', requireWorkspaceRead('nodes:read'), rateLimit, async (c) => {
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
-    const result = await nodeEngine.listNodes(db, workspace.id, {
+    const statusRaw = c.req.query('status');
+    if (statusRaw !== undefined && !nodeStatusSchema.safeParse(statusRaw).success) {
+      return jsonError(c, 'invalid_request', "status must be 'online' or 'offline'", 400);
+    }
+    const history = c.req.query('history') === 'true';
+    const limitRaw = c.req.query('limit');
+    const limit = limitRaw !== undefined ? Number(limitRaw) : undefined;
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+      return jsonError(c, 'invalid_request', 'limit must be a positive integer', 400);
+    }
+    const page = await nodeEngine.listNodes(db, workspace.id, {
       capability: c.req.query('capability'),
       name: c.req.query('name'),
+      status: statusRaw as 'online' | 'offline' | undefined,
+      history,
+      cursor: c.req.query('cursor') ?? null,
+      limit,
+      // Pushed into the same SQL query as every other filter, so hidden nodes
+      // are excluded from row selection before the page/cursor is computed —
+      // see `observerNodeVisibilityCondition` — instead of one
+      // `listNodeAgents` query per roster row followed by an app-side filter.
+      observerAgentIds: observerAgentIdsFilter(getObserverTokenFromContext(c)),
     });
-    return jsonOk(c, await filterNodesForObserver(
-      db,
-      workspace.id,
-      getObserverTokenFromContext(c),
-      result,
-    ));
+    return jsonOk(c, history ? { nodes: page.nodes, next_cursor: page.nextCursor } : page.nodes);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -221,7 +321,7 @@ nodeRoutes.post('/nodes/:name/agents', requireWorkspaceKey, rateLimit, async (c)
     if (!parsed.ok) {
       return parsed.response;
     }
-    const result = await nodeEngine.bindAgentToNode(
+    const { binding, move } = await nodeEngine.bindAgentToNode(
       c.get('db'),
       c.get('workspace').id,
       c.req.param('name'),
@@ -231,7 +331,23 @@ nodeRoutes.post('/nodes/:name/agents', requireWorkspaceKey, rateLimit, async (c)
         priority: parsed.data.priority,
       },
     );
-    return jsonCreated(c, result);
+    const response = jsonCreated(c, binding);
+    // The response — which carries delivery_ack_seq — must be on the wire
+    // before any deliver frame reaches the provider socket: agent.register and
+    // agent.recover order their cursor-bearing reply ahead of the ready mark
+    // and replay, and a bound agent's drain honors the same ordering.
+    runInBackground(
+      c,
+      Promise.resolve().then(() =>
+        nodeEngine.completeBoundAgentDelivery(
+          c.get('db'),
+          c.get('engine').nodeConnections,
+          c.get('workspace').id,
+          move,
+        )),
+      'bind delivery readiness+replay',
+    );
+    return response;
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -292,7 +408,7 @@ nodeRoutes.post('/nodes/:node/actions/:name/invoke', requireAuth, rateLimit, asy
       handler_node_id: result.handler_node_id,
     };
     await sendWebhookEvent(c, { type: 'action.invoked', workspaceId: workspace.id, data: eventData });
-    emitServerEvent(c, workspace.id, 'relaycast_server_action_invoked', {
+    emitServerEvent(c, workspace.id, 'action.invoked', {
       action_name: result.action_name,
       invocation_id: result.invocation_id,
       caller_agent_id: agent.id,
@@ -313,6 +429,7 @@ nodeRoutes.post('/nodes/:node/actions/:name/invoke', requireAuth, rateLimit, asy
             nodeConnections: c.get('engine').nodeConnections,
             environment: c.get('engine').config?.environment,
             httpPushProxy: c.get('engine').config?.httpPushProxy,
+            outboundWebhookFetch: c.get('engine').config?.outboundWebhookFetch,
             workspaceId: workspace.id,
           },
           {
@@ -354,6 +471,14 @@ nodeRoutes.delete('/nodes/:node/providers/:name', requireWorkspaceKey, rateLimit
 });
 
 // GET /v1/nodes/:name - single node roster entry
+// GET /v1/node/me - the node a node token belongs to. A service handed the
+// token (Cloud, recording who owns a node) proves which node it is without
+// holding the workspace key.
+nodeRoutes.get('/node/me', requireNodeToken, rateLimit, async (c) => {
+  const node = c.get('node')!;
+  return jsonOk(c, { id: node.id, name: node.name, workspace_id: c.get('workspace').id });
+});
+
 nodeRoutes.get('/nodes/:name', requireWorkspaceRead('nodes:read'), rateLimit, async (c) => {
   try {
     const db = c.get('db');

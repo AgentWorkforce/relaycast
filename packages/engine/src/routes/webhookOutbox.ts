@@ -27,20 +27,29 @@ import { getRequestLogger, toErrorDetails } from '../lib/logger.js';
  * event degrades to the legacy fire-and-forget queue send (no `outboxId`) —
  * a webhook should never fail the mutation that triggered it.
  */
-export async function sendWebhookEvent(c: Context<AppEnv>, event: QueuedEvent): Promise<void> {
+export async function shouldEnqueueWebhookEvent(
+  c: Context<AppEnv>,
+  workspaceId: string,
+  eventType: string,
+): Promise<boolean> {
   try {
     let subscribersExist = c.get('webhookSubscribersExist');
     if (subscribersExist === undefined) {
-      subscribersExist = await hasActiveSubscriptions(c.get('db'), event.workspaceId);
+      subscribersExist = await hasActiveSubscriptions(c.get('db'), workspaceId);
       c.set('webhookSubscribersExist', subscribersExist);
     }
-    if (!subscribersExist) return;
+    return subscribersExist;
   } catch (error) {
     // Fail open: a broken probe must not drop events for subscribed workspaces.
-    getRequestLogger(c, 'webhook.outbox').warn(`subscription probe failed for ${event.type}`, {
+    getRequestLogger(c, 'webhook.outbox').warn(`subscription probe failed for ${eventType}`, {
       ...toErrorDetails(error),
     });
+    return true;
   }
+}
+
+export async function sendWebhookEvent(c: Context<AppEnv>, event: QueuedEvent): Promise<void> {
+  if (!await shouldEnqueueWebhookEvent(c, event.workspaceId, event.type)) return;
 
   let outboxId: string | undefined;
   try {

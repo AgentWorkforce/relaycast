@@ -51,13 +51,25 @@ const NON_SDK_OPENAPI_PATHS = new Set([
   // Operator-only, one-time recovery for legacy registrations. Agent SDKs do
   // not expose it because normal registration establishes the verifier.
   '/v1/agents/{param}/legacy-identity',
+  // Workspace-admin maintenance is exposed by scripts/retain-agents.mts,
+  // not by the agent SDKs.
+  '/v1/agents/retention',
+  // Workspace-owner subscription provisioning, called by the Relay integration CLI.
+  '/v1/agents/{param}/subscription-channel',
+  // Node-token self lookup: a service handed a node token (Cloud's node claim)
+  // proves which node it is for. Agents never call it.
+  '/v1/node/me',
 ]);
 
 const CORE_SDK_PATHS = new Set([
   '/v1/agent',
+  '/v1/agent/recovery-credential',
   '/v1/agents',
   '/v1/agents/{param}',
+  '/v1/agents/{param}/recover',
+  '/v1/agents/{param}/revoke-token',
   '/v1/agents/{param}/rotate-token',
+  '/v1/agents/{param}/takeover',
   '/v1/agents/heartbeat',
   '/v1/agents/disconnect',
   '/v1/channels',

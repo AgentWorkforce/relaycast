@@ -1,3 +1,5 @@
+import { safeTelemetrySink } from './ports/telemetry.js';
+import { NoopTelemetrySink } from './providers/noop-telemetry.js';
 import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { cors } from 'hono/cors';
@@ -7,10 +9,11 @@ import type { EngineDeps } from './ports/index.js';
 import { engineContext } from './middleware/engine-context.js';
 import { loggerMiddleware } from './middleware/logger.js';
 import { getRequestLogger, toErrorDetails } from './lib/logger.js';
-import { asCodedError } from './lib/httpError.js';
+import { asCodedError, safeClientErrorMessage } from './lib/httpError.js';
 import { jsonError, jsonMalformedBody, jsonNotFound } from './lib/httpResponse.js';
 import { requiredOriginInfo } from './lib/origin.js';
 import { emitServerEvent } from './lib/serverTelemetry.js';
+import { runInBackground } from './routes/background.js';
 import {
   authenticateNodeWs,
   authenticateRealtimeWs,
@@ -74,7 +77,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     webhookQueue: deps.webhookQueue,
     auth: deps.auth,
     entitlements: deps.entitlements,
-    telemetry: deps.telemetry,
+    telemetry: safeTelemetrySink(deps.telemetry ?? new NoopTelemetrySink()),
     config: deps.config ?? {},
   };
 
@@ -82,8 +85,11 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
 
   // Inject the runtime first so the logger and all routes can read it.
   app.use('*', engineContext(runtime));
-  app.use('*', cors());
+  // Before CORS so a preflight, which returns without calling later
+  // middleware, still carries the request id. exposeHeaders lets browser
+  // clients read it.
   app.use('*', loggerMiddleware);
+  app.use('*', cors({ exposeHeaders: ['X-Request-Id'] }));
 
   app.use('*', secureHeaders());
 
@@ -127,9 +133,9 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
       observerToken: authResult.observerToken,
     });
     if (response.status === 101) {
-      emitServerEvent(c, authResult.workspace.id, 'relaycast_server_ws_session_started', {
+      emitServerEvent(c, authResult.workspace.id, 'ws.session.started', {
         session_scope: 'workspace',
-      });
+      }, {});
     }
     return response;
   });
@@ -172,10 +178,17 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
       originActor,
     });
     if (response.status === 101) {
-      emitServerEvent(c, authResult.node.workspaceId, 'relaycast_server_ws_session_started', {
-        node_id: authResult.node.id,
-        session_scope: 'node',
-      });
+      const workspaceId = authResult.node.workspaceId;
+      runInBackground(
+        c,
+        (async () => {
+          emitServerEvent(c, workspaceId, 'ws.session.started', {
+            node_id: authResult.node.id,
+            session_scope: 'node',
+          }, {});
+        })(),
+        'emit node session telemetry',
+      );
     }
     return response;
   });
@@ -242,10 +255,17 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     if (error.code === 'invalid_json' || err instanceof SyntaxError) {
       return jsonMalformedBody(c);
     }
-    return jsonError(
-      c,
-      error.code || 'internal_error',
-      error.message || 'Internal server error',
+    const requestId = c.get('requestId');
+    return c.json(
+      {
+        ok: false as const,
+        error: {
+          code: error.code || 'internal_error',
+          message: safeClientErrorMessage(error),
+          // Lets a caller quote a server error that the logs above can be found by.
+          ...(status >= 500 && requestId ? { request_id: requestId } : {}),
+        },
+      },
       status as ContentfulStatusCode,
     );
   });

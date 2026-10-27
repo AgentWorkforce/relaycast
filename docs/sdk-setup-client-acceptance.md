@@ -25,7 +25,7 @@ These are deviations from `docs/sdk-setup-client.md`. Workers implement the reso
 | C11 | `X-SDK-Version` "injected at build time" | Read at runtime from `SDK_VERSION` constant (`src/version.ts`). No build-time injection. Same source as existing client. |
 | C12 | Spec omits origin headers | All direct `fetch` calls in setup-client emit `X-Relaycast-Origin-Surface/Client/Version` from `SDK_ORIGIN` (`src/origin.ts`). Required for parity with existing static methods. |
 | C13 | `createWorkspace` idempotency on existing workspace | Detect by inspecting HTTP status code (200 = existed, 201 = created). Reuse the pattern from `RelayCast.createWorkspaceWithStatus`. Surface as `WorkspaceHandle` either way; no special return shape. |
-| C14 | "`registerAgent()` — duplicate name: handles gracefully" test bullet | Replace with: duplicate name surfaces through the existing `RelayCast.agents.register` error path as `RelayError` / `name_conflict` with status 409. For graceful rotation, callers use the existing `RelayCast.registerOrRotate` via `workspace.relayCast()`. |
+| C14 | "`registerAgent()` — duplicate name: handles gracefully" test bullet | Replace with: duplicate name surfaces through the existing `RelayCast.agents.register` error path as `RelayError` / `name_conflict` with status 409. Recovery is a separate proof-carrying operation and is never inferred from a collision. |
 | C15 | `Relay` constructor exposes `agents` accessor | Spec under-defines `agents`. Drop from v1. `Relay` v1 surface = `send`, `post`, `reply`, `inbox`, `onMessage` only. |
 | C16 | `CreateWorkspaceOptions.name` is optional | Current `POST /v1/workspaces` requires a non-empty `name`. `createWorkspace` requires `{ name }` and does not send empty workspace creation bodies. |
 
