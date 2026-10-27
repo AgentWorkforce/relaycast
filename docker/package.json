@@ -1,9 +1,9 @@
 {
   "name": "relaycast-self-host-image",
   "private": true,
-  "version": "10.6.2",
+  "version": "12.0.0",
   "dependencies": {
-    "@relaycast/engine": "10.6.2",
+    "@relaycast/engine": "12.0.0",
     "undici": "7.28.0"
   }
 }

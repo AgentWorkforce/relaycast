@@ -604,7 +604,7 @@ describe('node adapter conformance', () => {
 
     }, 20_000);
 
-    it('reports placeholder load as unavailable until a finite node explicitly marks it measured', async () => {
+    it('reports placeholder load as unavailable until a node explicitly marks it measured', async () => {
       const ws = await createWorkspace(stack.app, 'fleet-unreported-load-ws');
       const unbounded = await enrollAndAttachNode(ws, {
         id: 'node_unbounded',
@@ -632,8 +632,8 @@ describe('node adapter conformance', () => {
         .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_unbounded')));
       expect(stored).toEqual({ load: 0, loadReported: false });
 
-      // An unbounded node cannot report normalized utilization because it has
-      // no finite denominator, even when a client incorrectly claims it did.
+      // Unlimited capacity still permits a genuine machine-load measurement;
+      // no slot denominator is invented by the server.
       await unbounded.handle.handleMessage(JSON.stringify({
         v: 1,
         type: 'node.heartbeat',
@@ -646,11 +646,11 @@ describe('node adapter conformance', () => {
         headers: { authorization: `Bearer ${ws.workspaceKey}` },
       });
       const explicitlyReportedBody = await explicitlyReportedRoster.json() as { data: Array<Record<string, unknown>> };
-      expect(explicitlyReportedBody.data[0]).toMatchObject({ load: null, active_agents: 25, max_agents: 0 });
+      expect(explicitlyReportedBody.data[0]).toMatchObject({ load: 0.75, active_agents: 25, max_agents: 0 });
 
       // Older brokers sent a literal zero for the same unbounded state. The
-      // engine knows the denominator is absent and must keep treating it as
-      // unreported during the rolling upgrade.
+      // missing load_reported signal keeps that placeholder unreported
+      // during the rolling upgrade.
       await unbounded.handle.handleMessage(JSON.stringify({
         v: 1,
         type: 'node.heartbeat',

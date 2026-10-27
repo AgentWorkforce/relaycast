@@ -109,7 +109,7 @@ async function deleteAuthenticatedWorkspace(c: Context<AppEnv>, expectedId?: str
       return workspaceNotFound(c);
     }
     await workspaceEngine.deleteWorkspace(db, c.get('engine').files, workspace.id);
-    emitServerEvent(c, workspace.id, 'relaycast_server_workspace_deleted', {
+    emitServerEvent(c, workspace.id, 'workspace.deleted', {
       deleted_via: 'api',
     });
     return jsonNoContent(c);
@@ -267,7 +267,7 @@ workspaceRoutes.post('/workspaces', async (c) => {
       },
     );
     if (result.created) {
-      emitServerEvent(c, result.workspace.workspace_id, 'relaycast_server_workspace_created', {
+      emitServerEvent(c, result.workspace.workspace_id, 'workspace.created', {
         created_via: 'api',
       });
     }
@@ -468,7 +468,7 @@ workspaceRoutes.patch('/workspace', requireWorkspaceKey, rateLimit, async (c) =>
     if (!updated) {
       return workspaceNotFound(c);
     }
-    emitServerEvent(c, workspace.id, 'relaycast_server_workspace_updated', {
+    emitServerEvent(c, workspace.id, 'workspace.updated', {
       changed_name: typeof body?.name === 'string',
       changed_system_prompt: typeof body?.system_prompt === 'string',
       changed_metadata: body.metadata !== undefined,
@@ -625,7 +625,10 @@ workspaceRoutes.post('/agents/:name/rotate-token', requireAgentToken, rateLimit,
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
-    const authAgent = c.get('agent')!;
+    const authAgent = c.get('agent');
+    if (!authAgent) {
+      return jsonError(c, 'unauthorized', 'Agent token required', 401);
+    }
     if (authAgent.name !== c.req.param('name')) {
       return jsonError(
         c,
@@ -639,7 +642,7 @@ workspaceRoutes.post('/agents/:name/rotate-token', requireAgentToken, rateLimit,
       workspace.id,
       c.req.param('name'),
     );
-    emitServerEvent(c, workspace.id, 'relaycast_server_agent_token_rotated', {
+    emitServerEvent(c, workspace.id, 'agent.token.rotated', {
       agent_name: c.req.param('name'),
     });
     return jsonOk(c, result);
@@ -681,7 +684,7 @@ workspaceRoutes.post('/workspace/rotate-key', requireWorkspaceKey, rateLimit, as
         ? undefined
         : { graceMs: parsed.data.grace_seconds * 1000 },
     );
-    emitServerEvent(c, result.workspaceId, 'relaycast_server_workspace_key_rotated', {
+    emitServerEvent(c, result.workspaceId, 'workspace.key.rotated', {
       grace_seconds: parsed.data.grace_seconds ?? 60,
     });
     return jsonOk(c, {

@@ -8,5 +8,6 @@ routes = [
   { pattern = "*-observer.relaycast.dev/*", zone_name = "relaycast.dev" },
 ]
 
-[vars]
-OBSERVER_ORIGIN = "https://relaycast-observer.pages.dev"
+services = [
+  { binding = "OBSERVER", service = "relaycast-observer" },
+]

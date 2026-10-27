@@ -75,6 +75,8 @@ describe('uncoded server errors in route handlers', () => {
         ok: false,
         error: { code: 'internal_error', message: 'Internal server error', request_id: expect.any(String) },
       });
+      // The same id rides the header the SDKs read, so clients stop reporting null.
+      expect(response.headers.get('x-request-id')).toBe(body.error.request_id);
       expect(captureException).toHaveBeenCalledWith(
         expect.objectContaining({ message: OVERLOAD }),
         expect.objectContaining({
@@ -90,6 +92,19 @@ describe('uncoded server errors in route handlers', () => {
       restore();
       errorLog.mockRestore();
     }
+  });
+
+  it('puts the request id on a CORS preflight and exposes the header', async () => {
+    const response = await stack.app.request('/v1/agents', {
+      method: 'OPTIONS',
+      headers: {
+        origin: 'https://example.com',
+        'access-control-request-method': 'GET',
+      },
+    });
+    expect(response.status).toBe(204);
+    expect(response.headers.get('x-request-id')).toMatch(/.+/);
+    expect(response.headers.get('access-control-expose-headers')?.toLowerCase()).toContain('x-request-id');
   });
 
   it('let a host classifier turn D1 overload into a retryable 503', async () => {

@@ -105,32 +105,6 @@ Error: agent node socket construction never arrived within 1000ms
 Error: forward A2A RPC POST transport entry never arrived within 1000ms
 ```
 
-### Python missing signals
-
-Called `FakeConnection.wait_sent('node.register')` without sending a frame.
-Before, an external `asyncio.wait_for(..., timeout=1.2)` watchdog was necessary
-(actual output):
-
-```text
-Outer watchdog expired after 1.2s; wait_sent emitted no diagnostic: TimeoutError:
-```
-
-After, invoked the frame wait and the two event waits with no signal. Each uses
-its own one-second bound (actual output):
-
-```text
-AssertionError: sent node.register frame never arrived within 1.0s
-AssertionError: reconnect registration never arrived within 1.0s
-AssertionError: shutdown handler completion never arrived within 1.0s
-```
-
-Normal `uv run pytest tests/test_node.py -q`, including three missing-signal
-regressions (actual output):
-
-```text
-20 passed in 0.27s
-```
-
 ### Presence mock replacement
 
 Added three harness regressions for a prior mock, reset mock, and replacement
@@ -200,11 +174,7 @@ Cached:    23 cached, 26 total
 ```
 
 Unchanged packages reused the preceding successful local runs. The TypeScript
-SDK suite passed all 445 tests. The Python SDK also passed its full suite:
-
-```text
-226 passed in 2.98s
-```
+SDK suite passed all 445 tests.
 
 The first full run exposed that background webhook teardown legitimately takes
 three seconds for retries. Background draining therefore has a ten-second

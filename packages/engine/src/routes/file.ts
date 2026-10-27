@@ -74,7 +74,7 @@ fileRoutes.post('/files/upload', requireAgentToken, rateLimit, async (c) => {
       { filename, content_type, size_bytes },
     );
 
-    emitServerEvent(c, workspace.id, 'relaycast_server_file_upload_requested', {
+    emitServerEvent(c, workspace.id, 'file.upload.requested', {
       file_id: result.id,
       size_bytes,
       content_type,
@@ -112,7 +112,7 @@ fileRoutes.post('/files/:id/complete', requireAgentToken, rateLimit, async (c) =
       workspaceId: workspace.id,
       data: { ...result, uploaded_by_name: agent.name },
     });
-    emitServerEvent(c, workspace.id, 'relaycast_server_file_upload_completed', {
+    emitServerEvent(c, workspace.id, 'file.upload.completed', {
       file_id: result.id,
       size_bytes: result.size_bytes,
       content_type: result.content_type,

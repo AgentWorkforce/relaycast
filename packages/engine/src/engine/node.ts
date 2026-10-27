@@ -977,8 +977,8 @@ export async function heartbeatNode(
       const maxAgents = message.max_agents ?? existingProvider?.maxAgents ?? 0;
       // heartbeatProvider's load rule folded in here: a numeric load only
       // counts as a measurement when the provider opts in via load_reported
-      // and is capacity-bounded (zero is the unbounded sentinel).
-      const reportedLoad = maxAgents > 0 && message.load_reported === true && typeof message.load === 'number'
+      // regardless of whether it has a finite agent cap.
+      const reportedLoad = message.load_reported === true && typeof message.load === 'number'
         ? message.load
         : undefined;
       // One write carries both the roster refresh (capabilities/max_agents/
@@ -2906,9 +2906,15 @@ export async function reconcileInventory(
     }
   }
 
+  // Pinned to the node FK index for the same reason as the delivery roster:
+  // without stats SQLite picks idx_agents_roster and reads the workspace.
   const nodeAgents = await db
-    .select({ id: agents.id, name: agents.name, metadata: agents.metadata })
-    .from(agents)
+    .select({
+      id: sql`${agents.id}`.mapWith(agents.id),
+      name: sql`${agents.name}`.mapWith(agents.name),
+      metadata: sql`${agents.metadata}`.mapWith(agents.metadata),
+    })
+    .from(sql`${agents} INDEXED BY idx_agents_location_node_fk`)
     .where(and(
       eq(agents.workspaceId, workspaceId),
       eq(agents.locationType, 'via_node'),
@@ -3633,6 +3639,14 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           message.agents,
           args.completionDeps,
         );
+        // An agent the node had dropped and is routing again is a new hosting
+        // episode. Clear a presence-only disconnect so node liveness can count
+        // them without an HTTP heartbeat. An agent the snapshot already
+        // routed keeps the hold: still being listed is not recovery.
+        if (args.presence?.clearExplicitDisconnect && result.newlyRoutedAgentIds.length > 0) {
+          await Promise.all(result.newlyRoutedAgentIds.map((agentId) =>
+            args.presence!.clearExplicitDisconnect!(args.workspaceId, agentId)));
+        }
         const replySent = sendControl(args.socket, {
           v: 1,
           id: requestId(message),

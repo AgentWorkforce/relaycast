@@ -1,6 +1,8 @@
 import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { jsonError, jsonMalformedBody } from './httpResponse.js';
+import { AdmissionDeniedError } from './admissionError.js';
+import { admissionDeniedResponse } from '../middleware/admission.js';
 
 /**
  * Errors thrown inside the engine optionally carry a stable error `code` and an
@@ -86,6 +88,7 @@ export function safeClientErrorMessage(
  * way. Only route handlers call this, so a throw always reaches `onError`.
  */
 export function errorResponse(c: Context, err: unknown) {
+  if (err instanceof AdmissionDeniedError) return admissionDeniedResponse(c, err.denial);
   const error = asCodedError(err);
   if (error.code === 'workspace_delivery_depth_exceeded') c.header('Retry-After', '30');
   if (err instanceof SyntaxError) {
