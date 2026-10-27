@@ -1257,9 +1257,12 @@ public struct CompleteInvocationRequest: Codable, Equatable, Sendable {
 public struct ActionInvocation: Codable, Equatable, Sendable {
     /// The hosted API identifies an invocation as `invocation_id` on every
     /// route that returns this record (invoke ack, status poll, completion),
-    /// matching ``InvokeActionResult``. A plain `id` is accepted as an alias so
-    /// a record echoed by another surface still decodes.
+    /// matching ``InvokeActionResult``. A plain `id` is accepted as a decode
+    /// alias so a record echoed by another surface still decodes.
     public let invocationId: String
+    /// Callers that already read `invocation.id` keep compiling. Prefer ``invocationId``.
+    @available(*, deprecated, renamed: "invocationId")
+    public var id: String { invocationId }
     public let actionName: String?
     public let status: String
     public let input: [String: JSONValue]?
@@ -1289,7 +1292,19 @@ public struct ActionInvocation: Codable, Equatable, Sendable {
         createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
         updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
         completedAt = try container.decodeIfPresent(String.self, forKey: .completedAt)
-        durationMs = try container.decodeIfPresent(Int.self, forKey: .durationMs)
+        if !container.contains(.durationMs) || try container.decodeNil(forKey: .durationMs) {
+            durationMs = nil
+        } else {
+            let decodedDurationMs = try container.decode(Int.self, forKey: .durationMs)
+            guard decodedDurationMs >= 0 else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .durationMs,
+                    in: container,
+                    debugDescription: "durationMs must be nonnegative"
+                )
+            }
+            durationMs = decodedDurationMs
+        }
     }
 
     public func encode(to encoder: Encoder) throws {
