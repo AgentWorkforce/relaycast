@@ -88,10 +88,13 @@ export async function withEngineOperation<T>(
       isolate(() => sink.operation!({ ...context, durationMs: performance.now() - start, outcome: 'ok' }));
     }
     return result;
-  } catch (error) {
-    if (typeof error === 'object' && error !== null && !operationLabels.has(error)) {
-      operationLabels.set(error, label);
-    }
+  } catch (caught) {
+    // A primitive cannot carry a label, so it leaves as the Error the request
+    // error path would turn it into anyway (see `asCodedError`).
+    const error = typeof caught === 'object' && caught !== null
+      ? caught
+      : new Error(typeof caught === 'string' ? caught : 'Unknown error');
+    if (!operationLabels.has(error)) operationLabels.set(error, label);
     if (sink?.operation) {
       const errorName = error instanceof Error ? error.name : undefined;
       isolate(() => sink.operation!({

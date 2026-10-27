@@ -66,6 +66,24 @@ describe('engine diagnostics', () => {
     expect(operations).toContainEqual(expect.objectContaining({ label: 'inbox.get', outcome: 'error' }));
   });
 
+  it.each([
+    ['a string', 'adapter failure'],
+    ['an array', ['adapter failure']],
+  ])('keeps the operation when the database rejects with %s', async (_kind, rejection) => {
+    const ws = await createWorkspace(stack.app, 'diagnostics-odd-rejection');
+    const agent = await registerAgent(stack.app, ws.workspaceKey, 'diag-odd-rejection');
+    const db = Object.create(stack.runtime.deps.db) as EngineDb & { all: unknown };
+    db.all = () => Promise.reject(rejection);
+    const captureException = vi.fn();
+    const app = appWithDiagnostics({ db, captureException });
+    const response = await app.request('/v1/inbox', { headers: { authorization: `Bearer ${agent.token}` } });
+    expect(response.status).toBe(500);
+    await stack.settle();
+    expect(captureException).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      engine_operation: 'inbox.get',
+    }));
+  });
+
   it('keeps the operation when a plain-object rejection is wrapped into an Error', async () => {
     const ws = await createWorkspace(stack.app, 'diagnostics-plain-rejection');
     const agent = await registerAgent(stack.app, ws.workspaceKey, 'diag-plain-rejection');
