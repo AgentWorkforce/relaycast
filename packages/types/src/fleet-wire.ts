@@ -200,7 +200,8 @@ export const FleetNodeHeartbeatMessageSchema = z
     // synthetic `default` provider. Load/active_agents/handlers_live describe
     // the sending provider, and the node figures aggregate across providers.
     provider: FleetProviderIdentitySchema.optional(),
-    // Capacity utilization is absent/null until the provider has a genuine
+    // Normalized utilization (0–1, including machine utilization for unlimited
+    // providers) is absent/null until the provider has a genuine
     // measurement. Numeric values from legacy clients remain accepted for wire
     // compatibility but are only trusted when load_reported is explicitly true.
     load: z.number().finite().min(0).max(1).nullable().optional(),

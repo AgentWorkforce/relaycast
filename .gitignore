@@ -20,12 +20,6 @@ coverage/
 # Smithery build artifacts
 .smithery/
 
-# Python
-__pycache__/
-*.pyc
-*.egg-info/
-.venv/
-.pytest_cache/
 .npm-cache/
 
 # Rust
@@ -47,3 +41,9 @@ packages/sdk-typescript/bin/*
 relaycast-files/
 *.db
 .agentworkforce/relay*
+
+# OpenNext Cloudflare build output
+.open-next/
+
+# Standalone engine binaries (packages/engine/standalone/build.ts)
+dist-standalone/

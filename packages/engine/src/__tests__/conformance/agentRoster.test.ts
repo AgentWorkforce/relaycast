@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AGENT_LIVENESS_TTL_MS, AGENT_ROSTER_RECENCY_MS, RELEASED_AGENT_STATUS, listAgents } from '../../engine/agent.js';
 import { createWorkspace, makeNodeStack, type TestStack } from './harness.js';
 
+// bun:sqlite (the standalone binary's driver, under `npm run test:bun`) has no
+// user-defined SQL functions, which this visit-counting probe relies on.
+const userFunctions = !process.versions.bun;
+
 // SQLite stores last_seen in whole seconds. Exercise both the exact TTL
 // boundary and fractional-second request times, which must expire that row.
 const NOW = 1_800_000_000_000;
@@ -211,7 +215,7 @@ describe('agent roster recency and projection', () => {
 });
 
 describe('agent roster row visits', () => {
-  it('skips released history and seeks live status ranges within one workspace', async () => {
+  it.skipIf(!userFunctions)('skips released history and seeks live status ranges within one workspace', async () => {
     const stack = makeNodeStack();
     const { workspaceId, workspaceKey } = await createWorkspace(stack.app, 'roster-row-visits');
     const other = await createWorkspace(stack.app, 'other-row-visits');

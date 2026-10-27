@@ -33,11 +33,10 @@ Searching this checkout's original tests for `setTimeout`, `sleep(`, and `advanc
 | Engine routes `webhookOutbox.test.ts` | 25ms background-send sleeps | Bind Hono waitUntil and await queue handoff completion before inspecting persisted rows |
 | Engine `a2aFederation.test.ts` | 75ms injected latency plus elapsed-time assertion | Explicit transport gate and entry signal; verify acceptance before delivery and revocation after completion |
 | TypeScript SDK `identity.test.ts` | Up to 50 × 5ms waiting for a socket | Resolve a promise when the node WebSocket is constructed; disconnect in finally |
-| Python SDK `test_node.py` | 1s polling of captured frames/handler state | asyncio.Event on socket sends, registration resolution, and handler shutdown completion |
 | TypeScript SDK `agent-ws`, `client-retry`, `node-provider`, `relay`, `setup`, `ws` tests | Timer advancement | **Retained:** already use fake timers to drive production clocks deterministically |
-| MCP `telemetry.test.ts`; Python `test_client.py`; Rust `client_retry.rs` | Stubbed timer/sleep methods; comment matches | **Retained:** fake transports/sleep recorders, retry counters; no elapsed-time success assertion |
+| MCP `telemetry.test.ts`; Rust `client_retry.rs` | Stubbed timer/sleep methods; comment matches | **Retained:** fake transports/sleep recorders, retry counters; no elapsed-time success assertion |
 
-Suite watchdogs and Python's existing waits on task/connection completion remain deadlock guards. Their values are not correctness assertions. No test sleeps or real-time polling loops remain in the surveyed test bodies.
+Suite watchdogs and existing waits on task/connection completion remain deadlock guards. Their values are not correctness assertions. No test sleeps or real-time polling loops remain in the surveyed test bodies.
 
 ## Red-then-green evidence
 
@@ -131,24 +130,6 @@ Faults below were injected temporarily into the named production behavior (the t
 
 The added harness regression also fails with the `teardown` fault: `AssertionError: expected false to be true // Object.is equality`. Its green run verifies that SQLite stays open until startup completes and closes afterward.
 
-### All 11 directly edited Python test bodies
-
-`python-wire` corrupts handler results/errors, heartbeat active-agent count, spawn input, message sender, and context node name. `python-reconnect` exits the serve loop instead of reconnecting. `python-stop` omits graceful deregistration.
-
-| Test | Fault | Actual red output |
-| --- | --- | --- |
-| `test_invoke_runs_handler_and_replies_with_output` | `python-wire` | AssertionError: assert {'invocation_...sult', 'v': 1} == {'invocation_...sult', 'v': 1} |
-| `test_invoke_supports_a_sync_handler` | `python-wire` | AssertionError: assert None == {'echoed': {'rows': 2}} |
-| `test_handler_throw_becomes_error_result_never_dropped` | `python-wire` | AssertionError: assert {'error': 'lo...sult', 'v': 1} == {'error': 'bo...sult', 'v': 1} |
-| `test_unknown_action_errors_rather_than_dropping` | `python-wire` | AssertionError: assert 'nope' in 'Unknown action' |
-| `test_finite_heartbeat_is_provider_scoped_without_placeholder_load_or_last_heartbeat_at` | `python-wire` | assert 1 == 0 |
-| `test_reconnects_with_new_instance_id_after_unexpected_drop` | `python-reconnect` | TimeoutError |
-| `test_reconnects_when_dropped_during_register_handshake` | `python-reconnect` | TimeoutError |
-| `test_handler_can_call_stop_without_deadlocking` | `python-stop` | AssertionError: assert 0 == 1 |
-| `test_spawn_agent_sends_capacity_direct_node_spawn_frame` | `python-wire` | AssertionError: assert {} == {'cli': 'clau...': 'worker-1'} |
-| `test_send_message_posts_to_canonical_channel_route` | `python-wire` | AssertionError: assert {'from': 'wro...text': 'done'} == {'from': 'rep...text': 'done'} |
-| `test_ctx_node_exposes_name_and_capability_names` | `python-wire` | AssertionError: assert 'wrong-node' == 'alpha' |
-
 ### Pasted run output
 
 MCP retry-reset fault, followed by the restored server suite:
@@ -183,9 +164,6 @@ Cached:    9 cached, 18 total
 The cached tasks in `turbo test` were build dependencies. All nine test tasks executed. Package results: engine 828; MCP 224; TypeScript SDK 445; types 209; A2A 65; React 39; observer dashboard 18; OpenClaw 19; public relaycast 3. All passed; no tests skipped. The full output contains no closed-database or unhandled-error reports.
 
 ```text
-uv run --project packages/sdk-python --extra dev pytest packages/sdk-python/tests -q
-223 passed in 8.27s
-
 node --test test/container-entrypoint.test.mjs
 # tests 14
 # pass 14

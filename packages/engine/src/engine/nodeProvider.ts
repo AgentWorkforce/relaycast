@@ -142,21 +142,14 @@ export async function heartbeatProvider(
   name: string,
   data: { load?: number | null; loadReported?: boolean; activeAgents: number; handlersLive: boolean },
 ): Promise<void> {
-  // Every released provider sent placeholder zeroes. Only the additive
-  // load_reported signal can turn a numeric value into a measurement — and
-  // even then only on a capacity-bounded provider. max_agents is read in
-  // place inside the UPDATE instead of pre-reading the whole provider row,
-  // keeping a steady heartbeat to a single statement.
+  // Placeholder zeroes from older providers remain unknown. An explicit
+  // measurement is useful even without a finite agent cap (e.g. machine load).
   const measured = data.loadReported === true && typeof data.load === 'number';
   await db
     .update(nodeProviders)
     .set({
-      load: measured
-        ? sql`CASE WHEN ${nodeProviders.maxAgents} > 0 THEN ${data.load} ELSE 0 END`
-        : 0,
-      loadReported: measured
-        ? sql`CASE WHEN ${nodeProviders.maxAgents} > 0 THEN 1 ELSE 0 END`
-        : false,
+      load: measured ? data.load! : 0,
+      loadReported: measured,
       activeAgents: data.activeAgents,
       handlersLive: data.handlersLive,
       status: 'online',

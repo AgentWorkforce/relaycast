@@ -11,6 +11,10 @@ import {
 } from '../workspaceEvents.js';
 import { pruneExpired } from '../retention.js';
 
+// bun:sqlite (the standalone binary's driver, under `npm run test:bun`) has no
+// user-defined SQL functions, which this visit-counting probe relies on.
+const userFunctions = !process.versions.bun;
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function openDb(): SqliteDbHandle {
@@ -100,7 +104,7 @@ describe('appendWorkspaceEvent', () => {
     expect(seqs).toEqual([2, 1, 3, 2]);
   });
 
-  it('reads only the high-water row per workspace regardless of retained history', async () => {
+  it.skipIf(!userFunctions)('reads only the high-water row per workspace regardless of retained history', async () => {
     const { db, sqlite } = track(openDb());
     sqlite.exec(`
       WITH RECURSIVE seqs(n) AS (

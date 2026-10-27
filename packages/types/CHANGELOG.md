@@ -13,6 +13,37 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - `ActionInvocationSchema`, `ActionInvocationEventSchema` and `ActionInvocationRegisteredAgentSchema` for the invocation GET, with `ACTION_INVOCATION_EVENT_TYPES` (including `result_refused`), `ACTION_RESULT_REJECTION_REASONS` and `ACTION_INVOCATION_REQUEUE_REASONS`.
 
+## [12.0.0] - 2026-10-27
+
+### Removed
+
+- `WorkspaceSchema.plan`.
+
+## [11.1.0] - 2026-10-27
+
+### Added
+
+- Workspace `plan` accepts `trial`.
+
+## [10.6.1] - 2026-10-18
+
+### Fixed
+
+- `CliTypeSchema`, `CliType`, and `SpawnAgentRequest` now accept `muse` and `devin`, alongside existing `opencode` and `grok` values.
+
+## [10.6.0] - 2026-10-18
+
+### Added
+
+- `WorkspaceSchema.plan` accepts `connect` and `selfhost` (the self-host default, which the schema previously rejected).
+- `RotateWorkspaceKeyRequest` / `RotateWorkspaceKeyResponse` wire schemas and the `relaycast_server_workspace_key_rotated` telemetry event.
+
+## [10.5.0] - 2026-10-16
+
+### Added
+
+- `DeliveryFailedEvent.reason` preserves server rejection reasons such as `recipient_offline` and `depth_cap` for SDK event handlers.
+
 ## [10.4.0] - 2026-10-13
 
 ### Added

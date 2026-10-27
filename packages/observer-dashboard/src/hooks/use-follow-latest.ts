@@ -5,7 +5,7 @@ import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
 const useClientLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
 /** Follow incoming entries within this pane until the reader scrolls away. */
-export function useFollowLatest(scrollRef: RefObject<HTMLDivElement>, latestId?: string) {
+export function useFollowLatest(scrollRef: RefObject<HTMLDivElement | null>, latestId?: string) {
   const following = useRef(true);
 
   useClientLayoutEffect(() => {

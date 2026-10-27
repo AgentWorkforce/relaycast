@@ -1,9 +1,9 @@
-import { recoverAgentViaNode, registerAgentViaNode } from '../../engine/node.js';
+import { deregisterProvider, recoverAgentViaNode, registerAgentViaNode } from '../../engine/node.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { handleProviderDisconnect, markNodeOffline } from '../../node-control.js';
 import { makeNodeStack, createWorkspace, registerAgent, FakeSocket, type TestStack } from './harness.js';
-import { actionInvocations, channelMembers, nodeProviders, nodes } from '../../db/schema.js';
+import { actionInvocations, agents, channelMembers, nodeProviders, nodes } from '../../db/schema.js';
 
 // The provider-disconnect lifecycle is exported from @relaycast/engine/node-control
 // so an out-of-process socket owner — the relaycast-cloud NodeDO — drives it on
@@ -226,6 +226,26 @@ describe('node-control provider-disconnect exports', () => {
 
     expect(await providerStatuses(ws.workspaceId, 'node_a')).toEqual({ py: 'offline', rb: 'offline' });
     expect(await nodeStatus(ws.workspaceId, 'node_a')).toBe('offline');
+  });
+
+  it('does not restart the offline clock when deregistering a provider again', async () => {
+    const ws = await createWorkspace(stack.app, 'exp-provider-offline-clock');
+    await enrollNode(ws, 'node_a', 'alpha');
+    await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'py', 'run-etl');
+    await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'rb', 'build');
+    const agent = await registerAgentViaNode(db(), ws.workspaceId, 'node_a', 'py', {
+      v: 1, type: 'agent.register', name: 'old-offline-agent', auto_join_general: false,
+    });
+    const offlineSince = new Date(Math.floor((Date.now() - 48 * 60 * 60 * 1000) / 1000) * 1000);
+    await db().update(agents)
+      .set({ status: 'offline', lastSeen: offlineSince })
+      .where(eq(agents.id, agent.agent_id));
+
+    await deregisterProvider(db(), stack.runtime.realtime, ws.workspaceId, 'node_a', 'py');
+
+    const [persisted] = await db().select().from(agents).where(eq(agents.id, agent.agent_id));
+    expect(persisted.status).toBe('offline');
+    expect(persisted.lastSeen).toEqual(offlineSince);
   });
 
   it('drops a disconnected provider from the node aggregate, and restores it on reconnect', async () => {

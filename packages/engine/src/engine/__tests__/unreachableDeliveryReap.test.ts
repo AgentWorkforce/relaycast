@@ -207,4 +207,41 @@ describe('deadLetterUnreachableDeliveryBatch', () => {
     expect(batch.expiredCount).toBe(1);
     expect((await deliveryStatus(db, deliveryId)).status).toBe('dead_lettered');
   });
+
+  // Production D1 regression: the global sweep drove from the FK index over
+  // every delivery ever routed to a node (~250k rows read, 3.5-4.6s per run)
+  // to find the few still active.
+  it('reads only active deliveries, never the whole routed-delivery history', async () => {
+    const handle = openDb();
+    const base = await seed(handle.db);
+    const now = new Date();
+    const deadNode = await insertNode(handle.db, base.ws, 'offline', new Date(now.getTime() - UNREACHABLE_NODE_GRACE_MS - 60_000));
+    const settled = await insertQueuedDelivery(handle.db, base, deadNode);
+    await handle.db.update(deliveries).set({ status: 'acked' }).where(eq(deliveries.id, settled));
+    const active = await insertQueuedDelivery(handle.db, base, deadNode);
+
+    const statements: string[] = [];
+    const prepare = handle.sqlite.prepare.bind(handle.sqlite);
+    handle.sqlite.prepare = ((source: string) => {
+      statements.push(source);
+      return prepare(source);
+    }) as typeof handle.sqlite.prepare;
+    let batch: Awaited<ReturnType<typeof deadLetterUnreachableDeliveryBatch>>;
+    try {
+      batch = await deadLetterUnreachableDeliveryBatch(handle.db, undefined, UNREACHABLE_NODE_GRACE_MS, now);
+    } finally {
+      handle.sqlite.prepare = prepare;
+    }
+    expect(batch.notices.map((notice) => notice.delivery_id)).toEqual([active]);
+    expect((await deliveryStatus(handle.db, settled)).status).toBe('acked');
+
+    const candidateSql = statements.find((source) => source.startsWith('select') && source.includes('"nodes"."last_heartbeat_at" asc'));
+    expect(candidateSql).toBeDefined();
+    const params = (candidateSql!.match(/\?/g) ?? []).map(() => 0);
+    const plan = (handle.sqlite.prepare(`EXPLAIN QUERY PLAN ${candidateSql}`).all(...params) as Array<{ detail: string }>)
+      .map((step) => step.detail)
+      .join('\n');
+    expect(plan).toContain('idx_deliveries_active_location_node');
+    expect(plan).not.toContain('idx_deliveries_location_node_fk');
+  });
 });

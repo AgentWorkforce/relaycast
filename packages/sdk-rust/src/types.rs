@@ -34,7 +34,6 @@ pub struct Workspace {
     #[serde(default)]
     pub api_key_hash: String,
     pub system_prompt: Option<String>,
-    pub plan: String,
     pub created_at: String,
     #[serde(default)]
     pub metadata: serde_json::Map<String, serde_json::Value>,

@@ -36,7 +36,12 @@ it('upgrades existing actions and results additively, preserving rows and every 
       '0069_nodes_online_liveness_index.sql',
       '0070_agent_liveness_status.sql',
       '0071_node_liveness_revision.sql',
-      '0074_action_invocation_events.sql',
+      '0073_workspace_key_rotation.sql',
+      '0074_delivery_active_location_node_index.sql',
+      '0075_message_mention_fts.sql',
+      '0076_deliveries_agent_status_created_index.sql',
+      '0077_drop_workspace_plan.sql',
+      '0078_action_invocation_events.sql',
     ]);
     for (const table of before) {
       const columns = db.pragma(`table_info(${table.name})`) as { name: string }[];
@@ -47,7 +52,7 @@ it('upgrades existing actions and results additively, preserving rows and every 
     }
     expect(db.prepare('SELECT execution_mode FROM actions').get()).toEqual({ execution_mode: 'short' });
     expect(db.prepare('SELECT task_state FROM action_invocations').get()).toEqual({ task_state: null });
-    // 0074 backfills every pre-existing invocation with an empty timeline.
+    // 0078 backfills every pre-existing invocation with an empty timeline.
     expect(db.prepare('SELECT events FROM action_invocations').get()).toEqual({ events: '[]' });
     expect(db.pragma('foreign_key_check')).toEqual([]);
     expect(runMigrations(handle).applied).toEqual([]);
