@@ -94,7 +94,7 @@ directoryRoutes.post('/directory/agents', requireWorkspaceKey, rateLimit, async 
 
     const workspace = c.get('workspace');
     const result = await directoryEngine.createDirectoryAgent(c.get('db'), workspace.id, parsed.data);
-    emitServerEvent(c, workspace.id, 'relaycast_server_directory_agent_created', {
+    emitServerEvent(c, workspace.id, 'directory.agent.created', {
       slug: result?.slug,
       skill_count: result?.skills.length ?? 0,
     });
@@ -141,7 +141,7 @@ directoryRoutes.get('/directory/search', requireAuth, rateLimit, async (c) => {
       status: status || undefined,
       limit,
     });
-    emitServerEvent(c, workspace.id, 'relaycast_server_directory_search_executed', {
+    emitServerEvent(c, workspace.id, 'directory.search.executed', {
       query_length: q?.trim().length || 0,
       tag_count: tags?.length || 0,
       result_count: result.length,
@@ -184,7 +184,7 @@ directoryRoutes.patch('/directory/agents/:slug', requireWorkspaceKey, rateLimit,
       return jsonNotFound(c, 'directory_agent_not_found', 'Directory agent not found');
     }
 
-    emitServerEvent(c, workspace.id, 'relaycast_server_directory_agent_updated', {
+    emitServerEvent(c, workspace.id, 'directory.agent.updated', {
       slug: result.slug,
       status: result.status,
     });
@@ -202,7 +202,7 @@ directoryRoutes.delete('/directory/agents/:slug', requireWorkspaceKey, rateLimit
       return jsonNotFound(c, 'directory_agent_not_found', 'Directory agent not found');
     }
 
-    emitServerEvent(c, workspace.id, 'relaycast_server_directory_agent_deleted', {
+    emitServerEvent(c, workspace.id, 'directory.agent.deleted', {
       slug: c.req.param('slug'),
     });
     return jsonNoContent(c);
@@ -240,7 +240,7 @@ directoryRoutes.post('/directory/agents/:slug/ratings', requireAuth, rateLimit, 
       review: parsed.data.review,
     });
 
-    emitServerEvent(c, workspace.id, 'relaycast_server_directory_rating_upserted', {
+    emitServerEvent(c, workspace.id, 'directory.rating.upserted', {
       slug: c.req.param('slug'),
       score: result.score,
       rater_agent_id: agent.id,

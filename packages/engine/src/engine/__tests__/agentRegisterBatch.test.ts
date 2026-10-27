@@ -4,6 +4,7 @@ import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/
 import * as schema from '../../db/schema.js';
 import type { EngineDb } from '../../ports/database.js';
 import { registerAgentViaNode } from '../node.js';
+import { claimSpawnNode, reserveNodeCapacity } from '../placement.js';
 import type { FleetAgentRegisterMessage } from '@relaycast/types';
 
 const handles: SqliteDbHandle[] = [];
@@ -115,6 +116,38 @@ describe('agent.register statement batching', () => {
     expect(node.active_agents).toBe(0);
     const count = f.sqlite.prepare('SELECT COUNT(*) AS n FROM agents WHERE workspace_id = ?').get('ws') as { n: number };
     expect(count.n).toBe(1);
+  });
+
+  it('admits an unlimited node beyond the old desktop cap while counting active and reserved agents', async () => {
+    const f = fixture(`UPDATE nodes SET max_agents = 0, active_agents = 40, reserved_agents = 20 WHERE id = 'node1';`);
+    const reply = await register(f.db);
+    expect(reply.agent_id).toBeTruthy();
+    expect(f.sqlite.prepare('SELECT max_agents, active_agents, reserved_agents FROM nodes WHERE id = ?').get('node1'))
+      .toEqual({ max_agents: 0, active_agents: 41, reserved_agents: 20 });
+  });
+
+  it('reserves unlimited capacity and refuses after an explicit cap is lowered below the load', async () => {
+    const f = fixture(`UPDATE nodes SET max_agents = 0, active_agents = 40, reserved_agents = 20, handlers_live = 1 WHERE id = 'node1';`);
+    expect(await reserveNodeCapacity(f.db, 'ws', 'node1')).toMatchObject({ maxAgents: 0, reservedAgents: 21 });
+    f.sqlite.prepare('UPDATE nodes SET max_agents = 12 WHERE id = ?').run('node1');
+    expect(await reserveNodeCapacity(f.db, 'ws', 'node1')).toBeNull();
+    f.sqlite.prepare('UPDATE nodes SET max_agents = 0 WHERE id = ?').run('node1');
+    expect(await reserveNodeCapacity(f.db, 'ws', 'node1')).toMatchObject({ reservedAgents: 22 });
+  });
+
+  it('balances unlimited nodes using pending work when reported loads tie', async () => {
+    const f = fixture(`
+      UPDATE nodes SET capabilities = '[{"name":"spawn:codex"}]', max_agents = 0,
+        active_agents = 40, reserved_agents = 20, handlers_live = 1,
+        last_heartbeat_at = unixepoch(), load_reported = 1, load = 0.5 WHERE id = 'node1';
+      INSERT INTO nodes(id,workspace_id,name,token_hash,role,status,capabilities,max_agents,
+        active_agents,reserved_agents,handlers_live,last_heartbeat_at,load_reported,load)
+        VALUES ('node2','ws','less-pending','token2','broker','online','[{"name":"spawn:codex"}]',0,
+          41,0,1,unixepoch(),1,0.5);
+    `);
+    const chosen = await claimSpawnNode(f.db, 'ws', { actionName: 'spawn', input: { cli: 'codex' } });
+    expect(chosen.node.id).toBe('node2');
+    expect(chosen.node.reservedAgents).toBe(1);
   });
 
   it('still refuses a full node and leaves no ghost agent behind', async () => {

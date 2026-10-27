@@ -13,6 +13,125 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Agent-token `GET /v1/deliveries/by-message/{messageId}` resolves one pending delivery without the inbox page limit and reveals no other recipient's delivery.
 
+### Fixed
+
+- `GET /v1/agents/presence` counts a node-hosted agent as online while its node and that agent's own provider are live, including agents that make no HTTP calls. Agents of a disconnected provider, agents a live node omits from its inventory, and agents that called `POST /v1/agents/disconnect` without deregistering stay offline.
+- A status patch broadcasts the same derived presence the response returns.
+
+## [12.0.0] - 2026-10-27
+
+### Added
+
+- `AdmissionHooks` (`EngineDeps.admission`, `createNodeRuntime({ admission })`, `startServer({ admission })`): `admit({ workspace, action })` refuses a `request` or `message` with an `AdmissionDenial` (`status`, `code`, `message`, `details`, `retryAt`); `committed(ctx)` reports each successful, non-replayed action; `rateLimitPerMinute(workspace)` overrides the per-minute ceiling. A hook that throws admits the request. A denied keyed message send still replays its stored receipt.
+- `EngineConfig.rateLimitPerMinute` (default 30,000).
+
+### Removed
+
+- `EntitlementsProvider`, `PlanLimits`, `UpgradeGuidance`, `UsageMetric`, `StaticEntitlementsProvider`, `PLAN_LIMITS`, the `checkPlanLimit` / `checkMessageAllowance` middleware, and the usage-counter helpers (`usageCounterKey`, `getUsageMetric`, `lifetimeUsageCounterKey`, `getLifetimeUsageMetric`, `usagePeriod`, `usagePeriodResetAt`). The engine no longer writes `usage:*` KV counters. `KeyValueStore.increment` is removed; the port is `get`/`put`/`delete`.
+- The `workspaces.plan` column (migration `0077_drop_workspace_plan.sql`). A host that keeps tiers must copy the column into its own storage before applying it.
+- `WorkspaceDeliveryPolicyConfig.resolve` receives `{ id }`; it no longer gets `plan`.
+
+## [11.1.0] - 2026-10-27
+
+### Added
+
+- `PLAN_LIMITS.trial` and `PlanLimits.lifetime_messages`: a one-time message allowance enforced on message sends by the new `checkMessageAllowance` middleware; only successful fresh sends are counted (idempotent replays neither count nor get refused), under the never-expiring `usage:<workspace>:messages:lifetime` key (`lifetimeUsageCounterKey`, `getLifetimeUsageMetric`).
+- Optional `EntitlementsProvider.getUpgradeGuidance(workspace, metric)` hook; its URL and action are returned on `plan_limit_exceeded` as `upgrade_url` / `upgrade_action`.
+- Standalone single-file `relaycast-engine` builds (`bun build --compile`, `bun:sqlite`) with the same flags and behaviour as the npm bin; the Node adapter now opens SQLite through a small driver seam, and better-sqlite3 remains the Node driver.
+- `relaycast-engine --version` / `-v` prints the engine version.
+- Outbound webhook DNS pinning also holds when the engine runs under Bun, whose `undici` shim ignores custom dispatchers.
+
+### Fixed
+
+- `GET /v1/deliveries?status=<status>` now reads only the calling agent's rows (migration `0076` adds `idx_deliveries_agent_status_created`). It previously walked every row with that status in the workspace, which on large delivery histories could stall a shared database.
+- Routes that require an agent, node or observer token now answer `401 unauthorized` when the auth provider returns a result without that principal. Previously a host provider that answered a workspace key with a workspace-only result (for example from a cache) sent `POST /v1/agents/:name/rotate-token` into its handler with no agent, which failed with a 500. Observer-readable routes apply the same check, so an observer token resolved without its observer identity no longer reads with the workspace's unscoped access.
+
+## [11.0.0] - 2026-10-22
+
+### Changed
+
+- Replace analytics envelopes with typed domain observations (`kind`, `facts`, `occurredAt`, workspace, sender, and authenticated provenance). Hosts now own event naming, identity, groups, profile policy, and log transport via a generic `logExport` callback. The optional observation sink defaults to a no-op and isolates callback failures.
+
+### Breaking changes
+
+- Hosts implementing `TelemetrySink.capture` must consume `EngineObservation` (`kind` and `facts`) instead of the analytics envelope (`name`, `distinctId`, `properties`, `groups`, `setOnce`, `processPersonProfile`). `TelemetryEvent` now aliases that observation type.
+- `EngineConfig.logExport` accepts an `EngineLogExport` callback instead of PostHog configuration. Hosts provide their own transport; `EngineLogRecord` defines the callback payload.
+- REST and WebSocket contracts are unchanged. Self-hosts using the default observation sink need no analytics adapter.
+
+## [10.6.5] - 2026-10-21
+
+
+### Fixed
+
+- Expose credential-authenticated actor provenance separately from event targets so hosts can verify analytics ownership; fingerprint presented credentials with SHA-256 independently of custom authentication storage. Public metadata cannot identify people.
+- The `0075` mention-index backfill no longer fails on D1 with "Cannot read properties of undefined (reading 'bind')". Each page was committed through drizzle's D1 `batch()`, which cannot bind raw parameterized statements, so the cursor never advanced and inbox stayed on the history scan. Page writes now run sequentially; the copy was already replay-safe.
+
+## [10.6.4] - 2026-10-21
+
+### Added
+
+- `backfillMessageMentionFts` and `MESSAGE_MENTION_BACKFILL_BATCH` are exported from the package root, so hosts can drive the `0075` mention-index copy from their own maintenance instead of waiting on one batch per delivery sweep. Each call copies at most one batch atomically with its cursor, is safe to repeat, and returns `0` once the copy is complete.
+
+### Migration
+
+- Apply `0074_delivery_active_location_node_index.sql` and `0075_message_mention_fts.sql` before updating the worker. The new sweep requires the partial index; mention indexing copies history in bounded maintenance batches while inbox retains its fallback until completion.
+
+### Fixed
+
+- `GET /v1/inbox` finds mention candidates through `messages_mention_fts` (migration `0075`) once that index has caught up, instead of a `LIKE` walk of the whole workspace history. The migration does not rebuild history; delivery sweeps copy it in bounded batches, replaying a batch is safe, and a failed copy does not skip delivery maintenance. Inbox keeps the workspace scan until the copy finishes. Results are unchanged.
+- The unreachable-node delivery sweep reads only active deliveries through the new partial index `idx_deliveries_active_location_node` (migration `0074`), not every delivery ever routed to a node.
+- Every response carries its request id in an `X-Request-Id` header (the header the Rust SDK reads), so client error reports stop showing `request_id: null`.
+- Per-node agent roster and inventory lookups are pinned to `idx_agents_location_node_fk` instead of walking every agent in the workspace.
+- Raw JSON bodies sent to `POST /v1/hooks/:webhookId` (any object without `text`, `message`, `source`, `author` or `payload`, including `{}`) appear in the resulting channel message, capped at 16,000 characters. Their fields are rendered as text only: a third-party `session_ref` or `action_generated` no longer reaches message metadata, session validation or trigger suppression.
+
+## [10.6.3] - 2026-10-19
+
+- Unlimited-capacity nodes retain explicitly reported load for placement; load ties count both active and reserved agents.
+
+
+## [10.6.2] - 2026-10-18
+
+### Changed
+
+- `PLAN_LIMITS.connect.api_calls` rises from 3,000,000 to 10,000,000 (equal to `pro`), sized for a full 10-seat room polling for its 7-day maximum life.
+
+## [10.6.1] - 2026-10-18
+
+### Fixed
+
+- `POST /v1/agents/spawn` accepts `cli: muse` and `cli: devin` through the shared CLI schema.
+- `inventory.sync`'s missing sweep leaves an agent bound while an open built-in release dispatched to that node and provider names it (and its `expected_agent_id`, when set), for up to the dispatch timeout. The release completion deactivates the binding and tombstones the agent; before, the sweep won the race and the completion failed with `agent_identity_mismatch`.
+
+## [10.6.0] - 2026-10-18
+
+### Added
+
+- `PLAN_LIMITS.connect`: a room-sized tier (10 agents, 3,000,000 `api_calls`, 100,000 messages, 1 GiB files, 1,200 requests/min) that a control plane can assign to short-lived collaboration workspaces.
+- `POST /v1/workspace/rotate-key` rotates the authenticated workspace's API key with a bounded `grace_seconds` continuity window for the superseded key (`0` for immediate compromise cutoff). Migration `0073_workspace_key_rotation.sql` adds the `previous_api_key_hash`/`previous_api_key_expires_at` grace slot and the `api_key_generation` ordering fence. `EngineConfig.allowWorkspaceKeyRotation` opts in (default off, so hosted deployments where a control plane owns the canonical key can never serve it).
+
+## [10.5.1] - 2026-10-16
+
+### Fixed
+
+- Offline fanout exclusion now treats a fresh direct-node heartbeat or matching broker-provider heartbeat as proof that a hosted agent remains reachable, so a quiet connected agent is not dropped merely because route heartbeats do not update `agents.last_seen`. Disconnected providers and inventory-confirmed exits no longer inherit another provider's liveness.
+
+## [10.5.0] - 2026-10-16
+
+### Added
+
+- `EngineConfig.mailbox.offlineExcludeMs` (and the matching per-workspace override) bounds how long an effectively-offline agent keeps receiving new channel/group-DM broadcast deliveries before fanout excludes it; defaults to 24h and accepts `0` to disable exclusion.
+
+### Fixed
+
+- `buildChannelDeliveryWrite`/`buildGroupDmDeliveryWrite` no longer insert a new delivery row for a recipient that has been offline past `offlineExcludeMs`, including stale persisted `active`/`online` rows, so a handful of dead agents can no longer exhaust a workspace's shared delivery-depth cap across repeated broadcasts. Idle `http_push` routes remain eligible because they have no socket-liveness signal. `DeliveryRejectionRecord.reason` gained `recipient_offline` alongside `depth_cap` to report the exclusion; 1:1 DM thread replies remain direct deliveries.
+
+## [10.4.2] - 2026-10-16
+
+### Fixed
+
+- `errorResponse` re-throws an error with no `code` that resolves to a 5xx, so it reaches `app.onError` (structured log, telemetry, and any host classifier chained in front of it) instead of being answered as a bare `500 internal_error` in the route. Coded errors and 4xx are still answered in place, with an unchanged body.
+- `app.onError` adds `error.request_id` to 5xx bodies, matching the `request_id` in the request logs.
+
 ## [10.4.1] - 2026-10-15
 
 ### Fixed
@@ -92,7 +211,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Fixed
 
 - Thread reply pagination uses the existing thread index while preserving workspace filtering and decoded fields.
-
 ## [9.2.0] - 2026-10-09
 
 ### Added
@@ -148,7 +266,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- Server events belong to the acting agent's cloud user, carry sender fields and org/workspace groups, and fall back to a non-person workspace id; `TelemetryEvent` gains optional `groups`, `setOnce` and `processPersonProfile` for sinks (see [TELEMETRY.md](../../TELEMETRY.md)).
+- Server events belong to the acting agent's cloud user, carry sender fields and org/workspace groups, and fall back to a non-person workspace id; `TelemetryEvent` gains optional `groups`, `setOnce` and `processPersonProfile` for sinks.
 
 ## [8.14.0] - 2026-09-30
 

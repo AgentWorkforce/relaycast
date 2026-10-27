@@ -106,6 +106,67 @@ describe('agent presence and release lifecycle', () => {
     expect(persisted.status).toBe('active');
   });
 
+  it('broadcasts the derived offline status when a stale agent is patched active', async () => {
+    const ws = await createWorkspace(stack.app, 'stale-status-fanout');
+    const stale = await registerAgent(stack.app, ws.workspaceKey, 'stale-patch');
+    const sock = new FakeSocket();
+    stack.runtime.realtime.attachWorkspaceSocket(ws.workspaceId, sock);
+    await stack.runtime.deps.db
+      .update(agents)
+      .set({ lastSeen: new Date(Date.now() - AGENT_LIVENESS_TTL_MS - 1_000) })
+      .where(eq(agents.id, stale.agentId));
+    const [before] = await stack.runtime.deps.db
+      .select({ lastSeen: agents.lastSeen, status: agents.status })
+      .from(agents)
+      .where(eq(agents.id, stale.agentId));
+
+    const response = await stack.app.request(`/v1/agents/${stale.name}`, {
+      method: 'PATCH',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+      body: JSON.stringify({ status: 'active' }),
+    });
+    expect(response.status).toBe(200);
+    const body = await response.json() as { data: { status: string; last_seen: string } };
+    expect(body.data.status).toBe('offline');
+    expect(body.data.last_seen).toBe(before.lastSeen.toISOString());
+
+    await stack.settle();
+
+    const rows = await stack.runtime.deps.db
+      .select({ type: workspaceEvents.type, payload: workspaceEvents.payload })
+      .from(workspaceEvents)
+      .where(and(
+        eq(workspaceEvents.workspaceId, ws.workspaceId),
+        eq(workspaceEvents.type, 'agent.status.offline'),
+      ));
+    expect(rows).toHaveLength(1);
+    expect(JSON.parse(rows[0].payload)).toMatchObject({
+      type: 'agent.status.offline',
+      status: 'offline',
+    });
+    expect(sock.ofType('agent.status.offline')).toEqual([
+      expect.objectContaining({ type: 'agent.status.offline', status: 'offline' }),
+    ]);
+    expect(sock.ofType('agent.status.active')).toHaveLength(0);
+    expect(await stack.runtime.deps.db
+      .select({ type: workspaceEvents.type })
+      .from(workspaceEvents)
+      .where(and(
+        eq(workspaceEvents.workspaceId, ws.workspaceId),
+        eq(workspaceEvents.type, 'agent.status.active'),
+      ))).toHaveLength(0);
+
+    const [after] = await stack.runtime.deps.db
+      .select({ lastSeen: agents.lastSeen, status: agents.status })
+      .from(agents)
+      .where(eq(agents.id, stale.agentId));
+    expect(after.status).toBe('active');
+    expect(after.lastSeen.getTime()).toBe(before.lastSeen.getTime());
+  });
+
   it('leaves future last_seen untouched on reads and lets maintenance clamp it', async () => {
     const ws = await createWorkspace(stack.app, 'agent-future-presence');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'future-agent');

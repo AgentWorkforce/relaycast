@@ -7,14 +7,16 @@ info:
     All routes are prefixed with `/v1/`. Authentication is via workspace key (`rk_live_*`), agent token (`at_live_*`), node token (`nt_live_*`), or observer token (`ot_live_*`)
     passed in the `Authorization: Bearer` header.
 
-    Authenticated routes are throttled two ways, and the error code says which.
-    `rate_limit_exceeded` is the per-minute ceiling: it always clears inside the
-    window, so `Retry-After` is at most 60 and retrying works.
-    `plan_limit_exceeded` is the plan's API-call quota for the current billing
-    period, which resets only at the period boundary; `Retry-After` reports that
-    boundary and is normally far beyond any retry budget, so treat it as terminal
-    instead of retrying. Both carry `Retry-After` and `X-RateLimit-Reset`, and
-    successful responses carry `X-RateLimit-Limit`/`X-RateLimit-Remaining`.
+    Authenticated routes are throttled by a per-workspace, per-minute ceiling
+    (30,000 by default). `rate_limit_exceeded` always clears inside the window,
+    so `Retry-After` is at most 60 and retrying works. Successful responses
+    carry `X-RateLimit-Limit`/`X-RateLimit-Remaining`.
+
+    A hosting deployment may also refuse requests or message sends through its
+    own admission policy (for example a usage quota). Those errors carry the
+    deployment's own `code`, status and additive fields, and `Retry-After` only
+    when retrying can succeed. Idempotent replays of earlier sends still
+    succeed after a send is refused.
     `GET /workspace` is limited in its own bucket so the identity read used for
     credential validation and launch preflight stays reachable when the
     workspace's data-plane traffic is at its ceiling.
@@ -90,38 +92,33 @@ info:
     legacy strict frame shape. Providers must treat an absent `caller_id` as no
     authenticated caller; `caller_name` is informational and never authority.
 
-    Telemetry attribution (optional, all requests):
+    Origin and correlation hints (optional, all requests):
 
-    Clients may declare who is driving a request so server-side product
-    telemetry can attribute it. These are analytics dimensions only — they
-    never affect authentication, authorization, or routing, and are safe to
-    omit entirely.
+    These caller-declared values are untrusted observational hints. They never
+    establish authentication, authorization, analytics ownership, or routing.
+    Hosts own analytics policy; public metadata and caller identity hints do not
+    select a person in engine observations.
 
     | Header | Query parameter | Meaning |
     | --- | --- | --- |
-    | `X-Relaycast-Origin-Actor` | `origin_actor` | UA-style path identifying the caller, `{app}/{type}[/{name}]` (e.g. `agent-relay-cli/agent/claude-code`). Supersedes the former `X-Relaycast-Harness`. |
-    | `X-Agent-Relay-Distinct-Id` | `agent_relay_distinct_id` | Analytics person key for the caller. |
-    | `X-Agent-Relay-Machine-Id` | `agent_relay_machine_id` | Anonymous hashed id of the host machine. Sent alongside the distinct id, not instead of it. |
-    | `X-Agent-Relay-User-Id` | `agent_relay_user_id` | Signed-in user id from the calling product's own account system. Used as the person key when the acting agent has no `metadata.cloud_user_id`. |
-    | `X-Agent-Relay-Org-Id` | `agent_relay_org_id` | Organization id, for per-customer rollups. |
-    | `X-Agent-Relay-Org-Slug` | `agent_relay_org_slug` | Human-readable organization slug. |
+    | `X-Relaycast-Origin-Actor` | `origin_actor` | UA-style caller path, `{app}/{type}[/{name}]` (e.g. `agent-relay-cli/agent/claude-code`). |
+    | `X-Agent-Relay-Distinct-Id` | `agent_relay_distinct_id` | Caller-declared correlation id. |
+    | `X-Agent-Relay-Machine-Id` | `agent_relay_machine_id` | Caller-declared machine id. |
+    | `X-Agent-Relay-User-Id` | `agent_relay_user_id` | Caller-declared user id. |
+    | `X-Agent-Relay-Org-Id` | `agent_relay_org_id` | Caller-declared organization id. |
+    | `X-Agent-Relay-Org-Slug` | `agent_relay_org_slug` | Caller-declared organization slug. |
 
-    The person key is the acting agent's `metadata.cloud_user_id` when set,
-    then `X-Agent-Relay-User-Id`, then `X-Agent-Relay-Distinct-Id`. Without any
-    of them the event belongs to the workspace and creates no person. Organization
-    and workspace groups come from the workspace's `metadata.cloud_org_id` and
-    `metadata.cloud_workspace_id`.
+    Query parameters support WebSocket upgrades (`/v1/ws`, `/v1/node/ws`);
+    the header takes precedence when both are present.
 
-    The query-parameter forms exist for WebSocket upgrades (`/v1/ws`,
-    `/v1/node/ws`), where browsers cannot set custom headers; the header wins
-    when both are present.
+    Origin actor values are trimmed, lowercased, and capped at 128 characters.
+    Allowed characters are ASCII letters, digits, spaces, and `._-/():=;,+@`.
+    Missing or invalid values become `unknown`.
 
-    Values must match `[A-Za-z0-9._:-]+` and stay within 120 characters for the
-    org slug, 128 for the rest. A value that fails either rule is ignored, and
-    only that dimension is dropped — the request itself is unaffected. Identity
-    values are never truncated to fit: a shortened id would be a different id
-    and could attribute usage to the wrong person or organization.
-    (`X-Agent-Relay-Distinct-Id` predates this rule and still truncates at 128.)
+    Correlation ids are trimmed and must match `[A-Za-z0-9._:-]+`. The org slug
+    limit is 120 characters; the other ids have a 128-character limit. Invalid
+    or oversized values are ignored without rejecting the request, except that
+    `X-Agent-Relay-Distinct-Id` is truncated at 128 characters.
   version: 1.0.0
   contact:
     name: Relaycast
@@ -162,10 +159,10 @@ components:
     Throttled:
       description: >-
         Throttled. `rate_limit_exceeded` is the per-minute ceiling and always
-        clears inside the window; `plan_limit_exceeded` is the billing-period
-        quota and only clears when the period rolls over. `Retry-After` is
-        authoritative for both — treat a value beyond your retry budget as
-        terminal rather than retrying it.
+        clears inside the window. A hosting deployment's admission policy may
+        refuse with its own code. When present, `Retry-After` is authoritative —
+        treat a value beyond your retry budget as terminal rather than retrying
+        it.
       headers:
         Retry-After:
           description: Seconds to wait before retrying.
@@ -1308,7 +1305,7 @@ components:
           nullable: true
           minimum: 0
           maximum: 1
-          description: Normalized managed-agent capacity utilization. Null unless a direct node, or every constituent provider of a broker node, explicitly reports a genuine measurement.
+          description: Explicitly measured normalized utilization (0–1), including machine utilization on unlimited nodes. Null unless a direct node, or every constituent provider of a broker node, explicitly reports a genuine measurement.
         active_agents:
           type: integer
           description: Managed-agent occupancy. Authoritative only while `live` is true; once a node goes offline this is a frozen historical value — see `active_agents_stale`.
@@ -1318,7 +1315,7 @@ components:
         max_agents:
           type: integer
           minimum: 0
-          description: Maximum managed agents. Zero means unlimited capacity.
+          description: Maximum managed agents. Zero means unlimited capacity; active and reserved agents remain counted. Null is not accepted.
         last_heartbeat_at:
           type: string
           format: date-time
@@ -1747,6 +1744,12 @@ components:
             `workspace_expired` with HTTP 401.
         message:
           type: string
+        request_id:
+          type: string
+          description: >-
+            Present on unexpected server errors (5xx). Identifies the request in
+            the server logs; quote it when reporting the error. Every response
+            also carries this id in the `X-Request-Id` header.
 
     SuccessResponse:
       type: object
@@ -2682,7 +2685,12 @@ paths:
       description: >-
         Update agent properties. Platform-managed metadata keys such as
         `identity_key` are rejected; use the dedicated legacy identity claim
-        endpoint for the one supported backfill operation.
+        endpoint for the one supported backfill operation. A `status` write
+        does not renew `last_seen`. The response `status` is derived presence,
+        and workspace WebSocket plus outbound webhook subscribers receive that
+        same value as `agent.status.<status>`. Persisted `active` or legacy
+        `online` older than the five-minute TTL is `offline`, so patching a
+        stale agent to `active` returns and emits `offline`.
       tags:
         - Agents
       security:
@@ -2699,6 +2707,15 @@ paths:
             schema:
               type: object
               properties:
+                status:
+                  type: string
+                  enum: [active, idle, blocked, waiting, offline, online]
+                  description: >-
+                    Requested lifecycle status. `online` is reported as
+                    `active` when `last_seen` is inside the five-minute TTL.
+                    The write does not renew `last_seen`; a stale `active` or
+                    `online` row is returned and broadcast as `offline`
+                    (`agent.status.offline`).
                 persona:
                   type: string
                 metadata:
@@ -3020,7 +3037,7 @@ paths:
                   description: Unique name for the new agent
                 cli:
                   type: string
-                  enum: [claude, codex, gemini, aider, goose, opencode, grok]
+                  enum: [claude, codex, gemini, aider, goose, opencode, grok, muse, devin]
                   description: Which AI CLI tool to use
                 task:
                   type: string
@@ -4385,6 +4402,81 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: >-
+            The request does not authenticate as the agent. `error.code` is
+            `agent_token_invalid` for an unknown or rotated-out agent token,
+            `node_token_forbidden` or `observer_token_forbidden` for those token
+            kinds, `workspace_expired` past the workspace's `expires_at`, and
+            `unauthorized` otherwise: a missing header, a workspace key, or a
+            credential the auth provider resolves without an agent identity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /workspace/rotate-key:
+    post:
+      summary: Rotate workspace API key
+      description: >-
+        Self-rollover for the authenticated workspace. The response carries the
+        replacement key exactly once — persist it, do not log or print it. The
+        superseded key keeps authenticating for `grace_seconds` (default 60) so
+        peers and in-flight callers survive the cutover; `grace_seconds: 0` is
+        the compromise mode and kills the old key immediately. The route is
+        opt-in (`allowWorkspaceKeyRotation` in engine config) and off by
+        default; deployments where a control plane owns the canonical key leave
+        it unset and see `workspace_key_rotation_disabled`.
+      tags:
+        - Workspaces
+      security:
+        - workspaceKey: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                grace_seconds:
+                  type: integer
+                  minimum: 0
+                  maximum: 3600
+                  description: >-
+                    Seconds the superseded key remains authenticatable.
+                    Defaults to 60.
+      responses:
+        '200':
+          description: Workspace key rotated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      workspace_id:
+                        type: string
+                      api_key:
+                        type: string
+                        description: >-
+                          The replacement workspace key, revealed exactly once.
+                      previous_key_expires_at:
+                        type: string
+                        format: date-time
+                        nullable: true
+        '401':
+          description: Authentication required
+        '403':
+          description: Workspace key rotation is disabled on this deployment
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/Throttled'
 
   /workspace/system-prompt:
     get:
@@ -6563,7 +6655,7 @@ paths:
   /hooks/{webhookId}:
     post:
       summary: Trigger inbound webhook
-      description: Trigger a configured inbound webhook. Requires the per-webhook bearer token returned by `POST /webhooks`. Accepts either `{ message, author }` (SDK shape) or `{ text, source, payload }`; `message` maps to message text and `author` is used as the displayed sender without being copied into `source`.
+      description: Trigger a configured inbound webhook. Requires the per-webhook bearer token returned by `POST /webhooks`. Accepts either `{ message, author }` (SDK shape) or `{ text, source, payload }`; `message` maps to message text and `author` is used as the displayed sender without being copied into `source`. A JSON object with none of `text`, `message`, `source`, `author` or `payload` (including `{}`) is rendered as JSON in the message text, capped at 16,000 characters; its fields are not read as message metadata, so they never set `session_ref` or suppress message triggers.
       tags:
         - Webhooks
       security:

@@ -14,7 +14,7 @@ import { fanoutToChannel } from './fanout.js';
 import { routeDeliveryOutcomes } from './deliveryRouting.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
-import { emitServerEvent, loadTelemetryWorkspace } from '../lib/serverTelemetry.js';
+import { emitServerEvent } from '../lib/serverTelemetry.js';
 import {
   jsonCreated,
   jsonNoContent,
@@ -73,7 +73,7 @@ inboundWebhookRoutes.post('/webhooks', requireWorkspaceKey, rateLimit, async (c)
       ch.id,
       { name },
     );
-    emitServerEvent(c, workspace.id, 'relaycast_server_inbound_webhook_created', {
+    emitServerEvent(c, workspace.id, 'inbound.webhook.created', {
       webhook_id: result.webhook_id,
       channel_name: channel,
     });
@@ -108,7 +108,7 @@ inboundWebhookRoutes.delete('/webhooks/:id', requireWorkspaceKey, rateLimit, asy
     if (!deleted) {
       return jsonNotFound(c, 'webhook_not_found', 'Webhook not found');
     }
-    emitServerEvent(c, workspace.id, 'relaycast_server_inbound_webhook_deleted', {
+    emitServerEvent(c, workspace.id, 'inbound.webhook.deleted', {
       webhook_id: c.req.param('id'),
     });
     return jsonNoContent(c);
@@ -127,6 +127,13 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
       return parsed.response;
     }
     const { text, message, source, author, payload } = parsed.data;
+    // A body with none of the envelope fields is a third party's own event
+    // (e.g. Roma's envelope). Render it as text only; never read its fields
+    // as message metadata, session_ref or trigger control flags.
+    const rawEvent = text === undefined && message === undefined && source === undefined
+      && author === undefined && payload === undefined
+      ? parsed.data as Record<string, unknown>
+      : undefined;
     const result = await inboundWebhookEngine.triggerWebhook(
       db,
       c.req.param('webhookId'),
@@ -136,6 +143,7 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
         source,
         author: author ?? source,
         payload: (payload && typeof payload === 'object') ? payload as Record<string, unknown> : undefined,
+        rawEvent,
       },
       {
         mailbox: (workspaceId) => resolveMailboxConfig(c.get('engine').config, workspaceId),
@@ -208,14 +216,13 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
     runInBackground(
       c,
       (async () => {
-        const workspace = await loadTelemetryWorkspace(db, workspace_id);
-        emitServerEvent(c, workspace_id, 'relaycast_server_inbound_webhook_triggered', {
+        emitServerEvent(c, workspace_id, 'inbound.webhook.triggered', {
           webhook_id: result.webhook_id,
           message_id: result.message_id,
           channel_id,
           source: result.source ?? null,
           author: result.author ?? null,
-        }, { workspace });
+        }, {});
       })(),
       'emit inbound webhook telemetry',
     );

@@ -1,3 +1,5 @@
+import { safeTelemetrySink } from '../../ports/telemetry.js';
+import { NoopTelemetrySink } from '../../providers/noop-telemetry.js';
 import type { EngineDeps } from '../../ports/index.js';
 import { sweepDueNodeDeliveries, sweepExpiredDeliveries } from '../../routes/deliveryRouting.js';
 
@@ -18,6 +20,7 @@ export function createDeliveryMaintenanceRunner(
     sweepExpiry: sweepExpiredDeliveries,
   },
 ): () => Promise<void> {
+  const telemetry = safeTelemetrySink(deps.telemetry ?? new NoopTelemetrySink());
   let running: Promise<void> | undefined;
 
   return () => {
@@ -27,7 +30,7 @@ export function createDeliveryMaintenanceRunner(
       try {
         await operations.sweepNodeDeliveries(deps);
       } catch (err) {
-        deps.telemetry.captureException(err, {
+        telemetry.captureException(err, {
           source: 'node.maintenance',
           op: 'node_delivery',
         });
@@ -36,7 +39,7 @@ export function createDeliveryMaintenanceRunner(
       try {
         await operations.sweepExpiry(deps);
       } catch (err) {
-        deps.telemetry.captureException(err, {
+        telemetry.captureException(err, {
           source: 'node.maintenance',
           op: 'delivery_expiry',
         });
