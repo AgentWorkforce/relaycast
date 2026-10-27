@@ -12,6 +12,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Fixed
 
 - A message trigger cannot invoke builtin `release`.
+- A status patch broadcasts the same derived presence the response returns.
 
 ## [12.0.0] - 2026-10-27
 
