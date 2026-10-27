@@ -92,8 +92,8 @@ export type AgentPresenceInfo = z.infer<typeof AgentPresenceInfoSchema>;
 
 // === Spawn/Release (Agent Lifecycle) ===
 
-/** Harnesses Relaycast has always named; spawn is not limited to these. */
-export const KNOWN_CLI_TYPES = ['claude', 'codex', 'gemini', 'aider', 'goose', 'opencode', 'grok'] as const;
+/** Named harnesses, including Muse and Devin; spawn is not limited to these. */
+export const KNOWN_CLI_TYPES = ['claude', 'codex', 'gemini', 'aider', 'goose', 'opencode', 'grok', 'muse', 'devin'] as const;
 export type KnownCliType = (typeof KNOWN_CLI_TYPES)[number];
 
 /**

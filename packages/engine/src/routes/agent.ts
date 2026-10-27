@@ -323,7 +323,7 @@ agentRoutes.post(
           metadata: nextMetadata,
         });
       }
-      emitServerEvent(c, workspace.id, 'relaycast_server_agent_registered', {
+      emitServerEvent(c, workspace.id, 'agent.registered', {
         agent_id: result.id,
         agent_name: result.name,
         agent_type: type ?? 'agent',
@@ -504,7 +504,7 @@ agentRoutes.post(
         node_id: parsed.data.node_id,
         audit_id: result.audit_id,
       });
-      emitServerEvent(c, workspace.id, 'relaycast_server_agent_identity_taken_over', {
+      emitServerEvent(c, workspace.id, 'agent.identity.taken.over', {
         agent_id: target.id,
         agent_name: target.name,
         audit_id: result.audit_id,
@@ -549,7 +549,7 @@ agentRoutes.post(
         nodeId: parsed.data.node_id,
         originActor: c.get('originActor'),
       });
-      emitServerEvent(c, workspace.id, 'relaycast_server_agent_token_revoked', {
+      emitServerEvent(c, workspace.id, 'agent.token.revoked', {
         agent_id: target.id,
         agent_name: target.name,
         audit_id: result.audit_id,
@@ -672,9 +672,11 @@ agentRoutes.patch(
         });
       }
       if (body.status !== undefined) {
-        await fanoutAgentStatus(c, updated, body.status);
+        // `updated.status` is derived presence. A stale `last_seen` reports
+        // offline even when the caller wrote `active`; the event must match.
+        await fanoutAgentStatus(c, updated, updated.status);
       }
-      emitServerEvent(c, workspace.id, 'relaycast_server_agent_updated', {
+      emitServerEvent(c, workspace.id, 'agent.updated', {
         agent_name: name,
         changed_status: typeof body?.status === 'string',
         changed_persona: typeof body?.persona === 'string',
@@ -749,7 +751,7 @@ agentRoutes.patch(
         status: updated.status,
         metadata: updated.metadata ?? {},
       });
-      emitServerEvent(c, workspace.id, 'relaycast_server_legacy_identity_claimed', {
+      emitServerEvent(c, workspace.id, 'legacy.identity.claimed', {
         agent_name: name,
       });
       return jsonOk(c, updated);
@@ -773,7 +775,7 @@ agentRoutes.delete(
       if (!deleted) {
         return agentNotFound(c, name);
       }
-      emitServerEvent(c, workspace.id, 'relaycast_server_agent_deleted', {
+      emitServerEvent(c, workspace.id, 'agent.deleted', {
         agent_name: name,
       });
       return jsonNoContent(c);
@@ -845,7 +847,7 @@ agentRoutes.post(
         workspaceId: workspace.id,
         data: eventData,
       });
-      emitServerEvent(c, workspace.id, 'relaycast_server_action_invoked', {
+      emitServerEvent(c, workspace.id, 'action.invoked', {
         action_name: result.action_name,
         invocation_id: result.invocation_id,
         caller_agent_id: callerAgent?.id ?? null,
@@ -1063,7 +1065,7 @@ agentRoutes.post(
         workspaceId: workspace.id,
         data: eventData,
       });
-      emitServerEvent(c, workspace.id, 'relaycast_server_action_invoked', {
+      emitServerEvent(c, workspace.id, 'action.invoked', {
         action_name: result.action_name,
         invocation_id: result.invocation_id,
         caller_agent_id: callerAgent?.id ?? null,

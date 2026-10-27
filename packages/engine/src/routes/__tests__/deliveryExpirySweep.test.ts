@@ -4,6 +4,7 @@ import type { EngineDeps } from '../../ports/index.js';
 import {
   DELIVERY_EXPIRY_MAX_BATCHES,
   sweepExpiredDeliveries,
+  sweepUnreachableDeliveries,
 } from '../deliveryRouting.js';
 
 const deps = {} as EngineDeps;
@@ -29,5 +30,21 @@ describe('scheduled delivery expiry drain', () => {
     await expect(sweepExpiredDeliveries(deps, { maxBatches: Number.MAX_SAFE_INTEGER }))
       .resolves.toBe(DELIVERY_EXPIRY_MAX_BATCHES * deliveryEngine.DELIVERY_EXPIRY_BATCH_SIZE);
     expect(expire).toHaveBeenCalledTimes(DELIVERY_EXPIRY_MAX_BATCHES);
+  });
+
+  it('keeps sweeping when mention backfill fails', async () => {
+    const expire = vi.spyOn(deliveryEngine, 'expireDueDeliveryBatch')
+      .mockResolvedValue({ expiredCount: 3, notices: [] });
+    const unreachable = vi.spyOn(deliveryEngine, 'deadLetterUnreachableDeliveryBatch')
+      .mockResolvedValue({ expiredCount: 2, notices: [] });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const db = {
+      all: vi.fn().mockRejectedValue(new Error('UNIQUE constraint failed: messages_mention_fts_docsize.id')),
+    };
+
+    await expect(sweepExpiredDeliveries({ db } as EngineDeps)).resolves.toBe(3);
+    await expect(sweepUnreachableDeliveries({ db } as EngineDeps)).resolves.toBe(2);
+    expect(expire).toHaveBeenCalledTimes(1);
+    expect(unreachable).toHaveBeenCalledTimes(1);
   });
 });

@@ -698,6 +698,16 @@ describe('SDK v8 service contract', () => {
     });
     expect(wrongAuth.status).toBe(401);
 
+    const rawEvent = { event: 'task.updated', task: { id: 'roma-42', title: 'Review changes' } };
+    const rawTrigger = await stack.app.request(`/v1/hooks/${created.data.webhook_id}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${created.data.token}` },
+      body: JSON.stringify(rawEvent),
+    });
+    expect(rawTrigger.status).toBe(201);
+    const rawTriggered = await rawTrigger.json() as { data: { text: string } };
+    expect(rawTriggered.data.text).toContain(JSON.stringify(rawEvent));
+
     await stack.runtime.deps.db
       .update(webhooks)
       .set({ tokenHash: null })

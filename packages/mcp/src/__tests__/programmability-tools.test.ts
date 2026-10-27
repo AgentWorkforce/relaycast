@@ -5,6 +5,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerProgrammabilityTools } from '../tools/programmability.js';
 
 const mockRelay = {
+  agents: { spawn: vi.fn() },
   webhooks: {
     create: vi.fn(),
     list: vi.fn(),
@@ -48,6 +49,28 @@ describe('programmability tools', () => {
     client = new Client({ name: 'test-client', version: '0.1.0' });
     const [ct, st] = InMemoryTransport.createLinkedPair();
     await Promise.all([client.connect(ct), mcpServer.connect(st)]);
+  });
+
+  it.each(['muse', 'devin', 'opencode', 'grok'])('agent.add accepts %s and forwards its CLI', async (cli) => {
+    mockRelay.agents.spawn.mockResolvedValue({ invocationId: 'inv_spawn', status: 'invoked' });
+    const result = await client.callTool({
+      name: 'agent.add',
+      arguments: { name: 'worker', cli, task: 'Review the code' },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(mockRelay.agents.spawn).toHaveBeenCalledWith({
+      name: 'worker', cli, task: 'Review the code',
+      channel: undefined, persona: undefined, metadata: undefined,
+    });
+  });
+
+  it('agent.add rejects a malformed CLI before dispatch', async () => {
+    const result = await client.callTool({
+      name: 'agent.add',
+      arguments: { name: 'worker', cli: 'Muse', task: 'Review the code' },
+    });
+    expect(result.isError).toBe(true);
+    expect(mockRelay.agents.spawn).not.toHaveBeenCalled();
   });
 
   // === Webhooks ===

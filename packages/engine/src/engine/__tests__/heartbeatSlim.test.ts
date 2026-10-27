@@ -149,7 +149,7 @@ describe('node.heartbeat without a capabilities snapshot', () => {
       type: 'node.heartbeat',
       active_agents: 3,
       handlers_live: true,
-      load: 42,
+      load: 0.42,
       load_reported: true,
       ...overrides,
     });
@@ -174,7 +174,7 @@ describe('node.heartbeat without a capabilities snapshot', () => {
     };
     expect(row).toMatchObject({
       status: 'online', handlers_live: 1, max_agents: 4,
-      active_agents: 3, load: 42, load_reported: 1,
+      active_agents: 3, load: 0.42, load_reported: 1,
     });
   });
 
@@ -201,16 +201,16 @@ describe('node.heartbeat without a capabilities snapshot', () => {
     expect(node?.capabilities?.map((cap) => cap.name)).toEqual(['enrolled']);
   });
 
-  it('does not count load on a capacity-unbounded provider', async () => {
+  it('keeps explicitly measured load on a capacity-unbounded provider', async () => {
     const f = fixture();
     f.sqlite.prepare('UPDATE node_providers SET max_agents = 0 WHERE id = ?').run('prov1');
     const node = await steadyBeat(f);
     const row = f.sqlite.prepare('SELECT load, load_reported, max_agents FROM nodes WHERE id = ?').get('node1') as
       { load: number; load_reported: number; max_agents: number };
-    // The unbounded sentinel survives aggregation and the load signal is
-    // discarded, matching the previous read-then-write rule.
-    expect(row).toMatchObject({ load: 0, load_reported: 0, max_agents: 0 });
-    expect(node?.load).toBeNull();
+    expect(row).toMatchObject({ load: 0.42, load_reported: 1, max_agents: 0 });
+    expect(node?.load).toBe(0.42);
+    const unknown = await steadyBeat(f, { load: 0, load_reported: false });
+    expect(unknown?.load).toBeNull();
   });
 
   it('marks the node offline when no provider stays online', async () => {

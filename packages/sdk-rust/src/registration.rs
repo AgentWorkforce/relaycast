@@ -67,6 +67,10 @@ fn normalize_cli(raw: &str) -> Option<String> {
         "gemini" => "gemini",
         "aider" => "aider",
         "goose" => "goose",
+        "opencode" => "opencode",
+        "grok" => "grok",
+        "muse" => "muse",
+        "devin" => "devin",
         _ => return None,
     };
 
@@ -366,6 +370,7 @@ impl AgentRegistrationClient {
                 request_id,
                 attempts,
                 retry_after_ms,
+                ..
             }) => {
                 let cooldown = registration_cooldown_duration(retry_after_ms);
                 let retry_after_secs = cooldown.as_secs();
@@ -561,6 +566,21 @@ mod tests {
         assert_eq!(normalize_cli("codex"), Some("codex".to_string()));
         assert_eq!(normalize_cli("node /tmp/claude-code.js"), None);
         assert_eq!(normalize_cli("python /tmp/unknown.py"), None);
+    }
+
+    #[test]
+    fn registration_cli_preserves_supported_harnesses() {
+        for cli in [
+            "claude", "codex", "gemini", "aider", "goose", "opencode", "grok", "muse", "devin",
+        ] {
+            assert_eq!(normalize_cli(cli).as_deref(), Some(cli));
+            assert_eq!(
+                normalize_cli(&format!("/usr/local/bin/{cli} --version")).as_deref(),
+                Some(cli)
+            );
+            assert_eq!(registration_cli_from_hint(Some(cli), "claude"), cli);
+            assert_eq!(registration_cli_from_hint(None, cli), cli);
+        }
     }
 
     #[test]

@@ -414,3 +414,27 @@ describe('fleet wire fixtures', () => {
     });
   });
 });
+
+
+it('accepts the documented unlimited sentinel and finite caps on registration and heartbeats', () => {
+  for (const type of ['node.register', 'node.heartbeat']) {
+    const frame = JSON.parse(fs.readFileSync(path.join(FIXTURE_DIR, `${type}.json`), 'utf8'));
+    for (const max_agents of [0, 1, 12, 32]) {
+      expect(FleetBrokerToRelaycastMessageSchema.safeParse({ ...frame, max_agents }).success).toBe(true);
+    }
+    for (const max_agents of [null, -1, 1.5]) {
+      expect(FleetBrokerToRelaycastMessageSchema.safeParse({ ...frame, max_agents }).success).toBe(false);
+    }
+  }
+});
+
+
+it('keeps measured utilization normalized on unlimited heartbeat frames', () => {
+  const frame = JSON.parse(fs.readFileSync(path.join(FIXTURE_DIR, 'node.heartbeat.json'), 'utf8'));
+  for (const load of [0, 0.75, 1]) {
+    expect(FleetBrokerToRelaycastMessageSchema.safeParse({ ...frame, max_agents: 0, load, load_reported: true }).success).toBe(true);
+  }
+  for (const load of [null, -1, 2.5]) {
+    expect(FleetBrokerToRelaycastMessageSchema.safeParse({ ...frame, max_agents: 0, load, load_reported: true }).success).toBe(false);
+  }
+});

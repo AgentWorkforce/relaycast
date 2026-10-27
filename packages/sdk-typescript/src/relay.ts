@@ -36,6 +36,8 @@ import type {
   DmReceivedEvent,
   WorkspaceDmConversation,
   TokenRotateResponse,
+  RotateWorkspaceKeyRequest,
+  RotateWorkspaceKeyResponse,
   MessageListQuery,
   MessageCreatedEvent,
   MessageReadEvent,
@@ -99,9 +101,12 @@ import type {
   ConsoleCostStats,
   ThreadReplyEvent,
   WsClientEvent,
+  AgentExitedEvent,
   AgentStatusActiveEvent,
   AgentStatusChangedEvent,
   AgentStatusOfflineEvent,
+  NodeStatusOnlineEvent,
+  NodeStatusOfflineEvent,
   ChannelCreatedEvent,
   ChannelUpdatedEvent,
   ChannelArchivedEvent,
@@ -418,6 +423,12 @@ export class RelayCast {
     agentStatusChanged: (handler: (e: AgentStatusChangedEvent) => void): (() => void) => this.onEvent('agent.status.changed', handler),
     agentActive:     (handler: (e: AgentStatusActiveEvent) => void): (() => void)  => this.onEvent('agent.status.active', handler),
     agentOffline:    (handler: (e: AgentStatusOfflineEvent) => void): (() => void) => this.onEvent('agent.status.offline', handler),
+    agentExited:     (handler: (e: AgentExitedEvent) => void): (() => void)     => this.onEvent('agent.exited', handler),
+    // Node liveness is published on this workspace stream (`/v1/ws`) and to
+    // webhooks. It is not delivered to an agent mailbox, so AgentClient does
+    // not expose these handlers.
+    nodeOnline:      (handler: (e: NodeStatusOnlineEvent) => void): (() => void) => this.onEvent('node.status.online', handler),
+    nodeOffline:     (handler: (e: NodeStatusOfflineEvent) => void): (() => void) => this.onEvent('node.status.offline', handler),
     channelCreated:  (handler: (e: ChannelCreatedEvent) => void): (() => void)  => this.onEvent('channel.created', handler),
     channelUpdated:  (handler: (e: ChannelUpdatedEvent) => void): (() => void)  => this.onEvent('channel.updated', handler),
     channelArchived: (handler: (e: ChannelArchivedEvent) => void): (() => void) => this.onEvent('channel.archived', handler),
@@ -757,6 +768,15 @@ export class RelayCast {
       this.reconnect(data, options),
     update: (data: UpdateWorkspaceRequest): Promise<Workspace> =>
       this.client.patch('/v1/workspace', data),
+    /**
+     * Replace the workspace API key. The response carries the replacement
+     * exactly once; persist it (do not print it). `graceSeconds` keeps the
+     * superseded key authenticatable for propagation — pass `0` when the old
+     * key may be compromised. Hosted deployments manage keys through the
+     * control plane and refuse this call.
+     */
+    rotateKey: (data?: RotateWorkspaceKeyRequest): Promise<RotateWorkspaceKeyResponse> =>
+      this.client.post('/v1/workspace/rotate-key', data ?? {}),
     delete: (workspaceId?: string): Promise<void> => workspaceId === undefined
       ? this.client.delete('/v1/workspace')
       : this.client.delete(`/v1/workspaces/${encodeURIComponent(workspaceId)}`),

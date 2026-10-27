@@ -1,40 +1,52 @@
 import { lookup } from 'node:dns';
+import type { LookupFunction } from 'node:net';
 import { Agent, fetch as undiciFetch, type RequestInit as UndiciRequestInit } from 'undici';
 import { isGlobalIpAddress, isSafeExternalUrl } from '../../lib/ssrf.js';
+import { createLookupPinnedHttpsFetch } from './pinned-https-fetch.js';
 
-const dispatcher = new Agent({
-  connect: {
-    // This callback is the connection's DNS lookup, not a preflight lookup.
-    // Undici therefore opens the socket to the exact address classified here
-    // while preserving the URL hostname for Host/SNI/TLS verification.
-    lookup(hostname, options, callback) {
-      lookup(hostname, { all: true, verbatim: true }, (error, addresses) => {
-        if (error) {
-          callback(error, '', 0);
-          return;
-        }
-        const unsafe = addresses.find((entry) => !isGlobalIpAddress(entry.address));
-        if (unsafe || addresses.length === 0) {
-          const rejection = Object.assign(
-            new Error(`Outbound webhook DNS resolved to a non-global address for ${hostname}`),
-            { code: 'ENOTFOUND' },
-          );
-          callback(rejection, '', 0);
-          return;
-        }
-        if (options.all) {
-          callback(null, addresses);
-        } else {
-          callback(null, addresses[0].address, addresses[0].family);
-        }
-      });
-    },
-  },
-});
+/**
+ * The connection's DNS lookup, not a preflight lookup: the transport opens the
+ * socket to the exact address classified here while preserving the URL
+ * hostname for Host/SNI/TLS verification.
+ */
+const pinnedGlobalLookup: LookupFunction = (hostname, options, callback) => {
+  lookup(hostname, { all: true, verbatim: true }, (error, addresses) => {
+    if (error) {
+      callback(error, '', 0);
+      return;
+    }
+    const unsafe = addresses.find((entry) => !isGlobalIpAddress(entry.address));
+    if (unsafe || addresses.length === 0) {
+      const rejection = Object.assign(
+        new Error(`Outbound webhook DNS resolved to a non-global address for ${hostname}`),
+        { code: 'ENOTFOUND' },
+      );
+      callback(rejection, '', 0);
+      return;
+    }
+    if (options.all) {
+      callback(null, addresses);
+    } else {
+      callback(null, addresses[0].address, addresses[0].family);
+    }
+  });
+};
+
+const dispatcher = new Agent({ connect: { lookup: pinnedGlobalLookup } });
+
+/**
+ * Under Bun (the standalone binary, or the package run with `bun`), `undici`
+ * resolves to Bun's built-in shim, whose `fetch` ignores `dispatcher` — the
+ * pinned lookup above would silently stop applying. Bun's `node:https`
+ * honours `lookup`, so use it there; Node keeps undici.
+ */
+const pinnedTransport = (
+  typeof process.versions.bun === 'string' ? createLookupPinnedHttpsFetch(pinnedGlobalLookup) : undiciFetch
+) as typeof undiciFetch;
 
 /** HTTPS-only fetch whose connector validates and pins DNS answers at connect time. */
 export function createNodeSafeWebhookFetch(
-  fetchImpl: typeof undiciFetch = undiciFetch,
+  fetchImpl: typeof undiciFetch = pinnedTransport,
 ): typeof globalThis.fetch {
   return async (input, init) => {
     const rawUrl = typeof input === 'string'

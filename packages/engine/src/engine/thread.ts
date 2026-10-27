@@ -11,7 +11,7 @@ import {
   type DeliveryOutcomeRecords,
 } from './deliveryWrites.js';
 import { displayAgentName, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
-import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
+import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS, type MailboxConfig } from './mailboxConfig.js';
 import type { WorkspaceDeliveryPolicy } from './workspaceDeliveryPolicy.js';
 import { codedError } from '../lib/httpError.js';
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
@@ -47,7 +47,7 @@ export async function postReply(
 
   const [ch] = await db.select({ name: channels.name }).from(channels).where(eq(channels.id, parent.channelId));
   const [dmConversation] = await db
-    .select({ id: dmConversations.id })
+    .select({ id: dmConversations.id, dmType: dmConversations.dmType })
     .from(dmConversations)
     .where(eq(dmConversations.channelId, parent.channelId));
 
@@ -73,6 +73,7 @@ export async function postReply(
   const mailbox = options.mailbox ?? {
     ttlMs: DEFAULT_MAILBOX_TTL_MS,
     depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
+    offlineExcludeMs: DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS,
   };
 
   // Durable writes run as one atomic unit when the adapter supports it; fanout
@@ -116,6 +117,8 @@ export async function postReply(
           mode: 'immediate',
           ttlMs: mailbox.ttlMs,
           depthCap: mailbox.depthCap,
+          offlineExcludeMs: mailbox.offlineExcludeMs,
+          excludeLongOffline: dmConversation.dmType !== '1:1',
           workspacePolicy: options.workspaceDeliveryPolicy,
         })
         : buildChannelDeliveryWrite(writeDb, {
@@ -126,6 +129,7 @@ export async function postReply(
           mode: 'immediate',
           ttlMs: mailbox.ttlMs,
           depthCap: mailbox.depthCap,
+          offlineExcludeMs: mailbox.offlineExcludeMs,
           reason: 'thread-reply',
           mentionHandles: Array.from(mentionedHandles),
           workspacePolicy: options.workspaceDeliveryPolicy,
@@ -140,12 +144,15 @@ export async function postReply(
       messageId: replyId,
       conversationId: dmConversation.id,
       senderAgentId: agentId,
+      offlineExcludeMs: mailbox.offlineExcludeMs,
+      excludeLongOffline: dmConversation.dmType !== '1:1',
     })
     : await fetchChannelDeliveryOutcomes(db, {
       messageId: replyId,
       channelId: parent.channelId,
       senderAgentId: agentId,
       mentionHandles: Array.from(mentionedHandles),
+      offlineExcludeMs: mailbox.offlineExcludeMs,
     });
 
   return {

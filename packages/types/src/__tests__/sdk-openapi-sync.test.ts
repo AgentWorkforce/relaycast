@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-type SdkName = 'typescript' | 'rust' | 'python' | 'swift';
+type SdkName = 'typescript' | 'rust' | 'swift';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 const OPENAPI_PATH = path.join(REPO_ROOT, 'openapi.yaml');
@@ -11,17 +11,13 @@ const OPENAPI_PATH = path.join(REPO_ROOT, 'openapi.yaml');
 const SDK_SOURCE_ROOTS: Record<SdkName, string> = {
   typescript: path.join(REPO_ROOT, 'packages/sdk-typescript/src'),
   rust: path.join(REPO_ROOT, 'packages/sdk-rust/src'),
-  python: path.join(REPO_ROOT, 'packages/sdk-python/src/relay_sdk'),
   swift: path.join(REPO_ROOT, 'packages/sdk-swift/Sources'),
 };
 
-const SOURCE_EXTENSIONS = new Set(['.ts', '.tsx', '.rs', '.py', '.swift']);
+const SOURCE_EXTENSIONS = new Set(['.ts', '.tsx', '.rs', '.swift']);
 const IGNORED_SEGMENTS = new Set([
   '__tests__',
-  '__pycache__',
   '.build',
-  '.pytest_cache',
-  '.venv',
   'dist',
   'node_modules',
   'target',

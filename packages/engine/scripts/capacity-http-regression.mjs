@@ -8,6 +8,7 @@ import { drizzle } from 'drizzle-orm/d1';
 import { Miniflare } from 'miniflare';
 import Database from 'better-sqlite3';
 import { buildChannelDeliveryWrite, buildDirectDeliveryWrite } from '../dist/engine/deliveryWrites.js';
+import { DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS } from '../dist/engine/mailboxConfig.js';
 import { runAtomicWrites } from '../dist/ports/database.js';
 import { resolveWorkspaceDeliveryPolicyFor, resolveWorkspaceDeliveryPolicy } from '../dist/engine/workspaceDeliveryPolicy.js';
 import { deriveRelayfileInboundSecret } from '../dist/routes/relayfileInbound.js';
@@ -50,7 +51,7 @@ try {
  try {
   const baseline=sqlite.prepare("SELECT name,sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 ELSE 2 END,rowid").all().filter(row=>!shadow.has(row.name)&&row.name !== 'a2a_egress' && !row.name.startsWith('idx_a2a_egress_'));
   for(const row of baseline){upgradeSqlite.exec(row.sql);await upgradeD1.prepare(row.sql).run();}
-  const seed="INSERT INTO workspaces(id,name,api_key_hash,plan) VALUES('upgrade','upgrade','upgrade','enterprise')";
+  const seed="INSERT INTO workspaces(id,name,api_key_hash) VALUES('upgrade','upgrade','upgrade')";
   upgradeSqlite.exec(seed);await upgradeD1.prepare(seed).run();
   const migration=readFileSync(new URL('../src/db/migrations/0057_a2a_egress.sql',import.meta.url),'utf8');
   for(let repeat=0;repeat<2;repeat++){
@@ -73,7 +74,7 @@ try {
   const policies=new Map();let resolves=0;const background=[];
   const kvMap=new Map();let failCompletion=false;let completionFailures=0;
   const deps={...runtime.deps,db,
-    config:{environment:'test',relayfileInboundSecret:'fixture-only',workspaceDelivery:{resolve:async workspace=>{await Promise.resolve();resolves++;assert.equal(workspace.plan,'enterprise');return policies.get(workspace.id);}}},
+    config:{environment:'test',relayfileInboundSecret:'fixture-only',workspaceDelivery:{resolve:async workspace=>{await Promise.resolve();resolves++;assert.deepEqual(Object.keys(workspace),['id']);return policies.get(workspace.id);}}},
     kv:{get:async k=>kvMap.get(k)??null,put:async(k,v)=>{if(failCompletion&&!k.endsWith(':lock')){completionFailures++;throw Error('fixture KV completion failure');}kvMap.set(k,v);},delete:async k=>{kvMap.delete(k);}},
     rateLimiter:{check:async()=>({allowed:true,remaining:10000,resetAt:Date.now()+1000})},
     webhookQueue:{send:async()=>{}},
@@ -87,7 +88,7 @@ try {
   const expectStatus=(r,status)=>assert.equal(r.status,status,JSON.stringify(r));
   async function seed(label,n=1,policy={cap:n,reserve:0}){
     const ws=adapter+'-'+label; policies.set(ws,policy);
-    await run("INSERT INTO workspaces(id,name,api_key_hash,plan) VALUES(?,?,?,'enterprise')",ws,ws,hash('rk_live_'+ws));
+    await run("INSERT INTO workspaces(id,name,api_key_hash) VALUES(?,?,?)",ws,ws,hash('rk_live_'+ws));
     for(let i=0;i<=(n>10?0:n);i++){
       const suffix=i?'r'+i:'sender';
       await run("INSERT INTO agents(id,workspace_id,name,token_hash,status) VALUES(?,?,?,?,'offline')",ws+suffix,ws,i?'recipient-'+i:'sender',hash('at_live_'+ws+suffix));
@@ -138,9 +139,9 @@ try {
     assert.equal(await scalar('SELECT count(*) FROM message_sessions WHERE workspace_id=? AND session_ref=?',ws,'must-rollback'),0);
     assert.equal(await scalar('SELECT count(*) FROM messages WHERE workspace_id=?',ws),1);
     const message=(await rows('SELECT id FROM messages WHERE workspace_id=?',ws))[0].id;
-    await runAtomicWrites(db,tx=>[buildChannelDeliveryWrite(tx,{workspaceId:ws,messageId:message,channelId:ws+'ch',senderAgentId:ws+'sender',mode:'immediate',ttlMs:3600000,depthCap:1,rejectOnOverflow:true,workspacePolicy:{cap:1}})],{requireAtomic:true});
+    await runAtomicWrites(db,tx=>[buildChannelDeliveryWrite(tx,{workspaceId:ws,messageId:message,channelId:ws+'ch',senderAgentId:ws+'sender',mode:'immediate',ttlMs:3600000,depthCap:1,offlineExcludeMs:DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS,rejectOnOverflow:true,workspacePolicy:{cap:1}})],{requireAtomic:true});
     await run("UPDATE deliveries SET status='acked' WHERE workspace_id=?",ws);
-    await runAtomicWrites(db,tx=>[buildChannelDeliveryWrite(tx,{workspaceId:ws,messageId:message,channelId:ws+'ch',senderAgentId:ws+'sender',mode:'immediate',ttlMs:3600000,depthCap:1,rejectOnOverflow:true,workspacePolicy:{cap:1}})],{requireAtomic:true});
+    await runAtomicWrites(db,tx=>[buildChannelDeliveryWrite(tx,{workspaceId:ws,messageId:message,channelId:ws+'ch',senderAgentId:ws+'sender',mode:'immediate',ttlMs:3600000,depthCap:1,offlineExcludeMs:DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS,rejectOnOverflow:true,workspacePolicy:{cap:1}})],{requireAtomic:true});
     assert.equal(await depth(ws),0);record('HTTP new key rejected, recorded replay, rollback, duplicate settled identity');
   }
   {
@@ -232,7 +233,7 @@ try {
     for(const concurrent of [false,true]){
       const ws=await seed('large-'+concurrent,4889,{cap:5000});
       const metricsStart=d1Metrics.length;
-      const query=buildChannelDeliveryWrite(db,{workspaceId:ws,messageId:'plan-only',channelId:ws+'ch',senderAgentId:ws+'sender',mode:'immediate',ttlMs:3600000,depthCap:1000,workspacePolicy:{cap:5000}}).toSQL();
+      const query=buildChannelDeliveryWrite(db,{workspaceId:ws,messageId:'plan-only',channelId:ws+'ch',senderAgentId:ws+'sender',mode:'immediate',ttlMs:3600000,depthCap:1000,offlineExcludeMs:DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS,workspacePolicy:{cap:5000}}).toSQL();
       const plan=await rows('EXPLAIN QUERY PLAN '+query.sql,...query.params);
       assert.ok(plan.some(row=>String(row.detail).includes('MATERIALIZE capacity_candidates')));assert.ok(plan.some(row=>String(row.detail).includes('MATERIALIZE capacity_admission')));
       const a=concurrent?null:await send(ws,'large A');if(a)expectStatus(a,201);
