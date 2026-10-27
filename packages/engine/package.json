@@ -53,9 +53,12 @@
   ],
   "scripts": {
     "build": "tsc && node -e \"require('fs').cpSync('src/db/migrations','dist/db/migrations',{recursive:true})\"",
+    "build:standalone": "bun standalone/build.ts",
     "test": "vitest run",
+    "test:bun": "bun --bun x vitest run",
     "lint": "eslint src/",
-    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json"
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
+    "typecheck:standalone": "tsc -p standalone/tsconfig.json"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
@@ -71,6 +74,7 @@
   "devDependencies": {
     "@identities-ai/ratify-protocol": "1.0.0-alpha.16",
     "@types/better-sqlite3": "^7.6.11",
+    "@types/bun": "^1.4.4",
     "@types/node": "^25.2.1",
     "@types/ws": "^8.5.13",
     "drizzle-kit": "^0.31.9",

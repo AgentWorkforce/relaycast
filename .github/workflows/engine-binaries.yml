@@ -1,0 +1,199 @@
+name: Engine binaries
+
+# Standalone `relaycast-engine` executables (bun build --compile + bun:sqlite):
+# no Node, npm, compiler, or native addon needed to run them.
+#
+# - pull_request / workflow_dispatch: build every target, run the engine suite
+#   on bun:sqlite, and smoke-test each binary on a runner that can execute it.
+#   Nothing is uploaded to a release.
+# - workflow_call (from publish-npm.yml, after Create Release): the same, from
+#   the release tag, then attach the binaries and their .sha256 files to that
+#   release as relaycast-engine-<version>-<os>-<arch>[.exe].
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "packages/engine/**"
+      - "packages/types/**"
+      - "packages/a2a/**"
+      - "package-lock.json"
+      - ".github/workflows/engine-binaries.yml"
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: "Existing release tag (v<version>) to build from and attach binaries to"
+        required: true
+        type: string
+
+concurrency:
+  group: engine-binaries-${{ inputs.release_tag || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  BUN_VERSION: "1.4.2"
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Build workspace dependencies
+        run: npx turbo build --filter=@relaycast/engine^...
+      - name: Resolve version
+        id: version
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          version="$(node -p "require('./packages/engine/package.json').version")"
+          if [ -n "$RELEASE_TAG" ] && [ "v${version}" != "$RELEASE_TAG" ]; then
+            echo "::error::engine version ${version} does not match release tag ${RELEASE_TAG}"
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+      - name: Build all targets
+        working-directory: packages/engine
+        run: bun standalone/build.ts --outdir dist-standalone
+      - name: Verify checksums
+        working-directory: packages/engine/dist-standalone
+        run: |
+          sha256sum -c ./*.sha256
+          ls -l
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engine-binaries
+          path: packages/engine/dist-standalone/
+          if-no-files-found: error
+          retention-days: 7
+
+  test-bun:
+    name: Engine suite on bun:sqlite
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Build workspace dependencies
+        run: npx turbo build --filter=@relaycast/engine^...
+      - name: Typecheck standalone sources
+        working-directory: packages/engine
+        run: npm run typecheck:standalone
+      - name: bun:sqlite facade tests
+        working-directory: packages/engine
+        run: bun test standalone
+      - name: Engine suite under Bun
+        working-directory: packages/engine
+        env:
+          DO_NOT_TRACK: "1"
+        run: npm run test:bun
+
+  smoke:
+    name: Smoke (${{ matrix.target }})
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux-x64, runner: ubuntu-latest }
+          - { target: linux-arm64, runner: ubuntu-24.04-arm }
+          - { target: linux-musl-x64, runner: ubuntu-latest, alpine: true }
+          - { target: linux-musl-arm64, runner: ubuntu-24.04-arm, alpine: true }
+          - { target: darwin-x64, runner: macos-15-intel }
+          - { target: darwin-arm64, runner: macos-latest }
+          - { target: windows-x64, runner: windows-latest, exe: ".exe" }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.sha }}
+          persist-credentials: false
+          sparse-checkout: packages/engine/standalone
+      - uses: actions/download-artifact@v4
+        with:
+          name: engine-binaries
+          path: dist-standalone
+      - name: Select binary
+        id: binary
+        shell: bash
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          TARGET: ${{ matrix.target }}
+          EXE: ${{ matrix.exe }}
+        run: |
+          path="dist-standalone/relaycast-engine-${VERSION}-${TARGET}${EXE}"
+          test -f "$path"
+          chmod +x "$path"
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v4
+        if: ${{ !matrix.alpine }}
+        with:
+          node-version: "22.14.0"
+      - name: Smoke
+        if: ${{ !matrix.alpine }}
+        shell: bash
+        run: node packages/engine/standalone/smoke.mjs "${{ steps.binary.outputs.path }}" --expect-version "${{ needs.build.outputs.version }}"
+      - name: Smoke (Alpine)
+        if: ${{ matrix.alpine }}
+        # Node is only the test driver; the binary itself needs just musl and
+        # libstdc++ (Bun's musl builds link it dynamically).
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w alpine:3.21 sh -c '
+            apk add --no-cache libstdc++ nodejs >/dev/null &&
+            node packages/engine/standalone/smoke.mjs "${{ steps.binary.outputs.path }}" --expect-version "${{ needs.build.outputs.version }}"
+          '
+
+  release:
+    name: Attach to release
+    needs: [build, test-bun, smoke]
+    if: ${{ inputs.release_tag }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: engine-binaries
+          path: dist-standalone
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd dist-standalone
+          sha256sum -c ./*.sha256
+          shopt -s nullglob
+          assets=(relaycast-engine-"${VERSION}"-*)
+          if [ "${#assets[@]}" -ne 14 ]; then
+            echo "::error::expected 7 binaries plus 7 checksums, found ${#assets[@]}: ${assets[*]}"
+            exit 1
+          fi
+          gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          {
+            echo "### Standalone engine binaries attached to ${RELEASE_TAG}"
+            for asset in "${assets[@]}"; do echo "- \`${asset}\`"; done
+          } >> "$GITHUB_STEP_SUMMARY"
