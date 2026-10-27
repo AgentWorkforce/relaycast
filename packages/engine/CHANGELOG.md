@@ -7,13 +7,22 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+
 ## [Unreleased - Minor]
 
 ### Added
 
 - `DELETE /v1/nodes/:name` deletes a node by id (exact id first) or name, returning `{ id, name, deleted, cascaded_actions }`. It refuses an online node (`node_online`) or one hosting actions (`node_has_actions`) unless `force=true`, and returns `node_delete_conflict` when a heartbeat or action registration lands mid-delete.
+
+## [11.1.0] - 2026-10-27
+
+### Added
+
 - `PLAN_LIMITS.trial` and `PlanLimits.lifetime_messages`: a one-time message allowance enforced on message sends by the new `checkMessageAllowance` middleware; only successful fresh sends are counted (idempotent replays neither count nor get refused), under the never-expiring `usage:<workspace>:messages:lifetime` key (`lifetimeUsageCounterKey`, `getLifetimeUsageMetric`).
 - Optional `EntitlementsProvider.getUpgradeGuidance(workspace, metric)` hook; its URL and action are returned on `plan_limit_exceeded` as `upgrade_url` / `upgrade_action`.
+- Standalone single-file `relaycast-engine` builds (`bun build --compile`, `bun:sqlite`) with the same flags and behaviour as the npm bin; the Node adapter now opens SQLite through a small driver seam, and better-sqlite3 remains the Node driver.
+- `relaycast-engine --version` / `-v` prints the engine version.
+- Outbound webhook DNS pinning also holds when the engine runs under Bun, whose `undici` shim ignores custom dispatchers.
 
 ### Fixed
 

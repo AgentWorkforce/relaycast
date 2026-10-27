@@ -1,0 +1,15 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "rootDir": "..",
+    "types": ["bun"]
+  },
+  "include": ["."],
+  // Tests import Node-typed src/ modules (e.g. fetch signatures) that do not
+  // match Bun's lib types; `bun test` transpiles and runs them instead.
+  "exclude": ["*.test.ts"]
+}
