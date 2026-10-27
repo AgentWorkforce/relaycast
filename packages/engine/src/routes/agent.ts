@@ -736,7 +736,9 @@ agentRoutes.patch(
         });
       }
       if (body.status !== undefined) {
-        await fanoutAgentStatus(c, updated, body.status);
+        // `updated.status` is derived presence. A stale `last_seen` reports
+        // offline even when the caller wrote `active`; the event must match.
+        await fanoutAgentStatus(c, updated, updated.status);
       }
       emitServerEvent(c, workspace.id, 'agent.updated', {
         agent_name: name,

@@ -625,7 +625,10 @@ workspaceRoutes.post('/agents/:name/rotate-token', requireAgentToken, rateLimit,
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
-    const authAgent = c.get('agent')!;
+    const authAgent = c.get('agent');
+    if (!authAgent) {
+      return jsonError(c, 'unauthorized', 'Agent token required', 401);
+    }
     if (authAgent.name !== c.req.param('name')) {
       return jsonError(
         c,

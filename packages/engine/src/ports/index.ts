@@ -9,7 +9,7 @@
  *  - **Ports** — infrastructure the engine needs (db, realtime, presence, rate
  *    limiting, file blobs, key/value).
  *  - **Providers** — the open-core "hosting" seam the cloud layer overrides
- *    (auth, entitlements/billing, telemetry). Each ships an OSS default.
+ *    (auth, admission, telemetry). Each ships an OSS default or is optional.
  */
 export type {
   EngineDb,
@@ -42,10 +42,11 @@ export type {
   Agent,
 } from './auth.js';
 export type {
-  EntitlementsProvider,
-  PlanLimits,
-  UsageMetric,
-} from './entitlements.js';
+  AdmissionAction,
+  AdmissionContext,
+  AdmissionDenial,
+  AdmissionHooks,
+} from './admission.js';
 export { ENGINE_OBSERVATION_FACTS } from './telemetry.js';
 export type { TelemetrySink, TelemetryEvent, EngineObservation, EngineObservationKind, EngineObservationFacts } from './telemetry.js';
 export type { EngineLogRecord, EngineLogExport } from './logging.js';
@@ -58,7 +59,7 @@ import type { FileStorage } from './files.js';
 import type { KeyValueStore } from './kv.js';
 import type { EventQueue } from './event-queue.js';
 import type { AuthProvider } from './auth.js';
-import type { EntitlementsProvider } from './entitlements.js';
+import type { AdmissionHooks } from './admission.js';
 import type { TelemetrySink } from './telemetry.js';
 import type { EngineLogExport } from './logging.js';
 
@@ -78,7 +79,8 @@ export interface EnginePorts {
 /** The open-core hosting seam — each has an OSS default in `../auth`, etc. */
 export interface EngineProviders {
   auth: AuthProvider;
-  entitlements: EntitlementsProvider;
+  /** Host admission and metering hooks. Omitted: every request is admitted. */
+  admission?: AdmissionHooks;
   telemetry?: TelemetrySink;
 }
 
@@ -131,6 +133,11 @@ export interface EngineConfig {
    * narrowly scoped recovery capability and the secret remains server-only.
    */
   workspaceBootstrapProofRequired?: boolean;
+  /**
+   * Per-workspace requests-per-minute ceiling. Default 30,000.
+   * `AdmissionHooks.rateLimitPerMinute` overrides it per workspace.
+   */
+  rateLimitPerMinute?: number;
   /**
    * Opt-in for the self-serve `POST /v1/workspace/rotate-key` route. Defaults
    * to disabled: the route mints a live workspace credential, so a deployment

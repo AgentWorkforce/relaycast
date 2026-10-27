@@ -22,6 +22,45 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Agents can be restricted to an allowlist of senders, so a topology such as a worker only its coordinator can reach is enforced by the server; refused senders see the agent as nonexistent.
 
+### Fixed
+
+- `GET /v1/agents/presence` counts a node-hosted agent as online while its node and that agent's own provider are live, including agents that make no HTTP calls. Agents of a disconnected provider, agents a live node omits from its inventory, and agents that called `POST /v1/agents/disconnect` without deregistering stay offline.
+- TypeScript SDK: `agent.on.*` event handlers can be registered before `connect()` instead of throwing.
+- TypeScript SDK: `agent.exited`, `node.status.online`, and `node.status.offline` have camelCase event types. `on.agentExited` is available on `AgentClient` and `RelayCast`. `on.nodeOnline` and `on.nodeOffline` are on `RelayCast` only — node liveness is a workspace-stream and webhook event, not an agent-mailbox delivery.
+- A status patch broadcasts the same derived presence the response returns.
+
+## [12.0.0] - 2026-10-27
+
+### Changed
+
+- The engine has no plans, usage quotas or billing. Self-hosted workspaces are never quota-limited; every workspace has a per-minute request ceiling of 30,000 by default (`rateLimitPerMinute`). Hosting deployments add their own quotas through admission hooks, which refuse requests or message sends with the host's own error code.
+
+### Removed
+
+- `Workspace.plan` is gone from the API, `@relaycast/types`, and the Rust and Swift SDKs; migration `0077` drops the `workspaces.plan` column.
+- The engine no longer returns `plan_limit_exceeded`; a hosting deployment's admission policy returns its own codes.
+- The Python SDK (`relaycast-sdk`) is no longer developed or published from this repository.
+
+## [11.1.1] - 2026-10-27
+
+### Fixed
+
+- 401, not 500, when an agent route's auth result has no agent
+
+## [11.1.0] - 2026-10-27
+
+### Added
+
+- New `trial` plan for hosted anonymous workspaces: a one-time allowance of 100 messages (channel posts, DMs, group DMs, thread replies) that never resets. `free`, paid plans and self-hosted `selfhost` are unchanged.
+- `plan_limit_exceeded` errors now carry `metric`, `plan`, `limit`, `usage`, and, when the deployment has an upgrade path, `upgrade_url` and `upgrade_action` (`sign_in` or `upgrade`).
+- Standalone `relaycast-engine` executables for Linux (glibc and musl, x64 and arm64), macOS (x64 and arm64), and Windows x64 are attached to each GitHub release as `relaycast-engine-<version>-<os>-<arch>[.exe]` with `.sha256` files; they run the self-host server with no Node.js, npm, compiler, or native addon.
+- `relaycast-engine --version` prints the engine version.
+
+### Fixed
+
+- Listing deliveries filtered by status no longer scans the whole workspace's delivery history.
+- Agent-, node- and observer-token routes answer 401 when a host auth provider returns a result without that identity, instead of a 500 (agent routes) or unscoped workspace access (observer reads).
+
 ## [11.0.0] - 2026-10-22
 
 ### Changed
@@ -47,6 +86,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Inbox mention lookup uses a workspace-scoped index after its bounded backfill completes; delivery sweeps and per-node agent reads avoid full-history scans that stalled the shared database and surfaced as `database_overloaded`.
 - Every response includes its request id in the `X-Request-Id` header.
+- Raw JSON inbound webhook bodies (including `{}`) appear in the delivered message instead of a generic event line. Their fields are rendered as text only and never read as message metadata.
 
 ## [10.6.3] - 2026-10-19
 
@@ -871,7 +911,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v11.0.0...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.0.0...HEAD
+[12.0.0]: https://github.com/AgentWorkforce/relaycast/compare/v11.1.1...v12.0.0
+[11.1.1]: https://github.com/AgentWorkforce/relaycast/compare/v11.1.0...v11.1.1
+[11.1.0]: https://github.com/AgentWorkforce/relaycast/compare/v11.0.0...v11.1.0
 [11.0.0]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.5...v11.0.0
 [10.6.5]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.4...v10.6.5
 [10.6.4]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.3...v10.6.4

@@ -2,14 +2,15 @@ import { createMiddleware } from 'hono/factory';
 import type { AppEnv } from '../env.js';
 import { jsonError } from '../lib/httpResponse.js';
 import { RATE_LIMIT_WINDOW_MS, rateLimitWindow, rateLimitWindowResetAt, setRetryContract } from '../lib/throttle.js';
-import { checkPlanLimit } from './planLimits.js';
+import { admissionDeniedResponse, reportCommitted, resolveAdmission } from './admission.js';
 import { presenceRefresh } from './presenceRefresh.js';
-import { usageTracker } from './usageTracker.js';
 
-// Conservative per-minute ceiling applied when the entitlements lookup fails,
-// so an entitlements outage degrades to a safe default rather than no limit.
-const FALLBACK_RATE_PER_MIN = 300;
-const checkApiCallPlanLimit = checkPlanLimit('api_calls');
+/** Per-workspace requests-per-minute ceiling when the host configures none. */
+export const DEFAULT_RATE_LIMIT_PER_MINUTE = 30_000;
+
+function validRatePerMinute(value: number | undefined): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+}
 
 // Per-route rate limit multipliers (fraction of the global per-minute limit).
 // POST endpoints get tighter limits, GET endpoints get looser.
@@ -89,15 +90,7 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
     return;
   }
 
-  let planAllowed = false;
-  const planResponse = await checkApiCallPlanLimit(c, async () => {
-    planAllowed = true;
-  });
-  if (!planAllowed) {
-    return planResponse;
-  }
-
-  const { entitlements, rateLimiter } = c.get('engine');
+  const { admission, config, rateLimiter } = c.get('engine');
 
   // Apply route-specific multiplier if applicable
   const routeKey = getRouteKey(c.req.method, c.req.path);
@@ -106,14 +99,13 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
   const now = Date.now();
   const bucketKey = `${workspace.id}:${routeKey ?? 'global'}:${rateLimitWindow(now)}`;
 
-  // Resolve the per-minute limit. If entitlements are unavailable, fall back to
-  // a conservative default and still enforce it — an entitlements outage must
-  // NOT translate into unlimited throughput.
-  let globalLimit: number;
-  try {
-    globalLimit = (await entitlements.getLimits(workspace)).rate_per_min;
-  } catch {
-    globalLimit = FALLBACK_RATE_PER_MIN;
+  // An invalid ceiling (config or hook) or a failing hook degrades to the next
+  // valid one, never to no limit or to refusing everything.
+  let globalLimit = validRatePerMinute(config.rateLimitPerMinute) ?? DEFAULT_RATE_LIMIT_PER_MINUTE;
+  if (admission?.rateLimitPerMinute) {
+    try {
+      globalLimit = validRatePerMinute(await admission.rateLimitPerMinute(workspace)) ?? globalLimit;
+    } catch { /* keep the configured ceiling */ }
   }
   const limit = routeKey ? Math.ceil(globalLimit * ROUTE_MULTIPLIERS[routeKey]) : globalLimit;
 
@@ -128,13 +120,18 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
       // Transient by construction: the bucket is keyed to this minute, so the
       // advertised wait is the real one.
       setRetryContract(c, resetAt, now);
-      return jsonError(c, 'rate_limit_exceeded', `Rate limit exceeded. ${limit} requests per minute allowed for ${workspace.plan} plan.`, 429);
+      return jsonError(c, 'rate_limit_exceeded', `Rate limit exceeded. ${limit} requests per minute allowed.`, 429);
     }
   } catch {
     // Only the limiter backend failing is fail-open — a transient infra hiccup
     // shouldn't 500 the request (the limit was still computed above).
   }
 
+  // After the bucket, so a flood is throttled without reaching host admission.
+  const denial = await resolveAdmission(c, workspace, 'request');
+  if (denial) return admissionDeniedResponse(c, denial);
+
   await presenceRefresh(c, async () => {});
-  return usageTracker(c, next);
+  await next();
+  reportCommitted(c, workspace, 'request');
 });

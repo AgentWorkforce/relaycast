@@ -7,14 +7,16 @@ info:
     All routes are prefixed with `/v1/`. Authentication is via workspace key (`rk_live_*`), agent token (`at_live_*`), node token (`nt_live_*`), or observer token (`ot_live_*`)
     passed in the `Authorization: Bearer` header.
 
-    Authenticated routes are throttled two ways, and the error code says which.
-    `rate_limit_exceeded` is the per-minute ceiling: it always clears inside the
-    window, so `Retry-After` is at most 60 and retrying works.
-    `plan_limit_exceeded` is the plan's API-call quota for the current billing
-    period, which resets only at the period boundary; `Retry-After` reports that
-    boundary and is normally far beyond any retry budget, so treat it as terminal
-    instead of retrying. Both carry `Retry-After` and `X-RateLimit-Reset`, and
-    successful responses carry `X-RateLimit-Limit`/`X-RateLimit-Remaining`.
+    Authenticated routes are throttled by a per-workspace, per-minute ceiling
+    (30,000 by default). `rate_limit_exceeded` always clears inside the window,
+    so `Retry-After` is at most 60 and retrying works. Successful responses
+    carry `X-RateLimit-Limit`/`X-RateLimit-Remaining`.
+
+    A hosting deployment may also refuse requests or message sends through its
+    own admission policy (for example a usage quota). Those errors carry the
+    deployment's own `code`, status and additive fields, and `Retry-After` only
+    when retrying can succeed. Idempotent replays of earlier sends still
+    succeed after a send is refused.
     `GET /workspace` is limited in its own bucket so the identity read used for
     credential validation and launch preflight stays reachable when the
     workspace's data-plane traffic is at its ceiling.
@@ -157,10 +159,10 @@ components:
     Throttled:
       description: >-
         Throttled. `rate_limit_exceeded` is the per-minute ceiling and always
-        clears inside the window; `plan_limit_exceeded` is the billing-period
-        quota and only clears when the period rolls over. `Retry-After` is
-        authoritative for both — treat a value beyond your retry budget as
-        terminal rather than retrying it.
+        clears inside the window. A hosting deployment's admission policy may
+        refuse with its own code. When present, `Retry-After` is authoritative —
+        treat a value beyond your retry budget as terminal rather than retrying
+        it.
       headers:
         Retry-After:
           description: Seconds to wait before retrying.
@@ -281,10 +283,6 @@ components:
         key:
           type: string
           description: Workspace API key (only returned on creation)
-        plan:
-          type: string
-          enum: [free, connect, pro, enterprise, selfhost]
-          description: Stored plan that sets the workspace's usage limits. `connect` is sized for short-lived collaboration rooms.
         created_at:
           type: string
           format: date-time
@@ -2709,7 +2707,12 @@ paths:
       description: >-
         Update agent properties. Platform-managed metadata keys such as
         `identity_key` are rejected; use the dedicated legacy identity claim
-        endpoint for the one supported backfill operation.
+        endpoint for the one supported backfill operation. A `status` write
+        does not renew `last_seen`. The response `status` is derived presence,
+        and workspace WebSocket plus outbound webhook subscribers receive that
+        same value as `agent.status.<status>`. Persisted `active` or legacy
+        `online` older than the five-minute TTL is `offline`, so patching a
+        stale agent to `active` returns and emits `offline`.
       tags:
         - Agents
       security:
@@ -2726,6 +2729,15 @@ paths:
             schema:
               type: object
               properties:
+                status:
+                  type: string
+                  enum: [active, idle, blocked, waiting, offline, online]
+                  description: >-
+                    Requested lifecycle status. `online` is reported as
+                    `active` when `last_seen` is inside the five-minute TTL.
+                    The write does not renew `last_seen`; a stale `active` or
+                    `online` row is returned and broadcast as `offline`
+                    (`agent.status.offline`).
                 persona:
                   type: string
                 metadata:
@@ -4502,6 +4514,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: >-
+            The request does not authenticate as the agent. `error.code` is
+            `agent_token_invalid` for an unknown or rotated-out agent token,
+            `node_token_forbidden` or `observer_token_forbidden` for those token
+            kinds, `workspace_expired` past the workspace's `expires_at`, and
+            `unauthorized` otherwise: a missing header, a workspace key, or a
+            credential the auth provider resolves without an agent identity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /workspace/rotate-key:
     post:
@@ -6695,7 +6719,7 @@ paths:
   /hooks/{webhookId}:
     post:
       summary: Trigger inbound webhook
-      description: Trigger a configured inbound webhook. Requires the per-webhook bearer token returned by `POST /webhooks`. Accepts either `{ message, author }` (SDK shape) or `{ text, source, payload }`; `message` maps to message text and `author` is used as the displayed sender without being copied into `source`.
+      description: Trigger a configured inbound webhook. Requires the per-webhook bearer token returned by `POST /webhooks`. Accepts either `{ message, author }` (SDK shape) or `{ text, source, payload }`; `message` maps to message text and `author` is used as the displayed sender without being copied into `source`. A JSON object with none of `text`, `message`, `source`, `author` or `payload` (including `{}`) is rendered as JSON in the message text, capped at 16,000 characters; its fields are not read as message metadata, so they never set `session_ref` or suppress message triggers.
       tags:
         - Webhooks
       security:

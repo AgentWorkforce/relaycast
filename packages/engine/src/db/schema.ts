@@ -63,7 +63,6 @@ export const workspaces = sqliteTable(
     // repair cannot overwrite a newer rotation (0073).
     apiKeyGeneration: integer('api_key_generation').notNull().default(0),
     systemPrompt: text('system_prompt'),
-    plan: text('plan').notNull().default('free'),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
     metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>().default({}),
     retention: text('retention', { mode: 'json' }).$type<WorkspaceRetentionSettings>(),
@@ -1370,6 +1369,8 @@ export const deliveries = sqliteTable(
     index('idx_deliveries_node_retry_workspace').on(table.workspaceId, table.nextAttemptAt, table.createdAt, table.id)
       .where(sql`${table.status} = 'queued' AND ${table.routeNodeKind} IN ('http_push', 'ws', 'fleet_ws', 'direct_ws') AND ${table.nextAttemptAt} IS NOT NULL`),
     index('idx_deliveries_status').on(table.workspaceId, table.status, table.createdAt),
+    index('idx_deliveries_agent_status_created')
+      .on(table.workspaceId, table.agentId, table.status, table.createdAt, table.id),
   ],
 );
 
