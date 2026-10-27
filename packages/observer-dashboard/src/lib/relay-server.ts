@@ -1,4 +1,5 @@
 import type { NextRequest } from 'next/server';
+import { parseRetryAfterMs } from './connect-observer';
 
 function normalizeHost(host: string | null | undefined): string {
   if (!host) return '';
@@ -101,6 +102,13 @@ export interface EngineSelection {
   inconclusiveAny: boolean;
   /** Authoritative observer record id when the accepted key is an observer token. */
   observerTokenId: string | null;
+  /** Longest `Retry-After` an inconclusive engine asked for (e.g. a 429), in ms. */
+  retryAfterMs: number | null;
+}
+
+/** A `Retry-After` header value (whole seconds) for an inconclusive validation. */
+export function retryAfterHeader(retryAfterMs: number | null): Record<string, string> {
+  return retryAfterMs ? { 'Retry-After': String(Math.ceil(retryAfterMs / 1000)) } : {};
 }
 
 export function observerBindingMatches(
@@ -122,6 +130,7 @@ export async function selectEngineForKey(
   let reachedAny = false;
   let rejectedAny = false;
   let inconclusiveAny = false;
+  let retryAfterMs: number | null = null;
   for (const baseUrl of candidates) {
     try {
       const url = new URL('/v1/workspace', baseUrl);
@@ -141,19 +150,21 @@ export async function selectEngineForKey(
           // A successful legacy engine may not return a JSON body. It remains
           // usable for workspace sessions, but cannot establish Connect binding.
         }
-        return { baseUrl, reachedAny, rejectedAny, inconclusiveAny, observerTokenId };
+        return { baseUrl, reachedAny, rejectedAny, inconclusiveAny, observerTokenId, retryAfterMs: null };
       }
       if (res.status === 401 || res.status === 403) {
         rejectedAny = true;
       } else {
         inconclusiveAny = true;
+        const delay = parseRetryAfterMs(res.headers.get('retry-after'));
+        if (delay !== null && delay > (retryAfterMs ?? 0)) retryAfterMs = delay;
       }
     } catch {
       inconclusiveAny = true;
       // Unreachable engine — fall through to the next candidate.
     }
   }
-  return { baseUrl: null, reachedAny, rejectedAny, inconclusiveAny, observerTokenId: null };
+  return { baseUrl: null, reachedAny, rejectedAny, inconclusiveAny, observerTokenId: null, retryAfterMs };
 }
 
 /**

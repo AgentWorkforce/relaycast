@@ -65,7 +65,20 @@ export class SqliteApiKeyAuthProvider implements AuthProvider {
     const hash = await hashToken(token);
 
     if (parsedToken.kind === 'workspace') {
-      const [workspace] = await db.select().from(workspaces).where(eq(workspaces.apiKeyHash, hash));
+      // Current slot first — same shape as the agent-token lookup below.
+      let [workspace] = await db.select().from(workspaces).where(eq(workspaces.apiKeyHash, hash));
+      if (!workspace) {
+        // Superseded key inside its rotation grace window. A rotation with
+        // zero grace writes no usable previous slot, so a compromised key
+        // never lands here.
+        [workspace] = await db
+          .select()
+          .from(workspaces)
+          .where(and(
+            eq(workspaces.previousApiKeyHash, hash),
+            gt(workspaces.previousApiKeyExpiresAt, new Date()),
+          ));
+      }
       if (!workspace) return unauthorized('Invalid API key');
       return resolved(workspace);
     }

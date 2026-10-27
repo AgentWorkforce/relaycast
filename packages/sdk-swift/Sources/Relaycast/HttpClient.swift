@@ -125,6 +125,20 @@ public final class HttpClient: @unchecked Sendable {
         try await request("GET", path: path, body: Optional<EmptyRequest>.none, query: query, options: options)
     }
 
+    func getWithCursor<T: Decodable>(
+        _ path: String,
+        query: [String: String] = [:],
+        options: RequestOptions = RequestOptions()
+    ) async throws -> (data: T, cursor: Cursor?) {
+        try await requestWithCursor(
+            "GET",
+            path: path,
+            body: Optional<EmptyRequest>.none,
+            query: query,
+            options: options
+        )
+    }
+
     public func post<T: Decodable, Body: Encodable>(
         _ path: String,
         body: Body,
@@ -171,6 +185,16 @@ public final class HttpClient: @unchecked Sendable {
         query: [String: String] = [:],
         options: RequestOptions = RequestOptions()
     ) async throws -> T {
+        try await requestWithCursor(method, path: path, body: body, query: query, options: options).data
+    }
+
+    private func requestWithCursor<T: Decodable, Body: Encodable>(
+        _ method: String,
+        path: String,
+        body: Body? = nil,
+        query: [String: String] = [:],
+        options: RequestOptions = RequestOptions()
+    ) async throws -> (data: T, cursor: Cursor?) {
         let shouldRetry = options.retry ?? isRetrySafe(method: method, idempotencyKey: options.idempotencyKey)
         var attempt = 0
 
@@ -195,7 +219,7 @@ public final class HttpClient: @unchecked Sendable {
                     guard let empty = EmptyResponse() as? T else {
                         throw RelayError.missingData("Relaycast returned no content")
                     }
-                    return empty
+                    return (empty, nil)
                 }
 
                 let envelope: ApiResponse<T>
@@ -212,11 +236,11 @@ public final class HttpClient: @unchecked Sendable {
                 }
 
                 if let value = envelope.data {
-                    return value
+                    return (value, envelope.cursor)
                 }
 
                 if let empty = EmptyResponse() as? T {
-                    return empty
+                    return (empty, envelope.cursor)
                 }
 
                 throw RelayError.missingData("Relaycast API response was missing data")

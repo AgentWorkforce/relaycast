@@ -5,6 +5,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::time::Instant;
 
@@ -66,6 +67,10 @@ fn normalize_cli(raw: &str) -> Option<String> {
         "gemini" => "gemini",
         "aider" => "aider",
         "goose" => "goose",
+        "opencode" => "opencode",
+        "grok" => "grok",
+        "muse" => "muse",
+        "devin" => "devin",
         _ => return None,
     };
 
@@ -228,6 +233,38 @@ impl AgentRegistrationClient {
         lock_unpoisoned(&self.registration_cooldowns).remove(trimmed);
     }
 
+    /// Remove cached token and cooldown state only when the current token's
+    /// SHA-256 hash matches `expected_token_hash`.
+    ///
+    /// The comparison and both removals happen while the token cache remains
+    /// locked. A concurrent registration therefore either lands before the
+    /// comparison and is preserved on mismatch, or lands after the old
+    /// generation has been removed.
+    pub fn invalidate_cached_registration_if_token_hash(
+        &self,
+        agent_name: &str,
+        expected_token_hash: &str,
+    ) -> bool {
+        let trimmed = agent_name.trim();
+        let expected = expected_token_hash.trim().to_ascii_lowercase();
+        if trimmed.is_empty() || expected.is_empty() {
+            return false;
+        }
+
+        let mut tokens = lock_unpoisoned(&self.agent_tokens);
+        let matches = tokens
+            .get(trimmed)
+            .is_some_and(|token| format!("{:x}", Sha256::digest(token.as_bytes())) == expected);
+        if !matches {
+            return false;
+        }
+
+        let mut cooldowns = lock_unpoisoned(&self.registration_cooldowns);
+        tokens.remove(trimmed);
+        cooldowns.remove(trimmed);
+        true
+    }
+
     /// Select the next retry delay, preferring the active cached cooldown.
     ///
     /// The cached deadline prevents a retry from reaching the server before a
@@ -333,6 +370,7 @@ impl AgentRegistrationClient {
                 request_id,
                 attempts,
                 retry_after_ms,
+                ..
             }) => {
                 let cooldown = registration_cooldown_duration(retry_after_ms);
                 let retry_after_secs = cooldown.as_secs();
@@ -511,6 +549,9 @@ mod tests {
     };
     use crate::{RelayCast, RelayCastOptions};
     use serde_json::json;
+    use sha2::{Digest, Sha256};
+    use std::sync::{Arc, Barrier};
+    use std::thread;
     use std::time::Duration;
     use tokio::time::{advance, Instant};
     use wiremock::matchers::{body_string_contains, header, method, path};
@@ -525,6 +566,21 @@ mod tests {
         assert_eq!(normalize_cli("codex"), Some("codex".to_string()));
         assert_eq!(normalize_cli("node /tmp/claude-code.js"), None);
         assert_eq!(normalize_cli("python /tmp/unknown.py"), None);
+    }
+
+    #[test]
+    fn registration_cli_preserves_supported_harnesses() {
+        for cli in [
+            "claude", "codex", "gemini", "aider", "goose", "opencode", "grok", "muse", "devin",
+        ] {
+            assert_eq!(normalize_cli(cli).as_deref(), Some(cli));
+            assert_eq!(
+                normalize_cli(&format!("/usr/local/bin/{cli} --version")).as_deref(),
+                Some(cli)
+            );
+            assert_eq!(registration_cli_from_hint(Some(cli), "claude"), cli);
+            assert_eq!(registration_cli_from_hint(None, cli), cli);
+        }
     }
 
     #[test]
@@ -571,6 +627,76 @@ mod tests {
 
         assert_eq!(agent.http_client().api_key(), "at_live_cached");
         assert_eq!(agent.http_client().base_url(), server.uri());
+    }
+
+    #[tokio::test]
+    async fn conditional_cache_invalidation_requires_the_current_token_hash() {
+        let server = MockServer::start().await;
+        let relay =
+            RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+                .expect("relay init");
+        let client = AgentRegistrationClient::new(relay, "claude");
+        client.seed_agent_token("worker-a", "owned-token");
+        super::lock_unpoisoned(&client.registration_cooldowns).insert(
+            "worker-a".to_string(),
+            Instant::now() + Duration::from_secs(30),
+        );
+
+        let replacement_hash = format!("{:x}", Sha256::digest(b"replacement-token"));
+        assert!(
+            !client.invalidate_cached_registration_if_token_hash("worker-a", &replacement_hash,)
+        );
+        assert_eq!(
+            client.cached_agent_token("worker-a").as_deref(),
+            Some("owned-token")
+        );
+        assert!(client.registration_block_remaining("worker-a").is_some());
+
+        // Hex case does not matter: an uppercase hash of the owned token matches.
+        let owned_hash = format!("{:X}", Sha256::digest(b"owned-token"));
+        assert!(client.invalidate_cached_registration_if_token_hash("worker-a", &owned_hash,));
+        assert_eq!(client.cached_agent_token("worker-a"), None);
+        assert_eq!(client.registration_block_remaining("worker-a"), None);
+    }
+
+    #[tokio::test]
+    async fn conditional_cache_invalidation_preserves_a_concurrent_replacement() {
+        let server = MockServer::start().await;
+        let relay =
+            RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+                .expect("relay init");
+        let client = AgentRegistrationClient::new(relay, "claude");
+        let owned_hash = format!("{:x}", Sha256::digest(b"owned-token"));
+
+        for _ in 0..128 {
+            client.seed_agent_token("worker-a", "owned-token");
+            let barrier = Arc::new(Barrier::new(3));
+            let invalidator = {
+                let client = client.clone();
+                let barrier = Arc::clone(&barrier);
+                let owned_hash = owned_hash.clone();
+                thread::spawn(move || {
+                    barrier.wait();
+                    client.invalidate_cached_registration_if_token_hash("worker-a", &owned_hash);
+                })
+            };
+            let replacement = {
+                let client = client.clone();
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    client.seed_agent_token("worker-a", "replacement-token");
+                })
+            };
+
+            barrier.wait();
+            invalidator.join().expect("invalidation thread");
+            replacement.join().expect("replacement thread");
+            assert_eq!(
+                client.cached_agent_token("worker-a").as_deref(),
+                Some("replacement-token")
+            );
+        }
     }
 
     #[tokio::test]

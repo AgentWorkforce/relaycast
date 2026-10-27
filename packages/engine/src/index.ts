@@ -10,6 +10,8 @@ export type {
   EnginePorts,
   EngineProviders,
   EngineConfig,
+  EngineLogRecord,
+  EngineLogExport,
   EngineDb,
   EngineEvent,
   RealtimeBus,
@@ -46,7 +48,9 @@ export { StaticEntitlementsProvider, PLAN_LIMITS } from './providers/static-enti
 // engine writes, so it has to agree with the engine on the billing period the
 // key is scoped to — build the key with these rather than by hand.
 export {
+  getLifetimeUsageMetric,
   getUsageMetric,
+  lifetimeUsageCounterKey,
   usageCounterKey,
   usagePeriod,
   usagePeriodResetAt,
@@ -86,7 +90,11 @@ export { runA2aHealthChecks } from './engine/a2a-health.js';
 // `sweepDueHttpPushDeliveries` is a deprecated alias kept for hosts (relaycast-
 // cloud) that still import the old name.
 export { sweepDueNodeDeliveries, sweepDueHttpPushDeliveries } from './routes/deliveryRouting.js';
-export { sweepExpiredDeliveries } from './routes/deliveryRouting.js';
+export { sweepExpiredDeliveries, sweepUnreachableDeliveries } from './routes/deliveryRouting.js';
+// Mention-index catch-up for 0075. `sweepExpiredDeliveries` advances it one
+// batch per call; hosts whose rotation reaches that sweep rarely can drive it
+// directly (bounded, idempotent, returns rows copied; 0 once complete).
+export { backfillMessageMentionFts, MESSAGE_MENTION_BACKFILL_BATCH } from './engine/inbox.js';
 export { deliverPendingToNode } from './engine/delivery.js';
 export { handleNodeReconnect } from './node-reconnect.js';
 export { handleAgentDisconnect } from './agent-disconnect.js';

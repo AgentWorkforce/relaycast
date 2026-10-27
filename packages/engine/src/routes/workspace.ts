@@ -3,7 +3,13 @@ import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { createMiddleware } from 'hono/factory';
 import { z } from 'zod';
-import { CreateWorkspaceRequestSchema, UpdateWorkspaceRequestSchema } from '@relaycast/types';
+import {
+  ApiSuccessSchema,
+  CreateWorkspaceRequestSchema,
+  RotateWorkspaceKeyRequestSchema,
+  UpdateWorkspaceRequestSchema,
+  WorkspaceDmConversationSchema,
+} from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { requireAgentToken, requireWorkspaceKey, requireWorkspaceRead } from '../middleware/auth.js';
 import { authenticateUnexpired } from '../auth/workspaceExpiry.js';
@@ -42,6 +48,7 @@ import {
   jsonNotFound,
   jsonOk,
   parseJsonBody,
+  parseOptionalJsonBody,
   parseQueryParams,
 } from '../lib/httpResponse.js';
 import { parsePaginationQuery, positiveIntQueryParam } from '../lib/httpQuery.js';
@@ -55,6 +62,12 @@ const updateWorkspaceSchema = UpdateWorkspaceRequestSchema;
 const activityQuerySchema = z.object({
   limit: positiveIntQueryParam({ defaultValue: 20, max: 500 }),
 });
+
+const dmConversationListQuerySchema = z.object({
+  limit: positiveIntQueryParam({ max: dmAllEngine.DM_CONVERSATION_PAGE_MAX_LIMIT }),
+  cursor: z.string().min(1).optional(),
+});
+const dmConversationPageResponseSchema = ApiSuccessSchema(z.array(WorkspaceDmConversationSchema));
 
 const workspaceEventsQuerySchema = z.object({
   since: z.preprocess(
@@ -96,7 +109,7 @@ async function deleteAuthenticatedWorkspace(c: Context<AppEnv>, expectedId?: str
       return workspaceNotFound(c);
     }
     await workspaceEngine.deleteWorkspace(db, c.get('engine').files, workspace.id);
-    emitServerEvent(c, workspace.id, 'relaycast_server_workspace_deleted', {
+    emitServerEvent(c, workspace.id, 'workspace.deleted', {
       deleted_via: 'api',
     });
     return jsonNoContent(c);
@@ -254,7 +267,7 @@ workspaceRoutes.post('/workspaces', async (c) => {
       },
     );
     if (result.created) {
-      emitServerEvent(c, result.workspace.workspace_id, 'relaycast_server_workspace_created', {
+      emitServerEvent(c, result.workspace.workspace_id, 'workspace.created', {
         created_via: 'api',
       });
     }
@@ -268,7 +281,9 @@ workspaceRoutes.post('/workspaces', async (c) => {
     return result.created ? jsonCreated(c, result.workspace) : jsonOk(c, result.workspace);
   } catch (err: unknown) {
     const error = asCodedError(err);
-    if ((error.status ?? 500) >= 500) {
+    // An uncoded 5xx is re-thrown by errorResponse to app.onError, which logs
+    // and captures it; recording it here too would count it twice.
+    if (error.code && (error.status ?? 500) >= 500) {
       const diagnostics = safeErrorDiagnostics(error);
       getRequestLogger(c, 'workspace.create').error('Workspace creation failed', {
         error_code: error.code ?? 'internal_error',
@@ -453,7 +468,7 @@ workspaceRoutes.patch('/workspace', requireWorkspaceKey, rateLimit, async (c) =>
     if (!updated) {
       return workspaceNotFound(c);
     }
-    emitServerEvent(c, workspace.id, 'relaycast_server_workspace_updated', {
+    emitServerEvent(c, workspace.id, 'workspace.updated', {
       changed_name: typeof body?.name === 'string',
       changed_system_prompt: typeof body?.system_prompt === 'string',
       changed_metadata: body.metadata !== undefined,
@@ -505,9 +520,31 @@ workspaceRoutes.get('/dm/conversations/all', requireWorkspaceRead('dms:read', { 
     const db = c.get('db');
     const workspace = c.get('workspace');
     const observer = getObserverTokenFromContext(c);
-    const allowedConversations = (await dmAllEngine.listAllDmConversations(db, workspace.id))
-      .filter((conversation) => observerAllowsConversation(observer, conversation.id));
+    let pagination: z.infer<typeof dmConversationListQuerySchema> = { limit: undefined };
+    if (!observer) {
+      const parsed = parseQueryParams(c, dmConversationListQuerySchema, 'Invalid DM conversation list query');
+      if (!parsed.ok) {
+        return parsed.response;
+      }
+      pagination = parsed.data;
+    }
     const filters = observer ? normalizeObserverFilters(observer.filters) : null;
+    const scopedConversationIds = observer
+      ? (filters?.include_dms ? filters.dm_conversation_ids : [])
+      : undefined;
+    // Raw key presence opts workspace callers into pagination. In particular,
+    // `?limit=` is the existing query helper's spelling for "use the default";
+    // it must not fall through to the legacy unbounded response.
+    const paginated = !observer
+      && (c.req.query('limit') !== undefined || c.req.query('cursor') !== undefined);
+    const page = paginated
+      ? await dmAllEngine.listDmConversationsPage(db, workspace.id, pagination)
+      : null;
+    const listedConversations = page?.conversations ?? await dmAllEngine.listAllDmConversations(
+      db, workspace.id, { conversationIds: scopedConversationIds },
+    );
+    const allowedConversations = listedConversations
+      .filter((conversation) => observerAllowsConversation(observer, conversation.id));
     const filtersMessages = Boolean(filters?.agent_ids?.length || filters?.created_after);
     const filteredCounts = observer && filtersMessages
       ? await dmAllEngine.countDmMessagesForWorkspaceConversations(
@@ -530,6 +567,16 @@ workspaceRoutes.get('/dm/conversations/all', requireWorkspaceRead('dms:read', { 
         message_count: filteredCounts.get(conversation.id) ?? 0,
       };
     });
+    if (page) {
+      return c.json(dmConversationPageResponseSchema.parse({
+        ok: true as const,
+        data: conversations,
+        cursor: {
+          next: page.nextCursor,
+          has_more: page.nextCursor !== null,
+        },
+      }));
+    }
     return jsonOk(c, conversations);
   } catch (err: unknown) {
     return errorResponse(c, err);
@@ -578,7 +625,10 @@ workspaceRoutes.post('/agents/:name/rotate-token', requireAgentToken, rateLimit,
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
-    const authAgent = c.get('agent')!;
+    const authAgent = c.get('agent');
+    if (!authAgent) {
+      return jsonError(c, 'unauthorized', 'Agent token required', 401);
+    }
     if (authAgent.name !== c.req.param('name')) {
       return jsonError(
         c,
@@ -592,10 +642,56 @@ workspaceRoutes.post('/agents/:name/rotate-token', requireAgentToken, rateLimit,
       workspace.id,
       c.req.param('name'),
     );
-    emitServerEvent(c, workspace.id, 'relaycast_server_agent_token_rotated', {
+    emitServerEvent(c, workspace.id, 'agent.token.rotated', {
       agent_name: c.req.param('name'),
     });
     return jsonOk(c, result);
+  } catch (err: unknown) {
+    return errorResponse(c, err);
+  }
+});
+
+// POST /workspace/rotate-key — workspace-key self-rollover. The superseded key
+// keeps authenticating for `grace_seconds` (default 60) so peers and in-flight
+// callers survive the cutover; `grace_seconds: 0` is the compromise mode.
+// The route is opt-in (`config.allowWorkspaceKeyRotation`) and stays disabled
+// on deployments where the canonical key is owned by an external control
+// plane (hosted): a key minted here would be invisible to that plane and its
+// repair path would clobber or resurrect the replacement.
+workspaceRoutes.post('/workspace/rotate-key', requireWorkspaceKey, rateLimit, async (c) => {
+  try {
+    if (!c.get('engine').config.allowWorkspaceKeyRotation) {
+      return jsonError(
+        c,
+        'workspace_key_rotation_disabled',
+        'Workspace key rotation is disabled on this deployment; rotate through the managing control plane',
+        403,
+      );
+    }
+    const parsed = await parseOptionalJsonBody(
+      c,
+      RotateWorkspaceKeyRequestSchema,
+      'invalid workspace key rotation body',
+      { emptyBodyValue: {} },
+    );
+    if (!parsed.ok) {
+      return parsed.response;
+    }
+    const result = await tokenRotateEngine.rotateWorkspaceKey(
+      c.get('db'),
+      c.get('workspace').id,
+      parsed.data.grace_seconds === undefined
+        ? undefined
+        : { graceMs: parsed.data.grace_seconds * 1000 },
+    );
+    emitServerEvent(c, result.workspaceId, 'workspace.key.rotated', {
+      grace_seconds: parsed.data.grace_seconds ?? 60,
+    });
+    return jsonOk(c, {
+      workspace_id: result.workspaceId,
+      api_key: result.apiKey,
+      previous_key_expires_at: result.previousKeyExpiresAt?.toISOString() ?? null,
+    });
   } catch (err: unknown) {
     return errorResponse(c, err);
   }

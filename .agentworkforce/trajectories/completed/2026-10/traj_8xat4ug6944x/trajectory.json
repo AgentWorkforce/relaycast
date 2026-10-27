@@ -8,8 +8,9 @@
       "id": "relay-desktop#119"
     }
   },
-  "status": "active",
+  "status": "abandoned",
   "startedAt": "2026-09-29T21:01:44.449Z",
+  "completedAt": "2026-10-11T19:30:49.351Z",
   "agents": [
     {
       "name": "default",
@@ -23,6 +24,7 @@
       "title": "Work",
       "agentName": "default",
       "startedAt": "2026-09-29T21:01:47.106Z",
+      "endedAt": "2026-10-11T19:30:49.351Z",
       "events": [
         {
           "ts": 1790715707110,
@@ -47,6 +49,12 @@
           "tags": [
             "confidence:0.9"
           ]
+        },
+        {
+          "ts": 1791747049351,
+          "type": "note",
+          "content": "Abandoned: Stale trajectory from a different task (Desktop direct-node machine addresses); left active for 12 days, abandoning so the relaycast D1 robustness work can be tracked.",
+          "significance": "high"
         }
       ]
     }

@@ -978,7 +978,9 @@ async fn agent_heartbeat_uses_presence_endpoint() {
 
     Mock::given(method("POST"))
         .and(path("/v1/agents/heartbeat"))
-        .respond_with(ok(json!({})))
+        .and(header("authorization", "Bearer at_live_test"))
+        .and(body_json(json!({})))
+        .respond_with(ok(json!(null)))
         .expect(1)
         .mount(&server)
         .await;
@@ -1518,6 +1520,82 @@ async fn dm_conversation_participants_returns_workspace_conversation_members() {
         .await
         .expect("missing conversation should return empty vec");
     assert!(missing.is_empty());
+}
+
+#[tokio::test]
+async fn all_dm_conversations_aggregates_bounded_pages() {
+    let server = MockServer::start().await;
+    let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+        .expect("failed to create relay client");
+
+    Mock::given(method("GET"))
+        .and(path("/v1/dm/conversations/all"))
+        .and(query_param("limit", "500"))
+        .and(query_param_is_missing("cursor"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "ok": true,
+            "data": [{
+                "id": "conv_1", "type": "dm", "participants": ["alice", "bob"],
+                "message_count": 1, "last_message": null
+            }],
+            "cursor": { "next": "conv_1", "has_more": true }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/dm/conversations/all"))
+        .and(query_param("limit", "500"))
+        .and(query_param("cursor", "conv_1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "ok": true,
+            "data": [{
+                "id": "conv_2", "type": "dm", "participants": ["alice", "carol"],
+                "message_count": 1, "last_message": null
+            }],
+            "cursor": { "next": null, "has_more": false }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let conversations = relay
+        .all_dm_conversations()
+        .await
+        .expect("all_dm_conversations failed");
+    assert_eq!(
+        conversations
+            .iter()
+            .map(|conversation| conversation.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["conv_1", "conv_2"]
+    );
+}
+
+#[tokio::test]
+async fn all_dm_conversations_rejects_a_repeated_cursor() {
+    let server = MockServer::start().await;
+    let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+        .expect("failed to create relay client");
+
+    Mock::given(method("GET"))
+        .and(path("/v1/dm/conversations/all"))
+        .and(query_param("limit", "500"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "ok": true,
+            "data": [],
+            "cursor": { "next": "dm_repeat", "has_more": true }
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let result = relay.all_dm_conversations().await;
+    assert!(matches!(
+        result,
+        Err(RelayError::InvalidResponse(message))
+            if message.contains("pagination did not advance")
+    ));
 }
 
 #[tokio::test]
