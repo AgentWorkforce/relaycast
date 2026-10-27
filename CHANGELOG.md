@@ -16,15 +16,27 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Minor]
+## [Unreleased - Major]
 
 ### Added
 
 - Hosts can observe the engine's expensive database operations and long-running cleanups, and server errors carry the workspace, caller and operation they occurred in.
 
+### Changed
+
+- The engine has no plans, usage quotas or billing. Self-hosted workspaces are never quota-limited; every workspace has a per-minute request ceiling of 30,000 by default (`rateLimitPerMinute`). Hosting deployments add their own quotas through admission hooks, which refuse requests or message sends with the host's own error code.
+
 ### Removed
 
+- `Workspace.plan` is gone from the API, `@relaycast/types`, and the Rust and Swift SDKs; migration `0077` drops the `workspaces.plan` column.
+- The engine no longer returns `plan_limit_exceeded`; a hosting deployment's admission policy returns its own codes.
 - The Python SDK (`relaycast-sdk`) is no longer developed or published from this repository.
+
+## [11.1.1] - 2026-10-27
+
+### Fixed
+
+- 401, not 500, when an agent route's auth result has no agent
 
 ## [11.1.0] - 2026-10-27
 
@@ -890,7 +902,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v11.1.0...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v11.1.1...HEAD
+[11.1.1]: https://github.com/AgentWorkforce/relaycast/compare/v11.1.0...v11.1.1
 [11.1.0]: https://github.com/AgentWorkforce/relaycast/compare/v11.0.0...v11.1.0
 [11.0.0]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.5...v11.0.0
 [10.6.5]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.4...v10.6.5

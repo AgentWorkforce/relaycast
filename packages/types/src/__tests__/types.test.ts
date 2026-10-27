@@ -92,15 +92,8 @@ describe('Type definitions', () => {
     expectTypeOf<Workspace>().toHaveProperty('name');
     expectTypeOf<Workspace>().toHaveProperty('api_key_hash');
     expectTypeOf<Workspace>().toHaveProperty('system_prompt');
-    expectTypeOf<Workspace>().toHaveProperty('plan');
     expectTypeOf<Workspace>().toHaveProperty('created_at');
     expectTypeOf<Workspace>().toHaveProperty('metadata');
-  });
-
-  it('Workspace plan is a union type', () => {
-    expectTypeOf<'free'>().toMatchTypeOf<Workspace['plan']>();
-    expectTypeOf<'pro'>().toMatchTypeOf<Workspace['plan']>();
-    expectTypeOf<'enterprise'>().toMatchTypeOf<Workspace['plan']>();
   });
 
   it('defaults attribution fields for responses from pre-attribution engines', () => {
@@ -109,7 +102,6 @@ describe('Type definitions', () => {
       name: 'legacy',
       api_key_hash: 'hash',
       system_prompt: null,
-      plan: 'free',
       created_at: '2026-08-18T00:00:00.000Z',
       metadata: {},
     });
