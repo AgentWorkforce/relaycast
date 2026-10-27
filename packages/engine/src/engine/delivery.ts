@@ -631,13 +631,17 @@ export async function deadLetterUnreachableDeliveryBatch(
     lt(nodes.lastHeartbeatAt, staleBefore),
   );
 
+  // Pinned to the active-only location index: without it SQLite drove this
+  // from idx_deliveries_location_node_fk, reading every delivery ever routed
+  // to a node (~250k rows, 3.5-4.6s per run in production) to find the few
+  // still active, and stalled the shared D1 for every tenant while it ran.
   const due = await db
     .select({
-      delivery: deliveries,
+      delivery: indexedDeliveryColumns,
       senderAgentId: messages.agentId,
       targetAgentName: agents.name,
     })
-    .from(deliveries)
+    .from(sql`${deliveries} INDEXED BY idx_deliveries_active_location_node`)
     .innerJoin(nodes, staleNodePredicate)
     .innerJoin(messages, eq(deliveries.messageId, messages.id))
     .innerJoin(agents, eq(deliveries.agentId, agents.id))
@@ -646,6 +650,7 @@ export async function deadLetterUnreachableDeliveryBatch(
       // Literal statuses, as in expireDueDeliveryBatch: parameterizing them
       // hides the predicate from SQLite's partial-index selection.
       sql`${deliveries.status} IN ('queued', 'delivered')`,
+      isNotNull(deliveries.locationNodeId),
     ))
     .orderBy(asc(nodes.lastHeartbeatAt), asc(deliveries.expiresAt), asc(deliveries.id))
     .limit(DELIVERY_EXPIRY_BATCH_SIZE);
@@ -1136,10 +1141,16 @@ async function replayPendingToNode(
   // (≈6.5k on production) for every single-agent register/recover replay.
   // Push the scope into the primary-key IN list instead; the set is deduped and
   // chunked to stay under D1's bound-parameter cap.
+  // The unscoped roster is pinned to the node FK index: D1 keeps no ANALYZE
+  // stats, so SQLite otherwise walks agents_workspace_name_unique to satisfy
+  // the ORDER BY, reading every agent in the workspace (avg ~5.7k rows,
+  // ~33ms in production) to find one node's handful.
   const rosterQuery = (ids?: string[]) => db.select({
-    id: agents.id, name: agents.name, providerName: agents.providerName,
-    ackSeq: agents.deliveryAckSeq,
-  }).from(agents).where(and(
+    id: sql`${agents.id}`.mapWith(agents.id),
+    name: sql`${agents.name}`.mapWith(agents.name),
+    providerName: sql`${agents.providerName}`.mapWith(agents.providerName),
+    ackSeq: sql`${agents.deliveryAckSeq}`.mapWith(agents.deliveryAckSeq),
+  }).from(ids === undefined ? sql`${agents} INDEXED BY idx_agents_location_node_fk` : sql`${agents}`).where(and(
     eq(agents.workspaceId, workspaceId),
     eq(agents.locationType, 'via_node'),
     eq(agents.locationNodeId, nodeId),

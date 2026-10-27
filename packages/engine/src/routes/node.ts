@@ -408,7 +408,7 @@ nodeRoutes.post('/nodes/:node/actions/:name/invoke', requireAuth, rateLimit, asy
       handler_node_id: result.handler_node_id,
     };
     await sendWebhookEvent(c, { type: 'action.invoked', workspaceId: workspace.id, data: eventData });
-    emitServerEvent(c, workspace.id, 'relaycast_server_action_invoked', {
+    emitServerEvent(c, workspace.id, 'action.invoked', {
       action_name: result.action_name,
       invocation_id: result.invocation_id,
       caller_agent_id: agent.id,

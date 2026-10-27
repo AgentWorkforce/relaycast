@@ -6,6 +6,7 @@ import { z } from 'zod';
 import {
   ApiSuccessSchema,
   CreateWorkspaceRequestSchema,
+  RotateWorkspaceKeyRequestSchema,
   UpdateWorkspaceRequestSchema,
   WorkspaceDmConversationSchema,
 } from '@relaycast/types';
@@ -47,6 +48,7 @@ import {
   jsonNotFound,
   jsonOk,
   parseJsonBody,
+  parseOptionalJsonBody,
   parseQueryParams,
 } from '../lib/httpResponse.js';
 import { parsePaginationQuery, positiveIntQueryParam } from '../lib/httpQuery.js';
@@ -107,7 +109,7 @@ async function deleteAuthenticatedWorkspace(c: Context<AppEnv>, expectedId?: str
       return workspaceNotFound(c);
     }
     await workspaceEngine.deleteWorkspace(db, c.get('engine').files, workspace.id);
-    emitServerEvent(c, workspace.id, 'relaycast_server_workspace_deleted', {
+    emitServerEvent(c, workspace.id, 'workspace.deleted', {
       deleted_via: 'api',
     });
     return jsonNoContent(c);
@@ -265,7 +267,7 @@ workspaceRoutes.post('/workspaces', async (c) => {
       },
     );
     if (result.created) {
-      emitServerEvent(c, result.workspace.workspace_id, 'relaycast_server_workspace_created', {
+      emitServerEvent(c, result.workspace.workspace_id, 'workspace.created', {
         created_via: 'api',
       });
     }
@@ -279,7 +281,9 @@ workspaceRoutes.post('/workspaces', async (c) => {
     return result.created ? jsonCreated(c, result.workspace) : jsonOk(c, result.workspace);
   } catch (err: unknown) {
     const error = asCodedError(err);
-    if ((error.status ?? 500) >= 500) {
+    // An uncoded 5xx is re-thrown by errorResponse to app.onError, which logs
+    // and captures it; recording it here too would count it twice.
+    if (error.code && (error.status ?? 500) >= 500) {
       const diagnostics = safeErrorDiagnostics(error);
       getRequestLogger(c, 'workspace.create').error('Workspace creation failed', {
         error_code: error.code ?? 'internal_error',
@@ -464,7 +468,7 @@ workspaceRoutes.patch('/workspace', requireWorkspaceKey, rateLimit, async (c) =>
     if (!updated) {
       return workspaceNotFound(c);
     }
-    emitServerEvent(c, workspace.id, 'relaycast_server_workspace_updated', {
+    emitServerEvent(c, workspace.id, 'workspace.updated', {
       changed_name: typeof body?.name === 'string',
       changed_system_prompt: typeof body?.system_prompt === 'string',
       changed_metadata: body.metadata !== undefined,
@@ -621,7 +625,10 @@ workspaceRoutes.post('/agents/:name/rotate-token', requireAgentToken, rateLimit,
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
-    const authAgent = c.get('agent')!;
+    const authAgent = c.get('agent');
+    if (!authAgent) {
+      return jsonError(c, 'unauthorized', 'Agent token required', 401);
+    }
     if (authAgent.name !== c.req.param('name')) {
       return jsonError(
         c,
@@ -635,10 +642,56 @@ workspaceRoutes.post('/agents/:name/rotate-token', requireAgentToken, rateLimit,
       workspace.id,
       c.req.param('name'),
     );
-    emitServerEvent(c, workspace.id, 'relaycast_server_agent_token_rotated', {
+    emitServerEvent(c, workspace.id, 'agent.token.rotated', {
       agent_name: c.req.param('name'),
     });
     return jsonOk(c, result);
+  } catch (err: unknown) {
+    return errorResponse(c, err);
+  }
+});
+
+// POST /workspace/rotate-key — workspace-key self-rollover. The superseded key
+// keeps authenticating for `grace_seconds` (default 60) so peers and in-flight
+// callers survive the cutover; `grace_seconds: 0` is the compromise mode.
+// The route is opt-in (`config.allowWorkspaceKeyRotation`) and stays disabled
+// on deployments where the canonical key is owned by an external control
+// plane (hosted): a key minted here would be invisible to that plane and its
+// repair path would clobber or resurrect the replacement.
+workspaceRoutes.post('/workspace/rotate-key', requireWorkspaceKey, rateLimit, async (c) => {
+  try {
+    if (!c.get('engine').config.allowWorkspaceKeyRotation) {
+      return jsonError(
+        c,
+        'workspace_key_rotation_disabled',
+        'Workspace key rotation is disabled on this deployment; rotate through the managing control plane',
+        403,
+      );
+    }
+    const parsed = await parseOptionalJsonBody(
+      c,
+      RotateWorkspaceKeyRequestSchema,
+      'invalid workspace key rotation body',
+      { emptyBodyValue: {} },
+    );
+    if (!parsed.ok) {
+      return parsed.response;
+    }
+    const result = await tokenRotateEngine.rotateWorkspaceKey(
+      c.get('db'),
+      c.get('workspace').id,
+      parsed.data.grace_seconds === undefined
+        ? undefined
+        : { graceMs: parsed.data.grace_seconds * 1000 },
+    );
+    emitServerEvent(c, result.workspaceId, 'workspace.key.rotated', {
+      grace_seconds: parsed.data.grace_seconds ?? 60,
+    });
+    return jsonOk(c, {
+      workspace_id: result.workspaceId,
+      api_key: result.apiKey,
+      previous_key_expires_at: result.previousKeyExpiresAt?.toISOString() ?? null,
+    });
   } catch (err: unknown) {
     return errorResponse(c, err);
   }

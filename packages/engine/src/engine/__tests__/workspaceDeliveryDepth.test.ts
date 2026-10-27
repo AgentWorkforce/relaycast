@@ -92,6 +92,7 @@ async function send(
       mode: 'immediate',
       ttlMs: 3_600_000,
       depthCap: 1000,
+      offlineExcludeMs: 24 * 60 * 60 * 1000,
       workspacePolicy,
     }),
   ]);
@@ -172,18 +173,18 @@ describe('workspace delivery growth guard (channel broadcast)', () => {
   it('resolves the dynamic host policy through the async resolver, clamped within cap', async () => {
     const config = {
       workspaceDelivery: {
-        resolve: async (w: { id: string; plan: string }) =>
-          ({ cap: w.plan === 'enterprise' ? 5000 : 500, reserve: 16 }),
+        resolve: async (w: { id: string }) =>
+          ({ cap: w.id === 'ws_big' ? 5000 : 500, reserve: 16 }),
       },
     };
-    expect(await resolveWorkspaceDeliveryPolicyFor(config, { id: 'ws', plan: 'enterprise' }))
+    expect(await resolveWorkspaceDeliveryPolicyFor(config, { id: 'ws_big' }))
       .toEqual({ cap: 5000, reserve: 16 });
-    expect(await resolveWorkspaceDeliveryPolicyFor(config, { id: 'ws', plan: 'free' }))
+    expect(await resolveWorkspaceDeliveryPolicyFor(config, { id: 'ws' }))
       .toEqual({ cap: 500, reserve: 16 });
     // No host policy => undefined (self-host has no workspace guard).
-    expect(await resolveWorkspaceDeliveryPolicyFor(undefined, { id: 'ws', plan: 'free' })).toBeUndefined();
+    expect(await resolveWorkspaceDeliveryPolicyFor(undefined, { id: 'ws' })).toBeUndefined();
     // A reserve >= cap is clamped into `0 <= reserve < cap`.
-    expect(await resolveWorkspaceDeliveryPolicyFor({ workspaceDelivery: { cap: 100, reserve: 200 } }, { id: 'ws', plan: 'free' }))
+    expect(await resolveWorkspaceDeliveryPolicyFor({ workspaceDelivery: { cap: 100, reserve: 200 } }, { id: 'ws' }))
       .toEqual({ cap: 100, reserve: 99 });
   });
 
@@ -244,6 +245,7 @@ describe('workspace delivery guard at real engine entry points', () => {
         mode: 'immediate',
         ttlMs: 3_600_000,
         depthCap: 1000,
+        offlineExcludeMs: 24 * 60 * 60 * 1000,
         workspacePolicy: policy,
       }),
     ]);

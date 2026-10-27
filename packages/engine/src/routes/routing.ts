@@ -76,7 +76,7 @@ routingRoutes.post('/route', requireAuth, rateLimit, async (c) => {
       parsed.data.message || '',
     );
 
-    emitServerEvent(c, workspace.id, 'relaycast_server_route_resolved', {
+    emitServerEvent(c, workspace.id, 'route.resolved', {
       skill: parsed.data.skill,
       agent_name: result.agentName,
       fallback: result.fallback,
@@ -110,7 +110,7 @@ routingRoutes.post('/route/feedback', requireAuth, rateLimit, async (c) => {
         parsed.data.error,
       );
 
-    emitServerEvent(c, workspace.id, 'relaycast_server_route_feedback_recorded', {
+    emitServerEvent(c, workspace.id, 'route.feedback.recorded', {
       agent_name: parsed.data.agent_name,
       success: parsed.data.success,
     });
@@ -193,7 +193,7 @@ routingRoutes.put('/routing/config', requireWorkspaceKey, rateLimit, async (c) =
 
     const workspace = c.get('workspace');
     const result = await routingEngine.setRoutingConfig(c.get('db'), workspace.id, parsed.data);
-    emitServerEvent(c, workspace.id, 'relaycast_server_routing_config_updated', {
+    emitServerEvent(c, workspace.id, 'routing.config.updated', {
       circuit_breaker_threshold: result.circuit_breaker_threshold,
       circuit_breaker_cooldown_seconds: result.circuit_breaker_cooldown_seconds,
     });

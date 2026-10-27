@@ -1,7 +1,9 @@
 import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
-import { jsonError, jsonMalformedBody } from './httpResponse.js';
 import type { FleetSpawnErrorDetails } from '@relaycast/types';
+import { jsonError, jsonMalformedBody } from './httpResponse.js';
+import { AdmissionDeniedError } from './admissionError.js';
+import { admissionDeniedResponse } from '../middleware/admission.js';
 
 /**
  * Errors thrown inside the engine optionally carry a stable error `code` and an
@@ -82,8 +84,17 @@ export function safeClientErrorMessage(
  * `as ContentfulStatusCode` cast that Hono's typed status requires, behind a
  * real `instanceof` narrowing instead of the unchecked `err as Error & {...}`
  * assertion that was duplicated across every route handler.
+ *
+ * An error with no `code` that resolves to a 5xx is not an expected outcome of
+ * the route, so it is re-thrown to the app's `onError` rather than answered
+ * here. That handler logs it and records telemetry (answering here dropped
+ * both), and a host can chain a classifier in front of it: the hosted gateway
+ * maps D1 overload to a retryable `503 database_overloaded` with Retry-After,
+ * which a 500 answered here never reached. The client body is the same either
+ * way. Only route handlers call this, so a throw always reaches `onError`.
  */
 export function errorResponse(c: Context, err: unknown) {
+  if (err instanceof AdmissionDeniedError) return admissionDeniedResponse(c, err.denial);
   const error = asCodedError(err);
   if (error.code === 'workspace_delivery_depth_exceeded') c.header('Retry-After', '30');
   if (err instanceof SyntaxError) {
@@ -93,6 +104,8 @@ export function errorResponse(c: Context, err: unknown) {
   if (error.errorDetails) {
     return c.json({ ok: false as const, error: error.errorDetails }, status as ContentfulStatusCode);
   }
+  // Throw the normalized Error: Hono hands only `Error` instances to `onError`.
+  if (!error.code && status >= 500) throw error;
   return jsonError(
     c,
     error.code || 'internal_error',

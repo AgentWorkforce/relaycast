@@ -51,6 +51,7 @@ import {
 } from './nodeProvider.js';
 import { serializeNodeOp } from './nodeLock.js';
 import {
+  ACTION_DISPATCH_TIMEOUT_MS,
   completeNodeInvocation,
   dispatchCapacitySpawn,
   rescheduleInvocationsForLostNode,
@@ -981,8 +982,8 @@ export async function heartbeatNode(
       const maxAgents = message.max_agents ?? existingProvider?.maxAgents ?? 0;
       // heartbeatProvider's load rule folded in here: a numeric load only
       // counts as a measurement when the provider opts in via load_reported
-      // and is capacity-bounded (zero is the unbounded sentinel).
-      const reportedLoad = maxAgents > 0 && message.load_reported === true && typeof message.load === 'number'
+      // regardless of whether it has a finite agent cap.
+      const reportedLoad = message.load_reported === true && typeof message.load === 'number'
         ? message.load
         : undefined;
       // One write carries both the roster refresh (capabilities/max_agents/
@@ -1167,13 +1168,30 @@ export async function settleNodeOffline(
         : []),
     ));
 
+  const routeLostAt = new Date();
   await db
     .update(agents)
-    .set({ ...agentLivenessLoss(), lastSeen: new Date() })
+    .set({ ...agentLivenessLoss(), lastSeen: routeLostAt })
     .where(and(
       eq(agents.workspaceId, workspaceId),
       ne(agents.status, 'offline'),
       ne(agents.status, RELEASED_AGENT_STATUS),
+      eq(agents.locationType, 'via_node'),
+      eq(agents.locationNodeId, nodeId),
+      ...(claimRevision !== undefined
+        ? [lt(agents.nodeLivenessRevision, claimRevision)]
+        : []),
+    ));
+  // A quiet hosted agent may already be liveness-offline while its route is
+  // still healthy. Start its exclusion grace at actual route loss without an
+  // UPDATE OF status, which would clear the saved pre-sweep status via trigger.
+  await db
+    .update(agents)
+    .set({ lastSeen: routeLostAt })
+    .where(and(
+      eq(agents.workspaceId, workspaceId),
+      eq(agents.status, 'offline'),
+      isNotNull(agents.statusBeforeLivenessLoss),
       eq(agents.locationType, 'via_node'),
       eq(agents.locationNodeId, nodeId),
       ...(claimRevision !== undefined
@@ -1252,13 +1270,25 @@ export async function handleProviderDisconnect(
       return;
     }
     await markProviderOffline(db, workspaceId, nodeId, providerName);
+    const routeLostAt = new Date();
     await db
       .update(agents)
-      .set({ ...agentLivenessLoss(), lastSeen: new Date() })
+      .set({ ...agentLivenessLoss(), lastSeen: routeLostAt })
       .where(and(
         eq(agents.workspaceId, workspaceId),
         ne(agents.status, 'offline'),
         ne(agents.status, RELEASED_AGENT_STATUS),
+        eq(agents.locationType, 'via_node'),
+        eq(agents.locationNodeId, nodeId),
+        eq(agents.providerName, providerName),
+      ));
+    await db
+      .update(agents)
+      .set({ lastSeen: routeLostAt })
+      .where(and(
+        eq(agents.workspaceId, workspaceId),
+        eq(agents.status, 'offline'),
+        isNotNull(agents.statusBeforeLivenessLoss),
         eq(agents.locationType, 'via_node'),
         eq(agents.locationNodeId, nodeId),
         eq(agents.providerName, providerName),
@@ -1282,11 +1312,25 @@ export async function deregisterProvider(
 ) {
   await removeProvider(db, workspaceId, nodeId, providerName);
   registry.detachProvider(workspaceId, nodeId, providerName);
+  const routeLostAt = new Date();
   await db
     .update(agents)
-    .set({ status: 'offline', lastSeen: new Date() })
+    .set({ ...agentLivenessLoss(), lastSeen: routeLostAt })
     .where(and(
       eq(agents.workspaceId, workspaceId),
+      ne(agents.status, 'offline'),
+      ne(agents.status, RELEASED_AGENT_STATUS),
+      eq(agents.locationType, 'via_node'),
+      eq(agents.locationNodeId, nodeId),
+      eq(agents.providerName, providerName),
+    ));
+  await db
+    .update(agents)
+    .set({ lastSeen: routeLostAt })
+    .where(and(
+      eq(agents.workspaceId, workspaceId),
+      eq(agents.status, 'offline'),
+      isNotNull(agents.statusBeforeLivenessLoss),
       eq(agents.locationType, 'via_node'),
       eq(agents.locationNodeId, nodeId),
       eq(agents.providerName, providerName),
@@ -2540,6 +2584,52 @@ function requiresSpawnReadiness(input: unknown): boolean {
   return spawnReadinessSchema.safeParse(input).success;
 }
 
+/**
+ * The ids of `candidates` this node is releasing: an open built-in release
+ * dispatched to this node and provider names each one (and its immutable id,
+ * when the release carries one). A node stops listing an agent as soon as it
+ * has ended it, before its release result arrives, so the missing sweep must
+ * leave that binding to the release completion, which deactivates it and
+ * tombstones the agent atomically. Deactivating it first makes the completion
+ * fail (`agent_identity_mismatch`) although the agent did end. A release that
+ * has waited longer than the dispatch timeout no longer shields its agent.
+ * One indexed lookup (`dispatched_node_id`), however many agents are missing.
+ */
+async function releasingAgentIds(
+  db: Db,
+  workspaceId: string,
+  nodeId: string,
+  providerName: string,
+  candidates: ReadonlyArray<{ id: string; name: string }>,
+): Promise<Set<string>> {
+  const cutoff = new Date(Date.now() - ACTION_DISPATCH_TIMEOUT_MS);
+  const releases = await db
+    .select({ input: actionInvocations.input })
+    .from(actionInvocations)
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.dispatchedNodeId, nodeId),
+      eq(actionInvocations.dispatchedProvider, providerName),
+      eq(actionInvocations.actionName, 'release'),
+      eq(actionInvocations.invocationOrigin, 'builtin'),
+      inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked']),
+      or(
+        gt(actionInvocations.dispatchedAt, cutoff),
+        and(isNull(actionInvocations.dispatchedAt), gt(actionInvocations.createdAt, cutoff)),
+      ),
+    ));
+  const releasing = new Set<string>();
+  for (const { input } of releases) {
+    const release = input && typeof input === 'object' && !Array.isArray(input)
+      ? input as Record<string, unknown>
+      : {};
+    const agent = candidates.find((candidate) => candidate.name === release.name
+      && (release.expected_agent_id === undefined || release.expected_agent_id === candidate.id));
+    if (agent) releasing.add(agent.id);
+  }
+  return releasing;
+}
+
 export async function reconcileInventory(
   db: Db,
   registry: NodeConnectionRegistry,
@@ -2821,25 +2911,63 @@ export async function reconcileInventory(
     }
   }
 
+  // Pinned to the node FK index for the same reason as the delivery roster:
+  // without stats SQLite picks idx_agents_roster and reads the workspace.
   const nodeAgents = await db
-    .select({ id: agents.id, name: agents.name, metadata: agents.metadata })
-    .from(agents)
+    .select({
+      id: sql`${agents.id}`.mapWith(agents.id),
+      name: sql`${agents.name}`.mapWith(agents.name),
+      metadata: sql`${agents.metadata}`.mapWith(agents.metadata),
+    })
+    .from(sql`${agents} INDEXED BY idx_agents_location_node_fk`)
     .where(and(
       eq(agents.workspaceId, workspaceId),
       eq(agents.locationType, 'via_node'),
       eq(agents.locationNodeId, nodeId),
       eq(agents.providerName, providerName),
-      eq(agents.status, 'active'),
+      ne(agents.status, RELEASED_AGENT_STATUS),
     ));
-  const missingAgents = nodeAgents.filter((agent) => !reportedNames.has(agent.name));
+  const unreported = nodeAgents.filter((agent) => !reportedNames.has(agent.name));
+  const releasing = unreported.length > 0
+    ? await releasingAgentIds(db, workspaceId, nodeId, providerName, unreported)
+    : new Set<string>();
+  const missingAgents = unreported.filter((agent) => !releasing.has(agent.id));
   const missing = missingAgents.map((agent) => agent.id);
   if (missing.length > 0) {
-    await db
-      .update(agents)
-      .set({ status: 'offline', lastSeen: new Date() })
-      .where(inArray(agents.id, missing));
+    const missingAt = new Date();
+    const invalidationResults = await runAtomicWrites(db, [
+      db
+        .update(agentNodeBindings)
+        .set({ status: 'inactive', updatedAt: missingAt })
+        .where(and(
+          eq(agentNodeBindings.workspaceId, workspaceId),
+          eq(agentNodeBindings.nodeId, nodeId),
+          inArray(agentNodeBindings.agentId, missing),
+          eq(agentNodeBindings.status, 'active'),
+        )),
+      db
+        .update(agents)
+        .set({
+          status: 'offline',
+          lastSeen: missingAt,
+          locationNodeId: null,
+          sessionRef: null,
+        })
+        .where(and(
+          eq(agents.workspaceId, workspaceId),
+          inArray(agents.id, missing),
+          eq(agents.locationType, 'via_node'),
+          eq(agents.locationNodeId, nodeId),
+          eq(agents.providerName, providerName),
+          ne(agents.status, RELEASED_AGENT_STATUS),
+        ))
+        .returning({ id: agents.id }),
+    ]);
+    const invalidatedIds = new Set(
+      ((invalidationResults[1] ?? []) as Array<{ id: string }>).map((row) => row.id),
+    );
     if (completionDeps) {
-      for (const agent of missingAgents) {
+      for (const agent of missingAgents.filter((candidate) => invalidatedIds.has(candidate.id))) {
         await emitAgentExitedEffects(completionDeps, workspaceId, {
           agentId: agent.id,
           agentName: agent.name,
@@ -3532,6 +3660,14 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           message.agents,
           args.completionDeps,
         );
+        // An agent the node had dropped and is routing again is a new hosting
+        // episode. Clear a presence-only disconnect so node liveness can count
+        // them without an HTTP heartbeat. An agent the snapshot already
+        // routed keeps the hold: still being listed is not recovery.
+        if (args.presence?.clearExplicitDisconnect && result.newlyRoutedAgentIds.length > 0) {
+          await Promise.all(result.newlyRoutedAgentIds.map((agentId) =>
+            args.presence!.clearExplicitDisconnect!(args.workspaceId, agentId)));
+        }
         const replySent = sendControl(args.socket, {
           v: 1,
           id: requestId(message),

@@ -76,7 +76,6 @@ describe('MCP → SDK → HTTP integration', () => {
           id: 'ws_info',
           name,
           system_prompt: null,
-          plan: 'free',
           created_at: new Date().toISOString(),
           metadata: {},
         };
