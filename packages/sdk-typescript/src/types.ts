@@ -1,6 +1,20 @@
 import type * as Raw from '@relaycast/types';
 import type { Camelize } from './casing.js';
 
+/**
+ * Any JSON value — scalars, arrays, objects, or `null` — exactly mirroring the
+ * runtime wire contract (`FleetWireJsonValue`). Action invocation outputs are
+ * unconstrained JSON, so this is intentionally wider than `Record<string, unknown>`.
+ */
+export type JsonValue = Raw.FleetWireJsonValue;
+
+/**
+ * A capability advertised by a fleet node on the roster. The runtime emits and
+ * stores structured capability objects (`{ name, kind?, metadata? }`), never bare
+ * capability-name strings, so the SDK roster type must match.
+ */
+export type NodeCapability = Raw.FleetCapability;
+
 export interface A2aAgentCardSkill {
   id?: string;
   name: string;
@@ -160,12 +174,473 @@ export interface UpdateRoutingConfigRequest {
   circuitBreakerCooldownSeconds?: number;
 }
 
+// === Directory (extended) ===
+
+export interface ListDirectoryQuery {
+  status?: string;
+  limit?: number;
+}
+
+export interface UpdateDirectoryAgentRequest {
+  sourceAgentName?: string | null;
+  slug?: string;
+  name?: string;
+  description?: string | null;
+  provider?: string | null;
+  endpointUrl?: string | null;
+  documentationUrl?: string | null;
+  version?: string | null;
+  tags?: string[];
+  capabilities?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  status?: string;
+  skills?: DirectorySkillInput[];
+}
+
+export interface DirectoryRating {
+  id: string;
+  score: number;
+  review: string | null;
+  raterAgentId: string;
+  raterAgentName: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface RateDirectoryAgentRequest {
+  score: number;
+  review?: string;
+}
+
+// === Routing / Skills (extended) ===
+
+export interface RouteFeedbackRequest {
+  agentName: string;
+  success: boolean;
+  error?: string;
+}
+
+export interface RouteFeedbackResult {
+  ok: boolean;
+}
+
+export interface SkillSearchQuery {
+  q?: string;
+  limit?: number;
+}
+
+export interface SkillSearchResult {
+  agentName: string;
+  skillName: string;
+  description: string | null;
+  tags: string[];
+  relevanceScore: number;
+}
+
+// === Actions ===
+
+export interface ActionDefinition {
+  id: string;
+  name: string;
+  description: string;
+  handlerAgent: string | null;
+  handlerNode: string | null;
+  handlerNodeId: string | null;
+  inputSchema: Record<string, unknown>;
+  outputSchema: Record<string, unknown>;
+  availableTo: string[] | null;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export interface RegisterActionRequest {
+  name: string;
+  description: string;
+  handlerAgent?: string;
+  handlerNode?: string;
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  availableTo?: string[];
+}
+
+export interface InvokeActionResult {
+  invocationId: string;
+  actionName: string;
+  handlerAgentId: string | null;
+  handlerNodeId?: string | null;
+  dispatchedNodeId?: string | null;
+  input: Record<string, unknown>;
+  status: string;
+  createdAt: string;
+}
+
+export interface CompleteInvocationRequest {
+  output?: JsonValue;
+  error?: string;
+  durationMs?: number;
+}
+
+export interface ActionInvocation {
+  invocationId: string;
+  actionName: string;
+  callerId: string | null;
+  callerName?: string | null;
+  input?: Record<string, unknown>;
+  output: JsonValue;
+  status: string;
+  error: string | null;
+  durationMs: number | null;
+  dispatchedNodeId?: string | null;
+  dispatchedAt?: string | null;
+  createdAt?: string;
+  completedAt: string | null;
+}
+
+// === Fleet nodes / triggers ===
+
+export type NodeKind = 'ws' | 'http_push' | 'poll';
+export type NodeRole = 'direct' | 'broker';
+export type NodeAckMode = 'manual' | 'on_2xx' | 'response';
+
+export type NodeDeliveryAuth =
+  | { type: 'none' }
+  | { type: 'bearer'; token: string }
+  | { type: 'static_headers'; headers: Record<string, string> }
+  | {
+    type: 'hmac_sha256';
+    secret: string;
+    signatureHeader?: string;
+    timestampHeader?: string;
+    signedPayload?: 'body' | 'timestamp.body';
+    encoding?: 'hex';
+    prefix?: string;
+    /** Use Standard Webhooks headers/signing; requires a 24-64 byte `whsec_` secret. */
+    signatureScheme?: 'standard-webhooks';
+  };
+
+export interface HttpPushNodeDelivery {
+  url: string;
+  ackMode?: NodeAckMode;
+  auth?: NodeDeliveryAuth;
+  /**
+   * Route this node's webhook POST through the deployment's configured egress
+   * proxy (wire field `use_proxy`) instead of hitting `url` directly. For
+   * receivers that block the server's network origin; fails if no proxy is
+   * configured server-side.
+   */
+  useProxy?: boolean;
+}
+
+export interface NodeRosterEntry {
+  id: string;
+  name: string;
+  kind: NodeKind | string;
+  role: NodeRole | string;
+  /** Host machine this node runs on; null when nothing reported one. */
+  machineId: string | null;
+  deliveryAdapter: string;
+  delivery: Record<string, unknown> | null;
+  capabilities: NodeCapability[];
+  tags: string[];
+  version: string;
+  status: 'online' | 'offline' | string;
+  live: boolean;
+  handlersLive: boolean;
+  /** Managed-agent capacity utilization in [0,1], or null when unreported. */
+  load: number | null;
+  activeAgents: number;
+  /**
+   * `activeAgents` is only an authoritative live occupancy count while
+   * `live` is true. Once a node goes offline its last-reported value is
+   * frozen history — it cannot change and must not be read as current
+   * capacity. `true` whenever `live` is `false`.
+   */
+  activeAgentsStale: boolean;
+  maxAgents: number;
+  lastHeartbeatAt: string | null;
+  createdAt: string;
+}
+
+export interface CreateNodeRequest {
+  nodeId?: string;
+  name: string;
+  /**
+   * Stable id of the host machine. Enrollment's key of last resort, after
+   * `nodeId` and `name`: a host that keeps no `nodeId` and renames itself on
+   * each boot rotates its existing `broker` node instead of adding a roster
+   * row. Never matches `direct` nodes — one machine runs many of those.
+   */
+  machineId?: string;
+  kind?: NodeKind;
+  role?: NodeRole;
+  deliveryAdapter?: string;
+  delivery?: HttpPushNodeDelivery | Record<string, unknown> | null;
+  capabilities?: string[];
+  maxAgents?: number;
+  tags?: string[];
+  version?: string;
+}
+
+export interface CreateNodeOptions {
+  /**
+   * The node's current token. Required when `CreateNodeRequest` resolves an
+   * established node by id, name, or machine id; sent only in the
+   * `X-Relaycast-Node-Token` header and never serialized into the JSON body.
+   */
+  currentToken?: string;
+  /**
+   * CSPRNG-generated operation key (at least 32 characters). Reuse it with the
+   * same current token and request body to recover the replacement token after
+   * a lost response.
+   */
+  idempotencyKey?: string;
+}
+
+export interface CreateNodeResponse extends NodeRosterEntry {
+  token: string;
+}
+
+export interface DeleteNodeOptions {
+  /**
+   * Explicitly detach an online node or delete a node that hosts registered
+   * actions. Omit this for the safe default, which refuses either case.
+   */
+  force?: boolean;
+}
+
+export interface DeleteNodeResponse {
+  id: string;
+  name: string;
+  deleted: true;
+  /** Number of node-hosted actions removed by the deletion. */
+  cascadedActions: number;
+}
+
+export interface NodeAgentBinding {
+  id: string;
+  agentId: string;
+  agentName: string;
+  nodeId: string;
+  nodeName: string;
+  nodeKind: NodeKind | string;
+  nodeRole: NodeRole | string;
+  status: string;
+  sessionRef: string | null;
+  priority: number;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface BindAgentToNodeRequest {
+  agentName: string;
+  sessionRef?: string | null;
+  priority?: number;
+}
+
+export interface NodeListQuery {
+  capability?: string;
+  name?: string;
+  /**
+   * Pushed into the roster's SQL query. Omitted: unfiltered by liveness
+   * (legacy default). `'online'` is the server-filtered live-Fleet path —
+   * it never reads or returns history, however large the workspace's
+   * roster has grown. `'offline'` selects everything else and, without
+   * `history`, is not paginated: prefer {@link RelayClient.nodes.listHistory}
+   * for a bounded read of a large dead roster.
+   */
+  status?: 'online' | 'offline';
+}
+
+export interface NodeHistoryQuery {
+  capability?: string;
+  name?: string;
+  status?: 'online' | 'offline';
+  /** Resume point from a previous page's `nextCursor`. Omit to start from the beginning. */
+  cursor?: string | null;
+  /** Page size, clamped server-side to a fixed maximum. */
+  limit?: number;
+}
+
+export interface NodeHistoryPage {
+  nodes: NodeRosterEntry[];
+  /** Pass back as `cursor` to fetch the next page; `null` once every row has been visited. */
+  nextCursor: string | null;
+}
+
+export interface Trigger {
+  id: string;
+  channel: string | null;
+  pattern: string | null;
+  mention: boolean | null;
+  actionName: string;
+  enabled: boolean;
+  lastTriggeredAt: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface CreateTriggerRequest {
+  channel?: string | null;
+  pattern?: string | null;
+  mention?: boolean | null;
+  actionName: string;
+  enabled?: boolean;
+}
+
+export type UpdateTriggerRequest = Partial<CreateTriggerRequest>;
+
+// === Agent session events ===
+
+export interface SessionEvent {
+  id: string;
+  agentId: string;
+  type: string;
+  payload: Record<string, unknown>;
+  sequence?: number;
+  createdAt: string;
+}
+
+export interface EmitSessionEventRequest {
+  type: string;
+  payload?: Record<string, unknown>;
+}
+
+export interface ListSessionEventsQuery {
+  type?: string;
+  limit?: number;
+}
+
+// === Certification ===
+
+export interface CertificationTestResult {
+  name?: string;
+  passed?: boolean;
+  [key: string]: unknown;
+}
+
+export interface CertificationRun {
+  id: string;
+  agentUrl: string;
+  level: number;
+  source?: string;
+  status?: string;
+  passed: boolean;
+  passedTests: number;
+  totalTests: number;
+  monitorEnabled?: boolean;
+  monitorIntervalMinutes?: number | null;
+  lastRunAt?: string | null;
+  startedAt?: string;
+  completedAt?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  tests: CertificationTestResult[];
+}
+
+export interface SubmitCertificationRequest {
+  agentUrl: string;
+  level?: 1 | 2 | 3;
+}
+
+export interface MonitorCertificationRequest {
+  agentUrl: string;
+  level?: 1 | 2 | 3;
+  intervalMinutes?: number;
+}
+
+// === Console / observability ===
+
+export interface ConsoleMessagesQuery {
+  limit?: number;
+  before?: string;
+  agentId?: string;
+  channelId?: string;
+  conversationId?: string;
+  deliveryKind?: 'channel' | 'dm';
+}
+
+export interface ConsoleMessageLog {
+  id: string;
+  messageId: string | null;
+  channelId: string | null;
+  channelName: string | null;
+  agentId: string | null;
+  agentName: string | null;
+  conversationId: string | null;
+  deliveryKind: string;
+  text: string | null;
+  contentType: string | null;
+  metadata: Record<string, unknown>;
+  attachmentCount: number;
+  mentionCount: number;
+  latencyMs: number | null;
+  createdAt: string;
+}
+
+export interface ConsoleWindowQuery {
+  days?: number;
+}
+
+export interface ConsoleAgentStatsQuery {
+  days?: number;
+  limit?: number;
+}
+
+export interface ConsoleOverview {
+  windowDays: number;
+  since: string;
+  totalMessages: number;
+  channelMessages: number;
+  dmMessages: number;
+  uniqueAgents: number;
+  avgLatencyMs: number;
+  maxLatencyMs: number;
+  attachmentCount: number;
+  mentionCount: number;
+}
+
+export interface ConsoleAgentStat {
+  agentId: string;
+  agentName: string;
+  messageCount: number;
+  channelCount: number;
+  dmCount: number;
+  avgLatencyMs: number;
+  lastMessageAt: string | null;
+}
+
+export interface ConsoleCostAgent {
+  agentId: string;
+  agentName: string;
+  messageCount: number;
+  totalCostUsd: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
+export interface ConsoleCostStats {
+  windowDays: number;
+  totals: {
+    totalCostUsd: number;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
+  agents: ConsoleCostAgent[];
+}
+
 export type ActivityItem = Camelize<Raw.ActivityItem>;
 export type Agent = Camelize<Raw.Agent>;
-export type AgentCommand = Camelize<Raw.AgentCommand>;
 export type AgentListQuery = Camelize<Raw.AgentListQuery>;
-export type AgentOfflineEvent = Camelize<Raw.AgentOfflineEvent>;
-export type AgentOnlineEvent = Camelize<Raw.AgentOnlineEvent>;
+export type AgentExitedEvent = Camelize<Raw.AgentExitedEvent>;
+export type AgentStatusActiveEvent = Camelize<Raw.AgentStatusActiveEvent>;
+export type AgentStatusBlockedEvent = Camelize<Raw.AgentStatusBlockedEvent>;
+export type AgentStatusChangedEvent = Camelize<Raw.AgentStatusChangedEvent>;
+export type AgentStatusEvent = Camelize<Raw.AgentStatusEvent>;
+export type AgentStatusIdleEvent = Camelize<Raw.AgentStatusIdleEvent>;
+export type AgentStatusOfflineEvent = Camelize<Raw.AgentStatusOfflineEvent>;
+export type AgentStatusWaitingEvent = Camelize<Raw.AgentStatusWaitingEvent>;
 export type AgentPresenceInfo = Camelize<Raw.AgentPresenceInfo>;
 export type Channel = Camelize<Raw.Channel>;
 export type ChannelArchivedEvent = Camelize<Raw.ChannelArchivedEvent>;
@@ -175,14 +650,9 @@ export type JoinChannelResponse = Camelize<Raw.JoinChannelResponse>;
 export type InviteChannelResponse = Camelize<Raw.InviteChannelResponse>;
 export type ChannelReadStatus = Camelize<Raw.ChannelReadStatus>;
 export type ChannelUpdatedEvent = Camelize<Raw.ChannelUpdatedEvent>;
-export type CommandInvocation = Camelize<Raw.CommandInvocation>;
-export type CommandInvokeResult = CommandInvocation;
-export type CommandInvokedEvent = Camelize<Raw.CommandInvokedEvent>;
 export type CreateAgentRequest = Camelize<Raw.CreateAgentRequest>;
 export type CreateAgentResponse = Camelize<Raw.CreateAgentResponse>;
 export type CreateChannelRequest = Camelize<Raw.CreateChannelRequest>;
-export type CreateCommandRequest = Camelize<Raw.CreateCommandRequest>;
-export type CreateCommandResponse = Camelize<Raw.CreateCommandResponse>;
 export type CreateGroupDmRequest = Camelize<Raw.CreateGroupDmRequest>;
 export type DmConversation = Camelize<Raw.DmConversation>;
 export type CreateGroupDmResponse = Camelize<Raw.CreateGroupDmResponse>;
@@ -194,11 +664,19 @@ export type CreateWorkspaceResponse = Camelize<Raw.CreateWorkspaceResponse>;
 export type WorkspaceLookup = Camelize<Raw.WorkspaceLookup>;
 export type SendDmResponse = Camelize<Raw.SendDmResponse>;
 export type DmMessage = Camelize<Raw.DmMessage>;
+export interface DmMessagePage {
+  messages: DmMessage[];
+  nextBefore: string | null;
+  exhausted: boolean;
+}
 export type DmConversationSummary = Camelize<Raw.DmConversationSummary>;
 export type DmConversationParticipant = Camelize<Raw.DmConversationParticipant>;
 export type DmLastMessage = Camelize<Raw.DmLastMessage>;
 export type DmReceivedEvent = Camelize<Raw.DmReceivedEvent>;
 export type EventSubscription = Camelize<Raw.EventSubscription>;
+export type WebhookDelivery = Camelize<Raw.WebhookDelivery>;
+export type WebhookDeliveryStatus = Raw.WebhookDeliveryStatus;
+export type ReplayWebhookDeliveryResponse = Camelize<Raw.ReplayWebhookDeliveryResponse>;
 export type FileInfo = Camelize<Raw.FileInfo>;
 export type CompleteUploadResponse = Camelize<Raw.CompleteUploadResponse>;
 export type FileUploadedEvent = Camelize<Raw.FileUploadedEvent>;
@@ -206,29 +684,33 @@ export type GroupDmMessageResponse = Camelize<Raw.GroupDmMessageResponse>;
 export type GroupDmParticipantResponse = Camelize<Raw.GroupDmParticipantResponse>;
 export type GroupDmReceivedEvent = Camelize<Raw.GroupDmReceivedEvent>;
 export type InboxResponse = Camelize<Raw.InboxResponse>;
-export type InvokeCommandRequest = Camelize<Raw.InvokeCommandRequest>;
 export type MemberJoinedEvent = Camelize<Raw.MemberJoinedEvent>;
 export type MemberLeftEvent = Camelize<Raw.MemberLeftEvent>;
 export type ChannelMutedEvent = Camelize<Raw.ChannelMutedEvent>;
 export type ChannelUnmutedEvent = Camelize<Raw.ChannelUnmutedEvent>;
 export type MuteChannelResponse = Camelize<Raw.MuteChannelResponse>;
+export type NodeStatusOnlineEvent = Camelize<Raw.NodeStatusOnlineEvent>;
+export type NodeStatusOfflineEvent = Camelize<Raw.NodeStatusOfflineEvent>;
 export type MessageBlock = Camelize<Raw.MessageBlock>;
 export type MessageCreatedEvent = Camelize<Raw.MessageCreatedEvent>;
 export type MessageListQuery = Camelize<Raw.MessageListQuery>;
 export type MessageReadEvent = Camelize<Raw.MessageReadEvent>;
+export type MessageReactedEvent = Camelize<Raw.MessageReactedEvent>;
 export type SearchMessageResult = Camelize<Raw.SearchMessageResult>;
 export type MessageUpdatedEvent = Camelize<Raw.MessageUpdatedEvent>;
 export type MessageWithMeta = Camelize<Raw.MessageWithMeta>;
+export type SessionMessagesResult = Camelize<Raw.SessionMessagesResult>;
 export type PostMessageRequest = Camelize<Raw.PostMessageRequest>;
 export type AddedReaction = Camelize<Raw.AddedReaction>;
-export type ReactionAddedEvent = Camelize<Raw.ReactionAddedEvent>;
 export type ReactionGroup = Camelize<Raw.ReactionGroup>;
-export type ReactionRemovedEvent = Camelize<Raw.ReactionRemovedEvent>;
 export type ReadReceipt = Camelize<Raw.ReadReceipt>;
 export type ReaderInfo = Camelize<Raw.ReaderInfo>;
 export type RelaycastMessageEvent = Camelize<Raw.RelaycastMessageEvent>;
 export type ReleaseAgentRequest = Camelize<Raw.ReleaseAgentRequest>;
+export type ExactReleaseAgentRequest = Camelize<Raw.ExactReleaseAgentRequest>;
 export type ReleaseAgentResponse = Camelize<Raw.ReleaseAgentResponse>;
+export type RotateWorkspaceKeyRequest = Camelize<Raw.RotateWorkspaceKeyRequest>;
+export type RotateWorkspaceKeyResponse = Camelize<Raw.RotateWorkspaceKeyResponse>;
 export type SendDmRequest = Camelize<Raw.SendDmRequest>;
 export type SetSystemPromptRequest = Camelize<Raw.SetSystemPromptRequest>;
 export type SpawnAgentRequest = Camelize<Raw.SpawnAgentRequest>;
@@ -242,12 +724,34 @@ export type UpdateChannelRequest = Camelize<Raw.UpdateChannelRequest>;
 export type UpdateWorkspaceRequest = Camelize<Raw.UpdateWorkspaceRequest>;
 export type UploadRequest = Camelize<Raw.UploadRequest>;
 export type UploadResponse = Camelize<Raw.UploadResponse>;
+
+export type ObserverScope = Raw.ObserverScope;
+export type ObserverTokenFilters = Camelize<Raw.ObserverTokenFilters>;
+export type CreateObserverTokenRequest = Camelize<Raw.CreateObserverTokenRequest>;
+export type UpdateObserverTokenRequest = Camelize<Raw.UpdateObserverTokenRequest>;
+export type ObserverToken = Camelize<Raw.ObserverToken>;
+
+export type ActionInvokedEvent = Camelize<Raw.ActionInvokedEvent>;
+export type ActionCompletedEvent = Camelize<Raw.ActionCompletedEvent>;
+export type ActionDeniedEvent = Camelize<Raw.ActionDeniedEvent>;
+export type ActionFailedEvent = Camelize<Raw.ActionFailedEvent>;
+export type Delivery = Camelize<Raw.Delivery>;
+export type DeliveryItem = Camelize<Raw.DeliveryItem>;
+export type DeliveryMessage = Camelize<Raw.DeliveryMessage>;
+export type DeliveryStatus = Raw.DeliveryStatus;
+export type FailDeliveryRequest = Camelize<Raw.FailDeliveryRequest>;
+export type DeferDeliveryRequest = Camelize<Raw.DeferDeliveryRequest>;
+export type DeliveryAcceptedEvent = Camelize<Raw.DeliveryAcceptedEvent>;
+export type DeliveryDeliveredEvent = Camelize<Raw.DeliveryDeliveredEvent>;
+export type DeliveryDeferredEvent = Camelize<Raw.DeliveryDeferredEvent>;
+export type DeliveryFailedEvent = Camelize<Raw.DeliveryFailedEvent>;
 export type Webhook = Camelize<Raw.Webhook>;
 export type WebhookReceivedEvent = Camelize<Raw.WebhookReceivedEvent>;
 export type WebhookTriggerRequest = Camelize<Raw.WebhookTriggerRequest>;
 export type WebhookTriggerResponse = Camelize<Raw.WebhookTriggerResponse>;
 export type Workspace = Camelize<Raw.Workspace>;
 export type WorkspaceDmConversation = Camelize<Raw.WorkspaceDmConversation>;
+export type ResyncAckEvent = Camelize<Raw.ResyncAckEvent>;
 export type SearchResult = SearchMessageResult;
 export type WsClientEvent = Camelize<Raw.WsClientEvent>;
 export type WsCloseEvent = Camelize<Raw.WsCloseEvent>;
@@ -255,3 +759,27 @@ export type WsErrorEvent = Camelize<Raw.WsErrorEvent>;
 export type WsOpenEvent = Camelize<Raw.WsOpenEvent>;
 export type WsPermanentlyDisconnectedEvent = Camelize<Raw.WsPermanentlyDisconnectedEvent>;
 export type WsReconnectingEvent = Camelize<Raw.WsReconnectingEvent>;
+export type WsResyncedEvent = Camelize<Raw.WsResyncedEvent>;
+
+// === Compile-level contract assertions =====================================
+// These are type-only checks (zero JS emit) enforced on every `tsc` build, so
+// the fleet node + action SDK types can never silently drift from the runtime
+// wire contract again. A mismatch fails the build with `Type 'false' does not
+// satisfy the constraint 'true'`. (`src/__tests__` is excluded from the build,
+// so the matching `expectTypeOf` checks there are documentation, not enforcement.)
+type Assert<T extends true> = T;
+type Equals<X, Y> =
+  (<T>() => T extends X ? 1 : 2) extends (<T>() => T extends Y ? 1 : 2) ? true : false;
+
+// Node roster capabilities are structured objects, not capability-name strings.
+type _AssertRosterCapabilities = Assert<Equals<NodeRosterEntry['capabilities'], Raw.FleetCapability[]>>;
+type _AssertNodeCapability = Assert<Equals<NodeCapability, Raw.FleetCapability>>;
+// Action output is any JSON value (scalars/arrays/null legal), not object-only.
+type _AssertInvocationOutput = Assert<Equals<ActionInvocation['output'], Raw.FleetWireJsonValue>>;
+type _AssertCompletionOutput = Assert<Equals<CompleteInvocationRequest['output'], Raw.FleetWireJsonValue | undefined>>;
+type _AssertObserverScope = Assert<Equals<ObserverScope, Raw.ObserverScope>>;
+type _AssertObserverTokenFilters = Assert<Equals<ObserverTokenFilters, Camelize<Raw.ObserverTokenFilters>>>;
+type _AssertCreateObserverTokenRequest = Assert<Equals<CreateObserverTokenRequest, Camelize<Raw.CreateObserverTokenRequest>>>;
+type _AssertUpdateObserverTokenRequest = Assert<Equals<UpdateObserverTokenRequest, Camelize<Raw.UpdateObserverTokenRequest>>>;
+type _AssertObserverToken = Assert<Equals<ObserverToken, Camelize<Raw.ObserverToken>>>;
+type _AssertSessionMessagesResult = Assert<Equals<SessionMessagesResult, Camelize<Raw.SessionMessagesResult>>>;

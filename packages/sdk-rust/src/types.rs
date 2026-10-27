@@ -30,10 +30,12 @@ pub struct Cursor {
 pub struct Workspace {
     pub id: String,
     pub name: String,
+    /// Legacy field; current engines omit this private value from responses.
+    #[serde(default)]
     pub api_key_hash: String,
     pub system_prompt: Option<String>,
-    pub plan: String,
     pub created_at: String,
+    #[serde(default)]
     pub metadata: serde_json::Map<String, serde_json::Value>,
 }
 
@@ -44,12 +46,187 @@ pub struct CreateWorkspaceResponse {
     pub created_at: String,
 }
 
+/// Options for an unauthenticated workspace bootstrap request.
+///
+/// `idempotency_key` is a reveal-once recovery capability for anonymous
+/// creation. Generate it with a CSPRNG and persist it for the logical create
+/// operation; it is sent to hosted Relaycast without any deployment secret.
+#[derive(Clone)]
+pub struct WorkspaceBootstrapOptions {
+    pub base_url: Option<String>,
+    /// Product identifier for origin attribution; defaults to the Rust SDK.
+    pub origin_client: Option<String>,
+    /// Product version for origin attribution; defaults to the crate version.
+    pub origin_version: Option<String>,
+    pub provenance: WorkspaceProvenance,
+    /// Optional application metadata with arbitrary JSON values.
+    pub metadata: Option<serde_json::Map<String, serde_json::Value>>,
+    pub idempotency_key: Option<String>,
+    /// Optional shared-secret proof for a self-host that explicitly requires
+    /// `X-Workspace-Bootstrap-Secret`.
+    ///
+    /// Leave this unset for hosted Relaycast. The SDK refuses to send it to
+    /// the hosted gateway, and only sends it with an idempotency key to an
+    /// explicit self-hosted origin.
+    pub bootstrap_secret: Option<String>,
+}
+
+impl std::fmt::Debug for WorkspaceBootstrapOptions {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WorkspaceBootstrapOptions")
+            .field("base_url", &self.base_url)
+            .field("origin_client", &self.origin_client)
+            .field("origin_version", &self.origin_version)
+            .field("provenance", &self.provenance)
+            .field(
+                "metadata",
+                &self.metadata.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "idempotency_key",
+                &self.idempotency_key.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "bootstrap_secret",
+                &self.bootstrap_secret.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
+}
+
+impl WorkspaceBootstrapOptions {
+    pub fn new(provenance: WorkspaceProvenance) -> Self {
+        Self {
+            base_url: None,
+            origin_client: None,
+            origin_version: None,
+            provenance,
+            metadata: None,
+            idempotency_key: None,
+            bootstrap_secret: None,
+        }
+    }
+
+    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = Some(base_url.into());
+        self
+    }
+
+    /// Set the product identifier and version sent on workspace creation.
+    pub fn with_origin(
+        mut self,
+        origin_client: impl Into<String>,
+        origin_version: impl Into<String>,
+    ) -> Self {
+        self.origin_client = Some(origin_client.into());
+        self.origin_version = Some(origin_version.into());
+        self
+    }
+
+    pub fn with_metadata(mut self, metadata: serde_json::Map<String, serde_json::Value>) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
+    pub fn with_idempotency_key(mut self, idempotency_key: impl Into<String>) -> Self {
+        self.idempotency_key = Some(idempotency_key.into());
+        self
+    }
+
+    /// Add a proof only for an opt-in self-hosted bootstrap deployment.
+    ///
+    /// This is intentionally optional: hosted anonymous bootstrap uses the
+    /// high-entropy idempotency key alone and must not receive a deployment
+    /// secret from the caller.
+    pub fn with_bootstrap_secret(mut self, bootstrap_secret: impl Into<String>) -> Self {
+        self.bootstrap_secret = Some(bootstrap_secret.into());
+        self
+    }
+}
+
+/// Options for an unauthenticated workspace lookup request.
+#[derive(Debug, Clone, Default)]
+pub struct WorkspaceLookupOptions {
+    pub base_url: Option<String>,
+    /// Product identifier for origin attribution; defaults to the Rust SDK.
+    pub origin_client: Option<String>,
+    /// Product version for origin attribution; defaults to the crate version.
+    pub origin_version: Option<String>,
+}
+
+impl WorkspaceLookupOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = Some(base_url.into());
+        self
+    }
+
+    /// Set the product identifier and version sent on workspace lookup.
+    pub fn with_origin(
+        mut self,
+        origin_client: impl Into<String>,
+        origin_version: impl Into<String>,
+    ) -> Self {
+        self.origin_client = Some(origin_client.into());
+        self.origin_version = Some(origin_version.into());
+        self
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceCreationSource {
+    Api,
+    Sdk,
+    Cli,
+    Mcp,
+    Ci,
+    Relayflow,
+    Dashboard,
+    Other,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceUsageClassification {
+    Internal,
+    External,
+    Unknown,
+}
+
+/// Creation context recorded once for hosted usage attribution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceProvenance {
+    pub source: WorkspaceCreationSource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub classification: Option<WorkspaceUsageClassification>,
+}
+
+impl WorkspaceProvenance {
+    pub fn sdk() -> Self {
+        Self {
+            source: WorkspaceCreationSource::Sdk,
+            origin_id: None,
+            classification: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct UpdateWorkspaceRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
+    /// Shallow merge into workspace metadata; top-level null values delete keys.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,14 +241,6 @@ pub struct SetSystemPromptRequest {
     pub prompt: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reset: Option<bool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceStreamConfig {
-    pub enabled: bool,
-    pub default_enabled: bool,
-    #[serde(rename = "override")]
-    pub override_value: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,6 +272,7 @@ pub struct ActivityItem {
     #[serde(rename = "type")]
     pub item_type: String,
     pub id: String,
+    pub channel_id: Option<String>,
     pub channel_name: Option<String>,
     pub conversation_id: Option<String>,
     pub agent_name: String,
@@ -142,11 +312,159 @@ pub struct TokenRotateResponse {
     pub token: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct RecoverAgentRequest {
+    pub expected_agent_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovery_proof: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TakeOverAgentRequest {
+    pub expected_agent_id: String,
+    pub actor: String,
+    pub reason: String,
+    pub session_ref: String,
+    pub node_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RevokeAgentTokenRequest {
+    pub expected_agent_id: String,
+    pub actor: String,
+    pub reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EnrollRecoveryCredentialRequest {
+    pub recovery_proof_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work_unit_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentIdentityRecoveryResponse {
+    pub agent_id: String,
+    pub name: String,
+    pub token: String,
+    pub audit_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentIdentityRevocationResponse {
+    pub agent_id: String,
+    pub name: String,
+    pub audit_id: String,
+}
+
+// === Observer tokens ===
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ObserverScope {
+    #[serde(rename = "stream:read")]
+    StreamRead,
+    #[serde(rename = "messages:read")]
+    MessagesRead,
+    #[serde(rename = "threads:read")]
+    ThreadsRead,
+    #[serde(rename = "dms:read")]
+    DmsRead,
+    #[serde(rename = "channels:read")]
+    ChannelsRead,
+    #[serde(rename = "search:read")]
+    SearchRead,
+    #[serde(rename = "agents:read")]
+    AgentsRead,
+    #[serde(rename = "nodes:read")]
+    NodesRead,
+    #[serde(rename = "deliveries:read")]
+    DeliveriesRead,
+    #[serde(rename = "activity:read")]
+    ActivityRead,
+    #[serde(rename = "files:read")]
+    FilesRead,
+    #[serde(rename = "reactions:read")]
+    ReactionsRead,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ObserverTokenFilters {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channel_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channel_names: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_dms: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dm_conversation_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub event_types: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_after: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CreateObserverTokenRequest {
+    pub name: String,
+    pub scopes: Vec<ObserverScope>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filters: Option<ObserverTokenFilters>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct UpdateObserverTokenRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scopes: Option<Vec<ObserverScope>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filters: Option<ObserverTokenFilters>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObserverToken {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub scopes: Vec<ObserverScope>,
+    #[serde(default)]
+    pub filters: ObserverTokenFilters,
+    pub status: String,
+    pub expires_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: Option<String>,
+    pub revoked_at: Option<String>,
+    pub last_used_at: Option<String>,
+    pub token: Option<String>,
+}
+
 // === Agents ===
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Agent {
     pub id: String,
+    #[serde(default)]
+    pub workspace_id: Option<String>,
     pub name: String,
     #[serde(rename = "type")]
     pub agent_type: String,
@@ -184,6 +502,11 @@ pub struct CreateAgentRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateAgentResponse {
     pub id: String,
+    /// Workspace the agent registered into. `None` against engines that predate
+    /// this field — callers that joined by workspace key rely on it to avoid an
+    /// "unknown workspace" fallback.
+    #[serde(default)]
+    pub workspace_id: Option<String>,
     pub name: String,
     pub token: String,
     pub status: String,
@@ -217,21 +540,12 @@ pub struct SpawnAgentRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub persona: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SpawnAgentResponse {
-    pub id: String,
-    pub name: String,
-    pub token: String,
-    pub cli: String,
-    pub task: String,
-    pub channel: Option<String>,
-    pub status: String,
-    pub created_at: String,
-    pub already_existed: bool,
-}
+pub type SpawnAgentResponse = InvokeActionResult;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ReleaseAgentRequest {
@@ -242,13 +556,21 @@ pub struct ReleaseAgentRequest {
     pub delete_agent: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReleaseAgentResponse {
+/// Immutable-identity release reconciliation request. The operation is only
+/// accepted by `/v1/agents/release-exact` with a caller-held Idempotency-Key.
+#[derive(Debug, Clone, Serialize)]
+pub struct ExactReleaseAgentRequest {
     pub name: String,
-    pub released: bool,
-    pub deleted: bool,
+    pub expected_agent_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delete_agent: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_token_hash: Option<String>,
 }
+
+pub type ReleaseAgentResponse = InvokeActionResult;
 
 #[derive(Debug, Clone, Default)]
 pub struct AgentListQuery {
@@ -311,9 +633,7 @@ pub struct ChannelWithMembers {
 pub struct FileAttachment {
     pub file_id: String,
     pub filename: String,
-    #[serde(alias = "contentType")]
     pub content_type: String,
-    #[serde(alias = "size")]
     pub size_bytes: i64,
 }
 
@@ -498,13 +818,6 @@ where
         .collect())
 }
 
-fn deserialize_string_or_default<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 enum DmLastMessageValue {
@@ -593,6 +906,125 @@ pub struct ChannelReadStatus {
     pub last_read_at: Option<String>,
 }
 
+// === Durable Delivery ===
+
+/// Status of a per-recipient durable delivery record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryStatus {
+    /// Durable row accepted, not yet sent to the current location.
+    Queued,
+    /// Sent to the current location, awaiting cumulative ack.
+    Delivered,
+    /// Recipient location acknowledged through the seq cursor.
+    Acked,
+    /// Explicit failure report (terminal).
+    Failed,
+    /// TTL-expired / dead-lettered (terminal).
+    DeadLettered,
+    #[serde(other)]
+    Unknown,
+}
+
+impl DeliveryStatus {
+    /// Return the API query value for this status, or `None` for unknown.
+    pub fn as_query_value(self) -> Option<&'static str> {
+        match self {
+            DeliveryStatus::Queued => Some("queued"),
+            DeliveryStatus::Delivered => Some("delivered"),
+            DeliveryStatus::Acked => Some("acked"),
+            DeliveryStatus::Failed => Some("failed"),
+            DeliveryStatus::DeadLettered => Some("dead_lettered"),
+            DeliveryStatus::Unknown => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeliveryMessage {
+    pub id: String,
+    pub channel_id: String,
+    pub agent_id: Option<String>,
+    pub agent_name: Option<String>,
+    pub text: String,
+    pub thread_id: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Delivery {
+    pub id: String,
+    pub message_id: String,
+    pub channel_id: String,
+    pub agent_id: String,
+    pub status: DeliveryStatus,
+    #[serde(default)]
+    pub seq: Option<i64>,
+    #[serde(default)]
+    pub location_type: Option<String>,
+    #[serde(default)]
+    pub location_node_id: Option<String>,
+    #[serde(default)]
+    pub route_node_id: Option<String>,
+    #[serde(default)]
+    pub route_node_kind: Option<String>,
+    #[serde(default)]
+    pub route_node_role: Option<String>,
+    #[serde(default)]
+    pub delivery_adapter: Option<String>,
+    #[serde(default)]
+    pub dispatch_attempts: Option<i64>,
+    #[serde(default)]
+    pub next_attempt_at: Option<String>,
+    #[serde(default)]
+    pub last_dispatch_error: Option<String>,
+    pub mode: String,
+    pub reason: Option<String>,
+    pub priority: String,
+    pub retryable: Option<bool>,
+    pub error: Option<String>,
+    pub available_at: Option<String>,
+    pub deadline: Option<String>,
+    #[serde(default)]
+    pub expires_at: Option<String>,
+    #[serde(default)]
+    pub delivered_at: Option<String>,
+    #[serde(default)]
+    pub acked_at: Option<String>,
+    #[serde(default)]
+    pub dead_lettered_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeliveryItem {
+    #[serde(flatten)]
+    pub delivery: Delivery,
+    pub message: Option<DeliveryMessage>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ListDeliveriesOptions {
+    pub status: Option<DeliveryStatus>,
+    pub limit: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct FailDeliveryRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retryable: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DeferDeliveryRequest {
+    pub available_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 // === Files ===
 
 #[derive(Debug, Clone, Serialize)]
@@ -630,7 +1062,8 @@ pub struct FileListOptions {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CreateWebhookRequest {
-    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub channel: String,
 }
 
@@ -640,6 +1073,8 @@ pub struct CreateWebhookResponse {
     pub name: String,
     pub channel: String,
     pub url: String,
+    pub token: String,
+    pub is_active: bool,
     pub created_at: String,
 }
 
@@ -661,9 +1096,13 @@ pub struct WebhookTriggerRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub blocks: Option<Vec<serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payload: Option<serde_json::Map<String, serde_json::Value>>,
 }
@@ -673,6 +1112,10 @@ pub struct WebhookTriggerResponse {
     pub message_id: String,
     pub channel: String,
     pub text: String,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub author: Option<String>,
     pub created_at: String,
 }
 
@@ -687,10 +1130,14 @@ pub struct SubscriptionFilter {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventSubscription {
     pub id: String,
+    #[serde(default)]
     pub workspace_id: String,
     pub events: Vec<String>,
     pub filter: Option<SubscriptionFilter>,
     pub url: String,
+    #[serde(default)]
+    pub headers: Option<std::collections::BTreeMap<String, String>>,
+    #[serde(default)]
     pub secret: Option<String>,
     pub is_active: bool,
     pub created_at: String,
@@ -703,6 +1150,8 @@ pub struct CreateSubscriptionRequest {
     pub filter: Option<SubscriptionFilter>,
     pub url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub headers: Option<std::collections::BTreeMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub secret: Option<String>,
 }
 
@@ -712,6 +1161,8 @@ pub struct CreateSubscriptionResponse {
     pub events: Vec<String>,
     pub filter: Option<SubscriptionFilter>,
     pub url: String,
+    #[serde(default)]
+    pub headers: Option<std::collections::BTreeMap<String, String>>,
     pub is_active: bool,
     pub created_at: String,
 }
@@ -778,6 +1229,143 @@ pub struct CommandInvocation {
     pub parameters: Option<serde_json::Map<String, serde_json::Value>>,
     pub response_message_id: Option<String>,
     pub created_at: String,
+}
+
+// === Actions (agent-to-agent RPC) ===
+
+/// Status of an action invocation. `action.completed` always reports
+/// [`ActionInvocationStatus::Completed`] and `action.failed` reports
+/// [`ActionInvocationStatus::Failed`]; `Unknown` is a forward-compatible fallback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionInvocationStatus {
+    Pending,
+    Dispatched,
+    Invoked,
+    Completed,
+    Failed,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RegisterActionRequest {
+    pub name: String,
+    pub description: String,
+    pub handler_agent: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_schema: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub available_to: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionDefinition {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub handler_agent: String,
+    #[serde(default)]
+    pub input_schema: serde_json::Map<String, serde_json::Value>,
+    #[serde(default)]
+    pub output_schema: serde_json::Map<String, serde_json::Value>,
+    #[serde(default)]
+    pub available_to: Option<Vec<String>>,
+    pub is_active: bool,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InvokeActionRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InvokeActionResult {
+    pub invocation_id: String,
+    pub action_name: String,
+    pub handler_agent_id: Option<String>,
+    #[serde(default)]
+    pub handler_node_id: Option<String>,
+    #[serde(default)]
+    pub dispatched_node_id: Option<String>,
+    #[serde(default)]
+    pub input: serde_json::Map<String, serde_json::Value>,
+    pub status: ActionInvocationStatus,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CompleteInvocationRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionInvocation {
+    pub invocation_id: String,
+    pub action_name: String,
+    #[serde(default)]
+    pub caller_id: Option<String>,
+    #[serde(default)]
+    pub caller_name: Option<String>,
+    #[serde(default)]
+    pub input: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(default)]
+    pub output: Option<serde_json::Map<String, serde_json::Value>>,
+    pub status: ActionInvocationStatus,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub completed_at: Option<String>,
+}
+
+// === Agent session events ===
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EmitSessionEventRequest {
+    #[serde(rename = "type")]
+    pub event_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionEvent {
+    pub id: String,
+    pub agent_id: String,
+    #[serde(rename = "type")]
+    pub event_type: String,
+    #[serde(default)]
+    pub payload: serde_json::Map<String, serde_json::Value>,
+    #[serde(default)]
+    pub sequence: Option<i64>,
+    pub created_at: String,
+}
+
+/// Query filters for [`crate::RelayCast::list_agent_events`].
+#[derive(Debug, Clone, Default)]
+pub struct ListSessionEventsQuery {
+    pub event_type: Option<String>,
+    pub limit: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirectNodeToken {
+    pub node_id: String,
+    pub node_name: String,
+    pub token: String,
 }
 
 // === WebSocket Events ===
@@ -850,6 +1438,8 @@ pub struct WebhookMessagePayload {
     pub id: String,
     pub text: String,
     pub source: Option<String>,
+    #[serde(default)]
+    pub author: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -861,22 +1451,24 @@ pub enum WsEvent {
     MessageUpdated(MessageUpdatedEvent),
     #[serde(rename = "thread.reply")]
     ThreadReply(ThreadReplyEvent),
-    #[serde(rename = "reaction.added")]
-    ReactionAdded(ReactionAddedEvent),
-    #[serde(rename = "reaction.removed")]
-    ReactionRemoved(ReactionRemovedEvent),
+    #[serde(rename = "message.reacted")]
+    MessageReacted(MessageReactedEvent),
     #[serde(rename = "dm.received")]
     DmReceived(DmReceivedEvent),
     #[serde(rename = "group_dm.received")]
     GroupDmReceived(GroupDmReceivedEvent),
-    #[serde(rename = "agent.online")]
-    AgentOnline(AgentOnlineEvent),
-    #[serde(rename = "agent.offline")]
-    AgentOffline(AgentOfflineEvent),
-    #[serde(rename = "agent.spawn_requested")]
-    AgentSpawnRequested(AgentSpawnRequestedEvent),
-    #[serde(rename = "agent.release_requested")]
-    AgentReleaseRequested(AgentReleaseRequestedEvent),
+    #[serde(rename = "agent.status.active")]
+    AgentStatusActive(AgentStatusEvent),
+    #[serde(rename = "agent.status.idle")]
+    AgentStatusIdle(AgentStatusEvent),
+    #[serde(rename = "agent.status.blocked")]
+    AgentStatusBlocked(AgentStatusEvent),
+    #[serde(rename = "agent.status.waiting")]
+    AgentStatusWaiting(AgentStatusEvent),
+    #[serde(rename = "agent.status.offline")]
+    AgentStatusOffline(AgentStatusEvent),
+    #[serde(rename = "agent.status.changed")]
+    AgentStatusChanged(AgentStatusEvent),
     #[serde(rename = "channel.created")]
     ChannelCreated(ChannelCreatedEvent),
     #[serde(rename = "channel.updated")]
@@ -895,6 +1487,22 @@ pub enum WsEvent {
     WebhookReceived(WebhookReceivedEvent),
     #[serde(rename = "command.invoked")]
     CommandInvoked(CommandInvokedEvent),
+    #[serde(rename = "action.invoked")]
+    ActionInvoked(ActionInvokedEvent),
+    #[serde(rename = "action.completed")]
+    ActionCompleted(ActionCompletedEvent),
+    #[serde(rename = "action.failed")]
+    ActionFailed(ActionFailedEvent),
+    #[serde(rename = "action.denied")]
+    ActionDenied(ActionDeniedEvent),
+    #[serde(rename = "delivery.accepted")]
+    DeliveryAccepted(DeliveryAcceptedEvent),
+    #[serde(rename = "delivery.delivered")]
+    DeliveryDelivered(DeliveryDeliveredEvent),
+    #[serde(rename = "delivery.deferred")]
+    DeliveryDeferred(DeliveryDeferredEvent),
+    #[serde(rename = "delivery.failed")]
+    DeliveryFailed(DeliveryFailedEvent),
     #[serde(rename = "pong")]
     Pong,
     #[serde(other)]
@@ -922,17 +1530,12 @@ pub struct ThreadReplyEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReactionAddedEvent {
+pub struct MessageReactedEvent {
     pub message_id: String,
     pub emoji: String,
     pub agent_name: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReactionRemovedEvent {
-    pub message_id: String,
-    pub emoji: String,
-    pub agent_name: String,
+    #[serde(default)]
+    pub action: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -948,37 +1551,9 @@ pub struct GroupDmReceivedEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentOnlineEvent {
+pub struct AgentStatusEvent {
     pub agent: AgentEventPayload,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentOfflineEvent {
-    pub agent: AgentEventPayload,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentSpawnRequestedEvent {
-    pub agent: AgentSpawnRequestedPayload,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentSpawnRequestedPayload {
-    pub name: String,
-    pub cli: String,
-    #[serde(default, deserialize_with = "deserialize_string_or_default")]
-    pub task: String,
-    #[serde(default)]
-    pub channel: Option<String>,
-    #[serde(default)]
-    pub already_existed: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentReleaseRequestedEvent {
-    pub agent: AgentEventPayload,
-    pub reason: Option<String>,
-    pub deleted: bool,
+    pub status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1035,4 +1610,866 @@ pub struct CommandInvokedEvent {
     pub handler_agent_id: String,
     pub args: Option<String>,
     pub parameters: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+/// `action.invoked` — delivered to the handler agent when an action is invoked.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionInvokedEvent {
+    pub invocation_id: String,
+    pub action_name: String,
+    pub caller_name: String,
+    pub handler_agent_id: String,
+    #[serde(default)]
+    pub handler_agent_name: Option<String>,
+    #[serde(default)]
+    pub input: Option<serde_json::Value>,
+}
+
+/// Literal `completed` status for [`ActionCompletedEvent`]; deserialization
+/// rejects any other value so malformed `action.completed` payloads fail fast.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompletedStatus {
+    Completed,
+}
+
+/// Literal `failed` status for [`ActionFailedEvent`]; deserialization rejects
+/// any other value so malformed `action.failed` payloads fail fast.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailedStatus {
+    Failed,
+}
+
+/// `action.completed` — delivered to the caller when an invocation succeeds.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionCompletedEvent {
+    pub invocation_id: String,
+    pub action_name: String,
+    pub status: CompletedStatus,
+    #[serde(default)]
+    pub output: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// `action.failed` — delivered to the caller when an invocation fails.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionFailedEvent {
+    pub invocation_id: String,
+    pub action_name: String,
+    pub status: FailedStatus,
+    #[serde(default)]
+    pub output: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// `action.denied` — delivered to the caller when authorization rejects an invocation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionDeniedEvent {
+    pub action_name: String,
+    #[serde(default)]
+    pub caller_name: Option<String>,
+    pub error: String,
+}
+
+/// `delivery.accepted` — emitted when a delivery is queued for the recipient.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeliveryAcceptedEvent {
+    pub delivery_id: String,
+    pub message_id: String,
+    #[serde(default)]
+    pub channel_id: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// `delivery.delivered` — emitted when a delivery is acknowledged.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeliveryDeliveredEvent {
+    pub delivery_id: String,
+    pub message_id: String,
+}
+
+/// `delivery.deferred` — emitted when a delivery is deferred for retry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeliveryDeferredEvent {
+    pub delivery_id: String,
+    pub message_id: String,
+    pub available_at: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// `delivery.failed` — emitted when a delivery handler reports failure.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeliveryFailedEvent {
+    #[serde(default)]
+    pub delivery_id: Option<String>,
+    pub message_id: String,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub retryable: Option<bool>,
+}
+
+// === Workspace bootstrap (by-name lookup) ===
+
+/// Result of a `GET /v1/workspaces/by-name/{name}` lookup.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceLookup {
+    pub id: String,
+    pub name: String,
+    pub created_at: String,
+}
+
+// === A2A (agent-to-agent bridge) ===
+
+/// A skill advertised on an A2A agent card.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct A2aAgentCardSkill {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
+}
+
+/// An A2A agent card describing an external agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct A2aAgentCard {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub url: String,
+    pub version: String,
+    #[serde(default)]
+    pub skills: Vec<A2aAgentCardSkill>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_input_modes: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_output_modes: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub documentation_url: Option<String>,
+}
+
+/// Options for registering an A2A agent bridge.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct RegisterA2aOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_card_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_card: Option<A2aAgentCard>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_scheme: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_credential: Option<String>,
+}
+
+/// Response from registering an A2A agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisterA2aResponse {
+    pub relay_name: String,
+    pub relay_token: String,
+    pub webhook_url: String,
+    pub certification: String,
+}
+
+/// A registered A2A agent record.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct A2aAgentRecord {
+    pub id: String,
+    pub workspace_id: String,
+    pub relay_agent_id: String,
+    pub relay_name: String,
+    pub relay_status: String,
+    #[serde(default)]
+    pub relay_persona: Option<String>,
+    #[serde(default)]
+    pub relay_metadata: Option<serde_json::Map<String, serde_json::Value>>,
+    pub agent_card: A2aAgentCard,
+    pub external_url: String,
+    #[serde(default)]
+    pub auth_scheme: Option<String>,
+    #[serde(default)]
+    pub auth_credential: Option<String>,
+    pub status: String,
+    pub messages_sent: i64,
+    pub messages_recv: i64,
+    #[serde(default)]
+    pub last_health: Option<String>,
+    pub health_failures: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Response from removing an A2A agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoveA2aAgentResponse {
+    pub name: String,
+    pub removed: bool,
+}
+
+// === Directory ===
+
+/// A skill input when publishing/importing directory agents.
+#[derive(Debug, Clone, Serialize)]
+pub struct DirectorySkillInput {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+/// A skill stored on a directory agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirectorySkill {
+    pub id: String,
+    #[serde(default)]
+    pub skill_id: Option<String>,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub metadata: serde_json::Map<String, serde_json::Value>,
+}
+
+/// A directory agent entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirectoryAgent {
+    pub id: String,
+    #[serde(default)]
+    pub source_agent_id: Option<String>,
+    pub slug: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub endpoint_url: Option<String>,
+    #[serde(default)]
+    pub documentation_url: Option<String>,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub capabilities: serde_json::Map<String, serde_json::Value>,
+    #[serde(default)]
+    pub metadata: serde_json::Map<String, serde_json::Value>,
+    pub status: String,
+    pub rating_avg: f64,
+    pub rating_count: i64,
+    #[serde(default)]
+    pub skills: Vec<DirectorySkill>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// A directory search result (a directory agent plus a relevance score).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirectorySearchResult {
+    #[serde(flatten)]
+    pub agent: DirectoryAgent,
+    pub relevance_score: f64,
+}
+
+/// Query parameters for searching the directory.
+#[derive(Debug, Clone, Default)]
+pub struct SearchDirectoryQuery {
+    pub q: Option<String>,
+    pub tags: Option<Vec<String>>,
+    pub status: Option<String>,
+    pub limit: Option<i32>,
+}
+
+/// Request body for publishing an agent to the directory.
+#[derive(Debug, Clone, Serialize)]
+pub struct PublishToDirectoryRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_agent_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slug: Option<String>,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub documentation_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<DirectorySkillInput>>,
+}
+
+/// Request body for updating a directory agent (all fields optional).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct UpdateDirectoryAgentRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_agent_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slug: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub documentation_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<DirectorySkillInput>>,
+}
+
+/// Query parameters for listing directory agents.
+#[derive(Debug, Clone, Default)]
+pub struct ListDirectoryQuery {
+    pub status: Option<String>,
+    pub limit: Option<i32>,
+}
+
+/// A rating left on a directory agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirectoryRating {
+    pub id: String,
+    pub score: f64,
+    #[serde(default)]
+    pub review: Option<String>,
+    pub rater_agent_id: String,
+    pub rater_agent_name: String,
+    pub created_at: String,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+/// Request body for rating a directory agent.
+#[derive(Debug, Clone, Serialize)]
+pub struct RateDirectoryAgentRequest {
+    pub score: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review: Option<String>,
+}
+
+/// Request body for importing skills onto a directory agent.
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportSkillsRequest {
+    pub agent_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<DirectorySkillInput>>,
+}
+
+// === Routing ===
+
+/// Result of routing a message to a candidate agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RouteResult {
+    pub agent_name: String,
+    pub score: f64,
+    pub fallback: bool,
+}
+
+/// Routing scorer weights.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoutingWeights {
+    pub skill_match: f64,
+    pub message_match: f64,
+    pub tag_match: f64,
+    pub rating: f64,
+    pub availability: f64,
+}
+
+/// Partial routing weights for updates (all fields optional).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct UpdateRoutingWeights {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_match: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_match: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag_match: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rating: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub availability: Option<f64>,
+}
+
+/// Workspace routing configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoutingConfig {
+    pub weights: RoutingWeights,
+    pub circuit_breaker_threshold: f64,
+    pub circuit_breaker_cooldown_seconds: f64,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+/// Request body for updating routing configuration.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct UpdateRoutingConfigRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weights: Option<UpdateRoutingWeights>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub circuit_breaker_threshold: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub circuit_breaker_cooldown_seconds: Option<f64>,
+}
+
+/// Request body for reporting route feedback.
+#[derive(Debug, Clone, Serialize)]
+pub struct RouteFeedbackRequest {
+    pub agent_name: String,
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Result of reporting route feedback.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RouteFeedbackResult {
+    pub ok: bool,
+}
+
+// === Skills ===
+
+/// Query parameters for searching skills.
+#[derive(Debug, Clone, Default)]
+pub struct SkillSearchQuery {
+    pub q: Option<String>,
+    pub limit: Option<i32>,
+}
+
+/// A skill search result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillSearchResult {
+    pub agent_name: String,
+    pub skill_name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub relevance_score: f64,
+}
+
+// === Fleet nodes ===
+
+/// A capability advertised by a fleet node on the roster.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeCapability {
+    pub name: String,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub metadata: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+/// A fleet node roster entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeRosterEntry {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub delivery_adapter: Option<String>,
+    #[serde(default)]
+    pub delivery: Option<NodeDeliveryConfig>,
+    #[serde(default)]
+    pub capabilities: Vec<NodeCapability>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub version: String,
+    pub status: String,
+    pub live: bool,
+    pub handlers_live: bool,
+    pub load: Option<f64>,
+    pub active_agents: i64,
+    pub max_agents: i64,
+    #[serde(default)]
+    pub last_heartbeat_at: Option<String>,
+    pub created_at: String,
+}
+
+/// Query parameters for listing fleet nodes.
+#[derive(Debug, Clone, Default)]
+pub struct NodeListQuery {
+    pub capability: Option<String>,
+    pub name: Option<String>,
+}
+
+/// Delivery config for a node. HTTP push is typed; raw JSON keeps future adapters usable.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum NodeDeliveryConfig {
+    HttpPush(Box<HttpPushNodeDelivery>),
+    Raw(serde_json::Value),
+}
+
+impl From<HttpPushNodeDelivery> for NodeDeliveryConfig {
+    fn from(delivery: HttpPushNodeDelivery) -> Self {
+        Self::HttpPush(Box::new(delivery))
+    }
+}
+
+/// HTTP push delivery settings for a node.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpPushNodeDelivery {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ack_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<NodeDeliveryAuth>,
+}
+
+/// HTTP push authentication settings for a node delivery contract.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeDeliveryAuth {
+    #[serde(rename = "type")]
+    pub auth_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub headers: Option<std::collections::BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature_header: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp_header: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed_payload: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+}
+
+/// Request to enroll or rotate a node token.
+#[derive(Debug, Clone, Serialize)]
+pub struct CreateNodeRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub machine_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_adapter: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<NodeDeliveryConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_agents: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+/// Response from node enrollment or token rotation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateNodeResponse {
+    #[serde(flatten)]
+    pub node: NodeRosterEntry,
+    pub token: String,
+}
+
+/// Agent binding to a node delivery host.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeAgentBinding {
+    pub id: String,
+    pub agent_id: String,
+    pub agent_name: String,
+    pub node_id: String,
+    pub node_name: String,
+    pub node_kind: String,
+    pub node_role: String,
+    pub status: String,
+    pub session_ref: Option<String>,
+    pub priority: i64,
+    pub created_at: String,
+    pub updated_at: Option<String>,
+}
+
+/// Request to bind an agent to a node delivery host.
+#[derive(Debug, Clone, Serialize)]
+pub struct BindAgentToNodeRequest {
+    pub agent_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<i64>,
+}
+
+// === Triggers ===
+
+/// A trigger that fires an action when a message matches.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Trigger {
+    pub id: String,
+    #[serde(default)]
+    pub channel: Option<String>,
+    #[serde(default)]
+    pub pattern: Option<String>,
+    #[serde(default)]
+    pub mention: Option<bool>,
+    pub action_name: String,
+    pub enabled: bool,
+    #[serde(default)]
+    pub last_triggered_at: Option<String>,
+    pub created_at: String,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+/// Request body for creating a trigger.
+#[derive(Debug, Clone, Serialize)]
+pub struct CreateTriggerRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mention: Option<bool>,
+    pub action_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+}
+
+/// Request body for updating a trigger (all fields optional).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct UpdateTriggerRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mention: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+}
+
+// === Certification ===
+
+/// A single certification test result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CertificationTestResult {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub passed: Option<bool>,
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// A certification run for an external agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CertificationRun {
+    pub id: String,
+    pub agent_url: String,
+    pub level: i64,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    pub passed: bool,
+    pub passed_tests: i64,
+    pub total_tests: i64,
+    #[serde(default)]
+    pub monitor_enabled: Option<bool>,
+    #[serde(default)]
+    pub monitor_interval_minutes: Option<i64>,
+    #[serde(default)]
+    pub last_run_at: Option<String>,
+    #[serde(default)]
+    pub started_at: Option<String>,
+    #[serde(default)]
+    pub completed_at: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+    #[serde(default)]
+    pub tests: Vec<CertificationTestResult>,
+}
+
+/// Request body for submitting a certification run.
+#[derive(Debug, Clone, Serialize)]
+pub struct SubmitCertificationRequest {
+    pub agent_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub level: Option<i32>,
+}
+
+/// Request body for enabling certification monitoring.
+#[derive(Debug, Clone, Serialize)]
+pub struct MonitorCertificationRequest {
+    pub agent_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub level: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interval_minutes: Option<i32>,
+}
+
+// === Console / observability ===
+
+/// Query parameters for the console message log.
+#[derive(Debug, Clone, Default)]
+pub struct ConsoleMessagesQuery {
+    pub limit: Option<i32>,
+    pub before: Option<String>,
+    pub agent_id: Option<String>,
+    pub channel_id: Option<String>,
+    pub conversation_id: Option<String>,
+    pub delivery_kind: Option<String>,
+}
+
+/// A console message log entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsoleMessageLog {
+    pub id: String,
+    #[serde(default)]
+    pub message_id: Option<String>,
+    #[serde(default)]
+    pub channel_id: Option<String>,
+    #[serde(default)]
+    pub channel_name: Option<String>,
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    #[serde(default)]
+    pub agent_name: Option<String>,
+    #[serde(default)]
+    pub conversation_id: Option<String>,
+    pub delivery_kind: String,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub content_type: Option<String>,
+    #[serde(default)]
+    pub metadata: serde_json::Map<String, serde_json::Value>,
+    pub attachment_count: i64,
+    pub mention_count: i64,
+    #[serde(default)]
+    pub latency_ms: Option<i64>,
+    pub created_at: String,
+}
+
+/// Query parameters for windowed console stats.
+#[derive(Debug, Clone, Default)]
+pub struct ConsoleWindowQuery {
+    pub days: Option<i32>,
+}
+
+/// Query parameters for console agent stats.
+#[derive(Debug, Clone, Default)]
+pub struct ConsoleAgentStatsQuery {
+    pub days: Option<i32>,
+    pub limit: Option<i32>,
+}
+
+/// Console overview statistics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsoleOverview {
+    pub window_days: i64,
+    pub since: String,
+    pub total_messages: i64,
+    pub channel_messages: i64,
+    pub dm_messages: i64,
+    pub unique_agents: i64,
+    pub avg_latency_ms: f64,
+    pub max_latency_ms: f64,
+    pub attachment_count: i64,
+    pub mention_count: i64,
+}
+
+/// Per-agent console statistics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsoleAgentStat {
+    pub agent_id: String,
+    pub agent_name: String,
+    pub message_count: i64,
+    pub channel_count: i64,
+    pub dm_count: i64,
+    pub avg_latency_ms: f64,
+    #[serde(default)]
+    pub last_message_at: Option<String>,
+}
+
+/// Per-agent cost statistics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsoleCostAgent {
+    pub agent_id: String,
+    pub agent_name: String,
+    pub message_count: i64,
+    pub total_cost_usd: f64,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub total_tokens: i64,
+}
+
+/// Aggregate cost totals across the window.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsoleCostTotals {
+    pub total_cost_usd: f64,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub total_tokens: i64,
+}
+
+/// Console cost statistics for the window.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsoleCostStats {
+    pub window_days: i64,
+    pub totals: ConsoleCostTotals,
+    #[serde(default)]
+    pub agents: Vec<ConsoleCostAgent>,
 }

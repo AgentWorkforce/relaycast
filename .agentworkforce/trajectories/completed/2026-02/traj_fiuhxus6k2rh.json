@@ -1,0 +1,53 @@
+{
+  "id": "traj_fiuhxus6k2rh",
+  "version": 1,
+  "task": {
+    "title": "Fix WS activity channel labels and remove App tab from Activity"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-19T01:42:55.461Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-19T01:44:19.345Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_7mteke0gsl13",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-19T01:44:19.345Z",
+      "events": [
+        {
+          "ts": 1771465459348,
+          "type": "decision",
+          "content": "Use websocket-only Activity panel and fix member event channel label parsing: Use websocket-only Activity panel and fix member event channel label parsing",
+          "raw": {
+            "question": "Use websocket-only Activity panel and fix member event channel label parsing",
+            "chosen": "Use websocket-only Activity panel and fix member event channel label parsing",
+            "alternatives": [],
+            "reasoning": "Observer dashboard now relies on workspace WS stream; member events expose channel in  field, so summaries must read that key"
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-19T01:44:28.289Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "a6a9967aa5405d07eb22f02c0bb35f975531ad59",
+    "endRef": "a6a9967aa5405d07eb22f02c0bb35f975531ad59"
+  },
+  "completedAt": "2026-02-19T01:44:28.289Z",
+  "retrospective": {
+    "summary": "Fixed WS activity member channel labels and removed Activity App tab so panel is websocket-only.",
+    "approach": "Standard approach",
+    "confidence": 0.98
+  }
+}

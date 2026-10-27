@@ -1,0 +1,53 @@
+{
+  "id": "traj_how3l2dy5jb8",
+  "version": 1,
+  "task": {
+    "title": "Expose fleet node workspace flag in TypeScript SDK"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-18T17:04:18.696Z",
+  "completedAt": "2026-06-18T17:10:24.521Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-06-18T17:10:17.854Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_lkprvlefzfos",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-06-18T17:10:17.854Z",
+      "endedAt": "2026-06-18T17:10:24.521Z",
+      "events": [
+        {
+          "ts": 1781802617855,
+          "type": "decision",
+          "content": "Did not manually bump @relaycast/sdk version: Did not manually bump @relaycast/sdk version",
+          "raw": {
+            "question": "Did not manually bump @relaycast/sdk version",
+            "chosen": "Did not manually bump @relaycast/sdk version",
+            "alternatives": [],
+            "reasoning": "Versioning follows the repo release process; kept Relaycast package and lockfile versions unchanged while adding SDK source/tests."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Added Relaycast TypeScript SDK workspace.fleetNodes get/set/inherit helpers for the existing /v1/workspace/fleet-nodes endpoint, with tests and README docs. Kept package versions unchanged for the normal release process.",
+    "approach": "Standard approach",
+    "confidence": 0.9
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "e24fb635409e3c262d94a004f5080e2795ace5a3",
+    "endRef": "e24fb635409e3c262d94a004f5080e2795ace5a3"
+  }
+}

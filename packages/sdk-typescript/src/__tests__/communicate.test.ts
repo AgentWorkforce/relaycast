@@ -67,12 +67,30 @@ describe('communicate Relay wrapper', () => {
   beforeEach(() => {
     MockWebSocket.instances = [];
     mockFetch.mockReset();
-    mockFetch.mockImplementation(() => mockResponse({ id: 'm_1' }));
+    mockFetch.mockImplementation((url: string) => {
+      if (url.endsWith('/v1/agent/node-token')) {
+        return mockResponse({
+          node_id: 'node_direct_agent_1',
+          node_name: 'direct-agent-1',
+          token: 'nt_live_direct_agent_1',
+        });
+      }
+      return mockResponse({ id: 'm_1' });
+    });
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
+
+  async function nextSocket(): Promise<MockWebSocket> {
+    for (let i = 0; i < 10; i += 1) {
+      await Promise.resolve();
+      const socket = MockWebSocket.instances[0];
+      if (socket) return socket;
+    }
+    throw new Error('Mock WebSocket was not created');
+  }
 
   it('exposes the underlying AgentClient as agents', () => {
     const { agent, relay } = createRelay();
@@ -134,9 +152,9 @@ describe('communicate Relay wrapper', () => {
 
     const unsubscribe = relay.onMessage(handler);
 
+    const ws = await nextSocket();
     expect(MockWebSocket.instances).toHaveLength(1);
 
-    const ws = MockWebSocket.instances[0]!;
     ws.simulateOpen();
     ws.simulateMessage({
       type: 'message.created',

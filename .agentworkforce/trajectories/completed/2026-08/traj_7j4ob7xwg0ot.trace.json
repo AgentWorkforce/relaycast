@@ -1,0 +1,77 @@
+{
+  "version": "1.0.0",
+  "id": "632139b6-0bda-4558-a8ad-31a2aa1fa606",
+  "timestamp": "2026-08-18T09:19:00.798Z",
+  "trajectory": "traj_7j4ob7xwg0ot",
+  "files": [
+    {
+      "path": "packages/engine/src/engine/__tests__/workspace.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 9,
+              "end_line": 15,
+              "revision": "f2b371bd1267a9bd41a2221b4e110772c40258a1"
+            },
+            {
+              "start_line": 24,
+              "end_line": 30,
+              "revision": "f2b371bd1267a9bd41a2221b4e110772c40258a1"
+            },
+            {
+              "start_line": 84,
+              "end_line": 98,
+              "revision": "f2b371bd1267a9bd41a2221b4e110772c40258a1"
+            },
+            {
+              "start_line": 128,
+              "end_line": 134,
+              "revision": "f2b371bd1267a9bd41a2221b4e110772c40258a1"
+            },
+            {
+              "start_line": 147,
+              "end_line": 153,
+              "revision": "f2b371bd1267a9bd41a2221b4e110772c40258a1"
+            },
+            {
+              "start_line": 180,
+              "end_line": 212,
+              "revision": "f2b371bd1267a9bd41a2221b4e110772c40258a1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/engine/workspace.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 14,
+              "end_line": 24,
+              "revision": "f2b371bd1267a9bd41a2221b4e110772c40258a1"
+            },
+            {
+              "start_line": 73,
+              "end_line": 90,
+              "revision": "f2b371bd1267a9bd41a2221b4e110772c40258a1"
+            },
+            {
+              "start_line": 195,
+              "end_line": 221,
+              "revision": "f2b371bd1267a9bd41a2221b4e110772c40258a1"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

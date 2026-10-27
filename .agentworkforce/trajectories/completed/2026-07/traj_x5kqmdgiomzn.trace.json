@@ -1,0 +1,25 @@
+{
+  "version": "1.0.0",
+  "id": "c4d19ec4-339b-4355-9ee0-e37ef85090f1",
+  "timestamp": "2026-07-13T14:45:28.493Z",
+  "trajectory": "traj_x5kqmdgiomzn",
+  "files": [
+    {
+      "path": "packages/engine/src/adapters/node/__tests__/delivery-maintenance.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 65,
+              "end_line": 87,
+              "revision": "0a8324157924b110528d79723b3c86b95088952b"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

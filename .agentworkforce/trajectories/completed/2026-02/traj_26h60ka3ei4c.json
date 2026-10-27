@@ -1,0 +1,53 @@
+{
+  "id": "traj_26h60ka3ei4c",
+  "version": 1,
+  "task": {
+    "title": "Restore stream enable/disable on auth login/logout"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-19T04:09:00.700Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-19T04:09:35.032Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_wky2ntez6gne",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-19T04:09:35.032Z",
+      "events": [
+        {
+          "ts": 1771474175033,
+          "type": "decision",
+          "content": "Kept stream toggle on login/logout and preserved DO limiter: Kept stream toggle on login/logout and preserved DO limiter",
+          "raw": {
+            "question": "Kept stream toggle on login/logout and preserved DO limiter",
+            "chosen": "Kept stream toggle on login/logout and preserved DO limiter",
+            "alternatives": [],
+            "reasoning": "User confirmed high KV usage was from rate limiting, not stream toggles, so auth routes should continue best-effort stream enable/disable behavior while rate limiting remains off KV."
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-19T04:09:37.663Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "059f2723b789fd15602e2a7142fcc1350b331fd2",
+    "endRef": "059f2723b789fd15602e2a7142fcc1350b331fd2"
+  },
+  "completedAt": "2026-02-19T04:09:37.663Z",
+  "retrospective": {
+    "summary": "Restored dashboard auth behavior to enable stream on login and disable on logout (best-effort logging retained). Durable Object rate limiting changes remain to reduce KV read/write pressure.",
+    "approach": "Standard approach",
+    "confidence": 0.96
+  }
+}

@@ -7,7 +7,8 @@ Relaycast is headless Slack for agents: channels, threads, DMs, reactions, files
 - `README.md` for onboarding and examples.
 - `openapi.yaml` for HTTP API schema.
 - Root `package.json` for scripts and workspace configuration.
-- `packages/server` for API behavior.
+- `packages/engine` for API behavior — the canonical, portable server that powers the hosted gateway
+  (`cast.agentrelay.com`) and self-hosting.
 - `packages/sdk-typescript` for TypeScript SDK surface.
 
 
@@ -33,6 +34,16 @@ Relaycast is headless Slack for agents: channels, threads, DMs, reactions, files
 ## Docs Hygiene
 - Update `README.md` and `openapi.yaml` together when API behavior changes.
 - Keep quickstart examples realtime-first (WebSocket subscriptions and message handlers) instead of polling-first flows.
+
+## Changelog
+- Curate the unreleased section in `CHANGELOG.md` for cross-package or user-facing release notes.
+- An empty post-release changelog starts at `[Unreleased]`. The first pending user-visible change must set the heading to `[Unreleased - Patch]`, `[Unreleased - Minor]`, or `[Unreleased - Major]` according to its SemVer impact.
+- The pending release level is monotonic: `Patch < Minor < Major`. Raise the heading when a higher-impact change arrives; never lower it for a later lower-impact change, and leave it unchanged for another change at the same level.
+- When a release is cut, the publish workflow runs `scripts/cut-changelog.mjs`, which moves the pending entries under the released version and restores an empty `[Unreleased]` heading with no release level. Do not hand-cut a release; curate `[Unreleased]` and let the release commit do it. (The Rust SDK changelog is excluded — it ships on its own crates.io version line.)
+- Add package-level API and migration detail to the relevant `packages/*/CHANGELOG.md` when one exists.
+- Apply the same release-level heading rules to any package changelog that receives a pending entry.
+- Keep entries concise and impact-first: one short bullet per user-visible change.
+- Omit PR links, internal review notes, test-only work, and implementation backstory unless they explain shipped impact.
 
 
 
@@ -123,7 +134,7 @@ trail complete --summary "Added JWT auth with refresh tokens" --confidence 0.85
 
 After completing work, compact the finished trajectory or merged PR into a
 durable summary. When the compacted summary is sufficient, discard the raw
-source trajectories so `.trajectories/index.json` and list output stay focused:
+source trajectories so `.agentworkforce/trajectories` and list output stay focused:
 
 ```bash
 trail compact --discard-sources

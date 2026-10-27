@@ -29,20 +29,24 @@ import type {
   UploadResponse,
   CompleteUploadResponse,
   FileInfo,
-  InvokeCommandRequest,
-  CommandInvokeResult,
+  Agent,
+  TokenRotateResponse,
+  InvokeActionResult,
+  CompleteInvocationRequest,
+  ActionInvocation,
   WsClientEvent,
   MessageCreatedEvent,
   MessageUpdatedEvent,
   ThreadReplyEvent,
   MessageReadEvent,
-  ReactionAddedEvent,
-  ReactionRemovedEvent,
+  MessageReactedEvent,
   DmReceivedEvent,
   GroupDmReceivedEvent,
   RelaycastMessageEvent,
-  AgentOnlineEvent,
-  AgentOfflineEvent,
+  AgentExitedEvent,
+  AgentStatusActiveEvent,
+  AgentStatusChangedEvent,
+  AgentStatusOfflineEvent,
   ChannelCreatedEvent,
   ChannelUpdatedEvent,
   ChannelArchivedEvent,
@@ -52,14 +56,29 @@ import type {
   ChannelUnmutedEvent,
   FileUploadedEvent,
   WebhookReceivedEvent,
-  CommandInvokedEvent,
+  ActionInvokedEvent,
+  ActionCompletedEvent,
+  ActionDeniedEvent,
+  ActionFailedEvent,
+  Delivery,
+  DeliveryItem,
+  DeliveryStatus,
+  FailDeliveryRequest,
+  DeferDeliveryRequest,
+  DeliveryAcceptedEvent,
+  DeliveryDeliveredEvent,
+  DeliveryDeferredEvent,
+  DeliveryFailedEvent,
   WsReconnectingEvent,
   WsPermanentlyDisconnectedEvent,
+  WsResyncedEvent,
 } from './types.js';
 import { HttpClient, type RequestOptions } from './client.js';
 import { WsClient, type WsClientOptions, withInternalWsOrigin } from './ws.js';
 import type { Subscription } from './subscription.js';
 import { stableRelaycastEventId } from './event-id.js';
+import { SDK_VERSION } from './version.js';
+import type { EnrollRecoveryCredentialInput } from './identity.js';
 
 function stripHash(channel: string): string {
   return channel.startsWith('#') ? channel.slice(1) : channel;
@@ -106,7 +125,7 @@ function idempotencyHeaders(opts?: IdempotencyOption): RequestOptions {
 
 export interface AgentClientOptions {
   autoHeartbeatMs?: number | false;
-  ws?: Omit<WsClientOptions, 'token' | 'baseUrl'>;
+  ws?: Omit<WsClientOptions, 'token' | 'baseUrl' | 'path' | 'nodeRegistration' | 'autoAckDeliveries'>;
 }
 
 type RelaycastMessageHandler = (event: RelaycastMessageEvent) => void | Promise<void>;
@@ -115,6 +134,17 @@ type ManagedSubscription = {
   handler: RelaycastMessageHandler;
   stops: Array<() => void>;
 };
+
+type DirectNodeToken = {
+  nodeId: string;
+  nodeName: string;
+  token: string;
+};
+
+// Consecutive connect attempts a cached node token may serve before it is re-minted.
+// The counter resets whenever a connection actually opens, so a healthy client mints
+// once per session while a client that can never connect still recovers a stale token.
+const DIRECT_NODE_TOKEN_MAX_USES = 3;
 
 function normalizeSubscriptionChannel(channel: string): string {
   const trimmed = channel.trim();
@@ -135,10 +165,14 @@ function ensureRelaycastMessageEventId(event: RelaycastMessageEvent): RelaycastM
 export class AgentClient {
   public readonly client: HttpClient;
   private ws: WsClient | null = null;
+  /** True after `connect()` has started the current transport. Reset by `disconnect()`. */
+  private wsConnectStarted = false;
   private autoHeartbeatMs: number | false;
   private autoHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private pendingHeartbeat: Promise<void> | null = null;
-  private wsOptions: Omit<WsClientOptions, 'token' | 'baseUrl'>;
+  private wsOptions: Omit<WsClientOptions, 'token' | 'baseUrl' | 'path' | 'nodeRegistration' | 'autoAckDeliveries'>;
+  private directNodeToken: DirectNodeToken | null = null;
+  private directNodeTokenUses = 0;
   private manualSubscriptions = new Set<string>();
   private managedSubscriptions = new Map<symbol, ManagedSubscription>();
   private activeWsChannels = new Set<string>();
@@ -162,9 +196,24 @@ export class AgentClient {
     heartbeat: async (): Promise<void> => {
       await this.client.post('/v1/agents/heartbeat', {});
     },
-    markOffline: async (): Promise<void> => {
+    /**
+     * Mark this agent offline.
+     *
+     * By default this is a presence-only signal: a node-hosted (broker) agent
+     * keeps its node binding, so a session still running on its node keeps
+     * receiving deliveries through that node and the binding stays usable for
+     * later reconnection. Pass `{ deregister: true }` to also tear down the
+     * node binding and re-home the agent to its implicit direct node.
+     */
+    markOffline: async (options?: { deregister?: boolean }): Promise<void> => {
       this.stopAutoHeartbeat();
-      await this.client.post('/v1/agents/disconnect', {});
+      // Wait for any in-flight auto heartbeat to settle so the HTTP disconnect
+      // below is guaranteed to be the last presence mutation.
+      if (this.pendingHeartbeat) {
+        await this.pendingHeartbeat;
+        this.pendingHeartbeat = null;
+      }
+      await this.client.post('/v1/agents/disconnect', options?.deregister ? { deregister: true } : {});
     },
   };
 
@@ -172,6 +221,10 @@ export class AgentClient {
     this.stopAutoHeartbeat();
     if (this.autoHeartbeatMs === false) return;
     this.autoHeartbeatTimer = setInterval(() => {
+      // Serialize heartbeats: skip this tick while one is still in flight so
+      // pendingHeartbeat always tracks the only outstanding request — awaiting
+      // it before disconnect then guarantees no heartbeat lands afterwards.
+      if (this.pendingHeartbeat) return;
       this.pendingHeartbeat = this.presence.heartbeat()
         .catch(() => {})
         .finally(() => { this.pendingHeartbeat = null; });
@@ -185,36 +238,85 @@ export class AgentClient {
     }
   }
 
+  private async fetchDirectNodeToken(): Promise<string> {
+    // A node token is a long-lived credential, so reuse it across reconnects rather
+    // than minting one per attempt. Minting rotates the node's token through the
+    // workspace's shared write lane, so a reconnect loop that mints every attempt
+    // turns write backpressure into more write load. Reuse is bounded so a token the
+    // server no longer accepts still gets replaced instead of wedging the client.
+    if (this.directNodeToken && this.directNodeTokenUses < DIRECT_NODE_TOKEN_MAX_USES) {
+      this.directNodeTokenUses += 1;
+      return this.directNodeToken.token;
+    }
+    const token = await this.client.post<DirectNodeToken>('/v1/agent/node-token', {});
+    this.directNodeToken = token;
+    this.directNodeTokenUses = 1;
+    return token.token;
+  }
+
+  private directNodeRegistration(): Record<string, unknown> {
+    if (!this.directNodeToken) {
+      throw new Error('Direct node token has not been initialized');
+    }
+    return {
+      v: 1,
+      id: `sdk-direct-${Date.now()}`,
+      type: 'node.register',
+      node_id: this.directNodeToken.nodeId,
+      name: this.directNodeToken.nodeName,
+      capabilities: [],
+      max_agents: 1,
+      tags: ['implicit', 'direct', 'sdk'],
+      version: `sdk-typescript/${SDK_VERSION}`,
+    };
+  }
+
   // === WebSocket ===
 
+  /**
+   * Lazily create the underlying WsClient. Constructing it does not open a
+   * socket, so handlers registered via `on.*` before `connect()` attach to
+   * the same instance `connect()` later opens — no queueing needed.
+   */
+  private ensureWs(): WsClient {
+    if (!this.ws) {
+      this.ws = new WsClient(withInternalWsOrigin(
+        {
+          ...this.wsOptions,
+          token: () => this.fetchDirectNodeToken(),
+          baseUrl: this.client.baseUrl,
+          path: '/v1/node/ws',
+          nodeRegistration: () => this.directNodeRegistration(),
+          autoAckDeliveries: true,
+        },
+        this.client.internalOrigin,
+      ));
+      this.ws.on('open', () => {
+        this.directNodeTokenUses = 0;
+        void this.presence.markOnline().catch(() => {});
+        this.startAutoHeartbeat();
+        this.syncDesiredSubscriptions({ resetRemoteState: true });
+      });
+      this.ws.on('close', () => {
+        this.stopAutoHeartbeat();
+        this.activeWsChannels.clear();
+      });
+      this.ws.on('permanently_disconnected', () => {
+        this.stopAutoHeartbeat();
+        this.activeWsChannels.clear();
+      });
+    }
+    return this.ws;
+  }
+
   connect(): void {
-    if (this.ws) return;
-    this.ws = new WsClient(withInternalWsOrigin(
-      {
-        token: this.client.apiKey,
-        baseUrl: this.client.baseUrl,
-        ...this.wsOptions,
-      },
-      {
-        surface: this.client.originSurface,
-        client: this.client.originClient,
-        version: this.client.originVersion,
-      },
-    ));
-    this.ws.on('open', () => {
-      void this.presence.markOnline().catch(() => {});
-      this.startAutoHeartbeat();
-      this.syncDesiredSubscriptions({ resetRemoteState: true });
-    });
-    this.ws.on('close', () => {
-      this.stopAutoHeartbeat();
-      this.activeWsChannels.clear();
-    });
-    this.ws.on('permanently_disconnected', () => {
-      this.stopAutoHeartbeat();
-      this.activeWsChannels.clear();
-    });
-    this.ws.connect();
+    // Handlers may construct the client early via ensureWs(). Starting it is
+    // still once per transport: a second connect(), including after the
+    // circuit breaker trips, must not open another socket. disconnect()
+    // clears this so an explicit teardown can connect again.
+    if (this.wsConnectStarted) return;
+    this.wsConnectStarted = true;
+    this.ensureWs().connect();
   }
 
   /** Send a REST heartbeat to keep this agent online in PresenceDO without a WebSocket. */
@@ -222,7 +324,29 @@ export class AgentClient {
     await this.presence.heartbeat();
   }
 
-  async disconnect(): Promise<void> {
+  /** Authenticated self-rollover for this agent identity. */
+  async rotateToken(name: string): Promise<TokenRotateResponse> {
+    return this.client.post(`/v1/agents/${encodeURIComponent(name)}/rotate-token`, {});
+  }
+
+  /** Enroll or rotate this agent's server-owned recovery verifier. */
+  async enrollRecoveryCredential(
+    data: EnrollRecoveryCredentialInput,
+  ): Promise<{ agentId: string; enrolled: boolean }> {
+    return this.client.post('/v1/agent/recovery-credential', data);
+  }
+
+  /**
+   * Tear down this client's WebSocket and mark the agent offline.
+   *
+   * By default the HTTP disconnect is presence-only for node-hosted (broker)
+   * agents: the node binding is preserved, so an agent process still running
+   * on its node keeps receiving deliveries through that node, and the binding
+   * remains usable for later reconnection. Pass `{ deregister: true }` to also
+   * deregister the node binding and re-home the agent to its implicit direct
+   * node.
+   */
+  async disconnect(options?: { deregister?: boolean }): Promise<void> {
     this.stopAutoHeartbeat();
     // Wait for any in-flight auto heartbeat to settle at PresenceDO so the
     // HTTP disconnect below is guaranteed to be the last presence mutation.
@@ -241,10 +365,13 @@ export class AgentClient {
       this.ws.disconnect();
       this.ws = null;
     }
+    this.wsConnectStarted = false;
     this.activeWsChannels.clear();
     // Always send the HTTP disconnect — it works even without a WS and
     // serves as the authoritative presence update.
-    await this.client.post('/v1/agents/disconnect', {}).catch(() => {});
+    await this.client
+      .post('/v1/agents/disconnect', options?.deregister ? { deregister: true } : {})
+      .catch(() => {});
   }
 
   subscribe(channels: string[]): void;
@@ -317,10 +444,7 @@ export class AgentClient {
   }
 
   private onEvent<T extends WsClientEvent>(eventType: string, handler: (e: T) => void): () => void {
-    if (!this.ws) {
-      throw new Error('WebSocket not connected. Call connect() first.');
-    }
-    return this.ws.on(eventType, handler as (e: WsClientEvent) => void);
+    return this.ensureWs().on(eventType, handler as (e: WsClientEvent) => void);
   }
 
   on = {
@@ -328,12 +452,17 @@ export class AgentClient {
     messageUpdated:  (handler: (e: MessageUpdatedEvent) => void): (() => void)  => this.onEvent('message.updated', handler),
     threadReply:     (handler: (e: ThreadReplyEvent) => void): (() => void)     => this.onEvent('thread.reply', handler),
     messageRead:     (handler: (e: MessageReadEvent) => void): (() => void)     => this.onEvent('message.read', handler),
-    reactionAdded:   (handler: (e: ReactionAddedEvent) => void): (() => void)   => this.onEvent('reaction.added', handler),
-    reactionRemoved: (handler: (e: ReactionRemovedEvent) => void): (() => void) => this.onEvent('reaction.removed', handler),
+    messageReacted:  (handler: (e: MessageReactedEvent) => void): (() => void)  => this.onEvent('message.reacted', handler),
     dmReceived:      (handler: (e: DmReceivedEvent) => void): (() => void)      => this.onEvent('dm.received', handler),
     groupDmReceived: (handler: (e: GroupDmReceivedEvent) => void): (() => void) => this.onEvent('group_dm.received', handler),
-    agentOnline:     (handler: (e: AgentOnlineEvent) => void): (() => void)     => this.onEvent('agent.online', handler),
-    agentOffline:    (handler: (e: AgentOfflineEvent) => void): (() => void)    => this.onEvent('agent.offline', handler),
+    agentStatusChanged: (handler: (e: AgentStatusChangedEvent) => void): (() => void) => this.onEvent('agent.status.changed', handler),
+    agentActive:     (handler: (e: AgentStatusActiveEvent) => void): (() => void)  => this.onEvent('agent.status.active', handler),
+    agentOffline:    (handler: (e: AgentStatusOfflineEvent) => void): (() => void) => this.onEvent('agent.status.offline', handler),
+    // The spawn caller receives `agent.exited` on this socket as a `deliver`
+    // frame. Node liveness has no agent mailbox — `emitNodeStatusEffects`
+    // publishes `node.status.*` only to the workspace stream and webhooks —
+    // so those handlers live on `RelayCast`, which connects to `/v1/ws`.
+    agentExited:     (handler: (e: AgentExitedEvent) => void): (() => void)     => this.onEvent('agent.exited', handler),
     channelCreated:  (handler: (e: ChannelCreatedEvent) => void): (() => void)  => this.onEvent('channel.created', handler),
     channelUpdated:  (handler: (e: ChannelUpdatedEvent) => void): (() => void)  => this.onEvent('channel.updated', handler),
     channelArchived: (handler: (e: ChannelArchivedEvent) => void): (() => void) => this.onEvent('channel.archived', handler),
@@ -343,34 +472,39 @@ export class AgentClient {
     channelUnmuted:  (handler: (e: ChannelUnmutedEvent) => void): (() => void)  => this.onEvent('member.channel_unmuted', handler),
     fileUploaded:    (handler: (e: FileUploadedEvent) => void): (() => void)    => this.onEvent('file.uploaded', handler),
     webhookReceived: (handler: (e: WebhookReceivedEvent) => void): (() => void) => this.onEvent('webhook.received', handler),
-    commandInvoked:  (handler: (e: CommandInvokedEvent) => void): (() => void)  => this.onEvent('command.invoked', handler),
+    // Actions (agent-to-agent RPC)
+    actionInvoked:   (handler: (e: ActionInvokedEvent) => void): (() => void)   => this.onEvent('action.invoked', handler),
+    actionCompleted: (handler: (e: ActionCompletedEvent) => void): (() => void) => this.onEvent('action.completed', handler),
+    actionFailed:    (handler: (e: ActionFailedEvent) => void): (() => void)    => this.onEvent('action.failed', handler),
+    actionDenied:    (handler: (e: ActionDeniedEvent) => void): (() => void)    => this.onEvent('action.denied', handler),
+    // Durable delivery lifecycle
+    deliveryAccepted:  (handler: (e: DeliveryAcceptedEvent) => void): (() => void)  => this.onEvent('delivery.accepted', handler),
+    deliveryDelivered: (handler: (e: DeliveryDeliveredEvent) => void): (() => void) => this.onEvent('delivery.delivered', handler),
+    deliveryDeferred:  (handler: (e: DeliveryDeferredEvent) => void): (() => void)  => this.onEvent('delivery.deferred', handler),
+    deliveryFailed:    (handler: (e: DeliveryFailedEvent) => void): (() => void)    => this.onEvent('delivery.failed', handler),
     // Lifecycle
     connected:    (handler: () => void): (() => void) => this.onEvent('open', handler as (e: never) => void),
     disconnected: (handler: () => void): (() => void) => this.onEvent('close', handler as (e: never) => void),
     error:        (handler: () => void): (() => void) => this.onEvent('error', handler as (e: never) => void),
-    reconnecting: (handler: (attempt: number) => void): (() => void) => {
-      if (!this.ws) {
-        throw new Error('WebSocket not connected. Call connect() first.');
-      }
-      return this.ws.on('reconnecting', (e: WsClientEvent) => handler((e as WsReconnectingEvent).attempt));
-    },
-    permanentlyDisconnected: (handler: (attempt: number) => void): (() => void) => {
-      if (!this.ws) {
-        throw new Error('WebSocket not connected. Call connect() first.');
-      }
-      return this.ws.on('permanently_disconnected', (e: WsClientEvent) =>
-        handler((e as WsPermanentlyDisconnectedEvent).attempt));
-    },
+    reconnecting: (handler: (attempt: number) => void): (() => void) =>
+      this.ensureWs().on('reconnecting', (e: WsClientEvent) => handler((e as WsReconnectingEvent).attempt)),
+    permanentlyDisconnected: (handler: (attempt: number) => void): (() => void) =>
+      this.ensureWs().on('permanently_disconnected', (e: WsClientEvent) =>
+        handler((e as WsPermanentlyDisconnectedEvent).attempt)),
+    resynced: (handler: (info: { replayed: number; gapDetected: boolean }) => void): (() => void) =>
+      this.ensureWs().on('resynced', (e: WsClientEvent) => {
+        const event = e as WsResyncedEvent;
+        handler({ replayed: event.replayed, gapDetected: event.gapDetected });
+      }),
     // Wildcard
-    any: (handler: (e: WsClientEvent) => void): (() => void) => {
-      if (!this.ws) {
-        throw new Error('WebSocket not connected. Call connect() first.');
-      }
-      return this.ws.on('*', handler);
-    },
+    any: (handler: (e: WsClientEvent) => void): (() => void) => this.ensureWs().on('*', handler),
   };
 
   // === Messages ===
+
+  async me(): Promise<Agent> {
+    return this.client.get('/v1/agent');
+  }
 
   async send(
     channel: string,
@@ -378,6 +512,7 @@ export class AgentClient {
     opts?: {
       attachments?: string[];
       blocks?: MessageBlock[];
+      data?: Record<string, unknown> | null;
       mode?: 'wait' | 'steer';
       idempotencyKey?: string;
     },
@@ -387,6 +522,7 @@ export class AgentClient {
       text,
       ...(opts?.attachments ? { attachments: opts.attachments } : {}),
       ...(opts?.blocks ? { blocks: opts.blocks } : {}),
+      ...(opts?.data !== undefined ? { data: opts.data } : {}),
       mode: opts?.mode ?? 'wait',
     };
     return this.client.post(
@@ -402,6 +538,7 @@ export class AgentClient {
     opts?: {
       attachments?: string[];
       blocks?: MessageBlock[];
+      data?: Record<string, unknown> | null;
       mode?: 'wait' | 'steer';
       idempotencyKey?: string;
     },
@@ -431,11 +568,16 @@ export class AgentClient {
   async reply(
     id: string,
     text: string,
-    opts?: { blocks?: MessageBlock[]; idempotencyKey?: string },
+    opts?: {
+      blocks?: MessageBlock[];
+      data?: Record<string, unknown> | null;
+      idempotencyKey?: string;
+    },
   ): Promise<MessageWithMeta> {
     const body: ThreadReplyRequest = {
       text,
       ...(opts?.blocks ? { blocks: opts.blocks } : {}),
+      ...(opts?.data !== undefined ? { data: opts.data } : {}),
     };
     return this.client.post(
       `/v1/messages/${encodeURIComponent(id)}/replies`,
@@ -463,20 +605,48 @@ export class AgentClient {
   async dm(
     agent: string,
     text: string,
-    opts?: (IdempotencyOption & { mode?: 'wait' | 'steer'; attachments?: string[] }),
+    opts?: (IdempotencyOption & {
+      mode?: 'wait' | 'steer';
+      attachments?: string[];
+      data?: Record<string, unknown> | null;
+    }),
   ): Promise<SendDmResponse> {
     const body: SendDmRequest = {
       to: agent,
       text,
       ...(opts?.attachments ? { attachments: opts.attachments } : {}),
+      ...(opts?.data !== undefined ? { data: opts.data } : {}),
+      mode: opts?.mode ?? 'wait',
+    };
+    return this.client.post('/v1/dm', body, idempotencyHeaders(opts));
+  }
+
+  /** DM an `agent@machine` address; fails if the agent is no longer on that machine. */
+  async sendTo(
+    address: string,
+    text: string,
+    opts?: (IdempotencyOption & {
+      mode?: 'wait' | 'steer';
+      attachments?: string[];
+      data?: Record<string, unknown> | null;
+    }),
+  ): Promise<SendDmResponse> {
+    const body: SendDmRequest = {
+      address,
+      text,
+      ...(opts?.attachments ? { attachments: opts.attachments } : {}),
+      ...(opts?.data !== undefined ? { data: opts.data } : {}),
       mode: opts?.mode ?? 'wait',
     };
     return this.client.post('/v1/dm', body, idempotencyHeaders(opts));
   }
 
   dms = {
-    conversations: (): Promise<DmConversationSummary[]> =>
-      this.client.get('/v1/dm/conversations'),
+    conversations: (opts?: Pick<MessageListQuery, 'limit'>): Promise<DmConversationSummary[]> => {
+      const query: Record<string, string> = {};
+      if (opts?.limit != null) query.limit = String(opts.limit);
+      return this.client.get('/v1/dm/conversations', query);
+    },
 
     messages: (
       conversationId: string,
@@ -501,13 +671,18 @@ export class AgentClient {
     sendMessage: (
       conversationId: string,
       text: string,
-      opts?: (IdempotencyOption & { attachments?: string[]; mode?: 'wait' | 'steer' }),
+      opts?: (IdempotencyOption & {
+        attachments?: string[];
+        data?: Record<string, unknown> | null;
+        mode?: 'wait' | 'steer';
+      }),
     ): Promise<GroupDmMessageResponse> =>
       this.client.post(
         `/v1/dm/${encodeURIComponent(conversationId)}/messages`,
         {
           text,
           ...(opts?.attachments ? { attachments: opts.attachments } : {}),
+          ...(opts?.data !== undefined ? { data: opts.data } : {}),
           mode: opts?.mode ?? 'wait',
         },
         idempotencyHeaders(opts),
@@ -711,16 +886,70 @@ export class AgentClient {
     );
   }
 
-  // === Commands ===
+  // === Durable Delivery ===
 
-  commands = {
+  /**
+   * List durable delivery items queued for this agent. Defaults to the
+   * non-terminal queue (queued + delivered) so an offline consumer can replay
+   * what it missed on reconnect. Each item carries the message payload.
+   */
+  async deliveries(options?: { status?: DeliveryStatus; limit?: number }): Promise<DeliveryItem[]> {
+    const params: Record<string, string> = {};
+    if (options?.status) params.status = options.status;
+    if (options?.limit != null) params.limit = String(options.limit);
+    return this.client.get('/v1/deliveries', params);
+  }
+
+  /** Idempotently acknowledge a delivery, transitioning it to `acked`. */
+  async ackDelivery(deliveryId: string): Promise<Delivery> {
+    return this.client.post(
+      `/v1/deliveries/${encodeURIComponent(deliveryId)}/ack`,
+    );
+  }
+
+  /** Idempotently record a delivery as `failed` with optional error/retryability. */
+  async failDelivery(deliveryId: string, options?: FailDeliveryRequest): Promise<Delivery> {
+    return this.client.post(
+      `/v1/deliveries/${encodeURIComponent(deliveryId)}/fail`,
+      options ?? {},
+    );
+  }
+
+  /** Idempotently defer a delivery until `availableAt`. */
+  async deferDelivery(deliveryId: string, options: DeferDeliveryRequest): Promise<Delivery> {
+    return this.client.post(
+      `/v1/deliveries/${encodeURIComponent(deliveryId)}/defer`,
+      options,
+    );
+  }
+
+  // === Actions ===
+
+  actions = {
     invoke: (
-      command: string,
-      data: InvokeCommandRequest,
-    ): Promise<CommandInvokeResult> =>
+      name: string,
+      input?: Record<string, unknown>,
+      opts?: IdempotencyOption,
+    ): Promise<InvokeActionResult> =>
       this.client.post(
-        `/v1/commands/${encodeURIComponent(command)}/invoke`,
+        `/v1/actions/${encodeURIComponent(name)}/invoke`,
+        { input },
+        idempotencyHeaders(opts),
+      ),
+
+    completeInvocation: (
+      name: string,
+      invocationId: string,
+      data: CompleteInvocationRequest,
+    ): Promise<ActionInvocation> =>
+      this.client.post(
+        `/v1/actions/${encodeURIComponent(name)}/invocations/${encodeURIComponent(invocationId)}/complete`,
         data,
+      ),
+
+    getInvocation: (name: string, invocationId: string): Promise<ActionInvocation> =>
+      this.client.get(
+        `/v1/actions/${encodeURIComponent(name)}/invocations/${encodeURIComponent(invocationId)}`,
       ),
   };
 

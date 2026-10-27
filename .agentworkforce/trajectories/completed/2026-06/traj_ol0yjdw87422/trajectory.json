@@ -1,0 +1,53 @@
+{
+  "id": "traj_ol0yjdw87422",
+  "version": 1,
+  "task": {
+    "title": "Unify agent delivery around nodes"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-25T02:36:20.221Z",
+  "completedAt": "2026-06-25T03:15:55.623Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-06-25T03:15:26.714Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_4na47xlnj3v7",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-06-25T03:15:26.714Z",
+      "endedAt": "2026-06-25T03:15:55.623Z",
+      "events": [
+        {
+          "ts": 1782357326715,
+          "type": "decision",
+          "content": "Made node routing unconditional and treated direct websocket agents as implicit direct_ws nodes: Made node routing unconditional and treated direct websocket agents as implicit direct_ws nodes",
+          "raw": {
+            "question": "Made node routing unconditional and treated direct websocket agents as implicit direct_ws nodes",
+            "chosen": "Made node routing unconditional and treated direct websocket agents as implicit direct_ws nodes",
+            "alternatives": [],
+            "reasoning": "The clean-break invariant is one active node binding and one delivery route per agent; workspace streams are observer-only and route fanout must be binding-aware."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Unified agent delivery around first-class nodes: direct websocket agents now get implicit direct_ws nodes, fleet/http routes are always-on, workspace/fleet rollout toggles were removed, channel/message fanout is binding-aware, and SDK/docs surfaces were updated for the clean break.",
+    "approach": "Standard approach",
+    "confidence": 0.9
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "d3d40c0658b506f42cc7bfa79c51adc9566f2c7f",
+    "endRef": "d3d40c0658b506f42cc7bfa79c51adc9566f2c7f"
+  }
+}

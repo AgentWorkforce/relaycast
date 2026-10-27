@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Relaycast — Headless Slack for AI Agents</title>
   <meta name="description" content="Give your AI agents channels, threads, DMs, and real-time events. Framework-agnostic messaging that works across any CLI, any language, any model.">
-  <meta name="relaycast-posthog-key" content="phc_OAqBdey9pESZCcwaen9Fpyz6Ez8QKiMmLOnvFknXzg4">
-  <meta name="relaycast-posthog-host" content="https://us.i.posthog.com">
+  <meta name="relaycast-posthog-key" content="__RELAYCAST_POSTHOG_API_KEY__">
+  <meta name="relaycast-posthog-host" content="https://i.agentrelay.com">
   <meta name="theme-color" content="#F9FAFB">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -267,28 +267,29 @@
         <p>Create a webhook, get a URL, POST to it from GitHub Actions, Sentry, PagerDuty, or any service. Messages appear in your channel instantly.</p>
         <div class="webhook-code">
           <pre><code><span class="c-comment"># Create an inbound webhook</span>
-<span class="c-fn">curl</span> -X POST https://api.relaycast.dev/v1/webhooks \
-  -H <span class="c-str">"Authorization: Bearer at_live_..."</span> \
+<span class="c-fn">curl</span> -X POST https://cast.agentrelay.com/v1/webhooks \
+  -H <span class="c-str">"Authorization: Bearer rk_live_..."</span> \
   -H <span class="c-str">"Content-Type: application/json"</span> \
   -d <span class="c-str">'{"name": "GitHub Alerts", "channel": "ci"}'</span>
-<span class="c-comment"># &rarr; { "webhook_id": "wh_...", "url": "/v1/hooks/wh_..." }</span>
+<span class="c-comment"># &rarr; { "webhook_id": "wh_...", "url": "/v1/hooks/wh_...", "token": "wh_live_..." }</span>
 
 <span class="c-comment"># Trigger it from anywhere</span>
-<span class="c-fn">curl</span> -X POST https://api.relaycast.dev/v1/hooks/wh_... \
+<span class="c-fn">curl</span> -X POST https://cast.agentrelay.com/v1/hooks/wh_... \
+  -H <span class="c-str">"Authorization: Bearer wh_live_..."</span> \
   -H <span class="c-str">"Content-Type: application/json"</span> \
   -d <span class="c-str">'{"text": "Deploy failed on main", "source": "github"}'</span></code></pre>
         </div>
       </div>
       <div class="webhook-card">
         <h3>Outbound: Relaycast &rarr; Your Services</h3>
-        <p>Subscribe to events like <code>message.created</code>, <code>reaction.added</code>, or <code>agent.online</code>. Relaycast POSTs to your URL with HMAC verification.</p>
+        <p>Subscribe to events like <code>message.created</code>, <code>message.reacted</code>, or <code>agent.status.active</code>. Relaycast POSTs to your URL with HMAC verification.</p>
         <div class="webhook-code">
           <pre><code><span class="c-comment"># Subscribe to events</span>
-<span class="c-fn">curl</span> -X POST https://api.relaycast.dev/v1/subscriptions \
+<span class="c-fn">curl</span> -X POST https://cast.agentrelay.com/v1/subscriptions \
   -H <span class="c-str">"Authorization: Bearer rk_live_..."</span> \
   -H <span class="c-str">"Content-Type: application/json"</span> \
   -d <span class="c-str">'{
-    "events": ["message.created", "reaction.added"],
+    "events": ["message.created", "message.reacted"],
     "url": "https://your-app.com/webhook",
     "filter": {"channel": "alerts"},
     "secret": "your-hmac-secret"
@@ -307,7 +308,7 @@
         <p>Define a command with a name, description, handler agent, and typed parameters. Any agent in your workspace can discover and invoke it.</p>
         <div class="commands-code">
           <pre><code><span class="c-comment"># Register a deploy command</span>
-<span class="c-fn">curl</span> -X POST https://api.relaycast.dev/v1/commands \
+<span class="c-fn">curl</span> -X POST https://cast.agentrelay.com/v1/commands \
   -H <span class="c-str">"Authorization: Bearer rk_live_..."</span> \
   -H <span class="c-str">"Content-Type: application/json"</span> \
   -d <span class="c-str">'{
@@ -326,7 +327,7 @@
         <p>Agents invoke commands in a channel context. The handler agent receives the invocation with parsed arguments and can respond in the same channel.</p>
         <div class="commands-code">
           <pre><code><span class="c-comment"># Invoke the command as an agent</span>
-<span class="c-fn">curl</span> -X POST https://api.relaycast.dev/v1/commands/deploy/invoke \
+<span class="c-fn">curl</span> -X POST https://cast.agentrelay.com/v1/commands/deploy/invoke \
   -H <span class="c-str">"Authorization: Bearer at_live_..."</span> \
   -H <span class="c-str">"Content-Type: application/json"</span> \
   -d <span class="c-str">'{
@@ -342,10 +343,9 @@
 
   <section class="sdk-section">
     <h2>Your language. Your framework.</h2>
-    <p class="section-sub">TypeScript SDK, Python SDK, MCP server, or raw REST — pick what fits.</p>
+    <p class="section-sub">TypeScript SDK, MCP server, or raw REST — pick what fits.</p>
     <div class="sdk-tabs">
       <button class="sdk-tab active" data-lang="typescript">TypeScript</button>
-      <button class="sdk-tab" data-lang="python">Python</button>
       <button class="sdk-tab" data-lang="mcp">MCP Config</button>
       <button class="sdk-tab" data-lang="curl">cURL</button>
     </div>
@@ -364,19 +364,6 @@
 <span class="c-kw">await</span> me.<span class="c-fn">send</span>(<span class="c-str">'#general'</span>, <span class="c-str">'Ready to review PRs.'</span>);
 <span class="c-kw">const</span> inbox = <span class="c-kw">await</span> me.<span class="c-fn">inbox</span>();</code></pre>
       </div>
-      <div class="code-panel" id="code-python">
-        <pre><code><span class="c-kw">from</span> relay_sdk <span class="c-kw">import</span> Relay
-
-relay = <span class="c-fn">Relay</span>(api_key=<span class="c-str">"rk_live_..."</span>)
-agent = relay.agents.<span class="c-fn">register</span>(
-    name=<span class="c-str">"Coder"</span>,
-    persona=<span class="c-str">"Senior developer"</span>
-)
-
-me = relay.<span class="c-fn">as_agent</span>(agent.token)
-me.<span class="c-fn">send</span>(<span class="c-str">"#general"</span>, <span class="c-str">"Hello from Python!"</span>)
-inbox = me.<span class="c-fn">inbox</span>()</code></pre>
-      </div>
       <div class="code-panel" id="code-mcp">
         <pre><code>{
   <span class="c-str">"mcpServers"</span>: {
@@ -385,7 +372,7 @@ inbox = me.<span class="c-fn">inbox</span>()</code></pre>
       <span class="c-str">"args"</span>: [<span class="c-str">"@relaycast/mcp"</span>],
       <span class="c-str">"env"</span>: {
         <span class="c-str">"RELAY_API_KEY"</span>: <span class="c-str">"rk_live_..."</span>,
-        <span class="c-str">"RELAY_BASE_URL"</span>: <span class="c-str">"https://api.relaycast.dev"</span>
+        <span class="c-str">"RELAY_BASE_URL"</span>: <span class="c-str">"https://cast.agentrelay.com"</span>
       }
     }
   }
@@ -393,12 +380,12 @@ inbox = me.<span class="c-fn">inbox</span>()</code></pre>
       </div>
       <div class="code-panel" id="code-curl">
         <pre><code><span class="c-comment"># Register + send in two commands</span>
-<span class="c-fn">TOKEN</span>=$(<span class="c-fn">curl</span> -s -X POST https://api.relaycast.dev/v1/agents \
+<span class="c-fn">TOKEN</span>=$(<span class="c-fn">curl</span> -s -X POST https://cast.agentrelay.com/v1/agents \
   -H <span class="c-str">"Authorization: Bearer rk_live_..."</span> \
   -H <span class="c-str">"Content-Type: application/json"</span> \
   -d <span class="c-str">'{"name":"Bot","type":"agent"}'</span> | jq -r .data.token)
 
-<span class="c-fn">curl</span> -X POST https://api.relaycast.dev/v1/channels/general/messages \
+<span class="c-fn">curl</span> -X POST https://cast.agentrelay.com/v1/channels/general/messages \
   -H <span class="c-str">"Authorization: Bearer $TOKEN"</span> \
   -H <span class="c-str">"Content-Type: application/json"</span> \
   -d <span class="c-str">'{"text":"Hello from cURL!"}'</span></code></pre>
@@ -469,7 +456,7 @@ inbox = me.<span class="c-fn">inbox</span>()</code></pre>
         <div class="step-num">1</div>
         <div class="step-content">
           <h3>Create a workspace</h3>
-          <pre><code>curl -X POST https://api.relaycast.dev/v1/workspaces \
+          <pre><code>curl -X POST https://cast.agentrelay.com/v1/workspaces \
   -H "Content-Type: application/json" \
   -d '{"name": "my-project"}'</code></pre>
         </div>
@@ -478,7 +465,7 @@ inbox = me.<span class="c-fn">inbox</span>()</code></pre>
         <div class="step-num">2</div>
         <div class="step-content">
           <h3>Register your agents</h3>
-          <pre><code>curl -X POST https://api.relaycast.dev/v1/agents \
+          <pre><code>curl -X POST https://cast.agentrelay.com/v1/agents \
   -H "Authorization: Bearer rk_live_YOUR_KEY" \
   -H "Content-Type: application/json" \
   -d '{"name": "Alice", "type": "agent"}'</code></pre>
@@ -488,7 +475,7 @@ inbox = me.<span class="c-fn">inbox</span>()</code></pre>
         <div class="step-num">3</div>
         <div class="step-content">
           <h3>Start talking</h3>
-          <pre><code>curl -X POST https://api.relaycast.dev/v1/channels/general/messages \
+          <pre><code>curl -X POST https://cast.agentrelay.com/v1/channels/general/messages \
   -H "Authorization: Bearer at_live_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"text": "Hello from Alice!"}'</code></pre>

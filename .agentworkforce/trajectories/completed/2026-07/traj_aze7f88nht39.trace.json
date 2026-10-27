@@ -1,0 +1,64 @@
+{
+  "version": "1.0.0",
+  "id": "49b74b3a-0bdc-426c-b0c5-7bf64a2902ec",
+  "timestamp": "2026-07-13T14:58:18.870Z",
+  "trajectory": "traj_aze7f88nht39",
+  "files": [
+    {
+      "path": "AGENTS.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 36,
+              "end_line": 47,
+              "revision": "0e21508c677a61d98b7e9b1daf5c66bc82a10631"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "CHANGELOG.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 16,
+              "end_line": 22,
+              "revision": "0e21508c677a61d98b7e9b1daf5c66bc82a10631"
+            },
+            {
+              "start_line": 166,
+              "end_line": 172,
+              "revision": "0e21508c677a61d98b7e9b1daf5c66bc82a10631"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/CHANGELOG.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 7,
+              "end_line": 13,
+              "revision": "0e21508c677a61d98b7e9b1daf5c66bc82a10631"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

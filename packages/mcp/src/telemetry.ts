@@ -13,12 +13,12 @@ import {
 interface TelemetryState {
   anonymousId: string;
   telemetryDisabled?: boolean;
+  missingConsentFile?: boolean;
 }
 
 export interface McpTelemetryOptions {
   posthogHost?: string;
   posthogApiKey?: string;
-  originSurface?: 'mcp';
   originClient?: string;
   originVersion?: string;
 }
@@ -29,8 +29,9 @@ export interface McpTelemetry {
 }
 
 const TELEMETRY_PATH = path.join(os.homedir(), '.relay', 'telemetry.json');
-const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com';
-const DEFAULT_POSTHOG_PUBLIC_KEY = 'phc_OAqBdey9pESZCcwaen9Fpyz6Ez8QKiMmLOnvFknXzg4';
+const IDENTITY_PATH = path.join(os.homedir(), '.relay', 'telemetry-identity.json');
+const REVOKED_IDENTITIES_PATH = path.join(os.homedir(), '.relay', 'telemetry-revoked-identities.jsonl');
+const DEFAULT_POSTHOG_HOST = 'https://i.agentrelay.com';
 
 function isTruthy(value: string | undefined): boolean {
   if (!value) return false;
@@ -38,7 +39,7 @@ function isTruthy(value: string | undefined): boolean {
   return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
 }
 
-function telemetryEnabled(state: TelemetryState): boolean {
+function telemetryConsentEnabled(state: TelemetryState): boolean {
   if (isTruthy(process.env.DO_NOT_TRACK) || isTruthy(process.env.RELAYCAST_TELEMETRY_DISABLED)) {
     return false;
   }
@@ -61,43 +62,90 @@ function getPosthogHost(options: McpTelemetryOptions): string {
 }
 
 function getPosthogApiKey(options: McpTelemetryOptions): string {
+  // No baked-in default: a missing key disables telemetry rather than writing
+  // into the project's production PostHog. Production injects the key via env.
   return (
     process.env.RELAYCAST_POSTHOG_API_KEY
     ?? process.env.POSTHOG_API_KEY
     ?? options.posthogApiKey
-    ?? DEFAULT_POSTHOG_PUBLIC_KEY
+    ?? ''
   );
 }
 
-function loadState(): TelemetryState {
-  try {
-    const raw = fs.readFileSync(TELEMETRY_PATH, 'utf8');
-    const parsed: unknown = JSON.parse(raw);
-    if (
-      parsed &&
-      typeof parsed === 'object' &&
-      'anonymousId' in parsed &&
-      typeof (parsed as { anonymousId: unknown }).anonymousId === 'string'
-    ) {
-      return parsed as TelemetryState;
-    }
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException;
-    if (e.code !== 'ENOENT') {
-      // Fall through to fresh state.
-    }
-  }
+function isTelemetryState(value: unknown): value is TelemetryState {
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    'anonymousId' in value &&
+    typeof (value as { anonymousId: unknown }).anonymousId === 'string' &&
+    (value as { anonymousId: string }).anonymousId.trim().length > 0 &&
+    (!('telemetryDisabled' in value) || typeof (value as { telemetryDisabled: unknown }).telemetryDisabled === 'boolean'),
+  );
+}
 
-  const state: TelemetryState = { anonymousId: randomUUID() };
+/** Consent is read-only here: identity rotation must never overwrite an opt-out. */
+function loadState(anonymousId: string): TelemetryState | undefined {
   try {
-    const dir = path.dirname(TELEMETRY_PATH);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(TELEMETRY_PATH, JSON.stringify(state, null, 2) + '\n', 'utf8');
-  } catch {
-    // Best-effort persistence: if filesystem is read-only or unavailable,
-    // telemetry will still work with ephemeral anonymous ID
+    const parsed: unknown = JSON.parse(fs.readFileSync(TELEMETRY_PATH, 'utf8'));
+    return isTelemetryState(parsed) ? parsed : undefined;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { anonymousId, missingConsentFile: true };
+    // Unknown consent is not permission to reuse an older in-memory opt-in.
+    return undefined;
   }
-  return state;
+}
+
+function loadAnonymousId(fallback: string): { anonymousId: string; missing?: boolean } | undefined {
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(IDENTITY_PATH, 'utf8'));
+    return isTelemetryState(parsed) ? { anonymousId: parsed.anonymousId } : undefined;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? { anonymousId: fallback, missing: true } : undefined;
+  }
+}
+
+function persistAnonymousId(anonymousId: string): boolean {
+  const temporaryPath = `${IDENTITY_PATH}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(IDENTITY_PATH), { recursive: true });
+    fs.writeFileSync(temporaryPath, JSON.stringify({ anonymousId }) + '\n', { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    fs.renameSync(temporaryPath, IDENTITY_PATH);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try { fs.unlinkSync(temporaryPath); } catch { /* already renamed or unavailable */ }
+  }
+}
+
+/** Append-only invalidation avoids replaying or clearing another process's rotation. */
+function loadRevokedIdentities(): Set<string> | undefined {
+  try {
+    const journal = fs.readFileSync(REVOKED_IDENTITIES_PATH, 'utf8');
+    if (!journal.trim() || !journal.endsWith('\n')) throw Error('Incomplete identity revocation');
+    const lines = journal.trim().split('\n');
+    const ids = lines.filter(Boolean).flatMap(line => {
+      const value: unknown = JSON.parse(line);
+      if (!Array.isArray(value) || value.length === 0 || !value.every(id => typeof id === 'string' && id.trim())) {
+        throw Error('Invalid identity revocation');
+      }
+      return value as string[];
+    });
+    return new Set(ids);
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? new Set() : undefined;
+  }
+}
+
+function persistRevokedIdentities(ids: string[]): boolean {
+  try {
+    fs.mkdirSync(path.dirname(REVOKED_IDENTITIES_PATH), { recursive: true });
+    // One append preserves concurrent boundaries; never truncate or remove this file.
+    fs.appendFileSync(REVOKED_IDENTITIES_PATH, JSON.stringify(ids) + '\n', { encoding: 'utf8', mode: 0o600 });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function runtimePrefersFetch(): boolean {
@@ -200,22 +248,97 @@ async function postJson(
 }
 
 export function createMcpTelemetry(version = 'unknown', options: McpTelemetryOptions = {}): McpTelemetry {
-  const state = loadState();
-  const sessionId = randomUUID();
+  let state = loadState(randomUUID()) ?? { anonymousId: randomUUID() };
+  let hadConsent: boolean | undefined;
+  let localGeneration: string | undefined;
+  // An observed opt-out must be durable before this instance resumes capture.
+  let rotationPending = false;
+  let recoveryGeneration: string | undefined;
+  let pendingRevocations: string[] | undefined;
+  let sessionId = randomUUID();
   const pending = new Set<Promise<void>>();
-  const distinctId = process.env.RELAYCAST_TELEMETRY_DISTINCT_ID || state.anonymousId;
   const posthogHost = getPosthogHost(options);
   const posthogApiKey = getPosthogApiKey(options);
-  const originSurface = options.originSurface ?? 'mcp';
   const originClient = options.originClient ?? '@relaycast/mcp';
   const originVersion = options.originVersion ?? version;
 
   const capture = (event: ClientTelemetryEventName, properties: Record<string, unknown> = {}) => {
-    if (!telemetryEnabled(state)) return;
+    const current = loadState(state.anonymousId);
+    if (!current) return;
+    const previousAnonymousId = state.anonymousId;
+    const consentEnabled = telemetryConsentEnabled(current);
+    const sharedIdentity = loadAnonymousId(current.anonymousId);
+    const revoked = loadRevokedIdentities();
+    if (!revoked) return; // Unknown invalidation state is not permission to reuse an ID.
+    if (hadConsent !== false && !consentEnabled) {
+      pendingRevocations = [...new Set([state.anonymousId, current.anonymousId, sharedIdentity?.anonymousId].filter((id): id is string => Boolean(id)))];
+      localGeneration = randomUUID();
+      recoveryGeneration = localGeneration;
+      rotationPending = true;
+      sessionId = randomUUID();
+    }
+    if (pendingRevocations) {
+      if (!persistRevokedIdentities(pendingRevocations)) return;
+      pendingRevocations.forEach(id => revoked.add(id));
+      pendingRevocations = undefined;
+    }
+    // Recovery has no authority over another process's successfully persisted ID.
+    if (sharedIdentity && !sharedIdentity.missing && !revoked.has(sharedIdentity.anonymousId)) {
+      rotationPending = false;
+      localGeneration = undefined;
+      recoveryGeneration = undefined;
+    }
+    if (!localGeneration && !sharedIdentity) {
+      recoveryGeneration ??= randomUUID();
+      localGeneration = recoveryGeneration;
+    }
+    let anonymousId = localGeneration ?? sharedIdentity!.anonymousId;
+    if (revoked.has(anonymousId)) {
+      anonymousId = localGeneration = randomUUID();
+      recoveryGeneration = anonymousId;
+      rotationPending = true;
+    }
+    if (anonymousId !== state.anonymousId) sessionId = randomUUID();
+    if (!localGeneration && sharedIdentity?.missing && current.missingConsentFile) localGeneration = anonymousId;
+    if (localGeneration && persistAnonymousId(localGeneration)) {
+      localGeneration = undefined;
+      rotationPending = false;
+    }
+    state = { ...current, anonymousId };
+    hadConsent = consentEnabled;
+    // Recheck consent after a write: another process may opt out during rotation.
+    const latest = loadState(state.anonymousId);
+    if (!latest) return;
+    if (!telemetryConsentEnabled(latest)) {
+      if (hadConsent !== false) {
+        pendingRevocations = [...new Set([
+          previousAnonymousId, state.anonymousId, current.anonymousId, sharedIdentity?.anonymousId,
+          loadAnonymousId(current.anonymousId)?.anonymousId,
+        ].filter((id): id is string => Boolean(id)))];
+        localGeneration = randomUUID();
+        recoveryGeneration = localGeneration;
+        rotationPending = true;
+        sessionId = randomUUID();
+        // Persist the observed boundary before returning, including process exit.
+        if (persistRevokedIdentities(pendingRevocations)) {
+          pendingRevocations = undefined;
+        }
+        if (!pendingRevocations && persistAnonymousId(localGeneration)) {
+          localGeneration = undefined;
+          rotationPending = false;
+        }
+      }
+      hadConsent = false;
+      return;
+    }
+    // Missing configuration is not an opt-out and must not rotate identity.
+    const latestRevoked = loadRevokedIdentities();
+    if (!latestRevoked || latestRevoked.has(state.anonymousId)) return;
+    if (!consentEnabled || rotationPending || !posthogApiKey.trim()) return;
 
     const parsed = parseTelemetryIngestionEvent({
       event,
-      distinct_id: distinctId,
+      distinct_id: state.anonymousId,
       properties: sanitizeTelemetryProperties({
         surface: 'mcp',
         mcp_version: version,
@@ -233,9 +356,16 @@ export function createMcpTelemetry(version = 'unknown', options: McpTelemetryOpt
       distinct_id: parsed.distinct_id,
       properties: {
         ...parsed.properties,
-        origin_surface: originSurface,
         origin_client: originClient,
         origin_version: originVersion,
+        $process_person_profile: false,
+        $geoip_disable: true,
+        analytics_contract_version: 2,
+        emitter: 'relaycast-mcp',
+        emitter_version: version,
+        identity_source: 'anonymous',
+        actor_kind: 'agent',
+        is_authenticated: false,
       },
     };
 

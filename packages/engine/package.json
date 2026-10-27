@@ -1,0 +1,91 @@
+{
+  "name": "@relaycast/engine",
+  "version": "12.0.0",
+  "type": "module",
+  "description": "Portable, platform-agnostic engine for Relaycast — channels, threads, DMs, presence, real-time events. Runs on Node + SQLite (self-host) or behind a Cloudflare Durable Object adapter (hosted).",
+  "bin": {
+    "relaycast-engine": "dist/bin/serve.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./ports": {
+      "types": "./dist/ports/index.d.ts",
+      "import": "./dist/ports/index.js"
+    },
+    "./adapters/node": {
+      "types": "./dist/adapters/node/index.d.ts",
+      "import": "./dist/adapters/node/index.js"
+    },
+    "./auth": {
+      "types": "./dist/auth/index.d.ts",
+      "import": "./dist/auth/index.js"
+    },
+    "./db": {
+      "types": "./dist/db/index.d.ts",
+      "import": "./dist/db/index.js"
+    },
+    "./node": {
+      "types": "./dist/entrypoints/node.d.ts",
+      "import": "./dist/entrypoints/node.js"
+    },
+    "./node-reconnect": {
+      "types": "./dist/node-reconnect.d.ts",
+      "import": "./dist/node-reconnect.js"
+    },
+    "./agent-disconnect": {
+      "types": "./dist/agent-disconnect.d.ts",
+      "import": "./dist/agent-disconnect.js"
+    },
+    "./node-invocations": {
+      "types": "./dist/node-invocations.d.ts",
+      "import": "./dist/node-invocations.js"
+    },
+    "./node-control": {
+      "types": "./dist/node-control.d.ts",
+      "import": "./dist/node-control.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc && node -e \"require('fs').cpSync('src/db/migrations','dist/db/migrations',{recursive:true})\"",
+    "build:standalone": "bun standalone/build.ts",
+    "test": "vitest run",
+    "test:bun": "bun --bun x vitest run",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
+    "typecheck:standalone": "tsc -p standalone/tsconfig.json"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.7",
+    "@relaycast/a2a": "12.0.0",
+    "@relaycast/types": "12.0.0",
+    "better-sqlite3": "^11.10.0",
+    "drizzle-orm": "^0.45.1",
+    "hono": "^4.11.9",
+    "undici": "7.28.0",
+    "ws": "^8.18.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@identities-ai/ratify-protocol": "1.0.0-alpha.16",
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/bun": "^1.4.4",
+    "@types/node": "^25.2.1",
+    "@types/ws": "^8.5.13",
+    "drizzle-kit": "^0.31.9",
+    "vitest": "^4.0.18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AgentWorkforce/relaycast.git",
+    "directory": "packages/engine"
+  }
+}

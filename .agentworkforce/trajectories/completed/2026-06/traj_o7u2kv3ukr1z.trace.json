@@ -1,0 +1,135 @@
+{
+  "version": "1.0.0",
+  "id": "2c9d6f5e-5784-450c-9b43-0031f26d26bc",
+  "timestamp": "2026-06-02T14:56:52.400Z",
+  "trajectory": "traj_o7u2kv3ukr1z",
+  "files": [
+    {
+      "path": "packages/sdk-rust/CHANGELOG.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 17,
+              "end_line": 28,
+              "revision": "74347eb71708e2ac56547e2eb0ab5d43e55f9468"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/sdk-rust/README.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 96,
+              "end_line": 138,
+              "revision": "74347eb71708e2ac56547e2eb0ab5d43e55f9468"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/sdk-rust/src/agent.rs",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 845,
+              "end_line": 925,
+              "revision": "74347eb71708e2ac56547e2eb0ab5d43e55f9468"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/sdk-rust/src/lib.rs",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 194,
+              "end_line": 214,
+              "revision": "74347eb71708e2ac56547e2eb0ab5d43e55f9468"
+            },
+            {
+              "start_line": 224,
+              "end_line": 230,
+              "revision": "74347eb71708e2ac56547e2eb0ab5d43e55f9468"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/sdk-rust/src/types.rs",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 593,
+              "end_line": 682,
+              "revision": "74347eb71708e2ac56547e2eb0ab5d43e55f9468"
+            },
+            {
+              "start_line": 1109,
+              "end_line": 1122,
+              "revision": "74347eb71708e2ac56547e2eb0ab5d43e55f9468"
+            },
+            {
+              "start_line": 1307,
+              "end_line": 1348,
+              "revision": "74347eb71708e2ac56547e2eb0ab5d43e55f9468"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/sdk-rust/tests/parity.rs",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 7,
+              "revision": "74347eb71708e2ac56547e2eb0ab5d43e55f9468"
+            },
+            {
+              "start_line": 469,
+              "end_line": 670,
+              "revision": "74347eb71708e2ac56547e2eb0ab5d43e55f9468"
+            },
+            {
+              "start_line": 1234,
+              "end_line": 1298,
+              "revision": "74347eb71708e2ac56547e2eb0ab5d43e55f9468"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

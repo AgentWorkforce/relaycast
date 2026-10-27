@@ -1,19 +1,44 @@
+import { classifyConnectObserverStatus, parseRetryAfterMs, type ConnectObserverFailure } from './connect-observer';
+
 /**
  * Authenticate via server-side endpoint which sets httpOnly cookies.
  * Returns true on success.
  */
-export async function setAuth(apiKey: string): Promise<boolean> {
+export async function setAuth(apiKey: string, options?: { connectObserverId?: string }): Promise<boolean> {
+  return (await login(apiKey, options)).ok;
+}
+
+/**
+ * Logs in and says why it failed: the login route answers 401/400 when the
+ * engine rejected the credential, and 503 when it could not validate it (a
+ * rate limit or an engine outage), which must not read as a revoked link.
+ */
+export async function login(
+  apiKey: string,
+  options?: { connectObserverId?: string; signal?: AbortSignal },
+): Promise<{ ok: true } | { ok: false; failure: ConnectObserverFailure; retryAfterMs?: number | null }> {
+  let res: Response;
   try {
-    const res = await fetch('/observer/api/auth/login', {
+    res = await fetch('/observer/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ apiKey }),
+      body: JSON.stringify({
+        apiKey,
+        ...(options?.connectObserverId ? { connectObserverId: options.connectObserverId } : {}),
+      }),
+      signal: options?.signal,
     });
-    const data = await res.json();
-    return data.success === true;
   } catch {
-    return false;
+    return { ok: false, failure: 'temporary' };
   }
+  const data = await res.json().catch(() => null) as { success?: unknown } | null;
+  if (res.ok && data?.success === true) return { ok: true };
+  // A 2xx without `success: true` (e.g. a truncated body) proves no rejection.
+  return {
+    ok: false,
+    failure: res.ok ? 'temporary' : classifyConnectObserverStatus(res.status),
+    retryAfterMs: parseRetryAfterMs(res.headers.get('retry-after')),
+  };
 }
 
 /**
@@ -24,18 +49,5 @@ export async function clearAuth(): Promise<void> {
     await fetch('/observer/api/auth/logout', { method: 'POST' });
   } catch {
     // Best effort
-  }
-}
-
-/**
- * Check if user is authenticated by querying the session endpoint.
- * The httpOnly cookies are sent automatically.
- */
-export async function isAuthenticated(): Promise<boolean> {
-  try {
-    const res = await fetch('/observer/api/auth/session');
-    return res.ok;
-  } catch {
-    return false;
   }
 }

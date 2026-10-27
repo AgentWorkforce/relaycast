@@ -14,8 +14,8 @@ export default function LoginPage() {
     e.preventDefault();
     setError('');
 
-    if (!apiKey.startsWith('rk_live_')) {
-      setError('API key must start with rk_live_');
+    if (!apiKey.startsWith('rk_live_') && !apiKey.startsWith('ot_live_')) {
+      setError('API key must start with rk_live_ or ot_live_');
       return;
     }
 
@@ -62,7 +62,7 @@ export default function LoginPage() {
                   placeholder="rk_live_..."
                   autoFocus
                 />
-                <p className="text-xs text-[var(--text-faint)]">Starts with <code className="rounded-md bg-[color-mix(in_srgb,var(--brand-primary-faint)_78%,transparent)] px-1.5 py-0.5 text-[var(--brand-primary-strong)]">rk_live_…</code></p>
+                <p className="text-xs text-[var(--text-faint)]">Starts with <code className="rounded-md bg-[color-mix(in_srgb,var(--brand-primary-faint)_78%,transparent)] px-1.5 py-0.5 text-[var(--brand-primary-strong)]">rk_live_…</code> or <code className="rounded-md bg-[color-mix(in_srgb,var(--brand-primary-faint)_78%,transparent)] px-1.5 py-0.5 text-[var(--brand-primary-strong)]">ot_live_…</code></p>
               </div>
 
               {error && (

@@ -1,9 +1,10 @@
-import type { CreateAgentRequest, CreateAgentResponse } from './types.js';
+import type { CreateAgentRequest, CreateAgentResponse, JsonValue } from './types.js';
+import type { WorkspaceProvenanceOptions } from './workspace-provenance.js';
 
 export interface RelaycastSetupOptions {
   /**
    * Base URL for the Relaycast API.
-   * @default "https://api.relaycast.dev"
+   * @default "https://cast.agentrelay.com"
    */
   baseUrl?: string;
 
@@ -28,20 +29,24 @@ export interface RelaycastSetupOptions {
     maxRetries: number;
     baseDelayMs: number;
   };
-
-  /**
-   * Enable local mode, targeting a locally running Relaycast daemon.
-   * Automatically sets baseUrl to http://127.0.0.1:7528 if not overridden.
-   * @default false
-   */
-  local?: boolean;
 }
 
 export interface CreateWorkspaceOptions {
+  /** Application-defined JSON stored on the workspace. */
+  metadata?: Record<string, JsonValue>;
   /**
    * Human-readable name for the workspace.
    */
   name: string;
+  /**
+   * Explicitly expire this throwaway workspace after 60 seconds to 30 days.
+   * Omit for a persistent workspace.
+   */
+  expiresInSeconds?: number;
+  /** Creation context recorded once for hosted usage attribution. */
+  provenance?: WorkspaceProvenanceOptions;
+  /** Owner-scoped key for crash-safe delegated workspace-create retries. */
+  idempotencyKey?: string;
 }
 
 export type JoinWorkspaceOptions = Record<string, never>;
@@ -52,6 +57,8 @@ export interface WorkspaceInfo {
   baseUrl: string;
   /** ISO 8601 creation timestamp */
   createdAt?: string;
+  /** ISO 8601 expiry timestamp for an explicitly ephemeral workspace. */
+  expiresAt?: string | null;
   name?: string;
 }
 

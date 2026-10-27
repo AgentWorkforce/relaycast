@@ -1,0 +1,181 @@
+{
+  "version": "1.0.0",
+  "id": "7325b2df-94a5-482a-b16a-3f6538a1b2ee",
+  "timestamp": "2026-09-10T10:36:02.555Z",
+  "trajectory": "traj_n99tgaiqqynd",
+  "files": [
+    {
+      "path": ".agentworkforce/trajectories/active/traj_n99tgaiqqynd/trajectory.json",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 62,
+              "revision": "7bb763980ee363aede4b700369ff6637b5e4a4e0"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "CHANGELOG.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 16,
+              "end_line": 26,
+              "revision": "7bb763980ee363aede4b700369ff6637b5e4a4e0"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/CHANGELOG.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 7,
+              "end_line": 17,
+              "revision": "7bb763980ee363aede4b700369ff6637b5e4a4e0"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/__tests__/conformance/delivery.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1528,
+              "end_line": 1569,
+              "revision": "7bb763980ee363aede4b700369ff6637b5e4a4e0"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/engine/__tests__/maintenanceApiCompatibility.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 114,
+              "revision": "7bb763980ee363aede4b700369ff6637b5e4a4e0"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/engine/retention.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 5,
+              "end_line": 11,
+              "revision": "7bb763980ee363aede4b700369ff6637b5e4a4e0"
+            },
+            {
+              "start_line": 30,
+              "end_line": 52,
+              "revision": "7bb763980ee363aede4b700369ff6637b5e4a4e0"
+            },
+            {
+              "start_line": 150,
+              "end_line": 155,
+              "revision": "7bb763980ee363aede4b700369ff6637b5e4a4e0"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/engine/rowidRetention.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 230,
+              "revision": "7bb763980ee363aede4b700369ff6637b5e4a4e0"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/index.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 92,
+              "end_line": 98,
+              "revision": "7bb763980ee363aede4b700369ff6637b5e4a4e0"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/routes/deliveryRouting.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 510,
+              "end_line": 523,
+              "revision": "7bb763980ee363aede4b700369ff6637b5e4a4e0"
+            },
+            {
+              "start_line": 552,
+              "end_line": 565,
+              "revision": "7bb763980ee363aede4b700369ff6637b5e4a4e0"
+            },
+            {
+              "start_line": 591,
+              "end_line": 597,
+              "revision": "7bb763980ee363aede4b700369ff6637b5e4a4e0"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

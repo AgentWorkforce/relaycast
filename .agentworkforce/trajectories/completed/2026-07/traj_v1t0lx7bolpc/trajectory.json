@@ -1,0 +1,80 @@
+{
+  "id": "traj_v1t0lx7bolpc",
+  "version": 1,
+  "task": {
+    "title": "Address final PR #266 maintenance review",
+    "source": {
+      "system": "plain",
+      "id": "PR #266"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-07-13T14:37:14.308Z",
+  "completedAt": "2026-07-13T14:40:46.185Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-07-13T14:39:20.452Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_y13g9l4mz7ib",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-07-13T14:39:20.452Z",
+      "endedAt": "2026-07-13T14:40:46.185Z",
+      "events": [
+        {
+          "ts": 1783953560453,
+          "type": "decision",
+          "content": "Added a global partial active-expiry index: Added a global partial active-expiry index",
+          "raw": {
+            "question": "Added a global partial active-expiry index",
+            "chosen": "Added a global partial active-expiry index",
+            "alternatives": [],
+            "reasoning": "The scheduler sweeps across workspaces; the existing workspace-leading index cannot serve oldest-first global batches. Literal active statuses keep the SQLite partial-index predicate planner-visible."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1783953560805,
+          "type": "decision",
+          "content": "Serialized Node delivery maintenance: Serialized Node delivery maintenance",
+          "raw": {
+            "question": "Serialized Node delivery maintenance",
+            "chosen": "Serialized Node delivery maintenance",
+            "alternatives": [],
+            "reasoning": "HTTP push dispatch must finish before TTL expiry, and overlapping timer ticks are coalesced so a slow POST cannot race a later expiry cycle."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Added a planner-verified global partial index for active expiry batches and serialized Node HTTP-push/TTL maintenance with overlap coalescing and failure-isolation coverage.",
+    "approach": "Standard approach",
+    "confidence": 0.95
+  },
+  "commits": [
+    "9b5913e"
+  ],
+  "filesChanged": [
+    "packages/engine/src/__tests__/conformance/delivery.test.ts",
+    "packages/engine/src/adapters/node/__tests__/delivery-maintenance.test.ts",
+    "packages/engine/src/adapters/node/delivery-maintenance.ts",
+    "packages/engine/src/adapters/node/index.ts",
+    "packages/engine/src/db/migrations/0031_delivery_active_expiry_index.sql",
+    "packages/engine/src/db/schema.ts",
+    "packages/engine/src/engine/delivery.ts"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "e0208de5b6e4b3b01540169811d8275b396a34c6",
+    "endRef": "9b5913eca2cf93f91cf5ac56ab0e45e03b81346d",
+    "traceId": "11ad3a6d-5c1e-4dd8-96f3-f204fe4c85d4"
+  }
+}

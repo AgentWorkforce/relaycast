@@ -28,7 +28,7 @@ vi.mock('@relaycast/sdk/internal', () => {
   const createInternalRelayCast = vi.fn().mockImplementation(() => ({
     as: vi.fn(),
     agents: {
-      registerOrRotate: vi.fn().mockImplementation(async ({ name }: { name: string }) => ({
+      register: vi.fn().mockImplementation(async ({ name }: { name: string }) => ({
         agent: { name },
         token:
           name === 'BetaBot'
@@ -128,18 +128,20 @@ describe('eventToResourceUris', () => {
     ]);
   });
 
-  it('maps agent.online to agents resource', () => {
+  it('maps agent.status.active to agents resource', () => {
     const event = {
-      type: 'agent.online',
+      type: 'agent.status.active',
       agent: { name: 'bot1' },
+      status: 'active',
     } as WsClientEvent;
     expect(eventToResourceUris(event)).toEqual(['relay://agents']);
   });
 
-  it('maps agent.offline to agents resource', () => {
+  it('maps agent.status.offline to agents resource', () => {
     const event = {
-      type: 'agent.offline',
+      type: 'agent.status.offline',
       agent: { name: 'bot1' },
+      status: 'offline',
     } as WsClientEvent;
     expect(eventToResourceUris(event)).toEqual(['relay://agents']);
   });
@@ -198,17 +200,15 @@ describe('eventToResourceUris', () => {
     ]);
   });
 
-  it('maps command.invoked to channel messages', () => {
-    const event = {
-      type: 'command.invoked',
-      command: '/deploy',
-      channel: 'general',
-      invokedBy: 'agent1',
-      args: null,
-    } as WsClientEvent;
-    expect(eventToResourceUris(event)).toEqual([
-      'relay://channels/general/messages',
-    ]);
+  it('maps action lifecycle events to inbox', () => {
+    for (const type of ['action.invoked', 'action.completed', 'action.failed', 'action.denied'] as const) {
+      const event = {
+        type,
+        invocationId: 'inv_1',
+        actionName: 'deploy',
+      } as WsClientEvent;
+      expect(eventToResourceUris(event)).toEqual(['relay://inbox']);
+    }
   });
 
   it('returns empty array for unknown event types', () => {
@@ -216,22 +216,24 @@ describe('eventToResourceUris', () => {
     expect(eventToResourceUris(event)).toEqual([]);
   });
 
-  it('maps reaction.added to inbox as a soft notification signal', () => {
+  it('maps message.reacted to inbox as a soft notification signal', () => {
     const event = {
-      type: 'reaction.added',
+      type: 'message.reacted',
       messageId: 'm1',
       emoji: 'thumbsup',
       agentName: 'bot',
+      action: 'added',
     } as WsClientEvent;
     expect(eventToResourceUris(event)).toEqual(['relay://inbox']);
   });
 
-  it('maps reaction.removed to inbox as a soft notification signal', () => {
+  it('maps removed message.reacted to inbox as a soft notification signal', () => {
     const event = {
-      type: 'reaction.removed',
+      type: 'message.reacted',
       messageId: 'm1',
       emoji: 'thumbsup',
       agentName: 'bot',
+      action: 'removed',
     } as WsClientEvent;
     expect(eventToResourceUris(event)).toEqual(['relay://inbox']);
   });
@@ -259,7 +261,6 @@ describe('WsBridge lifecycle', () => {
             id: auth === 'Bearer rk_live_beta' ? 'ws_beta' : 'ws_alpha',
             name: auth === 'Bearer rk_live_beta' ? 'Beta Workspace' : 'Alpha Workspace',
             system_prompt: null,
-            plan: 'free',
             created_at: new Date().toISOString(),
             metadata: {},
           },

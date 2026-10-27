@@ -1,0 +1,102 @@
+{
+  "id": "traj_5d1p83x8twu5",
+  "version": 1,
+  "task": {
+    "title": "Implement node kind role delivery adapter split"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-25T09:57:27.186Z",
+  "completedAt": "2026-06-25T10:20:52.843Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-06-25T10:10:22.839Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_1vdmv87wcwxt",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-06-25T10:10:22.839Z",
+      "endedAt": "2026-06-25T10:20:52.843Z",
+      "events": [
+        {
+          "ts": 1782382222840,
+          "type": "decision",
+          "content": "Split node kind from role and unify WebSocket adapter: Split node kind from role and unify WebSocket adapter",
+          "raw": {
+            "question": "Split node kind from role and unify WebSocket adapter",
+            "chosen": "Split node kind from role and unify WebSocket adapter",
+            "alternatives": [],
+            "reasoning": "Using kind for both transport and ownership kept direct and broker WebSocket delivery on separate paths. The new model uses kind=ws/http_push/poll, role=direct/broker, and delivery_adapter=ws.node.v1 for all WebSocket durable delivery frames."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Opened PR #214 splitting node transport kind from ownership role and unifying direct/broker WebSocket delivery on ws.node.v1, with docs, OpenAPI, SDKs, migration, and conformance coverage.",
+    "approach": "Standard approach",
+    "confidence": 0.9
+  },
+  "commits": [
+    "195358d",
+    "70207ba",
+    "639de68",
+    "4d59f19",
+    "8f24574"
+  ],
+  "filesChanged": [
+    "README.md",
+    "openapi.yaml",
+    "package-lock.json",
+    "packages/a2a/package.json",
+    "packages/cli/package.json",
+    "packages/engine/package.json",
+    "packages/engine/src/__tests__/conformance/delivery.test.ts",
+    "packages/engine/src/__tests__/conformance/node.test.ts",
+    "packages/engine/src/__tests__/conformance/nodeDeliveryContracts.test.ts",
+    "packages/engine/src/adapters/node/realtime.ts",
+    "packages/engine/src/db/migrations/0025_node_kind_role_adapter.sql",
+    "packages/engine/src/db/schema.ts",
+    "packages/engine/src/engine/delivery.ts",
+    "packages/engine/src/engine/deliveryWire.ts",
+    "packages/engine/src/engine/deliveryWrites.ts",
+    "packages/engine/src/engine/node.ts",
+    "packages/engine/src/engine/nodeContext.ts",
+    "packages/engine/src/ports/realtime.ts",
+    "packages/engine/src/routes/deliveryRouting.ts",
+    "packages/engine/src/routes/node.ts",
+    "packages/mcp/package.json",
+    "packages/observer-dashboard/package.json",
+    "packages/openclaw/package.json",
+    "packages/react/package.json",
+    "packages/sdk-python/pyproject.toml",
+    "packages/sdk-python/src/relay_sdk/client.py",
+    "packages/sdk-python/src/relay_sdk/models.py",
+    "packages/sdk-python/tests/test_relay.py",
+    "packages/sdk-python/uv.lock",
+    "packages/sdk-rust/Cargo.toml",
+    "packages/sdk-rust/src/types.rs",
+    "packages/sdk-rust/tests/parity.rs",
+    "packages/sdk-swift/Sources/Relaycast/Models.swift",
+    "packages/sdk-swift/Tests/RelaycastTests/RelaycastTests.swift",
+    "packages/sdk-typescript/package.json",
+    "packages/sdk-typescript/src/types.ts",
+    "packages/types/fixtures/fleet-wire/deliver.json",
+    "packages/types/package.json",
+    "packages/types/src/__tests__/types.test.ts",
+    "packages/types/src/delivery.ts",
+    "packages/types/src/fleet-wire.ts"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "5ea722babd2b457571d45b8e4baa964372732c1d",
+    "endRef": "195358d72a5b0d0d16de99c11c5888d1a39fe6f8",
+    "traceId": "f8562866-2828-4419-acc2-6ff00abec268"
+  }
+}

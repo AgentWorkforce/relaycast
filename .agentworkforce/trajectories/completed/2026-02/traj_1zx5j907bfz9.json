@@ -1,0 +1,53 @@
+{
+  "id": "traj_1zx5j907bfz9",
+  "version": 1,
+  "task": {
+    "title": "Create root TELEMETRY.md with Relaycast PostHog events table and naming conventions"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-19T22:07:29.319Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-19T22:08:32.315Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_vuodlp7bonrd",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-19T22:08:32.315Z",
+      "events": [
+        {
+          "ts": 1771538912318,
+          "type": "decision",
+          "content": "Make TELEMETRY.md at repo root the canonical telemetry spec and keep docs/TELEMETRY.md as a pointer: Make TELEMETRY.md at repo root the canonical telemetry spec and keep docs/TELEMETRY.md as a pointer",
+          "raw": {
+            "question": "Make TELEMETRY.md at repo root the canonical telemetry spec and keep docs/TELEMETRY.md as a pointer",
+            "chosen": "Make TELEMETRY.md at repo root the canonical telemetry spec and keep docs/TELEMETRY.md as a pointer",
+            "alternatives": [],
+            "reasoning": "Single source-of-truth prevents drift while preserving existing external links to docs path"
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-19T22:08:37.041Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "d9cc4f186d0ba5f79c278a0147c581ed383b6924",
+    "endRef": "d9cc4f186d0ba5f79c278a0147c581ed383b6924"
+  },
+  "completedAt": "2026-02-19T22:08:37.041Z",
+  "retrospective": {
+    "summary": "Added root TELEMETRY.md with PostHog payload model and event table (active + planned), updated docs/TELEMETRY.md to point to root, and updated README telemetry link.",
+    "approach": "Standard approach",
+    "confidence": 0.94
+  }
+}

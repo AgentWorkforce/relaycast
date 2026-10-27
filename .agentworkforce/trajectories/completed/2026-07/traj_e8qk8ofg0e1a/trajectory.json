@@ -1,0 +1,57 @@
+{
+  "id": "traj_e8qk8ofg0e1a",
+  "version": 1,
+  "task": {
+    "title": "Fix #258: key node enrollment on node_id, not name",
+    "source": {
+      "system": "plain",
+      "id": "relaycast#258"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-07-16T04:07:04.421Z",
+  "completedAt": "2026-07-16T04:08:13.953Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-07-16T04:07:14.632Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_hxmgah13ehv7",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-07-16T04:07:14.632Z",
+      "endedAt": "2026-07-16T04:08:13.953Z",
+      "events": [
+        {
+          "ts": 1784174834634,
+          "type": "decision",
+          "content": "Enrollment keys on node_id when supplied; name lookup only as fallback for callers without a stable id: Enrollment keys on node_id when supplied; name lookup only as fallback for callers without a stable id",
+          "raw": {
+            "question": "Enrollment keys on node_id when supplied; name lookup only as fallback for callers without a stable id",
+            "chosen": "Enrollment keys on node_id when supplied; name lookup only as fallback for callers without a stable id",
+            "alternatives": [],
+            "reasoning": "node_id is the stable identity; keying on name let a second enroll silently rewrite a different node. Name-keyed rotate preserved for backwards compat (existing conformance test relies on it). Cross-id name collision is now an explicit 409 node_name_conflict, matching node.register — no takeover flag until a real need appears (user-confirmed)."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "POST /v1/nodes now keys on node_id when supplied: same id rotates/renames in place, new id creates a node, and a cross-id name collision is an explicit 409 node_name_conflict (matching node.register) instead of silently rewriting the other node. Name-only enrollment still rotates by name. Added 5 conformance tests; updated openapi + changelogs.",
+    "approach": "Standard approach",
+    "confidence": 0.9
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "git/AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "03ab9ad113b13ce16fbdb0632b222e84c62ab5e9",
+    "endRef": "03ab9ad113b13ce16fbdb0632b222e84c62ab5e9"
+  }
+}

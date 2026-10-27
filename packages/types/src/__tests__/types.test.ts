@@ -1,4 +1,15 @@
-import { describe, it, expectTypeOf } from 'vitest';
+import { describe, it, expect, expectTypeOf } from 'vitest';
+import {
+  DeliverySchema,
+  DeliveryItemSchema,
+  DeliveryFailedEventSchema,
+  ServerEventSchema,
+  SessionMessageSchema,
+  SessionMessagesResultSchema,
+  WorkspaceSchema,
+  CreateWorkspaceResponseSchema,
+  WebhookSchema,
+} from '../index.js';
 import type {
   Workspace,
   CreateWorkspaceRequest,
@@ -45,12 +56,34 @@ import type {
   ClientEvent,
   ServerEvent,
   MessageCreatedEvent,
-  ReactionAddedEvent,
-  AgentOnlineEvent,
+  MessageReactedEvent,
+  AgentStatusActiveEvent,
   PongEvent,
+  Webhook,
 } from '../index.js';
 
 describe('Type definitions', () => {
+  it('preserves inbound webhook ownership and channel identity fields', () => {
+    const webhook = WebhookSchema.parse({
+      id: 'wh_1',
+      workspace_id: 'ws_1',
+      name: 'Relayfile',
+      channel_id: 'ch_1',
+      channel_name: 'agent-events',
+      created_by: 'agent_1',
+      channel: 'agent-events',
+      url: '/v1/hooks/wh_1',
+      created_at: '2026-10-01T00:00:00.000Z',
+      is_active: true,
+    });
+
+    expect(webhook.workspace_id).toBe('ws_1');
+    expect(webhook.channel_id).toBe('ch_1');
+    expect(webhook.channel_name).toBe('agent-events');
+    expect(webhook.created_by).toBe('agent_1');
+    expectTypeOf<Webhook>().toHaveProperty('workspace_id');
+  });
+
   // ============================================
   // Workspace types
   // ============================================
@@ -59,24 +92,44 @@ describe('Type definitions', () => {
     expectTypeOf<Workspace>().toHaveProperty('name');
     expectTypeOf<Workspace>().toHaveProperty('api_key_hash');
     expectTypeOf<Workspace>().toHaveProperty('system_prompt');
-    expectTypeOf<Workspace>().toHaveProperty('plan');
     expectTypeOf<Workspace>().toHaveProperty('created_at');
     expectTypeOf<Workspace>().toHaveProperty('metadata');
   });
 
-  it('Workspace plan is a union type', () => {
-    expectTypeOf<'free'>().toMatchTypeOf<Workspace['plan']>();
-    expectTypeOf<'pro'>().toMatchTypeOf<Workspace['plan']>();
-    expectTypeOf<'enterprise'>().toMatchTypeOf<Workspace['plan']>();
+  it('defaults attribution fields for responses from pre-attribution engines', () => {
+    const workspace = WorkspaceSchema.parse({
+      id: 'rw_legacy',
+      name: 'legacy',
+      api_key_hash: 'hash',
+      system_prompt: null,
+      created_at: '2026-08-18T00:00:00.000Z',
+      metadata: {},
+    });
+    expect(workspace).toMatchObject({
+      provenance: null,
+      usage_classification: 'unknown',
+      classification_source: 'unclassified',
+      classification_reason: null,
+      classified_at: null,
+    });
   });
 
   it('CreateWorkspaceRequest has name', () => {
     expectTypeOf<CreateWorkspaceRequest>().toHaveProperty('name');
+    expectTypeOf<CreateWorkspaceRequest>().toHaveProperty('expires_in_seconds');
   });
 
   it('CreateWorkspaceResponse has api_key', () => {
     expectTypeOf<CreateWorkspaceResponse>().toHaveProperty('api_key');
     expectTypeOf<CreateWorkspaceResponse>().toHaveProperty('workspace_id');
+    expectTypeOf<CreateWorkspaceResponse>().toHaveProperty('expires_at');
+  });
+
+  it('CreateWorkspaceResponse requires the returned api_key', () => {
+    expect(() => CreateWorkspaceResponseSchema.parse({
+      workspace_id: 'ws_missing_key',
+      created_at: '2026-09-05T00:00:00.000Z',
+    })).toThrow();
   });
 
   it('WorkspaceLookup exposes public lookup fields', () => {
@@ -159,6 +212,45 @@ describe('Type definitions', () => {
     expectTypeOf<MessageWithMeta>().toHaveProperty('attachments');
   });
 
+  it('rejects replayable availability when the retention boundary is unknown', () => {
+    const parsed = SessionMessagesResultSchema.safeParse({
+      session_ref: 'session-1',
+      availability: 'retained',
+      retention: {
+        policy: 'unknown',
+        message_ttl_days: null,
+        retained_since: null,
+        source: 'unknown',
+        reason: 'boundary_unavailable',
+      },
+      session_started_at: '2026-08-18T00:00:00.000Z',
+      session_last_message_at: '2026-08-18T00:01:00.000Z',
+      messages: [],
+      page: { next_cursor: null, has_more: false },
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+
+  it('keeps a recorded session sender address and allows it to be absent', () => {
+    const message = {
+      id: 'm',
+      channel_id: 'c',
+      channel_name: 'general',
+      conversation_id: null,
+      agent_id: 'a',
+      agent_name: 'ada',
+      thread_id: null,
+      text: 'hi',
+      blocks: null,
+      metadata: {},
+      has_attachments: false,
+      created_at: '2026-10-12T00:00:00.000Z',
+    };
+    expect(SessionMessageSchema.parse({ ...message, agent_address: 'ada@laptop' }).agent_address).toBe('ada@laptop');
+    expect(SessionMessageSchema.parse(message)).not.toHaveProperty('agent_address');
+  });
+
   // ============================================
   // Reaction types
   // ============================================
@@ -233,6 +325,7 @@ describe('Type definitions', () => {
   it('DmMessage includes sender identity fields', () => {
     expectTypeOf<DmMessage>().toHaveProperty('agent_id');
     expectTypeOf<DmMessage>().toHaveProperty('agent_name');
+    expectTypeOf<DmMessage>().toHaveProperty('agent_type');
   });
 
   // ============================================
@@ -289,16 +382,103 @@ describe('Type definitions', () => {
       if (event.type === 'message.created') {
         expectTypeOf(event).toMatchTypeOf<MessageCreatedEvent>();
       }
-      if (event.type === 'reaction.added') {
-        expectTypeOf(event).toMatchTypeOf<ReactionAddedEvent>();
+      if (event.type === 'message.reacted') {
+        expectTypeOf(event).toMatchTypeOf<MessageReactedEvent>();
       }
-      if (event.type === 'agent.online') {
-        expectTypeOf(event).toMatchTypeOf<AgentOnlineEvent>();
+      if (event.type === 'agent.status.active') {
+        expectTypeOf(event).toMatchTypeOf<AgentStatusActiveEvent>();
       }
       if (event.type === 'pong') {
         expectTypeOf(event).toMatchTypeOf<PongEvent>();
       }
     }
     handleEvent({ type: 'pong' });
+  });
+
+  // ============================================
+  // Durable delivery
+  // ============================================
+  it('DeliverySchema validates a delivery record', () => {
+    const parsed = DeliverySchema.safeParse({
+      id: 'del_1',
+      message_id: 'm_1',
+      channel_id: 'c_1',
+      agent_id: 'a_1',
+      status: 'queued',
+      seq: 1,
+      location_type: 'self_connected',
+      location_node_id: null,
+      route_node_id: null,
+      route_node_kind: null,
+      route_node_role: null,
+      delivery_adapter: null,
+      dispatch_attempts: 0,
+      next_attempt_at: null,
+      last_dispatch_error: null,
+      mode: 'immediate',
+      reason: 'mention',
+      priority: 'normal',
+      retryable: null,
+      error: null,
+      available_at: null,
+      deadline: null,
+      expires_at: '2026-06-01T01:00:00.000Z',
+      delivered_at: null,
+      acked_at: null,
+      dead_lettered_at: null,
+      created_at: '2026-06-01T00:00:00.000Z',
+      updated_at: null,
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('DeliverySchema rejects an unknown status', () => {
+    const parsed = DeliverySchema.safeParse({
+      id: 'del_1', message_id: 'm_1', channel_id: 'c_1', agent_id: 'a_1',
+      seq: 1, location_type: 'self_connected', location_node_id: null,
+      route_node_id: null, route_node_kind: null, route_node_role: null, delivery_adapter: null,
+      dispatch_attempts: 0, next_attempt_at: null, last_dispatch_error: null,
+      status: 'bogus', mode: 'immediate', reason: null, priority: 'normal',
+      retryable: null, error: null, available_at: null, deadline: null,
+      expires_at: null, delivered_at: null, acked_at: null, dead_lettered_at: null,
+      created_at: '2026-06-01T00:00:00.000Z', updated_at: null,
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('DeliveryItemSchema carries an optional message payload', () => {
+    const parsed = DeliveryItemSchema.safeParse({
+      id: 'del_1', message_id: 'm_1', channel_id: 'c_1', agent_id: 'a_1',
+      seq: 1, location_type: 'self_connected', location_node_id: null,
+      route_node_id: null, route_node_kind: null, route_node_role: null, delivery_adapter: null,
+      dispatch_attempts: 0, next_attempt_at: null, last_dispatch_error: null,
+      status: 'delivered', mode: 'immediate', reason: null, priority: 'normal',
+      retryable: null, error: null, available_at: '2026-06-01T00:01:00.000Z',
+      deadline: null, expires_at: '2026-06-01T01:00:00.000Z',
+      delivered_at: '2026-06-01T00:00:01.000Z', acked_at: null, dead_lettered_at: null,
+      created_at: '2026-06-01T00:00:00.000Z', updated_at: null,
+      message: null,
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('ServerEventSchema parses durable delivery events', () => {
+    for (const event of [
+      { type: 'delivery.accepted', delivery_id: 'del_1', message_id: 'm_1', channel_id: 'c_1', reason: 'message' },
+      { type: 'delivery.delivered', delivery_id: 'del_1', message_id: 'm_1' },
+      { type: 'delivery.deferred', delivery_id: 'del_1', message_id: 'm_1', available_at: '2026-06-01T00:01:00.000Z' },
+      { type: 'delivery.failed', delivery_id: 'del_1', message_id: 'm_1', error: 'boom', retryable: true },
+      { type: 'delivery.failed', delivery_id: null, message_id: 'm_1', reason: 'depth_cap', retryable: false },
+    ]) {
+      expect(ServerEventSchema.safeParse(event).success).toBe(true);
+    }
+
+    expect(DeliveryFailedEventSchema.parse({
+      type: 'delivery.failed',
+      delivery_id: null,
+      message_id: 'm_1',
+      reason: 'recipient_offline',
+      retryable: false,
+    }).reason).toBe('recipient_offline');
   });
 });

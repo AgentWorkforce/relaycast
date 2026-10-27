@@ -1,4 +1,5 @@
 import type { NextRequest } from 'next/server';
+import { parseRetryAfterMs } from './connect-observer';
 
 function normalizeHost(host: string | null | undefined): string {
   if (!host) return '';
@@ -18,39 +19,162 @@ function isLocalHost(host: string): boolean {
 }
 
 /**
- * Resolve the Relay API base URL from observer host.
+ * Resolve the ordered list of Relay engine base URLs to try for an observer host.
+ *
+ * Every hosted observer host resolves to the single hosted engine
+ * (`cast.agentrelay.com`). A self-hosted or local engine is pinned with the
+ * `RELAY_SERVER_URL` override. Callers probe the candidates in order and keep
+ * the first one that accepts the workspace key.
  *
  * Examples:
- * - observer.relaycast.dev -> https://api.relaycast.dev
- * - pr23-observer.relaycast.dev -> https://pr23-api.relaycast.dev
+ * - observer.relaycast.dev -> [cast.agentrelay.com]
+ * - RELAY_SERVER_URL=http://localhost:8787 -> [http://localhost:8787]
  */
-export function resolveRelayServerUrlFromHost(host: string | null | undefined): string {
+export function resolveRelayServerCandidatesFromHost(
+  host: string | null | undefined
+): string[] {
   const normalized = normalizeHost(host);
 
+  // An explicit override pins a single engine (self-hosted / local dev).
+  const override = process.env.RELAY_SERVER_URL;
+  if (override) {
+    return [override];
+  }
+
   if (!normalized || isLocalHost(normalized)) {
-    return process.env.RELAY_SERVER_URL || 'http://localhost:3890';
+    return ['http://localhost:3890'];
   }
 
-  // Accept both custom domains and workers/pages preview hostnames that begin with prNN-observer.
-  const prMatch = normalized.match(/^pr(\d+)-observer(?:[.-]|$)/);
-  if (prMatch) {
-    return `https://pr${prMatch[1]}-api.relaycast.dev`;
-  }
-
-  if (normalized === 'staging-observer.relaycast.dev') {
-    return 'https://staging-api.relaycast.dev';
-  }
-
-  if (normalized === 'observer.relaycast.dev') {
-    return 'https://api.relaycast.dev';
-  }
-
-  return process.env.RELAY_SERVER_URL || 'https://api.relaycast.dev';
+  return ['https://cast.agentrelay.com'];
 }
 
-export function resolveRelayServerUrlFromRequest(request: NextRequest | Request): string {
+export function resolveRelayServerCandidatesFromRequest(
+  request: NextRequest | Request
+): string[] {
   const observerHost = request.headers.get('x-relaycast-observer-host');
   const forwardedHost = request.headers.get('x-forwarded-host');
   const host = request.headers.get('host');
-  return resolveRelayServerUrlFromHost(observerHost ?? forwardedHost ?? host);
+  return resolveRelayServerCandidatesFromHost(
+    observerHost ?? forwardedHost ?? host
+  );
+}
+
+/**
+ * Resolve the single happy-path engine URL for an observer host (first
+ * candidate). Prefer {@link resolveRelayServerCandidatesFromRequest} when a key
+ * is available so per-environment hosts can fall back to their `-api` engine.
+ */
+export function resolveRelayServerUrlFromHost(
+  host: string | null | undefined
+): string {
+  return resolveRelayServerCandidatesFromHost(host)[0]!;
+}
+
+export function resolveRelayServerUrlFromRequest(
+  request: NextRequest | Request
+): string {
+  return resolveRelayServerCandidatesFromRequest(request)[0]!;
+}
+
+/**
+ * Restrict a remembered engine cookie to the candidates valid for the current
+ * host before trusting it, so a stale or forged cookie cannot redirect probes
+ * to an arbitrary origin (SSRF).
+ */
+export function pickRememberedEngine(
+  value: string | null | undefined,
+  candidates: string[]
+): string | null {
+  if (value && candidates.includes(value)) {
+    return value;
+  }
+  return null;
+}
+
+export interface EngineSelection {
+  /** The engine that accepted the key, or null if none did. */
+  baseUrl: string | null;
+  /** True if at least one candidate responded (even to reject the key). */
+  reachedAny: boolean;
+  /** True if at least one candidate definitively rejected the key. */
+  rejectedAny: boolean;
+  /** True if at least one candidate could not definitively validate the key. */
+  inconclusiveAny: boolean;
+  /** Authoritative observer record id when the accepted key is an observer token. */
+  observerTokenId: string | null;
+  /** Longest `Retry-After` an inconclusive engine asked for (e.g. a 429), in ms. */
+  retryAfterMs: number | null;
+}
+
+/** A `Retry-After` header value (whole seconds) for an inconclusive validation. */
+export function retryAfterHeader(retryAfterMs: number | null): Record<string, string> {
+  return retryAfterMs ? { 'Retry-After': String(Math.ceil(retryAfterMs / 1000)) } : {};
+}
+
+export function observerBindingMatches(
+  expectedObserverId: string | null | undefined,
+  authenticatedObserverId: string | null,
+): boolean {
+  return !expectedObserverId || expectedObserverId === authenticatedObserverId;
+}
+
+/**
+ * Probe the candidate engines in order and return the first whose
+ * `/v1/workspace` accepts the workspace key. Auth failures (401/403) are
+ * conclusive rejections; network failures and other statuses are inconclusive.
+ */
+export async function selectEngineForKey(
+  candidates: string[],
+  apiKey: string
+): Promise<EngineSelection> {
+  let reachedAny = false;
+  let rejectedAny = false;
+  let inconclusiveAny = false;
+  let retryAfterMs: number | null = null;
+  for (const baseUrl of candidates) {
+    try {
+      const url = new URL('/v1/workspace', baseUrl);
+      const res = await fetch(url.toString(), {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        cache: 'no-store',
+      });
+      reachedAny = true;
+      if (res.ok) {
+        let observerTokenId: string | null = null;
+        try {
+          const body = (await res.json()) as { data?: { observer_token_id?: unknown } };
+          if (typeof body?.data?.observer_token_id === 'string') {
+            observerTokenId = body.data.observer_token_id;
+          }
+        } catch {
+          // A successful legacy engine may not return a JSON body. It remains
+          // usable for workspace sessions, but cannot establish Connect binding.
+        }
+        return { baseUrl, reachedAny, rejectedAny, inconclusiveAny, observerTokenId, retryAfterMs: null };
+      }
+      if (res.status === 401 || res.status === 403) {
+        rejectedAny = true;
+      } else {
+        inconclusiveAny = true;
+        const delay = parseRetryAfterMs(res.headers.get('retry-after'));
+        if (delay !== null && delay > (retryAfterMs ?? 0)) retryAfterMs = delay;
+      }
+    } catch {
+      inconclusiveAny = true;
+      // Unreachable engine — fall through to the next candidate.
+    }
+  }
+  return { baseUrl: null, reachedAny, rejectedAny, inconclusiveAny, observerTokenId: null, retryAfterMs };
+}
+
+/**
+ * Order candidates so a previously resolved engine is tried first, avoiding a
+ * redundant probe of the other engine on every session/check call.
+ */
+export function orderByRemembered(
+  candidates: string[],
+  remembered: string | null
+): string[] {
+  if (!remembered) return candidates;
+  return [remembered, ...candidates.filter((c) => c !== remembered)];
 }

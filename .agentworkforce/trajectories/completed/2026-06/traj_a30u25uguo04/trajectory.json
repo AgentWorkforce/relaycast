@@ -1,0 +1,25 @@
+{
+  "id": "traj_a30u25uguo04",
+  "version": 1,
+  "task": {
+    "title": "Address adversarial review for node delivery contracts"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-25T01:46:44.778Z",
+  "completedAt": "2026-06-25T02:00:33.610Z",
+  "agents": [],
+  "chapters": [],
+  "retrospective": {
+    "summary": "Hardened node delivery contracts after adversarial review: HTTP push retries now redrive from delivery rows, dispatch revalidates URLs and rejects redirects, recipient routing no longer blocks on slow webhooks, manual node capacity uses an atomic active-agent reservation, delivery config redaction is defensive, and manual HTTP ack docs were clarified.",
+    "approach": "Standard approach",
+    "confidence": 0.9
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "7b1f3d740f4c6e0239c59e0452f0e7264e4ce02c",
+    "endRef": "7b1f3d740f4c6e0239c59e0452f0e7264e4ce02c"
+  }
+}

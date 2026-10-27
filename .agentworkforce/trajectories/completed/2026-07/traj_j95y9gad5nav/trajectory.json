@@ -1,0 +1,65 @@
+{
+  "id": "traj_j95y9gad5nav",
+  "version": 1,
+  "task": {
+    "title": "Add durable workspace event log (observer plane v1): 0027 migration, append+stamp+publish on workspace stream, GET /v1/workspace/events, 30-day retention"
+  },
+  "status": "completed",
+  "startedAt": "2026-07-02T04:15:01.403Z",
+  "completedAt": "2026-07-02T04:16:02.497Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-07-02T04:15:10.265Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_hmaj7tx0ogxj",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-07-02T04:15:10.265Z",
+      "endedAt": "2026-07-02T04:16:02.497Z",
+      "events": [
+        {
+          "ts": 1782965710266,
+          "type": "decision",
+          "content": "Kept observer filtering on the events route to channel_id scoping (observerAllowsChannel with channel-name lookup); null channel_id rows pass: Kept observer filtering on the events route to channel_id scoping (observerAllowsChannel with channel-name lookup); null channel_id rows pass",
+          "raw": {
+            "question": "Kept observer filtering on the events route to channel_id scoping (observerAllowsChannel with channel-name lookup); null channel_id rows pass",
+            "chosen": "Kept observer filtering on the events route to channel_id scoping (observerAllowsChannel with channel-name lookup); null channel_id rows pass",
+            "alternatives": [],
+            "reasoning": "Matches the contract exactly; deeper payload-level filtering (observerAllowsEvent) would change visibility semantics for DM/agent filters beyond the v1 contract"
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1782965711207,
+          "type": "decision",
+          "content": "Retention added as workspaceEventTtlDays (default 30d) in pruneExpired with per-workspace workspace_event_ttl_days override; batched deletes via rowid due to composite PK: Retention added as workspaceEventTtlDays (default 30d) in pruneExpired with per-workspace workspace_event_ttl_days override; batched deletes via rowid due to composite PK",
+          "raw": {
+            "question": "Retention added as workspaceEventTtlDays (default 30d) in pruneExpired with per-workspace workspace_event_ttl_days override; batched deletes via rowid due to composite PK",
+            "chosen": "Retention added as workspaceEventTtlDays (default 30d) in pruneExpired with per-workspace workspace_event_ttl_days override; batched deletes via rowid due to composite PK",
+            "alternatives": [],
+            "reasoning": ""
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Added durable workspace event log: 0027 workspace_events migration + drizzle schema, engine/workspaceEvents.ts (appendWorkspaceEvent/listWorkspaceEvents/appendAndPublishWorkspaceEvent), all fanout+deliveryRouting stream call sites now append+stamp seq, GET /v1/workspace/events (workspace key or stream:read observer with channel scoping), 30-day retention in pruneExpired, tests + E2E verified",
+    "approach": "Standard approach",
+    "confidence": 0.85
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "git/AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "756c33d081bd609b3bbdf2b0a9359d1c723362b6",
+    "endRef": "756c33d081bd609b3bbdf2b0a9359d1c723362b6"
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "id": "traj_rxgn8ctkxay1",
+  "version": 1,
+  "task": {
+    "title": "Negotiate authoritative delivery cursor with Relay broker",
+    "source": {
+      "system": "plain",
+      "id": "AgentWorkforce/relay#1240"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-07-10T14:14:03.934Z",
+  "completedAt": "2026-07-10T14:14:38.983Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-07-10T14:14:16.832Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_yt0sk555qr4b",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-07-10T14:14:16.832Z",
+      "endedAt": "2026-07-10T14:14:38.983Z",
+      "events": [
+        {
+          "ts": 1783692856833,
+          "type": "decision",
+          "content": "Gate delivery_ack_seq behind a registered node capability: Gate delivery_ack_seq behind a registered node capability",
+          "raw": {
+            "question": "Gate delivery_ack_seq behind a registered node capability",
+            "chosen": "Gate delivery_ack_seq behind a registered node capability",
+            "alternatives": [],
+            "reasoning": "Older Relay brokers reject unknown agent.register reply fields. Capability negotiation lets new brokers receive the authoritative cursor before replay while preserving the exact legacy reply shape for old brokers."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Added capability-gated delivery_ack_seq replies before pending mailbox replay, with legacy broker compatibility and conformance coverage.",
+    "approach": "Standard approach",
+    "confidence": 0.94
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "e905f3acfb790279ee2eb964cf711f29de87f718",
+    "endRef": "e905f3acfb790279ee2eb964cf711f29de87f718"
+  }
+}

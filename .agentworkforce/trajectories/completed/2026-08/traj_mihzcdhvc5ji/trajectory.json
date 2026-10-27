@@ -1,0 +1,175 @@
+{
+  "id": "traj_mihzcdhvc5ji",
+  "version": 1,
+  "task": {
+    "title": "Add Relaycast workspace usage attribution contract",
+    "source": {
+      "system": "plain",
+      "id": "relaycast#337"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-08-18T10:05:13.298Z",
+  "completedAt": "2026-08-18T10:16:30.740Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-08-18T10:05:22.406Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_ohfjw2im7h6j",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-08-18T10:05:22.406Z",
+      "endedAt": "2026-08-18T10:16:30.740Z",
+      "events": [
+        {
+          "ts": 1787047522407,
+          "type": "decision",
+          "content": "Store provenance and classification in the existing workspace insert: Store provenance and classification in the existing workspace insert",
+          "raw": {
+            "question": "Store provenance and classification in the existing workspace insert",
+            "chosen": "Store provenance and classification in the existing workspace insert",
+            "alternatives": [],
+            "reasoning": "Captures creator context without an extra creation write or any per-message write."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1787047522672,
+          "type": "decision",
+          "content": "Keep historical rows unknown and expose legacy name matches only as low-confidence inference: Keep historical rows unknown and expose legacy name matches only as low-confidence inference",
+          "raw": {
+            "question": "Keep historical rows unknown and expose legacy name matches only as low-confidence inference",
+            "chosen": "Keep historical rows unknown and expose legacy name matches only as low-confidence inference",
+            "alternatives": [],
+            "reasoning": "The 41,320 existing rows cannot be attributed reliably; heuristics must not become facts."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1787047522973,
+          "type": "decision",
+          "content": "Host the usage view in relaycast-cloud behind the existing internal bearer: Host the usage view in relaycast-cloud behind the existing internal bearer",
+          "raw": {
+            "question": "Host the usage view in relaycast-cloud behind the existing internal bearer",
+            "chosen": "Host the usage view in relaycast-cloud behind the existing internal bearer",
+            "alternatives": [],
+            "reasoning": "The portable engine owns the creation contract; the hosted gateway owns operator-only cross-workspace aggregation and classification."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1787047523250,
+          "type": "decision",
+          "content": "Default usage rankings to external classification: Default usage rankings to external classification",
+          "raw": {
+            "question": "Default usage rankings to external classification",
+            "chosen": "Default usage rankings to external classification",
+            "alternatives": [],
+            "reasoning": "An implicit all-workspace view would be dominated by internal and unknown fleet traffic and actively mislead operators."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1787048182770,
+          "type": "decision",
+          "content": "Place attribution migration 0039 after workspace lifecycle and session-replay migrations: Place attribution migration 0039 after workspace lifecycle and session-replay migrations",
+          "raw": {
+            "question": "Place attribution migration 0039 after workspace lifecycle and session-replay migrations",
+            "chosen": "Place attribution migration 0039 after workspace lifecycle and session-replay migrations",
+            "alternatives": [],
+            "reasoning": "Current main owns migrations 0036 through 0038, so the final shipped attribution migration is 0039. The recorded feature commit introduced the file as 0038 before the later review repair renamed it."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1787048183034,
+          "type": "decision",
+          "content": "Ship the portable creator contract here; track hosted and cross-repo work separately: Ship the portable creator contract here; track hosted and cross-repo work separately",
+          "raw": {
+            "question": "Ship the portable creator contract here; track hosted and cross-repo work separately",
+            "chosen": "Ship the portable creator contract here; track hosted and cross-repo work separately",
+            "alternatives": [],
+            "reasoning": "Relaycast owns the portable API/SDK/MCP contract. Hosted aggregation and other repositories need their own evidence and context-specific decisions."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1787048183299,
+          "type": "reflection",
+          "content": "This trajectory records implementation of the portable creation-attribution contract and first-party E2E population. It contains no run, test, or proof events, so it does not establish verification. The hosted usage view belongs to a companion relaycast-cloud change and was not exercised here.",
+          "raw": {
+            "focalPoints": [
+              "coverage",
+              "cost",
+              "backfill",
+              "rollout"
+            ],
+            "confidence": 0.65
+          },
+          "significance": "high",
+          "tags": [
+            "focal:coverage",
+            "focal:cost",
+            "focal:backfill",
+            "focal:rollout",
+            "confidence:0.65"
+          ]
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Implemented portable workspace creation provenance, explicit usage classification, and first-party CI population. Hosted aggregation belongs to a companion relaycast-cloud change and was not verified by this trajectory.",
+    "approach": "Standard approach",
+    "confidence": 0.65
+  },
+  "commits": [
+    "37d6b50bb7e19bce7f26f309ad3213d99f2e4c0d"
+  ],
+  "filesChanged": [
+    ".agentworkforce/trajectories/completed/2026-08/traj_mihzcdhvc5ji/summary.md",
+    ".agentworkforce/trajectories/completed/2026-08/traj_mihzcdhvc5ji/trajectory.json",
+    "CHANGELOG.md",
+    "README.md",
+    "docs/workspace-usage-attribution.md",
+    "openapi.yaml",
+    "packages/engine/CHANGELOG.md",
+    "packages/engine/src/__tests__/conformance/workspaceAttribution.test.ts",
+    "packages/engine/src/db/migrations/0038_workspace_usage_attribution.sql",
+    "packages/engine/src/db/schema.ts",
+    "packages/engine/src/engine/workspace.ts",
+    "packages/engine/src/lib/workspaceProvenance.ts",
+    "packages/engine/src/routes/workspace.ts",
+    "packages/mcp/src/__tests__/integration.test.ts",
+    "packages/mcp/src/tools/registration.ts",
+    "packages/sdk-rust/CHANGELOG.md",
+    "packages/sdk-rust/src/lib.rs",
+    "packages/sdk-rust/src/relay.rs",
+    "packages/sdk-rust/src/types.rs",
+    "packages/sdk-rust/tests/parity.rs",
+    "packages/sdk-typescript/CHANGELOG.md",
+    "packages/sdk-typescript/src/__tests__/relay.test.ts",
+    "packages/sdk-typescript/src/__tests__/setup.test.ts",
+    "packages/sdk-typescript/src/relay.ts",
+    "packages/sdk-typescript/src/setup-types.ts",
+    "packages/sdk-typescript/src/setup.ts",
+    "packages/types/CHANGELOG.md",
+    "packages/types/src/__tests__/types.test.ts",
+    "packages/types/src/workspace.ts",
+    "scripts/e2e-actions.ts",
+    "scripts/e2e-sdk-setup-client.ts",
+    "scripts/e2e.ts"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "879bbcd444857bfd600b29d3a552fca3017cfd71",
+    "endRef": "37d6b50bb7e19bce7f26f309ad3213d99f2e4c0d",
+    "traceId": "5caa3a45-c2dc-44d5-80c9-e8eb251650be"
+  }
+}

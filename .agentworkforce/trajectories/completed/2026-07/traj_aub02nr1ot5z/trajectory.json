@@ -1,0 +1,93 @@
+{
+  "id": "traj_aub02nr1ot5z",
+  "version": 1,
+  "task": {
+    "title": "Decouple delivery expiry cleanup from inbox reads",
+    "source": {
+      "system": "plain",
+      "id": "PR #266"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-07-13T14:18:39.838Z",
+  "completedAt": "2026-07-13T14:22:58.612Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-07-13T14:22:57.885Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_w80gn0li6ckn",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-07-13T14:22:57.885Z",
+      "endedAt": "2026-07-13T14:22:58.612Z",
+      "events": [
+        {
+          "ts": 1783952577886,
+          "type": "decision",
+          "content": "Make scheduled maintenance the sole owner of delivery expiry transitions: Make scheduled maintenance the sole owner of delivery expiry transitions",
+          "raw": {
+            "question": "Make scheduled maintenance the sole owner of delivery expiry transitions",
+            "chosen": "Make scheduled maintenance the sole owner of delivery expiry transitions",
+            "alternatives": [],
+            "reasoning": "Mailbox reads must remain latency- and failure-independent from cleanup; default reads filter unswept expired rows while a bounded global sweep preserves dead-letter state and sender notices"
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1783952578235,
+          "type": "reflection",
+          "content": "Read paths are now pure, Node schedules expiry every 15 seconds, cron adapters receive an exported sweep helper, and failure-isolation plus 121-row D1 regressions pass",
+          "raw": {
+            "focalPoints": [
+              "read isolation",
+              "scheduled ownership",
+              "D1 bounds",
+              "failure behavior"
+            ],
+            "confidence": 0.95
+          },
+          "significance": "high",
+          "tags": [
+            "focal:read isolation",
+            "focal:scheduled ownership",
+            "focal:D1 bounds",
+            "focal:failure behavior",
+            "confidence:0.95"
+          ]
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Decoupled delivery expiry from inbox reads, added a bounded global scheduled sweeper for Node and cron adapters, documented the contract, and verified cleanup failures cannot break reads",
+    "approach": "Standard approach",
+    "confidence": 0.95
+  },
+  "commits": [
+    "b136358"
+  ],
+  "filesChanged": [
+    "CHANGELOG.md",
+    "README.md",
+    "openapi.yaml",
+    "packages/engine/CHANGELOG.md",
+    "packages/engine/src/__tests__/conformance/delivery.test.ts",
+    "packages/engine/src/adapters/node/index.ts",
+    "packages/engine/src/engine/delivery.ts",
+    "packages/engine/src/index.ts",
+    "packages/engine/src/routes/delivery.ts",
+    "packages/engine/src/routes/deliveryRouting.ts",
+    "packages/engine/src/routes/inbox.ts"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "59bf55634eed4d334e1d0e6c7ad495b67f829294",
+    "endRef": "b136358a23e7dbc843473305f3dceefbd3816808"
+  }
+}

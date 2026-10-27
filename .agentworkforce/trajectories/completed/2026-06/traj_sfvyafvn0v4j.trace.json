@@ -1,0 +1,106 @@
+{
+  "version": "1.0.0",
+  "id": "d65a82ad-ef90-4bca-a4b5-52b612439651",
+  "timestamp": "2026-06-25T13:40:43.670Z",
+  "trajectory": "traj_sfvyafvn0v4j",
+  "files": [
+    {
+      "path": "packages/engine/src/__tests__/conformance/observerToken.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 4,
+              "revision": "284b6c8674fbbd9cfb5618134837390f26cc631e"
+            },
+            {
+              "start_line": 28,
+              "end_line": 42,
+              "revision": "284b6c8674fbbd9cfb5618134837390f26cc631e"
+            },
+            {
+              "start_line": 303,
+              "end_line": 309,
+              "revision": "284b6c8674fbbd9cfb5618134837390f26cc631e"
+            },
+            {
+              "start_line": 336,
+              "end_line": 361,
+              "revision": "284b6c8674fbbd9cfb5618134837390f26cc631e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/engine/observerToken.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 284,
+              "end_line": 294,
+              "revision": "284b6c8674fbbd9cfb5618134837390f26cc631e"
+            },
+            {
+              "start_line": 432,
+              "end_line": 440,
+              "revision": "284b6c8674fbbd9cfb5618134837390f26cc631e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/routes/channel.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 49,
+              "end_line": 58,
+              "revision": "284b6c8674fbbd9cfb5618134837390f26cc631e"
+            },
+            {
+              "start_line": 140,
+              "end_line": 154,
+              "revision": "284b6c8674fbbd9cfb5618134837390f26cc631e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/routes/message.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 12,
+              "end_line": 18,
+              "revision": "284b6c8674fbbd9cfb5618134837390f26cc631e"
+            },
+            {
+              "start_line": 201,
+              "end_line": 217,
+              "revision": "284b6c8674fbbd9cfb5618134837390f26cc631e"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

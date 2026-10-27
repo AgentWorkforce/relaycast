@@ -1,0 +1,65 @@
+{
+  "id": "traj_gpafbpc1mmxy",
+  "version": 1,
+  "task": {
+    "title": "Engine retention pruning + outbox follow-ups"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-11T17:18:54.534Z",
+  "completedAt": "2026-06-11T17:27:56.131Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-06-11T17:27:47.575Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_av98qkuagsuz",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-06-11T17:27:47.575Z",
+      "endedAt": "2026-06-11T17:27:56.131Z",
+      "events": [
+        {
+          "ts": 1781198867576,
+          "type": "decision",
+          "content": "Retention config lives in a nullable workspaces.retention JSON column, not the entitlements port: Retention config lives in a nullable workspaces.retention JSON column, not the entitlements port",
+          "raw": {
+            "question": "Retention config lives in a nullable workspaces.retention JSON column, not the entitlements port",
+            "chosen": "Retention config lives in a nullable workspaces.retention JSON column, not the entitlements port",
+            "alternatives": [],
+            "reasoning": "Pruning runs out-of-request (Node cleanup tick / cloud cron) where no entitlements provider or Workspace object exists; a DB column lets pruneExpired resolve per-workspace TTLs itself in one query, with no port signature changes. Entitlements stays the billing/quota seam."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1781198868165,
+          "type": "decision",
+          "content": "Deliveries and message_logs default to 90-day TTL; messages retention strictly opt-in: Deliveries and message_logs default to 90-day TTL; messages retention strictly opt-in",
+          "raw": {
+            "question": "Deliveries and message_logs default to 90-day TTL; messages retention strictly opt-in",
+            "chosen": "Deliveries and message_logs default to 90-day TTL; messages retention strictly opt-in",
+            "alternatives": [],
+            "reasoning": "Settled deliveries and message_logs are operational telemetry (message_logs duplicates bodies already retained in messages); messages are user data so no surprise deletion. Explicit null in workspace settings disables even the operational defaults."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Engine retention pruning (pruneExpired, workspaces.retention column, Node cleanup-tick wiring, public export), exhausted pending_events settling in cleanupOldEvents, and zero-subscriber outbox skip with per-request memoization. Full engine suite + repo turbo build/lint/test green.",
+    "approach": "Standard approach",
+    "confidence": 0.85
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "ee64c948f762037934b86ee0e3961d038b0c2531",
+    "endRef": "ee64c948f762037934b86ee0e3961d038b0c2531"
+  }
+}

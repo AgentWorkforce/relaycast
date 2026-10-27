@@ -1,4 +1,5 @@
 import type {
+  JsonValue,
   A2aAgentCard,
   A2aAgentRecord,
   Agent,
@@ -6,11 +7,14 @@ import type {
   AgentPresenceInfo,
   Channel,
   ChannelMemberInfo,
+  CreateObserverTokenRequest,
   CreateAgentRequest,
   CreateAgentResponse,
   UpdateAgentRequest,
+  UpdateObserverTokenRequest,
   UpdateWorkspaceRequest,
   Workspace,
+  ObserverToken,
   CreateWorkspaceResponse,
   WorkspaceLookup,
   SystemPrompt,
@@ -23,19 +27,29 @@ import type {
   CreateSubscriptionRequest,
   CreateSubscriptionResponse,
   EventSubscription,
-  CreateCommandRequest,
-  CreateCommandResponse,
-  AgentCommand,
+  WebhookDelivery,
+  WebhookDeliveryStatus,
+  ReplayWebhookDeliveryResponse,
   ActivityItem,
   DmMessage,
+  DmMessagePage,
+  DmReceivedEvent,
   WorkspaceDmConversation,
   TokenRotateResponse,
+  RotateWorkspaceKeyRequest,
+  RotateWorkspaceKeyResponse,
   MessageListQuery,
+  MessageCreatedEvent,
+  MessageReadEvent,
+  MessageReactedEvent,
+  MessageUpdatedEvent,
   MessageWithMeta,
+  SessionMessagesResult,
   ReactionGroup,
   SpawnAgentRequest,
   SpawnAgentResponse,
   ReleaseAgentRequest,
+  ExactReleaseAgentRequest,
   ReleaseAgentResponse,
   RegisterA2aOptions,
   RegisterA2aResponse,
@@ -48,51 +62,201 @@ import type {
   RoutingConfig,
   SearchDirectoryQuery,
   UpdateRoutingConfigRequest,
+  ListDirectoryQuery,
+  UpdateDirectoryAgentRequest,
+  DirectoryRating,
+  RateDirectoryAgentRequest,
+  RouteFeedbackRequest,
+  RouteFeedbackResult,
+  SkillSearchQuery,
+  SkillSearchResult,
+  ActionDefinition,
+  RegisterActionRequest,
+  BindAgentToNodeRequest,
+  CreateNodeOptions,
+  CreateNodeRequest,
+  CreateNodeResponse,
+  DeleteNodeOptions,
+  DeleteNodeResponse,
+  NodeAgentBinding,
+  NodeHistoryPage,
+  NodeHistoryQuery,
+  NodeListQuery,
+  NodeRosterEntry,
+  Trigger,
+  CreateTriggerRequest,
+  UpdateTriggerRequest,
+  SessionEvent,
+  EmitSessionEventRequest,
+  ListSessionEventsQuery,
+  CertificationRun,
+  SubmitCertificationRequest,
+  MonitorCertificationRequest,
+  ConsoleMessageLog,
+  ConsoleMessagesQuery,
+  ConsoleOverview,
+  ConsoleAgentStat,
+  ConsoleAgentStatsQuery,
+  ConsoleWindowQuery,
+  ConsoleCostStats,
+  ThreadReplyEvent,
+  WsClientEvent,
+  AgentExitedEvent,
+  AgentStatusActiveEvent,
+  AgentStatusChangedEvent,
+  AgentStatusOfflineEvent,
+  NodeStatusOnlineEvent,
+  NodeStatusOfflineEvent,
+  ChannelCreatedEvent,
+  ChannelUpdatedEvent,
+  ChannelArchivedEvent,
+  MemberJoinedEvent,
+  MemberLeftEvent,
+  ChannelMutedEvent,
+  ChannelUnmutedEvent,
+  FileUploadedEvent,
+  WebhookReceivedEvent,
+  ActionInvokedEvent,
+  ActionCompletedEvent,
+  ActionDeniedEvent,
+  ActionFailedEvent,
+  DeliveryAcceptedEvent,
+  DeliveryDeliveredEvent,
+  DeliveryDeferredEvent,
+  DeliveryFailedEvent,
+  GroupDmReceivedEvent,
+  WsReconnectingEvent,
+  WsPermanentlyDisconnectedEvent,
+  WsResyncedEvent,
 } from './types.js';
-import { ApiResponseSchema, CreateWorkspaceResponseSchema, WorkspaceLookupSchema } from '@relaycast/types';
+import {
+  ApiResponseSchema,
+  CreateWorkspaceResponseSchema,
+  SessionMessagesResultSchema,
+  WorkspaceDmConversationSchema,
+  WorkspaceLookupSchema,
+} from '@relaycast/types';
+import { ZodError } from 'zod';
 import { AgentClient, type AgentClientOptions } from './agent.js';
 import { HttpClient, type RetryPolicyInput } from './client.js';
+import { WsClient, type WsClientOptions, withInternalWsOrigin } from './ws.js';
 import { RelayError, relayErrorFromApi } from './errors.js';
 import {
-  appendLegacySuffix,
   emitCompatibilityTelemetry,
-  isNameConflictError,
+  type AgentIdentityRecoveryResponse,
+  type AgentIdentityRevocationResponse,
+  type EnrollRecoveryCredentialInput,
+  type RecoverAgentInput,
   type RegisterAgentInput,
   type RegisterOrRotateInput,
   type ResolvedIdentity,
+  type RevokeAgentTokenInput,
+  type TakeOverAgentInput,
 } from './identity.js';
 import { SDK_VERSION } from './version.js';
-import { SDK_ORIGIN } from './origin.js';
+import {
+  SDK_ORIGIN,
+  agentRelayIdentityHeaders,
+  resolveAgentRelayIdentity,
+} from './origin.js';
 import { camelizeKeys } from './casing.js';
+import {
+  toWorkspaceProvenanceInput,
+  type WorkspaceProvenanceOptions,
+} from './workspace-provenance.js';
 
 export interface RelayCastOptions {
+  /**
+   * Workspace admin key (`rk_live_*`) for administration or observer token
+   * (`ot_live_*`) for read-only REST and workspace realtime observation.
+   */
   apiKey: string;
   baseUrl?: string;
   retryPolicy?: RetryPolicyInput;
+  ws?: Omit<WsClientOptions, 'token' | 'baseUrl'>;
+  /**
+   * Optional User-Agent-style identifier for the originActor driving requests
+   * (e.g. `'claude-code/2.3 (model=opus-4.8)'`, `'codex'`, `'human'`). Sent as
+   * the `X-Relaycast-Origin-Actor` header on every request so server-side telemetry
+   * can attribute traffic to a originActor.
+   */
+  originActor?: string;
+  /**
+   * Optional Agent Relay distinct telemetry id. Sent as
+   * `X-Agent-Relay-Distinct-Id` on HTTP requests so Relaycast telemetry can be
+   * joined to Agent Relay CLI telemetry without sending user-identifying data.
+   */
+  agentRelayDistinctId?: string;
+  /**
+   * Optional Agent Relay Cloud user id of the signed-in operator, sent as
+   * `X-Agent-Relay-User-Id`. Doubles as the distinct id when
+   * `agentRelayDistinctId` is unset.
+   */
+  agentRelayUserId?: string;
+  /** Optional hashed machine id, sent as `X-Agent-Relay-Machine-Id`. */
+  agentRelayMachineId?: string;
+  /** Optional Agent Relay Cloud organization id, for group analytics. */
+  agentRelayOrgId?: string;
+  /** Optional organization slug, for readable analytics breakdowns. */
+  agentRelayOrgSlug?: string;
 }
 
-export interface WorkspaceStreamConfig {
-  enabled: boolean;
-  defaultEnabled: boolean;
-  override: boolean | null;
+/** Identity fields accepted by the unauthenticated workspace bootstrap calls. */
+export interface WorkspaceIdentityOptions {
+  agentRelayDistinctId?: string;
+  agentRelayMachineId?: string;
+  agentRelayUserId?: string;
+  agentRelayOrgId?: string;
+  agentRelayOrgSlug?: string;
 }
 
-export interface WorkspaceBootstrapOptions {
+export interface WorkspaceBootstrapOptions extends WorkspaceIdentityOptions {
+  /** Application-defined JSON stored on the workspace. */
+  metadata?: Record<string, JsonValue>;
   apiKey?: string;
   baseUrl?: string;
+  /** Explicit lifetime for a throwaway workspace; omit for persistence. */
+  expiresInSeconds?: number;
+  /** Creation context recorded once for hosted usage attribution. */
+  provenance?: WorkspaceProvenanceOptions;
+  /**
+   * Crash-safe workspace-create replay key (relaycast#371/#379).
+   *
+   * With `apiKey` set: any value is fine — the owner's API key is the
+   * authorization boundary, so this only needs to be unique per operation
+   * (e.g. a job id).
+   *
+   * Without `apiKey` (anonymous bootstrap): this is the reveal-once recovery
+   * capability, so it MUST be generated with a CSPRNG. Never derive it from a
+   * job id, timestamp, or counter. The server enforces only a 32-character
+   * structural minimum and cannot verify true randomness.
+   * `crypto.randomUUID()` is a good default.
+   */
+  idempotencyKey?: string;
+  /**
+   * Optional self-host proof for deployments configured with
+   * `workspaceBootstrapProofRequired`. Hosted callers must omit this: the
+   * deployment secret stays server-only and the CSPRNG `idempotencyKey` is the
+   * recovery capability. When supplied, callers must set `baseUrl` to an
+   * explicit self-hosted origin; this SDK refuses the hosted gateway. Ignored
+   * when `apiKey` is set.
+   */
+  bootstrapSecret?: string;
+}
+
+export interface WorkspaceLookupOptions extends WorkspaceIdentityOptions {
+  baseUrl?: string;
+}
+
+export interface AgentReconnectOptions {
+  apiToken: string;
+  agent?: AgentClientOptions;
 }
 
 export type EnsureWorkspaceResponse = { existed: boolean; name: string } & CreateWorkspaceResponse;
 
 interface ChannelListOptions {
   includeArchived?: boolean;
-}
-
-interface CommandRegisterInput {
-  command: string;
-  description: string;
-  handlerAgent: string;
-  parameters?: CreateCommandRequest['parameters'];
 }
 
 type RegisterTypedIdentityInput = Omit<CreateAgentRequest, 'type'>;
@@ -107,8 +271,114 @@ function resolveWorkspaceBootstrapOptions(
   return options ?? {};
 }
 
+function resolveWorkspaceLookupOptions(
+  options?: string | WorkspaceLookupOptions,
+): WorkspaceLookupOptions {
+  if (typeof options === 'string') {
+    return { baseUrl: options };
+  }
+  return options ?? {};
+}
+
+/** Minimum structural length for an anonymous bootstrap replay key. */
+export const MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH = 32;
+
+const HOSTED_GATEWAY_HOSTNAME = 'cast.agentrelay.com';
+const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
+
+export function validateAnonymousKeyedBootstrapDestination(value: string): URL {
+  let baseUrl: URL;
+  try {
+    baseUrl = new URL(value);
+  } catch {
+    throw new RelayError(
+      'transport_error',
+      'Anonymous keyed workspace bootstrap requires a valid baseUrl',
+      {
+        statusCode: 400,
+        retryable: false,
+        rawCode: 'workspace_create_bootstrap_base_url_required',
+      },
+    );
+  }
+
+  const hostname = baseUrl.hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase();
+  const isLoopbackHttp =
+    baseUrl.protocol === 'http:' && LOOPBACK_HOSTNAMES.has(hostname);
+  if (baseUrl.protocol !== 'https:' && !isLoopbackHttp) {
+    throw new RelayError(
+      'transport_error',
+      'Anonymous keyed workspace bootstrap requires an HTTPS self-hosted baseUrl (or loopback HTTP for local development)',
+      {
+        statusCode: 400,
+        retryable: false,
+        rawCode: 'workspace_create_bootstrap_base_url_required',
+      },
+    );
+  }
+
+  return baseUrl;
+}
+
+function validateWorkspaceBootstrapOptions(options: WorkspaceBootstrapOptions): void {
+  // Owner-scoped keys are bounded by the authenticated API key and may remain
+  // short. Anonymous keys are part of the recovery proof and must satisfy the
+  // same structural floor as the server before any request is sent.
+  if (
+    !options.apiKey &&
+    options.idempotencyKey !== undefined &&
+    options.idempotencyKey.length < MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH
+  ) {
+    throw new RelayError(
+      'transport_error',
+      `Anonymous Idempotency-Key must be at least ${MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH} characters`,
+      {
+        statusCode: 400,
+        retryable: false,
+        rawCode: 'workspace_create_idempotency_key_too_weak',
+      },
+    );
+  }
+
+  const anonymousKeyedBootstrap = !options.apiKey && options.idempotencyKey !== undefined;
+  if (anonymousKeyedBootstrap) {
+    validateAnonymousKeyedBootstrapDestination(
+      options.baseUrl ?? 'https://cast.agentrelay.com',
+    );
+  }
+
+  if (anonymousKeyedBootstrap && options.bootstrapSecret !== undefined) {
+    if (!options.baseUrl) {
+      throw new RelayError(
+        'transport_error',
+        'Anonymous keyed workspace bootstrap with a bootstrapSecret requires an explicit self-hosted baseUrl',
+        {
+          statusCode: 400,
+          retryable: false,
+          rawCode: 'workspace_create_bootstrap_base_url_required',
+        },
+      );
+    }
+
+    const baseUrl = validateAnonymousKeyedBootstrapDestination(options.baseUrl);
+    const hostname = baseUrl.hostname.replace(/\.$/, '').toLowerCase();
+    if (hostname === HOSTED_GATEWAY_HOSTNAME) {
+      throw new RelayError(
+        'transport_error',
+        'Anonymous keyed workspace bootstrap cannot send a bootstrapSecret to the hosted gateway',
+        {
+          statusCode: 400,
+          retryable: false,
+          rawCode: 'workspace_create_bootstrap_base_url_required',
+        },
+      );
+    }
+  }
+}
+
 export class RelayCast {
   private client: HttpClient;
+  private ws: WsClient;
   private identityHint: { agentId: string; name: string } | null = null;
   private workspaceIdHint: string | null = null;
 
@@ -120,7 +390,77 @@ export class RelayCast {
     // Preserve hidden internal-origin metadata on options when created via
     // createInternalRelayCast() so downstream requests use the correct origin headers.
     this.client = new HttpClient(options);
+    this.ws = new WsClient(withInternalWsOrigin(
+      {
+        ...(options.ws ?? {}),
+        token: this.client.apiKey,
+        baseUrl: this.client.baseUrl,
+      },
+      this.client.internalOrigin,
+    ));
   }
+
+  connect(): void {
+    this.ws.connect();
+  }
+
+  disconnect(): void {
+    this.ws.disconnect();
+  }
+
+  private onEvent<T extends WsClientEvent>(eventType: string, handler: (e: T) => void): () => void {
+    return this.ws.on(eventType, handler as (e: WsClientEvent) => void);
+  }
+
+  on = {
+    messageCreated:  (handler: (e: MessageCreatedEvent) => void): (() => void)  => this.onEvent('message.created', handler),
+    messageUpdated:  (handler: (e: MessageUpdatedEvent) => void): (() => void)  => this.onEvent('message.updated', handler),
+    threadReply:     (handler: (e: ThreadReplyEvent) => void): (() => void)     => this.onEvent('thread.reply', handler),
+    messageRead:     (handler: (e: MessageReadEvent) => void): (() => void)     => this.onEvent('message.read', handler),
+    messageReacted:  (handler: (e: MessageReactedEvent) => void): (() => void)  => this.onEvent('message.reacted', handler),
+    dmReceived:      (handler: (e: DmReceivedEvent) => void): (() => void)      => this.onEvent('dm.received', handler),
+    groupDmReceived: (handler: (e: GroupDmReceivedEvent) => void): (() => void) => this.onEvent('group_dm.received', handler),
+    agentStatusChanged: (handler: (e: AgentStatusChangedEvent) => void): (() => void) => this.onEvent('agent.status.changed', handler),
+    agentActive:     (handler: (e: AgentStatusActiveEvent) => void): (() => void)  => this.onEvent('agent.status.active', handler),
+    agentOffline:    (handler: (e: AgentStatusOfflineEvent) => void): (() => void) => this.onEvent('agent.status.offline', handler),
+    agentExited:     (handler: (e: AgentExitedEvent) => void): (() => void)     => this.onEvent('agent.exited', handler),
+    // Node liveness is published on this workspace stream (`/v1/ws`) and to
+    // webhooks. It is not delivered to an agent mailbox, so AgentClient does
+    // not expose these handlers.
+    nodeOnline:      (handler: (e: NodeStatusOnlineEvent) => void): (() => void) => this.onEvent('node.status.online', handler),
+    nodeOffline:     (handler: (e: NodeStatusOfflineEvent) => void): (() => void) => this.onEvent('node.status.offline', handler),
+    channelCreated:  (handler: (e: ChannelCreatedEvent) => void): (() => void)  => this.onEvent('channel.created', handler),
+    channelUpdated:  (handler: (e: ChannelUpdatedEvent) => void): (() => void)  => this.onEvent('channel.updated', handler),
+    channelArchived: (handler: (e: ChannelArchivedEvent) => void): (() => void) => this.onEvent('channel.archived', handler),
+    memberJoined:    (handler: (e: MemberJoinedEvent) => void): (() => void)    => this.onEvent('member.joined', handler),
+    memberLeft:      (handler: (e: MemberLeftEvent) => void): (() => void)      => this.onEvent('member.left', handler),
+    channelMuted:    (handler: (e: ChannelMutedEvent) => void): (() => void)    => this.onEvent('member.channel_muted', handler),
+    channelUnmuted:  (handler: (e: ChannelUnmutedEvent) => void): (() => void)  => this.onEvent('member.channel_unmuted', handler),
+    fileUploaded:    (handler: (e: FileUploadedEvent) => void): (() => void)    => this.onEvent('file.uploaded', handler),
+    webhookReceived: (handler: (e: WebhookReceivedEvent) => void): (() => void) => this.onEvent('webhook.received', handler),
+    actionInvoked:   (handler: (e: ActionInvokedEvent) => void): (() => void)   => this.onEvent('action.invoked', handler),
+    actionCompleted: (handler: (e: ActionCompletedEvent) => void): (() => void) => this.onEvent('action.completed', handler),
+    actionFailed:    (handler: (e: ActionFailedEvent) => void): (() => void)    => this.onEvent('action.failed', handler),
+    actionDenied:    (handler: (e: ActionDeniedEvent) => void): (() => void)    => this.onEvent('action.denied', handler),
+    deliveryAccepted:  (handler: (e: DeliveryAcceptedEvent) => void): (() => void)  => this.onEvent('delivery.accepted', handler),
+    deliveryDelivered: (handler: (e: DeliveryDeliveredEvent) => void): (() => void) => this.onEvent('delivery.delivered', handler),
+    deliveryDeferred:  (handler: (e: DeliveryDeferredEvent) => void): (() => void)  => this.onEvent('delivery.deferred', handler),
+    deliveryFailed:    (handler: (e: DeliveryFailedEvent) => void): (() => void)    => this.onEvent('delivery.failed', handler),
+    connected:    (handler: () => void): (() => void) => this.onEvent('open', handler as (e: never) => void),
+    disconnected: (handler: () => void): (() => void) => this.onEvent('close', handler as (e: never) => void),
+    error:        (handler: () => void): (() => void) => this.onEvent('error', handler as (e: never) => void),
+    reconnecting: (handler: (attempt: number) => void): (() => void) =>
+      this.ws.on('reconnecting', (e: WsClientEvent) => handler((e as WsReconnectingEvent).attempt)),
+    permanentlyDisconnected: (handler: (attempt: number) => void): (() => void) =>
+      this.ws.on('permanently_disconnected', (e: WsClientEvent) =>
+        handler((e as WsPermanentlyDisconnectedEvent).attempt)),
+    resynced: (handler: (info: { replayed: number; gapDetected: boolean }) => void): (() => void) =>
+      this.ws.on('resynced', (e: WsClientEvent) => {
+        const event = e as WsResyncedEvent;
+        handler({ replayed: event.replayed, gapDetected: event.gapDetected });
+      }),
+    any: (handler: (e: WsClientEvent) => void): (() => void) => this.ws.on('*', handler),
+  };
 
   static async createWorkspace(
     name: string,
@@ -134,22 +474,53 @@ export class RelayCast {
     name: string,
     options?: string | WorkspaceBootstrapOptions,
   ): Promise<{ data: CreateWorkspaceResponse; statusCode: number }> {
-    const { apiKey, baseUrl } = resolveWorkspaceBootstrapOptions(options);
-    const requestBaseUrl = baseUrl ?? 'https://api.relaycast.dev';
+    const resolved = resolveWorkspaceBootstrapOptions(options);
+    validateWorkspaceBootstrapOptions(resolved);
+    const { apiKey, baseUrl } = resolved;
+    const requestBaseUrl = baseUrl ?? 'https://cast.agentrelay.com';
+    const identity = resolveAgentRelayIdentity(resolved);
+    const anonymousKeyedBootstrap = !apiKey && resolved.idempotencyKey !== undefined;
+    const sendsBootstrapSecret =
+      anonymousKeyedBootstrap && resolved.bootstrapSecret !== undefined;
 
     const url = new URL('/v1/workspaces', requestBaseUrl);
     const res = await fetch(url.toString(), {
       method: 'POST',
+      ...(anonymousKeyedBootstrap ? { redirect: 'manual' as const } : {}),
       headers: {
         'Content-Type': 'application/json',
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        ...(resolved.idempotencyKey !== undefined
+          ? { 'Idempotency-Key': resolved.idempotencyKey }
+          : {}),
+        ...(sendsBootstrapSecret
+          ? { 'X-Workspace-Bootstrap-Secret': resolved.bootstrapSecret }
+          : {}),
         'X-SDK-Version': SDK_VERSION,
-        'X-Relaycast-Origin-Surface': SDK_ORIGIN.surface,
         'X-Relaycast-Origin-Client': SDK_ORIGIN.client,
         'X-Relaycast-Origin-Version': SDK_ORIGIN.version,
+        ...agentRelayIdentityHeaders(identity),
       },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({
+        name,
+        ...(resolved.expiresInSeconds !== undefined
+          ? { expires_in_seconds: resolved.expiresInSeconds }
+          : {}),
+        ...(resolved.metadata !== undefined ? { metadata: resolved.metadata } : {}),
+        provenance: toWorkspaceProvenanceInput(resolved.provenance),
+      }),
     });
+
+    if (
+      anonymousKeyedBootstrap &&
+      (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400))
+    ) {
+      throw new RelayError(
+        'transport_error',
+        'Refusing to follow an anonymous bootstrap redirect',
+        { statusCode: res.status, retryable: false },
+      );
+    }
 
     let parsed: unknown;
     try {
@@ -181,8 +552,13 @@ export class RelayCast {
     };
   }
 
-  static async lookupWorkspace(name: string, baseUrl?: string): Promise<WorkspaceLookup | null> {
-    const requestBaseUrl = baseUrl ?? 'https://api.relaycast.dev';
+  static async lookupWorkspace(
+    name: string,
+    options?: string | WorkspaceLookupOptions,
+  ): Promise<WorkspaceLookup | null> {
+    const resolved = resolveWorkspaceLookupOptions(options);
+    const requestBaseUrl = resolved.baseUrl ?? 'https://cast.agentrelay.com';
+    const identity = resolveAgentRelayIdentity(resolved);
 
     const url = new URL(`/v1/workspaces/by-name/${encodeURIComponent(name)}`, requestBaseUrl);
     const res = await fetch(url.toString(), {
@@ -190,9 +566,9 @@ export class RelayCast {
       headers: {
         'Content-Type': 'application/json',
         'X-SDK-Version': SDK_VERSION,
-        'X-Relaycast-Origin-Surface': SDK_ORIGIN.surface,
         'X-Relaycast-Origin-Client': SDK_ORIGIN.client,
         'X-Relaycast-Origin-Version': SDK_ORIGIN.version,
+        ...agentRelayIdentityHeaders(identity),
       },
     });
 
@@ -261,24 +637,6 @@ export class RelayCast {
     };
   }
 
-  private async registerWithLegacySuffix(data: CreateAgentRequest): Promise<CreateAgentResponse> {
-    const maxAttempts = 5;
-    let candidateName = data.name;
-
-    for (let attempt = 0; attempt <= maxAttempts; attempt += 1) {
-      try {
-        return await this.agents.register({ ...data, name: candidateName });
-      } catch (err) {
-        if (!isNameConflictError(err) || attempt === maxAttempts) {
-          throw err;
-        }
-        candidateName = appendLegacySuffix(data.name);
-      }
-    }
-
-    throw new RelayError('transport_error', 'Failed to register agent identity after suffix retries');
-  }
-
   private registerTypedIdentity(
     type: RegisterIdentityType,
     data: RegisterTypedIdentityInput,
@@ -287,40 +645,26 @@ export class RelayCast {
   }
 
   async registerAgent(data: RegisterAgentInput): Promise<CreateAgentResponse> {
-    const { strict, ...request } = data;
-    if (strict) {
-      return this.agents.register(request);
-    }
-
-    emitCompatibilityTelemetry('agents.registerAgent.legacy_suffix', {
-      requested_name: data.name,
-    });
-    return this.registerWithLegacySuffix(request);
+    const { strict: _strict, ...request } = data;
+    return this.agents.register(request);
   }
 
   async registerOrRotate(data: RegisterOrRotateInput): Promise<CreateAgentResponse> {
-    try {
-      return await this.registerAgent({ ...data, strict: true });
-    } catch (err) {
-      if (isNameConflictError(err)) {
-        const agent = await this.agents.get(data.name);
-        const { token } = await this.agents.rotateToken(agent.name);
-        this.rememberIdentity(agent.id, agent.name);
-        const createdAt = agent.createdAt ?? agent.lastSeen;
-        return {
-          id: agent.id,
-          name: agent.name,
-          token,
-          status: agent.status,
-          createdAt,
-        };
-      }
-      throw err;
-    }
+    emitCompatibilityTelemetry('agents.registerOrRotate.deprecated', {
+      replacement: 'agents.register or agents.recover',
+    });
+    return this.registerAgent(data);
   }
 
   async resolveIdentity(): Promise<ResolvedIdentity> {
     return this.resolveIdentityInternal();
+  }
+
+  async reconnect(data: AgentReconnectOptions, options?: AgentClientOptions): Promise<AgentClient> {
+    const agentClient = this.as(data.apiToken, data.agent ?? options);
+    const agent = await agentClient.me();
+    this.rememberIdentity(agent.id, agent.name);
+    return agentClient;
   }
 
   agent(data: RegisterTypedIdentityInput): Promise<CreateAgentResponse> {
@@ -372,6 +716,44 @@ export class RelayCast {
     return this.client.post('/v1/skills/sync', data);
   }
 
+  searchSkills(query?: SkillSearchQuery): Promise<SkillSearchResult[]> {
+    const params: Record<string, string> = {};
+    if (query?.q) params.q = query.q;
+    if (query?.limit != null) params.limit = String(query.limit);
+    return this.client.get('/v1/skills/search', params);
+  }
+
+  routeFeedback(data: RouteFeedbackRequest): Promise<RouteFeedbackResult> {
+    return this.client.post('/v1/route/feedback', data);
+  }
+
+  listDirectory(query?: ListDirectoryQuery): Promise<DirectoryAgent[]> {
+    const params: Record<string, string> = {};
+    if (query?.status) params.status = query.status;
+    if (query?.limit != null) params.limit = String(query.limit);
+    return this.client.get('/v1/directory/agents', params);
+  }
+
+  getDirectoryAgent(slug: string): Promise<DirectoryAgent> {
+    return this.client.get(`/v1/directory/agents/${encodeURIComponent(slug)}`);
+  }
+
+  updateDirectoryAgent(slug: string, data: UpdateDirectoryAgentRequest): Promise<DirectoryAgent> {
+    return this.client.patch(`/v1/directory/agents/${encodeURIComponent(slug)}`, data);
+  }
+
+  deleteDirectoryAgent(slug: string): Promise<void> {
+    return this.client.delete(`/v1/directory/agents/${encodeURIComponent(slug)}`);
+  }
+
+  listDirectoryRatings(slug: string): Promise<DirectoryRating[]> {
+    return this.client.get(`/v1/directory/agents/${encodeURIComponent(slug)}/ratings`);
+  }
+
+  rateDirectoryAgent(slug: string, data: RateDirectoryAgentRequest): Promise<DirectoryRating> {
+    return this.client.post(`/v1/directory/agents/${encodeURIComponent(slug)}/ratings`, data);
+  }
+
   getRoutingConfig(): Promise<RoutingConfig> {
     return this.client.get('/v1/routing/config');
   }
@@ -382,16 +764,37 @@ export class RelayCast {
 
   workspace = {
     info: (): Promise<Workspace> => this.client.get('/v1/workspace'),
+    reconnect: (data: AgentReconnectOptions, options?: AgentClientOptions): Promise<AgentClient> =>
+      this.reconnect(data, options),
     update: (data: UpdateWorkspaceRequest): Promise<Workspace> =>
       this.client.patch('/v1/workspace', data),
-    delete: (): Promise<void> => this.client.delete('/v1/workspace'),
-    stream: {
-      get: (): Promise<WorkspaceStreamConfig> => this.client.get('/v1/workspace/stream'),
-      set: (enabled: boolean): Promise<WorkspaceStreamConfig> =>
-        this.client.put('/v1/workspace/stream', { enabled }),
-      inherit: (): Promise<WorkspaceStreamConfig> =>
-        this.client.put('/v1/workspace/stream', { mode: 'inherit' }),
-    },
+    /**
+     * Replace the workspace API key. The response carries the replacement
+     * exactly once; persist it (do not print it). `graceSeconds` keeps the
+     * superseded key authenticatable for propagation — pass `0` when the old
+     * key may be compromised. Hosted deployments manage keys through the
+     * control plane and refuse this call.
+     */
+    rotateKey: (data?: RotateWorkspaceKeyRequest): Promise<RotateWorkspaceKeyResponse> =>
+      this.client.post('/v1/workspace/rotate-key', data ?? {}),
+    delete: (workspaceId?: string): Promise<void> => workspaceId === undefined
+      ? this.client.delete('/v1/workspace')
+      : this.client.delete(`/v1/workspaces/${encodeURIComponent(workspaceId)}`),
+  };
+
+  observerTokens = {
+    create: (data: CreateObserverTokenRequest): Promise<ObserverToken> =>
+      this.client.post('/v1/observer-tokens', data),
+    list: (): Promise<ObserverToken[]> =>
+      this.client.get('/v1/observer-tokens'),
+    get: (id: string): Promise<ObserverToken> =>
+      this.client.get(`/v1/observer-tokens/${encodeURIComponent(id)}`),
+    update: (id: string, data: UpdateObserverTokenRequest): Promise<ObserverToken> =>
+      this.client.patch(`/v1/observer-tokens/${encodeURIComponent(id)}`, data),
+    rotate: (id: string): Promise<ObserverToken> =>
+      this.client.post(`/v1/observer-tokens/${encodeURIComponent(id)}/rotate`, {}),
+    revoke: (id: string): Promise<void> =>
+      this.client.delete(`/v1/observer-tokens/${encodeURIComponent(id)}`),
   };
 
   systemPrompt = {
@@ -430,6 +833,40 @@ export class RelayCast {
     },
     reactions: (id: string): Promise<ReactionGroup[]> =>
       this.client.get(`/v1/messages/${encodeURIComponent(id)}/reactions`),
+    bySessionRef: async (
+      sessionRef: string,
+      opts?: { limit?: number; after?: string },
+    ): Promise<SessionMessagesResult> => {
+      const query: Record<string, string> = {};
+      if (opts?.limit != null) query.limit = String(opts.limit);
+      if (opts?.after) query.after = opts.after;
+      try {
+        return await this.client.get<SessionMessagesResult>(
+          `/v1/sessions/${encodeURIComponent(sessionRef)}/messages`,
+          query,
+          { schema: SessionMessagesResultSchema },
+        );
+      } catch (error) {
+        // Replay availability is fail-closed: transport/auth/server failures
+        // are unknown, never evidence that the session is retained.
+        return {
+          sessionRef,
+          availability: 'unknown',
+          reason: error instanceof ZodError ? 'response_invalid' : 'query_failed',
+          retention: {
+            policy: 'unknown',
+            messageTtlDays: null,
+            retainedSince: null,
+            source: 'unknown',
+            reason: 'boundary_unavailable',
+          },
+          sessionStartedAt: null,
+          sessionLastMessageAt: null,
+          messages: [],
+          page: { nextCursor: null, hasMore: false },
+        };
+      }
+    },
   };
 
   agents = {
@@ -441,12 +878,33 @@ export class RelayCast {
     list: (query?: AgentListQuery): Promise<Agent[]> => {
       const params: Record<string, string> = {};
       if (query?.status) params.status = query.status;
+      if (query?.includeStale !== undefined) params.include_stale = query.includeStale ? '1' : '0';
+      if (query?.includeMetadata !== undefined) params.include_metadata = query.includeMetadata ? '1' : '0';
       return this.client.get('/v1/agents', params);
     },
     get: (name: string): Promise<Agent> =>
       this.client.get(`/v1/agents/${encodeURIComponent(name)}`),
-    rotateToken: (name: string): Promise<TokenRotateResponse> =>
-      this.client.post(`/v1/agents/${encodeURIComponent(name)}/rotate-token`, {}),
+    me: (apiToken?: string): Promise<Agent> =>
+      (apiToken ? this.client.withApiKey(apiToken) : this.client).get('/v1/agent'),
+    rotateToken: (name: string, agentToken: string): Promise<TokenRotateResponse> =>
+      this.client.withApiKey(agentToken).post(`/v1/agents/${encodeURIComponent(name)}/rotate-token`, {}),
+    recover: async ({ name, ...data }: RecoverAgentInput): Promise<AgentIdentityRecoveryResponse> => {
+      const result = await this.client.post<AgentIdentityRecoveryResponse>(
+        `/v1/agents/${encodeURIComponent(name)}/recover`,
+        data,
+      );
+      this.rememberIdentity(result.agentId, result.name);
+      return result;
+    },
+    takeOver: ({ name, ...data }: TakeOverAgentInput): Promise<AgentIdentityRecoveryResponse> =>
+      this.client.post(`/v1/agents/${encodeURIComponent(name)}/takeover`, data),
+    revokeToken: ({ name, ...data }: RevokeAgentTokenInput): Promise<AgentIdentityRevocationResponse> =>
+      this.client.post(`/v1/agents/${encodeURIComponent(name)}/revoke-token`, data),
+    enrollRecoveryCredential: (
+      data: EnrollRecoveryCredentialInput,
+      agentToken: string,
+    ): Promise<{ agentId: string; enrolled: boolean }> =>
+      this.client.withApiKey(agentToken).post('/v1/agent/recovery-credential', data),
     update: (name: string, data: UpdateAgentRequest): Promise<Agent> =>
       this.client.patch(`/v1/agents/${encodeURIComponent(name)}`, data),
     delete: (name: string): Promise<void> =>
@@ -455,9 +913,9 @@ export class RelayCast {
       this.client.get('/v1/agents/presence'),
     registerOrGet: async (data: CreateAgentRequest): Promise<CreateAgentResponse> => {
       emitCompatibilityTelemetry('agents.registerOrGet.deprecated', {
-        replacement: 'agents.registerOrRotate',
+        replacement: 'agents.register or agents.recover',
       });
-      return this.registerOrRotate(data);
+      return this.agents.register(data);
     },
     registerAgent: (data: RegisterAgentInput): Promise<CreateAgentResponse> =>
       this.registerAgent(data),
@@ -469,10 +927,37 @@ export class RelayCast {
       this.client.post('/v1/agents/spawn', data),
     release: (data: ReleaseAgentRequest): Promise<ReleaseAgentResponse> =>
       this.client.post('/v1/agents/release', data),
+    /**
+     * Atomically release only the exact immutable agent identity. The key is
+     * deliberately mandatory: callers persist and reuse it across restarts.
+     */
+    releaseExact: (
+      data: ExactReleaseAgentRequest,
+      options: { idempotencyKey: string },
+    ): Promise<ReleaseAgentResponse> => {
+      const idempotencyKey = options.idempotencyKey.trim();
+      if (!idempotencyKey) throw new Error('idempotencyKey is required for exact agent release');
+      return this.client.post('/v1/agents/release-exact', data, {
+        headers: { 'Idempotency-Key': idempotencyKey },
+      });
+    },
+    events: {
+      emit: (name: string, data: EmitSessionEventRequest): Promise<SessionEvent> =>
+        this.client.post(`/v1/agents/${encodeURIComponent(name)}/events`, data),
+      list: (name: string, query?: ListSessionEventsQuery): Promise<SessionEvent[]> => {
+        const params: Record<string, string> = {};
+        if (query?.type) params.type = query.type;
+        if (query?.limit != null) params.limit = String(query.limit);
+        return this.client.get(`/v1/agents/${encodeURIComponent(name)}/events`, params);
+      },
+    },
   };
 
   webhooks = {
     create: (data: CreateWebhookRequest): Promise<CreateWebhookResponse> =>
+      this.client.post('/v1/webhooks', data),
+
+    createInbound: (data: CreateWebhookRequest): Promise<CreateWebhookResponse> =>
       this.client.post('/v1/webhooks', data),
 
     list: (): Promise<Webhook[]> =>
@@ -481,8 +966,13 @@ export class RelayCast {
     delete: (id: string): Promise<void> =>
       this.client.delete(`/v1/webhooks/${encodeURIComponent(id)}`),
 
-    trigger: (webhookId: string, data: WebhookTriggerRequest): Promise<WebhookTriggerResponse> =>
-      this.client.post(`/v1/hooks/${encodeURIComponent(webhookId)}`, data),
+    trigger: (
+      webhookId: string,
+      data: WebhookTriggerRequest,
+      token: string,
+    ): Promise<WebhookTriggerResponse> => {
+      return this.client.withApiKey(token).post(`/v1/hooks/${encodeURIComponent(webhookId)}`, data);
+    },
   };
 
   subscriptions = {
@@ -497,17 +987,169 @@ export class RelayCast {
 
     delete: (id: string): Promise<void> =>
       this.client.delete(`/v1/subscriptions/${encodeURIComponent(id)}`),
+
+    deliveries: (
+      id: string,
+      query: { status?: WebhookDeliveryStatus; limit?: number } = {},
+    ): Promise<WebhookDelivery[]> => {
+      if (query.limit != null
+        && (!Number.isInteger(query.limit) || query.limit < 1 || query.limit > 100)) {
+        throw new RangeError('subscriptions.deliveries limit must be an integer from 1 to 100');
+      }
+      const params: Record<string, string> = {};
+      if (query.status) params.status = query.status;
+      if (query.limit != null) params.limit = String(query.limit);
+      return this.client.get(`/v1/subscriptions/${encodeURIComponent(id)}/deliveries`, params);
+    },
+
+    replayDelivery: (id: string, deliveryId: string): Promise<ReplayWebhookDeliveryResponse> =>
+      this.client.post(
+        `/v1/subscriptions/${encodeURIComponent(id)}/deliveries/${encodeURIComponent(deliveryId)}/replay`,
+        {},
+      ),
   };
 
-  commands = {
-    register: (data: CommandRegisterInput): Promise<CreateCommandResponse> =>
-      this.client.post('/v1/commands', data),
+  actions = {
+    register: (data: RegisterActionRequest): Promise<ActionDefinition> =>
+      this.client.post('/v1/actions', data),
 
-    list: (): Promise<AgentCommand[]> =>
-      this.client.get('/v1/commands'),
+    list: (): Promise<ActionDefinition[]> =>
+      this.client.get('/v1/actions'),
 
-    delete: (command: string): Promise<void> =>
-      this.client.delete(`/v1/commands/${encodeURIComponent(command)}`),
+    get: (name: string): Promise<ActionDefinition> =>
+      this.client.get(`/v1/actions/${encodeURIComponent(name)}`),
+
+    delete: (name: string): Promise<void> =>
+      this.client.delete(`/v1/actions/${encodeURIComponent(name)}`),
+  };
+
+  nodes = {
+    create: (data: CreateNodeRequest, options?: CreateNodeOptions): Promise<CreateNodeResponse> => {
+      if (options?.currentToken !== undefined && !options.currentToken.trim()) {
+        throw new Error('currentToken must not be blank for node rotation');
+      }
+      if (options?.idempotencyKey !== undefined && !options.idempotencyKey.trim()) {
+        throw new Error('idempotencyKey must not be blank for node rotation recovery');
+      }
+      if (options?.idempotencyKey !== undefined && !options.currentToken) {
+        throw new Error('idempotencyKey requires currentToken for node rotation recovery');
+      }
+      const headers = {
+        ...(options?.currentToken ? { 'X-Relaycast-Node-Token': options.currentToken } : {}),
+        ...(options?.currentToken && options.idempotencyKey !== undefined
+          ? { 'Idempotency-Key': options.idempotencyKey }
+          : {}),
+      };
+      return this.client.post(
+        '/v1/nodes',
+        data,
+        Object.keys(headers).length > 0 ? { headers } : undefined,
+      );
+    },
+
+    list: (query?: NodeListQuery): Promise<NodeRosterEntry[]> => {
+      const params: Record<string, string> = {};
+      if (query?.capability) params.capability = query.capability;
+      if (query?.name) params.name = query.name;
+      if (query?.status) params.status = query.status;
+      return this.client.get('/v1/nodes', params);
+    },
+
+    // Explicit, bounded pagination contract for reading history (e.g. `--all`
+    // in the Relay CLI): pages through every matching row exactly once, no
+    // matter how many the workspace has retained, without silent truncation.
+    // Compatible callers keep using `list()`, which never returns this shape.
+    listHistory: (query?: NodeHistoryQuery): Promise<NodeHistoryPage> => {
+      const params: Record<string, string> = { history: 'true' };
+      if (query?.capability) params.capability = query.capability;
+      if (query?.name) params.name = query.name;
+      if (query?.status) params.status = query.status;
+      if (query?.cursor) params.cursor = query.cursor;
+      if (query?.limit !== undefined) params.limit = String(query.limit);
+      return this.client.get('/v1/nodes', params);
+    },
+
+    get: (name: string): Promise<NodeRosterEntry> =>
+      this.client.get(`/v1/nodes/${encodeURIComponent(name)}`),
+
+    delete: (name: string, options?: DeleteNodeOptions): Promise<DeleteNodeResponse> =>
+      this.client.request(
+        'DELETE',
+        `/v1/nodes/${encodeURIComponent(name)}`,
+        undefined,
+        options?.force ? { force: 'true' } : undefined,
+        { retry: false },
+      ),
+
+    listAgents: (name: string): Promise<NodeAgentBinding[]> =>
+      this.client.get(`/v1/nodes/${encodeURIComponent(name)}/agents`),
+
+    bindAgent: (name: string, data: BindAgentToNodeRequest): Promise<NodeAgentBinding> =>
+      this.client.post(`/v1/nodes/${encodeURIComponent(name)}/agents`, data),
+
+    unbindAgent: (name: string, agentName: string): Promise<void> =>
+      this.client.delete(`/v1/nodes/${encodeURIComponent(name)}/agents/${encodeURIComponent(agentName)}`),
+  };
+
+  triggers = {
+    create: (data: CreateTriggerRequest): Promise<Trigger> =>
+      this.client.post('/v1/triggers', data),
+
+    list: (): Promise<Trigger[]> =>
+      this.client.get('/v1/triggers'),
+
+    get: (id: string): Promise<Trigger> =>
+      this.client.get(`/v1/triggers/${encodeURIComponent(id)}`),
+
+    update: (id: string, data: UpdateTriggerRequest): Promise<Trigger> =>
+      this.client.patch(`/v1/triggers/${encodeURIComponent(id)}`, data),
+
+    delete: (id: string): Promise<void> =>
+      this.client.delete(`/v1/triggers/${encodeURIComponent(id)}`),
+  };
+
+  certify = {
+    submit: (data: SubmitCertificationRequest): Promise<CertificationRun> =>
+      this.client.post('/v1/certify', data),
+
+    get: (id: string): Promise<CertificationRun> =>
+      this.client.get(`/v1/certify/${encodeURIComponent(id)}`),
+
+    /** Public badge SVG URL for a certification run (served without an auth header). */
+    badgeUrl: (id: string): string =>
+      new URL(`/v1/certify/${encodeURIComponent(id)}/badge.svg`, this.client.baseUrl).toString(),
+
+    monitor: (data: MonitorCertificationRequest): Promise<CertificationRun> =>
+      this.client.post('/v1/certify/monitor', data),
+  };
+
+  console = {
+    messages: (query?: ConsoleMessagesQuery): Promise<ConsoleMessageLog[]> => {
+      const params: Record<string, string> = {};
+      if (query?.limit != null) params.limit = String(query.limit);
+      if (query?.before) params.before = query.before;
+      if (query?.agentId) params.agentId = query.agentId;
+      if (query?.channelId) params.channelId = query.channelId;
+      if (query?.conversationId) params.conversationId = query.conversationId;
+      if (query?.deliveryKind) params.deliveryKind = query.deliveryKind;
+      return this.client.get('/v1/console/messages', params);
+    },
+    stats: (query?: ConsoleWindowQuery): Promise<ConsoleOverview> => {
+      const params: Record<string, string> = {};
+      if (query?.days != null) params.days = String(query.days);
+      return this.client.get('/v1/console/stats', params);
+    },
+    agents: (query?: ConsoleAgentStatsQuery): Promise<ConsoleAgentStat[]> => {
+      const params: Record<string, string> = {};
+      if (query?.days != null) params.days = String(query.days);
+      if (query?.limit != null) params.limit = String(query.limit);
+      return this.client.get('/v1/console/agents', params);
+    },
+    costs: (query?: ConsoleWindowQuery): Promise<ConsoleCostStats> => {
+      const params: Record<string, string> = {};
+      if (query?.days != null) params.days = String(query.days);
+      return this.client.get('/v1/console/costs', params);
+    },
   };
 
   activity = (limit?: number): Promise<ActivityItem[]> => {
@@ -516,11 +1158,44 @@ export class RelayCast {
     return this.client.get('/v1/activity', params);
   };
 
-  allDmConversations = (): Promise<WorkspaceDmConversation[]> =>
-    this.client.get('/v1/dm/conversations/all');
+  allDmConversations = async (): Promise<WorkspaceDmConversation[]> => {
+    const conversations: WorkspaceDmConversation[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+
+    while (true) {
+      const page = await this.client.getEnvelope<WorkspaceDmConversation[]>(
+        '/v1/dm/conversations/all',
+        { limit: '500', ...(cursor ? { cursor } : {}) },
+        { schema: WorkspaceDmConversationSchema.array() },
+      );
+      conversations.push(...page.data);
+      if (!page.cursor?.hasMore) return conversations;
+
+      const next = page.cursor.next;
+      if (!next || seenCursors.has(next)) {
+        throw new RelayError('transport_error', 'DM conversation pagination did not advance', {
+          retryable: false,
+        });
+      }
+      seenCursors.add(next);
+      cursor = next;
+    }
+  };
 
   dmMessages = async (conversationId: string, opts?: { limit?: number; before?: string; after?: string }): Promise<DmMessage[]> => {
     const query: Record<string, string> = {};
+    if (opts?.limit !== undefined) query.limit = String(opts.limit);
+    if (opts?.before) query.before = opts.before;
+    if (opts?.after) query.after = opts.after;
+    return this.client.get(`/v1/dm/conversations/${encodeURIComponent(conversationId)}/messages`, query);
+  };
+
+  dmMessagePage = async (
+    conversationId: string,
+    opts?: { limit?: number; before?: string; after?: string },
+  ): Promise<DmMessagePage> => {
+    const query: Record<string, string> = { page: '1' };
     if (opts?.limit !== undefined) query.limit = String(opts.limit);
     if (opts?.before) query.before = opts.before;
     if (opts?.after) query.after = opts.after;

@@ -1,0 +1,2923 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { and, eq } from 'drizzle-orm';
+import { FLEET_DELIVERY_CURSOR_CAPABILITY } from '@relaycast/types';
+import {
+  makeNodeStack,
+  createWorkspace,
+  registerAgent,
+  FakeSocket,
+  attachDirectNodeSocket,
+  deliverFramesOfType,
+  contextUpdatesOfType,
+  type TestStack,
+} from './harness.js';
+import { agents, deliveries, messages, nodeProviders } from '../../db/schema.js';
+import * as messageEngine from '../../engine/message.js';
+import * as deliveryEngine from '../../engine/delivery.js';
+import { ensureDirectNodeForAgent } from '../../engine/node.js';
+import { DEFAULT_PROVIDER_NAME } from '../../engine/nodeProvider.js';
+import { sendNodeDeliveriesToAgents } from '../../engine/nodeDeliver.js';
+import type { NodeConnectionRegistry } from '../../ports/realtime.js';
+import { pruneExpired } from '../../engine/retention.js';
+import { routeDeliveryOutcomes, sweepDueNodeDeliveries, sweepExpiredDeliveries } from '../../routes/deliveryRouting.js';
+import { deliverPendingToNode, handleNodeReconnect } from '../../index.js';
+
+/**
+ * Durable delivery API conformance: listing the queued inbox, and the
+ * idempotent ack / fail / defer transitions over the public engine routes.
+ */
+describe('durable delivery api', () => {
+  let stack: TestStack;
+  let enrolledNodeTokens: Map<string, string>;
+  beforeEach(() => {
+    stack = makeNodeStack({ ttlMs: 60_000 });
+    enrolledNodeTokens = new Map();
+  });
+  afterEach(async () => {
+    await stack.close();
+  });
+
+  /** Stand up a workspace + channel with alice and bob joined, alice posts one message. */
+  async function seed() {
+    const ws = await createWorkspace(stack.app, 'delivery-ws');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+
+    const createRes = await stack.app.request('/v1/channels', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ name: 'team-chat' }),
+    });
+    expect(createRes.status).toBeLessThan(300);
+    for (const token of [alice.token, bob.token]) {
+      const joinRes = await stack.app.request('/v1/channels/team-chat/join', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(joinRes.status).toBeLessThan(300);
+    }
+
+    const postRes = await stack.app.request('/v1/channels/team-chat/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'hello bob' }),
+    });
+    expect(postRes.status).toBeLessThan(300);
+    const messageId = ((await postRes.json()) as { data: { id: string } }).data.id;
+
+    return { ws, alice, bob, messageId };
+  }
+
+  async function listDeliveries(token: string, query = '') {
+    const res = await stack.app.request(`/v1/deliveries${query}`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(200);
+    return ((await res.json()) as { data: Array<Record<string, unknown>> }).data;
+  }
+
+  async function waitForAssertion(assertion: () => void | Promise<void>) {
+    await stack.settle();
+    await assertion();
+  }
+
+  async function enrollAndAttachNode(
+    ws: { workspaceKey: string; workspaceId: string },
+    opts: { id?: string; name?: string; cursorHandshake?: boolean } = {},
+  ) {
+    const id = opts.id ?? 'node_mailbox';
+    const name = opts.name ?? 'mailbox-node';
+    const capabilities = opts.cursorHandshake
+      ? [
+        { name: 'spawn:claude', kind: 'capacity' },
+        { name: FLEET_DELIVERY_CURSOR_CAPABILITY, kind: 'capacity' },
+      ]
+      : [{ name: 'spawn:claude', kind: 'capacity' }];
+    const tokenKey = `${ws.workspaceId}:${id}`;
+    const currentToken = enrolledNodeTokens.get(tokenKey);
+    const create = await stack.app.request('/v1/nodes', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+        ...(currentToken ? { 'X-Relaycast-Node-Token': currentToken } : {}),
+      },
+      body: JSON.stringify({
+        node_id: id,
+        name,
+        capabilities: capabilities.map((capability) => capability.name),
+        max_agents: 4,
+        tags: ['mailbox-test'],
+        version: 'test-node',
+      }),
+    });
+    expect(create.status).toBe(201);
+    const created = (await create.json()) as { data: { token: string } };
+    enrolledNodeTokens.set(tokenKey, created.data.token);
+
+    const sock = new FakeSocket();
+    const handle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, id, sock);
+    await handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'node.register',
+      name,
+      node_id: id,
+      capabilities,
+      max_agents: 4,
+      tags: ['mailbox-test'],
+      version: 'test-node',
+      resume_cursor: null,
+    }));
+    await handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'node.heartbeat',
+      load: 0,
+      active_agents: 0,
+      handlers_live: true,
+    }));
+    return { id, name, sock, handle };
+  }
+
+  async function registerViaNode(
+    node: Awaited<ReturnType<typeof enrollAndAttachNode>>,
+    name: string,
+  ) {
+    await node.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'agent.register',
+      name,
+      resumable: true,
+      session_ref: `sess-${name}`,
+    }));
+    // The engine answers agent.register with a `reply` frame (the shape the
+    // relay broker's node_control client consumes): { ok, data: {agent_id, token, name} }.
+    const reply = node.sock.ofType('reply').at(-1) as {
+      ok: boolean;
+      data: { agent_id: string; token: string; name?: string; delivery_ack_seq?: number };
+    };
+    expect(reply?.ok).toBe(true);
+    expect(reply.data).toMatchObject({ name });
+    return {
+      agentId: reply.data.agent_id,
+      token: reply.data.token,
+      name,
+    };
+  }
+
+  function latestDeliverOfType(sock: FakeSocket, eventType: string) {
+    const deliveries = sock.ofType('deliver');
+    const match = deliveries.findLast((event: { payload?: { type?: string } }) => event.payload?.type === eventType);
+    expect(match).toBeDefined();
+    return match as { msg_id: string; seq: number; payload: Record<string, unknown> };
+  }
+
+  it('lists the queued delivery for a recipient with the message payload', async () => {
+    const { bob, messageId } = await seed();
+
+    const items = await listDeliveries(bob.token);
+    expect(items).toHaveLength(1);
+    const item = items[0];
+    expect(item.message_id).toBe(messageId);
+    expect(['queued', 'delivered']).toContain(item.status);
+    expect(item.seq).toBe(1);
+    expect(item.agent_id).toBe(bob.agentId);
+    expect((item.message as { text: string }).text).toBe('hello bob');
+    expect((item.message as { agent_name: string }).agent_name).toBe('alice');
+  });
+
+  it('does not expose deliveries to non-recipients', async () => {
+    const { alice } = await seed();
+    // alice is the sender, so she has no delivery row of her own
+    const items = await listDeliveries(alice.token);
+    expect(items).toHaveLength(0);
+  });
+
+  it('acks a delivery idempotently and removes it from the default queue', async () => {
+    const { bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+    const deliveryId = item.id as string;
+
+    const ack1 = await stack.app.request(`/v1/deliveries/${deliveryId}/ack`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(ack1.status).toBe(200);
+    const ack1Data = ((await ack1.json()) as { data: { status: string; channel_id: string } }).data;
+    expect(ack1Data.status).toBe('acked');
+    // channel_id is populated on the transition response, matching the queued item.
+    expect(ack1Data.channel_id).toBe(item.channel_id);
+    expect(ack1Data.channel_id).not.toBe('');
+
+    // Idempotent: second ack still 200 + acked.
+    const ack2 = await stack.app.request(`/v1/deliveries/${deliveryId}/ack`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(ack2.status).toBe(200);
+    expect(((await ack2.json()) as { data: { status: string } }).data.status).toBe('acked');
+
+    // Acked items drop out of the default (queued+delivered) queue.
+    expect(await listDeliveries(bob.token)).toHaveLength(0);
+    // But are still listable by explicit status filter.
+    expect(await listDeliveries(bob.token, '?status=acked')).toHaveLength(1);
+  });
+
+  it('records a failed delivery with error text and retryability', async () => {
+    const { bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+
+    const res = await stack.app.request(`/v1/deliveries/${item.id}/fail`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ error: 'handler threw', retryable: true }),
+    });
+    expect(res.status).toBe(200);
+    const data = ((await res.json()) as { data: Record<string, unknown> }).data;
+    expect(data.status).toBe('failed');
+    expect(data.error).toBe('handler threw');
+    expect(data.retryable).toBe(true);
+    expect(data.channel_id).toBe(item.channel_id);
+  });
+
+  it('defers a delivery with available_at and keeps it in the queue', async () => {
+    const { bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+    // Timestamps are stored at second precision (unixepoch), so align to the second.
+    const availableAt = new Date(Math.floor((Date.now() + 60_000) / 1000) * 1000).toISOString();
+
+    const res = await stack.app.request(`/v1/deliveries/${item.id}/defer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ available_at: availableAt, reason: 'busy' }),
+    });
+    expect(res.status).toBe(200);
+    const data = ((await res.json()) as { data: Record<string, unknown> }).data;
+    expect(data.status).toBe('queued');
+    expect(data.available_at).toBe(availableAt);
+    expect(data.reason).toBe('busy');
+    expect(data.channel_id).toBe(item.channel_id);
+
+    // Deferred items remain queued for later retry.
+    const queued = await listDeliveries(bob.token);
+    expect(queued).toHaveLength(1);
+    expect(['queued', 'delivered']).toContain(queued[0].status);
+  });
+
+  it('does not resurrect an acked (terminal) delivery via defer or fail', async () => {
+    const { bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+
+    const ack = await stack.app.request(`/v1/deliveries/${item.id}/ack`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(ack.status).toBe(200);
+
+    // A late defer must not move an acked record back into the queue.
+    const defer = await stack.app.request(`/v1/deliveries/${item.id}/defer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ available_at: new Date(Date.now() + 60_000).toISOString() }),
+    });
+    expect(defer.status).toBe(200);
+    expect(((await defer.json()) as { data: { status: string } }).data.status).toBe('acked');
+
+    // Same for a late fail.
+    const fail = await stack.app.request(`/v1/deliveries/${item.id}/fail`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ error: 'too late' }),
+    });
+    expect(fail.status).toBe(200);
+    expect(((await fail.json()) as { data: { status: string } }).data.status).toBe('acked');
+
+    // Stays out of the default queue.
+    expect(await listDeliveries(bob.token)).toHaveLength(0);
+  });
+
+  it('allows recovering a failed delivery via ack (retryable failures are not terminal)', async () => {
+    const { bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+
+    const fail = await stack.app.request(`/v1/deliveries/${item.id}/fail`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ error: 'transient', retryable: true }),
+    });
+    expect(fail.status).toBe(200);
+    expect(((await fail.json()) as { data: { status: string } }).data.status).toBe('failed');
+
+    // A retry that succeeds can ack the previously-failed delivery.
+    const ack = await stack.app.request(`/v1/deliveries/${item.id}/ack`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(ack.status).toBe(200);
+    expect(((await ack.json()) as { data: { status: string } }).data.status).toBe('acked');
+  });
+
+  it('includes queued deliveries in the agent detail pending_deliveries', async () => {
+    const { ws, bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+
+    const defer = await stack.app.request(`/v1/deliveries/${item.id}/defer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ available_at: new Date(Date.now() + 60_000).toISOString() }),
+    });
+    expect(defer.status).toBe(200);
+
+    const res = await stack.app.request('/v1/agents/bob', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    expect(res.status).toBe(200);
+    const pending = ((await res.json()) as {
+      data: { pending_deliveries: Array<{ id: string; status: string }> };
+    }).data.pending_deliveries;
+    const queued = pending.find((d) => d.id === item.id);
+    expect(queued).toBeDefined();
+    expect(queued!.status).toBe('queued');
+  });
+
+  it('does not expose an expired unswept delivery as pending agent detail', async () => {
+    const { ws, bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+    await stack.runtime.deps.db
+      .update(deliveries)
+      .set({ expiresAt: new Date(Date.now() - 1_000) })
+      .where(eq(deliveries.id, item.id as string));
+
+    const res = await stack.app.request('/v1/agents/bob', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    expect(res.status).toBe(200);
+    const pending = ((await res.json()) as {
+      data: { pending_deliveries: Array<{ id: string }> };
+    }).data.pending_deliveries;
+    expect(pending.map((delivery) => delivery.id)).not.toContain(item.id);
+
+    const [stored] = await stack.runtime.deps.db
+      .select({ status: deliveries.status })
+      .from(deliveries)
+      .where(eq(deliveries.id, item.id as string));
+    expect(stored.status).toBe('queued');
+
+    const plan = stack.runtime.handle.sqlite
+      .prepare(`EXPLAIN QUERY PLAN
+        SELECT id FROM deliveries
+        WHERE workspace_id = ?
+          AND agent_id = ?
+          AND status IN ('queued', 'delivered')
+          AND (expires_at IS NULL OR expires_at > unixepoch())
+        ORDER BY created_at, id
+        LIMIT 50`)
+      .all(ws.workspaceId, bob.agentId) as Array<{ detail: string }>;
+    expect(plan.some((step) => step.detail.includes('idx_deliveries_agent_active_created'))).toBe(true);
+  });
+
+  it('serves an explicit-status listing with an agent-scoped seek, never a workspace status walk', async () => {
+    const { ws, bob } = await seed();
+    for (const status of ['dead_lettered', 'acked', 'failed', 'queued', 'delivered']) {
+      const plan = stack.runtime.handle.sqlite
+        // Same projection as listDeliveries: an id-only query could be served
+        // by a different (covering) index and pass for the wrong reason.
+        .prepare(`EXPLAIN QUERY PLAN
+          SELECT * FROM deliveries
+          WHERE workspace_id = ?
+            AND agent_id = ?
+            AND status = ?
+          ORDER BY created_at, id
+          LIMIT 50`)
+        .all(ws.workspaceId, bob.agentId, status) as Array<{ detail: string }>;
+      const details = plan.map((step) => step.detail).join(' | ');
+      expect(details, status).toContain('idx_deliveries_agent_status_created');
+      // Already in the requested order: no sort that would force a full read before LIMIT.
+      expect(details, status).not.toContain('TEMP B-TREE');
+    }
+  });
+
+  it('rejects a malformed JSON fail body with 400 (no state change)', async () => {
+    const { bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+
+    const res = await stack.app.request(`/v1/deliveries/${item.id}/fail`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: '{"error": "boom"', // missing closing brace
+    });
+    expect(res.status).toBe(400);
+
+    // The delivery must remain queued, not flipped to failed.
+    const queued = await listDeliveries(bob.token);
+    expect(queued).toHaveLength(1);
+    expect(['queued', 'delivered']).toContain(queued[0].status);
+  });
+
+  it('accepts an empty fail body (optional metadata)', async () => {
+    const { bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+
+    const res = await stack.app.request(`/v1/deliveries/${item.id}/fail`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { data: { status: string } }).data.status).toBe('failed');
+  });
+
+  it('does not inherit the acceptance reason when deferring without a reason', async () => {
+    const { bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+    // The queued item carries an acceptance reason (e.g. "message").
+    expect(item.reason).toBeTruthy();
+
+    const res = await stack.app.request(`/v1/deliveries/${item.id}/defer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ available_at: new Date(Date.now() + 60_000).toISOString() }),
+    });
+    expect(res.status).toBe(200);
+    const data = ((await res.json()) as { data: { status: string; reason: string | null } }).data;
+    expect(data.status).toBe('queued');
+    expect(data.reason).toBeNull();
+  });
+
+  it('rejects an invalid defer payload', async () => {
+    const { bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+    const res = await stack.app.request(`/v1/deliveries/${item.id}/defer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ available_at: 'not-a-date' }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 404 for an unknown or unowned delivery', async () => {
+    const { alice } = await seed();
+    const res = await stack.app.request('/v1/deliveries/del_does_not_exist/ack', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${alice.token}` },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('emits delivery.delivered once on ack, not on idempotent retries', async () => {
+    const { ws, bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+
+    const { sock: bobSock } = await attachDirectNodeSocket(stack, ws.workspaceId, bob);
+
+    const ackOnce = () => stack.app.request(`/v1/deliveries/${item.id}/ack`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+
+    expect((await ackOnce()).status).toBe(200);
+    // A second ack is a no-op and must not re-emit the event.
+    expect((await ackOnce()).status).toBe(200);
+    await waitForAssertion(() => {
+      expect(contextUpdatesOfType(bobSock, 'delivery.delivered')).toHaveLength(1);
+    });
+  });
+
+  it('does not re-emit delivery.deferred when re-deferred to the same time', async () => {
+    const { ws, bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+    const availableAt = new Date(Date.now() + 60_000).toISOString();
+
+    const { sock: bobSock } = await attachDirectNodeSocket(stack, ws.workspaceId, bob);
+
+    const deferOnce = () => stack.app.request(`/v1/deliveries/${item.id}/defer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ available_at: availableAt }),
+    });
+
+    expect((await deferOnce()).status).toBe(200);
+    // Re-deferring to the identical available_at is a no-op — no second event.
+    expect((await deferOnce()).status).toBe(200);
+    await waitForAssertion(() => {
+      expect(contextUpdatesOfType(bobSock, 'delivery.deferred')).toHaveLength(1);
+    });
+  });
+
+  it('preserves failure metadata across repeated fail calls (idempotent)', async () => {
+    const { ws, bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+    const { sock: bobSock } = await attachDirectNodeSocket(stack, ws.workspaceId, bob);
+
+    const first = await stack.app.request(`/v1/deliveries/${item.id}/fail`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ error: 'boom', retryable: true }),
+    });
+    expect(first.status).toBe(200);
+
+    // A second fail (even with an empty body) must not null out the recorded
+    // error/retryable — the first failure is preserved.
+    const second = await stack.app.request(`/v1/deliveries/${item.id}/fail`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({}),
+    });
+    expect(second.status).toBe(200);
+    const data = ((await second.json()) as { data: Record<string, unknown> }).data;
+    expect(data.status).toBe('failed');
+    expect(data.error).toBe('boom');
+    expect(data.retryable).toBe(true);
+    await waitForAssertion(() => {
+      expect(contextUpdatesOfType(bobSock, 'delivery.failed')).toHaveLength(1);
+    });
+  });
+
+  it('clears a queued delivery from the replay queue when the message is read', async () => {
+    const { bob, messageId } = await seed();
+    const [item] = await listDeliveries(bob.token);
+
+    const defer = await stack.app.request(`/v1/deliveries/${item.id}/defer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ available_at: new Date(Date.now() + 60_000).toISOString() }),
+    });
+    expect(defer.status).toBe(200);
+    expect(await listDeliveries(bob.token)).toHaveLength(1);
+
+    const read = await stack.app.request(`/v1/messages/${messageId}/read`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(read.status).toBe(200);
+
+    // The queued item is now acked and out of the default queue.
+    expect(await listDeliveries(bob.token)).toHaveLength(0);
+    expect(await listDeliveries(bob.token, '?status=acked')).toHaveLength(1);
+  });
+
+  it('routes via-node deliveries over the node control connection and cumulative ack marks them read', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-node-route');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws);
+    const bob = await registerViaNode(node, 'bob');
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'node hello' }),
+    });
+    expect(post.status).toBe(201);
+    const messageId = ((await post.json()) as { data: { id: string } }).data.id;
+    await stack.settle();
+
+    const delivered = node.sock.ofType('deliver');
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]).toMatchObject({
+      agent: 'bob',
+      msg_id: messageId,
+      seq: 1,
+      mode: 'wait',
+    });
+
+    const inboxBefore = await stack.app.request('/v1/inbox', {
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(inboxBefore.status).toBe(200);
+    expect(((await inboxBefore.json()) as {
+      data: { unread_channels: Array<{ channel_name: string; unread_count: number }> };
+    }).data.unread_channels).toEqual(expect.arrayContaining([
+      expect.objectContaining({ channel_name: 'general', unread_count: 1 }),
+    ]));
+
+    await node.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'delivery.ack',
+      agent: 'bob',
+      up_to_seq: 1,
+    }));
+
+    expect(await listDeliveries(bob.token)).toHaveLength(0);
+    expect(await listDeliveries(bob.token, '?status=acked')).toHaveLength(1);
+    const inboxAfter = await stack.app.request('/v1/inbox', {
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(inboxAfter.status).toBe(200);
+    expect(((await inboxAfter.json()) as {
+      data: { unread_channels: Array<{ channel_name: string; unread_count: number }> };
+    }).data.unread_channels).toHaveLength(0);
+  });
+
+  it('returns the authoritative cursor before resumed delivery only to negotiated brokers', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-cursor-handshake');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+
+    const initialReply = node.sock.ofType('reply').at(-1) as {
+      data: { delivery_ack_seq?: number };
+    };
+    expect(initialReply.data.delivery_ack_seq).toBe(0);
+
+    const first = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'before broker restart' }),
+    });
+    expect(first.status).toBe(201);
+    await waitForAssertion(() => expect(node.sock.ofType('deliver')).toHaveLength(1));
+    await node.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'delivery.ack',
+      agent: bob.name,
+      up_to_seq: 1,
+    }));
+    await node.handle.handleClose();
+
+    const second = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'after broker restart' }),
+    });
+    expect(second.status).toBe(201);
+
+    const resumed = await enrollAndAttachNode(ws, {
+      id: node.id,
+      name: node.name,
+      cursorHandshake: true,
+    });
+    expect(resumed.sock.ofType('deliver')).toHaveLength(0);
+    await resumed.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'resume-bob',
+      type: 'agent.recover',
+      name: bob.name,
+      expected_agent_id: bob.agentId,
+      resumable: true,
+      session_ref: 'sess-bob',
+    }));
+
+    const replyIndex = resumed.sock.received.findIndex(
+      (frame) => frame.type === 'reply' && frame.id === 'resume-bob',
+    );
+    const deliveryIndex = resumed.sock.received.findIndex(
+      (frame) => frame.type === 'deliver' && frame.seq === 2,
+    );
+    expect(replyIndex).toBeGreaterThanOrEqual(0);
+    expect(resumed.sock.received[replyIndex]).toMatchObject({
+      data: { agent_id: bob.agentId, delivery_ack_seq: 1 },
+    });
+    expect(deliveryIndex).toBeGreaterThan(replyIndex);
+
+    const legacy = await enrollAndAttachNode(ws, {
+      id: 'node_legacy_cursor',
+      name: 'legacy-cursor-node',
+    });
+    await legacy.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'legacy-register',
+      type: 'agent.register',
+      name: 'legacy-worker',
+    }));
+    const legacyReply = legacy.sock.received.find(
+      (frame) => frame.type === 'reply' && frame.id === 'legacy-register',
+    ) as { data: Record<string, unknown> };
+    expect(legacyReply.data).not.toHaveProperty('delivery_ack_seq');
+  });
+
+  it('does not replay another negotiated agent before that agent receives its cursor', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-cursor-agent-scope');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+    const carol = await registerViaNode(node, 'carol');
+
+    const first = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'before multi-agent restart' }),
+    });
+    expect(first.status).toBe(201);
+    await waitForAssertion(() => {
+      const deliveredAgents = node.sock.ofType('deliver')
+        .filter((frame) => frame.seq === 1)
+        .map((frame) => frame.agent)
+        .sort();
+      expect(deliveredAgents).toEqual(['bob', 'carol']);
+    });
+    for (const agent of [bob, carol]) {
+      await node.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'delivery.ack',
+        agent: agent.name,
+        up_to_seq: 1,
+      }));
+    }
+    await node.handle.handleClose();
+
+    const second = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'after multi-agent restart' }),
+    });
+    expect(second.status).toBe(201);
+
+    const resumed = await enrollAndAttachNode(ws, {
+      id: node.id,
+      name: node.name,
+      cursorHandshake: true,
+    });
+    expect(resumed.sock.ofType('deliver')).toHaveLength(0);
+
+    await resumed.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'resume-bob-first',
+      type: 'agent.recover',
+      name: bob.name,
+      expected_agent_id: bob.agentId,
+      resumable: true,
+      session_ref: 'sess-bob',
+    }));
+    const bobReplyIndex = resumed.sock.received.findIndex(
+      (frame) => frame.type === 'reply' && frame.id === 'resume-bob-first',
+    );
+    const bobDeliveryIndex = resumed.sock.received.findIndex(
+      (frame) => frame.type === 'deliver' && frame.agent === bob.name && frame.seq === 2,
+    );
+    expect(bobReplyIndex).toBeGreaterThanOrEqual(0);
+    expect(bobDeliveryIndex).toBeGreaterThan(bobReplyIndex);
+    expect(resumed.sock.ofType('deliver').some((frame) => frame.agent === carol.name)).toBe(false);
+
+    await resumed.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'resume-carol-second',
+      type: 'agent.recover',
+      name: carol.name,
+      expected_agent_id: carol.agentId,
+      resumable: true,
+      session_ref: 'sess-carol',
+    }));
+    const carolReplyIndex = resumed.sock.received.findIndex(
+      (frame) => frame.type === 'reply' && frame.id === 'resume-carol-second',
+    );
+    const carolDeliveryIndex = resumed.sock.received.findIndex(
+      (frame) => frame.type === 'deliver' && frame.agent === carol.name && frame.seq === 2,
+    );
+    expect(carolReplyIndex).toBeGreaterThan(bobDeliveryIndex);
+    expect(carolDeliveryIndex).toBeGreaterThan(carolReplyIndex);
+  });
+
+  it('gates live durable and seq-zero delivery until the agent cursor reply is sent', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-cursor-live-gate');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+
+    const first = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'establish cursor' }),
+    });
+    expect(first.status).toBe(201);
+    await waitForAssertion(() => {
+      expect(node.sock.ofType('deliver').some((frame) => frame.agent === bob.name && frame.seq === 1)).toBe(true);
+    });
+    await node.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'delivery.ack',
+      agent: bob.name,
+      up_to_seq: 1,
+    }));
+    await node.handle.handleClose();
+
+    const resumed = await enrollAndAttachNode(ws, {
+      id: node.id,
+      name: node.name,
+      cursorHandshake: true,
+    });
+    const live = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'arrives before cursor readiness' }),
+    });
+    expect(live.status).toBe(201);
+    let adapterSendAttempts = 0;
+    const recordingRegistry: NodeConnectionRegistry = {
+      upgradeNode: async () => new Response(null, { status: 501 }),
+      sendToNode: async () => false,
+      sendToProvider: async () => {
+        adapterSendAttempts++;
+        return true;
+      },
+      isNodeConnected: () => true,
+      isProviderConnected: () => true,
+      setProviderDeliveryReadiness: () => {},
+      markProviderAgentsDeliveryReady: () => {},
+      isProviderAgentDeliveryReady: () => false,
+      detachProvider: () => {},
+      disconnectNode: async () => {},
+      drainNode: async () => {},
+    };
+    await sendNodeDeliveriesToAgents({
+      db: stack.runtime.deps.db,
+      nodeConnections: recordingRegistry,
+      workspaceId: ws.workspaceId,
+      environment: 'test',
+    }, {
+      agentIds: [bob.agentId],
+      event: 'message.reacted',
+      eventKey: 'adapter-before-cursor-ready',
+      data: { message_id: 'msg_adapter_before_cursor', emoji: 'eyes' },
+      messageId: 'msg_adapter_before_cursor',
+    });
+    expect(adapterSendAttempts).toBe(0);
+
+    await sendNodeDeliveriesToAgents({
+      db: stack.runtime.deps.db,
+      nodeConnections: stack.runtime.deps.nodeConnections,
+      workspaceId: ws.workspaceId,
+      environment: 'test',
+    }, {
+      agentIds: [bob.agentId],
+      event: 'message.reacted',
+      eventKey: 'before-cursor-ready',
+      data: { message_id: 'msg_before_cursor', emoji: 'eyes' },
+      messageId: 'msg_before_cursor',
+    });
+    expect(resumed.sock.ofType('deliver')).toHaveLength(0);
+
+    await resumed.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'resume-live-gated-bob',
+      type: 'agent.recover',
+      name: bob.name,
+      expected_agent_id: bob.agentId,
+      resumable: true,
+      session_ref: 'sess-bob',
+    }));
+    const replyIndex = resumed.sock.received.findIndex(
+      (frame) => frame.type === 'reply' && frame.id === 'resume-live-gated-bob',
+    );
+    const durableIndex = resumed.sock.received.findIndex(
+      (frame) => frame.type === 'deliver' && frame.agent === bob.name && frame.seq === 2,
+    );
+    expect(durableIndex).toBeGreaterThan(replyIndex);
+
+    await sendNodeDeliveriesToAgents({
+      db: stack.runtime.deps.db,
+      nodeConnections: stack.runtime.deps.nodeConnections,
+      workspaceId: ws.workspaceId,
+      environment: 'test',
+    }, {
+      agentIds: [bob.agentId],
+      event: 'message.reacted',
+      eventKey: 'after-cursor-ready',
+      data: { message_id: 'msg_after_cursor', emoji: 'eyes' },
+      messageId: 'msg_after_cursor',
+    });
+    expect(resumed.sock.ofType('deliver').some((frame) => frame.agent === bob.name && frame.seq === 0)).toBe(true);
+  });
+
+  it('rejects a mismatched inventory identity without making its agent delivery-ready', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-cursor-inventory-id');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+    await node.handle.handleClose();
+
+    const resumed = await enrollAndAttachNode(ws, {
+      id: node.id,
+      name: node.name,
+      cursorHandshake: true,
+    });
+    await resumed.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'inventory-wrong-bob-id',
+      type: 'inventory.sync',
+      agents: [{ agent_id: 'agt_wrong_bob', name: bob.name, session_ref: 'sess-bob' }],
+    }));
+    expect(resumed.sock.ofType('error').at(-1)).toMatchObject({
+      id: 'inventory-wrong-bob-id',
+      code: 'agent_identity_mismatch',
+    });
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'must remain gated after bad inventory' }),
+    });
+    expect(post.status).toBe(201);
+    expect(resumed.sock.ofType('deliver')).toHaveLength(0);
+
+    await resumed.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'resume-bob-after-bad-inventory',
+      type: 'agent.recover',
+      name: bob.name,
+      expected_agent_id: bob.agentId,
+      resumable: true,
+      session_ref: 'sess-bob',
+    }));
+    const replyIndex = resumed.sock.received.findIndex(
+      (frame) => frame.type === 'reply' && frame.id === 'resume-bob-after-bad-inventory',
+    );
+    const deliveryIndex = resumed.sock.received.findIndex(
+      (frame) => frame.type === 'deliver' && frame.agent === bob.name && frame.seq === 1,
+    );
+    expect(deliveryIndex).toBeGreaterThan(replyIndex);
+  });
+
+  it('replays only inventoried cursor agents after a transient control reconnect', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-cursor-inventory-scope');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+    const carol = await registerViaNode(node, 'carol');
+
+    const first = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'before transient reconnect' }),
+    });
+    expect(first.status).toBe(201);
+    await waitForAssertion(() => {
+      expect(node.sock.ofType('deliver').filter((frame) => frame.seq === 1)).toHaveLength(2);
+    });
+    for (const agent of [bob, carol]) {
+      await node.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'delivery.ack',
+        agent: agent.name,
+        up_to_seq: 1,
+      }));
+    }
+    await node.handle.handleClose();
+
+    const second = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'queued during transport outage' }),
+    });
+    expect(second.status).toBe(201);
+
+    const resumed = await enrollAndAttachNode(ws, {
+      id: node.id,
+      name: node.name,
+      cursorHandshake: true,
+    });
+    expect(resumed.sock.ofType('deliver')).toHaveLength(0);
+    await resumed.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'inventory-bob-only',
+      type: 'inventory.sync',
+      agents: [{ agent_id: bob.agentId, name: bob.name, session_ref: 'sess-bob' }],
+    }));
+
+    const replyIndex = resumed.sock.received.findIndex(
+      (frame) => frame.type === 'reply' && frame.id === 'inventory-bob-only',
+    );
+    const bobDeliveryIndex = resumed.sock.received.findIndex(
+      (frame) => frame.type === 'deliver' && frame.agent === bob.name && frame.seq === 2,
+    );
+    expect(replyIndex).toBeGreaterThanOrEqual(0);
+    expect(bobDeliveryIndex).toBeGreaterThan(replyIndex);
+    expect(resumed.sock.ofType('deliver').some((frame) => frame.agent === carol.name)).toBe(false);
+  });
+
+  it('keeps a legacy provider reconnect from flushing a cursor provider mailbox', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-cursor-provider-scope');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const cursor = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const cursorAgent = await registerViaNode(cursor, 'cursor-agent');
+
+    const attachLegacyProvider = async (instanceId: string) => {
+      const sock = new FakeSocket();
+      const handle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, cursor.id, sock);
+      await handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: `register-legacy-${instanceId}`,
+        type: 'node.register',
+        name: cursor.name,
+        node_id: cursor.id,
+        provider: { name: 'legacy', instance_id: instanceId },
+        capabilities: [{ name: 'spawn:codex', kind: 'capacity' }],
+        max_agents: 4,
+        tags: ['mailbox-test'],
+        version: 'test-node',
+        resume_cursor: null,
+      }));
+      await handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.heartbeat',
+        provider: { name: 'legacy', instance_id: instanceId },
+        load: 0,
+        active_agents: 0,
+        handlers_live: true,
+      }));
+      return { id: cursor.id, name: cursor.name, sock, handle };
+    };
+
+    const legacy = await attachLegacyProvider('legacy-i1');
+    const legacyAgent = await registerViaNode(legacy, 'legacy-agent');
+    const first = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'before provider reconnect' }),
+    });
+    expect(first.status).toBe(201);
+    await waitForAssertion(() => {
+      expect(cursor.sock.ofType('deliver').some((frame) => frame.agent === cursorAgent.name && frame.seq === 1)).toBe(true);
+      expect(legacy.sock.ofType('deliver').some((frame) => frame.agent === legacyAgent.name && frame.seq === 1)).toBe(true);
+    });
+    await cursor.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'delivery.ack',
+      agent: cursorAgent.name,
+      up_to_seq: 1,
+    }));
+    await legacy.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'delivery.ack',
+      agent: legacyAgent.name,
+      up_to_seq: 1,
+    }));
+    await cursor.handle.handleClose();
+    await legacy.handle.handleClose();
+
+    const second = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'queued for both providers' }),
+    });
+    expect(second.status).toBe(201);
+
+    const cursorResumed = await enrollAndAttachNode(ws, {
+      id: cursor.id,
+      name: cursor.name,
+      cursorHandshake: true,
+    });
+    expect(cursorResumed.sock.ofType('deliver')).toHaveLength(0);
+    const legacyResumed = await attachLegacyProvider('legacy-i2');
+    expect(legacyResumed.sock.ofType('deliver')).toEqual([
+      expect.objectContaining({ agent: legacyAgent.name, seq: 2 }),
+    ]);
+    expect(cursorResumed.sock.ofType('deliver')).toHaveLength(0);
+  });
+
+  it('keeps delivering after a same-connection node.register re-register without re-announcing agents', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-cursor-reregister-same-conn');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+
+    const first = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'before re-register' }),
+    });
+    expect(first.status).toBe(201);
+    await waitForAssertion(() => {
+      expect(node.sock.ofType('deliver').some((frame) => frame.agent === bob.name && frame.seq === 1)).toBe(true);
+    });
+
+    // The broker re-sends node.register on the SAME live connection (same
+    // provider instance, since `provider` is omitted the instance_id resolves to
+    // the connection id) WITHOUT re-announcing bob. This is a reconnect that must
+    // not invalidate broker-side cursors — bob's delivery readiness is preserved.
+    await node.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'node.register',
+      name: node.name,
+      node_id: node.id,
+      capabilities: [
+        { name: 'spawn:claude', kind: 'capacity' },
+        { name: FLEET_DELIVERY_CURSOR_CAPABILITY, kind: 'capacity' },
+      ],
+      max_agents: 4,
+      tags: ['mailbox-test'],
+      version: 'test-node',
+      resume_cursor: null,
+    }));
+
+    const second = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'after re-register' }),
+    });
+    expect(second.status).toBe(201);
+    // Regression for #270: before the fix the re-register wiped the ready-set and
+    // this frame was silently dropped until the mailbox TTL dead-lettered it.
+    await waitForAssertion(() => {
+      expect(node.sock.ofType('deliver').some((frame) => frame.agent === bob.name && frame.seq === 2)).toBe(true);
+    });
+  });
+
+  it('resets readiness on a same-connection re-register with a new provider instance id', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-cursor-reregister-new-instance');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+
+    const first = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'before re-register' }),
+    });
+    expect(first.status).toBe(201);
+    await waitForAssertion(() => {
+      expect(node.sock.ofType('deliver').some((frame) => frame.agent === bob.name && frame.seq === 1)).toBe(true);
+    });
+
+    // The broker re-registers on the SAME live connection but with a NEW
+    // provider instance id — a restarted provider whose broker-side cursors are
+    // gone. providerAttachConflict never conflicts for the same connectionId, so
+    // this is accepted; attachProvider must reset the ready-set so the following
+    // agent_scoped readiness starts empty and bob is gated until it re-announces.
+    await node.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'node.register',
+      name: node.name,
+      node_id: node.id,
+      provider: { name: DEFAULT_PROVIDER_NAME, instance_id: 'restarted-instance' },
+      capabilities: [
+        { name: 'spawn:claude', kind: 'capacity' },
+        { name: FLEET_DELIVERY_CURSOR_CAPABILITY, kind: 'capacity' },
+      ],
+      max_agents: 4,
+      tags: ['mailbox-test'],
+      version: 'test-node',
+      resume_cursor: null,
+    }));
+
+    const second = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'after new-instance re-register' }),
+    });
+    expect(second.status).toBe(201);
+
+    // The new-instance re-register wiped the ready-set: the seq 2 frame is NOT
+    // delivered and the row stays queued but is stamped observable + retryable.
+    await waitForAssertion(async () => {
+      const [row] = await stack.runtime.deps.db
+        .select()
+        .from(deliveries)
+        .where(and(
+          eq(deliveries.workspaceId, ws.workspaceId),
+          eq(deliveries.agentId, bob.agentId),
+          eq(deliveries.seq, 2),
+        ));
+      expect(row).toBeDefined();
+      expect(row.status).toBe('queued');
+      expect(row.lastDispatchError).toBe('provider connection not delivery-ready for agent');
+      expect(row.nextAttemptAt).toBeInstanceOf(Date);
+      expect(row.dispatchAttempts).toBe(0);
+    });
+    expect(node.sock.ofType('deliver').some((frame) => frame.agent === bob.name && frame.seq === 2)).toBe(false);
+  });
+
+  it('resets readiness and drops the stale index entry on a same-connection re-register with a new provider name', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-cursor-reregister-new-name');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+
+    const first = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'before rename' }),
+    });
+    expect(first.status).toBe(201);
+    await waitForAssertion(() => {
+      expect(node.sock.ofType('deliver').some((frame) => frame.agent === bob.name && frame.seq === 1)).toBe(true);
+    });
+
+    // The broker re-registers on the SAME live connection with the SAME
+    // instance id but a DIFFERENT provider name. A name change is a different
+    // provider identity: the ready-set must reset (bob was announced under the
+    // old name) and the old name's index entry must not keep pointing at this
+    // socket.
+    await node.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'node.register',
+      name: node.name,
+      node_id: node.id,
+      provider: { name: 'renamed-provider', instance_id: node.handle.connectionId },
+      capabilities: [
+        { name: 'spawn:claude', kind: 'capacity' },
+        { name: FLEET_DELIVERY_CURSOR_CAPABILITY, kind: 'capacity' },
+      ],
+      max_agents: 4,
+      tags: ['mailbox-test'],
+      version: 'test-node',
+      resume_cursor: null,
+    }));
+
+    expect(stack.runtime.realtime.isProviderAttached(ws.workspaceId, node.id, DEFAULT_PROVIDER_NAME)).toBe(false);
+    expect(stack.runtime.realtime.isProviderAttached(ws.workspaceId, node.id, 'renamed-provider')).toBe(true);
+
+    const second = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'after rename re-register' }),
+    });
+    expect(second.status).toBe(201);
+
+    await waitForAssertion(async () => {
+      const [row] = await stack.runtime.deps.db
+        .select()
+        .from(deliveries)
+        .where(and(
+          eq(deliveries.workspaceId, ws.workspaceId),
+          eq(deliveries.agentId, bob.agentId),
+          eq(deliveries.seq, 2),
+        ));
+      expect(row).toBeDefined();
+      expect(row.status).toBe('queued');
+      expect(row.lastDispatchError).toBe('provider connection not delivery-ready for agent');
+      expect(row.nextAttemptAt).toBeInstanceOf(Date);
+      expect(row.dispatchAttempts).toBe(0);
+    });
+    expect(node.sock.ofType('deliver').some((frame) => frame.agent === bob.name && frame.seq === 2)).toBe(false);
+  });
+
+  it('stamps a retryable dispatch error when a reconnected provider never re-announces the agent', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-cursor-observable-drop');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+
+    const first = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'delivered before reconnect' }),
+    });
+    expect(first.status).toBe(201);
+    await waitForAssertion(() => {
+      expect(node.sock.ofType('deliver').some((frame) => frame.agent === bob.name && frame.seq === 1)).toBe(true);
+    });
+    await node.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'delivery.ack',
+      agent: bob.name,
+      up_to_seq: 1,
+    }));
+    await node.handle.handleClose();
+
+    // A genuinely new connection re-registers (fresh NodeConn → empty ready-set)
+    // but never re-announces bob, so live dispatch stays gated.
+    const resumed = await enrollAndAttachNode(ws, {
+      id: node.id,
+      name: node.name,
+      cursorHandshake: true,
+    });
+    expect(resumed.sock.ofType('deliver')).toHaveLength(0);
+
+    const second = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'gated after reconnect' }),
+    });
+    expect(second.status).toBe(201);
+
+    // The row stays queued but is now observable + retryable (last_dispatch_error
+    // + next_attempt_at stamped) rather than a bare silent row. A readiness skip
+    // is not a dispatch attempt, so dispatch_attempts stays 0.
+    await waitForAssertion(async () => {
+      const [row] = await stack.runtime.deps.db
+        .select()
+        .from(deliveries)
+        .where(and(
+          eq(deliveries.workspaceId, ws.workspaceId),
+          eq(deliveries.agentId, bob.agentId),
+          eq(deliveries.seq, 2),
+        ));
+      expect(row).toBeDefined();
+      expect(row.status).toBe('queued');
+      expect(row.lastDispatchError).toBe('provider connection not delivery-ready for agent');
+      expect(row.nextAttemptAt).toBeInstanceOf(Date);
+      expect(row.dispatchAttempts).toBe(0);
+    });
+    expect(resumed.sock.ofType('deliver')).toHaveLength(0);
+  });
+
+  it('sweep delivers a never-inline-dispatched ws-node row to a connected, ready node', async () => {
+    // Regression for #271: a ws.node.v1 delivery is a single background dispatch.
+    // If that attempt is lost (e.g. a dropped waitUntil) the row sits queued with
+    // no next_attempt_at. The node sweep now redrives ws rows (not just http_push)
+    // and delivers when the node is connected + delivery-ready.
+    const ws = await createWorkspace(stack.app, 'mailbox-ws-sweep-null-next');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'lost background dispatch' }),
+    });
+    expect(post.status).toBe(201);
+    await waitForAssertion(() => expect(node.sock.ofType('deliver')).toHaveLength(1));
+
+    // Reproduce the lost inline dispatch: the row is queued again with no
+    // next_attempt_at, as if the single background send never landed.
+    const db = stack.runtime.deps.db;
+    await db
+      .update(deliveries)
+      .set({ status: 'queued', nextAttemptAt: null, dispatchAttempts: 0, deliveredAt: null, lastDispatchError: null })
+      .where(and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId)));
+    const beforeDeliver = node.sock.ofType('deliver').length;
+
+    const swept = await sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date() });
+    expect(swept).toBe(1);
+
+    const afterDeliver = node.sock.ofType('deliver');
+    expect(afterDeliver).toHaveLength(beforeDeliver + 1);
+    expect(afterDeliver.at(-1)).toMatchObject({ agent: bob.name, seq: 1 });
+    const [row] = await db
+      .select()
+      .from(deliveries)
+      .where(and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId), eq(deliveries.seq, 1)));
+    expect(row.status).toBe('delivered');
+  });
+
+  it('sweep stamps a stranded ws-node row when the node is offline and respects next_attempt_at spacing', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-ws-sweep-offline');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+
+    const first = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'delivered before disconnect' }),
+    });
+    expect(first.status).toBe(201);
+    await waitForAssertion(() => expect(node.sock.ofType('deliver')).toHaveLength(1));
+    await node.handle.handleMessage(JSON.stringify({ v: 1, type: 'delivery.ack', agent: bob.name, up_to_seq: 1 }));
+    await node.handle.handleClose();
+
+    // Message queued while the node is offline: no live socket, so the row cannot
+    // be delivered. Reset next_attempt_at to NULL so the sweep (not the inline
+    // post) is what stamps it, exercising the ws branch of the sweep.
+    const second = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'stranded while offline' }),
+    });
+    expect(second.status).toBe(201);
+    const db = stack.runtime.deps.db;
+    const strandedRow = and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId), eq(deliveries.seq, 2));
+    await db
+      .update(deliveries)
+      .set({ nextAttemptAt: null, dispatchAttempts: 0, lastDispatchError: null })
+      .where(strandedRow);
+    const deliverCount = node.sock.ofType('deliver').length;
+
+    // First sweep: node is offline / not delivery-ready, so the row stays queued
+    // but is stamped observable + retryable. A readiness skip is not a dispatch
+    // attempt, so dispatch_attempts stays 0.
+    const firstSweep = await sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date() });
+    expect(firstSweep).toBe(1);
+    const [stamped] = await db.select().from(deliveries).where(strandedRow);
+    expect(stamped.status).toBe('queued');
+    expect(stamped.lastDispatchError).toBe('provider connection not delivery-ready for agent');
+    expect(stamped.nextAttemptAt).toBeInstanceOf(Date);
+    expect(stamped.dispatchAttempts).toBe(0);
+    expect(node.sock.ofType('deliver')).toHaveLength(deliverCount);
+
+    // Second sweep before next_attempt_at is due: the row must NOT be re-attempted
+    // (due-ness respected), so nothing is fetched.
+    const secondSweep = await sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date() });
+    expect(secondSweep).toBe(0);
+    const [unchanged] = await db.select().from(deliveries).where(strandedRow);
+    expect(unchanged.status).toBe('queued');
+    expect(node.sock.ofType('deliver')).toHaveLength(deliverCount);
+  });
+
+  it('sweep delivers a stranded ws-node row once past next_attempt_at with a ready node', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-ws-sweep-due');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'stranded but node stays ready' }),
+    });
+    expect(post.status).toBe(201);
+    await waitForAssertion(() => expect(node.sock.ofType('deliver')).toHaveLength(1));
+
+    // A row that a prior failed/deferred attempt stamped for retry ~30s out. The
+    // node stays connected and bob stays delivery-ready throughout.
+    const db = stack.runtime.deps.db;
+    const strandedRow = and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId), eq(deliveries.seq, 1));
+    await db
+      .update(deliveries)
+      .set({ status: 'queued', nextAttemptAt: new Date(Date.now() + 30_000), dispatchAttempts: 1, deliveredAt: null, lastDispatchError: 'node socket send failed' })
+      .where(strandedRow);
+    const beforeDeliver = node.sock.ofType('deliver').length;
+
+    // Not yet due: the sweep must skip it.
+    expect(await sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date() })).toBe(0);
+    expect(node.sock.ofType('deliver')).toHaveLength(beforeDeliver);
+
+    // Past next_attempt_at: the ready node receives the previously stranded row.
+    const swept = await sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date(Date.now() + 31_000) });
+    expect(swept).toBe(1);
+    const afterDeliver = node.sock.ofType('deliver');
+    expect(afterDeliver).toHaveLength(beforeDeliver + 1);
+    expect(afterDeliver.at(-1)).toMatchObject({ agent: bob.name, seq: 1 });
+    const [row] = await db.select().from(deliveries).where(strandedRow);
+    expect(row.status).toBe('delivered');
+  });
+
+  it('sweep stamps a ws-node row (incrementing attempts) when the live send fails', async () => {
+    // Regression for #271 part A: the provider is delivery-ready but the live
+    // send does not land (socket throws / provider detaches mid-send). The row is
+    // stamped for retry — counting a real dispatch attempt — instead of silently
+    // sitting queued until the mailbox TTL dead-letters it.
+    const ws = await createWorkspace(stack.app, 'mailbox-ws-sweep-send-fail');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'send will throw on redrive' }),
+    });
+    expect(post.status).toBe(201);
+    await waitForAssertion(() => expect(node.sock.ofType('deliver')).toHaveLength(1));
+
+    const db = stack.runtime.deps.db;
+    const strandedRow = and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId), eq(deliveries.seq, 1));
+    await db
+      .update(deliveries)
+      .set({ status: 'queued', nextAttemptAt: null, dispatchAttempts: 0, deliveredAt: null, lastDispatchError: null })
+      .where(strandedRow);
+
+    // bob is delivery-ready, but the underlying socket send throws — sendToProvider
+    // catches it, detaches the provider, and returns false, hitting the failed-send
+    // branch (not the readiness skip).
+    node.sock.send = () => { throw new Error('socket write failed'); };
+
+    const swept = await sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date() });
+    expect(swept).toBe(1);
+    const [row] = await db.select().from(deliveries).where(strandedRow);
+    expect(row.status).toBe('queued');
+    expect(row.lastDispatchError).toBe('node socket send failed');
+    expect(row.nextAttemptAt).toBeInstanceOf(Date);
+    expect(row.dispatchAttempts).toBe(1);
+  });
+
+  it('sweep redrives two queued ws-node rows for one agent in ascending seq order', async () => {
+    // Regression for #271: the broker injects deliver frames only when
+    // `seq == received_up_to_seq + 1`. If both of an agent's inline dispatches
+    // are lost, the sweep must resend seq 1 THEN seq 2 (never out of order or
+    // concurrently), or the broker Gaps the later frame and strands the row.
+    const ws = await createWorkspace(stack.app, 'mailbox-ws-sweep-inorder');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+
+    for (const text of ['first', 'second']) {
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text }),
+      });
+      expect(post.status).toBe(201);
+    }
+    await waitForAssertion(() => expect(node.sock.ofType('deliver')).toHaveLength(2));
+
+    // Both inline dispatches "lost": rows back to queued with no next_attempt_at.
+    const db = stack.runtime.deps.db;
+    await db
+      .update(deliveries)
+      .set({ status: 'queued', nextAttemptAt: null, dispatchAttempts: 0, deliveredAt: null, lastDispatchError: null })
+      .where(and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId)));
+    const beforeDeliver = node.sock.ofType('deliver').length;
+
+    const swept = await sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date() });
+    expect(swept).toBe(2);
+
+    const redriven = node.sock.ofType('deliver').slice(beforeDeliver);
+    expect(redriven).toHaveLength(2);
+    // Strictly ascending seq, in the order the sweep emitted them.
+    expect(redriven.map((frame) => frame.seq)).toEqual([1, 2]);
+    expect(redriven.every((frame) => frame.agent === bob.name)).toBe(true);
+
+    const rows = await db
+      .select()
+      .from(deliveries)
+      .where(and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId)));
+    expect(rows.every((row) => row.status === 'delivered')).toBe(true);
+  });
+
+  it('sweep redrives the whole ws backlog in seq order when only the later seq is due', async () => {
+    // Due-ness inversion: seq 1 was stamped not-yet-due by a prior failed attempt
+    // while seq 2 sits due (NULL next_attempt_at). Fetching only the due row would
+    // send seq 2 alone and the broker would Gap it. The redrive starts from the
+    // agent's lowest queued seq regardless of due-ness, so BOTH go out in order.
+    const ws = await createWorkspace(stack.app, 'mailbox-ws-sweep-inversion');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+
+    for (const text of ['first', 'second']) {
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text }),
+      });
+      expect(post.status).toBe(201);
+    }
+    await waitForAssertion(() => expect(node.sock.ofType('deliver')).toHaveLength(2));
+
+    const db = stack.runtime.deps.db;
+    const seq1 = and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId), eq(deliveries.seq, 1));
+    const seq2 = and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId), eq(deliveries.seq, 2));
+    // seq 1: queued but not yet due (a prior failed attempt stamped it ~30s out).
+    await db
+      .update(deliveries)
+      .set({ status: 'queued', nextAttemptAt: new Date(Date.now() + 30_000), dispatchAttempts: 1, deliveredAt: null, lastDispatchError: 'node socket send failed' })
+      .where(seq1);
+    // seq 2: queued and due (its inline dispatch was lost — no next_attempt_at).
+    await db
+      .update(deliveries)
+      .set({ status: 'queued', nextAttemptAt: null, dispatchAttempts: 0, deliveredAt: null, lastDispatchError: null })
+      .where(seq2);
+    const beforeDeliver = node.sock.ofType('deliver').length;
+
+    const swept = await sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date() });
+    // Only seq 2 is "due", so it is the single row the sweep counts as due work...
+    expect(swept).toBe(1);
+    // ...but the whole backlog is redriven in ascending order.
+    const redriven = node.sock.ofType('deliver').slice(beforeDeliver);
+    expect(redriven.map((frame) => frame.seq)).toEqual([1, 2]);
+    const [row1] = await db.select().from(deliveries).where(seq1);
+    const [row2] = await db.select().from(deliveries).where(seq2);
+    expect(row1.status).toBe('delivered');
+    expect(row2.status).toBe('delivered');
+  });
+
+  it('caps one ws agent backlog per scheduled sweep without reordering or failing deferred rows', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-ws-sweep-backlog-limit');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+    for (const text of ['one', 'two', 'three']) {
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text }),
+      });
+      expect(post.status).toBe(201);
+    }
+    await waitForAssertion(() => expect(node.sock.ofType('deliver')).toHaveLength(3));
+
+    const db = stack.runtime.deps.db;
+    const rowsForBob = and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId));
+    await db.update(deliveries).set({
+      status: 'queued', nextAttemptAt: null, dispatchAttempts: 0, deliveredAt: null, lastDispatchError: null,
+    }).where(rowsForBob);
+    const before = node.sock.ofType('deliver').length;
+
+    expect(await sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date(), wsBacklogLimit: 2 })).toBe(3);
+    expect(node.sock.ofType('deliver').slice(before).map(frame => frame.seq)).toEqual([1, 2]);
+    const firstPass = await db.select({ seq: deliveries.seq, status: deliveries.status })
+      .from(deliveries).where(rowsForBob).orderBy(deliveries.seq);
+    expect(firstPass).toEqual([
+      { seq: 1, status: 'delivered' }, { seq: 2, status: 'delivered' }, { seq: 3, status: 'queued' },
+    ]);
+
+    expect(await sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date(Date.now() + 1_000) })).toBe(1);
+    const [remaining] = await db.select({ status: deliveries.status }).from(deliveries)
+      .where(and(rowsForBob, eq(deliveries.seq, 3)));
+    expect(remaining).toEqual({ status: 'delivered' });
+  });
+
+  it.each([1.5, Number.NaN])('normalizes invalid ws backlog limits before the SQL LIMIT (%s)', async (wsBacklogLimit) => {
+    const ws = await createWorkspace(stack.app, `mailbox-ws-sweep-limit-${String(wsBacklogLimit)}`);
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+    for (const text of ['one', 'two']) {
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text }),
+      });
+      expect(post.status).toBe(201);
+    }
+    await waitForAssertion(() => expect(node.sock.ofType('deliver')).toHaveLength(2));
+
+    const db = stack.runtime.deps.db;
+    const rowsForBob = and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId));
+    await db.update(deliveries).set({
+      status: 'queued', nextAttemptAt: null, dispatchAttempts: 0, deliveredAt: null, lastDispatchError: null,
+    }).where(rowsForBob);
+    const before = node.sock.ofType('deliver').length;
+
+    await expect(sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date(), wsBacklogLimit })).resolves.toBe(2);
+    const redriven = node.sock.ofType('deliver').slice(before);
+    expect(redriven.map((frame) => frame.seq)).toEqual(Number.isNaN(wsBacklogLimit) ? [1, 2] : [1]);
+    const remaining = await db.select({ seq: deliveries.seq, status: deliveries.status })
+      .from(deliveries).where(rowsForBob).orderBy(deliveries.seq);
+    expect(remaining).toEqual(Number.isNaN(wsBacklogLimit)
+      ? [{ seq: 1, status: 'delivered' }, { seq: 2, status: 'delivered' }]
+      : [{ seq: 1, status: 'delivered' }, { seq: 2, status: 'queued' }]);
+  });
+
+  it('sweep stops a ws agent backlog at the first undeliverable seq (node connected, agent not ready)', async () => {
+    // The node is connected but the agent is not delivery-ready (cursor
+    // negotiation pending after a reconnect). The group must stop at seq 1 —
+    // stamped for retry — and never emit a later-seq frame nor mark anything
+    // delivered.
+    const ws = await createWorkspace(stack.app, 'mailbox-ws-sweep-stop');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+
+    // Establish a cursor, ack it, then reconnect WITHOUT re-registering bob: the
+    // node is online but bob is not delivery-ready on the fresh connection.
+    const establish = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'establish cursor' }),
+    });
+    expect(establish.status).toBe(201);
+    await waitForAssertion(() => expect(node.sock.ofType('deliver')).toHaveLength(1));
+    await node.handle.handleMessage(JSON.stringify({ v: 1, type: 'delivery.ack', agent: bob.name, up_to_seq: 1 }));
+    await node.handle.handleClose();
+
+    const resumed = await enrollAndAttachNode(ws, { id: node.id, name: node.name, cursorHandshake: true });
+
+    // Two messages queue while bob is gated (not delivery-ready): no deliver frames.
+    for (const text of ['gated one', 'gated two']) {
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text }),
+      });
+      expect(post.status).toBe(201);
+    }
+    const db = stack.runtime.deps.db;
+    const seq2 = and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId), eq(deliveries.seq, 2));
+    const seq3 = and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId), eq(deliveries.seq, 3));
+    // Both queued with no next_attempt_at so the sweep (not the inline post) drives them.
+    await db
+      .update(deliveries)
+      .set({ nextAttemptAt: null, dispatchAttempts: 0, lastDispatchError: null })
+      .where(and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId)));
+    const beforeDeliver = resumed.sock.ofType('deliver').length;
+
+    const swept = await sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date() });
+    expect(swept).toBe(2);
+
+    // No frame emitted (bob not ready), nothing delivered.
+    expect(resumed.sock.ofType('deliver')).toHaveLength(beforeDeliver);
+    const [row2] = await db.select().from(deliveries).where(seq2);
+    const [row3] = await db.select().from(deliveries).where(seq3);
+    expect(row2.status).toBe('queued');
+    expect(row3.status).toBe('queued');
+    // seq 2 (the lowest queued) is stamped for the next retry; the group stopped
+    // there, so the higher seq was never attempted this cycle (no stamp, no frame).
+    expect(row2.lastDispatchError).toBe('provider connection not delivery-ready for agent');
+    expect(row2.nextAttemptAt).toBeInstanceOf(Date);
+    expect(row3.lastDispatchError).toBeNull();
+    expect(row3.nextAttemptAt).toBeNull();
+  });
+
+  it('honors recorded route metadata when live binding changes before fanout', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-reroute');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws);
+    const bob = await registerViaNode(node, 'bob');
+
+    const create = await stack.app.request('/v1/channels', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ name: 'team-chat' }),
+    });
+    expect(create.status).toBeLessThan(300);
+    const channelId = ((await create.json()) as { data: { id: string } }).data.id;
+
+    for (const token of [alice.token, bob.token]) {
+      const joinRes = await stack.app.request('/v1/channels/team-chat/join', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(joinRes.status).toBeLessThan(300);
+    }
+
+    const result = await messageEngine.postMessage(
+      stack.runtime.deps.db,
+      ws.workspaceId,
+      channelId,
+      alice.agentId,
+      { text: 'reroute me' },
+      { mailbox: { ttlMs: 60_000, depthCap: 1_000, offlineExcludeMs: 24 * 60 * 60 * 1000 } },
+    );
+
+    expect(result._deliveries).toHaveLength(1);
+    expect(result._deliveries[0]).toMatchObject({
+      agentId: bob.agentId,
+      locationType: 'via_node',
+      locationNodeId: node.id,
+    });
+
+    await ensureDirectNodeForAgent(
+      stack.runtime.deps.db,
+      ws.workspaceId,
+      { id: bob.agentId, name: 'bob', locationNodeId: node.id },
+      { force: true, online: true },
+    );
+
+    const ctx = {
+      get(key: string) {
+        if (key === 'workspace') return { id: ws.workspaceId };
+        if (key === 'db') return stack.runtime.deps.db;
+        if (key === 'engine') {
+          return {
+            nodeConnections: stack.runtime.realtime,
+            realtime: stack.runtime.realtime,
+          };
+        }
+        return undefined;
+      },
+    } as unknown as Parameters<typeof routeDeliveryOutcomes>[0];
+
+    await routeDeliveryOutcomes(ctx, result._deliveries, 'message.created', {
+      channel_id: channelId,
+      channel_name: 'team-chat',
+      from_name: 'alice',
+      injection_mode: 'wait',
+    });
+
+    expect(node.sock.ofType('deliver')).toHaveLength(1);
+    expect(await listDeliveries(bob.token)).toHaveLength(1);
+    expect(await listDeliveries(bob.token, '?status=delivered')).toHaveLength(1);
+  });
+
+  it('does not redeliver acked messages after a node reconnect with inventory sync', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-node-acked-reconnect');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws);
+    const bob = await registerViaNode(node, 'bob');
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'ack survives reconnect' }),
+    });
+    expect(post.status).toBe(201);
+    await stack.settle();
+    expect(node.sock.ofType('deliver')).toHaveLength(1);
+
+    await node.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'delivery.ack',
+      agent: 'bob',
+      up_to_seq: 1,
+    }));
+    await node.handle.handleClose();
+
+    const reconnected = await enrollAndAttachNode(ws, { id: node.id, name: node.name });
+    await reconnected.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'inventory.sync',
+      agents: [{ agent_id: bob.agentId, name: 'bob', session_ref: 'sess-bob' }],
+    }));
+    await stack.settle();
+    expect(reconnected.sock.ofType('deliver')).toHaveLength(0);
+  });
+
+  it('replays and acknowledges the next sequence after settled history is pruned offline', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-node-pruned-history');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws);
+    const bob = await registerViaNode(node, 'bob');
+
+    const first = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'first' }),
+    });
+    expect(first.status).toBe(201);
+    await waitForAssertion(() => {
+      expect(deliverFramesOfType(node.sock, 'message.created').map((frame) => frame.seq)).toEqual([1]);
+    });
+
+    await node.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'delivery.ack',
+      agent: 'bob',
+      up_to_seq: 1,
+    }));
+    await stack.runtime.deps.db
+      .update(deliveries)
+      .set({ createdAt: new Date(Date.now() - 100 * 24 * 60 * 60 * 1000) })
+      .where(eq(deliveries.agentId, bob.agentId));
+    expect((await pruneExpired(stack.runtime.deps.db)).deliveries).toBe(1);
+
+    await node.handle.handleClose();
+    const second = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'second while offline' }),
+    });
+    expect(second.status).toBe(201);
+
+    const reconnected = await enrollAndAttachNode(ws, { id: node.id, name: node.name });
+    await reconnected.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'inventory.sync',
+      agents: [{ agent_id: bob.agentId, name: 'bob', session_ref: 'sess-bob' }],
+    }));
+    await waitForAssertion(() => {
+      expect(deliverFramesOfType(reconnected.sock, 'message.created').map((frame) => frame.seq)).toEqual([2]);
+    });
+
+    await reconnected.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'delivery.ack',
+      agent: 'bob',
+      up_to_seq: 2,
+    }));
+    const [recipient] = await stack.runtime.deps.db
+      .select({ ackSeq: agents.deliveryAckSeq, deliverySeq: agents.deliverySeq })
+      .from(agents)
+      .where(eq(agents.id, bob.agentId));
+    expect(recipient).toEqual({ ackSeq: 2, deliverySeq: 2 });
+    expect(await listDeliveries(bob.token)).toHaveLength(0);
+  });
+
+  it('redelivers a channel message with the same deliver payload after broker death/reconnect', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-node-redeliver-message');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws);
+    const bob = await registerViaNode(node, 'bob');
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + alice.token },
+      body: JSON.stringify({ text: 'redeliver me' }),
+    });
+    expect(post.status).toBe(201);
+    const messageId = ((await post.json()) as { data: { id: string } }).data.id;
+    await stack.settle();
+    const live = latestDeliverOfType(node.sock, 'message.created');
+    expect(live).toMatchObject({ msg_id: messageId });
+
+    await node.handle.handleClose();
+    const reconnected = await enrollAndAttachNode(ws, { id: node.id, name: node.name });
+    await reconnected.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'inventory.sync',
+      agents: [{ agent_id: bob.agentId, name: 'bob', session_ref: 'sess-bob' }],
+    }));
+    await stack.settle();
+
+    const replayed = latestDeliverOfType(reconnected.sock, 'message.created');
+    expect(replayed).toMatchObject({ msg_id: messageId });
+    expect(replayed.payload).toEqual(live.payload);
+  });
+
+  it('exports node reconnect delivery replay for adapters that own node.register', async () => {
+    expect(deliverPendingToNode).toBeTypeOf('function');
+
+    const ws = await createWorkspace(stack.app, 'mailbox-node-exported-reconnect');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws);
+    const bob = await registerViaNode(node, 'bob');
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'external reconnect replay' }),
+    });
+    expect(post.status).toBe(201);
+    const messageId = ((await post.json()) as { data: { id: string } }).data.id;
+    await waitForAssertion(() => {
+      expect(deliverFramesOfType(node.sock, 'message.created')).toHaveLength(1);
+    });
+
+    await node.handle.handleClose();
+
+    const replaySock = new FakeSocket();
+    const replayHandle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, node.id, replaySock);
+    stack.runtime.realtime.attachProvider(
+      ws.workspaceId,
+      node.id,
+      'default',
+      'external-adapter-reconnect',
+      replayHandle.connectionId!,
+    );
+    stack.runtime.realtime.setProviderDeliveryReadiness(
+      ws.workspaceId,
+      node.id,
+      'default',
+      replayHandle.connectionId,
+      'immediate',
+    );
+    const replayedCount = await handleNodeReconnect(
+      stack.runtime.deps.db,
+      stack.runtime.deps.nodeConnections,
+      ws.workspaceId,
+      node.id,
+    );
+
+    expect(replayedCount).toBe(1);
+    expect(deliverFramesOfType(replaySock, 'message.created')).toEqual([
+      expect.objectContaining({
+        agent: bob.name,
+        msg_id: messageId,
+      }),
+    ]);
+  });
+
+  /**
+   * A reconnecting broker certifies its surviving sessions with `inventory.sync`,
+   * and that certified set is what gets replayed. These cases pin the reconnect
+   * drain to the certification itself rather than to a readiness/routing
+   * transition: a socket owner that already reports the listed identities as
+   * delivery-ready (an out-of-process owner whose ready-set is keyed per
+   * node+provider, not per connection) must still get the outage backlog.
+   */
+  describe('reconnect replay of an outage backlog', () => {
+    /**
+     * Reconnect a cursor-negotiated node and certify `agentIds` through
+     * `inventory.sync`, with the socket owner already reporting them
+     * delivery-ready — the state a remote socket owner presents when its
+     * ready-set survives the transport reconnect.
+     */
+    async function reconnectAndSync(
+      ws: { workspaceKey: string; workspaceId: string },
+      node: { id: string; name: string },
+      agents: Array<{ agentId: string; name: string }>,
+      opts: { alreadyReady?: boolean; heartbeatCapabilities?: string[] } = {},
+    ) {
+      const reconnected = await enrollAndAttachNode(ws, {
+        id: node.id,
+        name: node.name,
+        cursorHandshake: true,
+      });
+      expect(reconnected.sock.ofType('deliver')).toHaveLength(0);
+      if (opts.heartbeatCapabilities) {
+        await reconnected.handle.handleMessage(JSON.stringify({
+          v: 1,
+          type: 'node.heartbeat',
+          load: 0,
+          active_agents: agents.length,
+          handlers_live: true,
+          capabilities: opts.heartbeatCapabilities.map((name) => ({ name, kind: 'capacity' })),
+        }));
+      }
+      if (opts.alreadyReady !== false) {
+        stack.runtime.realtime.markProviderAgentsDeliveryReady(
+          ws.workspaceId,
+          node.id,
+          DEFAULT_PROVIDER_NAME,
+          undefined,
+          agents.map((agent) => agent.agentId),
+        );
+      }
+      await reconnected.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'inventory.sync',
+        agents: agents.map((agent) => ({
+          agent_id: agent.agentId,
+          name: agent.name,
+          session_ref: `sess-${agent.name}`,
+        })),
+      }));
+      await stack.settle();
+      return reconnected;
+    }
+
+    it('replays a message queued while the node socket was down', async () => {
+      const ws = await createWorkspace(stack.app, 'mailbox-outage-replay');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+      const bob = await registerViaNode(node, 'bob');
+
+      await node.handle.handleClose();
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text: 'queued during the outage' }),
+      });
+      expect(post.status).toBe(201);
+      const messageId = ((await post.json()) as { data: { id: string } }).data.id;
+      await stack.settle();
+
+      const reconnected = await reconnectAndSync(ws, node, [bob]);
+
+      expect(deliverFramesOfType(reconnected.sock, 'message.created')).toEqual([
+        expect.objectContaining({ agent: bob.name, msg_id: messageId, seq: 1 }),
+      ]);
+    });
+
+    it('does not re-send a delivery the node already acked before the outage', async () => {
+      const ws = await createWorkspace(stack.app, 'mailbox-outage-acked');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+      const bob = await registerViaNode(node, 'bob');
+
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text: 'acked before the outage' }),
+      });
+      expect(post.status).toBe(201);
+      await waitForAssertion(() => {
+        expect(deliverFramesOfType(node.sock, 'message.created')).toHaveLength(1);
+      });
+      await node.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'delivery.ack',
+        agent: bob.name,
+        up_to_seq: 1,
+      }));
+      await node.handle.handleClose();
+
+      const reconnected = await reconnectAndSync(ws, node, [bob]);
+
+      expect(deliverFramesOfType(reconnected.sock, 'message.created')).toEqual([]);
+    });
+
+    it('drains two outage deliveries oldest-first, exactly once across repeated syncs', async () => {
+      const ws = await createWorkspace(stack.app, 'mailbox-outage-ordering');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+      const bob = await registerViaNode(node, 'bob');
+
+      await node.handle.handleClose();
+      const texts = ['first while offline', 'second while offline'];
+      const messageIds: string[] = [];
+      for (const text of texts) {
+        const post = await stack.app.request('/v1/channels/general/messages', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+          body: JSON.stringify({ text }),
+        });
+        expect(post.status).toBe(201);
+        messageIds.push(((await post.json()) as { data: { id: string } }).data.id);
+      }
+      await stack.settle();
+
+      const reconnected = await reconnectAndSync(ws, node, [bob]);
+      expect(deliverFramesOfType(reconnected.sock, 'message.created')).toEqual([
+        expect.objectContaining({ msg_id: messageIds[0], seq: 1 }),
+        expect.objectContaining({ msg_id: messageIds[1], seq: 2 }),
+      ]);
+
+      // The cumulative cursor is the only dedupe: once the node acks the drained
+      // range, a further certification of the same session replays nothing.
+      await reconnected.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'delivery.ack',
+        agent: bob.name,
+        up_to_seq: 2,
+      }));
+      await reconnected.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'inventory.sync',
+        agents: [{ agent_id: bob.agentId, name: bob.name, session_ref: 'sess-bob' }],
+      }));
+      await stack.settle();
+      expect(deliverFramesOfType(reconnected.sock, 'message.created')).toHaveLength(2);
+    });
+
+    it('does not push to an agent that the reconnect has not made delivery-ready', async () => {
+      const ws = await createWorkspace(stack.app, 'mailbox-outage-not-ready');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+      const bob = await registerViaNode(node, 'bob');
+      const carol = await registerViaNode(node, 'carol');
+
+      await node.handle.handleClose();
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text: 'queued for both sessions' }),
+      });
+      expect(post.status).toBe(201);
+      await stack.settle();
+
+      // Only bob's session survived the reconnect; carol's restarted and is not
+      // certified by this inventory, so she stays gated until she re-announces.
+      const reconnected = await reconnectAndSync(ws, node, [bob]);
+      expect(deliverFramesOfType(reconnected.sock, 'message.created').map((frame) => frame.agent))
+        .toEqual([bob.name]);
+
+      await reconnected.handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'resume-carol',
+        type: 'agent.recover',
+        name: carol.name,
+        expected_agent_id: carol.agentId,
+        resumable: true,
+        session_ref: 'sess-carol',
+      }));
+      await stack.settle();
+      expect(deliverFramesOfType(reconnected.sock, 'message.created').map((frame) => frame.agent))
+        .toEqual([bob.name, carol.name]);
+    });
+
+    /**
+     * The handshake belongs to the CONNECTION, not to the provider's roster: a
+     * heartbeat between `node.register` and the certification refreshes spawn
+     * capacity and may omit (or add) the delivery-cursor advertisement. Neither
+     * direction may change how the live connection replays.
+     */
+    it('replays the certified backlog when a heartbeat roster omits the cursor capability', async () => {
+      const ws = await createWorkspace(stack.app, 'mailbox-outage-heartbeat-roster');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+      const bob = await registerViaNode(node, 'bob');
+
+      await node.handle.handleClose();
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text: 'queued before a roster-only heartbeat' }),
+      });
+      expect(post.status).toBe(201);
+      const messageId = ((await post.json()) as { data: { id: string } }).data.id;
+      await stack.settle();
+
+      // The reconnect negotiated the cursor handshake and so got no
+      // register-time flush; the heartbeat that follows advertises spawn
+      // capacity only. The certification is still this connection's only
+      // replay trigger.
+      const reconnected = await reconnectAndSync(ws, node, [bob], {
+        alreadyReady: false,
+        heartbeatCapabilities: ['spawn:claude'],
+      });
+
+      expect(deliverFramesOfType(reconnected.sock, 'message.created')).toEqual([
+        expect.objectContaining({ agent: bob.name, msg_id: messageId, seq: 1 }),
+      ]);
+    });
+
+    it('does not re-flush an immediate connection whose heartbeat roster adds the cursor capability', async () => {
+      const ws = await createWorkspace(stack.app, 'mailbox-outage-heartbeat-promote');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const node = await enrollAndAttachNode(ws);
+      const bob = await registerViaNode(node, 'bob');
+
+      await node.handle.handleClose();
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text: 'flushed by the legacy register' }),
+      });
+      expect(post.status).toBe(201);
+      await stack.settle();
+
+      // Legacy handshake: `node.register` flushes the whole node, so the
+      // backlog is already on the socket (delivered, not yet acked).
+      const reconnected = await enrollAndAttachNode(ws, { id: node.id, name: node.name });
+      await stack.settle();
+      expect(deliverFramesOfType(reconnected.sock, 'message.created')).toHaveLength(1);
+
+      await reconnected.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.heartbeat',
+        load: 0,
+        active_agents: 1,
+        handlers_live: true,
+        capabilities: [
+          { name: 'spawn:claude', kind: 'capacity' },
+          { name: FLEET_DELIVERY_CURSOR_CAPABILITY, kind: 'capacity' },
+        ],
+      }));
+      await reconnected.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'inventory.sync',
+        agents: [{ agent_id: bob.agentId, name: bob.name, session_ref: 'sess-bob' }],
+      }));
+      await stack.settle();
+
+      // A roster heartbeat cannot promote the connection to cursor-gated, so
+      // the certification replays nothing the register-time flush already sent.
+      expect(deliverFramesOfType(reconnected.sock, 'message.created')).toHaveLength(1);
+    });
+
+    it('keeps the registered cursor advertisement out of reach of a heartbeat roster refresh', async () => {
+      const ws = await createWorkspace(stack.app, 'mailbox-heartbeat-capabilities');
+      const cursorNode = await enrollAndAttachNode(ws, { cursorHandshake: true });
+      const legacyNode = await enrollAndAttachNode(ws, { id: 'node_legacy', name: 'legacy-node' });
+
+      const rosterOnly = {
+        v: 1,
+        type: 'node.heartbeat',
+        load: 0,
+        active_agents: 0,
+        handlers_live: true,
+        capabilities: [{ name: 'spawn:claude', kind: 'capacity' }],
+      };
+      await cursorNode.handle.handleMessage(JSON.stringify(rosterOnly));
+      await legacyNode.handle.handleMessage(JSON.stringify({
+        ...rosterOnly,
+        capabilities: [
+          { name: 'spawn:claude', kind: 'capacity' },
+          { name: FLEET_DELIVERY_CURSOR_CAPABILITY, kind: 'capacity' },
+        ],
+      }));
+      await stack.settle();
+
+      const advertised = async (nodeId: string) => {
+        const [row] = await stack.runtime.deps.db
+          .select({ capabilities: nodeProviders.capabilities })
+          .from(nodeProviders)
+          .where(and(eq(nodeProviders.nodeId, nodeId), eq(nodeProviders.name, DEFAULT_PROVIDER_NAME)));
+        return (row?.capabilities ?? []).map((capability) => capability.name);
+      };
+
+      // The negotiated capability survives a heartbeat that omits it...
+      expect(await advertised(cursorNode.id)).toContain(FLEET_DELIVERY_CURSOR_CAPABILITY);
+      // ...and a heartbeat cannot introduce one the registration never made.
+      expect(await advertised(legacyNode.id)).not.toContain(FLEET_DELIVERY_CURSOR_CAPABILITY);
+    });
+
+    /**
+     * A superseded connection's in-flight `inventory.sync` is not the live
+     * connection's certification. The registry answers `undefined` for a
+     * connection that no longer owns the provider — reading the persisted
+     * advertisement instead would classify the stale frame by whichever
+     * registration owns the provider NOW, replaying certified deliveries to
+     * sessions the replacement never certified.
+     */
+    it('does not replay the outage backlog on a superseded connection certification', async () => {
+      const ws = await createWorkspace(stack.app, 'mailbox-outage-stale-sync');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const nodeA = await enrollAndAttachNode(ws, { cursorHandshake: true });
+      const bob = await registerViaNode(nodeA, 'bob');
+
+      await nodeA.handle.handleClose();
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text: 'queued before the stale certification' }),
+      });
+      expect(post.status).toBe(201);
+      const messageId = ((await post.json()) as { data: { id: string } }).data.id;
+      await stack.settle();
+
+      // The broker's fresh connection owns the provider now and persisted its
+      // own cursor advertisement at register. Nothing is certified yet — but
+      // an out-of-process socket owner can still report bob ready: its
+      // ready-set is keyed per node+provider, not per connection, and survives
+      // the transport reconnect (the state this whole replay path exists for).
+      const nodeB = await enrollAndAttachNode(ws, {
+        id: nodeA.id,
+        name: nodeA.name,
+        cursorHandshake: true,
+      });
+      expect(nodeB.sock.ofType('deliver')).toHaveLength(0);
+      stack.runtime.realtime.markProviderAgentsDeliveryReady(
+        ws.workspaceId,
+        nodeB.id,
+        DEFAULT_PROVIDER_NAME,
+        undefined,
+        [bob.agentId],
+      );
+
+      // The old connection's queued sync finally runs. Its certification is
+      // not this connection's: it must not drain the backlog to bob.
+      await nodeA.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'inventory.sync',
+        agents: [{ agent_id: bob.agentId, name: bob.name, session_ref: 'sess-bob' }],
+      }));
+      await stack.settle();
+      expect(deliverFramesOfType(nodeB.sock, 'message.created')).toHaveLength(0);
+
+      // The replacement's own certification still drains the backlog.
+      await nodeB.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'inventory.sync',
+        agents: [{ agent_id: bob.agentId, name: bob.name, session_ref: 'sess-bob' }],
+      }));
+      await stack.settle();
+      expect(deliverFramesOfType(nodeB.sock, 'message.created')).toEqual([
+        expect.objectContaining({ agent: bob.name, msg_id: messageId, seq: 1 }),
+      ]);
+    });
+  });
+
+  it('preserves hyphenated mentions through node reconnect replay', async () => {
+    const ws = await createWorkspace(stack.app, 'mention-replay');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws);
+    const bob = await registerViaNode(node, 'build-reviewer_2');
+    const response = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: '@build-reviewer_2 ping @build-reviewer_2 email@example.com \\@escaped' }),
+    });
+    expect(response.status).toBe(201);
+    await stack.settle();
+    const live = latestDeliverOfType(node.sock, 'message.created');
+    expect(live.payload).toMatchObject({ data: { mentions: ['build-reviewer_2'] } });
+    await node.handle.handleClose();
+    const reconnected = await enrollAndAttachNode(ws, { id: node.id, name: node.name });
+    await reconnected.handle.handleMessage(JSON.stringify({ v: 1, type: 'inventory.sync',
+      agents: [{ agent_id: bob.agentId, name: 'build-reviewer_2', session_ref: 'sess-build-reviewer_2' }] }));
+    await stack.settle();
+    expect(latestDeliverOfType(reconnected.sock, 'message.created').payload).toEqual(live.payload);
+  });
+
+  it('normalizes a live raw-hook delivery for node recipients', async () => {
+    const ws = await createWorkspace(stack.app, 'raw-hook-wire');
+    const node = await enrollAndAttachNode(ws);
+    const recipient = await registerViaNode(node, 'hook-recipient');
+    const created = await stack.app.request('/v1/webhooks', { method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ channel: 'general' }) });
+    expect(created.status).toBe(201);
+    const { data: hook } = await created.json();
+    const response = await stack.app.request(`/v1/hooks/${hook.webhook_id}`, { method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${hook.token}` },
+      body: JSON.stringify({ text: 'provider event', author: 'GitHub' }) });
+    expect(response.status).toBe(201);
+    await stack.settle();
+    expect(latestDeliverOfType(node.sock, 'message.created').payload).toMatchObject({
+      type: 'message.created', data: { channel_name: 'general', from_name: 'GitHub', text: 'provider event' },
+    });
+    await node.handle.handleClose();
+    const reconnected = await enrollAndAttachNode(ws, { id: node.id, name: node.name });
+    await reconnected.handle.handleMessage(JSON.stringify({ v: 1, type: 'inventory.sync',
+      agents: [{ agent_id: recipient.agentId, name: 'hook-recipient', session_ref: 'sess-hook-recipient' }] }));
+    await stack.settle();
+    expect(latestDeliverOfType(reconnected.sock, 'message.created').payload).toMatchObject({
+      type: 'message.created', data: { channel_name: 'general', from_name: 'GitHub', text: 'provider event' },
+    });
+
+  });
+
+  it('redelivers a DM with the same deliver payload after broker death/reconnect', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-node-redeliver-dm');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws);
+    const bob = await registerViaNode(node, 'bob');
+
+    const dm = await stack.app.request('/v1/dm', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + alice.token },
+      body: JSON.stringify({ to: 'bob', text: 'redeliver dm' }),
+    });
+    expect(dm.status).toBe(201);
+    const messageId = ((await dm.json()) as { data: { id: string } }).data.id;
+    await stack.settle();
+    const live = latestDeliverOfType(node.sock, 'dm.received');
+    expect(live).toMatchObject({ msg_id: messageId });
+
+    await node.handle.handleClose();
+    const reconnected = await enrollAndAttachNode(ws, { id: node.id, name: node.name });
+    await reconnected.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'inventory.sync',
+      agents: [{ agent_id: bob.agentId, name: 'bob', session_ref: 'sess-bob' }],
+    }));
+    await stack.settle();
+
+    const replayed = latestDeliverOfType(reconnected.sock, 'dm.received');
+    expect(replayed).toMatchObject({ msg_id: messageId });
+    expect(replayed.payload).toEqual(live.payload);
+  });
+
+  it('delivers thread replies on DM conversations to participants', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-dm-thread-reply');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    const { sock: bobSock } = await attachDirectNodeSocket(stack, ws.workspaceId, bob);
+
+    const root = await stack.app.request('/v1/dm', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ to: 'bob', text: 'dm root' }),
+    });
+    expect(root.status).toBe(201);
+    const rootId = ((await root.json()) as { data: { id: string } }).data.id;
+    bobSock.received.length = 0;
+
+    const reply = await stack.app.request(`/v1/messages/${rootId}/replies`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'dm thread reply' }),
+    });
+    expect(reply.status).toBe(201);
+    const replyId = ((await reply.json()) as { data: { id: string } }).data.id;
+
+    await waitForAssertion(() => {
+      expect(deliverFramesOfType(bobSock, 'thread.reply')).toEqual([
+        expect.objectContaining({
+          type: 'deliver',
+          msg_id: replyId,
+          payload: expect.objectContaining({
+            type: 'thread.reply',
+            data: expect.objectContaining({
+              id: replyId,
+              from_name: 'alice',
+              text: 'dm thread reply',
+            }),
+          }),
+        }),
+      ]);
+    });
+  });
+
+  it('redelivers a group DM with the same deliver payload after broker death/reconnect', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-node-redeliver-group');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws);
+    const bob = await registerViaNode(node, 'bob');
+
+    const create = await stack.app.request('/v1/dm/group', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + alice.token },
+      body: JSON.stringify({ participants: ['bob'] }),
+    });
+    expect(create.status).toBe(201);
+    const conversationId = ((await create.json()) as { data: { id: string } }).data.id;
+
+    const msg = await stack.app.request('/v1/dm/' + conversationId + '/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + alice.token },
+      body: JSON.stringify({
+        text: 'redeliver group',
+        data: { session_ref: 'session-group-redelivery' },
+      }),
+    });
+    expect(msg.status).toBe(201);
+    const messageId = ((await msg.json()) as { data: { id: string } }).data.id;
+    await stack.settle();
+    const live = latestDeliverOfType(node.sock, 'group_dm.received');
+    expect(live).toMatchObject({ msg_id: messageId });
+
+    await node.handle.handleClose();
+    const reconnected = await enrollAndAttachNode(ws, { id: node.id, name: node.name });
+    await reconnected.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'inventory.sync',
+      agents: [{ agent_id: bob.agentId, name: 'bob', session_ref: 'sess-bob' }],
+    }));
+    await stack.settle();
+
+    const replayed = latestDeliverOfType(reconnected.sock, 'group_dm.received');
+    expect(replayed).toMatchObject({ msg_id: messageId });
+    expect(replayed.payload).toEqual(live.payload);
+    expect(replayed.payload).toMatchObject({
+      data: {
+        metadata: { session_ref: 'session-group-redelivery' },
+        message: { metadata: { session_ref: 'session-group-redelivery' } },
+      },
+    });
+  });
+
+  it('redelivers a thread reply with the same deliver payload after broker death/reconnect', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-node-redeliver-thread');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws);
+    const bob = await registerViaNode(node, 'bob');
+
+    const root = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + alice.token },
+      body: JSON.stringify({ text: 'thread root' }),
+    });
+    expect(root.status).toBe(201);
+    const rootId = ((await root.json()) as { data: { id: string } }).data.id;
+
+    const reply = await stack.app.request('/v1/messages/' + rootId + '/replies', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + alice.token },
+      body: JSON.stringify({ text: 'redeliver thread' }),
+    });
+    expect(reply.status).toBe(201);
+    const messageId = ((await reply.json()) as { data: { id: string } }).data.id;
+    await stack.settle();
+    const live = latestDeliverOfType(node.sock, 'thread.reply');
+    expect(live).toMatchObject({ msg_id: messageId });
+    expect(live.payload).toMatchObject({
+      type: 'thread.reply',
+      data: { agent_address: 'alice@direct' },
+    });
+
+    await node.handle.handleClose();
+    const reconnected = await enrollAndAttachNode(ws, { id: node.id, name: node.name });
+    await reconnected.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'inventory.sync',
+      agents: [{ agent_id: bob.agentId, name: 'bob', session_ref: 'sess-bob' }],
+    }));
+    await stack.settle();
+
+    const replayed = latestDeliverOfType(reconnected.sock, 'thread.reply');
+    expect(replayed).toMatchObject({ msg_id: messageId });
+    expect(replayed.payload).toEqual(live.payload);
+  });
+  it('handles out-of-order cumulative acks idempotently', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-node-out-of-order');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws);
+    const bob = await registerViaNode(node, 'bob');
+
+    for (const text of ['one', 'two']) {
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text }),
+      });
+      expect(post.status).toBe(201);
+    }
+    await stack.settle();
+    expect(node.sock.ofType('deliver').map((event) => event.seq)).toEqual([1, 2]);
+
+    await node.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'delivery.ack',
+      agent: 'bob',
+      up_to_seq: 2,
+    }));
+    await node.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'delivery.ack',
+      agent: 'bob',
+      up_to_seq: 1,
+    }));
+
+    expect(await listDeliveries(bob.token)).toHaveLength(0);
+    expect(await listDeliveries(bob.token, '?status=acked')).toHaveLength(2);
+  });
+
+  it('does not skip a lower-seq queued delivery on node replay after an out-of-order per-delivery ack', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-node-ooo-single-ack');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws);
+    const bob = await registerViaNode(node, 'bob');
+
+    for (const text of ['first', 'second']) {
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text }),
+      });
+      expect(post.status).toBe(201);
+    }
+    await stack.settle();
+    expect(node.sock.ofType('deliver').map((event) => event.seq)).toEqual([1, 2]);
+
+    // Ack ONLY seq 2 via the per-delivery REST path, out of order — seq 1 stays queued.
+    const queued = await listDeliveries(bob.token);
+    const seq2 = queued.find((item) => item.seq === 2);
+    expect(seq2).toBeDefined();
+    const ackRes = await stack.app.request(`/v1/deliveries/${seq2!.id}/ack`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(ackRes.status).toBe(200);
+
+    // The cumulative cursor must NOT have advanced past seq 1: on node reconnect the
+    // still-queued seq 1 must replay rather than be skipped forever (only seq 2 is acked).
+    await node.handle.handleClose();
+    const reconnected = await enrollAndAttachNode(ws, { id: node.id, name: node.name });
+    await reconnected.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'inventory.sync',
+      agents: [{ agent_id: bob.agentId, name: 'bob', session_ref: 'sess-bob' }],
+    }));
+    await stack.settle();
+
+    expect(reconnected.sock.ofType('deliver').map((event) => event.seq)).toEqual([1]);
+  });
+
+  it('excludes expired (unswept) rows from the mailbox depth cap', async () => {
+    stack.runtime.deps.config!.mailbox = { deliveryTtlMs: 60_000, depthCap: 1 };
+
+    const ws = await createWorkspace(stack.app, 'mailbox-depthcap-expiry');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    const { sock: aliceSock } = await attachDirectNodeSocket(stack, ws.workspaceId, alice);
+
+    const createRes = await stack.app.request('/v1/channels', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ name: 'team-chat' }),
+    });
+    expect(createRes.status).toBeLessThan(300);
+    for (const token of [alice.token, bob.token]) {
+      await stack.app.request('/v1/channels/team-chat/join', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+      });
+    }
+
+    // Fill bob's mailbox to the cap (1), then let that row's TTL lapse WITHOUT
+    // sweeping it (no GET/inbox/replay) so it lingers as an expired queued row.
+    const first = await stack.app.request('/v1/channels/team-chat/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'will expire' }),
+    });
+    expect(first.status).toBe(201);
+    await stack.settle(); // let the delivery row land
+    // Deterministically age bob's queued row past its TTL (no wall-clock race on
+    // the second-granular unixepoch boundary) without sweeping it — it lingers as
+    // an expired-but-present queued row.
+    await stack.runtime.deps.db
+      .update(deliveries)
+      .set({ expiresAt: new Date(Date.now() - 3_600_000) })
+      .where(eq(deliveries.agentId, bob.agentId));
+
+    // A new send must not be rejected as depth_cap: the expired row is not active depth.
+    const second = await stack.app.request('/v1/channels/team-chat/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'fresh' }),
+    });
+    expect(second.status).toBe(201);
+    await stack.settle();
+
+    expect(contextUpdatesOfType(aliceSock, 'delivery.failed').filter((event) => {
+      const data = event.data as Record<string, unknown> | undefined;
+      return data?.reason === 'depth_cap';
+    })).toHaveLength(0);
+    const bobQueued = await listDeliveries(bob.token);
+    expect(bobQueued.some((item) => (item.message as { text?: string }).text === 'fresh')).toBe(true);
+  });
+
+  it('does not dead-letter an acked delivery after TTL expiry', async () => {
+    stack.runtime.deps.config!.mailbox = { deliveryTtlMs: 60_000, depthCap: 1000 };
+
+    const { ws, alice, bob } = await seed();
+    const { sock: aliceSock } = await attachDirectNodeSocket(stack, ws.workspaceId, alice);
+    await stack.settle();
+    const [item] = await listDeliveries(bob.token);
+
+    // SQLite writes TTLs in whole seconds; expire the stored row explicitly.
+    await stack.runtime.deps.db.update(deliveries)
+      .set({ expiresAt: new Date(0) }).where(eq(deliveries.id, item.id));
+    const ackRes = await stack.app.request('/v1/deliveries/' + item.id + '/ack', {
+      method: 'POST',
+      headers: { authorization: 'Bearer ' + bob.token },
+    });
+    expect(ackRes.status).toBe(200);
+    const expiredRows = await deliveryEngine.expireDueDeliveries(stack.runtime.deps.db, ws.workspaceId);
+    expect(expiredRows).toHaveLength(0);
+    expect(await listDeliveries(bob.token, '?status=acked')).toHaveLength(1);
+    expect(contextUpdatesOfType(aliceSock, 'delivery.failed')).toHaveLength(0);
+  });
+
+  it('expires TTL deliveries to dead-letter and notifies the sender', async () => {
+    stack.runtime.deps.config!.mailbox = { deliveryTtlMs: 1000, depthCap: 1000 };
+
+    const { ws, alice, bob } = await seed();
+    const { sock: aliceSock } = await attachDirectNodeSocket(stack, ws.workspaceId, alice);
+
+    await stack.settle();
+    await stack.runtime.deps.db.update(deliveries)
+      .set({ expiresAt: new Date(0) }).where(eq(deliveries.workspaceId, ws.workspaceId));
+    expect(await listDeliveries(bob.token)).toHaveLength(0);
+    // Non-finite internal overrides must fall back to the production cap instead
+    // of turning the bounded loop into a silent no-op.
+    expect(await sweepExpiredDeliveries(stack.runtime.deps, {
+      workspaceId: ws.workspaceId,
+      maxBatches: Number.NaN,
+    })).toBe(1);
+    expect(await listDeliveries(bob.token, '?status=dead_lettered')).toHaveLength(1);
+    await stack.settle();
+    await waitForAssertion(() => {
+      expect(contextUpdatesOfType(aliceSock, 'delivery.failed').map((event) => event.data)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ reason: 'ttl_expired', retryable: false }),
+      ]));
+    });
+  });
+
+  it('scheduled expiry drains a large backlog in D1-safe batches without affecting reads', async () => {
+    const { ws, alice, bob, messageId } = await seed();
+    const charlie = await registerAgent(stack.app, ws.workspaceKey, 'charlie');
+    const { sock: aliceSock } = await attachDirectNodeSocket(stack, ws.workspaceId, alice);
+    const [seedMessage] = await stack.runtime.deps.db
+      .select({ channelId: messages.channelId })
+      .from(messages)
+      .where(eq(messages.id, messageId));
+    const bobExpiredAt = new Date(Date.now() - 60_000);
+    const charlieExpiredAt = new Date(Date.now() - 120_000);
+    const extraCount = 120;
+    const charlieCount = 60;
+
+    await stack.runtime.deps.db.insert(messages).values(Array.from({ length: extraCount }, (_, index) => ({
+      id: `expiry-message-${index}`,
+      workspaceId: ws.workspaceId,
+      channelId: seedMessage.channelId,
+      agentId: alice.agentId,
+      body: `expired ${index}`,
+    })));
+    await stack.runtime.deps.db.insert(deliveries).values(Array.from({ length: extraCount }, (_, index) => ({
+      id: `expiry-delivery-${index}`,
+      workspaceId: ws.workspaceId,
+      messageId: `expiry-message-${index}`,
+      agentId: index < charlieCount ? charlie.agentId : bob.agentId,
+      status: 'queued',
+      seq: index < charlieCount ? index + 1 : index - charlieCount + 2,
+      expiresAt: index < charlieCount ? charlieExpiredAt : bobExpiredAt,
+    })));
+    await stack.runtime.deps.db
+      .update(deliveries)
+      .set({ expiresAt: bobExpiredAt })
+      .where(eq(deliveries.messageId, messageId));
+
+    const expiryPlan = stack.runtime.handle.sqlite
+      .prepare(`EXPLAIN QUERY PLAN
+        SELECT id FROM deliveries
+        WHERE status IN ('queued', 'delivered')
+          AND expires_at IS NOT NULL
+          AND expires_at <= ?
+        ORDER BY expires_at, id
+        LIMIT 50`)
+      .all(Math.floor(Date.now() / 1000)) as Array<{ detail: string }>;
+    expect(expiryPlan.some((step) => step.detail.includes('idx_deliveries_active_expiry'))).toBe(true);
+
+    const retryPlan = stack.runtime.handle.sqlite
+      .prepare(`EXPLAIN QUERY PLAN
+        SELECT id FROM deliveries
+        WHERE status = 'queued'
+          AND route_node_kind IN ('http_push', 'ws', 'fleet_ws', 'direct_ws')
+          AND next_attempt_at IS NOT NULL
+          AND next_attempt_at <= ?
+          AND (expires_at IS NULL OR expires_at > ?)
+        ORDER BY next_attempt_at, created_at, id
+        LIMIT 50`)
+      .all(Math.floor(Date.now() / 1000), Math.floor(Date.now() / 1000)) as Array<{ detail: string }>;
+    expect(retryPlan.some((step) => step.detail.includes('idx_deliveries_retry_due'))).toBe(true);
+
+    // Emulate D1's documented ceiling against the real SQL emitted by Drizzle.
+    // The regression used to put all 121 delivery IDs in one UPDATE and trip this guard.
+    const sqlite = stack.runtime.handle.sqlite;
+    const prepare = sqlite.prepare.bind(sqlite);
+    sqlite.prepare = ((source: string) => {
+      const parameterCount = (source.match(/\?/g) ?? []).length;
+      if (parameterCount > 100) {
+        throw new Error(`D1_ERROR: too many SQL variables at offset 100 (${parameterCount})`);
+      }
+      return prepare(source);
+    }) as typeof sqlite.prepare;
+
+    const deadLetteredCount = async () => (await stack.runtime.deps.db
+      .select({ id: deliveries.id })
+      .from(deliveries)
+      .where(eq(deliveries.status, 'dead_lettered'))).length;
+
+    const inbox = await stack.app.request('/v1/inbox', {
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(inbox.status).toBe(200);
+    expect(await listDeliveries(bob.token)).toHaveLength(0);
+    // Reads filter expired active rows but do not mutate them or depend on cleanup.
+    expect(await deadLetteredCount()).toBe(0);
+
+    // Must fire: one invocation advances through more than the 50-row SQL batch.
+    expect(await sweepExpiredDeliveries(stack.runtime.deps, { maxBatches: 2 })).toBe(100);
+    // Charlie's remaining 10 rows and Bob's oldest 40 transitioned. Bob's 21
+    // still-unswept expired rows prove the invocation still honored its bound
+    // and must not leak through the active list.
+    expect(await listDeliveries(bob.token)).toHaveLength(0);
+    expect(await deadLetteredCount()).toBe(100);
+
+    expect(await sweepExpiredDeliveries(stack.runtime.deps, { maxBatches: 1 })).toBe(21);
+    expect(await deadLetteredCount()).toBe(121);
+
+    await waitForAssertion(() => {
+      const notices = contextUpdatesOfType(aliceSock, 'delivery.failed')
+        .filter((event) => event.data && (event.data as Record<string, unknown>).reason === 'ttl_expired');
+      expect(notices).toHaveLength(121);
+      expect(new Set(notices.map((event) => (event.data as Record<string, unknown>).delivery_id)).size).toBe(121);
+    });
+
+    expect(await sweepExpiredDeliveries(stack.runtime.deps)).toBe(0);
+    await stack.settle();
+    expect(contextUpdatesOfType(aliceSock, 'delivery.failed')
+      .filter((event) => event.data && (event.data as Record<string, unknown>).reason === 'ttl_expired')).toHaveLength(121);
+  });
+
+  it("flushes a committed batch's failure notices before a later expiry batch fails", async () => {
+    const { ws, alice, bob, messageId } = await seed();
+    const { sock: aliceSock } = await attachDirectNodeSocket(stack, ws.workspaceId, alice);
+    const [seedMessage] = await stack.runtime.deps.db
+      .select({ channelId: messages.channelId })
+      .from(messages)
+      .where(eq(messages.id, messageId));
+    const expiredAt = new Date(Date.now() - 60_000);
+
+    await stack.runtime.deps.db.insert(messages).values(Array.from({ length: 50 }, (_, index) => ({
+      id: `expiry-failure-message-${index}`,
+      workspaceId: ws.workspaceId,
+      channelId: seedMessage.channelId,
+      agentId: alice.agentId,
+      body: `expired before later failure ${index}`,
+    })));
+    await stack.runtime.deps.db.insert(deliveries).values(Array.from({ length: 50 }, (_, index) => ({
+      id: `expiry-failure-delivery-${index}`,
+      workspaceId: ws.workspaceId,
+      messageId: `expiry-failure-message-${index}`,
+      agentId: bob.agentId,
+      status: 'queued',
+      seq: index + 2,
+      expiresAt: expiredAt,
+    })));
+    await stack.runtime.deps.db
+      .update(deliveries)
+      .set({ expiresAt: expiredAt })
+      .where(eq(deliveries.messageId, messageId));
+
+    const sqlite = stack.runtime.handle.sqlite;
+    const prepare = sqlite.prepare.bind(sqlite);
+    let expiryUpdates = 0;
+    sqlite.prepare = ((source: string) => {
+      if (source.startsWith('update "deliveries"') && source.includes('"dead_lettered_at"')) {
+        expiryUpdates++;
+        if (expiryUpdates === 2) throw new Error('simulated later expiry batch failure');
+      }
+      return prepare(source);
+    }) as typeof sqlite.prepare;
+
+    await expect(sweepExpiredDeliveries(stack.runtime.deps, { maxBatches: 2 }))
+      .rejects.toThrow('simulated later expiry batch failure');
+
+    const deadLettered = await stack.runtime.deps.db
+      .select({ id: deliveries.id })
+      .from(deliveries)
+      .where(eq(deliveries.status, 'dead_lettered'));
+    expect(deadLettered).toHaveLength(50);
+    await waitForAssertion(() => {
+      const notices = contextUpdatesOfType(aliceSock, 'delivery.failed')
+        .filter((event) => event.data && (event.data as Record<string, unknown>).reason === 'ttl_expired');
+      expect(notices).toHaveLength(50);
+      expect(new Set(notices.map((event) => (event.data as Record<string, unknown>).delivery_id)).size).toBe(50);
+    });
+  });
+
+  it('keeps inbox and delivery reads available when scheduled expiry fails', async () => {
+    const { ws, bob, messageId } = await seed();
+    await stack.runtime.deps.db
+      .update(deliveries)
+      .set({ expiresAt: new Date(Date.now() - 60_000) })
+      .where(eq(deliveries.messageId, messageId));
+
+    const sqlite = stack.runtime.handle.sqlite;
+    const prepare = sqlite.prepare.bind(sqlite);
+    sqlite.prepare = ((source: string) => {
+      if (source.startsWith('update "deliveries"') && source.includes('"dead_lettered_at"')) {
+        throw new Error('simulated scheduled expiry failure');
+      }
+      return prepare(source);
+    }) as typeof sqlite.prepare;
+
+    await expect(sweepExpiredDeliveries(stack.runtime.deps, { workspaceId: ws.workspaceId }))
+      .rejects.toThrow('simulated scheduled expiry failure');
+
+    const inbox = await stack.app.request('/v1/inbox', {
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(inbox.status).toBe(200);
+    expect(await listDeliveries(bob.token)).toHaveLength(0);
+    const [stored] = await stack.runtime.deps.db
+      .select({ status: deliveries.status })
+      .from(deliveries)
+      .where(eq(deliveries.messageId, messageId));
+    expect(stored.status).toBe('queued');
+  });
+
+  it('rejects new deliveries over the depth cap and sends feedback to the sender', async () => {
+    stack.runtime.deps.config!.mailbox = { deliveryTtlMs: 60_000, depthCap: 1 };
+
+    const { ws, alice, bob } = await seed();
+    const { sock: aliceSock } = await attachDirectNodeSocket(stack, ws.workspaceId, alice);
+
+    const second = await stack.app.request('/v1/channels/team-chat/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'overflow' }),
+    });
+    expect(second.status).toBe(201);
+    const secondMessageId = ((await second.json()) as { data: { id: string } }).data.id;
+    await stack.settle();
+
+    expect(await listDeliveries(bob.token)).toHaveLength(1);
+    await waitForAssertion(() => {
+      expect(contextUpdatesOfType(aliceSock, 'delivery.failed').map((event) => event.data)).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          delivery_id: null,
+          message_id: secondMessageId,
+          target_agent_name: 'bob',
+          reason: 'depth_cap',
+          retryable: false,
+        }),
+      ]));
+    });
+  });
+});

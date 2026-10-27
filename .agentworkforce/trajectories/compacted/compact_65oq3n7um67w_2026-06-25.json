@@ -1,0 +1,37 @@
+{
+  "id": "compact_65oq3n7um67w",
+  "version": 1,
+  "type": "compacted",
+  "compactedAt": "2026-06-25T16:35:52.627Z",
+  "sourceTrajectories": [
+    "traj_mygya9rp1ipf"
+  ],
+  "dateRange": {
+    "start": "2026-06-25T16:32:01.693Z",
+    "end": "2026-06-25T16:35:35.063Z"
+  },
+  "summary": {
+    "totalDecisions": 1,
+    "totalEvents": 1,
+    "uniqueAgents": [
+      "default"
+    ]
+  },
+  "decisionGroups": [
+    {
+      "category": "api",
+      "decisions": [
+        {
+          "question": "Centralized auth token kind parsing in a zod-backed helper",
+          "chosen": "Centralized auth token kind parsing in a zod-backed helper",
+          "reasoning": "HTTP auth, WS auth, workspace-read middleware, and request logging all needed the same live-token prefix classification while preserving endpoint-specific error messages",
+          "fromTrajectory": "traj_mygya9rp1ipf"
+        }
+      ]
+    }
+  ],
+  "keyLearnings": [],
+  "keyFindings": [],
+  "filesAffected": [],
+  "commits": []
+}

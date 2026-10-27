@@ -1,6 +1,6 @@
 //! WebSocket client for real-time events.
 
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{Sink, SinkExt, StreamExt};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, Mutex};
@@ -10,11 +10,13 @@ use tracing::{debug, warn};
 use url::Url;
 
 use crate::error::{RelayError, Result};
+use crate::origin_actor::{
+    sanitize_agent_relay_distinct_id, sanitize_origin_actor, AGENT_RELAY_DISTINCT_ID_QUERY,
+};
 use crate::types::WsEvent;
+use crate::{ws_base_from_http, DEFAULT_BASE_URL};
 
-const DEFAULT_BASE_URL: &str = "https://api.relaycast.dev";
 const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
-const DEFAULT_ORIGIN_SURFACE: &str = "sdk";
 const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/sdk-rust";
 const PING_INTERVAL_SECS: u64 = 30;
 const DEFAULT_MAX_RECONNECT_ATTEMPTS: u32 = 10;
@@ -25,20 +27,35 @@ const DEFAULT_MAX_RECONNECT_DELAY_MS: u64 = 30_000;
 pub struct WsClientOptions {
     /// The agent token for authentication.
     pub token: String,
-    /// The base URL for the API (defaults to https://api.relaycast.dev).
+    /// The base URL for the API (defaults to https://cast.agentrelay.com).
     pub base_url: Option<String>,
     /// Enable debug logging for dropped/malformed messages.
     pub debug: bool,
-    /// SDK origin surface metadata.
-    pub origin_surface: Option<String>,
     /// SDK origin client metadata.
     pub origin_client: Option<String>,
     /// SDK origin version metadata.
     pub origin_version: Option<String>,
+    /// User-Agent-style origin_actor identifier, forwarded as the `origin_actor` query
+    /// param (browsers can't set custom WS headers). Invalid values are dropped.
+    pub origin_actor: Option<String>,
+    /// Agent Relay distinct telemetry id, forwarded as the
+    /// `agent_relay_distinct_id` query param. Invalid values are dropped.
+    pub agent_relay_distinct_id: Option<String>,
     /// Maximum reconnect attempts before giving up (default: 10).
     pub max_reconnect_attempts: Option<u32>,
     /// Maximum reconnect delay in milliseconds (default: 30000).
     pub max_reconnect_delay_ms: Option<u64>,
+    /// WebSocket path. Defaults to `/v1/ws` for workspace observer streams.
+    pub path: Option<String>,
+    /// Optional node registration sent after connecting to `/v1/node/ws`.
+    pub node_registration: Option<NodeRegistration>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NodeRegistration {
+    pub node_id: String,
+    pub name: String,
+    pub agent_name: String,
 }
 
 impl WsClientOptions {
@@ -48,11 +65,14 @@ impl WsClientOptions {
             token: token.into(),
             base_url: None,
             debug: false,
-            origin_surface: None,
             origin_client: None,
             origin_version: None,
+            origin_actor: None,
+            agent_relay_distinct_id: None,
             max_reconnect_attempts: None,
             max_reconnect_delay_ms: None,
+            path: None,
+            node_registration: None,
         }
     }
 
@@ -71,13 +91,23 @@ impl WsClientOptions {
     /// Set origin metadata query params for WebSocket handshake.
     pub fn with_origin(
         mut self,
-        origin_surface: impl Into<String>,
         origin_client: impl Into<String>,
         origin_version: impl Into<String>,
     ) -> Self {
-        self.origin_surface = Some(origin_surface.into());
         self.origin_client = Some(origin_client.into());
         self.origin_version = Some(origin_version.into());
+        self
+    }
+
+    /// Set the origin_actor identifier forwarded as the `origin_actor` query param.
+    pub fn with_origin_actor(mut self, origin_actor: impl Into<String>) -> Self {
+        self.origin_actor = Some(origin_actor.into());
+        self
+    }
+
+    /// Set Agent Relay's distinct telemetry id for WebSocket handshakes.
+    pub fn with_agent_relay_distinct_id(mut self, id: impl Into<String>) -> Self {
+        self.agent_relay_distinct_id = Some(id.into());
         self
     }
 
@@ -92,10 +122,19 @@ impl WsClientOptions {
         self.max_reconnect_delay_ms = Some(delay_ms);
         self
     }
+
+    /// Connect to the node-control WebSocket and register this node on open.
+    pub fn with_node_registration(mut self, registration: NodeRegistration) -> Self {
+        self.path = Some("/v1/node/ws".to_string());
+        self.node_registration = Some(registration);
+        self
+    }
 }
 
 /// A handle for subscribing to WebSocket events.
 pub type EventReceiver = broadcast::Receiver<WsEvent>;
+/// A handle for subscribing to raw WebSocket JSON events.
+pub type RawEventReceiver = broadcast::Receiver<serde_json::Value>;
 /// A handle for subscribing to WebSocket lifecycle events.
 pub type LifecycleReceiver = broadcast::Receiver<WsLifecycleEvent>;
 
@@ -113,12 +152,16 @@ pub struct WsClient {
     token: Arc<Mutex<String>>,
     base_url: String,
     debug: bool,
-    origin_surface: String,
     origin_client: String,
     origin_version: String,
+    origin_actor: Option<String>,
+    agent_relay_distinct_id: Option<String>,
     max_reconnect_attempts: u32,
     max_reconnect_delay_ms: u64,
+    path: String,
+    node_registration: Option<NodeRegistration>,
     event_tx: broadcast::Sender<WsEvent>,
+    raw_event_tx: broadcast::Sender<serde_json::Value>,
     lifecycle_tx: broadcast::Sender<WsLifecycleEvent>,
     command_tx: Option<mpsc::Sender<WsCommand>>,
     is_connected: Arc<Mutex<bool>>,
@@ -133,35 +176,39 @@ enum WsCommand {
 impl WsClient {
     /// Create a new WebSocket client with the given options.
     pub fn new(options: WsClientOptions) -> Self {
-        let base_url = options
-            .base_url
-            .unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
-            .replace("https://", "wss://")
-            .replace("http://", "ws://");
+        // Single source of truth for HTTP(S)->WS(S) normalization (trims
+        // whitespace + trailing slashes); see `ws_base_from_http` in lib.rs.
+        let base_url =
+            ws_base_from_http(options.base_url.as_deref().unwrap_or(DEFAULT_BASE_URL));
 
         let (event_tx, _) = broadcast::channel(1024);
+        let (raw_event_tx, _) = broadcast::channel(1024);
         let (lifecycle_tx, _) = broadcast::channel(128);
 
         Self {
             token: Arc::new(Mutex::new(options.token)),
-            base_url: base_url.trim_end_matches('/').to_string(),
+            base_url,
             debug: options.debug,
-            origin_surface: options
-                .origin_surface
-                .unwrap_or_else(|| DEFAULT_ORIGIN_SURFACE.to_string()),
             origin_client: options
                 .origin_client
                 .unwrap_or_else(|| DEFAULT_ORIGIN_CLIENT.to_string()),
             origin_version: options
                 .origin_version
                 .unwrap_or_else(|| SDK_VERSION.to_string()),
+            origin_actor: sanitize_origin_actor(options.origin_actor),
+            agent_relay_distinct_id: sanitize_agent_relay_distinct_id(
+                options.agent_relay_distinct_id,
+            ),
             max_reconnect_attempts: options
                 .max_reconnect_attempts
                 .unwrap_or(DEFAULT_MAX_RECONNECT_ATTEMPTS),
             max_reconnect_delay_ms: options
                 .max_reconnect_delay_ms
                 .unwrap_or(DEFAULT_MAX_RECONNECT_DELAY_MS),
+            path: options.path.unwrap_or_else(|| "/v1/ws".to_string()),
+            node_registration: options.node_registration,
             event_tx,
+            raw_event_tx,
             lifecycle_tx,
             command_tx: None,
             is_connected: Arc::new(Mutex::new(false)),
@@ -176,6 +223,11 @@ impl WsClient {
     /// Subscribe to receive events.
     pub fn subscribe_events(&self) -> EventReceiver {
         self.event_tx.subscribe()
+    }
+
+    /// Subscribe to receive raw WebSocket JSON events.
+    pub fn subscribe_raw_events(&self) -> RawEventReceiver {
+        self.raw_event_tx.subscribe()
     }
 
     /// Subscribe to lifecycle events.
@@ -194,14 +246,19 @@ impl WsClient {
             return Ok(());
         }
 
-        let mut url = Url::parse(&format!("{}/v1/ws", self.base_url))?;
+        let mut url = Url::parse(&format!("{}{}", self.base_url, self.path))?;
         {
             let token = self.token.lock().await.clone();
             let mut query = url.query_pairs_mut();
             query.append_pair("token", &token);
-            query.append_pair("origin_surface", &self.origin_surface);
             query.append_pair("origin_client", &self.origin_client);
             query.append_pair("origin_version", &self.origin_version);
+            if let Some(ref origin_actor) = self.origin_actor {
+                query.append_pair("origin_actor", origin_actor);
+            }
+            if let Some(ref id) = self.agent_relay_distinct_id {
+                query.append_pair(AGENT_RELAY_DISTINCT_ID_QUERY, id);
+            }
         }
 
         let (ws_stream, _) = connect_async(url.as_str()).await?;
@@ -211,15 +268,19 @@ impl WsClient {
 
         let token = self.token.clone();
         let event_tx = self.event_tx.clone();
+        let raw_event_tx = self.raw_event_tx.clone();
         let lifecycle_tx = self.lifecycle_tx.clone();
         let is_connected = self.is_connected.clone();
         let debug = self.debug;
         let base_url = self.base_url.clone();
-        let origin_surface = self.origin_surface.clone();
         let origin_client = self.origin_client.clone();
         let origin_version = self.origin_version.clone();
+        let origin_actor = self.origin_actor.clone();
+        let agent_relay_distinct_id = self.agent_relay_distinct_id.clone();
         let max_reconnect_attempts = self.max_reconnect_attempts;
         let max_reconnect_delay_ms = self.max_reconnect_delay_ms;
+        let path = self.path.clone();
+        let node_registration = self.node_registration.clone();
 
         *is_connected.lock().await = true;
 
@@ -234,7 +295,7 @@ impl WsClient {
                 let stream = if let Some(stream) = current_stream.take() {
                     stream
                 } else {
-                    let mut reconnect_url = match Url::parse(&format!("{}/v1/ws", base_url)) {
+                    let mut reconnect_url = match Url::parse(&format!("{}{}", base_url, path)) {
                         Ok(url) => url,
                         Err(err) => {
                             let _ = lifecycle_tx.send(WsLifecycleEvent::Error(err.to_string()));
@@ -246,9 +307,14 @@ impl WsClient {
                     {
                         let mut query = reconnect_url.query_pairs_mut();
                         query.append_pair("token", &current_token);
-                        query.append_pair("origin_surface", &origin_surface);
                         query.append_pair("origin_client", &origin_client);
                         query.append_pair("origin_version", &origin_version);
+                        if let Some(ref origin_actor) = origin_actor {
+                            query.append_pair("origin_actor", origin_actor);
+                        }
+                        if let Some(ref id) = agent_relay_distinct_id {
+                            query.append_pair(AGENT_RELAY_DISTINCT_ID_QUERY, id);
+                        }
                     }
 
                     match connect_async(reconnect_url.as_str()).await {
@@ -300,10 +366,17 @@ impl WsClient {
                 let (mut write, mut read) = stream.split();
                 reconnect_attempt = 0;
                 *is_connected.lock().await = true;
+                if let Some(registration) = &node_registration {
+                    if let Err(err) = send_node_register(&mut write, registration).await {
+                        let _ = lifecycle_tx.send(WsLifecycleEvent::Error(err.to_string()));
+                        *is_connected.lock().await = false;
+                        continue;
+                    }
+                }
                 let _ = lifecycle_tx.send(WsLifecycleEvent::Open);
 
                 // Re-subscribe all known channels on every new socket.
-                if !subscribed_channels.is_empty() {
+                if node_registration.is_none() && !subscribed_channels.is_empty() {
                     let msg = serde_json::json!({
                         "type": "subscribe",
                         "channels": subscribed_channels.iter().cloned().collect::<Vec<_>>()
@@ -324,13 +397,32 @@ impl WsClient {
                         msg = read.next() => {
                             match msg {
                                 Some(Ok(Message::Text(text))) => {
-                                    match serde_json::from_str::<WsEvent>(&text) {
-                                        Ok(event) => {
-                                            let _ = event_tx.send(event);
+                                    match serde_json::from_str::<serde_json::Value>(&text) {
+                                        Ok(value) => {
+                                            let event_value = normalize_node_message(value.clone()).unwrap_or_else(|| value.clone());
+                                            let _ = raw_event_tx.send(event_value.clone());
+                                            if node_registration.is_some() {
+                                                if let Some(ack) = node_delivery_ack(&value) {
+                                                    if let Err(err) = write.send(Message::Text(ack.to_string())).await {
+                                                        let _ = lifecycle_tx.send(WsLifecycleEvent::Error(err.to_string()));
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                            match serde_json::from_value::<WsEvent>(event_value) {
+                                                Ok(event) => {
+                                                    let _ = event_tx.send(event);
+                                                }
+                                                Err(err) => {
+                                                    if debug {
+                                                        warn!("[relaycast] Dropped typed WebSocket event: {}: {}", err, truncate_str(&text, 200));
+                                                    }
+                                                }
+                                            }
                                         }
                                         Err(err) => {
                                             if debug {
-                                                warn!("[relaycast] Dropped WebSocket message: {}: {}", err, &text[..text.len().min(200)]);
+                                                warn!("[relaycast] Dropped non-JSON WebSocket message: {}: {}", err, truncate_str(&text, 200));
                                             }
                                         }
                                     }
@@ -352,26 +444,30 @@ impl WsClient {
                                     for ch in &channels {
                                         subscribed_channels.insert(ch.clone());
                                     }
-                                    let msg = serde_json::json!({
-                                        "type": "subscribe",
-                                        "channels": channels
-                                    });
-                                    if let Err(err) = write.send(Message::Text(msg.to_string())).await {
-                                        let _ = lifecycle_tx.send(WsLifecycleEvent::Error(err.to_string()));
-                                        break;
+                                    if node_registration.is_none() {
+                                        let msg = serde_json::json!({
+                                            "type": "subscribe",
+                                            "channels": channels
+                                        });
+                                        if let Err(err) = write.send(Message::Text(msg.to_string())).await {
+                                            let _ = lifecycle_tx.send(WsLifecycleEvent::Error(err.to_string()));
+                                            break;
+                                        }
                                     }
                                 }
                                 Some(WsCommand::Unsubscribe(channels)) => {
                                     for ch in &channels {
                                         subscribed_channels.remove(ch);
                                     }
-                                    let msg = serde_json::json!({
-                                        "type": "unsubscribe",
-                                        "channels": channels
-                                    });
-                                    if let Err(err) = write.send(Message::Text(msg.to_string())).await {
-                                        let _ = lifecycle_tx.send(WsLifecycleEvent::Error(err.to_string()));
-                                        break;
+                                    if node_registration.is_none() {
+                                        let msg = serde_json::json!({
+                                            "type": "unsubscribe",
+                                            "channels": channels
+                                        });
+                                        if let Err(err) = write.send(Message::Text(msg.to_string())).await {
+                                            let _ = lifecycle_tx.send(WsLifecycleEvent::Error(err.to_string()));
+                                            break;
+                                        }
                                     }
                                 }
                                 Some(WsCommand::Disconnect) | None => {
@@ -382,7 +478,11 @@ impl WsClient {
                             }
                         }
                         _ = ping_interval.tick() => {
-                            let ping = serde_json::json!({"type": "ping"});
+                            let ping = if let Some(registration) = &node_registration {
+                                node_heartbeat(registration)
+                            } else {
+                                serde_json::json!({"type": "ping"})
+                            };
                             if let Err(err) = write.send(Message::Text(ping.to_string())).await {
                                 let _ = lifecycle_tx.send(WsLifecycleEvent::Error(err.to_string()));
                                 break;
@@ -484,4 +584,210 @@ fn reconnect_delay_ms(attempt: u32, max_delay_ms: u64) -> u64 {
     let exp = attempt.saturating_sub(1);
     let delay = 1_000u64.saturating_mul(2u64.saturating_pow(exp));
     delay.min(max_delay_ms.max(1_000))
+}
+
+fn node_heartbeat(registration: &NodeRegistration) -> serde_json::Value {
+    serde_json::json!({
+        "v": 1,
+        "type": "node.heartbeat",
+        "load": null,
+        "active_agents": 1,
+        "handlers_live": false,
+        "node_id": registration.node_id,
+        "name": registration.name,
+        "capabilities": [],
+        "max_agents": 1,
+        "version": SDK_VERSION,
+    })
+}
+
+// The error type is `tungstenite::Error`, fixed by the `Sink` bound this
+// function is generic over, and Rust 1.98's tightened `result_large_err`
+// threshold now flags it. Boxing would mean allocating on a path that only ever
+// forwards `write.send()`, and would change the signature of an external
+// crate's error for every caller — so the size is acknowledged rather than
+// worked around.
+#[allow(clippy::result_large_err)]
+async fn send_node_register<S>(
+    write: &mut S,
+    registration: &NodeRegistration,
+) -> std::result::Result<(), tokio_tungstenite::tungstenite::Error>
+where
+    S: Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
+{
+    let msg = serde_json::json!({
+        "v": 1,
+        "id": format!("register-{}", registration.node_id),
+        "type": "node.register",
+        "node_id": registration.node_id,
+        "name": registration.name,
+        "capabilities": [],
+        "max_agents": 1,
+        "tags": ["implicit", "direct", "sdk"],
+        "version": SDK_VERSION,
+        "resume_cursor": null,
+    });
+    write.send(Message::Text(msg.to_string())).await
+}
+
+fn node_delivery_ack(value: &serde_json::Value) -> Option<serde_json::Value> {
+    if value.get("type")?.as_str()? != "deliver" {
+        return None;
+    }
+    Some(serde_json::json!({
+        "v": 1,
+        "type": "delivery.ack",
+        "agent": value.get("agent")?.as_str()?,
+        "up_to_seq": value.get("seq")?.as_u64()?,
+    }))
+}
+
+fn normalize_node_deliver(value: serde_json::Value) -> Option<serde_json::Value> {
+    if value.get("type")?.as_str()? != "deliver" {
+        return None;
+    }
+    let payload = value.get("payload")?;
+    let event_type = payload.get("type")?.as_str()?;
+    let data = payload.get("data")?.clone();
+    let data_obj = data.as_object()?;
+
+    if event_type == "message.created" {
+        return Some(serde_json::json!({
+            "type": event_type,
+            "channel": data_obj.get("channel_name").and_then(|v| v.as_str()).unwrap_or(""),
+            "message": {
+                "id": data_obj.get("id").cloned().unwrap_or(serde_json::Value::Null),
+                "agent_id": data_obj.get("agent_id").cloned().unwrap_or(serde_json::Value::Null),
+                "agent_name": data_obj
+                    .get("agent_name")
+                    .or_else(|| data_obj.get("from_name"))
+                    .cloned()
+                    .unwrap_or(serde_json::Value::String("unknown".to_string())),
+                "text": data_obj.get("text").cloned().unwrap_or(serde_json::Value::String(String::new())),
+                "attachments": data_obj.get("attachments").cloned().unwrap_or_else(|| serde_json::json!([])),
+                "injection_mode": data_obj.get("injection_mode").cloned().unwrap_or(serde_json::Value::Null),
+            }
+        }));
+    }
+
+    if event_type == "thread.reply" {
+        return Some(serde_json::json!({
+            "type": event_type,
+            "channel": data_obj.get("channel_name").and_then(|v| v.as_str()).unwrap_or(""),
+            "parent_id": data_obj.get("thread_id").cloned().unwrap_or(serde_json::Value::Null),
+            "message": {
+                "id": data_obj.get("id").cloned().unwrap_or(serde_json::Value::Null),
+                "agent_id": data_obj.get("agent_id").cloned().unwrap_or(serde_json::Value::Null),
+                "agent_name": data_obj
+                    .get("agent_name")
+                    .or_else(|| data_obj.get("from_name"))
+                    .cloned()
+                    .unwrap_or(serde_json::Value::String("unknown".to_string())),
+                "text": data_obj.get("text").cloned().unwrap_or(serde_json::Value::String(String::new())),
+            }
+        }));
+    }
+
+    let mut event = data_obj.clone();
+    event.insert("type".to_string(), serde_json::Value::String(event_type.to_string()));
+    Some(serde_json::Value::Object(event))
+}
+
+fn normalize_node_message(value: serde_json::Value) -> Option<serde_json::Value> {
+    normalize_node_deliver(value.clone())
+        .or_else(|| normalize_node_context_update(value.clone()))
+        .or_else(|| normalize_node_action_invoke(value))
+}
+
+fn normalize_node_action_invoke(value: serde_json::Value) -> Option<serde_json::Value> {
+    if value.get("type")?.as_str()? != "action.invoke" {
+        return None;
+    }
+    Some(serde_json::json!({
+        "type": "action.invoked",
+        "invocation_id": value.get("invocation_id").cloned().unwrap_or(serde_json::Value::String(String::new())),
+        "action_name": value.get("action").cloned().unwrap_or(serde_json::Value::String(String::new())),
+        "caller_name": "node",
+        "handler_agent_id": value.get("agent_id").cloned().unwrap_or(serde_json::Value::String(String::new())),
+        "handler_agent_name": value.get("agent_name").cloned().unwrap_or(serde_json::Value::Null),
+        "input": value.get("input").cloned().unwrap_or(serde_json::json!({})),
+    }))
+}
+
+fn normalize_node_context_update(value: serde_json::Value) -> Option<serde_json::Value> {
+    if value.get("type")?.as_str()? != "context.update" {
+        return None;
+    }
+    let event_type = value.get("event")?.as_str()?;
+    let data = value.get("data")?.as_object()?;
+    let mut event = data.clone();
+    event.insert(
+        "type".to_string(),
+        serde_json::Value::String(event_type.to_string()),
+    );
+    Some(serde_json::Value::Object(event))
+}
+
+fn truncate_str(s: &str, max_chars: usize) -> &str {
+    match s.char_indices().nth(max_chars) {
+        Some((idx, _)) => &s[..idx],
+        None => s,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{node_heartbeat, normalize_node_message, truncate_str, NodeRegistration};
+    use crate::types::WsEvent;
+    use serde_json::json;
+
+    #[test]
+    fn truncate_str_respects_utf8_boundaries() {
+        let text = "😀".repeat(201);
+        let truncated = truncate_str(&text, 200);
+
+        assert_eq!(truncated.chars().count(), 200);
+        assert!(truncated.is_char_boundary(truncated.len()));
+    }
+
+    #[test]
+    fn truncate_str_returns_short_strings_unchanged() {
+        assert_eq!(truncate_str("hello", 200), "hello");
+    }
+
+    #[test]
+    fn direct_node_heartbeat_keeps_load_unreported() {
+        let heartbeat = node_heartbeat(&NodeRegistration {
+            node_id: "node_1".to_string(),
+            name: "direct-alice".to_string(),
+            agent_name: "alice".to_string(),
+        });
+
+        assert_eq!(heartbeat.get("load"), Some(&serde_json::Value::Null));
+        assert!(heartbeat.get("load_reported").is_none());
+    }
+
+    #[test]
+    fn normalizes_node_context_update_frames() {
+        let normalized = normalize_node_message(json!({
+            "v": 1,
+            "type": "context.update",
+            "topic": "agent",
+            "event": "delivery.failed",
+            "agent_ids": ["agt_sender"],
+            "data": {
+                "delivery_id": null,
+                "message_id": "msg_1",
+                "reason": "depth_cap",
+                "retryable": false
+            }
+        }))
+        .expect("context.update should normalize");
+
+        assert_eq!(normalized["type"], "delivery.failed");
+        assert_eq!(normalized["delivery_id"], serde_json::Value::Null);
+        let event: WsEvent = serde_json::from_value(normalized)
+            .expect("normalized context update should deserialize as a websocket event");
+        assert!(matches!(event, WsEvent::DeliveryFailed(_)));
+    }
 }

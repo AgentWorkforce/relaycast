@@ -5,16 +5,28 @@ import type {
   WsReconnectingEvent,
   WsPermanentlyDisconnectedEvent,
   WsCloseEvent,
+  WsResyncedEvent,
 } from './types.js';
 import { ServerEventSchema } from '@relaycast/types';
-import { SDK_ORIGIN, type InternalOrigin } from './origin.js';
+import {
+  SDK_ORIGIN,
+  applyAgentRelayIdentityQuery,
+  resolveAgentRelayIdentity,
+  sanitizeOriginActor,
+  type AgentRelayIdentity,
+  type InternalOrigin,
+} from './origin.js';
 import { camelizeKeys, decamelizeKey } from './casing.js';
+import { stableRelaycastEventId } from './event-id.js';
 
 export type EventHandler<T = WsClientEvent> = (event: T) => void;
 
 export interface WsClientOptions {
-  token: string;
+  token: string | (() => string | Promise<string>);
   baseUrl?: string;
+  path?: string;
+  nodeRegistration?: () => Record<string, unknown> | Promise<Record<string, unknown>>;
+  autoAckDeliveries?: boolean;
   maxReconnectAttempts?: number;
   reconnectJitter?: boolean;
   reconnectBaseDelayMs?: number;
@@ -22,7 +34,36 @@ export interface WsClientOptions {
   circuitBreakerMaxAttempts?: number;
   /** Log warnings for dropped/malformed WebSocket messages via console.warn. */
   debug?: boolean;
+  /**
+   * Optional User-Agent-style originActor identifier, forwarded as the `originActor`
+   * query param (browsers can't set custom WS headers). See {@link sanitizeOriginActor}.
+   */
+  originActor?: string;
+  /**
+   * Optional Agent Relay distinct telemetry id, forwarded as the
+   * `agent_relay_distinct_id` query param (browsers can't set custom WS
+   * headers). Invalid values are dropped.
+   */
+  agentRelayDistinctId?: string;
+  /**
+   * Optional Agent Relay Cloud user id of the signed-in operator, forwarded as
+   * the `agent_relay_user_id` query param. Doubles as the distinct id when
+   * `agentRelayDistinctId` is unset.
+   */
+  agentRelayUserId?: string;
+  /** Optional hashed machine id, forwarded as `agent_relay_machine_id`. */
+  agentRelayMachineId?: string;
+  /** Optional Agent Relay Cloud organization id, for group analytics. */
+  agentRelayOrgId?: string;
+  /** Optional organization slug, for readable analytics breakdowns. */
+  agentRelayOrgSlug?: string;
 }
+
+/**
+ * How many recently-seen event ids to remember for replay dedupe. Sized above
+ * the server's 500-event resync ring plus DB-fallback replay batches.
+ */
+const SEEN_EVENT_IDS_MAX = 2048;
 
 const INTERNAL_WS_ORIGIN = Symbol('relaycast.internal.ws-origin');
 
@@ -32,6 +73,10 @@ type WsClientOptionsWithInternalOrigin = WsClientOptions & {
 
 function readInternalWsOrigin(options: WsClientOptions): InternalOrigin | undefined {
   return (options as WsClientOptionsWithInternalOrigin)[INTERNAL_WS_ORIGIN];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 export function withInternalWsOrigin<T extends WsClientOptions>(
@@ -49,9 +94,15 @@ export function withInternalWsOrigin<T extends WsClientOptions>(
 }
 
 export class WsClient {
-  private token: string;
+  private token: string | (() => string | Promise<string>);
   private baseUrl: string;
+  private path: string;
+  private nodeRegistration?: () => Record<string, unknown> | Promise<Record<string, unknown>>;
+  private autoAckDeliveries: boolean;
+  private nodeMode: boolean;
+  private lastNodeRegistration: Record<string, unknown> | null = null;
   private ws: WebSocket | null = null;
+  private connecting = false;
   private handlers: Map<string, Set<EventHandler>> = new Map();
   private isOpen = false;
   private reconnectAttempt = 0;
@@ -67,13 +118,24 @@ export class WsClient {
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private closed = false;
   private debug: boolean;
-  private originSurface: string;
   private originClient: string;
   private originVersion: string;
+  private originActor?: string;
+  private identity: AgentRelayIdentity;
+  /** Highest `agent_seq` observed across delivered events; null until the first stamped event. */
+  private lastSeenSeq: number | null = null;
+  /** Receive time of the last seq-stamped event, used as `since` for DB-backed replay. */
+  private lastEventAt: string | null = null;
+  /** Recently dispatched event ids (insertion-ordered for LRU eviction) for replay dedupe. */
+  private seenEventIds = new Set<string>();
 
   constructor(options: WsClientOptions) {
     const origin = readInternalWsOrigin(options) ?? SDK_ORIGIN;
     this.token = options.token;
+    this.path = options.path ?? '/v1/ws';
+    this.nodeRegistration = options.nodeRegistration;
+    this.autoAckDeliveries = options.autoAckDeliveries ?? false;
+    this.nodeMode = this.path === '/v1/node/ws' || !!options.nodeRegistration;
     this.debug = options.debug ?? false;
     this.maxReconnectAttempts = Number.isFinite(options.maxReconnectAttempts)
       ? Math.max(0, Math.floor(options.maxReconnectAttempts!))
@@ -88,26 +150,50 @@ export class WsClient {
     this.circuitBreakerMaxAttempts = Number.isFinite(options.circuitBreakerMaxAttempts)
       ? Math.max(1, Math.floor(options.circuitBreakerMaxAttempts!))
       : 30;
-    const base = (options.baseUrl ?? 'https://api.relaycast.dev').replace(/\/+$/, '');
+    const base = (options.baseUrl ?? 'https://cast.agentrelay.com').replace(/\/+$/, '');
     this.baseUrl = base.replace(/^http/, 'ws');
-    this.originSurface = origin.surface;
     this.originClient = origin.client;
     this.originVersion = origin.version;
+    this.originActor = sanitizeOriginActor(origin.originActor ?? options.originActor);
+    this.identity = resolveAgentRelayIdentity(origin, options);
   }
 
   connect(): void {
-    if (this.ws) return;
+    if (this.ws || this.connecting) return;
     this.closed = false;
     this.permanentlyDisconnected = false;
+    this.connecting = true;
 
-    const wsUrl = new URL('/v1/ws', `${this.baseUrl}/`);
-    wsUrl.searchParams.set('token', this.token);
-    wsUrl.searchParams.set(decamelizeKey('originSurface'), this.originSurface);
+    void this.openSocket().catch((err) => {
+      this.connecting = false;
+      if (this.closed) return;
+      if (this.debug) {
+        console.warn('[relaycast] Failed to open WebSocket:', err);
+      }
+      this.emit('error', { type: 'error' });
+      this.scheduleReconnect();
+    });
+  }
+
+  private async openSocket(): Promise<void> {
+    const token = typeof this.token === 'function' ? await this.token() : this.token;
+    if (this.closed) {
+      this.connecting = false;
+      return;
+    }
+
+    const wsUrl = new URL(this.path, `${this.baseUrl}/`);
+    wsUrl.searchParams.set('token', token);
     wsUrl.searchParams.set(decamelizeKey('originClient'), this.originClient);
     wsUrl.searchParams.set(decamelizeKey('originVersion'), this.originVersion);
+    if (this.originActor) {
+      wsUrl.searchParams.set('origin_actor', this.originActor);
+    }
+    applyAgentRelayIdentityQuery(wsUrl, this.identity);
 
     const ws = new WebSocket(wsUrl.toString());
     this.ws = ws;
+    this.connecting = false;
 
     this.connectTimer = setTimeout(() => {
       if (this.ws !== ws || this.isOpen || this.closed) return;
@@ -123,19 +209,54 @@ export class WsClient {
 
     ws.onopen = () => {
       if (this.ws !== ws) return;
-      this.clearConnectTimer();
-      this.isOpen = true;
-      this.reconnectAttempt = 0;
-      this.permanentlyDisconnected = false;
-      this.startPing();
-      const openEvent: WsOpenEvent = { type: 'open' };
-      this.emit('open', openEvent);
+      void this.handleOpen(ws).catch((err) => {
+        if (this.ws !== ws || this.closed) return;
+        if (this.debug) {
+          console.warn('[relaycast] WebSocket open handler failed:', err);
+        }
+        this.emit('error', { type: 'error' });
+        try {
+          ws.close();
+        } catch {
+          // noop
+        }
+      });
     };
 
     ws.onmessage = (event: MessageEvent) => {
       if (this.ws !== ws) return;
       try {
         const parsed = JSON.parse(String(event.data));
+        if (this.nodeMode && this.handleNodeMessage(parsed)) {
+          return;
+        }
+
+        if (parsed !== null && typeof parsed === 'object') {
+          // The server stamps every delivered event with a monotonic
+          // `agent_seq` (stripped by schema parsing, so read it raw here).
+          if (typeof parsed.agent_seq === 'number' && Number.isFinite(parsed.agent_seq)) {
+            this.lastSeenSeq = parsed.agent_seq;
+            this.lastEventAt = new Date().toISOString();
+          }
+
+          if (parsed.type === 'resync_ack') {
+            const resyncedEvent: WsResyncedEvent = {
+              type: 'resynced',
+              replayed: typeof parsed.replayed === 'number' ? parsed.replayed : 0,
+              gapDetected: parsed.gap_detected === true,
+            };
+            this.emit('resynced', resyncedEvent);
+            return;
+          }
+
+          // Drop replays of events already dispatched (stable event id).
+          if (typeof parsed.id === 'string' && parsed.id.length > 0 && typeof parsed.type === 'string') {
+            const dedupeKey = `${parsed.type}:${parsed.id}`;
+            if (this.seenEventIds.has(dedupeKey)) return;
+            this.rememberEventId(dedupeKey);
+          }
+        }
+
         const result = ServerEventSchema.safeParse(parsed);
         if (result.success) {
           this.emit(result.data.type, camelizeKeys(result.data) as WsClientEvent);
@@ -184,9 +305,32 @@ export class WsClient {
     };
   }
 
+  private async handleOpen(ws: WebSocket): Promise<void> {
+    if (this.ws !== ws) return;
+    this.clearConnectTimer();
+    this.isOpen = true;
+    this.reconnectAttempt = 0;
+    this.permanentlyDisconnected = false;
+
+    if (this.nodeRegistration) {
+      const registration = await this.nodeRegistration();
+      if (this.ws !== ws || this.closed) return;
+      this.lastNodeRegistration = registration;
+      this.sendJson(registration);
+    }
+
+    this.startPing();
+    const openEvent: WsOpenEvent = { type: 'open' };
+    this.emit('open', openEvent);
+    // After open handlers have re-subscribed, request replay of anything
+    // missed while disconnected. A fresh client has no seq and sends nothing.
+    this.sendResync();
+  }
+
   disconnect(): void {
     this.closed = true;
     this.isOpen = false;
+    this.connecting = false;
     this.permanentlyDisconnected = false;
     this.clearConnectTimer();
     this.stopPing();
@@ -209,6 +353,7 @@ export class WsClient {
   reconnect(): void {
     this.closed = false;
     this.isOpen = false;
+    this.connecting = false;
     this.permanentlyDisconnected = false;
     this.reconnectAttempt = 0;
     this.clearConnectTimer();
@@ -233,10 +378,12 @@ export class WsClient {
   }
 
   subscribe(channels: string[]): void {
+    if (this.nodeMode) return;
     this.sendJson({ type: 'subscribe', channels });
   }
 
   unsubscribe(channels: string[]): void {
+    if (this.nodeMode) return;
     this.sendJson({ type: 'unsubscribe', channels });
   }
 
@@ -273,15 +420,207 @@ export class WsClient {
     this.handlers.get('*')?.forEach((h) => h(data));
   }
 
+  private handleNodeMessage(parsed: unknown): boolean {
+    if (!isRecord(parsed) || typeof parsed.type !== 'string') return false;
+
+    if (parsed.type === 'deliver') {
+      const payload = isRecord(parsed.payload) ? parsed.payload : null;
+      if (payload && typeof payload.type === 'string') {
+        const data = isRecord(payload.data) ? payload.data : {};
+        this.emitServerLikeEvent(payload.type, data);
+      }
+      if (
+        this.autoAckDeliveries &&
+        typeof parsed.agent === 'string' &&
+        typeof parsed.seq === 'number' &&
+        Number.isFinite(parsed.seq)
+      ) {
+        this.sendJson({
+          v: 1,
+          type: 'delivery.ack',
+          agent: parsed.agent,
+          up_to_seq: parsed.seq,
+        });
+      }
+      return true;
+    }
+
+    if (parsed.type === 'context.update') {
+      const eventType = typeof parsed.event === 'string' ? parsed.event : null;
+      if (eventType) {
+        this.emitServerLikeEvent(eventType, isRecord(parsed.data) ? parsed.data : {});
+      }
+      return true;
+    }
+
+    if (parsed.type === 'action.invoke') {
+      this.emitServerLikeEvent('action.invoked', {
+        invocation_id: typeof parsed.invocation_id === 'string' ? parsed.invocation_id : '',
+        action_name: typeof parsed.action === 'string' ? parsed.action : '',
+        caller_name: 'node',
+        handler_agent_id: typeof parsed.agent_id === 'string' ? parsed.agent_id : '',
+        handler_agent_name: typeof parsed.agent_name === 'string' ? parsed.agent_name : undefined,
+        input: isRecord(parsed.input) ? parsed.input : {},
+      });
+      return true;
+    }
+
+    // Node control replies/errors are transport-level acknowledgements for the
+    // direct node client. They are intentionally not surfaced as app events.
+    return parsed.type === 'reply' || parsed.type === 'error' || parsed.type === 'pong' || parsed.type === 'resync_ack';
+  }
+
+  private emitServerLikeEvent(eventType: string, data: Record<string, unknown>): void {
+    const transformed = this.transformServerLikeEvent(eventType, data);
+    // Node delivery is at-least-once, so redelivered frames must be deduped
+    // the same way the standard onmessage flow dedupes server events.
+    if (
+      typeof transformed.id === 'string' &&
+      transformed.id.length > 0 &&
+      typeof transformed.type === 'string'
+    ) {
+      const dedupeKey = `${transformed.type}:${transformed.id}`;
+      if (this.seenEventIds.has(dedupeKey)) return;
+      this.rememberEventId(dedupeKey);
+    }
+    const result = ServerEventSchema.safeParse(transformed);
+    if (result.success) {
+      this.emit(result.data.type, camelizeKeys(result.data) as WsClientEvent);
+      return;
+    }
+    if (typeof transformed.type === 'string') {
+      this.emit(transformed.type, camelizeKeys(transformed) as WsClientEvent);
+    } else if (this.debug) {
+      console.warn('[relaycast] Dropped node event: missing or invalid "type" field', transformed);
+    }
+  }
+
+  /** Normalize a direct-node delivery into the public workspace event shape. */
+  private transformServerLikeEvent(eventType: string, data: Record<string, unknown>): Record<string, unknown> {
+    switch (eventType) {
+      case 'message.created':
+        return {
+          id: stableRelaycastEventId(String(data.id ?? '')),
+          type: 'message.created',
+          ...(typeof data.created_at === 'string' ? { created_at: data.created_at } : {}),
+          channel: data.channel_name,
+          message: {
+            id: data.id,
+            agent_id: data.agent_id,
+            agent_name: data.from_name,
+            text: data.text,
+            attachments: Array.isArray(data.attachments) ? data.attachments : [],
+            ...(typeof data.injection_mode === 'string' ? { injection_mode: data.injection_mode } : {}),
+            ...(isRecord(data.metadata) ? { metadata: data.metadata } : {}),
+          },
+        };
+      case 'thread.reply':
+        return {
+          id: stableRelaycastEventId(String(data.id ?? '')),
+          type: 'thread.reply',
+          channel: data.channel_name,
+          parent_id: data.thread_id,
+          message: {
+            id: data.id,
+            agent_id: data.agent_id,
+            agent_name: data.from_name,
+            text: data.text,
+          },
+        };
+      case 'message.updated':
+        return {
+          type: 'message.updated',
+          channel: data.channel_name,
+          message: {
+            id: data.id,
+            agent_id: data.agent_id,
+            agent_name: data.from_name,
+            text: data.text,
+          },
+        };
+      case 'message.reacted':
+        return {
+          type: 'message.reacted',
+          message_id: data.message_id,
+          emoji: data.emoji,
+          agent_name: data.agent_name,
+          action: data.action ?? 'added',
+        };
+      case 'dm.received':
+      case 'group_dm.received': {
+        const message = isRecord(data.message) ? data.message : {};
+        const attachments = Array.isArray(message.attachments)
+          ? message.attachments
+          : Array.isArray(data.attachments)
+            ? data.attachments
+            : [];
+        const messageId = String(message.id ?? data.id ?? '');
+        return {
+          id: stableRelaycastEventId(messageId),
+          type: eventType,
+          conversation_id: data.conversation_id,
+          message: {
+            id: message.id ?? data.id,
+            agent_id: message.agent_id ?? data.from_agent_id ?? data.agent_id,
+            agent_name: message.agent_name ?? data.from_name,
+            text: message.text ?? data.text,
+            ...((message.injection_mode ?? data.injection_mode) ? { injection_mode: message.injection_mode ?? data.injection_mode } : {}),
+            ...(attachments.length ? { attachments } : {}),
+          },
+        };
+      }
+      default:
+        return { type: eventType, ...data };
+    }
+  }
+
   private sendJson(data: unknown): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(data));
     }
   }
 
+  /**
+   * Request replay of events missed while disconnected. The server replays its
+   * resync ring past `last_seen_seq`, falls back to a DB-backed replay from
+   * `since` when the gap exceeds the ring, and answers with `resync_ack`.
+   * No-op until at least one seq-stamped event has been received.
+   */
+  private sendResync(): void {
+    if (this.nodeMode) return;
+    if (this.lastSeenSeq === null) return;
+    this.sendJson({
+      type: 'resync',
+      last_seen_seq: this.lastSeenSeq,
+      ...(this.lastEventAt ? { since: this.lastEventAt } : {}),
+    });
+  }
+
+  private rememberEventId(key: string): void {
+    this.seenEventIds.add(key);
+    if (this.seenEventIds.size > SEEN_EVENT_IDS_MAX) {
+      const oldest = this.seenEventIds.values().next().value;
+      if (oldest !== undefined) this.seenEventIds.delete(oldest);
+    }
+  }
+
   private startPing(): void {
     this.stopPing();
     this.pingTimer = setInterval(() => {
+      if (this.nodeMode) {
+        const nodeId = typeof this.lastNodeRegistration?.node_id === 'string'
+          ? this.lastNodeRegistration.node_id
+          : undefined;
+        this.sendJson({
+          v: 1,
+          type: 'node.heartbeat',
+          ...(nodeId ? { node_id: nodeId } : {}),
+          load: null,
+          active_agents: 1,
+          handlers_live: false,
+        });
+        return;
+      }
       this.sendJson({ type: 'ping' });
     }, 30_000);
   }

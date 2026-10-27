@@ -1,0 +1,54 @@
+{
+  "id": "traj_7qgqustv0zzw",
+  "version": 1,
+  "task": {
+    "title": "Simplify origin handling: hardcoded internal constants, no normalization functions"
+  },
+  "status": "abandoned",
+  "startedAt": "2026-02-20T00:16:37.909Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-20T00:21:33.644Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_jdqzpsd4mzmn",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-20T00:21:33.644Z",
+      "events": [
+        {
+          "ts": 1771546893645,
+          "type": "decision",
+          "content": "Added internal WS client factory for MCP: Added internal WS client factory for MCP",
+          "raw": {
+            "question": "Added internal WS client factory for MCP",
+            "chosen": "Added internal WS client factory for MCP",
+            "alternatives": [],
+            "reasoning": "Ensures MCP WebSocket-origin metadata is set through the same internal-only path as HTTP requests."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1771612346412,
+          "type": "note",
+          "content": "Abandoned: Stale active trajectory from previous task",
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-20T18:32:26.411Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "d9cc4f186d0ba5f79c278a0147c581ed383b6924",
+    "endRef": "d9cc4f186d0ba5f79c278a0147c581ed383b6924"
+  },
+  "completedAt": "2026-02-20T18:32:26.411Z"
+}

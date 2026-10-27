@@ -1,0 +1,25 @@
+{
+  "version": "1.0.0",
+  "id": "4cce42d1-fcdf-41c1-8b46-7b792240ef1e",
+  "timestamp": "2026-08-18T09:04:41.523Z",
+  "trajectory": "traj_a8ldf56q5b68",
+  "files": [
+    {
+      "path": "packages/engine/src/engine/__tests__/workspace.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 179,
+              "end_line": 185,
+              "revision": "7b4794c14a95f657bb925612bef0b6de36bf569f"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

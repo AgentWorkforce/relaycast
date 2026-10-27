@@ -20,21 +20,30 @@ coverage/
 # Smithery build artifacts
 .smithery/
 
-# Python
-__pycache__/
-*.pyc
-*.egg-info/
-.venv/
-.pytest_cache/
 .npm-cache/
 
 # Rust
 target/
 Cargo.lock
 
+# Swift Package Manager
+.build/
+.swiftpm/
+
 # Relaycast local runtime generated state
 .agent-relay/
+# agent-relay broker workspace state (churns on every broker run)
+**/.relay/
 
 # Staged local binary artifacts for npm packaging
 packages/sdk-typescript/bin/*
 !packages/sdk-typescript/bin/.gitkeep
+relaycast-files/
+*.db
+.agentworkforce/relay*
+
+# OpenNext Cloudflare build output
+.open-next/
+
+# Standalone engine binaries (packages/engine/standalone/build.ts)
+dist-standalone/

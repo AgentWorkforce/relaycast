@@ -1,0 +1,77 @@
+{
+  "id": "traj_jvzosckbsdmo",
+  "version": 1,
+  "task": {
+    "title": "Make realtime delivery node-only"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-25T10:52:58.487Z",
+  "completedAt": "2026-06-25T11:56:12.125Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-06-25T11:56:03.789Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_z8v74wljpbm1",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-06-25T11:56:03.789Z",
+      "endedAt": "2026-06-25T11:56:12.125Z",
+      "events": [
+        {
+          "ts": 1782388563790,
+          "type": "decision",
+          "content": "Made node transport the only agent realtime path: Made node transport the only agent realtime path",
+          "raw": {
+            "question": "Made node transport the only agent realtime path",
+            "chosen": "Made node transport the only agent realtime path",
+            "alternatives": [],
+            "reasoning": "Agent tokens are REST identity; all realtime delivery now routes through node bindings, direct node-of-one for self-registered agents, and workspace WebSocket remains observer-only."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1782388564198,
+          "type": "decision",
+          "content": "Dispatched agent-owned actions through bound nodes: Dispatched agent-owned actions through bound nodes",
+          "raw": {
+            "question": "Dispatched agent-owned actions through bound nodes",
+            "chosen": "Dispatched agent-owned actions through bound nodes",
+            "alternatives": [],
+            "reasoning": "Removing direct sockets meant handler_agent invocations and action completion/denial notifications had to use node action.invoke and node deliver frames, while SDKs preserve actionInvoked callbacks."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1782388564624,
+          "type": "decision",
+          "content": "Updated Rust Swift Python and TypeScript SDK surfaces with node transport contracts: Updated Rust Swift Python and TypeScript SDK surfaces with node transport contracts",
+          "raw": {
+            "question": "Updated Rust Swift Python and TypeScript SDK surfaces with node transport contracts",
+            "chosen": "Updated Rust Swift Python and TypeScript SDK surfaces with node transport contracts",
+            "alternatives": [],
+            "reasoning": "The major upgrade changes authentication and WebSocket behavior across all supported SDKs, so agent connect flows mint node tokens and node frames are normalized into existing callbacks where appropriate."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Implemented node-only realtime delivery: workspace streams are observer-only, agents mint node tokens and receive realtime over direct or broker nodes, spawn/release use node action.invoke, handler-agent actions dispatch through bound nodes, node deliver frames cover action lifecycle/reactions/receipts, and TypeScript/Rust/Swift/Python SDK docs/tests were updated. Verified JS build/test/lint, Rust cargo tests, and Swift tests; Python pytest is unavailable in this environment.",
+    "approach": "Standard approach",
+    "confidence": 0.86
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "d970f571dd6efdf4b4e201115e70ac6dc106529d",
+    "endRef": "d970f571dd6efdf4b4e201115e70ac6dc106529d"
+  }
+}

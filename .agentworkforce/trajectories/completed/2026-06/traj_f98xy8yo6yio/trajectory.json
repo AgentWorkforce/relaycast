@@ -1,0 +1,53 @@
+{
+  "id": "traj_f98xy8yo6yio",
+  "version": 1,
+  "task": {
+    "title": "Remove GooseWorks MCP"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-24T19:16:06.191Z",
+  "completedAt": "2026-06-24T19:17:59.874Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-06-24T19:17:52.941Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_2oh9qyvfad9y",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-06-24T19:17:52.941Z",
+      "endedAt": "2026-06-24T19:17:59.874Z",
+      "events": [
+        {
+          "ts": 1782328672942,
+          "type": "decision",
+          "content": "Removed GooseWorks MCP from user-level Codex and Cursor configs: Removed GooseWorks MCP from user-level Codex and Cursor configs",
+          "raw": {
+            "question": "Removed GooseWorks MCP from user-level Codex and Cursor configs",
+            "chosen": "Removed GooseWorks MCP from user-level Codex and Cursor configs",
+            "alternatives": [],
+            "reasoning": "The repo did not contain a GooseWorks MCP config; the active entries were in ~/.codex/config.toml and ~/.cursor/mcp.json. Claude settings had no MCP servers."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Removed the GooseWorks MCP server entries from ~/.codex/config.toml and ~/.cursor/mcp.json, verified the remaining configs parse, and confirmed no live GooseWorks MCP references remain in Codex/Cursor/Claude config files.",
+    "approach": "Standard approach",
+    "confidence": 0.95
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "b2c3cc033dbe7fc3d9c1f2d360d1bb74466588bd",
+    "endRef": "b2c3cc033dbe7fc3d9c1f2d360d1bb74466588bd"
+  }
+}

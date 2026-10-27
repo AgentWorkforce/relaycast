@@ -1,0 +1,65 @@
+{
+  "id": "traj_hx25e0ryz9vz",
+  "version": 1,
+  "task": {
+    "title": "Add origin attribution parameters from SDK/MCP into server telemetry metadata"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-19T22:46:47.608Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-19T22:46:50.814Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_y1ydntxlo9sh",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-19T22:46:50.814Z",
+      "events": [
+        {
+          "ts": 1771541210814,
+          "type": "decision",
+          "content": "Use explicit origin endpoint parameters with header-over-query precedence: Use explicit origin endpoint parameters with header-over-query precedence",
+          "raw": {
+            "question": "Use explicit origin endpoint parameters with header-over-query precedence",
+            "chosen": "Use explicit origin endpoint parameters with header-over-query precedence",
+            "alternatives": [],
+            "reasoning": "HTTP calls can reliably send headers while WebSocket upgrades need query parameters; precedence prevents ambiguity when both are present"
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1771541214366,
+          "type": "decision",
+          "content": "Default SDK origin metadata to sdk/@relaycast/sdk and override to mcp in MCP server: Default SDK origin metadata to sdk/@relaycast/sdk and override to mcp in MCP server",
+          "raw": {
+            "question": "Default SDK origin metadata to sdk/@relaycast/sdk and override to mcp in MCP server",
+            "chosen": "Default SDK origin metadata to sdk/@relaycast/sdk and override to mcp in MCP server",
+            "alternatives": [],
+            "reasoning": "Provides attribution automatically for existing SDK users while ensuring MCP traffic is distinguished without requiring user configuration"
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-19T22:46:58.050Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "d9cc4f186d0ba5f79c278a0147c581ed383b6924",
+    "endRef": "d9cc4f186d0ba5f79c278a0147c581ed383b6924"
+  },
+  "completedAt": "2026-02-19T22:46:58.050Z",
+  "retrospective": {
+    "summary": "Implemented origin attribution endpoint parameters for server telemetry, propagated origin metadata through SDK HTTP+WS clients and MCP server, added tests for server logging and SDK behavior, and documented accepted origin parameters in TELEMETRY.md.",
+    "approach": "Standard approach",
+    "confidence": 0.96
+  }
+}

@@ -1,0 +1,316 @@
+{
+  "provenance": {
+    "package": "@relaycast/engine",
+    "version": "8.9.1",
+    "archive_sha256": "9ddd817c410c02a75cca1c2af82b6a0697599e3f9b730be23076dd8213465854"
+  },
+  "capturedAt": 1789254869788,
+  "workspaceId": "published-891-inbound",
+  "actorId": "published-sender",
+  "payload": {
+    "jsonrpc": "2.0",
+    "id": 42,
+    "method": "message/send",
+    "params": {
+      "target_agent": "recipient",
+      "message": {
+        "message_id": "legacy-inbound",
+        "role": "agent",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "published legacy accepted body"
+          }
+        ],
+        "metadata": {
+          "legacy": "published8.9.1"
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": 42,
+      "result": {
+        "task": {
+          "id": "224669025321394176",
+          "context_id": "dm_ceca634f71c433ff9e0edf6d",
+          "status": {
+            "state": "submitted",
+            "message": "Message accepted by Relaycast"
+          },
+          "history": [
+            {
+              "message_id": "224669025321394176",
+              "role": "agent",
+              "context_id": "dm_ceca634f71c433ff9e0edf6d",
+              "parts": [
+                {
+                  "kind": "text",
+                  "text": "published legacy accepted body"
+                }
+              ],
+              "metadata": {
+                "legacy": "published8.9.1"
+              }
+            }
+          ],
+          "metadata": {
+            "conversation_id": "dm_ceca634f71c433ff9e0edf6d",
+            "relay_agent": "sender",
+            "target_agent": "recipient"
+          }
+        }
+      }
+    }
+  },
+  "kvEntries": [
+    [
+      "idem:v1:published-891-inbound:published-sender:dd68763ac63e485c:e84e9c219f935a93e3ed2e2006898163f03e3c2d55cae25ffce64af44b103203",
+      "{\"status\":200,\"data\":{\"conversation_id\":\"dm_ceca634f71c433ff9e0edf6d\",\"message\":{\"id\":\"224669025321394176\",\"agent_id\":\"published-sender\",\"agent_name\":\"sender\",\"text\":\"published legacy accepted body\",\"injection_mode\":\"wait\",\"attachments\":[],\"metadata\":{\"legacy\":\"published8.9.1\",\"injection_mode\":\"wait\"}},\"created_at\":\"2026-09-12T23:14:29.000Z\",\"id\":\"224669025321394176\",\"from_agent_id\":\"published-sender\",\"to\":\"recipient\",\"text\":\"published legacy accepted body\",\"injection_mode\":\"wait\",\"attachments\":[],\"metadata\":{\"legacy\":\"published8.9.1\",\"injection_mode\":\"wait\"},\"_delivery\":{\"id\":\"del_224669025321394177\",\"agentId\":\"published-recipient\",\"agentName\":\"recipient\",\"messageId\":\"224669025321394176\",\"seq\":1,\"mode\":\"immediate\",\"reason\":\"dm\",\"status\":\"queued\",\"locationType\":\"self_connected\",\"locationNodeId\":null,\"routeNodeId\":null,\"routeNodeKind\":null,\"routeNodeRole\":null,\"deliveryAdapter\":null,\"nextAttemptAt\":null},\"_delivery_rejections\":[]},\"fingerprint\":\"{\\\"to\\\":\\\"recipient\\\",\\\"text\\\":\\\"published legacy accepted body\\\",\\\"data\\\":{\\\"legacy\\\":\\\"published8.9.1\\\"}}\"}"
+    ]
+  ],
+  "kvWrites": [
+    {
+      "key": "idem:v1:published-891-inbound:published-sender:dd68763ac63e485c:e84e9c219f935a93e3ed2e2006898163f03e3c2d55cae25ffce64af44b103203:lock",
+      "value": "1",
+      "options": {
+        "expirationTtl": 30
+      },
+      "at": 1789254869784
+    },
+    {
+      "key": "idem:v1:published-891-inbound:published-sender:dd68763ac63e485c:e84e9c219f935a93e3ed2e2006898163f03e3c2d55cae25ffce64af44b103203",
+      "value": "{\"status\":200,\"data\":{\"conversation_id\":\"dm_ceca634f71c433ff9e0edf6d\",\"message\":{\"id\":\"224669025321394176\",\"agent_id\":\"published-sender\",\"agent_name\":\"sender\",\"text\":\"published legacy accepted body\",\"injection_mode\":\"wait\",\"attachments\":[],\"metadata\":{\"legacy\":\"published8.9.1\",\"injection_mode\":\"wait\"}},\"created_at\":\"2026-09-12T23:14:29.000Z\",\"id\":\"224669025321394176\",\"from_agent_id\":\"published-sender\",\"to\":\"recipient\",\"text\":\"published legacy accepted body\",\"injection_mode\":\"wait\",\"attachments\":[],\"metadata\":{\"legacy\":\"published8.9.1\",\"injection_mode\":\"wait\"},\"_delivery\":{\"id\":\"del_224669025321394177\",\"agentId\":\"published-recipient\",\"agentName\":\"recipient\",\"messageId\":\"224669025321394176\",\"seq\":1,\"mode\":\"immediate\",\"reason\":\"dm\",\"status\":\"queued\",\"locationType\":\"self_connected\",\"locationNodeId\":null,\"routeNodeId\":null,\"routeNodeKind\":null,\"routeNodeRole\":null,\"deliveryAdapter\":null,\"nextAttemptAt\":null},\"_delivery_rejections\":[]},\"fingerprint\":\"{\\\"to\\\":\\\"recipient\\\",\\\"text\\\":\\\"published legacy accepted body\\\",\\\"data\\\":{\\\"legacy\\\":\\\"published8.9.1\\\"}}\"}",
+      "options": {
+        "expirationTtl": 86400
+      },
+      "at": 1789254869786
+    }
+  ],
+  "tables": {
+    "workspaces": [
+      {
+        "id": "published-891-inbound",
+        "name": "published-891-inbound",
+        "api_key_hash": "c094f966f5467a0ab0df3d97185a9e6b201e7f8f66c8a3a7961d5faeadcf481b",
+        "system_prompt": null,
+        "plan": "free",
+        "stripe_customer_id": null,
+        "stripe_subscription_id": null,
+        "created_at": 1789254869,
+        "metadata": "{}",
+        "retention": null,
+        "expires_at": null,
+        "provenance": null,
+        "usage_classification": "unknown",
+        "classification_source": "unclassified",
+        "classification_reason": null,
+        "classified_at": null
+      }
+    ],
+    "agents": [
+      {
+        "id": "published-sender",
+        "workspace_id": "published-891-inbound",
+        "name": "sender",
+        "type": "agent",
+        "token_hash": "75ef2c643c0af0b11e74813a3f494f6c9a58deee17d53bd5d7256b59949e4521",
+        "status": "online",
+        "persona": null,
+        "metadata": "{}",
+        "created_at": 1789254869,
+        "last_seen": 1789254869,
+        "capabilities": null,
+        "handle": null,
+        "location_type": "self_connected",
+        "location_node_id": null,
+        "resumable": 0,
+        "session_ref": null,
+        "origin_node_id": null,
+        "delivery_ack_seq": 0,
+        "provider_name": "default",
+        "delivery_seq": 0,
+        "previous_token_hash": null,
+        "previous_token_expires_at": null,
+        "status_updated_at": null
+      },
+      {
+        "id": "published-recipient",
+        "workspace_id": "published-891-inbound",
+        "name": "recipient",
+        "type": "agent",
+        "token_hash": "0b25d8f823a1f42df9b62d8b241c028f5ea4622503192a88e161f97119ab4fca",
+        "status": "online",
+        "persona": null,
+        "metadata": "{}",
+        "created_at": 1789254869,
+        "last_seen": 1789254869,
+        "capabilities": null,
+        "handle": null,
+        "location_type": "self_connected",
+        "location_node_id": null,
+        "resumable": 0,
+        "session_ref": null,
+        "origin_node_id": null,
+        "delivery_ack_seq": 0,
+        "provider_name": "default",
+        "delivery_seq": 1,
+        "previous_token_hash": null,
+        "previous_token_expires_at": null,
+        "status_updated_at": null
+      }
+    ],
+    "channels": [
+      {
+        "id": "dmch_ceca634f71c433ff9e0edf6d",
+        "workspace_id": "published-891-inbound",
+        "name": "dm-ceca634f71c433ff9e0edf6d",
+        "channel_type": 1,
+        "topic": null,
+        "created_by": null,
+        "created_at": 1789254869,
+        "is_archived": 0,
+        "metadata": "{}"
+      }
+    ],
+    "dm_conversation_reservations": [
+      {
+        "conversation_id": "dm_ceca634f71c433ff9e0edf6d",
+        "workspace_id": "published-891-inbound",
+        "participant_one_id": "published-recipient",
+        "participant_two_id": "published-sender",
+        "created_at": 1789254869
+      }
+    ],
+    "dm_conversations": [
+      {
+        "id": "dm_ceca634f71c433ff9e0edf6d",
+        "workspace_id": "published-891-inbound",
+        "channel_id": "dmch_ceca634f71c433ff9e0edf6d",
+        "dm_type": "1:1",
+        "name": null,
+        "created_at": 1789254869
+      }
+    ],
+    "dm_participants": [
+      {
+        "conversation_id": "dm_ceca634f71c433ff9e0edf6d",
+        "agent_id": "published-sender",
+        "joined_at": 1789254869,
+        "left_at": null
+      },
+      {
+        "conversation_id": "dm_ceca634f71c433ff9e0edf6d",
+        "agent_id": "published-recipient",
+        "joined_at": 1789254869,
+        "left_at": null
+      }
+    ],
+    "messages": [
+      {
+        "id": "224669025321394176",
+        "workspace_id": "published-891-inbound",
+        "channel_id": "dmch_ceca634f71c433ff9e0edf6d",
+        "agent_id": "published-sender",
+        "thread_id": null,
+        "body": "published legacy accepted body",
+        "blocks": null,
+        "has_attachments": 0,
+        "created_at": 1789254869,
+        "updated_at": null,
+        "metadata": "{\"legacy\":\"published8.9.1\",\"injection_mode\":\"wait\"}",
+        "session_ref": null
+      }
+    ],
+    "message_logs": [
+      {
+        "id": "224669025321394178",
+        "workspace_id": "published-891-inbound",
+        "message_id": "224669025321394176",
+        "channel_id": "dmch_ceca634f71c433ff9e0edf6d",
+        "agent_id": "published-sender",
+        "conversation_id": "dm_ceca634f71c433ff9e0edf6d",
+        "delivery_kind": "dm",
+        "body": "published legacy accepted body",
+        "content_type": "text/plain",
+        "metadata": "{\"target_agent\":\"recipient\",\"injection_mode\":\"wait\"}",
+        "attachment_count": 0,
+        "mention_count": 0,
+        "latency_ms": 1,
+        "created_at": 1789254869
+      }
+    ],
+    "deliveries": [
+      {
+        "id": "del_224669025321394177",
+        "workspace_id": "published-891-inbound",
+        "message_id": "224669025321394176",
+        "agent_id": "published-recipient",
+        "mode": "immediate",
+        "reason": "dm",
+        "priority": "normal",
+        "deadline": null,
+        "status": "queued",
+        "retryable": null,
+        "available_at": null,
+        "error": null,
+        "idempotency_key": null,
+        "created_at": 1789254869,
+        "updated_at": null,
+        "seq": 1,
+        "location_type": "self_connected",
+        "location_node_id": null,
+        "expires_at": 1789258469,
+        "delivered_at": null,
+        "acked_at": null,
+        "dead_lettered_at": null,
+        "route_node_id": null,
+        "route_node_kind": null,
+        "delivery_adapter": null,
+        "dispatch_attempts": 0,
+        "next_attempt_at": null,
+        "last_dispatch_error": null,
+        "route_node_role": null
+      }
+    ],
+    "a2a_agents": [
+      {
+        "id": "published-peer",
+        "workspace_id": "published-891-inbound",
+        "relay_agent_id": "published-sender",
+        "agent_card": "{}",
+        "external_url": "https://peer.example/a2a",
+        "auth_scheme": null,
+        "auth_credential": null,
+        "status": "active",
+        "messages_sent": 0,
+        "messages_recv": 1,
+        "last_health": null,
+        "health_failures": 0,
+        "created_at": 1789254869,
+        "updated_at": 1789254869
+      }
+    ],
+    "workspace_events": [
+      {
+        "workspace_id": "published-891-inbound",
+        "seq": 1,
+        "type": "agent.status.active",
+        "channel_id": null,
+        "payload": "{\"type\":\"agent.status.active\",\"agent\":{\"name\":\"sender\"},\"agent_name\":\"sender\",\"status\":\"active\",\"subject_agent_id\":\"published-sender\",\"timestamp\":\"2026-09-12T23:14:29.776Z\"}",
+        "created_at": 1789254869
+      },
+      {
+        "workspace_id": "published-891-inbound",
+        "seq": 2,
+        "type": "dm.received",
+        "channel_id": null,
+        "payload": "{\"id\":\"37aecad3-cc24-5c8b-a3c5-400db8208a54\",\"type\":\"dm.received\",\"created_at\":\"2026-09-12T23:14:29.000Z\",\"conversation_id\":\"dm_ceca634f71c433ff9e0edf6d\",\"message\":{\"id\":\"224669025321394176\",\"agent_id\":\"published-sender\",\"agent_name\":\"sender\",\"text\":\"published legacy accepted body\",\"injection_mode\":\"wait\"}}",
+        "created_at": 1789254869
+      }
+    ]
+  }
+}

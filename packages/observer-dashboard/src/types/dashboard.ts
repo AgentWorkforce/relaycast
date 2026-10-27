@@ -1,22 +1,16 @@
-export type ActivityEventType =
-  | 'message_sent'
-  | 'connection'
-  | 'agent_idle'
+export type WebSocketFeedCategory =
+  | 'message'
+  | 'action'
+  | 'presence'
   | 'reaction'
-  | 'thread_reply';
-
-export interface ActivityEvent {
-  id: string;
-  type: ActivityEventType;
-  summary: string;
-  timestamp: string;
-  agent?: string;
-}
+  | 'channel'
+  | 'delivery'
+  | 'system';
 
 export interface WebSocketFeedEvent {
   id: string;
   eventType: string;
   summary: string;
+  category: WebSocketFeedCategory;
   timestamp: string;
 }
-

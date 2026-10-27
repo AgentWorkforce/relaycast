@@ -1,0 +1,67 @@
+{
+  "id": "traj_skw3lpvhwyd4",
+  "version": 1,
+  "task": {
+    "title": "Remove mixed-case observer fallback paths"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-25T14:48:25.226Z",
+  "completedAt": "2026-06-25T14:57:22.782Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-06-25T14:55:10.324Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_dadn2dr1ms44",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-06-25T14:55:10.324Z",
+      "endedAt": "2026-06-25T14:57:22.782Z",
+      "events": [
+        {
+          "ts": 1782399310325,
+          "type": "decision",
+          "content": "Use @relaycast/types as the observer scope anchor: Use @relaycast/types as the observer scope anchor",
+          "raw": {
+            "question": "Use @relaycast/types as the observer scope anchor",
+            "chosen": "Use @relaycast/types as the observer scope anchor",
+            "alternatives": [],
+            "reasoning": "The engine now imports OBSERVER_SCOPES from the shared types package and the TypeScript SDK aliases observer token request/response types from Raw with compile-level assertions, so scope/filter drift fails during package builds instead of silently diverging."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Removed mixed-case compatibility fallbacks in observer security paths, anchored observer token scopes through @relaycast/types with TS SDK assertions, and documented observer-token auth/scopes plus console schemas in OpenAPI.",
+    "approach": "Standard approach",
+    "confidence": 0.88
+  },
+  "commits": [
+    "027e212",
+    "5e0161a"
+  ],
+  "filesChanged": [
+    "memory/workspace/.relay/outbox/capabilities.json",
+    "memory/workspace/.relay/state.json",
+    "openapi.yaml",
+    "packages/engine/src/engine/observerToken.ts",
+    "packages/sdk-rust/src/types.rs",
+    "packages/sdk-typescript/src/types.ts",
+    "packages/types/src/workspace.ts",
+    "scripts/e2e-actions.ts",
+    "workflows/sdk-setup-client-80-100.ts"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "efa69719ed60c185191b927a041fda709c6cd041",
+    "endRef": "027e212d3015cd56600d4c55e7535532d05eadd1",
+    "traceId": "808c3dbb-81fc-4936-83a5-39de217bb627"
+  }
+}

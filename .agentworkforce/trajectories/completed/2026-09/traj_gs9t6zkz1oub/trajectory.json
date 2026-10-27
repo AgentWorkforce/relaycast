@@ -1,0 +1,53 @@
+{
+  "id": "traj_gs9t6zkz1oub",
+  "version": 1,
+  "task": {
+    "title": "Harden Relaycast release fixture cleanup after hosted CI ENOTEMPTY"
+  },
+  "status": "completed",
+  "startedAt": "2026-09-09T02:29:21.894Z",
+  "completedAt": "2026-09-09T02:31:21.490Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-09-09T02:31:20.106Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_bx6qpvv4yswv",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-09-09T02:31:20.106Z",
+      "endedAt": "2026-09-09T02:31:21.490Z",
+      "events": [
+        {
+          "ts": 1788921080107,
+          "type": "decision",
+          "content": "Retry recursive release fixture cleanup: Retry recursive release fixture cleanup",
+          "raw": {
+            "question": "Retry recursive release fixture cleanup",
+            "chosen": "Retry recursive release fixture cleanup",
+            "alternatives": [],
+            "reasoning": "Hosted Node 24/Linux failed one of 70 release tests with ENOTEMPTY while removing a temporary Git object directory; bounded rmSync retries make cleanup robust without changing release semantics."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Hardened release workflow fixture cleanup with bounded recursive-removal retries after hosted CI ENOTEMPTY; Node 22/24 release suites, full tests, lint, build, diff, and secret scan pass.",
+    "approach": "Standard approach",
+    "confidence": 0.95
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "c7de9af2afd41babb56a416496e011f718ae32c8",
+    "endRef": "c7de9af2afd41babb56a416496e011f718ae32c8"
+  }
+}

@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { RelayCast } from '../relay.js';
+import type { AgentExitedEvent, NodeStatusOfflineEvent, NodeStatusOnlineEvent } from '../types.js';
 import { WsClient } from '../ws.js';
 
 class MockWebSocket {
@@ -55,10 +57,9 @@ describe('WsClient', () => {
 
     expect(MockWebSocket.instances).toHaveLength(1);
     const url = new URL(MockWebSocket.instances[0]!.url);
-    expect(url.origin).toBe('wss://api.relaycast.dev');
+    expect(url.origin).toBe('wss://cast.agentrelay.com');
     expect(url.pathname).toBe('/v1/ws');
     expect(url.searchParams.get('token')).toBe('at_live_test');
-    expect(url.searchParams.get('origin_surface')).toBe('sdk');
     expect(url.searchParams.get('origin_client')).toBe('@relaycast/sdk');
     expect(url.searchParams.get('origin_version')).toBeDefined();
   });
@@ -74,7 +75,6 @@ describe('WsClient', () => {
     expect(url.origin).toBe('ws://localhost:8080');
     expect(url.pathname).toBe('/v1/ws');
     expect(url.searchParams.get('token')).toBe('at_live_test');
-    expect(url.searchParams.get('origin_surface')).toBe('sdk');
     expect(url.searchParams.get('origin_client')).toBe('@relaycast/sdk');
     expect(url.searchParams.get('origin_version')).toBeDefined();
   });
@@ -82,15 +82,14 @@ describe('WsClient', () => {
   it('normalizes trailing slash in baseUrl', () => {
     const client = new WsClient({
       token: 'at_live_test',
-      baseUrl: 'https://pr28-api.relaycast.dev/',
+      baseUrl: 'https://relay.example.com/',
     });
     client.connect();
 
     const url = new URL(MockWebSocket.instances[0]!.url);
-    expect(url.origin).toBe('wss://pr28-api.relaycast.dev');
+    expect(url.origin).toBe('wss://relay.example.com');
     expect(url.pathname).toBe('/v1/ws');
     expect(url.searchParams.get('token')).toBe('at_live_test');
-    expect(url.searchParams.get('origin_surface')).toBe('sdk');
     expect(url.searchParams.get('origin_client')).toBe('@relaycast/sdk');
     expect(url.searchParams.get('origin_version')).toBeDefined();
   });
@@ -458,6 +457,198 @@ describe('WsClient', () => {
     expect(MockWebSocket.instances).toHaveLength(2);
   });
 
+  describe('reconnect resync', () => {
+    function sentFrames(ws: MockWebSocket): Array<Record<string, unknown>> {
+      return ws.send.mock.calls.map(([data]) => JSON.parse(data as string));
+    }
+
+    function resyncFrames(ws: MockWebSocket): Array<Record<string, unknown>> {
+      return sentFrames(ws).filter((frame) => frame.type === 'resync');
+    }
+
+    it('does not send a resync frame on first connection', () => {
+      const client = new WsClient({ token: 'at_live_test' });
+      client.connect();
+      const ws = MockWebSocket.instances[0]!;
+      ws.simulateOpen();
+
+      expect(resyncFrames(ws)).toHaveLength(0);
+    });
+
+    it('tracks agent_seq and sends resync with the highest seen seq on reconnect', () => {
+      const client = new WsClient({ token: 'at_live_test', reconnectJitter: false });
+      client.connect();
+      const ws1 = MockWebSocket.instances[0]!;
+      ws1.simulateOpen();
+
+      ws1.simulateMessage({
+        type: 'message.created',
+        channel: 'general',
+        message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] },
+        agent_seq: 1,
+      });
+      // Unrecognized event types still advance the seq cursor.
+      ws1.simulateMessage({ type: 'typing.started', agent_name: 'Alice', agent_seq: 2 });
+      ws1.simulateMessage({ type: 'pong' });
+
+      ws1.simulateClose();
+      vi.advanceTimersByTime(1000);
+
+      const ws2 = MockWebSocket.instances[1]!;
+      ws2.simulateOpen();
+
+      const frames = resyncFrames(ws2);
+      expect(frames).toHaveLength(1);
+      expect(frames[0]).toMatchObject({ type: 'resync', last_seen_seq: 2 });
+      expect(typeof frames[0]!.since).toBe('string');
+      expect(Number.isNaN(new Date(frames[0]!.since as string).getTime())).toBe(false);
+    });
+
+    it('sends resync after open handlers have re-subscribed', () => {
+      const client = new WsClient({ token: 'at_live_test', reconnectJitter: false });
+      client.on('open', () => client.subscribe(['general']));
+      client.connect();
+      const ws1 = MockWebSocket.instances[0]!;
+      ws1.simulateOpen();
+      ws1.simulateMessage({
+        type: 'message.reacted',
+        message_id: 'm_1',
+        emoji: 'thumbsup',
+        agent_name: 'Bot',
+        action: 'added',
+        agent_seq: 7,
+      });
+      ws1.simulateClose();
+      vi.advanceTimersByTime(1000);
+
+      const ws2 = MockWebSocket.instances[1]!;
+      ws2.simulateOpen();
+
+      const frames = sentFrames(ws2);
+      expect(frames[0]).toMatchObject({ type: 'subscribe', channels: ['general'] });
+      expect(frames[1]).toMatchObject({ type: 'resync', last_seen_seq: 7 });
+    });
+
+    it('does not send a resync frame on reconnect when no events were received', () => {
+      const client = new WsClient({ token: 'at_live_test', reconnectJitter: false });
+      client.connect();
+      const ws1 = MockWebSocket.instances[0]!;
+      ws1.simulateOpen();
+      ws1.simulateClose();
+      vi.advanceTimersByTime(1000);
+
+      const ws2 = MockWebSocket.instances[1]!;
+      ws2.simulateOpen();
+
+      expect(resyncFrames(ws2)).toHaveLength(0);
+    });
+
+    it('dispatches replayed events once, deduped by stable event id', () => {
+      const client = new WsClient({ token: 'at_live_test', reconnectJitter: false });
+      const handler = vi.fn();
+      client.on('message.created', handler);
+      client.connect();
+      const ws1 = MockWebSocket.instances[0]!;
+      ws1.simulateOpen();
+
+      const original = {
+        id: 'evt-stable-1',
+        type: 'message.created',
+        channel: 'general',
+        message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] },
+        agent_seq: 1,
+      };
+      ws1.simulateMessage(original);
+      expect(handler).toHaveBeenCalledTimes(1);
+
+      ws1.simulateClose();
+      vi.advanceTimersByTime(1000);
+      const ws2 = MockWebSocket.instances[1]!;
+      ws2.simulateOpen();
+
+      // Server replays the same event (same stable id) plus a new one.
+      ws2.simulateMessage(original);
+      ws2.simulateMessage({
+        id: 'evt-stable-2',
+        type: 'message.created',
+        channel: 'general',
+        message: { id: 'm_2', agent_name: 'Bot', text: 'missed you', attachments: [] },
+        agent_seq: 2,
+        replayed: true,
+      });
+
+      expect(handler).toHaveBeenCalledTimes(2);
+      expect(handler).toHaveBeenLastCalledWith(
+        expect.objectContaining({ id: 'evt-stable-2' }),
+      );
+    });
+
+    it('emits resynced with replay stats when the server acks a resync', () => {
+      const client = new WsClient({ token: 'at_live_test' });
+      const resyncedHandler = vi.fn();
+      const wildcardHandler = vi.fn();
+      client.on('resynced', resyncedHandler);
+      client.on('*', wildcardHandler);
+      client.connect();
+      const ws = MockWebSocket.instances[0]!;
+      ws.simulateOpen();
+
+      ws.simulateMessage({
+        type: 'resync_ack',
+        last_seen_seq: 5,
+        current_seq: 9,
+        replayed: 4,
+        gap_detected: true,
+      });
+
+      expect(resyncedHandler).toHaveBeenCalledTimes(1);
+      expect(resyncedHandler).toHaveBeenCalledWith({
+        type: 'resynced',
+        replayed: 4,
+        gapDetected: true,
+      });
+      expect(wildcardHandler).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'resynced' }),
+      );
+    });
+
+    it('resyncs from the latest seq after multiple reconnects', () => {
+      const client = new WsClient({ token: 'at_live_test', reconnectJitter: false });
+      client.connect();
+      const ws1 = MockWebSocket.instances[0]!;
+      ws1.simulateOpen();
+      ws1.simulateMessage({
+        type: 'message.reacted',
+        message_id: 'm_1',
+        emoji: 'eyes',
+        agent_name: 'Bot',
+        action: 'added',
+        agent_seq: 3,
+      });
+      ws1.simulateClose();
+      vi.advanceTimersByTime(1000);
+
+      const ws2 = MockWebSocket.instances[1]!;
+      ws2.simulateOpen();
+      expect(resyncFrames(ws2)[0]).toMatchObject({ last_seen_seq: 3 });
+
+      ws2.simulateMessage({
+        type: 'message.reacted',
+        message_id: 'm_2',
+        emoji: 'eyes',
+        agent_name: 'Bot',
+        action: 'added',
+        agent_seq: 8,
+      });
+      ws2.simulateClose();
+      vi.advanceTimersByTime(1000);
+
+      const ws3 = MockWebSocket.instances[2]!;
+      ws3.simulateOpen();
+      expect(resyncFrames(ws3)[0]).toMatchObject({ last_seen_seq: 8 });
+    });
+  });
+
   it('manual reconnect() opens a new socket after circuit breaker trip', () => {
     const client = new WsClient({
       token: 'at_live_test',
@@ -477,5 +668,92 @@ describe('WsClient', () => {
 
     client.reconnect();
     expect(MockWebSocket.instances).toHaveLength(2);
+  });
+});
+
+describe('RelayCast workspace stream events', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    MockWebSocket.instances = [];
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('camelizes agent.exited and node.status frames on /v1/ws', () => {
+    const relay = new RelayCast({
+      apiKey: 'rk_live_test',
+      baseUrl: 'http://localhost:8080',
+    });
+    relay.connect();
+
+    const ws = MockWebSocket.instances[0]!;
+    const url = new URL(ws.url);
+    expect(url.pathname).toBe('/v1/ws');
+    ws.simulateOpen();
+
+    let exited: AgentExitedEvent | undefined;
+    let online: NodeStatusOnlineEvent | undefined;
+    let offline: NodeStatusOfflineEvent | undefined;
+    relay.on.agentExited((event) => {
+      exited = event;
+    });
+    relay.on.nodeOnline((event) => {
+      online = event;
+    });
+    relay.on.nodeOffline((event) => {
+      offline = event;
+    });
+
+    // appendAndPublishWorkspaceEvent publishes the transformForClient frame
+    // (flat snake_case fields, plus created_at and the durable seq).
+    ws.simulateMessage({
+      type: 'agent.exited',
+      agent_id: 'agt_01J7FLEET000000000000101',
+      agent_name: 'claude-worker-7',
+      node_id: 'node_1',
+      invocation_id: null,
+      reason: 'deregistered',
+      created_at: '2026-10-10T09:00:00.000Z',
+      seq: 4,
+    });
+    ws.simulateMessage({
+      type: 'node.status.online',
+      node_id: 'node_1',
+      node_name: 'builder-1',
+      created_at: '2026-10-10T09:00:01.000Z',
+      seq: 5,
+    });
+    ws.simulateMessage({
+      type: 'node.status.offline',
+      node_id: 'node_1',
+      node_name: 'builder-1',
+      reason: 'liveness_timeout',
+      created_at: '2026-10-10T09:00:02.000Z',
+      seq: 6,
+    });
+
+    expect(exited).toEqual({
+      type: 'agent.exited',
+      agentId: 'agt_01J7FLEET000000000000101',
+      agentName: 'claude-worker-7',
+      nodeId: 'node_1',
+      invocationId: null,
+      reason: 'deregistered',
+    });
+    expect(online).toEqual({
+      type: 'node.status.online',
+      nodeId: 'node_1',
+      nodeName: 'builder-1',
+    });
+    expect(offline).toEqual({
+      type: 'node.status.offline',
+      nodeId: 'node_1',
+      nodeName: 'builder-1',
+      reason: 'liveness_timeout',
+    });
+
+    relay.disconnect();
   });
 });

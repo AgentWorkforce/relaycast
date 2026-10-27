@@ -1,0 +1,53 @@
+{
+  "id": "traj_nfevo2c0al5k",
+  "version": 1,
+  "task": {
+    "title": "Rename packages/dashboard to packages/observer-dashboard and update references"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-20T21:13:31.591Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-20T21:17:52.859Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_g87z74ugyklc",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-20T21:17:52.859Z",
+      "events": [
+        {
+          "ts": 1771622272860,
+          "type": "decision",
+          "content": "Renamed workspace folder from packages/dashboard to packages/observer-dashboard while keeping package name @relaycast/dashboard: Renamed workspace folder from packages/dashboard to packages/observer-dashboard while keeping package name @relaycast/dashboard",
+          "raw": {
+            "question": "Renamed workspace folder from packages/dashboard to packages/observer-dashboard while keeping package name @relaycast/dashboard",
+            "chosen": "Renamed workspace folder from packages/dashboard to packages/observer-dashboard while keeping package name @relaycast/dashboard",
+            "alternatives": [],
+            "reasoning": "User requested directory rename; keeping package name avoids broader dependency and script churn while still changing repo structure."
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-20T21:17:57.412Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "408a4595facfbe405fff48ae340265a269d6b3f1",
+    "endRef": "408a4595facfbe405fff48ae340265a269d6b3f1"
+  },
+  "completedAt": "2026-02-20T21:17:57.412Z",
+  "retrospective": {
+    "summary": "Renamed dashboard package directory to packages/observer-dashboard, removed stale packages/dashboard leftovers, updated deploy action path, and refreshed lockfile path entries. Verified with full turbo build.",
+    "approach": "Standard approach",
+    "confidence": 0.98
+  }
+}

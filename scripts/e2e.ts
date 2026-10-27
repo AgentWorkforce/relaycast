@@ -6,26 +6,25 @@
  * messages flow in both the terminal and the dashboard.
  *
  * Usage:
- *   npm run e2e                                   # defaults to npm run dev server (http://localhost:8787)
- *   npm run e2e -- --local                        # SDK local mode (http://127.0.0.1:7528)
- *   npm run e2e -- --local --ci                   # SDK local mode in CI
- *   npm run e2e -- --local http://127.0.0.1:7529 # SDK local mode with custom port
+ *   npm run e2e                                   # defaults to the engine dev server (http://localhost:8787)
+ *   npm run e2e -- http://localhost:8787 --ci     # self-hosted engine in CI
  *   npm run e2e -- --continue-on-failure          # keep running after step failures
- *   npm run e2e -- https://relaycast.dev --ci
+ *   npm run e2e -- https://cast.agentrelay.com --ci
  */
 
 import { createServer } from 'node:http';
 import { createInterface } from 'node:readline';
+import WebSocket from 'ws';
 import { RelayCast, AgentClient, RelayError } from '../packages/sdk-typescript/src/index.js';
+import { actionWaitObserverCreateBody, actionWaitWsUrl } from './action-wait-ws.js';
 
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 const flags = new Set(process.argv.slice(2).filter((a) => a.startsWith('--')));
-const LOCAL = flags.has('--local');
 const CONTINUE_ON_FAILURE = flags.has('--continue-on-failure');
-const DEFAULT_BASE_URL = LOCAL ? 'http://127.0.0.1:7528' : 'http://localhost:8787';
+const DEFAULT_BASE_URL = 'http://localhost:8787';
 const BASE_URL = (args[0] ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
 const CI = flags.has('--ci') || !!process.env.CI;
 
@@ -43,19 +42,6 @@ function resolveDashboardUrl(baseUrl: string): string {
 
   if (!host || isLocalHost(host)) {
     return 'http://localhost:3100';
-  }
-
-  const prMatch = host.match(/^pr(\d+)-api(?:[.-]|$)/);
-  if (prMatch) {
-    return `https://pr${prMatch[1]}-observer.relaycast.dev`;
-  }
-
-  if (host === 'staging-api.relaycast.dev') {
-    return 'https://staging-observer.relaycast.dev';
-  }
-
-  if (host === 'api.relaycast.dev') {
-    return 'https://observer.relaycast.dev';
   }
 
   return 'https://observer.relaycast.dev';
@@ -285,7 +271,6 @@ ${B}${CYAN}╔══════════════════════
 ╚══════════════════════════════════════════════╝${R}
 `);
   log('🌐', `Server: ${B}${BASE_URL}${R}`);
-  log('🏁', `Target: ${B}${LOCAL ? 'SDK local mode' : 'HTTP base URL mode'}${R}`);
   log('⚙️ ', `Mode:   ${B}${CI ? 'CI (auto)' : 'Interactive'}${R}`);
   log('🧭', `Flow:   ${B}${CONTINUE_ON_FAILURE ? 'Continue on failure' : 'Fail fast (default)'}${R}`);
 
@@ -372,15 +357,18 @@ ${B}${CYAN}╔══════════════════════
   // ── 1. Create workspace ──────────────────────────────────────────────
   step('Create workspace');
   await run('Create workspace', async () => {
-    if (LOCAL) {
-      const host = new URL(BASE_URL).hostname.toLowerCase();
-      if (!isLocalHost(host)) {
-        throw new Error(`--local requires a local base URL, got: ${BASE_URL}`);
-      }
-    }
-
     const wsName = `e2e-${Date.now()}`;
-    const res = await RelayCast.createWorkspace(wsName, BASE_URL);
+    const res = await RelayCast.createWorkspace(wsName, {
+      baseUrl: BASE_URL,
+      expiresInSeconds: 24 * 60 * 60,
+      provenance: {
+        source: 'ci',
+        originId: process.env.GITHUB_RUN_ID
+          ? `github:AgentWorkforce/relaycast/actions/runs/${process.env.GITHUB_RUN_ID}`
+          : 'relaycast:e2e:local',
+        classification: 'internal',
+      },
+    });
     workspaceKey = res.apiKey;
     relay = new RelayCast({ apiKey: workspaceKey, baseUrl: BASE_URL });
     log('🔑', `Workspace ${B}${wsName}${R} — key: ${DIM}${workspaceKey.slice(0, 16)}…${R}`);
@@ -404,19 +392,9 @@ ${B}${CYAN}╔══════════════════════
   // ── 2. Register agents ───────────────────────────────────────────────
   step('Register agents');
 
-  /** Register agent, using registerOrRotate to handle stale agents from prior runs. */
+  /** Registration is create-only; a stale identity is a failed cleanup, not authority. */
   async function registerAgent(opts: Parameters<typeof relay.agents.register>[0]): Promise<{ token: string }> {
-    try {
-      return await relay.agents.register(opts);
-    } catch (err) {
-      if (err instanceof RelayError && /already exists/i.test(err.message)) {
-        // Agent left over from a prior E2E run (D1 read replica lag after delete).
-        // Use registerOrRotate which is the idempotent server-side path.
-        log('ℹ️ ', `${opts.name} already exists; rotating token via registerOrRotate...`);
-        return await relay.registerOrRotate(opts);
-      }
-      throw err;
-    }
+    return relay.agents.register(opts);
   }
 
   await run(`Register ${LEAD}`, async () => {
@@ -474,24 +452,26 @@ ${B}${CYAN}╔══════════════════════
     }
   });
 
-  await run('registerAgent non-strict appends suffix', async () => {
-    const res = await relay.registerAgent({ name: LEAD, strict: false });
-    if (res.name === LEAD) throw new Error(`Expected suffixed name, got exact '${LEAD}'`);
-    if (!res.name.startsWith(LEAD)) throw new Error(`Expected name starting with '${LEAD}', got '${res.name}'`);
-    log('🛡️ ', `Non-strict duplicate registered as ${B}${res.name}${R} (suffix appended)`);
+  await run('registerAgent non-strict still fails closed', async () => {
+    await relay.registerAgent({ name: LEAD, strict: false })
+      .then(() => { throw new Error('Expected duplicate registration to fail'); })
+      .catch((err) => {
+        if (!(err instanceof RelayError) || err.code !== 'name_conflict') throw err;
+      });
+    log('🛡️ ', 'Non-strict compatibility input did not suffix or reclaim the identity');
   });
 
-  // ── 2b. registerOrRotate + resolveIdentity ─────────────────────────
-  step('registerOrRotate + resolveIdentity');
+  // ── 2b. fail-closed compatibility aliases + resolveIdentity ────────
+  step('fail-closed identity aliases + resolveIdentity');
 
-  await run('registerOrRotate returns valid token', async () => {
-    const res = await relay.registerOrRotate({ name: LEAD, type: 'agent' });
-    if (!res.token) throw new Error('Expected token from registerOrRotate');
-    // Update lead client with rotated token (old token is now invalid)
-    lead = relay.as(res.token);
-    agentMap[LEAD] = lead;
+  await run('registerOrRotate does not take over a collision', async () => {
+    await relay.registerOrRotate({ name: LEAD, type: 'agent' })
+      .then(() => { throw new Error('Expected registerOrRotate collision to fail'); })
+      .catch((err) => {
+        if (!(err instanceof RelayError) || err.code !== 'name_conflict') throw err;
+      });
     const channels = await lead.channels.list();
-    log('🔑', `registerOrRotate returned token, verified with list channels (${channels.length} channels)`);
+    log('🔑', `Original token remains valid after refused collision (${channels.length} channels)`);
   });
 
   await run('resolveIdentity returns identity fields', async () => {
@@ -540,7 +520,7 @@ ${B}${CYAN}╔══════════════════════
     for (const [name, client] of Object.entries(agentMap)) {
       client.on.messageCreated((e) => { wsEvents++; ws(name, 'message.created', `from ${B}${e.message.agentName}${R}: "${e.message.text}"`); });
       client.on.dmReceived((e) => { wsEvents++; ws(name, 'dm.received', `from ${B}${e.message.agentName}${R}: "${e.message.text}"`); });
-      client.on.reactionAdded((e) => { wsEvents++; ws(name, 'reaction.added', `${e.emoji}`); });
+      client.on.messageReacted((e) => { wsEvents++; ws(name, 'message.reacted', `${e.emoji}`); });
       client.on.channelUpdated(() => { wsEvents++; ws(name, 'channel.updated', ''); });
     }
 
@@ -1145,53 +1125,124 @@ ${B}${CYAN}╔══════════════════════
   // Let trailing WS events flush
   await pause();
 
-  // ── 15. Commands ──────────────────────────────────────────────────────
-  step('Commands');
+  // ── 15. Actions (agent-to-agent RPC) ──────────────────────────────────
+  step('Actions');
 
-  await run('Register /deploy command', async () => {
-    await relay.commands.register({
-      command: 'deploy',
+  // Workspace observer stream. action.invoked and action.completed are published
+  // there; agent tokens are rejected on /v1/ws and stay on the HTTP calls.
+  let observerToken = '';
+  await run('Create action-wait observer token', async () => {
+    const created = await relay.observerTokens.create(actionWaitObserverCreateBody('e2e-actions'));
+    if (!created.token) throw new Error('observer token was not returned');
+    observerToken = created.token;
+  });
+
+  const openObserverWs = (token: string) => {
+    const sock = new WebSocket(actionWaitWsUrl(BASE_URL, token));
+    const events: any[] = [];
+    sock.on('message', (d) => {
+      // Guard against non-JSON frames so a stray payload can't crash the script.
+      try { events.push(JSON.parse(d.toString())); } catch { /* ignore */ }
+    });
+    const ready = new Promise<void>((resolve, reject) => {
+      sock.on('open', () => resolve());
+      sock.on('error', reject);
+    });
+    const waitFor = (type: string, timeoutMs = 5000) =>
+      new Promise<any>((resolve, reject) => {
+        const found = events.find((e) => e.type === type);
+        if (found) return resolve(found);
+        const start = Date.now();
+        const timer = setInterval(() => {
+          const e = events.find((ev) => ev.type === type);
+          if (e) { clearInterval(timer); resolve(e); }
+          else if (Date.now() - start > timeoutMs) { clearInterval(timer); reject(new Error(`timeout waiting for "${type}"`)); }
+        }, 50);
+      });
+    return { ready, waitFor, close: () => sock.close() };
+  };
+
+  let observerWs: ReturnType<typeof openObserverWs> | undefined;
+  await run('Connect workspace observer WebSocket', async () => {
+    observerWs = openObserverWs(observerToken);
+    await observerWs.ready;
+  });
+  let invocationId = '';
+
+  await run(`Register "deploy" action (handler ${LEAD})`, async () => {
+    await relay.actions.register({
+      name: 'deploy',
       description: 'Deploy the application to staging or production',
       handlerAgent: LEAD,
-      parameters: [
-        { name: 'env', type: 'string' as const, required: true, description: 'Target environment' },
-      ],
+      inputSchema: { type: 'object', properties: { env: { type: 'string' } }, required: ['env'] },
+      outputSchema: { type: 'object', properties: { url: { type: 'string' } } },
     });
-    log('⚙️ ', `Registered ${B}/deploy${R} command handled by ${YELLOW}${B}${LEAD}${R}`);
+    log('⚙️ ', `Registered ${B}deploy${R} action handled by ${YELLOW}${B}${LEAD}${R}`);
   });
   await pause();
 
-  await run('List commands', async () => {
-    const cmds = await relay.commands.list();
-    if (cmds.length === 0) throw new Error('Expected at least one command');
-    log('📋', `Commands: ${cmds.map((c) => `/${c.command}`).join(', ')}`);
+  await run('List actions includes deploy', async () => {
+    const actions = await relay.actions.list();
+    const names = actions.map((a) => a.name);
+    if (!names.includes('deploy')) throw new Error(`deploy not listed: ${JSON.stringify(names)}`);
+    log('📋', `Actions: ${names.join(', ')}`);
   });
 
-  await run(`${BACKEND} invokes /deploy`, async () => {
-    const result = await backend.commands.invoke('deploy', {
-      channel: channelName,
-      args: '--env staging',
-    });
-    log('🚀', `${BLUE}${B}${BACKEND}${R} invoked /deploy → invocation ${JSON.stringify(result).slice(0, 80)}`);
+  await run(`${BACKEND} invokes deploy → invocationId`, async () => {
+    const r = await backend.actions.invoke('deploy', { env: 'staging' });
+    invocationId = r.invocationId;
+    if (!invocationId) throw new Error('no invocationId returned');
+    log('🚀', `${BLUE}${B}${BACKEND}${R} invoked deploy → invocation ${B}${invocationId}${R} (status ${r.status})`);
+  });
+
+  await run(`Handler ${LEAD} receives action.invoked over WS`, async () => {
+    if (!observerWs) throw new Error('workspace observer socket is not connected');
+    await observerWs.waitFor('action.invoked');
   });
   await pause();
 
-  await run('Delete /deploy command', async () => {
-    await relay.commands.delete('deploy');
-    log('🗑️ ', `Deleted /deploy command`);
+  await run('Handler completes the invocation', async () => {
+    const r = await lead.actions.completeInvocation('deploy', invocationId, {
+      output: { url: 'https://staging.example.com' }, durationMs: 1200,
+    });
+    if (r.status !== 'completed') throw new Error(`status ${r.status}`);
+    log('✅', `Handler completed invocation → ${B}completed${R}`);
   });
+
+  await run(`Caller ${BACKEND} receives action.completed over WS`, async () => {
+    if (!observerWs) throw new Error('workspace observer socket is not connected');
+    await observerWs.waitFor('action.completed');
+  });
+
+  await run('Get invocation shows completed + output', async () => {
+    const inv = await backend.actions.getInvocation('deploy', invocationId);
+    if (inv.status !== 'completed') throw new Error(`status ${inv.status}`);
+    if ((inv.output as Record<string, unknown> | null)?.url !== 'https://staging.example.com') {
+      throw new Error('output not recorded');
+    }
+  });
+  await pause();
+
+  await run('Delete deploy action', async () => {
+    await relay.actions.delete('deploy');
+    log('🗑️ ', `Deleted deploy action`);
+  });
+
+  observerWs?.close();
   await pause();
 
   // ── 16. Inbound Webhooks ──────────────────────────────────────────────
   step('Inbound Webhooks');
 
   let webhookId = '';
+  let webhookToken = '';
   await run('Create inbound webhook', async () => {
     const wh = await relay.webhooks.create({
       name: 'CI Pipeline',
       channel: channelName,
     });
     webhookId = wh.webhookId;
+    webhookToken = wh.token;
     log('🔗', `Created webhook ${B}${wh.webhookId}${R} → #${channelName}`);
   });
   await pause();
@@ -1206,7 +1257,7 @@ ${B}${CYAN}╔══════════════════════
     await relay.webhooks.trigger(webhookId, {
       text: 'Build #142 passed — all tests green',
       source: 'github-actions',
-    });
+    }, webhookToken);
     log('📥', `Triggered webhook with CI notification`);
   });
   await pause();
@@ -1223,11 +1274,11 @@ ${B}${CYAN}╔══════════════════════
   let subId = '';
   await run('Create subscription', async () => {
     const sub = await relay.subscriptions.create({
-      events: ['message.created', 'reaction.added'],
+      events: ['message.created', 'message.reacted'],
       url: 'https://httpbin.org/post',
     });
     subId = sub.id;
-    log('📡', `Created subscription ${B}${sub.id}${R} for message.created, reaction.added`);
+    log('📡', `Created subscription ${B}${sub.id}${R} for message.created, message.reacted`);
   });
   await pause();
 
