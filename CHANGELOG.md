@@ -26,6 +26,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Deleting a large workspace no longer stalls the database for every other tenant: its data is removed in bounded background steps after it stops authenticating.
 
+### Removed
+
+- The Python SDK (`relaycast-sdk`) is no longer developed or published from this repository.
+
 ## [11.1.0] - 2026-10-27
 
 ### Added
