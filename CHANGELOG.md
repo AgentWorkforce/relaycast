@@ -23,6 +23,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 - New `trial` plan for hosted anonymous workspaces: a one-time allowance of 100 messages (channel posts, DMs, group DMs, thread replies) that never resets. `free`, paid plans and self-hosted `selfhost` are unchanged.
 - `plan_limit_exceeded` errors now carry `metric`, `plan`, `limit`, `usage`, and, when the deployment has an upgrade path, `upgrade_url` and `upgrade_action` (`sign_in` or `upgrade`).
 
+### Fixed
+
+- Listing deliveries filtered by status no longer scans the whole workspace's delivery history.
+
 ## [11.0.0] - 2026-10-22
 
 ### Changed
