@@ -17,7 +17,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Removed
 
-- `EntitlementsProvider`, `PlanLimits`, `UpgradeGuidance`, `UsageMetric`, `StaticEntitlementsProvider`, `PLAN_LIMITS`, the `checkPlanLimit` / `checkMessageAllowance` middleware, and the usage-counter helpers (`usageCounterKey`, `getUsageMetric`, `lifetimeUsageCounterKey`, `getLifetimeUsageMetric`, `usagePeriod`, `usagePeriodResetAt`). The engine no longer writes `usage:*` KV counters.
+- `EntitlementsProvider`, `PlanLimits`, `UpgradeGuidance`, `UsageMetric`, `StaticEntitlementsProvider`, `PLAN_LIMITS`, the `checkPlanLimit` / `checkMessageAllowance` middleware, and the usage-counter helpers (`usageCounterKey`, `getUsageMetric`, `lifetimeUsageCounterKey`, `getLifetimeUsageMetric`, `usagePeriod`, `usagePeriodResetAt`). The engine no longer writes `usage:*` KV counters. `KeyValueStore.increment` is removed; the port is `get`/`put`/`delete`.
 - The `workspaces.plan` column (migration `0077_drop_workspace_plan.sql`). A host that keeps tiers must copy the column into its own storage before applying it.
 - `WorkspaceDeliveryPolicyConfig.resolve` receives `{ id }`; it no longer gets `plan`.
 
