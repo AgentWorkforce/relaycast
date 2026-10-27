@@ -21,7 +21,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Fixed
 
 - Listing deliveries filtered by status no longer scans the whole workspace's delivery history.
-- Agent-token routes answer 401 instead of 500 when a host auth provider returns a result without an agent.
+- Agent-, node- and observer-token routes answer 401 when a host auth provider returns a result without that identity, instead of a 500 (agent routes) or unscoped workspace access (observer reads).
 
 ## [11.0.0] - 2026-10-22
 

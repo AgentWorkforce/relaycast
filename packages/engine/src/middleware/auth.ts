@@ -115,6 +115,12 @@ export function requireWorkspaceRead(
     if (!result.ok) {
       return jsonError(c, result.code, result.message, result.status as ContentfulStatusCode);
     }
+    // An observer token answered without its observer identity would otherwise
+    // fall through below and read with the workspace's full access, unscoped.
+    const missing = missingPrincipal(require, result);
+    if (missing) {
+      return jsonError(c, 'unauthorized', requiredTokenMessage(missing), 401);
+    }
 
     if (result.observerToken) {
       if (!hasAnyObserverScope(result.observerToken, requiredScopes)) {

@@ -44,6 +44,33 @@ describe('single-principal routes require that principal', () => {
     expect(await res.json()).toMatchObject({ error: { code: 'unauthorized' } });
   });
 
+  it('answers 401 when an observer token resolves without its observer identity', async () => {
+    const ws = await createWorkspace(stack.app, 'auth-required-observer');
+    const minted = await stack.app.request('/v1/observer-tokens', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ws.workspaceKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'scoped-observer', scopes: ['stream:read'] }),
+    });
+    expect(minted.status).toBe(201);
+    const observer = (await minted.json() as { data: { token: string } }).data.token;
+    const base = stack.runtime.deps.auth;
+    // Resolve the token for the route's own requirement, then drop the principal.
+    const auth: AuthProvider = {
+      hashToken: token => base.hashToken(token),
+      async authenticate(args) {
+        const result = await base.authenticate(args);
+        return result.ok ? { ok: true, workspace: result.workspace } : result;
+      },
+    };
+    const app = createEngine({ ...stack.runtime.deps, auth });
+
+    // Without the guard this unscoped token would list agents as the workspace.
+    const res = await app.request('/v1/agents', { headers: { authorization: `Bearer ${observer}` } });
+
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ error: { code: 'unauthorized' } });
+  });
+
   it('still rotates for a real agent token', async () => {
     const ws = await createWorkspace(stack.app, 'auth-required-principal-ok');
     const agent = await registerAgent(stack.app, ws.workspaceKey, 'rotating-agent');

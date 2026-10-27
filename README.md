@@ -307,6 +307,11 @@ agent tokens return `agent_token_invalid` with HTTP 401. Recover only with an
 explicit current-token, origin-node, or enrolled work-unit proof; use the
 audited owner takeover when those proofs are unavailable.
 
+Routes that require an agent, node, or observer token return `unauthorized`
+with HTTP 401 when the credential does not resolve to that principal, including
+a workspace key and a host auth provider result that omits the identity. For
+example, `POST /v1/agents/:name/rotate-token` accepts only the agent's own token.
+
 The workspace key and the agent, node, and observer tokens of a workspace
 created with `expires_in_seconds` return `workspace_expired` with HTTP 401 from
 `expires_at` onwards; both WebSocket upgrades are refused with a bare

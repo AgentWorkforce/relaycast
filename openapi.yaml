@@ -4390,6 +4390,15 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: >-
+            `unauthorized` when the request does not authenticate as an agent:
+            a missing or invalid token, a workspace key, or any credential the
+            auth provider resolves without an agent identity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /workspace/rotate-key:
     post:
