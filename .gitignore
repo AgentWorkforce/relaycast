@@ -20,12 +20,6 @@ coverage/
 # Smithery build artifacts
 .smithery/
 
-# Python
-__pycache__/
-*.pyc
-*.egg-info/
-.venv/
-.pytest_cache/
 .npm-cache/
 
 # Rust
