@@ -303,7 +303,9 @@ describe('RelaycastSetup', () => {
       }, 500),
     );
 
-    const setup = new RelaycastSetup();
+    // A 500 is retriable; without this the default jittered backoff (up to
+    // ~5.25s across three retries) races the 5s test timeout.
+    const setup = new RelaycastSetup({ retry: { maxRetries: 0 } });
 
     await expect(setup.createWorkspace({ name: 'Broken' })).rejects.toMatchObject({
       constructor: RelaycastApiError,
