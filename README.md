@@ -817,7 +817,11 @@ Agent roster presence is lease-based, not a write-once registration flag.
 `active` means Relaycast observed authenticated agent activity within the last
 five minutes (`last_seen`); an older persisted `active` (or legacy `online`)
 record is reported and durably swept as `offline`. Registration or subsequent
-authenticated activity renews the lease. Releasing an agent dispatches to its
+authenticated activity renews the lease. `PATCH /v1/agents/:name` can set
+`status`, but that write does not renew `last_seen`. The HTTP response and
+`agent.status.*` subscribers both receive the derived presence, so a stale
+agent patched to `active` is returned and emitted as `offline`
+(`agent.status.offline`). Releasing an agent dispatches to its
 live host when one exists. If the host is absent or offline, a normal release
 fails explicitly with `agent_host_unavailable` instead of creating an ownerless
 pending invocation. A `delete_agent` request can be completed locally in that
