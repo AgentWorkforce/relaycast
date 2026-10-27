@@ -812,6 +812,45 @@ describe('AgentClient WebSocket integration', () => {
     expect(MockWebSocket.instances).toHaveLength(0);
   });
 
+  it('does not reopen after permanent disconnection until disconnect()', async () => {
+    const agent = createAgent({
+      ws: { maxReconnectAttempts: 0, reconnectJitter: false },
+    });
+    const handler = vi.fn();
+    agent.on.messageCreated(handler);
+
+    agent.connect();
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    ws.simulateClose();
+
+    expect(MockWebSocket.instances).toHaveLength(1);
+
+    agent.connect();
+    agent.subscribe(['general'], vi.fn());
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(MockWebSocket.instances).toHaveLength(1);
+
+    const p = agent.disconnect();
+    await vi.advanceTimersByTimeAsync(200);
+    await p;
+
+    agent.connect();
+    const ws2 = await nextSocket(1);
+    ws2.simulateOpen();
+    ws2.simulateMessage({
+      type: 'message.created',
+      channel: 'general',
+      message: { id: 'm_2', agent_name: 'Bot', text: 'again', attachments: [] },
+    });
+
+    // disconnect() drops the previous transport, including handlers attached to it.
+    expect(handler).not.toHaveBeenCalled();
+    expect(MockWebSocket.instances).toHaveLength(2);
+  });
+
   // --- unsubscribe function ---
 
   it('handler unsubscribe function stops future events', async () => {

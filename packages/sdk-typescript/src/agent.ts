@@ -164,6 +164,8 @@ function ensureRelaycastMessageEventId(event: RelaycastMessageEvent): RelaycastM
 export class AgentClient {
   public readonly client: HttpClient;
   private ws: WsClient | null = null;
+  /** True after `connect()` has started the current transport. Reset by `disconnect()`. */
+  private wsConnectStarted = false;
   private autoHeartbeatMs: number | false;
   private autoHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private pendingHeartbeat: Promise<void> | null = null;
@@ -307,6 +309,12 @@ export class AgentClient {
   }
 
   connect(): void {
+    // Handlers may construct the client early via ensureWs(). Starting it is
+    // still once per transport: a second connect(), including after the
+    // circuit breaker trips, must not open another socket. disconnect()
+    // clears this so an explicit teardown can connect again.
+    if (this.wsConnectStarted) return;
+    this.wsConnectStarted = true;
     this.ensureWs().connect();
   }
 
@@ -356,6 +364,7 @@ export class AgentClient {
       this.ws.disconnect();
       this.ws = null;
     }
+    this.wsConnectStarted = false;
     this.activeWsChannels.clear();
     // Always send the HTTP disconnect — it works even without a WS and
     // serves as the authoritative presence update.
