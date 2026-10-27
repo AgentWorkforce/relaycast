@@ -75,8 +75,21 @@ export function decamelizeKeys<T>(value: T): unknown {
   }
   if (isPlainObject(value)) {
     const out: Record<string, unknown> = {};
+    // Caller-supplied source key per wire key, so two different-cased spellings
+    // of the same field (e.g. `autoJoinGeneral` and `auto_join_general`) are
+    // caught instead of one silently clobbering the other depending on object
+    // key order.
+    const sourceKeyByWireKey = new Map<string, string>();
     for (const [key, val] of Object.entries(value)) {
-      out[toSnakeKey(key)] = VERBATIM_VALUE_KEYS.has(key) ? val : decamelizeKeys(val);
+      const wireKey = toSnakeKey(key);
+      const existingSourceKey = sourceKeyByWireKey.get(wireKey);
+      if (existingSourceKey !== undefined && existingSourceKey !== key) {
+        throw new Error(
+          `Ambiguous request fields "${existingSourceKey}" and "${key}" both map to "${wireKey}". Use only one casing for this field.`,
+        );
+      }
+      sourceKeyByWireKey.set(wireKey, key);
+      out[wireKey] = VERBATIM_VALUE_KEYS.has(key) ? val : decamelizeKeys(val);
     }
     return out;
   }
