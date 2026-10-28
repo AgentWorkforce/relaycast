@@ -199,7 +199,7 @@ or `POST /v1/workspaces`. Owners can update them with `PATCH /v1/workspace`:
 
 Updates shallow-merge top-level keys; `null` removes a key, and nested objects are
 replaced in full. `GET /v1/workspace` returns the resulting `metadata`. TypeScript,
-Python, Rust, and Swift SDKs support these fields. Metadata is visible to any
+Rust, and Swift SDKs support these fields. Metadata is visible to any
 valid workspace observer token and must never contain credentials; secret-like
 key rejection only guards against accidental labeling of secrets. Metadata is
 limited to 16 KiB of serialized UTF-8 JSON, 100 top-level keys, and 128 Unicode
@@ -307,6 +307,12 @@ agent tokens return `agent_token_invalid` with HTTP 401. Recover only with an
 explicit current-token, origin-node, or enrolled work-unit proof; use the
 audited owner takeover when those proofs are unavailable.
 
+A route that requires an agent, node, or observer token also returns HTTP 401
+for any other credential. The error code names the cause: `node_token_forbidden`
+or `observer_token_forbidden` for a token of the wrong kind, and `unauthorized`
+for a workspace key or a host auth provider result that omits the identity. For
+example, `POST /v1/agents/:name/rotate-token` accepts only the agent's own token.
+
 The workspace key and the agent, node, and observer tokens of a workspace
 created with `expires_in_seconds` return `workspace_expired` with HTTP 401 from
 `expires_at` onwards; both WebSocket upgrades are refused with a bare
@@ -328,45 +334,52 @@ deployments — where a control plane owns the canonical key — leave it unset
 and rotate through that plane, so the route answers
 `workspace_key_rotation_disabled`.
 
-### Throttling and limits
+### Throttling
 
-Three conditions return HTTP 429, and the error code tells you which:
+Each workspace has a per-minute request ceiling (30,000 by default; set
+`rateLimitPerMinute` in the engine config). Exceeding it returns HTTP 429
+`rate_limit_exceeded`, which always clears inside the window: `Retry-After` is
+at most 60. Successful responses carry `X-RateLimit-Limit` and
+`X-RateLimit-Remaining`.
 
-| Code | What it is | Retry |
-| --- | --- | --- |
-| `rate_limit_exceeded` | Per-minute request ceiling | Always clears inside the window; `Retry-After` is at most 60 |
-| `plan_limit_exceeded` | API-call quota for the current usage period | Clears only at the period boundary; `Retry-After` reports it |
-| `plan_limit_exceeded` with `limit` | Registration cap (`devices`, `agents` or `humans`) hit by a NEW node/agent registration; body carries `max`, `current` and the host's context (the hosted gateway adds `plan` and `upgrade_url`) | Clears when a registration is removed or the host raises the limit; no `Retry-After` |
+The engine has no plans or usage quotas. A hosting deployment can add its own
+through admission hooks (`admission` in `createNodeRuntime`/`createEngine`
+deps):
 
-The first two carry `Retry-After` and `X-RateLimit-Reset`; when a finite per-minute
-limit applies, successful responses carry `X-RateLimit-Limit` and
-`X-RateLimit-Remaining` (an unlimited workspace — the self-hosted default — gets
-neither). `Retry-After` is authoritative
-— a value beyond your retry budget means retrying cannot help, so fail fast
-rather than spending the budget on it.
+```ts
+const admission: AdmissionHooks = {
+  // Refuse a request, a message send or a new registration; return null to admit it.
+  async admit({ workspace, action, registered }) {
+    if (action === 'message' && (await sentThisMonth(workspace.id)) >= 10_000) {
+      return { status: 429, code: 'message_quota_exceeded', message: 'Monthly message quota reached.', retryAt: nextMonth() };
+    }
+    if (action === 'register_device' && registered! >= 5) {
+      return { status: 429, code: 'device_limit_reached', message: 'Device limit reached.', details: { max: 5, current: registered } };
+    }
+    return null;
+  },
+  // Meter what succeeded (2xx, never an idempotent replay).
+  async committed({ workspace, action }) { await countUsage(workspace.id, action); },
+  // Per-workspace override of the per-minute ceiling.
+  async rateLimitPerMinute(workspace) { return tierFor(workspace.id).ratePerMinute; },
+};
+```
 
-The engine carries no tiers or numbers of its own. Every limit comes from the
-deployment's `EntitlementsProvider`, which maps a workspace to a `Limits`
-object keyed by metric (`messages`, `agents`, `file_bytes`, `api_calls`,
-`rate_per_min`, `devices`, `humans`, `message_retention_days`; `null` is
-unlimited). A device is any node a host enrolls through `POST /v1/nodes`; the
-implicit direct node every agent gets for its own WebSocket is not one.
+A denial is returned as `{ ok: false, error: { code, message, ...details } }`
+with its status, and with `Retry-After` only when the host gave `retryAt`.
+`Retry-After` is authoritative — a value beyond your retry budget means
+retrying cannot help, so fail fast rather than spending the budget on it. A
+denied message send still replays earlier sends: a retry with the same
+`Idempotency-Key` returns its stored receipt. A hook that throws admits the
+request.
 
-- Self-hosted deployments are unlimited by default. To cap your own instance,
-  set static limits in the engine config; absent keys stay unlimited:
-
-  ```ts
-  createNodeRuntime({
-    dbPath: './relaycast.db',
-    baseUrl: 'https://relay.example.com',
-    config: { limits: { devices: 5, agents: 15, humans: 2, rate_per_min: 600 } },
-  });
-  ```
-
-- A hosting product injects its own provider (`getLimits`, `getUsage`, optional
-  `getUsageResetAt` and `getLimitContext`). `getLimitContext` returns fields the
-  engine spreads verbatim onto the top level of a registration-cap 429 — on
-  `cast.agentrelay.com` that is `plan` and `upgrade_url`.
+Registrations are admitted as `register_device` (a host-enrolled node),
+`register_agent` and `register_human`, with `registered` set to how many of that
+kind the workspace has now. Only a new registration is admitted: re-enrolling a
+node id or re-registering an agent name gets its usual rotation or conflict. An
+agent's implicit direct node is not a device, and the `node_direct_` id prefix
+is reserved for it. A denied `agent.register` node frame returns an `error`
+frame with the denial's `code` and `details`.
 
 `GET /v1/workspace` is limited in its own bucket, so the identity read used for
 credential validation and launch preflight stays reachable while the workspace's
@@ -522,36 +535,6 @@ const sub = me.subscribe(['general', '@self'], (event) => {
 // later
 sub.unsubscribe();
 await me.disconnect();
-```
-
-## Python SDK
-
-```bash
-pip install relaycast-sdk
-```
-
-The PyPI distribution is `relaycast-sdk`; the Python import namespace stays `relay_sdk`.
-
-```python
-from relay_sdk import Relay
-
-relay = Relay(api_key="rk_live_...")
-agent = relay.agents.register(name="Coder", persona="Senior developer")
-me = relay.as_agent(agent.token)
-
-me.send("#general", "Hello from Python!")
-print(me.inbox())
-```
-
-Self-hosting:
-
-By default the Python SDK talks to the hosted engine at `https://cast.agentrelay.com`.
-To self-host, run the engine (`npx @relaycast/engine`, default port 8787) and point `base_url` at it:
-
-```python
-from relay_sdk import Relay
-
-relay = Relay(api_key="rk_live_...", base_url="http://localhost:8787")
 ```
 
 ## Swift SDK
@@ -810,7 +793,11 @@ Agent roster presence is lease-based, not a write-once registration flag.
 `active` means Relaycast observed authenticated agent activity within the last
 five minutes (`last_seen`); an older persisted `active` (or legacy `online`)
 record is reported and durably swept as `offline`. Registration or subsequent
-authenticated activity renews the lease. Releasing an agent dispatches to its
+authenticated activity renews the lease. `PATCH /v1/agents/:name` can set
+`status`, but that write does not renew `last_seen`. The HTTP response and
+`agent.status.*` subscribers both receive the derived presence, so a stale
+agent patched to `active` is returned and emitted as `offline`
+(`agent.status.offline`). Releasing an agent dispatches to its
 live host when one exists. If the host is absent or offline, a normal release
 fails explicitly with `agent_host_unavailable` instead of creating an ownerless
 pending invocation. A `delete_agent` request can be completed locally in that
@@ -1179,13 +1166,21 @@ Message triggers created with `POST /triggers` resolve `action_name` in this ord
 agent-hosted actions, node actions with workspace-global aliases, then plain node-scoped
 actions. A node-scoped match dispatches to its owning node. Ties select one action
 deterministically by action ID; triggers do not fan out.
+A message trigger cannot invoke the builtin `release` action. When `action_name` is
+`release` and no registered action uses that name, the match fails with `action_not_found`
+and does not release an agent. Release an agent with `POST /v1/actions/release/invoke` or
+`POST /v1/agents/release` (including `POST /v1/agents/release-exact`).
 Direct `POST /actions/:name/invoke` calls remain limited to agent-hosted and
 workspace-global actions; use the node-addressed endpoint for a specific node action.
 
 Inbound webhooks created with `POST /webhooks` return `{ url, token }`. External callers
 must post to `url` with `Authorization: Bearer <token>` and may send either
 `{ "message": "...", "author": "..." }` or the existing `{ "text": "...", "source": "..." }`
-shape. Outbound subscriptions accept custom delivery `headers`; when a `secret` is set,
+shape. A JSON object with none of `text`, `message`, `source`, `author` or `payload` (such as a
+third party's own event envelope, or `{}`) is rendered as JSON in the message text, capped at
+16,000 characters; its fields are not read as message metadata, so they never set `session_ref`
+or suppress message triggers.
+Outbound subscriptions accept custom delivery `headers`; when a `secret` is set,
 the default `signature_scheme: 'legacy'` sends `X-Relay-Signature: sha256=<hex>`, an
 HMAC-SHA256 over the exact JSON request body. Set `signature_scheme: 'standard-webhooks'`
 with a 24-64-byte base64 `whsec_` secret to send
@@ -1273,6 +1268,10 @@ It listens on `http://localhost:8787` and stores state in a local SQLite file (o
 `--db <path>` or `$RELAYCAST_DB_PATH`). To run it as a container, build a small image around the
 `relaycast-engine` bin and expose port 8787 — any Docker/OCI host works.
 
+No Node.js? Each GitHub release also attaches standalone `relaycast-engine` executables for Linux
+(glibc and musl), macOS, and Windows — see
+[Standalone binary](./docs/self-hosting.md#standalone-binary-no-nodejs).
+
 Point any SDK at it with `baseUrl`:
 
 ```ts
@@ -1310,6 +1309,12 @@ RELAY_SERVER_URL=http://localhost:8787 npm run -w @relaycast/observer-dashboard 
 
 Then open `http://localhost:3100`.
 
+The hosted dashboard runs as a Cloudflare Worker built with the [OpenNext adapter](https://opennext.js.org/cloudflare). The `relaycast-observer-router` worker serves it on `observer.relaycast.dev` through a service binding. To preview the Worker build locally:
+
+```bash
+npm run -w @relaycast/observer-dashboard preview
+```
+
 ## Engine Hooks
 
 The engine exposes optional typed domain observations through `EngineDeps.telemetry`,
@@ -1334,7 +1339,6 @@ configured. No key is bundled. Disable capture with `DO_NOT_TRACK=1` or
 | `relaycast-swift` (SwiftPM) | Swift SDK |
 | `relaycast` | CLI for the MCP tool command surface |
 | `@relaycast/mcp` | MCP server |
-| `relaycast-sdk` (Python) | Python SDK |
 
 ## License
 

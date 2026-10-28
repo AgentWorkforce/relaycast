@@ -12,7 +12,7 @@ import {
 } from '../auth/workspaceExpiry.js';
 import { getWorkspaceExpiry } from '../engine/workspace.js';
 import { rateLimit } from '../middleware/rateLimit.js';
-import { registrationCapacityGuard } from '../middleware/planLimits.js';
+import { registrationAdmission } from '../middleware/admission.js';
 import * as agentEngine from '../engine/agent.js';
 import { agentRetentionSchema, retainAgents } from '../engine/agentRetention.js';
 import * as agentIdentityEngine from '../engine/agentIdentity.js';
@@ -315,7 +315,7 @@ agentRoutes.post(
         autoJoinGeneral,
         recoveryProofHash,
         workUnitId,
-        capacity: registrationCapacityGuard(c),
+        admitRegistration: registrationAdmission(c),
       });
       if (skills?.length) {
         await directoryEngine.syncSourceAgentDirectoryEntry(db, workspace.id, {
@@ -674,7 +674,9 @@ agentRoutes.patch(
         });
       }
       if (body.status !== undefined) {
-        await fanoutAgentStatus(c, updated, body.status);
+        // `updated.status` is derived presence. A stale `last_seen` reports
+        // offline even when the caller wrote `active`; the event must match.
+        await fanoutAgentStatus(c, updated, updated.status);
       }
       emitServerEvent(c, workspace.id, 'agent.updated', {
         agent_name: name,

@@ -7,22 +7,50 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-
-## [Unreleased - Major]
+## [Unreleased - Minor]
 
 ### Added
 
-- Registration caps are enforced at every path that creates a node or agent: `POST /v1/nodes`, `POST /v1/agents`, `POST /v1/a2a/register` and the `agent.register` node frame. A refusal is HTTP 429 `plan_limit_exceeded` with top-level `error_code`, `limit`, `max`, `current` and the provider's `getLimitContext` fields spread verbatim (the same fields on the WebSocket `error` frame). Re-enrolling or rotating an existing node/agent is never capped; an agent's implicit direct node is not a device, and the `node_direct_` id prefix is reserved for it (`reserved_node_id`).
-- `Limits` (metric-keyed, `null` = unlimited) with `UNLIMITED_LIMITS` and `resolveLimits`; `UsageMetric` gains `devices`/`humans` and `EntitlementsProvider.getUsage` reports live registration counts for them (`countRegistrations` is exported for providers). Optional `EntitlementsProvider.getLimitContext` supplies the refusal's host context.
-- `EngineConfig.limits` sets static limits for a self-hosted instance; `StaticEntitlementsProvider(kv, limits, db)` applies them and counts registrations from `db`.
-- `workspaces.limit_overrides` (migration `0076`) is a host-owned JSON column the engine never interprets.
-- `createRegistrationCapacityGuard` and `HandleNodeControlMessageArgs.capacity` let a host's node-control transport enforce the agent cap on `agent.register`.
+- Registration admission: `AdmissionAction` gains `register_device`, `register_agent` and `register_human`, and `AdmissionContext.registered` carries how many of that kind the workspace has registered before this one. The engine admits at every path that creates a node or agent — `POST /v1/nodes` (any host-enrolled node), `POST /v1/agents` (`type: human` is `register_human`), a new `POST /v1/a2a/register` proxy and the `agent.register` node frame. A denial renders like any admission denial, and the node `error` frame carries the denial's `code` and `details`. An established node id or agent name is answered by its usual conflict or rotation, never by admission; an agent's implicit direct node is not a device. Registrations are not reported to `committed`.
+- `createRegistrationAdmission` builds the same check for a host's own node-control transport (`HandleNodeControlMessageArgs.admitRegistration`).
 
-### Breaking changes
+### Changed
 
-- `PLAN_LIMITS` and every plan name, number and rank are removed from the engine; `PlanLimits` is replaced by `Limits`, whose metered fields are `number | null` (`null` = unlimited) instead of `number`/`Infinity`. `StaticEntitlementsProvider` no longer reads `workspace.plan`: it is unlimited unless `config.limits` is set. Hosts that relied on the built-in tiers must supply them from their own provider.
-- `WorkspaceDeliveryPolicyConfig.resolve` receives `plan: string | null` (the row's host-assigned key, no `'free'` default).
-- The `rate_limit_exceeded` and `plan_limit_exceeded` quota messages no longer name a plan.
+- Node ids beginning with `node_direct_` are reserved for implicit direct nodes: enrolling one is `400 reserved_node_id`.
+
+### Fixed
+
+- A message trigger cannot invoke builtin `release`.
+- `GET /v1/agents/presence` counts a node-hosted agent as online while its node and that agent's own provider are live, including agents that make no HTTP calls. Agents of a disconnected provider, agents a live node omits from its inventory, and agents that called `POST /v1/agents/disconnect` without deregistering stay offline.
+- A status patch broadcasts the same derived presence the response returns.
+
+## [12.0.0] - 2026-10-27
+
+### Added
+
+- `AdmissionHooks` (`EngineDeps.admission`, `createNodeRuntime({ admission })`, `startServer({ admission })`): `admit({ workspace, action })` refuses a `request` or `message` with an `AdmissionDenial` (`status`, `code`, `message`, `details`, `retryAt`); `committed(ctx)` reports each successful, non-replayed action; `rateLimitPerMinute(workspace)` overrides the per-minute ceiling. A hook that throws admits the request. A denied keyed message send still replays its stored receipt.
+- `EngineConfig.rateLimitPerMinute` (default 30,000).
+
+### Removed
+
+- `EntitlementsProvider`, `PlanLimits`, `UpgradeGuidance`, `UsageMetric`, `StaticEntitlementsProvider`, `PLAN_LIMITS`, the `checkPlanLimit` / `checkMessageAllowance` middleware, and the usage-counter helpers (`usageCounterKey`, `getUsageMetric`, `lifetimeUsageCounterKey`, `getLifetimeUsageMetric`, `usagePeriod`, `usagePeriodResetAt`). The engine no longer writes `usage:*` KV counters. `KeyValueStore.increment` is removed; the port is `get`/`put`/`delete`.
+- The `workspaces.plan` column (migration `0077_drop_workspace_plan.sql`). A host that keeps tiers must copy the column into its own storage before applying it.
+- `WorkspaceDeliveryPolicyConfig.resolve` receives `{ id }`; it no longer gets `plan`.
+
+## [11.1.0] - 2026-10-27
+
+### Added
+
+- `PLAN_LIMITS.trial` and `PlanLimits.lifetime_messages`: a one-time message allowance enforced on message sends by the new `checkMessageAllowance` middleware; only successful fresh sends are counted (idempotent replays neither count nor get refused), under the never-expiring `usage:<workspace>:messages:lifetime` key (`lifetimeUsageCounterKey`, `getLifetimeUsageMetric`).
+- Optional `EntitlementsProvider.getUpgradeGuidance(workspace, metric)` hook; its URL and action are returned on `plan_limit_exceeded` as `upgrade_url` / `upgrade_action`.
+- Standalone single-file `relaycast-engine` builds (`bun build --compile`, `bun:sqlite`) with the same flags and behaviour as the npm bin; the Node adapter now opens SQLite through a small driver seam, and better-sqlite3 remains the Node driver.
+- `relaycast-engine --version` / `-v` prints the engine version.
+- Outbound webhook DNS pinning also holds when the engine runs under Bun, whose `undici` shim ignores custom dispatchers.
+
+### Fixed
+
+- `GET /v1/deliveries?status=<status>` now reads only the calling agent's rows (migration `0076` adds `idx_deliveries_agent_status_created`). It previously walked every row with that status in the workspace, which on large delivery histories could stall a shared database.
+- Routes that require an agent, node or observer token now answer `401 unauthorized` when the auth provider returns a result without that principal. Previously a host provider that answered a workspace key with a workspace-only result (for example from a cache) sent `POST /v1/agents/:name/rotate-token` into its handler with no agent, which failed with a 500. Observer-readable routes apply the same check, so an observer token resolved without its observer identity no longer reads with the workspace's unscoped access.
 
 ## [11.0.0] - 2026-10-22
 
@@ -60,6 +88,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - The unreachable-node delivery sweep reads only active deliveries through the new partial index `idx_deliveries_active_location_node` (migration `0074`), not every delivery ever routed to a node.
 - Every response carries its request id in an `X-Request-Id` header (the header the Rust SDK reads), so client error reports stop showing `request_id: null`.
 - Per-node agent roster and inventory lookups are pinned to `idx_agents_location_node_fk` instead of walking every agent in the workspace.
+- Raw JSON bodies sent to `POST /v1/hooks/:webhookId` (any object without `text`, `message`, `source`, `author` or `payload`, including `{}`) appear in the resulting channel message, capped at 16,000 characters. Their fields are rendered as text only: a third-party `session_ref` or `action_generated` no longer reaches message metadata, session validation or trigger suppression.
 
 ## [10.6.3] - 2026-10-19
 

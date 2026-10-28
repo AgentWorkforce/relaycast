@@ -1,16 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { resolveLimits, type EntitlementsProvider, type Limits, type Workspace } from '../../ports/index.js';
 import { InProcessRateLimiter } from '../../adapters/node/rate-limit.js';
 import { createWorkspace, makeNodeStack, type TestStack } from './harness.js';
-
-function entitlementsWithRate(ratePerMin: number): EntitlementsProvider {
-  return {
-    async getLimits(_workspace: Workspace): Promise<Limits> {
-      return resolveLimits({ rate_per_min: ratePerMin });
-    },
-    async getUsage() { return 0; },
-  };
-}
 
 describe('rate limit contract', () => {
   let stack: TestStack | undefined;
@@ -25,7 +15,7 @@ describe('rate limit contract', () => {
   // its credentials and start a run. Retrying could never help — every attempt
   // landed in the same saturated bucket.
   it('keeps workspace identity readable when the shared bucket is exhausted', async () => {
-    stack = makeNodeStack({ entitlements: entitlementsWithRate(2) });
+    stack = makeNodeStack({ rateLimitPerMinute: 2 });
     const ws = await createWorkspace(stack.app, 'identity-bucket-ws');
 
     expect((await get('/v1/agents', ws.workspaceKey)).status).toBe(200);
@@ -43,7 +33,7 @@ describe('rate limit contract', () => {
   });
 
   it('puts a bounded retry contract on a throttled response', async () => {
-    stack = makeNodeStack({ entitlements: entitlementsWithRate(1) });
+    stack = makeNodeStack({ rateLimitPerMinute: 1 });
     const ws = await createWorkspace(stack.app, 'retry-contract-ws');
 
     expect((await get('/v1/agents', ws.workspaceKey)).status).toBe(200);
@@ -66,7 +56,7 @@ describe('rate limit contract', () => {
   });
 
   it('reports the window reset on a successful response', async () => {
-    stack = makeNodeStack({ entitlements: entitlementsWithRate(10) });
+    stack = makeNodeStack({ rateLimitPerMinute: 10 });
     const ws = await createWorkspace(stack.app, 'reset-header-ws');
 
     const res = await get('/v1/workspace', ws.workspaceKey);

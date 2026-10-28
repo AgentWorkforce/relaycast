@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
-import { resolveLimits } from '../../ports/entitlements.js';
 
 /**
  * Regression for the captured cross-channel leak: a native MCP post result
@@ -13,16 +12,9 @@ import { resolveLimits } from '../../ports/entitlements.js';
  * {name, topic, metadata} (no private flag), so privacy is proven by a
  * non-member never seeing the mention.
  */
-// Test-only entitlements: a high per-minute ceiling so the bounded >200-candidate
-// fixture exercises the limiter without being throttled.
-const testEntitlements = {
-  getLimits: async () => resolveLimits({ messages: 1_000_000, agents: 1_000_000, file_bytes: 1_000_000_000, api_calls: 1_000_000, rate_per_min: 100_000 }),
-  getUsage: async () => 0,
-};
-
 describe('inbox mention scope', () => {
   let stack: TestStack;
-  beforeEach(() => { stack = makeNodeStack({ entitlements: testEntitlements }); });
+  beforeEach(() => { stack = makeNodeStack(); });
   afterEach(async () => { await stack.close(); });
 
   const api = (token: string) => ({

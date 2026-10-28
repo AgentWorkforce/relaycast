@@ -53,14 +53,14 @@ function snapshot(handle: SqliteDbHandle) {
       // so this regression continues to compare all pre-existing user data.
       // 0070 adds a nullable liveness-recovery marker without backfilling it.
       if (name === 'workspaces') {
-        // 0073 adds the rotation grace slot and the generation fence, and
-        // 0076 the host limit overrides, as additive columns; exclude them so
-        // this comparison stays byte-for-byte over every pre-existing value.
+        // 0073 adds the rotation grace slot and the generation fence as
+        // additive columns, and 0077 drops `plan`; exclude them so this
+        // comparison stays byte-for-byte over every other value.
         const {
+          plan: _plan,
           previous_api_key_hash: _previousApiKeyHash,
           previous_api_key_expires_at: _previousApiKeyExpiresAt,
           api_key_generation: _apiKeyGeneration,
-          limit_overrides: _limitOverrides,
           ...existing
         } = row as Record<string, unknown>;
         return JSON.stringify(existing);
@@ -100,7 +100,9 @@ function constraints(handle: SqliteDbHandle) {
   const db = handle.sqlite;
   const tables = db.prepare("SELECT name,sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != '_engine_migrations' ORDER BY name").all() as { name: string; sql: string }[];
   return tables.map(({ name, sql }) => ({
-    name, sql,
+    name,
+    // 0077 drops `plan`; compare every other workspace column definition.
+    sql: name === 'workspaces' ? sql.replace(/\s*`plan` text DEFAULT 'free' NOT NULL,/, '') : sql,
     foreignKeys: db.pragma(`foreign_key_list("${name}")`),
     uniqueIndexes: (db.pragma(`index_list("${name}")`) as { name: string; unique: number; origin: string; partial: number }[])
       .filter(index => index.unique === 1)
@@ -159,17 +161,16 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
       if (table.name === 'agents' && original) {
         return { ...table, sql: original.sql };
       }
-      // 0073 appends the rotation grace slot and the generation fence, and
-      // 0076 the host limit overrides. Remove only their exact additive DDL so
-      // every pre-existing workspace constraint stays under comparison.
+      // 0073 appends the rotation grace slot and the generation fence.
+      // Remove only their exact additive DDL so every pre-existing workspace
+      // constraint stays under comparison.
       if (table.name === 'workspaces') {
         table = {
           ...table,
           sql: table.sql
             .replace(', previous_api_key_hash TEXT', '')
             .replace(', previous_api_key_expires_at INTEGER', '')
-            .replace(', api_key_generation INTEGER NOT NULL DEFAULT 0', '')
-            .replace(', limit_overrides TEXT', ''),
+            .replace(', api_key_generation INTEGER NOT NULL DEFAULT 0', ''),
         };
       }
       // 0063 appends four nullable recovery fields. Remove only their exact

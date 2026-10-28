@@ -15,7 +15,7 @@ import type { EngineDb } from '../ports/database.js';
  * `rw_7ccfea89`: two 4,889-recipient sends -> 9,778 active rows vs a 5,000 cap).
  *
  * This module owns the engine-side enforcement boundary. The host resolves the
- * *effective configured* cap (and any optional reserve) from server-owned plan
+ * *effective configured* cap (and any optional reserve) from its own server-owned
  * state and passes it here through a server-only field. It is never derived
  * from a client header, and an absent policy applies **no** guard rather than
  * silently becoming unlimited by accident-of-plumbing: callers that must be
@@ -47,12 +47,9 @@ const dynamicWorkspaceDeliveryPolicySchema = z.object({
  */
 export async function resolveWorkspaceDeliveryPolicyFor(
   config: { workspaceDelivery?: WorkspaceDeliveryPolicyConfig } | undefined,
-  workspace: { id: string; plan?: string | null },
+  workspace: { id: string },
 ): Promise<WorkspaceDeliveryPolicy | undefined> {
-  const dynamic = await config?.workspaceDelivery?.resolve?.({
-    id: workspace.id,
-    plan: workspace.plan ?? null,
-  });
+  const dynamic = await config?.workspaceDelivery?.resolve?.({ id: workspace.id });
   if (dynamic !== undefined) return dynamicWorkspaceDeliveryPolicySchema.parse(dynamic);
   return resolveWorkspaceDeliveryPolicy(config, workspace.id);
 }
@@ -177,7 +174,7 @@ export async function resolveWorkspaceDeliveryPolicyById(
   config: { workspaceDelivery?: WorkspaceDeliveryPolicyConfig } | undefined,
   workspaceId: string,
 ): Promise<WorkspaceDeliveryPolicy | undefined> {
-  const [workspace] = await db.select({ id: workspaces.id, plan: workspaces.plan })
+  const [workspace] = await db.select({ id: workspaces.id })
     .from(workspaces).where(eq(workspaces.id, workspaceId));
   if (!workspace) throw new Error('Workspace delivery policy workspace not found');
   return resolveWorkspaceDeliveryPolicyFor(config, workspace);

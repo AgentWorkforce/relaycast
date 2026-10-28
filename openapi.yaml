@@ -7,31 +7,20 @@ info:
     All routes are prefixed with `/v1/`. Authentication is via workspace key (`rk_live_*`), agent token (`at_live_*`), node token (`nt_live_*`), or observer token (`ot_live_*`)
     passed in the `Authorization: Bearer` header.
 
-    Authenticated routes are throttled two ways, and the error code says which.
-    `rate_limit_exceeded` is the per-minute ceiling: it always clears inside the
-    window, so `Retry-After` is at most 60 and retrying works.
-    `plan_limit_exceeded` is the plan's API-call quota for the current billing
-    period, which resets only at the period boundary; `Retry-After` reports that
-    boundary and is normally far beyond any retry budget, so treat it as terminal
-    instead of retrying. Both carry `Retry-After` and `X-RateLimit-Reset`, and
-    successful responses carry `X-RateLimit-Limit`/`X-RateLimit-Remaining`.
+    Authenticated routes are throttled by a per-workspace, per-minute ceiling
+    (30,000 by default). `rate_limit_exceeded` always clears inside the window,
+    so `Retry-After` is at most 60 and retrying works. Successful responses
+    carry `X-RateLimit-Limit`/`X-RateLimit-Remaining`.
+
+    A hosting deployment may also refuse requests, message sends or new
+    registrations (nodes, agents, human members) through its own admission
+    policy (for example a usage quota or a device cap). Those errors carry the
+    deployment's own `code`, status and additive fields, and `Retry-After` only
+    when retrying can succeed. Idempotent replays of earlier sends still
+    succeed after a send is refused.
     `GET /workspace` is limited in its own bucket so the identity read used for
     credential validation and launch preflight stays reachable when the
     workspace's data-plane traffic is at its ceiling.
-
-    The deployment's entitlements provider may also cap how many devices
-    (nodes), agents and human members a workspace can register. Enrolling a NEW
-    node (`POST /nodes`) or registering a NEW agent (`POST /agents`,
-    `POST /a2a/register`) beyond the cap returns HTTP 429 `plan_limit_exceeded`
-    with the top-level fields `error_code`, `limit` (`devices`|`agents`|`humans`),
-    `max` and `current`, plus whatever context the provider supplies (the hosted
-    gateway adds `plan` and `upgrade_url`) so a client can explain the refusal
-    and offer an upgrade. An `agent.register` node-control frame at the cap is
-    answered on the WebSocket with an `error` frame carrying `code:
-    plan_limit_exceeded` and the same fields, not with an HTTP response.
-    Re-enrolling or rotating an existing node or agent is never capped. No
-    `Retry-After` is sent: the cap clears only when a registration is removed
-    or the provider raises the limit.
 
     Workspace delivery capacity applies to all local message producers. A write
     that would exceed it returns HTTP 429 with error code
@@ -171,10 +160,10 @@ components:
     Throttled:
       description: >-
         Throttled. `rate_limit_exceeded` is the per-minute ceiling and always
-        clears inside the window; `plan_limit_exceeded` is the billing-period
-        quota and only clears when the period rolls over. `Retry-After` is
-        authoritative for both — treat a value beyond your retry budget as
-        terminal rather than retrying it.
+        clears inside the window. A hosting deployment's admission policy may
+        refuse with its own code. When present, `Retry-After` is authoritative —
+        treat a value beyond your retry budget as terminal rather than retrying
+        it.
       headers:
         Retry-After:
           description: Seconds to wait before retrying.
@@ -196,60 +185,8 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
-    PlanLimitExceeded:
-      description: >-
-        The workspace is at its registration cap for the requested kind.
-        Only a NEW registration is refused; re-enrolling or rotating an existing
-        node or agent never is. The cap clears when a registration is removed or
-        the provider raises the limit, so no `Retry-After` is sent.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/PlanLimitExceededResponse'
 
   schemas:
-    PlanLimitExceededResponse:
-      type: object
-      required: [ok, error, error_code, limit, max, current]
-      description: >-
-        Beyond the required fields, the deployment's entitlements provider may
-        add context at the top level (for example `plan` and `upgrade_url` on
-        the hosted gateway); the engine passes it through verbatim.
-      additionalProperties: true
-      properties:
-        ok:
-          type: boolean
-          enum: [false]
-        error:
-          type: object
-          required: [code, message]
-          properties:
-            code:
-              type: string
-              enum: [plan_limit_exceeded]
-            message:
-              type: string
-        error_code:
-          type: string
-          enum: [plan_limit_exceeded]
-        limit:
-          type: string
-          enum: [devices, agents, humans]
-          description: Which registration cap refused the request.
-        max:
-          type: integer
-          description: The cap for `limit`.
-        current:
-          type: integer
-          description: How many are registered now.
-        plan:
-          type: string
-          description: Provider-supplied, optional. The hosted gateway reports the workspace's billing tier here.
-        upgrade_url:
-          type: string
-          format: uri
-          description: Provider-supplied, optional. Where the workspace can raise its limits.
-
     WorkspaceProvenanceInput:
       type: object
       description: >-
@@ -325,9 +262,6 @@ components:
         key:
           type: string
           description: Workspace API key (only returned on creation)
-        plan:
-          type: string
-          description: Host-assigned plan key stored on the workspace; opaque to the engine, which takes every limit from its entitlements provider.
         created_at:
           type: string
           format: date-time
@@ -2560,8 +2494,6 @@ paths:
           description: Malformed registration identity_key (invalid_agent_identity_key)
         '409':
           description: Agent name already exists in this workspace
-        '429':
-          $ref: '#/components/responses/PlanLimitExceeded'
 
     get:
       summary: List agents
@@ -2754,7 +2686,12 @@ paths:
       description: >-
         Update agent properties. Platform-managed metadata keys such as
         `identity_key` are rejected; use the dedicated legacy identity claim
-        endpoint for the one supported backfill operation.
+        endpoint for the one supported backfill operation. A `status` write
+        does not renew `last_seen`. The response `status` is derived presence,
+        and workspace WebSocket plus outbound webhook subscribers receive that
+        same value as `agent.status.<status>`. Persisted `active` or legacy
+        `online` older than the five-minute TTL is `offline`, so patching a
+        stale agent to `active` returns and emits `offline`.
       tags:
         - Agents
       security:
@@ -2771,6 +2708,15 @@ paths:
             schema:
               type: object
               properties:
+                status:
+                  type: string
+                  enum: [active, idle, blocked, waiting, offline, online]
+                  description: >-
+                    Requested lifecycle status. `online` is reported as
+                    `active` when `last_seen` is inside the five-minute TTL.
+                    The write does not renew `last_seen`; a stale `active` or
+                    `online` row is returned and broadcast as `offline`
+                    (`agent.status.offline`).
                 persona:
                   type: string
                 metadata:
@@ -4457,6 +4403,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: >-
+            The request does not authenticate as the agent. `error.code` is
+            `agent_token_invalid` for an unknown or rotated-out agent token,
+            `node_token_forbidden` or `observer_token_forbidden` for those token
+            kinds, `workspace_expired` past the workspace's `expires_at`, and
+            `unauthorized` otherwise: a missing header, a workspace key, or a
+            credential the auth provider resolves without an agent identity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /workspace/rotate-key:
     post:
@@ -5516,14 +5474,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid enrollment, or a `node_id` beginning with `node_direct_`, which is reserved for implicit direct nodes (`reserved_node_id`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '409':
           description: Node name conflict, or an existing node requires current-token proof
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-        '429':
-          $ref: '#/components/responses/PlanLimitExceeded'
     get:
       summary: List nodes
       description: >
@@ -5961,7 +5923,13 @@ paths:
   /triggers:
     post:
       summary: Create message trigger
-      description: Create a declarative message trigger that invokes an action when matched.
+      description: >-
+        Create a declarative message trigger that invokes an action when matched.
+        A message trigger cannot invoke the builtin `release` action. When
+        `action_name` is `release` and no registered action uses that name, the
+        match fails with `action_not_found` and does not release an agent. Builtin
+        `release` stays on `POST /v1/actions/{name}/invoke` and the
+        `/v1/agents/release` endpoints.
       tags:
         - Triggers
       security:
@@ -5992,7 +5960,9 @@ paths:
                     actions, then node actions with workspace-global aliases, then plain
                     node-scoped actions. A node-scoped match dispatches to its owning node.
                     Ties select one action deterministically by action ID; triggers do not
-                    fan out.
+                    fan out. The builtin `release` action is excluded: a trigger whose
+                    name is `release` and that does not match a registered action fails
+                    with `action_not_found` instead of releasing an agent.
                 enabled:
                   type: boolean
       responses:
@@ -6081,7 +6051,9 @@ paths:
                     actions, then node actions with workspace-global aliases, then plain
                     node-scoped actions. A node-scoped match dispatches to its owning node.
                     Ties select one action deterministically by action ID; triggers do not
-                    fan out.
+                    fan out. The builtin `release` action is excluded: a trigger whose
+                    name is `release` and that does not match a registered action fails
+                    with `action_not_found` instead of releasing an agent.
                 enabled:
                   type: boolean
       responses:
@@ -6652,7 +6624,7 @@ paths:
   /hooks/{webhookId}:
     post:
       summary: Trigger inbound webhook
-      description: Trigger a configured inbound webhook. Requires the per-webhook bearer token returned by `POST /webhooks`. Accepts either `{ message, author }` (SDK shape) or `{ text, source, payload }`; `message` maps to message text and `author` is used as the displayed sender without being copied into `source`.
+      description: Trigger a configured inbound webhook. Requires the per-webhook bearer token returned by `POST /webhooks`. Accepts either `{ message, author }` (SDK shape) or `{ text, source, payload }`; `message` maps to message text and `author` is used as the displayed sender without being copied into `source`. A JSON object with none of `text`, `message`, `source`, `author` or `payload` (including `{}`) is rendered as JSON in the message text, capped at 16,000 characters; its fields are not read as message metadata, so they never set `session_ref` or suppress message triggers.
       tags:
         - Webhooks
       security:
@@ -6843,8 +6815,6 @@ paths:
             application/json:
               schema:
                 type: object
-        '429':
-          $ref: '#/components/responses/PlanLimitExceeded'
 
   /a2a/agents:
     get:

@@ -1,5 +1,4 @@
 import { safeTelemetrySink } from './ports/telemetry.js';
-import { planLimitExceeded, planLimitExceededBody } from './engine/planCapacity.js';
 import { NoopTelemetrySink } from './providers/noop-telemetry.js';
 import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
@@ -57,7 +56,7 @@ import { routingRoutes } from './routes/routing.js';
  *
  * All infrastructure (database, realtime, presence, rate limiting, files,
  * key/value, outbound queue) and the open-core providers
- * (auth, entitlements, telemetry) are injected via {@link EngineDeps}. An
+ * (auth, admission, telemetry) are injected via {@link EngineDeps}. An
  * adapter supplies concrete implementations:
  *  - the Node in-process adapter for self-host (Node + SQLite), or
  *  - the Cloudflare Durable Object adapter for the hosted product (cloud repo).
@@ -77,7 +76,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     kv: deps.kv,
     webhookQueue: deps.webhookQueue,
     auth: deps.auth,
-    entitlements: deps.entitlements,
+    admission: deps.admission,
     telemetry: safeTelemetrySink(deps.telemetry ?? new NoopTelemetrySink()),
     config: deps.config ?? {},
   };
@@ -256,8 +255,6 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     if (error.code === 'invalid_json' || err instanceof SyntaxError) {
       return jsonMalformedBody(c);
     }
-    const refusal = planLimitExceeded(error);
-    if (refusal) return c.json(planLimitExceededBody(error, refusal), 429);
     const requestId = c.get('requestId');
     return c.json(
       {

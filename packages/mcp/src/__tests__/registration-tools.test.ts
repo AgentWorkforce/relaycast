@@ -43,7 +43,6 @@ describe('registration tools', () => {
               id: 'ws_info',
               name: workspaceName,
               system_prompt: null,
-              plan: 'free',
               created_at: new Date().toISOString(),
               metadata: {},
             },

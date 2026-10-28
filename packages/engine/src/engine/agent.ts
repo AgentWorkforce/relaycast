@@ -6,7 +6,7 @@ import { generateId } from './snowflake.js';
 import { invalidateChannelCache } from './cache.js';
 import { queryInChunks } from '../lib/queryChunks.js';
 import { codedError } from '../lib/httpError.js';
-import type { RegistrationCapacityGuard } from './planCapacity.js';
+import type { RegistrationAdmission } from './registrationAdmission.js';
 import { directNodeIdForAgent } from './node.js';
 import { addressNodeSelection, formatAgentAddress } from './address.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
@@ -217,8 +217,8 @@ export async function registerAgent(
     autoJoinGeneral?: boolean;
     recoveryProofHash?: string;
     workUnitId?: string;
-    /** Registration-cap guard, consulted only when `name` is NEW to the workspace. */
-    capacity?: RegistrationCapacityGuard;
+    /** Host admission, consulted only when `name` is NEW to the workspace. */
+    admitRegistration?: RegistrationAdmission;
   },
   /**
    * Internal. Set only by the verifier-reclaim retry below, so that retry can
@@ -245,15 +245,15 @@ export async function registerAgent(
       400,
     );
   }
-  if (data.capacity && !afterVerifierReclaim) {
-    // Only a NEW identity counts against the cap. An established name is
-    // answered by the unique-constraint conflict below — never by the cap —
-    // so a register-or-rotate client at its cap still reaches its rotation.
+  if (data.admitRegistration && !afterVerifierReclaim) {
+    // Only a NEW identity is admitted. An established name is answered by the
+    // unique-constraint conflict below — never by a denial — so a
+    // register-or-rotate client at a host cap still reaches its rotation.
     const [established] = await db
       .select({ id: agents.id })
       .from(agents)
       .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, data.name)));
-    if (!established) await data.capacity((data.type ?? 'agent') === 'human' ? 'humans' : 'agents');
+    if (!established) await data.admitRegistration((data.type ?? 'agent') === 'human' ? 'register_human' : 'register_agent');
   }
   const agentId = generateId();
   const directMachineId = data.directMachinePrefix ? `${data.directMachinePrefix}-${agentId}` : null;

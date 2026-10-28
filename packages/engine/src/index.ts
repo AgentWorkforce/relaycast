@@ -29,9 +29,11 @@ export type {
   AuthRequire,
   Workspace,
   Agent,
-  EntitlementsProvider,
-  Limits,
-  UsageMetric,
+  AdmissionAction,
+  AdmissionContext,
+  AdmissionDenial,
+  AdmissionHooks,
+  RegistrationAdmissionAction,
   TelemetrySink,
   TelemetryEvent,
 } from './ports/index.js';
@@ -41,31 +43,15 @@ export type {
 // must apply it per socket — the Cloudflare stream lives outside this package.
 export { observerAllowsEvent, type ObserverToken } from './engine/observerToken.js';
 
+// Registration admission a host wires into its own node-control transport so
+// `agent.register` frames are admitted like the HTTP registration routes.
+export {
+  createRegistrationAdmission,
+  type RegistrationAdmission,
+} from './engine/registrationAdmission.js';
+
 // OSS default providers (self-host). Cloud injects its own.
 export { SqliteApiKeyAuthProvider, hashToken } from './auth/index.js';
-export { StaticEntitlementsProvider } from './providers/static-entitlements.js';
-export { UNLIMITED_LIMITS, resolveLimits } from './ports/entitlements.js';
-// Registration caps (devices/agents/humans): the live counts a provider's
-// `getUsage` reports, the cap normalizer, and the guard a host wires into its
-// node-control transport so `agent.register` frames are capped like HTTP.
-export {
-  countRegistrations,
-  createRegistrationCapacityGuard,
-  planLimitExceeded,
-  registrationCap,
-  PLAN_LIMIT_EXCEEDED,
-  type PlanLimitExceededDetail,
-  type RegistrationCapacityGuard,
-} from './engine/planCapacity.js';
-// Usage-counter key contract. An `EntitlementsProvider` reads the counters the
-// engine writes, so it has to agree with the engine on the billing period the
-// key is scoped to — build the key with these rather than by hand.
-export {
-  getUsageMetric,
-  usageCounterKey,
-  usagePeriod,
-  usagePeriodResetAt,
-} from './engine/usage.js';
 export { NoopTelemetrySink } from './providers/noop-telemetry.js';
 export {
   isValidStandardWebhookSecret,

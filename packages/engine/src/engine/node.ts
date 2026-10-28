@@ -24,7 +24,8 @@ import type { getDb } from '../db/index.js';
 import { actionInvocations, agents, agentNodeBindings, channelMembers, channels, nodeProviders, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
-import { planLimitExceeded, type RegistrationCapacityGuard } from './planCapacity.js';
+import type { RegistrationAdmission } from './registrationAdmission.js';
+import { AdmissionDeniedError } from '../lib/admissionError.js';
 import { acceptTaskInvocation, completeTaskInvocation } from './taskInvocation.js';
 import { databaseConstraintKind, runAtomic, runAtomicWrites } from '../ports/database.js';
 import { retryD1Write } from '../lib/d1Retry.js';
@@ -90,10 +91,10 @@ export interface HandleNodeControlMessageArgs {
    */
   connectionId?: string;
   /**
-   * Registration-cap guard for `agent.register`. Absent when the host
-   * enforces no caps (or drives node control without entitlements).
+   * Host admission for `agent.register` (see `createRegistrationAdmission`).
+   * Absent when the host has no `admit` hook.
    */
-  capacity?: RegistrationCapacityGuard;
+  admitRegistration?: RegistrationAdmission;
   raw: string;
 }
 
@@ -448,8 +449,8 @@ export async function createNodeToken(
       idempotencyKeyHash: string;
       requestDigest: string;
     };
-    /** Registration-cap guard, consulted only when this enrolls a NEW device. */
-    capacity?: RegistrationCapacityGuard;
+    /** Host admission, consulted only when this enrolls a NEW device. */
+    admitRegistration?: RegistrationAdmission;
   } = {},
 ) {
   const token = authorization.rotationRecovery?.replacementToken ?? `nt_live_${randomHex(24)}`;
@@ -509,12 +510,12 @@ export async function createNodeToken(
   if (role === 'direct' && maxAgents !== 1) {
     throw codedError('Direct nodes can bind at most one agent', 'direct_node_capacity_exceeded', 400);
   }
-  // Only a NEW device counts against the cap. Rotating or re-enrolling an
-  // established row never does (its role may change, but it was counted when
-  // it was enrolled), and an agent's implicit direct node — minted on its
-  // behalf, never enrolled by a host — is its own WebSocket, not a device.
-  if (!existing && authorization.directAgentId === undefined && authorization.capacity) {
-    await authorization.capacity('devices');
+  // Only a NEW device is admitted. Rotating or re-enrolling an established
+  // row never is (its role may change, but it was admitted when it was
+  // enrolled), and an agent's implicit direct node — minted on its behalf,
+  // never enrolled by a host — is its own WebSocket, not a device.
+  if (!existing && authorization.directAgentId === undefined && authorization.admitRegistration) {
+    await authorization.admitRegistration('register_device');
   }
 
   if (existing) {
@@ -2148,18 +2149,18 @@ export async function registerAgentViaNode(
   nodeId: string,
   providerName: string,
   message: FleetAgentRegisterMessage,
-  options: { deliveryCursorSupported?: boolean; capacity?: RegistrationCapacityGuard } = {},
+  options: { deliveryCursorSupported?: boolean; admitRegistration?: RegistrationAdmission } = {},
 ): Promise<AgentRegisterReplyData> {
   assertRegistrableAgentName(message.name);
   const wantsAutoJoin = message.auto_join_general !== false;
-  if (options.capacity) {
-    // Only a NEW identity counts against the cap: an established name is
-    // answered by the conflict below, never by the cap.
+  if (options.admitRegistration) {
+    // Only a NEW identity is admitted: an established name is answered by the
+    // conflict below, never by a denial.
     const [established] = await db
       .select({ id: agents.id })
       .from(agents)
       .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, message.name)));
-    if (!established) await options.capacity('agents');
+    if (!established) await options.admitRegistration('register_agent');
   }
   const registered = await runAtomic(db, async (tx) => {
     // Every awaited statement is a separate D1 round-trip — and this path runs
@@ -3594,7 +3595,7 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           message,
           {
             deliveryCursorSupported: supportsProviderDeliveryReadiness(args.registry),
-            capacity: args.capacity,
+            admitRegistration: args.admitRegistration,
           },
         );
         // The relay broker's node_control client awaits a `reply` frame keyed by
@@ -3683,6 +3684,14 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           message.agents,
           args.completionDeps,
         );
+        // An agent the node had dropped and is routing again is a new hosting
+        // episode. Clear a presence-only disconnect so node liveness can count
+        // them without an HTTP heartbeat. An agent the snapshot already
+        // routed keeps the hold: still being listed is not recovery.
+        if (args.presence?.clearExplicitDisconnect && result.newlyRoutedAgentIds.length > 0) {
+          await Promise.all(result.newlyRoutedAgentIds.map((agentId) =>
+            args.presence!.clearExplicitDisconnect!(args.workspaceId, agentId)));
+        }
         const replySent = sendControl(args.socket, {
           v: 1,
           id: requestId(message),
@@ -3797,7 +3806,8 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
     }
   } catch (err) {
     const error = err as Error & { code?: string };
-    const code = error.code ?? 'node_control_failed';
+    const denial = err instanceof AdmissionDeniedError ? err.denial : null;
+    const code = denial?.code ?? error.code ?? 'node_control_failed';
     // The rejection reaches the client only as the error frame below. Log it so
     // it is not invisible server-side: a rejected node.register/node.heartbeat
     // (e.g. node_name_conflict, a UNIQUE violation) otherwise leaves a node
@@ -3811,19 +3821,16 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
       provider: frameProviderName,
       message: error.message,
     });
-    // A cap refusal carries the same machine-readable detail as the HTTP 429
-    // (`error_code`, `limit`, `max`, `current`) plus the host's context.
-    const refusal = planLimitExceeded(err);
+    // An admission denial carries the host's details, as on the HTTP error;
+    // the frame's own fields always win over them.
     sendControl(args.socket, {
-      // Host context first: the frame's own fields always win over it.
-      ...(refusal?.context ?? {}),
+      ...(denial?.details ?? {}),
       v: 1,
       id: requestId(message),
       type: 'error',
       ok: false,
       code,
       message: error.message,
-      ...(refusal ? { error_code: code, ...refusal.detail } : {}),
     });
   }
   });

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { admitMessage, assertMessageAdmitted } from '../middleware/admission.js';
 import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import { sha256Hex } from '../lib/crypto.js';
 import * as dmEngine from '../engine/dm.js';
@@ -44,6 +45,7 @@ dmRoutes.post(
   '/dm',
   requireAgentToken,
   rateLimit,
+  admitMessage,
   async (c) => {
     try {
       const db = c.get('db');
@@ -130,6 +132,7 @@ dmRoutes.post(
         ttlSecondsForResult: (result) => result._idempotency_ttl_seconds,
         kv: c.get('engine').kv,
         operation: async () => {
+          assertMessageAdmitted(c);
           const hasWebhookSubscriptions = await shouldEnqueueWebhookEvent(c, workspace.id, 'dm.received');
           return dmEngine.sendDm(db, workspace.id, agent!.id, {
             to,

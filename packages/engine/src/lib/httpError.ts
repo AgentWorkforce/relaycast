@@ -1,7 +1,8 @@
 import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { jsonError, jsonMalformedBody } from './httpResponse.js';
-import { planLimitExceeded, planLimitExceededBody } from '../engine/planCapacity.js';
+import { AdmissionDeniedError } from './admissionError.js';
+import { admissionDeniedResponse } from '../middleware/admission.js';
 
 /**
  * Errors thrown inside the engine optionally carry a stable error `code` and an
@@ -87,15 +88,12 @@ export function safeClientErrorMessage(
  * way. Only route handlers call this, so a throw always reaches `onError`.
  */
 export function errorResponse(c: Context, err: unknown) {
+  if (err instanceof AdmissionDeniedError) return admissionDeniedResponse(c, err.denial);
   const error = asCodedError(err);
   if (error.code === 'workspace_delivery_depth_exceeded') c.header('Retry-After', '30');
   if (err instanceof SyntaxError) {
     return jsonMalformedBody(c);
   }
-  // A registration-cap refusal carries machine-readable detail beyond the
-  // envelope (`error_code`, `limit`, `max`, `current`) plus the host's context.
-  const refusal = planLimitExceeded(error);
-  if (refusal) return c.json(planLimitExceededBody(error, refusal), 429);
   const status = effectiveHttpStatus(error);
   // Throw the normalized Error: Hono hands only `Error` instances to `onError`.
   if (!error.code && status >= 500) throw error;

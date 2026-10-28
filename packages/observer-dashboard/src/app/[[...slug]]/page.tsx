@@ -3,10 +3,9 @@ import { RelaySessionProvider } from '../../components/RelaySessionProvider';
 import { DashboardLayout } from '../../components/DashboardLayout';
 import { ConnectObserverLayout } from '../../components/ConnectObserverLayout';
 
-export const runtime = 'edge';
-
-export default function CatchAllPage({ params }: { params: { slug?: string[] } }) {
-  const connectObserver = params.slug?.[0] === 'connect';
+export default async function CatchAllPage({ params }: { params: Promise<{ slug?: string[] }> }) {
+  const { slug } = await params;
+  const connectObserver = slug?.[0] === 'connect';
   return (
     <Suspense
       fallback={

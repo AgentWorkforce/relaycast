@@ -26,7 +26,7 @@ import type { FileAttachment } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import { a2aAgents, agents } from '../db/schema.js';
 import { registerAgent, getAgentByName, updateAgent, updateAgentById } from './agent.js';
-import type { RegistrationCapacityGuard } from './planCapacity.js';
+import type { RegistrationAdmission } from './registrationAdmission.js';
 import { rotateAgentToken } from './tokenRotate.js';
 import { createAndRunCertification } from './certify.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
@@ -91,8 +91,8 @@ export interface RegisterA2aAgentInput {
   authCredential?: string;
   /** Remote skill/agent that DMs to this proxy should address. */
   targetAgent?: string;
-  /** Registration-cap guard, consulted only when a NEW proxy identity is provisioned. */
-  capacity?: RegistrationCapacityGuard;
+  /** Host admission, consulted only when a NEW proxy identity is provisioned. */
+  admitRegistration?: RegistrationAdmission;
 }
 
 export interface RegisterA2aAgentResult {
@@ -345,7 +345,7 @@ export async function registerA2aAgent(
   } else {
     const provisioned = await registerAgent(db, workspaceId, {
       name: relayName,
-      capacity: input.capacity,
+      admitRegistration: input.admitRegistration,
       type: 'external',
       persona: `External A2A agent proxy for ${agentCard.name}`,
       metadata: proxyMetadata,
