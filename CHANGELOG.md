@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
+
+### Added
+
+- Published `@relaycast/a2a` as the shared agent-card contract and added a unified, filterable A2A team directory for discovering and addressing native and registered agents.
 
 ### Fixed
 

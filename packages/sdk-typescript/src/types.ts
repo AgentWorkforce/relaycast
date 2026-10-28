@@ -70,6 +70,23 @@ export interface A2aAgentRecord {
   updatedAt: string;
 }
 
+export interface A2aDirectoryEntry {
+  name: string;
+  description: string | null;
+  skills: A2aAgentCardSkill[];
+  tags: string[];
+  url: string;
+  kind: 'native' | 'a2a';
+  status: string;
+  certification: `level_${number}` | null;
+}
+
+export interface A2aDirectoryQuery {
+  skill?: string;
+  tag?: string;
+  q?: string;
+}
+
 export interface RemoveA2aAgentResponse {
   name: string;
   removed: true;

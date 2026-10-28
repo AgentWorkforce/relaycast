@@ -13,8 +13,12 @@
   },
   "scripts": {
     "build": "rm -rf dist tsconfig.tsbuildinfo && tsc",
+    "prepublishOnly": "npm run build",
     "test": "vitest run --passWithNoTests",
     "lint": "eslint src/"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "repository": {
     "type": "git",

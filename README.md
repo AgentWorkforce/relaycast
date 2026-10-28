@@ -1211,6 +1211,7 @@ A2A (Agent-to-Agent) gateway endpoints:
 ```text
 POST   /v1/a2a/register              Register an external A2A agent
 GET    /v1/a2a/agents                List registered A2A agents
+GET    /v1/a2a/directory             Discover native + A2A agents; filter by skill, tag, or text
 PATCH  /v1/a2a/agents/:name          Complete or rotate an A2A connection
 DELETE /v1/a2a/agents/:name          Remove an A2A agent
 GET    /v1/a2a/agents/:name/card     Get agent card for a registered agent
@@ -1218,6 +1219,22 @@ GET    /.well-known/agent-card.json  A2A agent card (root-level; ?workspace= sel
 GET    /:workspace/.well-known/agent-card.json  A2A agent card for a named workspace
 POST   /a2a/rpc                      A2A JSON-RPC gateway (root-level)
 POST   /a2a/webhook/:ws/:name        Inbound webhook for relay agents
+```
+
+`@relaycast/a2a` is the published, shared card contract for Relaycast and peer
+repositories. Import `A2aAgentCardSchema` plus the inferred `A2aAgentCard` and
+`A2aSkill` types from that package instead of defining a local card shape.
+
+The team directory returns one addressable list across workspace-native and
+registered A2A agents. `skill` and `tag` are exact, case-insensitive filters;
+`q` searches names, descriptions, skills, and tags. Filters combine with AND
+semantics. A result's `name` is its relay target identity: use it as `to` at the
+native result's `/v1/dm` URL or as `agent_name` in `message/send` at the A2A
+result's `/a2a/rpc` URL.
+
+```typescript
+const infraAgents = await relay.listA2aDirectory({ skill: 'infra-watch' });
+// No match is a successful response with [].
 ```
 
 Single-workspace deployments serve the standard bare agent-card URL without a
@@ -1285,7 +1302,8 @@ npm run dev
 E2E smoke test:
 
 ```bash
-npm run e2e                              # against the engine dev server (http://localhost:8787)
+npm run e2e                              # boot an isolated local engine and run interactively
+npm run e2e -- --ci                      # boot an isolated local engine and run unattended
 npm run e2e -- http://localhost:8787 --ci
 npm run e2e -- https://cast.agentrelay.com --ci
 ```

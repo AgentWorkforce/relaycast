@@ -31,6 +31,7 @@ import {
   jsonNotFound,
   jsonOk,
   parseJsonBody,
+  parseQueryParams,
 } from '../lib/httpResponse.js';
 
 export const a2aRoutes = new Hono<AppEnv>();
@@ -140,6 +141,11 @@ const updateA2aConnectionSchema = z.object({
 );
 
 const rpcRequestSchema = a2aEngine.JsonRpcRequestSchema;
+const directoryQuerySchema = z.object({
+  skill: z.string().optional(),
+  tag: z.string().optional(),
+  q: z.string().optional(),
+});
 
 function jsonRpcHttpStatus(response: a2aEngine.A2aJsonRpcResponse): number {
   return response.error ? 400 : 200;
@@ -329,6 +335,26 @@ a2aRoutes.get('/v1/a2a/agents', requireAuth, rateLimit, async (c) => {
   try {
     const agentsList = await a2aEngine.listA2aAgents(c.get('db'), c.get('workspace').id);
     return jsonOk(c, agentsList);
+  } catch (err: unknown) {
+    return codedJsonError(c, err);
+  }
+});
+
+// GET /v1/a2a/directory
+a2aRoutes.get('/v1/a2a/directory', requireAuth, rateLimit, async (c) => {
+  try {
+    const parsed = parseQueryParams(c, directoryQuerySchema, 'Invalid A2A directory query');
+    if (!parsed.ok) {
+      return parsed.response;
+    }
+
+    const entries = await a2aEngine.listA2aDirectory(
+      c.get('db'),
+      c.get('workspace').id,
+      new URL(c.req.url).origin,
+      parsed.data,
+    );
+    return jsonOk(c, entries);
   } catch (err: unknown) {
     return codedJsonError(c, err);
   }

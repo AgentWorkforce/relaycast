@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
+
+### Added
+
+- Added `GET /v1/a2a/directory` to discover native and registered A2A agents together, filter them by skill, tag, or text, and use the returned relay identity for one-hop engagement.
 
 ### Fixed
 
