@@ -26,7 +26,8 @@ export interface PresenceTracker {
   /**
    * Forget an explicit disconnect so node liveness can count the agent again.
    * {@link heartbeat} does this itself. Called when a node newly routes an
-   * agent that had left, which is the node-side recovery of a presence hold.
+   * agent that had left, and when `agent.recover` restores one, including a
+   * presence-only disconnect whose binding was still active.
    */
   clearExplicitDisconnect?(workspaceId: string, agentId: string): Promise<void>;
 }

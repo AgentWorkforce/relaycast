@@ -1,0 +1,55 @@
+{
+  "id": "compact_k9rd961zkf9r",
+  "version": 1,
+  "type": "compacted",
+  "compactedAt": "2026-10-28T14:34:28.928Z",
+  "sourceTrajectories": [
+    "traj_72s6kvlv8x4m"
+  ],
+  "dateRange": {
+    "start": "2026-10-28T14:29:33.678Z",
+    "end": "2026-10-28T14:34:27.449Z"
+  },
+  "summary": {
+    "totalDecisions": 1,
+    "totalEvents": 1,
+    "uniqueAgents": [
+      "default"
+    ]
+  },
+  "decisionGroups": [
+    {
+      "category": "database",
+      "decisions": [
+        {
+          "question": "Merge current main and preserve disconnect cleanup query membership",
+          "chosen": "Merge current main and preserve disconnect cleanup query membership",
+          "reasoning": "Seven open threads already have verified fixes; the remaining presence race requires cleanup to remove only identities included in the completed lookup.",
+          "fromTrajectory": "traj_72s6kvlv8x4m"
+        }
+      ]
+    }
+  ],
+  "keyLearnings": [],
+  "keyFindings": [],
+  "filesAffected": [
+    "CHANGELOG.md",
+    "packages/engine/CHANGELOG.md",
+    "packages/engine/src/__tests__/conformance/engineDiagnostics.test.ts",
+    "packages/engine/src/engine.ts",
+    "packages/engine/src/engine/action.ts",
+    "packages/engine/src/engine/delivery.ts",
+    "packages/engine/src/engine/inbox.ts",
+    "packages/engine/src/engine/workspace.ts",
+    "packages/engine/src/index.ts",
+    "packages/engine/src/lib/__tests__/engineDiagnostics.test.ts",
+    "packages/engine/src/lib/engineDiagnostics.ts",
+    "packages/engine/src/lib/httpError.ts",
+    "packages/engine/src/ports/diagnostics.ts",
+    "packages/engine/src/ports/index.ts"
+  ],
+  "commits": [
+    "71581d91",
+    "7b4f9ad2"
+  ]
+}

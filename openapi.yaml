@@ -7,13 +7,19 @@ info:
     All routes are prefixed with `/v1/`. Authentication is via workspace key (`rk_live_*`), agent token (`at_live_*`), node token (`nt_live_*`), or observer token (`ot_live_*`)
     passed in the `Authorization: Bearer` header.
 
-    Authenticated routes are throttled by a per-workspace, per-minute ceiling
-    (30,000 by default). `rate_limit_exceeded` always clears inside the window,
-    so `Retry-After` is at most 60 and retrying works. Successful responses
-    carry `X-RateLimit-Limit`/`X-RateLimit-Remaining`.
+    Authenticated routes are throttled per workspace, per route bucket, per
+    minute. The default bucket limit is 30,000 (`rateLimitPerMinute`). Routes
+    without their own bucket share `global`, and some routes use a lower
+    limit. A workspace can therefore exceed 30,000 requests in one minute
+    across buckets, while a route such as `POST /dm` can be limited below
+    30,000. `rate_limit_exceeded` always clears inside the window, so
+    `Retry-After` is at most 60 and retrying works. Successful responses
+    carry `X-RateLimit-Limit`/`X-RateLimit-Remaining` for the bucket that
+    served the request.
 
-    A hosting deployment may also refuse requests or message sends through its
-    own admission policy (for example a usage quota). Those errors carry the
+    A hosting deployment may also refuse requests, message sends or new
+    registrations (nodes, agents, human members) through its own admission
+    policy (for example a usage quota or a device cap). Those errors carry the
     deployment's own `code`, status and additive fields, and `Retry-After` only
     when retrying can succeed. Idempotent replays of earlier sends still
     succeed after a send is refused.
@@ -5475,6 +5481,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid enrollment, or a `node_id` beginning with `node_direct_`, which is reserved for implicit direct nodes (`reserved_node_id`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '409':
           description: Node name conflict, or an existing node requires current-token proof
           content:

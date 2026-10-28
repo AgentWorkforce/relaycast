@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { agentNodeBindings, agents, nodeProviders, nodes } from '../../db/schema.js';
 import { handleProviderDisconnect, registerAgentViaNode } from '../../engine/node.js';
@@ -400,6 +400,109 @@ describe('node-hosted presence', () => {
     expect(broker.sock.ofType('reply').find((frame) => frame.id === 'inventory-restored')).toMatchObject({ ok: true });
     expect((await presenceByName(ws.workspaceKey)).get('worker')).toBe('online');
     expect(await stack.runtime.presence.getOnline(ws.workspaceId)).not.toContain(worker.agent_id);
+  });
+
+  it('drops disconnect holds whose agent or workspace no longer exists', async () => {
+    const ws = await createWorkspace(stack.app, 'node-hosted-presence-evict');
+    await enrollBroker(ws.workspaceKey, 'node_evict', 'evict-broker');
+    await attachProvider(ws.workspaceId, 'node_evict', 'evict-broker', 'broker');
+    const worker = await registerAgentViaNode(stack.runtime.deps.db, ws.workspaceId, 'node_evict', 'broker', {
+      v: 1, type: 'agent.register', name: 'worker', auto_join_general: false,
+    });
+    await stack.runtime.presence.disconnect(ws.workspaceId, worker.agent_id);
+    await stack.runtime.presence.disconnect(ws.workspaceId, 'agent_deleted');
+    await stack.runtime.presence.disconnect('ws_deleted', 'agent_left');
+
+    await stack.runtime.presence.sweep();
+
+    const held = await stack.runtime.presence.explicitlyDisconnected?.(ws.workspaceId);
+    expect(held).toContain(worker.agent_id);
+    expect(held).not.toContain('agent_deleted');
+    expect(await stack.runtime.presence.explicitlyDisconnected?.('ws_deleted')).toEqual([]);
+  });
+
+  it.each([
+    { label: 'a new disconnect during the agent lookup', replace: false, lookup: 2 },
+    { label: 'a replacement disconnect during the agent lookup', replace: true, lookup: 2 },
+    { label: 'a replacement disconnect during the workspace lookup', replace: true, lookup: 1 },
+  ])('preserves $label', async ({ replace, lookup }) => {
+    const ws = await createWorkspace(stack.app, 'node-hosted-presence-sweep-race');
+    await enrollBroker(ws.workspaceKey, 'node_race', 'race-broker');
+    await attachProvider(ws.workspaceId, 'node_race', 'race-broker', 'broker');
+    const first = await registerAgentViaNode(stack.runtime.deps.db, ws.workspaceId, 'node_race', 'broker', {
+      v: 1, type: 'agent.register', name: 'first', auto_join_general: false,
+    });
+    const second = await registerAgentViaNode(stack.runtime.deps.db, ws.workspaceId, 'node_race', 'broker', {
+      v: 1, type: 'agent.register', name: 'second', auto_join_general: false,
+    });
+    await stack.settle();
+    await stack.runtime.presence.disconnect(ws.workspaceId, first.agent_id);
+    if (!replace) await stack.runtime.presence.disconnect(ws.workspaceId, 'agent_deleted');
+    expect((await presenceByName(ws.workspaceKey)).get('second')).toBe('online');
+
+    const db = stack.runtime.deps.db;
+    const select = db.select.bind(db);
+    let reads = 0;
+    let disconnected = false;
+    // Run the real lookup, then change holds before the sweep resumes. A
+    // heartbeat of the last held agent removes the original workspace set.
+    const wrap = (query: object): object => new Proxy(query, {
+      get(object, key) {
+        const value = Reflect.get(object, key, object);
+        if (key === 'then') return (resolve: (rows: unknown) => unknown, reject: (error: unknown) => unknown) =>
+          Promise.resolve(object).then(async rows => {
+            if (replace) await stack.runtime.presence.heartbeat(ws.workspaceId, first.agent_id, first.name);
+            await stack.runtime.presence.disconnect(ws.workspaceId, second.agent_id);
+            disconnected = true;
+            return rows;
+          }).then(resolve, reject);
+        return typeof value === 'function' ? (...args: unknown[]) => wrap(value.apply(object, args)) : value;
+      },
+    });
+    const hook = vi.spyOn(db, 'select').mockImplementation(((...args: Parameters<typeof select>) => {
+      const query = select(...args);
+      return ++reads === lookup ? wrap(query) : query;
+    }) as typeof db.select);
+    try {
+      await stack.runtime.presence.sweep();
+    } finally { hook.mockRestore(); }
+
+    expect(disconnected).toBe(true);
+    expect(await stack.runtime.presence.explicitlyDisconnected?.(ws.workspaceId))
+      .toEqual(replace ? [second.agent_id] : expect.arrayContaining([first.agent_id, second.agent_id]));
+    expect(await stack.runtime.presence.explicitlyDisconnected?.(ws.workspaceId)).not.toContain('agent_deleted');
+    const after = await presenceByName(ws.workspaceKey);
+    expect(after.get('first')).toBe(replace ? 'online' : 'offline');
+    expect(after.get('second')).toBe('offline');
+  });
+
+  it('clears a presence-only disconnect when the node recovers the agent', async () => {
+    const ws = await createWorkspace(stack.app, 'node-hosted-presence-recover');
+    await enrollBroker(ws.workspaceKey, 'node_recover', 'recover-broker');
+    const broker = await attachProvider(ws.workspaceId, 'node_recover', 'recover-broker', 'broker');
+    const worker = await registerAgentViaNode(stack.runtime.deps.db, ws.workspaceId, 'node_recover', 'broker', {
+      v: 1, type: 'agent.register', name: 'worker', auto_join_general: false,
+    });
+    expect((await presenceByName(ws.workspaceKey)).get('worker')).toBe('online');
+
+    const disconnect = await stack.app.request('/v1/agents/disconnect', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${worker.token}` },
+    });
+    expect(disconnect.status).toBe(200);
+    expect((await presenceByName(ws.workspaceKey)).get('worker')).toBe('offline');
+    expect(await stack.runtime.presence.explicitlyDisconnected?.(ws.workspaceId)).toContain(worker.agent_id);
+
+    await broker.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'recover-worker',
+      type: 'agent.recover',
+      name: worker.name,
+      expected_agent_id: worker.agent_id,
+    }));
+    expect(broker.sock.ofType('reply').find((frame) => frame.id === 'recover-worker')).toMatchObject({ ok: true });
+    expect(await stack.runtime.presence.explicitlyDisconnected?.(ws.workspaceId)).not.toContain(worker.agent_id);
+    expect((await presenceByName(ws.workspaceKey)).get('worker')).toBe('online');
   });
 
   it('counts an implicit direct node from node liveness when it has no provider row', async () => {

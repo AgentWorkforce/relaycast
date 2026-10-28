@@ -6,10 +6,12 @@ import { generateId } from './snowflake.js';
 import { invalidateChannelCache } from './cache.js';
 import { queryInChunks } from '../lib/queryChunks.js';
 import { codedError } from '../lib/httpError.js';
+import type { RegistrationAdmission } from './registrationAdmission.js';
 import { directNodeIdForAgent } from './node.js';
 import { addressNodeSelection, formatAgentAddress } from './address.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { AGENT_RECOVERY_PROOF_HASH_PATTERN } from '@relaycast/types';
+import { WEBHOOK_AGENT_NAME } from './messageMetadata.js';
 
 export { AGENT_RECOVERY_PROOF_HASH_PATTERN } from '@relaycast/types';
 
@@ -138,12 +140,22 @@ export function releasedAgentName(name: string, agentId: string): string {
 }
 
 /**
- * Reject names that would land in the reserved tombstone namespace.
+ * Reject names the engine reserves for itself.
  *
- * Called on every registration path. Without it the release path is not
- * atomic-safe: see {@link releasedAgentName}.
+ * Called on every registration path. The tombstone namespace keeps the release
+ * path atomic-safe (see {@link releasedAgentName}). {@link WEBHOOK_AGENT_NAME}
+ * is the engine-provisioned inbound-webhook identity: only `createWebhook`
+ * creates it, which is what lets registration admission leave it out of the
+ * `register_agent` count.
  */
 export function assertRegistrableAgentName(name: string): void {
+  if (name === WEBHOOK_AGENT_NAME) {
+    throw codedError(
+      `Agent name "${name}" is reserved for the inbound webhook identity`,
+      'invalid_agent_name',
+      400,
+    );
+  }
   if (name.includes(RELEASED_NAME_MARKER)) {
     throw codedError(
       `Agent name "${name}" is reserved: "${RELEASED_NAME_MARKER}" marks a released agent`,
@@ -216,6 +228,8 @@ export async function registerAgent(
     autoJoinGeneral?: boolean;
     recoveryProofHash?: string;
     workUnitId?: string;
+    /** Host admission, consulted only when `name` is NEW to the workspace. */
+    admitRegistration?: RegistrationAdmission;
   },
   /**
    * Internal. Set only by the verifier-reclaim retry below, so that retry can
@@ -241,6 +255,16 @@ export async function registerAgent(
       'invalid_agent_recovery_proof_hash',
       400,
     );
+  }
+  if (data.admitRegistration && !afterVerifierReclaim) {
+    // Only a NEW identity is admitted. An established name is answered by the
+    // unique-constraint conflict below — never by a denial — so a
+    // register-or-rotate client at a host cap still reaches its rotation.
+    const [established] = await db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, data.name)));
+    if (!established) await data.admitRegistration((data.type ?? 'agent') === 'human' ? 'register_human' : 'register_agent');
   }
   const agentId = generateId();
   const directMachineId = data.directMachinePrefix ? `${data.directMachinePrefix}-${agentId}` : null;

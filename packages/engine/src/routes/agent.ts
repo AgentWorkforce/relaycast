@@ -12,6 +12,7 @@ import {
 } from '../auth/workspaceExpiry.js';
 import { getWorkspaceExpiry } from '../engine/workspace.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { registrationAdmission } from '../middleware/admission.js';
 import * as agentEngine from '../engine/agent.js';
 import { agentRetentionSchema, retainAgents } from '../engine/agentRetention.js';
 import * as agentIdentityEngine from '../engine/agentIdentity.js';
@@ -314,6 +315,7 @@ agentRoutes.post(
         autoJoinGeneral,
         recoveryProofHash,
         workUnitId,
+        admitRegistration: registrationAdmission(c),
       });
       if (skills?.length) {
         await directoryEngine.syncSourceAgentDirectoryEntry(db, workspace.id, {

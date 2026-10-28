@@ -7,12 +7,15 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
+
+### Added
+
+- `on.agentExited` on `AgentClient` and `RelayCast`, and `on.nodeOnline` / `on.nodeOffline` on `RelayCast`, with camelCase `AgentExitedEvent`, `NodeStatusOnlineEvent`, and `NodeStatusOfflineEvent` types. `AgentClient` does not receive node liveness events.
 
 ### Fixed
 
 - `agent.on.*` no longer throws when registered before `connect()`; handlers attach immediately and fire once the socket opens.
-- `agent.exited`, `node.status.online`, and `node.status.offline` have camelCase SDK types (`AgentExitedEvent`, `NodeStatusOnlineEvent`, `NodeStatusOfflineEvent`). `on.agentExited` is on `AgentClient` and `RelayCast`. `on.nodeOnline` and `on.nodeOffline` are on `RelayCast` only: the engine publishes node liveness to the workspace stream and webhooks, and `AgentClient`'s `/v1/node/ws` socket never receives it. Previously these events had no SDK type, so consumers reached for the snake_case raw type from `@relaycast/types` and read `undefined` off the camelized payload.
 
 ## [10.6.1] - 2026-10-18
 

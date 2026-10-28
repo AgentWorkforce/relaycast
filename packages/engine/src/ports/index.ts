@@ -46,6 +46,7 @@ export type {
   AdmissionContext,
   AdmissionDenial,
   AdmissionHooks,
+  RegistrationAdmissionAction,
 } from './admission.js';
 export { ENGINE_OBSERVATION_FACTS } from './telemetry.js';
 export type { TelemetrySink, TelemetryEvent, EngineObservation, EngineObservationKind, EngineObservationFacts } from './telemetry.js';

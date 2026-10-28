@@ -75,6 +75,24 @@ export interface AgentActionProviderAuthorization {
   handlerAgentId: string;
   /** False when a queued attempt was already counted before this delivery. */
   recordAttempt: boolean;
+  /** Queue the claim as pending. Absent means a live dispatched attempt. */
+  pending?: boolean;
+  /**
+   * Deadline to store. An unset deadline stays unset when this claim changes
+   * the attempt count or the status, so a queued row stays due for drain.
+   */
+  retryAfterAt?: Date | null;
+  /**
+   * Status the caller observed. A timeout or `handler_unavailable` retry passes
+   * `dispatched` or `invoked`. Absent means a fresh `pending` row.
+   */
+  claimStatus?: 'pending' | 'dispatched' | 'invoked';
+  /** `retry_after_at` the caller observed. Absent means it was unset. */
+  observedRetryAfterAt?: Date | null;
+  /** `dispatch_attempts` the caller observed. Absent means zero. */
+  observedDispatchAttempts?: number;
+  /** Stamp `spawn_reserved_at` when this caller holds a capacity reservation. */
+  reservationHeld?: boolean;
   /** Optional lost-node retry generation; the socket owner must CAS it. */
   expectedNodeLivenessRevision?: number;
 }

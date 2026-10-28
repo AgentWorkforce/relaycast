@@ -4,7 +4,9 @@ import { createMiddleware } from 'hono/factory';
 import type { AppEnv } from '../env.js';
 import type { AdmissionAction, AdmissionDenial } from '../ports/admission.js';
 import type { Workspace } from '../ports/auth.js';
+import { createRegistrationAdmission, type RegistrationAdmission } from '../engine/registrationAdmission.js';
 import { AdmissionDeniedError } from '../lib/admissionError.js';
+import { getRequestLogger, toErrorDetails } from '../lib/logger.js';
 import { setRetryContract } from '../lib/throttle.js';
 import { runInBackground } from '../routes/background.js';
 
@@ -21,7 +23,11 @@ export async function resolveAdmission(
   if (!admission?.admit) return null;
   try {
     return (await admission.admit({ workspace, action })) ?? null;
-  } catch {
+  } catch (error) {
+    getRequestLogger(c, 'admission').warn('admission hook failed; admitting request', {
+      action,
+      ...toErrorDetails(error),
+    });
     return null;
   }
 }
@@ -91,4 +97,17 @@ export const admitMessage = createMiddleware<AppEnv>(async (c, next) => {
 export function assertMessageAdmitted(c: Context<AppEnv>): void {
   const denial = c.get('messageAdmissionDenial');
   if (denial) throw new AdmissionDeniedError(denial);
+}
+
+/**
+ * The registration admission for the authenticated workspace, or `undefined`
+ * when the host has no `admit` hook. Pass it to the node and agent
+ * registration paths, which consult it only for a NEW registration.
+ */
+export function registrationAdmission(c: Context<AppEnv>): RegistrationAdmission | undefined {
+  return createRegistrationAdmission({
+    db: c.get('db'),
+    admission: c.get('engine').admission,
+    workspace: c.get('workspace'),
+  });
 }

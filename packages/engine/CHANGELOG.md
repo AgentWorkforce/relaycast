@@ -11,18 +11,25 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- Registration admission: `AdmissionAction` gains `register_device`, `register_agent` and `register_human`, and `AdmissionContext.registered` carries how many of that kind the workspace has registered before this one. The engine admits at every path that creates a node or agent — `POST /v1/nodes` (any host-enrolled node), `POST /v1/agents` (`type: human` is `register_human`), a new `POST /v1/a2a/register` proxy and the `agent.register` node frame. A denial renders like any admission denial, and the node `error` frame carries the denial's `code` and `details`. An established node id or agent name is answered by its usual conflict or rotation, never by admission; an agent's implicit direct node is not a device, and the engine-provisioned inbound-webhook identity (`__relay_webhook__`) is not an agent. Registrations are not reported to `committed`.
+- `createRegistrationAdmission` builds the same check for a host's own node-control transport (`HandleNodeControlMessageArgs.admitRegistration`).
 - `DELETE /v1/nodes/:name` deletes a node by id (exact id first) or name, returning `{ id, name, deleted, cascaded_actions }`. It refuses an online node (`node_online`) or one hosting actions (`node_has_actions`) unless `force=true`, and returns `node_delete_conflict` when a heartbeat or action registration lands mid-delete.
 
 ### Changed
 
+- Node ids beginning with `node_direct_` are reserved for implicit direct nodes: enrolling one is `400 reserved_node_id`.
+- The agent name `__relay_webhook__` is reserved for the inbound-webhook identity: registering it is `400 invalid_agent_name`.
 - Deleting a large workspace (over 2,000 bulk rows) no longer runs as one cascading transaction. It stops authenticating at once (`workspace_expired`), and its rows are drained in bounded, paced statements (`reapWorkspace`, the expired-workspace reaper). Small workspaces keep the atomic delete. `deleteWorkspace` now returns `{ deferred }`, and the background reap after workspace creation is capped at 250 ms.
 - Inbound webhooks (`POST /v1/hooks/:webhookId`) of an expired or deleted workspace now return `404` instead of accepting messages.
 - A node socket opened before its workspace expired or was deleted can no longer write into it: every control frame except those that settle work already in flight (`action.accept`, `action.result`, `delivery.ack`) or tear identity down (`node.deregister`, `agent.deregister`) now gets a `workspace_expired` error. This costs each forwarded heartbeat one primary-key read.
 
 ### Fixed
 
+- A stale spawn retry releases its original node slot after a failed drain send.
+- Agents stay offline if they disconnect while presence cleanup is running, including after another agent heartbeats.
 - A message trigger cannot invoke builtin `release`.
-- `GET /v1/agents/presence` counts a node-hosted agent as online while its node and that agent's own provider are live, including agents that make no HTTP calls. Agents of a disconnected provider, agents a live node omits from its inventory, and agents that called `POST /v1/agents/disconnect` without deregistering stay offline.
+- Overlapping dispatch of a spawn or agent-hosted action sends one frame and keeps one capacity reservation. A timeout retry, a send that fails before the frame is accepted, a claim write that fails before the frame is sent, a drain that observed a hold a retry already released, and a restore that fails while the reservation marker is still set all stay on that one reservation.
+- `GET /v1/agents/presence` counts a node-hosted agent as online while its node and that agent's own provider are live, including agents that make no HTTP calls. Agents of a disconnected provider, agents a live node omits from its inventory, and agents that called `POST /v1/agents/disconnect` without deregistering stay offline until a heartbeat, a new inventory route, or `agent.recover`. A deleted agent or workspace drops that hold.
 - A status patch broadcasts the same derived presence the response returns.
 
 ## [12.0.0] - 2026-10-27

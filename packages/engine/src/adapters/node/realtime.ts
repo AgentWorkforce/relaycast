@@ -11,6 +11,7 @@ import type {
 import type { PresenceTracker } from '../../ports/presence.js';
 import type { ObserverToken } from '../../ports/auth.js';
 import { and, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
+import { exclusiveClaimWrite, retryAfterAtMatches } from '../../engine/invocationClaim.js';
 import type { EngineDb } from '../../ports/database.js';
 import {
   actions,
@@ -26,6 +27,8 @@ import { providerAttachDecision } from '../../engine/placement.js';
 import { drainNodeInvocations } from '../../engine/action.js';
 import { observerAllowsEvent } from '../../engine/observerToken.js';
 import type { InvocationCompletionDeps } from '../../engine/invocationCompletion.js';
+import type { AdmissionHooks } from '../../ports/admission.js';
+import { createRegistrationAdmission } from '../../engine/registrationAdmission.js';
 import type { FleetRelaycastToBrokerMessage } from '@relaycast/types';
 
 /**
@@ -108,6 +111,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
   /** Serializes drains per node so concurrent triggers never overlap. */
   private readonly nodeDrainChains = new Map<string, Promise<void>>();
   private nodeCompletionDeps: InvocationCompletionDeps | undefined;
+  private admission: AdmissionHooks | undefined;
   private connectionSeq = 0;
 
   constructor(private readonly db: EngineDb) {}
@@ -121,6 +125,11 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
 
   setNodeCompletionDeps(deps: InvocationCompletionDeps): void {
     this.nodeCompletionDeps = deps;
+  }
+
+  /** Admit `agent.register` frames through the host's admission hooks. */
+  setAdmission(admission: AdmissionHooks | undefined): void {
+    this.admission = admission;
   }
 
   private nodeKey(workspaceId: string, nodeId: string): string {
@@ -433,22 +442,41 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       return false;
     }
     // The socket owner commits the exact action generation, delivery route,
-    // and accepted attempt in one CAS before handing off the frame. Deleting
+    // and accepted attempt in one CAS before handing off the frame. The claim
+    // matches the observed status, deadline, and attempt count, so a
+    // dispatched timeout retry can win and a second scheduler cannot. Deleting
     // the action immediately after this point may clear action_id via the FK,
     // but cannot make cleanup fail or reroute work that the handler owns.
+    const claimStatus = authorization.claimStatus ?? 'pending';
+    const observedRetryAfterAt = authorization.observedRetryAfterAt ?? null;
+    const observedDispatchAttempts = authorization.observedDispatchAttempts ?? 0;
+    const pendingClaim = authorization.pending === true;
+    const claimWrite = exclusiveClaimWrite({
+      observedStatus: claimStatus,
+      observedRetryAfterAt,
+      observedDispatchAttempts,
+      nextStatus: pendingClaim ? 'pending' : 'dispatched',
+      nextRetryAfterAt: authorization.retryAfterAt ?? null,
+      incrementAttempts: authorization.recordAttempt,
+    });
     const acceptedAttempt = authorization.recordAttempt
       ? sql`COALESCE(${actionInvocations.dispatchAttempts}, 0) + 1`
       : actionInvocations.dispatchAttempts;
     const [accepted] = await this.db
       .update(actionInvocations)
       .set({
-        status: 'dispatched',
+        ...(pendingClaim
+          ? { status: 'pending' as const, dispatchedAt: null, retryAfterAt: claimWrite.retryAfterAt }
+          : {
+            status: 'dispatched' as const,
+            dispatchedAt: new Date(),
+            retryAfterAt: claimWrite.retryAfterAt,
+          }),
         handlerNodeId: sql`COALESCE(${actionInvocations.handlerNodeId}, ${nodeId})`,
         dispatchedNodeId: nodeId,
         dispatchedProvider: providerName,
-        dispatchedAt: new Date(),
-        retryAfterAt: null,
         providerAcceptedAttempt: acceptedAttempt,
+        spawnReservedAt: authorization.reservationHeld ? new Date() : null,
         ...(authorization.recordAttempt ? {
           attemptedNodeIds: sql`json_insert(COALESCE(${actionInvocations.attemptedNodeIds}, '[]'), '$[#]', ${nodeId})`,
           dispatchAttempts: acceptedAttempt,
@@ -460,7 +488,9 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
         eq(actionInvocations.invocationOrigin, 'registered_action'),
         eq(actionInvocations.actionId, authorization.actionId),
         eq(actionInvocations.actionName, message.action),
-        inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked']),
+        eq(actionInvocations.status, claimStatus),
+        retryAfterAtMatches(observedRetryAfterAt),
+        eq(actionInvocations.dispatchAttempts, observedDispatchAttempts),
         eq(actionInvocations.handlerAgentId, authorization.handlerAgentId),
         eq(actionInvocations.handlerNodeId, nodeId),
         ...(authorization.expectedNodeLivenessRevision !== undefined
@@ -844,6 +874,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
           nodeId,
           socket,
           connectionId,
+          admitRegistration: createRegistrationAdmission({ db: this.db, admission: this.admission, workspace: workspaceId }),
           raw,
         });
       },

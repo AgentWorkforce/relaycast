@@ -33,6 +33,7 @@ export type {
   AdmissionContext,
   AdmissionDenial,
   AdmissionHooks,
+  RegistrationAdmissionAction,
   TelemetrySink,
   TelemetryEvent,
 } from './ports/index.js';
@@ -41,6 +42,13 @@ export type {
 // workspace stream. A realtime adapter that fans events out to observer sockets
 // must apply it per socket — the Cloudflare stream lives outside this package.
 export { observerAllowsEvent, type ObserverToken } from './engine/observerToken.js';
+
+// Registration admission a host wires into its own node-control transport so
+// `agent.register` frames are admitted like the HTTP registration routes.
+export {
+  createRegistrationAdmission,
+  type RegistrationAdmission,
+} from './engine/registrationAdmission.js';
 
 // OSS default providers (self-host). Cloud injects its own.
 export { SqliteApiKeyAuthProvider, hashToken } from './auth/index.js';
