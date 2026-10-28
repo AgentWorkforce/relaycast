@@ -5,9 +5,14 @@ metadata:
   name: {{ include "relaycast.claimName" . }}
   labels:
     {{- include "relaycast.labels" . | nindent 4 }}
-  {{- with .Values.persistence.annotations }}
+  {{- if or .Values.persistence.retainOnUninstall .Values.persistence.annotations }}
   annotations:
+    {{- if .Values.persistence.retainOnUninstall }}
+    helm.sh/resource-policy: keep
+    {{- end }}
+    {{- with .Values.persistence.annotations }}
     {{- toYaml . | nindent 4 }}
+    {{- end }}
   {{- end }}
 spec:
   accessModes:

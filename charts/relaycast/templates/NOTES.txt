@@ -22,4 +22,19 @@ Public POST /v1/workspaces: {{ ternary "enabled" "disabled (404)" $publicCreate 
 {{- if not .Values.persistence.enabled }}
 
 WARNING: persistence is disabled; all data is lost when the pod restarts.
+{{- else if .Values.persistence.existingClaim }}
+
+Data lives on your existing PVC {{ .Values.persistence.existingClaim }}; helm uninstall leaves it alone.
+{{- else if .Values.persistence.retainOnUninstall }}
+
+Data lives on PVC {{ include "relaycast.claimName" . }} (helm.sh/resource-policy: keep):
+helm uninstall leaves it behind. Reinstalling with the same release name reuses
+it; delete it with `kubectl delete pvc {{ include "relaycast.claimName" . }} -n {{ .Release.Namespace }}`
+only when you want the database gone.
+{{- else }}
+
+WARNING: persistence.retainOnUninstall=false: helm uninstall deletes PVC
+{{ include "relaycast.claimName" . }}. With a Delete reclaimPolicy the SQLite
+database and uploaded files are destroyed. Back up first, or set
+persistence.retainOnUninstall=true / use persistence.existingClaim.
 {{- end }}

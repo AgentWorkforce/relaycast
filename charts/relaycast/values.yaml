@@ -75,6 +75,12 @@ persistence:
   # ReadWriteOnce is deliberate: one pod owns the SQLite file.
   accessMode: ReadWriteOnce
   size: 5Gi
+  # Keep the chart-created PVC (and so the SQLite database and uploaded files)
+  # on `helm uninstall` via helm.sh/resource-policy: keep. Delete it yourself
+  # with `kubectl delete pvc` when you really want the data gone. Set false to
+  # let uninstall delete the claim (the storage class reclaimPolicy then
+  # decides whether the volume survives).
+  retainOnUninstall: true
   annotations: {}
 
 service:
