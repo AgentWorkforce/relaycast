@@ -262,7 +262,7 @@ impl WsClient {
             }
         }
 
-        let (ws_stream, _) = ws_tls::connect(&url).await?;
+        let (ws_stream, _) = ws_tls::connect(&url).await.map_err(RelayError::WebSocket)?;
 
         let (command_tx, mut command_rx) = mpsc::channel::<WsCommand>(32);
         self.command_tx = Some(command_tx);

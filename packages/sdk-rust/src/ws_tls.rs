@@ -21,13 +21,17 @@ pub(crate) type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 static SHARED: SharedConfig = SharedConfig::new();
 
 /// Opens a WebSocket; `wss://` uses the shared TLS configuration.
-pub(crate) async fn connect(url: &Url) -> Result<(WsStream, Response), Error> {
+pub(crate) async fn connect(url: &Url) -> Result<(WsStream, Response), Box<Error>> {
     let connector = if url.scheme() == "wss" {
-        Some(Connector::Rustls(SHARED.config(native_roots).await?))
+        let config = SHARED.config(native_roots).await.map_err(Error::Io)?;
+        Some(Connector::Rustls(config))
     } else {
         None
     };
-    tokio_tungstenite::connect_async_tls_with_config(url.as_str(), None, false, connector).await
+    Ok(
+        tokio_tungstenite::connect_async_tls_with_config(url.as_str(), None, false, connector)
+            .await?,
+    )
 }
 
 fn native_roots() -> RootCertStore {
