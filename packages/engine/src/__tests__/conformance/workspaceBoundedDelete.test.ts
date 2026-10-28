@@ -307,10 +307,20 @@ describe('bounded workspace deletion', () => {
       .where(eq(workspaces.id, large.workspaceId));
     await stack.runtime.handle.db.update(workspaces).set({ expiresAt: new Date(Date.now() - 1_000) })
       .where(eq(workspaces.id, small.workspaceId));
-    // A budget far too small to drain the large one in a single call.
-    const reaped = await reapExpiredWorkspaces(stack.runtime.deps.db, stack.runtime.deps.files, {
-      maxDurationMs: 5, sleep: async () => {},
-    });
+    // A budget far too small to drain the large one in a single call. Every raw
+    // statement "takes" 10ms on a fake clock, so a slow runner cannot change it.
+    let clock = 0;
+    const db = stack.runtime.deps.db;
+    const all = db.all.bind(db);
+    (db as { all: typeof db.all }).all = (async (...args: Parameters<typeof db.all>) => { clock += 10; return all(...args); }) as typeof db.all;
+    let reaped: string[];
+    try {
+      reaped = await reapExpiredWorkspaces(db, stack.runtime.deps.files, {
+        maxDurationMs: 100, clock: () => clock, sleep: async () => {},
+      });
+    } finally {
+      (db as { all: typeof db.all }).all = all;
+    }
     expect(reaped).toContain(small.workspaceId);
     expect(reaped).not.toContain(large.workspaceId);
   });
