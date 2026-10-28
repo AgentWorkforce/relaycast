@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
+
+### Added
+
+- Agents can be restricted to an allowlist of senders, so a topology such as a worker only its coordinator can reach is enforced by the server; refused senders see the agent as nonexistent.
 
 ### Fixed
 

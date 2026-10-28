@@ -186,6 +186,28 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
 
   schemas:
+    InboundPolicy:
+      type: object
+      required: [agent_id, mode, allowed_agents, pinned_agents]
+      properties:
+        agent_id: { type: string }
+        mode: { type: string, enum: [open, allowlist] }
+        allowed_agents:
+          type: array
+          items:
+            type: object
+            required: [id, name]
+            properties:
+              id: { type: string }
+              name: { type: string }
+        pinned_agents:
+          type: array
+          items:
+            type: object
+            required: [id, name]
+            properties:
+              id: { type: string }
+              name: { type: string }
     WorkspaceProvenanceInput:
       type: object
       description: >-
@@ -2808,6 +2830,96 @@ paths:
           description: Recipient identity not found
         '409':
           description: Subscription channel archived
+
+  /agents/{name}/inbound-policy:
+    parameters:
+      - in: path
+        name: name
+        required: true
+        schema: { type: string }
+    get:
+      summary: Get who may address an agent
+      description: |
+        The workspace key reads any agent's policy. An agent token reads only
+        its own; any other name returns 404 agent_not_found so the read cannot
+        probe for agents. An agent without a policy is open.
+      tags: [Agents]
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      responses:
+        '200':
+          description: Inbound policy
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, data]
+                properties:
+                  ok: { type: boolean, enum: [true] }
+                  data: { $ref: '#/components/schemas/InboundPolicy' }
+        '404':
+          description: Agent not found, or not the calling agent
+    put:
+      summary: Set who may address an agent
+      description: |
+        On an `allowlist` policy, only the agent itself, `allowed_agents` and
+        `pinned_agents` may DM the agent, put it in a group DM, invite it to a
+        channel or reply in its DM threads. Anyone else gets the same
+        404 agent_not_found (or message_not_found for a thread reply) as a
+        missing agent. A group DM may only contain members every restricted
+        member admits (403 participant_not_allowed). The policy restricts who
+        reaches the agent, not who it messages, and does not cover channels
+        the agent joins itself.
+
+        The workspace key may set anything. An agent token may set only its own
+        policy and only narrow it: any allowlist when open, or a subset of its
+        current allowed_agents. Opening or widening returns 403
+        inbound_policy_widen_forbidden; sending pinned_agents returns 403
+        workspace_key_required. Pinned agents (owner, admins) persist while a
+        policy is open, so they keep access after the agent narrows. Policies
+        are stored by agent id, so a reused name never inherits one.
+      tags: [Agents]
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [mode]
+              properties:
+                mode: { type: string, enum: [open, allowlist] }
+                allowed_agents:
+                  type: array
+                  maxItems: 256
+                  items: { type: string }
+                  description: Agent names; must be empty or omitted when mode is open.
+                pinned_agents:
+                  type: array
+                  maxItems: 256
+                  items: { type: string }
+                  description: Workspace key only. Replaces the pinned list when present.
+      responses:
+        '200':
+          description: Updated inbound policy
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, data]
+                properties:
+                  ok: { type: boolean, enum: [true] }
+                  data: { $ref: '#/components/schemas/InboundPolicy' }
+        '400':
+          description: invalid_inbound_policy
+        '403':
+          description: inbound_policy_widen_forbidden or workspace_key_required
+        '404':
+          description: Agent not found, not the calling agent, or a named agent is unknown or refuses the caller
 
   /agents/{name}/legacy-identity:
     patch:

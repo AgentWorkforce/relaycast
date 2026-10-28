@@ -39,6 +39,7 @@ it('upgrades existing actions and results additively, preserving rows and every 
       '0073_workspace_key_rotation.sql',
       '0074_delivery_active_location_node_index.sql',
       '0075_message_mention_fts.sql',
+      '0076_agent_inbound_policies.sql',
       '0076_deliveries_agent_status_created_index.sql',
       '0077_drop_workspace_plan.sql',
     ]);

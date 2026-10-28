@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
+
+### Added
+
+- `GET`/`PUT /v1/agents/{name}/inbound-policy` restrict who may DM an agent, add it to a group DM, invite it to a channel or reply in its DM threads. An agent token may only narrow its own policy; the workspace key sets anything, including pinned owner/admin agents. Apply migration `0076_agent_inbound_policies.sql` before updating the worker.
 
 ### Fixed
 

@@ -184,6 +184,34 @@ export const agents = sqliteTable(
 );
 
 // ============================================
+// Agent Inbound Policies
+// ============================================
+/**
+ * Who may address an agent. No row means open. The agent's own token may only
+ * narrow `allowedAgentIds`; `pinnedAgentIds` (owner, admins) is set with the
+ * workspace key. Keyed by agent id so a reused name never inherits a policy.
+ */
+export const agentInboundPolicies = sqliteTable(
+  'agent_inbound_policies',
+  {
+    agentId: text('agent_id')
+      .primaryKey()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    mode: text('mode').$type<'open' | 'allowlist'>().notNull(),
+    allowedAgentIds: text('allowed_agent_ids', { mode: 'json' }).$type<string[]>().notNull().default([]),
+    pinnedAgentIds: text('pinned_agent_ids', { mode: 'json' }).$type<string[]>().notNull().default([]),
+    updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (table) => [
+    index('idx_agent_inbound_policies_workspace').on(table.workspaceId),
+    check('agent_inbound_policies_mode_check', sql`${table.mode} IN ('open', 'allowlist')`),
+  ],
+);
+
+// ============================================
 // Agent Identity Recovery
 // ============================================
 /**
