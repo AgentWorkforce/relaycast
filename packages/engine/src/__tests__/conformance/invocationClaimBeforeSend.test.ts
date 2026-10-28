@@ -661,6 +661,52 @@ describe('invocation claim before send', () => {
     expect(after?.reservedAgents).toBe(1);
   });
 
+  it('keeps the spawn slot when restoring an unsent claim throws', async () => {
+    const ws = await createWorkspace(stack.app, 'spawn-claim-restore-throws');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    const nodeId = 'node_spawn_restore_throws';
+    await registerSpawnNode(stack, ws, nodeId, 'spawn-restore-throws', 4);
+    const db = stack.runtime.handle.db;
+    const invocationId = 'inv_spawn_restore_throws';
+    await db.insert(actionInvocations).values({
+      id: invocationId,
+      workspaceId: ws.workspaceId,
+      actionName: 'spawn:claude',
+      invocationOrigin: 'builtin',
+      callerId: caller.agentId,
+      callerName: caller.name,
+      input: { cli: 'claude', name: 'worker-restore', task: 'hi' },
+      status: 'pending',
+      handlerNodeId: nodeId,
+      dispatchedNodeId: nodeId,
+      attemptedNodeIds: [nodeId],
+      dispatchAttempts: 1,
+      retryAfterAt: new Date(Date.now() - 1_000),
+    });
+    // One slot belongs to another spawn. This drain reserves a second.
+    await db
+      .update(nodes)
+      .set({ reservedAgents: 1 })
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, nodeId)));
+    vi.spyOn(stack.runtime.realtime, 'sendToProvider').mockResolvedValue(false);
+    // Snapshot, claim, then the restore. Fail only the restore.
+    const restore = injectUpdateFailure(db, actionInvocations, 'restore claim failed', { skip: 2, times: 1 });
+    try {
+      await drainNodeInvocations(db, stack.runtime.realtime, ws.workspaceId, nodeId);
+    } finally {
+      restore();
+    }
+
+    const [node] = await db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, nodeId)));
+    expect(node?.reservedAgents).toBe(2);
+    const [row] = await db.select().from(actionInvocations).where(eq(actionInvocations.id, invocationId));
+    expect(row?.spawnReservedAt).toBeInstanceOf(Date);
+    expect(row?.status).toBe('dispatched');
+  });
+
   it('does not send a spawn whose hold a retry released before the drain claim', async () => {
     const ws = await createWorkspace(stack.app, 'spawn-claim-released-hold');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');

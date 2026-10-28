@@ -402,6 +402,25 @@ describe('node-hosted presence', () => {
     expect(await stack.runtime.presence.getOnline(ws.workspaceId)).not.toContain(worker.agent_id);
   });
 
+  it('drops disconnect holds whose agent or workspace no longer exists', async () => {
+    const ws = await createWorkspace(stack.app, 'node-hosted-presence-evict');
+    await enrollBroker(ws.workspaceKey, 'node_evict', 'evict-broker');
+    await attachProvider(ws.workspaceId, 'node_evict', 'evict-broker', 'broker');
+    const worker = await registerAgentViaNode(stack.runtime.deps.db, ws.workspaceId, 'node_evict', 'broker', {
+      v: 1, type: 'agent.register', name: 'worker', auto_join_general: false,
+    });
+    await stack.runtime.presence.disconnect(ws.workspaceId, worker.agent_id);
+    await stack.runtime.presence.disconnect(ws.workspaceId, 'agent_deleted');
+    await stack.runtime.presence.disconnect('ws_deleted', 'agent_left');
+
+    await stack.runtime.presence.sweep();
+
+    const held = await stack.runtime.presence.explicitlyDisconnected?.(ws.workspaceId);
+    expect(held).toContain(worker.agent_id);
+    expect(held).not.toContain('agent_deleted');
+    expect(await stack.runtime.presence.explicitlyDisconnected?.('ws_deleted')).toEqual([]);
+  });
+
   it('clears a presence-only disconnect when the node recovers the agent', async () => {
     const ws = await createWorkspace(stack.app, 'node-hosted-presence-recover');
     await enrollBroker(ws.workspaceKey, 'node_recover', 'recover-broker');

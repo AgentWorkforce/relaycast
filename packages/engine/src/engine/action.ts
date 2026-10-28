@@ -1851,7 +1851,7 @@ async function dispatchSpawn(args: {
   // drain never sees it while this send is in flight or still holding the
   // reservation. A thrown send has an unknown outcome, so it is not marked
   // and only the never-dispatched sweep ends it.
-  if (!dispatched.accepted && !placement.queued) {
+  if (!dispatched.accepted && !placement.queued && !dispatched.reservationStillHeld) {
     await releaseNodeCapacity(args.db, args.workspaceId, nodeId);
   }
   if (!dispatched.sent && !dispatched.sendOutcomeUnknown) {
@@ -3064,6 +3064,12 @@ async function dispatchNodeInvocation(args: {
   sent: boolean;
   /** The send threw after the claim. The frame may have left; do not re-queue it. */
   sendOutcomeUnknown?: boolean;
+  /**
+   * The claim wrote `spawnReservedAt` and restoring that claim did not commit.
+   * The slot is still counted. Callers must not release it; a later sweep
+   * releases the marker once.
+   */
+  reservationStillHeld?: boolean;
   settled?: InvocationRow;
 }> {
   const guardedReleaseHash = args.invocationOrigin === 'builtin' && isReleaseInvocation(args.action)
@@ -3253,6 +3259,16 @@ async function dispatchNodeInvocation(args: {
       clearSpawnReservation: !args.preserveSpawnReservation,
     },
   );
+  // A failed restore leaves the marker set. Returning the slot as well lets
+  // the timeout sweep release it a second time.
+  const restoreSpawnClaimOrHold = async (): Promise<boolean> => {
+    try {
+      await restoreSpawnClaim();
+      return false;
+    } catch {
+      return true;
+    }
+  };
   let sent = false;
   try {
     sent = args.agent && args.actionId
@@ -3323,14 +3339,23 @@ async function dispatchNodeInvocation(args: {
     // send. Registered-action crashes still propagate: their claim has to stay
     // in place for the keyed replay.
     if (nativeSpawnClaimed) {
-      await restoreSpawnClaim();
-      return { accepted: false, pending: false, sent: false, sendOutcomeUnknown: true };
+      const reservationStillHeld = await restoreSpawnClaimOrHold();
+      return {
+        accepted: false,
+        pending: false,
+        sent: false,
+        sendOutcomeUnknown: true,
+        ...(reservationStillHeld ? { reservationStillHeld: true } : {}),
+      };
     }
     throw error;
   }
 
   if (!sent && nativeSpawnClaimed) {
-    await restoreSpawnClaim();
+    const reservationStillHeld = await restoreSpawnClaimOrHold();
+    if (reservationStillHeld) {
+      return { accepted: false, pending: false, sent: false, reservationStillHeld: true };
+    }
   }
   if (!sent && (guardedReleaseHash || guardedReleaseAgentId)) {
     // An adapter compiled against the older owner-authorization contract may
@@ -3723,7 +3748,7 @@ export async function drainNodeInvocations(
       });
       if (dispatched.accepted) {
         drained++;
-      } else if (reservedForDrain) {
+      } else if (reservedForDrain && !dispatched.reservationStillHeld) {
         await releaseNodeCapacity(db, workspaceId, nodeId);
         reservedForDrain = false;
       }
@@ -3993,7 +4018,7 @@ export async function rescheduleNodeInvocation(
           }
           return accepted;
         }
-        let dispatched: { accepted: boolean; sent: boolean };
+        let dispatched: { accepted: boolean; sent: boolean; reservationStillHeld?: boolean };
         try {
           dispatched = await dispatchNodeInvocation({
             db,
@@ -4013,14 +4038,18 @@ export async function rescheduleNodeInvocation(
             ...observedInvocationClaim(invocation),
           });
         } catch (error) {
+          // A throw before the claim commits has no marker, so return the
+          // new slot. A restore failure returns reservationStillHeld instead
+          // of throwing, and the check below leaves that slot in place.
           if (reservationHeld) {
             await releaseNodeCapacity(db, invocation.workspaceId, placement.node.id);
           }
           throw error;
         }
         // claimSpawnNode incremented reservedAgents for this attempt. Release
-        // it when the pending claim loses or the send never starts.
-        if (!dispatched.accepted && !dispatched.sent && reservationHeld) {
+        // it when the pending claim loses or the send never starts. Leave it
+        // when the reservation marker is still set.
+        if (!dispatched.accepted && !dispatched.sent && reservationHeld && !dispatched.reservationStillHeld) {
           await releaseNodeCapacity(db, invocation.workspaceId, placement.node.id);
         }
         return dispatched.accepted;

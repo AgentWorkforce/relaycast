@@ -1,6 +1,8 @@
+import { and, eq, inArray } from 'drizzle-orm';
 import type { PresenceTracker } from '../../ports/presence.js';
 import type { RealtimeBus, EngineEvent } from '../../ports/realtime.js';
 import type { EngineDb } from '../../ports/database.js';
+import { agents, workspaces } from '../../db/schema.js';
 import { appendWorkspaceEvent } from '../../engine/workspaceEvents.js';
 
 const DEFAULT_TTL_MS = 60_000;
@@ -39,7 +41,8 @@ export class InProcessPresence implements PresenceTracker {
    * Presence-only disconnects. Distinct from the online map: a node-hosted
    * agent may never have heartbeated over HTTP, so removing a missing map
    * entry would not stick once node liveness counts them. Heartbeat and
-   * {@link clearExplicitDisconnect} are the only ways out.
+   * {@link clearExplicitDisconnect} drop a live hold. The sweep drops a hold
+   * whose agent or workspace row is gone.
    */
   private readonly disconnected = new Map<string, Set<string>>();
   private readonly ttlMs: number;
@@ -188,6 +191,48 @@ export class InProcessPresence implements PresenceTracker {
       // Reclaim the workspace entry once it has no tracked agents, so the map
       // doesn't grow unbounded with workspace churn.
       if (map.size === 0) this.workspaces.delete(workspaceId);
+    }
+    await this.evictGoneDisconnects();
+  }
+
+  /**
+   * Drop disconnect holds for agents or workspaces that no longer exist.
+   * A live explicit disconnect stays until heartbeat, recovery, or a new
+   * inventory route. A lookup failure leaves the hold in place.
+   */
+  private async evictGoneDisconnects(): Promise<void> {
+    const db = this.options.db;
+    if (!db || this.disconnected.size === 0) return;
+    for (const [workspaceId, ids] of [...this.disconnected]) {
+      try {
+        const [workspace] = await db
+          .select({ id: workspaces.id })
+          .from(workspaces)
+          .where(eq(workspaces.id, workspaceId))
+          .limit(1);
+        if (!workspace) {
+          this.disconnected.delete(workspaceId);
+          continue;
+        }
+        if (ids.size === 0) {
+          this.disconnected.delete(workspaceId);
+          continue;
+        }
+        const rows = await db
+          .select({ id: agents.id })
+          .from(agents)
+          .where(and(
+            eq(agents.workspaceId, workspaceId),
+            inArray(agents.id, [...ids]),
+          ));
+        const live = new Set(rows.map((row) => row.id));
+        for (const id of [...ids]) {
+          if (!live.has(id)) ids.delete(id);
+        }
+        if (ids.size === 0) this.disconnected.delete(workspaceId);
+      } catch {
+        // Keep the hold. A failed lookup is not evidence the identity is gone.
+      }
     }
   }
 }
