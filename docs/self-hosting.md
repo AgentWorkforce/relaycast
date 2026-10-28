@@ -91,10 +91,17 @@ Flags take precedence over environment variables.
 | `--base-url <url>` | — | `http://localhost:<port>` | Public origin. **Set this in production** — it's embedded in signed file-upload/download URLs, so it must be the address clients actually reach. |
 | `--env <name>` | `RELAYCAST_ENV` | `production` | Environment label used in logs. |
 | — | `RELAYCAST_MESSAGE_TTL_DAYS` | unset (keep forever) | Opt in to pruning message history after this many days. Unset, `0`, or negative keeps messages forever. Per-workspace `retention` settings override this; operational tables (deliveries, message logs) prune at 90 days regardless. |
-| — | `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` | unset (fail closed) | Stable server-only derivation secret for anonymous keyed workspace retries. Generate once with `openssl rand -hex 32` and persist it across restarts. |
+| — | `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` / `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE` | unset (fail closed) | Stable server-only derivation secret for anonymous keyed workspace retries. Generate once with `openssl rand -hex 32` and persist it across restarts. |
 | — | `RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED` | `false` | Optional self-host policy requiring callers to prove the derivation secret. Leave unset for hosted-safe anonymous retries. |
-| — | `RELAYCAST_INTERNAL_SECRET` / `RELAYCAST_INTERNAL_SECRET_FILE` | unset (disabled) | Enables the [internal admin API](#internal-admin-api) for a trusted control plane. `_FILE` (a mounted secret file) wins over the inline value. |
-| — | `RELAYCAST_ALLOW_INSECURE_BASE_URL` | `false` | Container image only: accept an `http://` (or IP-literal / single-label) `--base-url` whose host is loopback or private. Public hosts stay HTTPS-only. |
+| — | `RELAYCAST_INTERNAL_SECRET` / `RELAYCAST_INTERNAL_SECRET_FILE` | unset (disabled) | Enables the [internal admin API](#internal-admin-api) for a trusted control plane. Must be at least 32 characters (startup refuses a shorter one). |
+| — | `RELAYCAST_PUBLIC_WORKSPACE_CREATE` | `true` | `false` makes the anonymous `POST /v1/workspaces` answer the generic `404 not_found`; workspaces then come only from `POST /internal/workspaces`. The Helm chart sets `false` when the internal secret is configured. |
+| — | `RELAYCAST_ALLOW_INSECURE_BASE_URL` | `false` | Container image only: accept an `http://` (or IP-literal / single-label) `--base-url` whose host is loopback or private (including `*.svc` and `*.svc.cluster.local`). Public hosts stay HTTPS-only. |
+| — | `RELAYCAST_PRIVATE_DNS_SUFFIXES` | unset | Container image only, with the insecure opt-in: extra private DNS suffixes, comma-separated (e.g. `.svc.corp` for a custom `clusterDomain`). Entries must have two or more labels and must not end in a public TLD. |
+| — | `RELAYCAST_INSECURE_BASE_URL_HOSTS` | unset | Container image only, with the insecure opt-in: exact hosts treated as private, comma-separated (e.g. `relaycast.relaycast` for a `<svc>.<ns>` short name). IP literals and names under a public TLD are refused. |
+
+For every `*_FILE` variant, a directly set non-empty variable wins over the
+file (the same rule as RelayAuth), and a `_FILE` that cannot be read stops
+startup with exit code `64` (configuration refused).
 
 **Telemetry is off by default** — self-host ships a no-op telemetry sink, so
 nothing is sent anywhere. (There is no PostHog/analytics in self-host.)
@@ -159,8 +166,11 @@ enables `/internal/*` for a trusted control plane such as a self-hosted Agent
 Relay cloud. Without it every `/internal/*` route returns the generic
 `404 not_found`. Callers send `Authorization: Bearer <secret>`; the comparison
 is constant-time and a wrong or missing secret is `401 unauthorized`. Generate
-the secret with `openssl rand -hex 32` and share it only with the control
-plane. The shapes match the hosted gateway so the same client works against
+the secret with `openssl rand -hex 32` (32 characters minimum) and share it
+only with the control plane. Request logs never fingerprint the bearer
+presented on `/internal/*`. Pair it with `RELAYCAST_PUBLIC_WORKSPACE_CREATE=false`
+so anonymous callers cannot create workspaces the control plane does not know
+about. The shapes match the hosted gateway so the same client works against
 both.
 
 | Route | Body | Success `data` |
@@ -171,7 +181,10 @@ both.
 
 `POST /internal/workspaces/:id/api-key` semantics:
 
-- **Push** (`api_key` = an `rk_live_…` key the control plane minted): upserts.
+- **Push** (`api_key` = an `rk_live_…` key the control plane minted; must
+  match `^rk_live_[A-Za-z0-9_-]{32,256}$`, which covers both the engine's
+  32-hex keys and the cloud's base64url keys; `key_generation` must be a safe
+  integer): upserts.
   A missing workspace is created with `id = name = :id` and a `#general`
   channel. Re-pushing the live key is idempotent; a higher `key_generation`
   bumps the stored fence. A key change with `key_generation` commits only if
@@ -369,13 +382,18 @@ kubectl create secret generic relaycast-secrets \
   --from-literal=internal-secret="$(openssl rand -hex 32)"
 helm install relaycast charts/relaycast \
   --set baseUrl=https://relay.example.com \
-  --set existingSecret=relaycast-secrets
+  --set existingSecret=relaycast-secrets \
+  --set secretKeys.internalSecret=internal-secret
 ```
 
-The internal secret is mounted as a file (`RELAYCAST_INTERNAL_SECRET_FILE`);
-set `secretKeys.internalSecret=""` to leave the admin API off. For an
-in-cluster-only origin such as `http://relaycast.relay.svc:8787`, also set
-`allowInsecureBaseUrl=true`. Probes use `GET /health`.
+The admin API is opt-in: set `secretKeys.internalSecret=internal-secret` (the
+key name in your Secret) to mount it as `RELAYCAST_INTERNAL_SECRET_FILE`. When
+it is set the chart also disables the public `POST /v1/workspaces`
+(`publicWorkspaceCreate`, default automatic). For an in-cluster-only origin
+such as `http://relaycast.relay.svc:8787` (the URL printed in the install
+notes), also set `allowInsecureBaseUrl=true`; for a custom `clusterDomain` add
+`privateDnsSuffixes`, or allowlist a `<svc>.<ns>` short name with
+`insecureBaseUrlHosts`. Probes use `GET /health`.
 
 ---
 

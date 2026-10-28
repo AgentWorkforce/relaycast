@@ -8,7 +8,12 @@
 #   3. registers two agents with the returned key and exchanges a #general message,
 #   4. rotates the key via POST /internal/workspaces/:id/api-key and proves the
 #      old key is rejected while the new one works,
-#   5. exercises the hosted-shape push (control-plane-minted key + generation).
+#   5. exercises the hosted-shape push (control-plane-minted base64url key +
+#      generation) and rejects malformed keys,
+#   6. checks the public POST /v1/workspaces is 404 with
+#      RELAYCAST_PUBLIC_WORKSPACE_CREATE=false,
+#   7. checks config refusals exit 64 (short secret, missing secret file,
+#      public http base URL) while a *.svc base URL validates.
 # Secrets and keys are never printed. Everything is removed on exit.
 #
 # Env: RELAYCAST_SMOKE_PORT (default 19487), RELAYCAST_SMOKE_IMAGE
@@ -71,6 +76,7 @@ docker run -d --name "$NAME" \
   --read-only --tmpfs /tmp:size=64m --tmpfs /data:uid=1000,gid=1000 \
   --cap-drop ALL --security-opt no-new-privileges:true \
   -e RELAYCAST_ALLOW_INSECURE_BASE_URL=true \
+  -e RELAYCAST_PUBLIC_WORKSPACE_CREATE=false \
   -e RELAYCAST_INTERNAL_SECRET_FILE=/run/secrets/relaycast/internal-secret \
   -v "$SECRET_DIR/internal-secret:/run/secrets/relaycast/internal-secret:ro" \
   "$IMAGE" --base-url "$BASE" >/dev/null
@@ -114,13 +120,43 @@ expect 401 "$(status GET /v1/workspace "$OLD_KEY")" "old key rejected after rota
 expect 200 "$(status GET /v1/workspace "$NEW_KEY")" "new key accepted"
 expect 200 "$(status GET /v1/channels/general/messages "$BOB" '')" "existing agent tokens keep working"
 
-# 5. Hosted-shape push: control plane mints the key and fences by generation
-CP_KEY="rk_live_$(openssl rand -hex 16)"
+# 5. Hosted-shape push: control plane mints the key (base64url, as the cloud
+# does) and fences by generation
+CP_KEY="rk_live_$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n')"
 expect 200 "$(status POST "/internal/workspaces/${WS_ID}/api-key" "$INTERNAL_SECRET" "{\"api_key\":\"${CP_KEY}\",\"key_generation\":2,\"grace_ms\":0}")" "hosted-shape push (key_generation 2)"
 [[ "$(jq -c .data "$BODY_FILE")" == "{\"workspace_id\":\"${WS_ID}\",\"api_key_generation\":2}" ]] \
   && pass "push echoes {workspace_id, api_key_generation}" || fail "push response shape"
 expect 401 "$(status GET /v1/workspace "$NEW_KEY")" "server-minted key rejected after push"
 expect 200 "$(status GET /v1/workspace "$CP_KEY")" "pushed key accepted"
 expect 409 "$(status POST "/internal/workspaces/${WS_ID}/api-key" "$INTERNAL_SECRET" "{\"api_key\":\"${NEW_KEY}\",\"key_generation\":1}")" "stale generation push refused"
+
+expect 400 "$(status POST "/internal/workspaces/${WS_ID}/api-key" "$INTERNAL_SECRET" '{"api_key":"rk_live_tooshort","key_generation":9}')" "malformed api_key refused"
+expect 400 "$(status POST "/internal/workspaces/${WS_ID}/api-key" "$INTERNAL_SECRET" "{\"api_key\":\"${CP_KEY}\",\"key_generation\":9007199254740992}")" "unsafe key_generation refused"
+
+# 6. Public workspace create is off on a control-plane-managed engine
+expect 404 "$(status POST /v1/workspaces '' '{"name":"anon"}')" "public POST /v1/workspaces disabled"
+[[ "$(jq -r .error.code "$BODY_FILE")" == "not_found" ]] && pass "disabled create looks like an absent route" || fail "disabled create body"
+
+# 7. Config refusals exit 64 before the engine starts
+refused() { # refused <label> <docker run args...>
+  local label="$1"; shift
+  set +e
+  docker run --rm --read-only --tmpfs /tmp:size=8m --tmpfs /data:uid=1000,gid=1000 "$@" >/dev/null 2>"$SECRET_DIR/refusal.err"
+  local code=$?
+  set -e
+  [[ "$code" == "64" ]] && pass "$label (exit 64)" || fail "$label: expected exit 64, got $code"
+  if grep -qF "$INTERNAL_SECRET" "$SECRET_DIR/refusal.err"; then fail "$label: secret leaked to stderr"; fi
+}
+refused "short internal secret refused" -e RELAYCAST_INTERNAL_SECRET=short "$IMAGE" --base-url https://relay.example.com
+refused "missing secret file refused (on a *.svc base URL that itself validates)" \
+  -e RELAYCAST_ALLOW_INSECURE_BASE_URL=true -e RELAYCAST_INTERNAL_SECRET_FILE=/run/secrets/absent \
+  "$IMAGE" --base-url http://relaycast.relaycast.svc:8787
+grep -q "RELAYCAST_INTERNAL_SECRET_FILE points at an unreadable file" "$SECRET_DIR/refusal.err" \
+  && pass "*.svc base URL accepted; refusal names the unreadable file" || fail "unexpected refusal: $(cat "$SECRET_DIR/refusal.err")"
+refused "public http base URL refused even with the insecure opt-in" \
+  -e RELAYCAST_ALLOW_INSECURE_BASE_URL=true "$IMAGE" --base-url http://relay.example.com
+refused "public name in RELAYCAST_INSECURE_BASE_URL_HOSTS refused" \
+  -e RELAYCAST_ALLOW_INSECURE_BASE_URL=true -e RELAYCAST_INSECURE_BASE_URL_HOSTS=relay.example.com \
+  "$IMAGE" --base-url http://relay.example.com
 
 echo "selfhost admin smoke: all checks passed"

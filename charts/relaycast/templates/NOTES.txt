@@ -5,13 +5,20 @@ rollout. Do not scale it or run a second release against the same volume —
 realtime, presence and sequences live in process memory and the database is a
 single SQLite file on {{ include "relaycast.claimName" . }}.
 
+{{- $internal := and .Values.existingSecret .Values.secretKeys.internalSecret }}
+{{- $publicCreate := .Values.publicWorkspaceCreate }}
+{{- if eq $publicCreate nil }}{{ $publicCreate = not $internal }}{{ end }}
+
 In-cluster URL: http://{{ include "relaycast.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}
-{{- if and .Values.existingSecret .Values.secretKeys.internalSecret }}
+  (usable as baseUrl for an in-cluster-only install with allowInsecureBaseUrl=true;
+  *.svc and *.svc.cluster.local are treated as private)
+{{- if $internal }}
 Internal admin API: enabled when Secret {{ .Values.existingSecret }} has key {{ .Values.secretKeys.internalSecret }}
-  (Authorization: Bearer <secret>; /internal/capabilities, /internal/workspaces).
+  (Authorization: Bearer <secret>, at least 32 characters; /internal/capabilities, /internal/workspaces).
 {{- else }}
-Internal admin API: disabled (set existingSecret + secretKeys.internalSecret).
+Internal admin API: disabled (opt in with existingSecret + secretKeys.internalSecret).
 {{- end }}
+Public POST /v1/workspaces: {{ ternary "enabled" "disabled (404)" $publicCreate }}
 {{- if not .Values.persistence.enabled }}
 
 WARNING: persistence is disabled; all data is lost when the pod restarts.

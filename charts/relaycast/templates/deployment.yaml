@@ -1,6 +1,11 @@
 {{- if not .Values.baseUrl }}
 {{- fail "baseUrl is required (the public origin clients use, e.g. https://relay.example.com)" }}
 {{- end }}
+{{- $internal := and .Values.existingSecret .Values.secretKeys.internalSecret }}
+{{- $publicCreate := .Values.publicWorkspaceCreate }}
+{{- if eq $publicCreate nil }}
+{{- $publicCreate = not $internal }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -55,7 +60,17 @@ spec:
             {{- if .Values.allowInsecureBaseUrl }}
             - name: RELAYCAST_ALLOW_INSECURE_BASE_URL
               value: "true"
+            {{- with .Values.privateDnsSuffixes }}
+            - name: RELAYCAST_PRIVATE_DNS_SUFFIXES
+              value: {{ join "," . | quote }}
             {{- end }}
+            {{- with .Values.insecureBaseUrlHosts }}
+            - name: RELAYCAST_INSECURE_BASE_URL_HOSTS
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- end }}
+            - name: RELAYCAST_PUBLIC_WORKSPACE_CREATE
+              value: {{ ternary "true" "false" $publicCreate | quote }}
             {{- if .Values.bootstrapProofRequired }}
             - name: RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED
               value: "true"
@@ -72,7 +87,7 @@ spec:
                   key: {{ .Values.secretKeys.bootstrapSecret }}
                   optional: true
             {{- end }}
-            {{- if and .Values.existingSecret .Values.secretKeys.internalSecret }}
+            {{- if $internal }}
             - name: RELAYCAST_INTERNAL_SECRET_FILE
               value: /run/secrets/relaycast/internal-secret
             {{- end }}
@@ -107,7 +122,7 @@ spec:
               mountPath: /data
             - name: tmp
               mountPath: /tmp
-            {{- if and .Values.existingSecret .Values.secretKeys.internalSecret }}
+            {{- if $internal }}
             - name: internal-secret
               mountPath: /run/secrets/relaycast
               readOnly: true
@@ -123,7 +138,7 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: 64Mi
-        {{- if and .Values.existingSecret .Values.secretKeys.internalSecret }}
+        {{- if $internal }}
         - name: internal-secret
           secret:
             secretName: {{ .Values.existingSecret }}
