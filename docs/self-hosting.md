@@ -357,6 +357,26 @@ labs and in-cluster control planes; never for a public origin. See
 [`RUNBOOK.md`](../RUNBOOK.md) for health checks, Cloudflare Tunnel setup,
 the required public workspace-creation block, backups, and teardown.
 
+**Kubernetes (Helm)**: `charts/relaycast` runs the repository image.
+**It is single-process only** — the Deployment is pinned to `replicas: 1` with
+a `Recreate` rollout and a `ReadWriteOnce` PVC on `/data`; do not scale it
+(see [Limitations](#8-limitations)). Put secrets in your own Secret and point
+`existingSecret` at it:
+
+```bash
+kubectl create secret generic relaycast-secrets \
+  --from-literal=workspace-bootstrap-secret="$(openssl rand -hex 32)" \
+  --from-literal=internal-secret="$(openssl rand -hex 32)"
+helm install relaycast charts/relaycast \
+  --set baseUrl=https://relay.example.com \
+  --set existingSecret=relaycast-secrets
+```
+
+The internal secret is mounted as a file (`RELAYCAST_INTERNAL_SECRET_FILE`);
+set `secretKeys.internalSecret=""` to leave the admin API off. For an
+in-cluster-only origin such as `http://relaycast.relay.svc:8787`, also set
+`allowInsecureBaseUrl=true`. Probes use `GET /health`.
+
 ---
 
 ## 7. Upgrades & backups

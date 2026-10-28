@@ -1,0 +1,146 @@
+{{- if not .Values.baseUrl }}
+{{- fail "baseUrl is required (the public origin clients use, e.g. https://relay.example.com)" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "relaycast.fullname" . }}
+  labels:
+    {{- include "relaycast.labels" . | nindent 4 }}
+spec:
+  # SINGLE PROCESS ONLY: in-memory realtime/presence state and a single SQLite
+  # file. Never raise this; there is no shared backend for scale-out.
+  replicas: 1
+  strategy:
+    # The old pod must release the ReadWriteOnce volume (and the SQLite file)
+    # before the new one starts.
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "relaycast.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "relaycast.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: relaycast
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --base-url
+            - {{ .Values.baseUrl | quote }}
+            - --port
+            - {{ .Values.containerPort | quote }}
+            - --db
+            - /data/relaycast.db
+          env:
+            - name: RELAYCAST_ENV
+              value: {{ .Values.environment | quote }}
+            {{- if .Values.allowInsecureBaseUrl }}
+            - name: RELAYCAST_ALLOW_INSECURE_BASE_URL
+              value: "true"
+            {{- end }}
+            {{- if .Values.bootstrapProofRequired }}
+            - name: RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED
+              value: "true"
+            {{- end }}
+            {{- if ne .Values.messageTtlDays nil }}
+            - name: RELAYCAST_MESSAGE_TTL_DAYS
+              value: {{ .Values.messageTtlDays | quote }}
+            {{- end }}
+            {{- if and .Values.existingSecret .Values.secretKeys.bootstrapSecret }}
+            - name: RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: {{ .Values.secretKeys.bootstrapSecret }}
+                  optional: true
+            {{- end }}
+            {{- if and .Values.existingSecret .Values.secretKeys.internalSecret }}
+            - name: RELAYCAST_INTERNAL_SECRET_FILE
+              value: /run/secrets/relaycast/internal-secret
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.containerPort }}
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            {{- toYaml .Values.startupProbe | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+            {{- if and .Values.existingSecret .Values.secretKeys.internalSecret }}
+            - name: internal-secret
+              mountPath: /run/secrets/relaycast
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "relaycast.claimName" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+        {{- if and .Values.existingSecret .Values.secretKeys.internalSecret }}
+        - name: internal-secret
+          secret:
+            secretName: {{ .Values.existingSecret }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.secretKeys.internalSecret }}
+                path: internal-secret
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

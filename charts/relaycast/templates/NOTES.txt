@@ -1,0 +1,18 @@
+Relaycast is running as {{ include "relaycast.fullname" . }} for {{ .Values.baseUrl }}.
+
+SINGLE PROCESS ONLY: this Deployment is pinned to 1 replica with a Recreate
+rollout. Do not scale it or run a second release against the same volume —
+realtime, presence and sequences live in process memory and the database is a
+single SQLite file on {{ include "relaycast.claimName" . }}.
+
+In-cluster URL: http://{{ include "relaycast.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}
+{{- if and .Values.existingSecret .Values.secretKeys.internalSecret }}
+Internal admin API: enabled when Secret {{ .Values.existingSecret }} has key {{ .Values.secretKeys.internalSecret }}
+  (Authorization: Bearer <secret>; /internal/capabilities, /internal/workspaces).
+{{- else }}
+Internal admin API: disabled (set existingSecret + secretKeys.internalSecret).
+{{- end }}
+{{- if not .Values.persistence.enabled }}
+
+WARNING: persistence is disabled; all data is lost when the pod restarts.
+{{- end }}

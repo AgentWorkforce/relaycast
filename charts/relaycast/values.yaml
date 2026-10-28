@@ -1,0 +1,112 @@
+# Relaycast self-host chart.
+#
+# SINGLE PROCESS ONLY. The engine keeps WebSocket connections, presence,
+# realtime sequence counters, idempotency windows and rate-limit buckets in
+# process memory, and stores everything else in one SQLite file. Two pods
+# would split-brain. The Deployment is pinned to replicas: 1 with a Recreate
+# strategy (the old pod releases the volume before the new one starts); there
+# is intentionally no replicaCount value and no HPA.
+
+image:
+  # Built from this repository's Dockerfile; no registry image is published.
+  repository: relaycast-self-host
+  tag: local
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Required. Public origin clients use (embedded in signed file URLs and the A2A
+# card). Must be an HTTPS public DNS origin unless allowInsecureBaseUrl is set.
+baseUrl: ""
+
+# Accept http:// (or IP-literal / single-label) baseUrl values whose host is
+# loopback or private (RFC 1918, ULA, link-local, *.local, *.internal, *.lan,
+# *.home.arpa, single-label service names). Public hosts stay HTTPS-only.
+allowInsecureBaseUrl: false
+
+# Environment label used in logs.
+environment: production
+
+# Name of an existing Secret holding the deployment secrets. Nothing secret is
+# ever rendered into this chart's manifests. A missing bootstrapSecret key
+# leaves keyed anonymous creates disabled (fail closed). The internalSecret key
+# MUST exist when named (the pod will not start otherwise); set it to "" to
+# leave the admin API disabled.
+existingSecret: ""
+secretKeys:
+  # RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: stable derivation secret for
+  # anonymous keyed workspace retries.
+  bootstrapSecret: workspace-bootstrap-secret
+  # RELAYCAST_INTERNAL_SECRET_FILE: enables the /internal admin API for a
+  # trusted control plane (mounted as a file, never an env value). Generate
+  # with `openssl rand -hex 32`.
+  internalSecret: internal-secret
+
+# Require bootstrap-secret proof for anonymous keyed creates.
+bootstrapProofRequired: false
+
+# Opt-in message retention in days (unset keeps history forever).
+messageTtlDays: null
+
+# Additional container env entries (list of EnvVar).
+extraEnv: []
+
+persistence:
+  enabled: true
+  # Use an existing PVC instead of creating one.
+  existingClaim: ""
+  storageClass: ""
+  # ReadWriteOnce is deliberate: one pod owns the SQLite file.
+  accessMode: ReadWriteOnce
+  size: 5Gi
+  annotations: {}
+
+service:
+  type: ClusterIP
+  port: 8787
+  annotations: {}
+
+containerPort: 8787
+
+resources: {}
+#  requests:
+#    cpu: 100m
+#    memory: 256Mi
+#  limits:
+#    memory: 1Gi
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+livenessProbe:
+  initialDelaySeconds: 10
+  periodSeconds: 15
+  timeoutSeconds: 5
+  failureThreshold: 4
+readinessProbe:
+  initialDelaySeconds: 3
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+startupProbe:
+  periodSeconds: 5
+  timeoutSeconds: 5
+  failureThreshold: 30
+
+terminationGracePeriodSeconds: 30
