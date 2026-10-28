@@ -589,6 +589,8 @@ relaycast --relay-agent-token at_live_... message.inbox.check
 
 `RELAY_API_KEY` authenticates workspace-level commands. `RELAY_AGENT_TOKEN` authenticates commands that act as an agent, such as posting messages, joining channels, DMs, reactions, inbox, and file upload.
 
+To answer mentions in a Buzz room with an existing Relay agent, run `relaycast buzz.bridge` as a separate bridge identity. See [Buzz room bridge setup](docs/buzz-room-bridge.md) for Buzz membership, credentials, threading, and supervision.
+
 The CLI command names are the MCP tool names. Run `relaycast tools` for the live list; current groups are:
 
 - `workspace.*`: `create`, `set_key`, `list`, `join`, `switch`

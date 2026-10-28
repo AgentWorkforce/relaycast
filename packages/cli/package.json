@@ -16,15 +16,20 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "vitest run --root ../.. packages/cli/src/__tests__/cli.test.ts",
+    "test": "vitest run --root ../.. packages/cli/src/__tests__",
     "lint": "eslint src/"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",
-    "@relaycast/mcp": "12.0.0"
+    "@relaycast/mcp": "12.0.0",
+    "@relaycast/sdk": "12.0.0",
+    "nostr-tools": "^2.25.2",
+    "ws": "^8.18.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "@types/ws": "^8.5.13",
     "typescript": "^5.7.0",
     "vitest": "^4.0.18"
   },

@@ -73,6 +73,17 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
       return 0;
     }
 
+    if (parsed.command === 'buzz.bridge') {
+      if (parsed.help) {
+        io.stdout.write('relaycast buzz.bridge — connect one Buzz room bot to one existing Relay agent.\nSet BUZZ_RELAY_URL, BUZZ_CHANNEL_ID, BUZZ_PRIVATE_KEY, RELAYCAST_AGENT_TOKEN, and RELAYCAST_TARGET_AGENT.\nOptional: BUZZ_BOT_NAME, RELAYCAST_BASE_URL, BUZZ_BRIDGE_STATE_FILE.\n');
+        return 0;
+      }
+      if (parsed.commandArgs.length) throw new Error('buzz.bridge takes configuration from environment variables, not arguments.');
+      const { runBuzzBridge } = await import('./buzz-bridge/cli.js');
+      await runBuzzBridge(io.env ?? process.env);
+      return 0;
+    }
+
     const session = await createCliMcpSession(parsed.config);
     try {
       const tools = await session.listTools();
@@ -269,6 +280,7 @@ function formatHelp(tools: ToolDefinition[]): string {
     '  relaycast tools',
     '  relaycast <mcp-tool-name> [--arg value]',
     '  relaycast <mcp-tool-name> --json-args \'{"key":"value"}\'',
+    '  relaycast buzz.bridge              Connect a Buzz room to an existing Relay agent',
     '',
     'Global options:',
     '  --relay-api-key <key>          Workspace key, defaults to RELAY_API_KEY',
