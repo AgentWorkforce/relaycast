@@ -53,6 +53,7 @@ export function makeNodeStack(options?: {
   workspaceBootstrapProofRequired?: boolean;
   allowWorkspaceKeyRotation?: boolean;
   internalSecret?: string;
+  publicWorkspaceCreate?: boolean;
   admission?: AdmissionHooks;
   rateLimitPerMinute?: number;
 }): TestStack {
@@ -82,6 +83,7 @@ export function makeNodeStack(options?: {
         workspaceBootstrapProofRequired: options?.workspaceBootstrapProofRequired,
         allowWorkspaceKeyRotation: options?.allowWorkspaceKeyRotation,
         internalSecret: options?.internalSecret,
+        publicWorkspaceCreate: options?.publicWorkspaceCreate,
         rateLimitPerMinute: options?.rateLimitPerMinute,
       },
       admission: options?.admission,

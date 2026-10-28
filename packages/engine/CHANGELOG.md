@@ -12,6 +12,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Added
 
 - `/internal` admin API, enabled by `EngineConfig.internalSecret` (`RELAYCAST_INTERNAL_SECRET` / `_FILE` in `relaycast-engine`): `GET /internal/capabilities`, `POST /internal/workspaces`, and generation-fenced `POST /internal/workspaces/:id/api-key` (push or server-minted rotation, with an optional grace window). Unset, every `/internal` route is `404`.
+- `EngineConfig.publicWorkspaceCreate: false` (`RELAYCAST_PUBLIC_WORKSPACE_CREATE=false`) answers the public `POST /v1/workspaces` with the generic `404`.
+- `internalSecret` must be at least 32 characters (`createEngine` throws otherwise); `/internal` pushes require `api_key` to match `^rk_live_[A-Za-z0-9_-]{32,256}$` and a safe-integer `key_generation`; request logs no longer fingerprint the bearer on `/internal` paths. `relaycast-engine` reads `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE`, lets a direct variable win over `_FILE`, and exits `64` on an unreadable `_FILE`.
 
 ## [12.1.0] - 2026-10-28
 

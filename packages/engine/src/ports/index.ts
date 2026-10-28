@@ -156,6 +156,13 @@ export interface EngineConfig {
    */
   internalSecret?: string;
   /**
+   * Anonymous/public `POST /v1/workspaces`. Defaults to enabled (unset or
+   * `true`). Set `false` on a deployment whose workspaces are provisioned by a
+   * control plane through `/internal/workspaces`: the public route then
+   * answers the generic 404, like any other disabled surface.
+   */
+  publicWorkspaceCreate?: boolean;
+  /**
    * Per-workspace requests-per-minute ceiling. Default 30,000.
    * `AdmissionHooks.rateLimitPerMinute` overrides it per workspace.
    */

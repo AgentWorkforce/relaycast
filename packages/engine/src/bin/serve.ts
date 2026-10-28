@@ -2,6 +2,7 @@
 import { startServer } from '../entrypoints/node.js';
 import { readFileSync } from 'node:fs';
 import { engineVersion } from './version.js';
+import { MIN_INTERNAL_SECRET_LENGTH } from '../engine/internalAdmin.js';
 
 const HELP = `relaycast-engine — run a self-hosted Relaycast server (Node + SQLite)
 
@@ -18,7 +19,13 @@ Options:
 
 Environment:
   RELAYCAST_INTERNAL_SECRET(_FILE)  Enable the /internal admin API for a trusted
-                                    control plane (Authorization: Bearer <secret>)
+                                    control plane (Authorization: Bearer <secret>;
+                                    at least 32 characters)
+  RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET(_FILE)
+                                    Stable secret for anonymous keyed workspace retries
+  RELAYCAST_PUBLIC_WORKSPACE_CREATE Set false to 404 the public POST /v1/workspaces
+                                    (workspaces then come from /internal/workspaces)
+  A directly set variable wins over its _FILE variant.
 
 After start, create a workspace:
   curl -XPOST http://localhost:<port>/v1/workspaces -H 'content-type: application/json' -d '{"name":"my-team"}'
@@ -54,11 +61,30 @@ function parseArgs(argv: string[], env: NodeJS.ProcessEnv): ServeArgs {
   return out;
 }
 
-/** Read `NAME` or the file named by `NAME_FILE` (trimmed); empty → undefined. */
+/** Exit code for a configuration the server refuses to run with (EX_USAGE). */
+const CONFIG_EXIT_CODE = 64;
+
+class ConfigError extends Error {}
+
+/**
+ * `NAME`, or the contents of the file named by `NAME_FILE`, trimmed; empty →
+ * undefined. A directly set (non-empty) variable wins over its `_FILE`
+ * variant, matching RelayAuth. An unreadable `_FILE` is a configuration error.
+ */
 function secretFromEnv(env: NodeJS.ProcessEnv, name: string): string | undefined {
-  const file = env[`${name}_FILE`];
-  const value = file ? readFileSync(file, 'utf8') : env[name];
-  const trimmed = value?.trim();
+  const direct = env[name]?.trim();
+  if (direct) return direct;
+  const file = env[`${name}_FILE`]?.trim();
+  if (!file) return undefined;
+  let value: string;
+  try {
+    value = readFileSync(file, 'utf8');
+  } catch (err) {
+    throw new ConfigError(
+      `${name}_FILE points at an unreadable file (${err instanceof Error && 'code' in err ? String(err.code) : 'read error'})`,
+    );
+  }
+  const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
 }
 
@@ -102,6 +128,16 @@ async function main(): Promise<void> {
       : undefined;
 
   const internalSecret = secretFromEnv(process.env, 'RELAYCAST_INTERNAL_SECRET');
+  if (internalSecret !== undefined && internalSecret.length < MIN_INTERNAL_SECRET_LENGTH) {
+    throw new ConfigError(
+      `RELAYCAST_INTERNAL_SECRET must be at least ${MIN_INTERNAL_SECRET_LENGTH} characters`,
+    );
+  }
+  const workspaceBootstrapSecret = secretFromEnv(process.env, 'RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET');
+  const publicWorkspaceCreate = process.env.RELAYCAST_PUBLIC_WORKSPACE_CREATE?.trim();
+  if (publicWorkspaceCreate && publicWorkspaceCreate !== 'true' && publicWorkspaceCreate !== 'false') {
+    throw new ConfigError('RELAYCAST_PUBLIC_WORKSPACE_CREATE must be "true" or "false"');
+  }
 
   const running = startServer({
     dbPath: opts.db,
@@ -109,13 +145,12 @@ async function main(): Promise<void> {
     baseUrl,
     config: {
       environment: opts.environment,
-      ...(process.env.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET
-        ? { workspaceBootstrapSecret: process.env.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET }
-        : {}),
+      ...(workspaceBootstrapSecret ? { workspaceBootstrapSecret } : {}),
       ...(process.env.RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED === 'true'
         ? { workspaceBootstrapProofRequired: true }
         : {}),
       ...(internalSecret ? { internalSecret } : {}),
+      ...(publicWorkspaceCreate === 'false' ? { publicWorkspaceCreate: false } : {}),
       ...(Object.keys(mailbox).length > 0 ? { mailbox } : {}),
     },
     ...(eventQueue ? { eventQueue } : {}),
@@ -138,5 +173,5 @@ async function main(): Promise<void> {
 
 main().catch((err) => {
   process.stderr.write(`relaycast-engine failed to start: ${err instanceof Error ? err.message : String(err)}\n`);
-  process.exit(1);
+  process.exit(err instanceof ConfigError ? CONFIG_EXIT_CODE : 1);
 });

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { makeNodeStack, registerAgent, type TestStack } from './harness.js';
 
 /**
@@ -125,7 +125,7 @@ describe('internal admin API', () => {
 
       // Fenced now: a generationless hash change is refused.
       const legacy = await internal(`/workspaces/${ws.workspace_id}/api-key`, {
-        method: 'POST', body: { api_key: 'rk_live_legacywriter' },
+        method: 'POST', body: { api_key: `rk_${'live'}_legacywriter00000000000000000000` },
       });
       expect(legacy.status).toBe(409);
       expect(await legacy.json()).toMatchObject({ error: { code: 'key_generation_required' } });
@@ -148,7 +148,7 @@ describe('internal admin API', () => {
 
     it('upserts a missing workspace from a pushed key (hosted shape)', async () => {
       stack = makeNodeStack({ internalSecret: SECRET });
-      const key = `rk_${'live'}_cloudminted0000000000000001`;
+      const key = `rk_${'live'}_cloudminted_b64url-0000000000000001`;
       const res = await internal('/workspaces/cloud-ws-1/api-key', {
         method: 'POST', body: { api_key: key, key_generation: 1, plan: 'pro' },
       });
@@ -169,7 +169,7 @@ describe('internal admin API', () => {
 
     it('re-pushing the live key is idempotent and can bump the generation', async () => {
       stack = makeNodeStack({ internalSecret: SECRET });
-      const key = `rk_${'live'}_cloudminted0000000000000002`;
+      const key = `rk_${'live'}_cloudminted_b64url-0000000000000002`;
       const path = '/workspaces/cloud-ws-2/api-key';
       expect((await internal(path, { method: 'POST', body: { api_key: key, key_generation: 2 } })).status).toBe(201);
       const again = await internal(path, { method: 'POST', body: { api_key: key, key_generation: 2 } });
@@ -184,8 +184,8 @@ describe('internal admin API', () => {
     it('generation-fenced rotation: grace 0 revokes, stale pushes are refused', async () => {
       stack = makeNodeStack({ internalSecret: SECRET });
       const path = '/workspaces/cloud-ws-3/api-key';
-      const k1 = `rk_${'live'}_cloudminted0000000000000031`;
-      const k2 = `rk_${'live'}_cloudminted0000000000000032`;
+      const k1 = `rk_${'live'}_cloudminted_b64url-0000000000000031`;
+      const k2 = `rk_${'live'}_cloudminted_b64url-0000000000000032`;
       await internal(path, { method: 'POST', body: { api_key: k1, key_generation: 1 } });
 
       const rotate = await internal(path, { method: 'POST', body: { api_key: k2, key_generation: 2, grace_ms: 0 } });
@@ -204,8 +204,8 @@ describe('internal admin API', () => {
     it('keeps the superseded key alive for grace_ms', async () => {
       stack = makeNodeStack({ internalSecret: SECRET });
       const path = '/workspaces/cloud-ws-4/api-key';
-      const k1 = `rk_${'live'}_cloudminted0000000000000041`;
-      const k2 = `rk_${'live'}_cloudminted0000000000000042`;
+      const k1 = `rk_${'live'}_cloudminted_b64url-0000000000000041`;
+      const k2 = `rk_${'live'}_cloudminted_b64url-0000000000000042`;
       await internal(path, { method: 'POST', body: { api_key: k1, key_generation: 1 } });
       await internal(path, { method: 'POST', body: { api_key: k2, key_generation: 2, grace_ms: 60_000 } });
       expect((await readWorkspace(k1)).status).toBe(200);
@@ -215,8 +215,8 @@ describe('internal admin API', () => {
     it('accepts generationless pushes only while unfenced', async () => {
       stack = makeNodeStack({ internalSecret: SECRET });
       const path = '/workspaces/cloud-ws-5/api-key';
-      const k1 = `rk_${'live'}_cloudminted0000000000000051`;
-      const k2 = `rk_${'live'}_cloudminted0000000000000052`;
+      const k1 = `rk_${'live'}_cloudminted_b64url-0000000000000051`;
+      const k2 = `rk_${'live'}_cloudminted_b64url-0000000000000052`;
       expect((await internal(path, { method: 'POST', body: { api_key: k1 } })).status).toBe(201);
       const swap = await internal(path, { method: 'POST', body: { api_key: k2 } });
       expect(await data(swap)).toEqual({ workspace_id: 'cloud-ws-5', api_key_generation: 0 });
@@ -234,6 +234,14 @@ describe('internal admin API', () => {
         { api_key: 'rk_live_x', key_generation: 1, grace_ms: 3_600_001 },
         { api_key: 'rk_live_x', grace_ms: 10 },
       ];
+      cases.push(
+        // rk_live_ + fewer than 32 characters, or characters outside [A-Za-z0-9_-].
+        { api_key: `rk_live_${'a'.repeat(31)}` },
+        { api_key: `rk_live_${'a'.repeat(32)}!` },
+        { api_key: `rk_live_${'a'.repeat(257)}` },
+        { api_key: `rk_live_${'a'.repeat(16)} ${'a'.repeat(16)}` },
+        { api_key: `rk_live_${'a'.repeat(32)}`, key_generation: Number.MAX_SAFE_INTEGER + 1 },
+      );
       for (const body of cases) {
         const res = await internal(path, { method: 'POST', body });
         expect(res.status, JSON.stringify(body)).toBe(400);
@@ -247,6 +255,70 @@ describe('internal admin API', () => {
       const res = await internal('/workspaces/other-ws/api-key', { method: 'POST', body: { api_key: ws.api_key } });
       expect(res.status).toBe(409);
       expect(await res.json()).toMatchObject({ error: { code: 'api_key_conflict' } });
+    });
+  });
+  describe('key formats', () => {
+    it('accepts engine-minted hex keys and cloud-minted base64url keys', async () => {
+      stack = makeNodeStack({ internalSecret: SECRET });
+      // The cloud control plane mints rk_live_ + base64url(32 random bytes).
+      const cloudKey = `rk_live_${Buffer.alloc(32, 0xfb).toString('base64url')}`;
+      expect(cloudKey).toMatch(/[-_]/);
+      const pushed = await internal('/workspaces/cloud-b64/api-key', {
+        method: 'POST', body: { api_key: cloudKey, key_generation: Number.MAX_SAFE_INTEGER },
+      });
+      expect(pushed.status).toBe(201);
+      expect((await readWorkspace(cloudKey)).status).toBe(200);
+    });
+  });
+
+  describe('public workspace create', () => {
+    it('is on by default and answers the generic 404 when publicWorkspaceCreate is false', async () => {
+      const create = () => stack.app.request('/v1/workspaces', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'public-team' }),
+      });
+      stack = makeNodeStack({ internalSecret: SECRET });
+      expect((await create()).status).toBe(201);
+      stack.close();
+
+      stack = makeNodeStack({ internalSecret: SECRET, publicWorkspaceCreate: false });
+      const res = await create();
+      expect(res.status).toBe(404);
+      expect(await res.json()).toMatchObject({ ok: false, error: { code: 'not_found' } });
+      // The control plane path still provisions workspaces.
+      const ws = await createViaAdmin('managed');
+      expect((await readWorkspace(ws.api_key)).status).toBe(200);
+    });
+  });
+
+  describe('secret handling', () => {
+    it('refuses an internal secret shorter than 32 characters at engine creation', () => {
+      expect(() => makeNodeStack({ internalSecret: 'x'.repeat(31) })).toThrow(/at least 32 characters/);
+    });
+
+    it('never fingerprints the internal bearer in request logs', async () => {
+      stack = makeNodeStack({ internalSecret: SECRET });
+      const lines: unknown[][] = [];
+      const capture = (...args: unknown[]) => { lines.push(args); };
+      const spies = (['debug', 'info', 'warn', 'error'] as const).map((level) =>
+        vi.spyOn(console, level).mockImplementation(capture));
+      try {
+        // 401 with a wrong secret is logged as a client error.
+        expect((await internal('/capabilities', { secret: `${SECRET}-wrong` })).status).toBe(401);
+        // A public route with a bearer still gets a fingerprint (unchanged behaviour).
+        await stack.app.request('/v1/workspace', { headers: { authorization: 'Bearer rk_live_unknownkey' } });
+      } finally {
+        for (const spy of spies) spy.mockRestore();
+      }
+      const serialized = lines.map((args) => JSON.stringify(args));
+      const internalLines = serialized.filter((line) => line.includes('/internal/capabilities'));
+      expect(internalLines.length).toBeGreaterThan(0);
+      for (const line of internalLines) {
+        expect(line).not.toContain('actor_fingerprint');
+        expect(line).not.toContain(SECRET);
+      }
+      expect(serialized.some((line) => line.includes('/v1/workspace') && line.includes('actor_fingerprint'))).toBe(true);
     });
   });
 });

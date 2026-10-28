@@ -25,6 +25,7 @@ import {
 // Route imports
 import { healthRoutes } from './routes/health.js';
 import { workspaceRoutes } from './routes/workspace.js';
+import { assertInternalSecretStrength } from './engine/internalAdmin.js';
 import { observerTokenRoutes } from './routes/observerToken.js';
 import { agentRoutes } from './routes/agent.js';
 import { channelRoutes } from './routes/channel.js';
@@ -67,6 +68,7 @@ import { internalRoutes } from './routes/internal.js';
  * no Durable Objects — those concerns belong to the adapter/entrypoint.
  */
 export function createEngine(deps: EngineDeps): Hono<AppEnv> {
+  assertInternalSecretStrength(deps.config?.internalSecret);
   const runtime: EngineRuntime = {
     db: deps.db,
     realtime: deps.realtime,

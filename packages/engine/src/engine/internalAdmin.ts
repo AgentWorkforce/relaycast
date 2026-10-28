@@ -39,6 +39,23 @@ export const INTERNAL_CAPABILITIES = {
   },
 } as const;
 
+/** Minimum length of `config.internalSecret` (e.g. `openssl rand -hex 32` is 64). */
+export const MIN_INTERNAL_SECRET_LENGTH = 32;
+
+/**
+ * Throw when a configured internal secret is too short to be a credential.
+ * Unset/empty is fine (the admin API stays disabled).
+ */
+export function assertInternalSecretStrength(secret: string | undefined): void {
+  if (secret === undefined || secret === '') return;
+  if (secret.length < MIN_INTERNAL_SECRET_LENGTH) {
+    throw new Error(
+      `RELAYCAST_INTERNAL_SECRET must be at least ${MIN_INTERNAL_SECRET_LENGTH} characters ` +
+        '(generate one with `openssl rand -hex 32`)',
+    );
+  }
+}
+
 export interface PushWorkspaceKeyInput {
   /** Caller-minted `rk_live_` key. Omitted → the engine mints one (self-host extension). */
   apiKey?: string;

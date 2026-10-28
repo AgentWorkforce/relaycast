@@ -31,6 +31,7 @@ import { WORKSPACE_KEY_MAX_GRACE_MS } from '../engine/tokenRotate.js';
 export const internalRoutes = new Hono<AppEnv>();
 
 const WORKSPACE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+const WORKSPACE_KEY_PATTERN = /^rk_live_[A-Za-z0-9_-]{32,256}$/;
 
 const requireInternalSecret = createMiddleware<AppEnv>(async (c, next) => {
   const expected = c.get('engine').config.internalSecret;
@@ -77,11 +78,19 @@ internalRoutes.post('/workspaces', async (c) => {
 });
 
 const pushKeySchema = z.object({
-  api_key: z.string().trim().startsWith('rk_live_', 'api_key must be an rk_live workspace key').optional(),
+  // `rk_live_` + 32..256 URL-safe characters: the engine mints 32 hex chars and
+  // the cloud control plane mints base64url(32 bytes), so `-`/`_` are allowed.
+  api_key: z.string().trim().regex(
+    WORKSPACE_KEY_PATTERN,
+    'api_key must be an rk_live_ workspace key (rk_live_ followed by 32-256 characters of [A-Za-z0-9_-])',
+  ).optional(),
   // Accepted for wire compatibility with the hosted gateway; the self-host
   // engine has no plan entitlements, so the value is validated and ignored.
   plan: z.string().min(1).optional(),
-  key_generation: z.number().int().min(1, 'key_generation must be a positive integer').optional(),
+  key_generation: z.number().int()
+    .min(1, 'key_generation must be a positive integer')
+    .max(Number.MAX_SAFE_INTEGER, 'key_generation must be a safe integer')
+    .optional(),
   grace_ms: z.number().int().min(0).max(WORKSPACE_KEY_MAX_GRACE_MS).optional(),
 }).refine((body) => body.grace_ms === undefined || body.key_generation !== undefined || body.api_key === undefined, {
   message: 'grace_ms requires key_generation',
