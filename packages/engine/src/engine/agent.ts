@@ -11,6 +11,7 @@ import { directNodeIdForAgent } from './node.js';
 import { addressNodeSelection, formatAgentAddress } from './address.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { AGENT_RECOVERY_PROOF_HASH_PATTERN } from '@relaycast/types';
+import { WEBHOOK_AGENT_NAME } from './messageMetadata.js';
 
 export { AGENT_RECOVERY_PROOF_HASH_PATTERN } from '@relaycast/types';
 
@@ -139,12 +140,22 @@ export function releasedAgentName(name: string, agentId: string): string {
 }
 
 /**
- * Reject names that would land in the reserved tombstone namespace.
+ * Reject names the engine reserves for itself.
  *
- * Called on every registration path. Without it the release path is not
- * atomic-safe: see {@link releasedAgentName}.
+ * Called on every registration path. The tombstone namespace keeps the release
+ * path atomic-safe (see {@link releasedAgentName}). {@link WEBHOOK_AGENT_NAME}
+ * is the engine-provisioned inbound-webhook identity: only `createWebhook`
+ * creates it, which is what lets registration admission leave it out of the
+ * `register_agent` count.
  */
 export function assertRegistrableAgentName(name: string): void {
+  if (name === WEBHOOK_AGENT_NAME) {
+    throw codedError(
+      `Agent name "${name}" is reserved for the inbound webhook identity`,
+      'invalid_agent_name',
+      400,
+    );
+  }
   if (name.includes(RELEASED_NAME_MARKER)) {
     throw codedError(
       `Agent name "${name}" is reserved: "${RELEASED_NAME_MARKER}" marks a released agent`,

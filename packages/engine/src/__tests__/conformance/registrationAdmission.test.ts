@@ -120,15 +120,27 @@ describe('registration admission', () => {
     await expect(spoofed.json()).resolves.toMatchObject({ error: { code: 'reserved_node_id' } });
     await expect(countRegistrations(stack.runtime.handle.db, ws.workspaceId, 'register_device')).resolves.toBe(1);
 
-    // A near miss on the prefix (`_` is a LIKE wildcard, not a GLOB one) is an
-    // ordinary host-enrolled direct node: not reserved, and counted.
+  });
+
+  it('counts a direct node whose id only resembles the reserved prefix as a device', async () => {
+    const seen: AdmissionContext[] = [];
+    stack = makeNodeStack({ admission: cappingHost({ register_device: 1 }, seen) });
+    const ws = await createWorkspace(stack.app, 'cap-near-miss');
+
+    // `_` is a LIKE wildcard, not a GLOB one: `nodeXdirectXcustom` is an
+    // ordinary host-enrolled direct node, not reserved, and it takes the slot.
     const nearMiss = await stack.app.request('/v1/nodes', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
       body: JSON.stringify({ node_id: 'nodeXdirectXcustom', name: 'near-miss', role: 'direct', max_agents: 1 }),
     });
-    expect(nearMiss.status).toBe(429);
-    await expect(nearMiss.json()).resolves.toMatchObject(refusal('devices', 1, 1));
+    expect(nearMiss.status).toBe(201);
+    await expect(countRegistrations(stack.runtime.handle.db, ws.workspaceId, 'register_device')).resolves.toBe(1);
+
+    const next = await enrollNode(ws, 'node_1', 'device');
+    expect(next.status).toBe(429);
+    await expect(next.json()).resolves.toMatchObject(refusal('devices', 1, 1));
+    expect(seen.filter((ctx) => ctx.action === 'register_device').map((ctx) => ctx.registered)).toEqual([0, 1]);
   });
 
   it('counts an explicitly enrolled direct node as a device, so a direct-then-broker re-enroll cannot bypass the cap', async () => {
@@ -234,6 +246,35 @@ describe('registration admission', () => {
     });
     expect(refused.status).toBe(429);
     await expect(refused.json()).resolves.toMatchObject(refusal('agents', 1, 1));
+  });
+
+  it('does not count the inbound webhook identity as an agent', async () => {
+    stack = makeNodeStack({ admission: cappingHost({ register_agent: 2 }) });
+    const ws = await createWorkspace(stack.app, 'cap-webhook');
+    expect((await registerAgentRaw(ws, { name: 'first' })).status).toBe(201);
+
+    // The first webhook provisions the engine's `__relay_webhook__` identity.
+    const hook = await stack.app.request('/v1/webhooks', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ channel: 'general' }),
+    });
+    expect(hook.status).toBe(201);
+    await expect(countRegistrations(stack.runtime.handle.db, ws.workspaceId, 'register_agent')).resolves.toBe(1);
+
+    expect((await registerAgentRaw(ws, { name: 'second' })).status).toBe(201);
+    const third = await registerAgentRaw(ws, { name: 'third' });
+    expect(third.status).toBe(429);
+    await expect(third.json()).resolves.toMatchObject(refusal('agents', 2, 2));
+  });
+
+  it('reserves the inbound webhook identity name at registration', async () => {
+    stack = makeNodeStack({ admission: cappingHost({ register_agent: 2 }) });
+    const ws = await createWorkspace(stack.app, 'cap-webhook-name');
+    const spoofed = await registerAgentRaw(ws, { name: '__relay_webhook__', type: 'system' });
+    expect(spoofed.status).toBe(400);
+    await expect(spoofed.json()).resolves.toMatchObject({ error: { code: 'invalid_agent_name' } });
+    await expect(countRegistrations(stack.runtime.handle.db, ws.workspaceId, 'register_agent')).resolves.toBe(0);
   });
 
   it('admits every registration without an admit hook', async () => {

@@ -4,6 +4,7 @@ import type { AdmissionHooks, RegistrationAdmissionAction } from '../ports/admis
 import type { Workspace } from '../ports/auth.js';
 import { agents, nodes, workspaces } from '../db/schema.js';
 import { AdmissionDeniedError } from '../lib/admissionError.js';
+import { WEBHOOK_AGENT_NAME } from './messageMetadata.js';
 
 /**
  * How many of `action`'s kind the workspace currently has registered — the
@@ -14,7 +15,11 @@ import { AdmissionDeniedError } from '../lib/admissionError.js';
  *   (`node_direct_<agent id>`) for its own WebSocket; those are not devices.
  *   The prefix is reserved at enrollment (`createNodeToken`), so a host cannot
  *   enroll into it.
- * - `register_agent`: non-human identities that have not been released.
+ * - `register_agent`: non-human identities that have not been released, except
+ *   the engine-provisioned inbound-webhook identity ({@link WEBHOOK_AGENT_NAME}).
+ *   `createWebhook` provisions it on a workspace's first webhook; no caller
+ *   registers it, and its name is reserved at registration
+ *   (`assertRegistrableAgentName`), so it never holds a slot.
  * - `register_human`: `type = 'human'` identities that have not been released.
  */
 export async function countRegistrations(
@@ -40,7 +45,9 @@ export async function countRegistrations(
         eq(agents.workspaceId, workspaceId),
         // Tombstoned identities (`RELEASED_AGENT_STATUS` in agent.ts) hold no slot.
         ne(agents.status, 'released'),
-        action === 'register_human' ? eq(agents.type, 'human') : ne(agents.type, 'human'),
+        action === 'register_human'
+          ? eq(agents.type, 'human')
+          : and(ne(agents.type, 'human'), ne(agents.name, WEBHOOK_AGENT_NAME)),
       ));
   return Number(rows[0]?.count ?? 0);
 }

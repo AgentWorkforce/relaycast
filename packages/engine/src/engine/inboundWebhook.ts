@@ -5,7 +5,7 @@ import { isWorkspaceExpired } from '../auth/workspaceExpiry.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { generateId } from './snowflake.js';
-import { inboundWebhookMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
+import { inboundWebhookMessageMetadata, sanitizeUserMessageMetadata, WEBHOOK_AGENT_NAME } from './messageMetadata.js';
 import { runAtomicWrites, databaseConstraintKind, type AtomicWrite } from '../ports/database.js';
 import { buildChannelDeliveryWrite, fetchChannelDeliveryOutcomes } from './deliveryWrites.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS, type MailboxConfig } from './mailboxConfig.js';
@@ -13,7 +13,6 @@ import type { WorkspaceDeliveryPolicy } from './workspaceDeliveryPolicy.js';
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 
 type Db = ReturnType<typeof getDb>;
-const WEBHOOK_AGENT_NAME = '__relay_webhook__';
 
 async function ensureWebhookAgent(db: Db, workspaceId: string): Promise<string> {
   const [existing] = await db
