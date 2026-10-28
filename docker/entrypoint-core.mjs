@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 
 const CONFIG_EXIT_CODE = 64;
@@ -8,7 +9,8 @@ Usage:
   docker run <image> --base-url <https-origin> [--db <path>] [--port <n>] [--env <name>]
 
 Options:
-  --base-url <url>   Required public HTTPS origin
+  --base-url <url>   Required public HTTPS origin (http on loopback/private
+                     hosts only with RELAYCAST_ALLOW_INSECURE_BASE_URL=true)
   --db <path>        SQLite database file (default: $RELAYCAST_DB_PATH or ./relaycast.db)
   --port <n>         HTTP port inside the container (default: $PORT or 8787)
   --env <name>       Environment label (default: production)
@@ -17,6 +19,11 @@ Options:
 Environment:
   RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET  Stable secret for anonymous keyed workspace retries
   RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED  Set true to require bootstrap-secret proof for anonymous keyed creates
+  RELAYCAST_INTERNAL_SECRET(_FILE)      Enable the /internal admin API for a trusted control plane
+  RELAYCAST_ALLOW_INSECURE_BASE_URL     Set true to accept http:// (or IP-literal / single-label)
+                                        base URLs whose host is loopback or private (RFC 1918,
+                                        ULA, link-local, *.local, *.internal, *.lan, *.home.arpa,
+                                        single-label service names). Public hosts stay HTTPS-only.
 `;
 
 export class BaseUrlError extends Error {
@@ -147,7 +154,69 @@ function isLoopbackHostname(hostname) {
   return ipv4 !== null && ipv4 >>> 24 === 127;
 }
 
-export function validateBaseUrl(value) {
+const PRIVATE_DNS_SUFFIXES = ['.local', '.internal', '.lan', '.home.arpa'];
+
+function isPrivateIPv4(ipv4) {
+  const a = ipv4 >>> 24;
+  const b = (ipv4 >>> 16) & 0xff;
+  return (
+    a === 10 ||
+    a === 127 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 169 && b === 254)
+  );
+}
+
+/**
+ * True for hosts that cannot be a public internet authority: loopback,
+ * RFC 1918 / link-local IPv4, ULA / link-local IPv6, single-label names
+ * (container or Kubernetes service names) and private-use DNS suffixes.
+ */
+export function isPrivateHostname(hostname) {
+  const host = unbracket(hostname).replace(/\.$/, '').toLowerCase();
+  if (isLoopbackHostname(host)) return true;
+  const ipVersion = isIP(host);
+  if (ipVersion === 6) {
+    const parts = expandedIpv6(host);
+    if (!parts) return false;
+    if ((parts[0] & 0xfe00) === 0xfc00) return true; // fc00::/7
+    if ((parts[0] & 0xffc0) === 0xfe80) return true; // fe80::/10
+    const isMapped =
+      parts.slice(0, 5).every((part) => part === 0) && parts[5] === 0xffff;
+    return isMapped && isPrivateIPv4(((parts[6] << 16) | parts[7]) >>> 0);
+  }
+  const ipv4 = parseIPv4Like(host);
+  if (ipv4 !== null) return isPrivateIPv4(ipv4);
+  if (!isValidDnsHostname(host)) return false;
+  if (!host.includes('.')) return true;
+  return PRIVATE_DNS_SUFFIXES.some((suffix) => host.endsWith(suffix));
+}
+
+export function insecureBaseUrlAllowed(env = process.env) {
+  return env.RELAYCAST_ALLOW_INSECURE_BASE_URL === 'true';
+}
+
+function validatePrivateBaseUrl(url) {
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    refusal('invalid_base_url', '--base-url must use http or https.');
+  }
+  if (
+    url.username ||
+    url.password ||
+    url.pathname !== '/' ||
+    url.search ||
+    url.hash
+  ) {
+    refusal(
+      'non_origin_base_url',
+      '--base-url must be an origin only, without credentials, a path, query, or fragment.',
+    );
+  }
+  return url.origin;
+}
+
+export function validateBaseUrl(value, { allowInsecure = insecureBaseUrlAllowed() } = {}) {
   let url;
   try {
     url = new URL(value);
@@ -158,10 +227,19 @@ export function validateBaseUrl(value) {
     );
   }
 
+  // Opt-in lab/private-network mode: a host that cannot be a public internet
+  // authority may use http (and IP literals / single-label names). A public
+  // host is still held to every rule below.
+  if (allowInsecure && isPrivateHostname(url.hostname)) {
+    return validatePrivateBaseUrl(url);
+  }
+
   if (url.protocol !== 'https:') {
     refusal(
       'non_https_base_url',
-      '--base-url must use https; plaintext deployment authorities are forbidden.',
+      allowInsecure
+        ? '--base-url must use https; RELAYCAST_ALLOW_INSECURE_BASE_URL only relaxes this for loopback/private hosts.'
+        : '--base-url must use https; plaintext deployment authorities are forbidden.',
     );
   }
 
@@ -217,7 +295,7 @@ export function validateBaseUrl(value) {
   return url.origin;
 }
 
-export function validatedEngineArgs(argv) {
+export function validatedEngineArgs(argv, env = process.env) {
   const args = [];
   let baseUrlIndex = -1;
 
@@ -265,7 +343,9 @@ export function validatedEngineArgs(argv) {
     );
   }
 
-  args[baseUrlIndex] = validateBaseUrl(args[baseUrlIndex]);
+  args[baseUrlIndex] = validateBaseUrl(args[baseUrlIndex], {
+    allowInsecure: insecureBaseUrlAllowed(env),
+  });
   return args;
 }
 
@@ -321,7 +401,9 @@ function parseEngineOptions(argv, env) {
       '--base-url is required and must not be consumed as another option value.',
     );
   }
-  options.baseUrl = validateBaseUrl(options.baseUrl);
+  options.baseUrl = validateBaseUrl(options.baseUrl, {
+    allowInsecure: insecureBaseUrlAllowed(env),
+  });
   return options;
 }
 
@@ -337,7 +419,16 @@ function optionalNumber(value) {
  * for keyed anonymous creates while preserving unkeyed and authenticated-owner
  * creation.
  */
+/** `NAME` or the contents of the file named by `NAME_FILE`, trimmed; empty → undefined. */
+export function secretFromEnv(env, name) {
+  const file = env[`${name}_FILE`];
+  const value = file ? readFileSync(file, 'utf8') : env[name];
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 export function buildEngineConfig(env, mailbox = {}) {
+  const internalSecret = secretFromEnv(env, 'RELAYCAST_INTERNAL_SECRET');
   return {
     environment: env.RELAYCAST_ENV ?? 'production',
     ...(env.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET
@@ -346,6 +437,7 @@ export function buildEngineConfig(env, mailbox = {}) {
     ...(env.RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED === 'true'
       ? { workspaceBootstrapProofRequired: true }
       : {}),
+    ...(internalSecret ? { internalSecret } : {}),
     ...(Object.keys(mailbox).length > 0 ? { mailbox } : {}),
   };
 }
@@ -358,7 +450,8 @@ export function buildEngineConfig(env, mailbox = {}) {
  * that every request to this container represents an HTTPS public authority.
  */
 export function installPublicAuthorityMarker(server, baseUrl) {
-  const publicAuthority = new URL(baseUrl).host;
+  const { host: publicAuthority, protocol } = new URL(baseUrl);
+  const encrypted = protocol === 'https:';
   server.prependListener('request', (request) => {
     request.headers.host = publicAuthority;
     let replacedHost = false;
@@ -369,7 +462,8 @@ export function installPublicAuthorityMarker(server, baseUrl) {
       }
     }
     if (!replacedHost) request.rawHeaders.push('Host', publicAuthority);
-    request.socket.encrypted = true;
+    // An opted-in plaintext private base URL is served as http end to end.
+    if (encrypted) request.socket.encrypted = true;
   });
 }
 

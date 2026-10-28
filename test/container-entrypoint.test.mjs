@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +11,8 @@ import {
   buildEngineConfig,
   installPublicAuthorityMarker,
   isHelpRequest,
+  isPrivateHostname,
+  validateBaseUrl,
   validatedEngineArgs,
 } from '../docker/entrypoint-core.mjs';
 
@@ -305,4 +307,96 @@ test('normalizes tunnel requests to the validated public HTTPS authority', () =>
   // Negative control: the upstream Node adapter sees tunnel loopback as HTTP.
   assert.equal(observedOrigin(false), 'http://container:8787');
   assert.equal(observedOrigin(true), 'https://relay.ratifyprotocol.com');
+});
+
+test('keeps http and private authorities refused unless explicitly opted in', () => {
+  for (const url of ['http://127.0.0.1:19487', 'http://relaycast:8787', 'http://10.0.0.5']) {
+    assert.throws(() => validateBaseUrl(url, { allowInsecure: false }), /refused to start/);
+  }
+  assert.throws(
+    () => validatedEngineArgs(['--base-url', 'http://127.0.0.1:19487'], {}),
+    /must use https/,
+  );
+});
+
+test('accepts http base URLs on loopback/private hosts when RELAYCAST_ALLOW_INSECURE_BASE_URL=true', () => {
+  const env = { RELAYCAST_ALLOW_INSECURE_BASE_URL: 'true' };
+  for (const [input, origin] of [
+    ['http://127.0.0.1:19487', 'http://127.0.0.1:19487'],
+    ['http://localhost:8787', 'http://localhost:8787'],
+    ['http://[::1]:8787', 'http://[::1]:8787'],
+    ['http://10.1.2.3', 'http://10.1.2.3'],
+    ['http://172.20.0.4:8787', 'http://172.20.0.4:8787'],
+    ['http://192.168.1.10', 'http://192.168.1.10'],
+    ['http://[fd00::1]', 'http://[fd00::1]'],
+    ['http://relaycast:8787', 'http://relaycast:8787'],
+    ['http://relaycast.relay.svc.cluster.local:8787', 'http://relaycast.relay.svc.cluster.local:8787'],
+    ['http://cast.corp.internal', 'http://cast.corp.internal'],
+  ]) {
+    assert.deepEqual(validatedEngineArgs(['--base-url', input], env), ['--base-url', origin], input);
+  }
+  // The usual HTTPS public authority still works with the flag set.
+  assert.deepEqual(validatedEngineArgs(acceptedArgs, env), acceptedArgs);
+});
+
+test('the insecure opt-in never relaxes public hosts or origin-only rules', () => {
+  const env = { RELAYCAST_ALLOW_INSECURE_BASE_URL: 'true' };
+  for (const url of [
+    'http://relay.ratifyprotocol.com',
+    'http://8.8.8.8',
+    'http://172.32.0.1',
+    'http://[2001:db8::1]',
+  ]) {
+    assert.throws(() => validatedEngineArgs(['--base-url', url], env), /must use https|IP literals/, url);
+  }
+  assert.throws(
+    () => validatedEngineArgs(['--base-url', 'http://127.0.0.1:19487/path'], env),
+    /origin only/,
+  );
+  assert.throws(
+    () => validatedEngineArgs(['--base-url', 'ftp://127.0.0.1'], env),
+    /http or https/,
+  );
+  // Only the exact string "true" opts in.
+  assert.throws(
+    () => validatedEngineArgs(['--base-url', 'http://127.0.0.1'], { RELAYCAST_ALLOW_INSECURE_BASE_URL: '1' }),
+    /must use https/,
+  );
+  assert.equal(isPrivateHostname('relay.ratifyprotocol.com'), false);
+});
+
+test('forwards the internal secret from env or a mounted file', (t) => {
+  assert.deepEqual(
+    buildEngineConfig({ RELAYCAST_ENV: 'production', RELAYCAST_INTERNAL_SECRET: 'inline-secret' }),
+    { environment: 'production', internalSecret: 'inline-secret' },
+  );
+  const dir = mkdtempSync(join(tmpdir(), 'relaycast-internal-secret-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, 'secret');
+  writeFileSync(file, 'file-secret\n', { mode: 0o600 });
+  assert.deepEqual(
+    buildEngineConfig({
+      RELAYCAST_ENV: 'production',
+      RELAYCAST_INTERNAL_SECRET: 'ignored-when-file-set',
+      RELAYCAST_INTERNAL_SECRET_FILE: file,
+    }),
+    { environment: 'production', internalSecret: 'file-secret' },
+  );
+  // Unset or blank leaves the admin API disabled.
+  assert.deepEqual(buildEngineConfig({ RELAYCAST_ENV: 'production', RELAYCAST_INTERNAL_SECRET: '  ' }), {
+    environment: 'production',
+  });
+});
+
+test('keeps plaintext private base URLs unmarked as TLS', () => {
+  const server = new EventEmitter();
+  let encrypted;
+  server.on('request', (request) => { encrypted = request.socket.encrypted; });
+  installPublicAuthorityMarker(server, 'http://127.0.0.1:19487');
+  server.emit('request', {
+    headers: { host: 'container:8787' },
+    rawHeaders: ['Host', 'container:8787'],
+    socket: { encrypted: false },
+  });
+  assert.equal(encrypted, false);
 });
