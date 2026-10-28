@@ -467,6 +467,7 @@ export async function listAgents(
         capabilities: agents.capabilities,
         createdAt: agents.createdAt,
         lastSeen: agents.lastSeen,
+        spawnedBy: agents.spawnedBy,
         // Installed desktop clients need provider/host/session metadata. Keep
         // it by default; lean callers avoid reading or decoding the JSON blob.
         metadata: options.includeMetadata === false
@@ -492,6 +493,7 @@ export async function listAgents(
     capabilities: a.capabilities ?? null,
     created_at: a.createdAt.toISOString(),
     last_seen: a.lastSeen.toISOString(),
+    spawned_by: a.spawnedBy ?? null,
     metadata: a.metadata,
   }));
 }
@@ -577,6 +579,7 @@ export async function getAgentByName(db: Db, workspaceId: string, name: string) 
     capabilities: agent.capabilities ?? null,
     created_at: agent.createdAt.toISOString(),
     last_seen: agent.lastSeen.toISOString(),
+    spawned_by: agent.spawnedBy ?? null,
     metadata: agent.metadata,
     // The node whose authenticated socket registered this agent; set once by
     // the server and never patchable, unlike metadata.fleet. An agent
@@ -699,6 +702,7 @@ export async function updateAgentById(
     capabilities: updated.capabilities ?? null,
     created_at: updated.createdAt.toISOString(),
     last_seen: updated.lastSeen.toISOString(),
+    spawned_by: updated.spawnedBy ?? null,
     metadata: updated.metadata,
   };
 }
@@ -752,6 +756,7 @@ export async function claimLegacyAgentIdentity(
     capabilities: updated.capabilities ?? null,
     created_at: updated.createdAt.toISOString(),
     last_seen: updated.lastSeen.toISOString(),
+    spawned_by: updated.spawnedBy ?? null,
     metadata: updated.metadata,
   };
 }

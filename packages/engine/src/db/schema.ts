@@ -154,6 +154,9 @@ export const agents = sqliteTable(
     // Migration 0056 backfills historical rows from last_seen and its SQLite
     // trigger advances this value for every later status/liveness write.
     statusUpdatedAt: integer('status_updated_at', { mode: 'timestamp' }),
+    // Id of the agent whose spawn invocation created this one (migration 0078).
+    // Grants that agent release/delete rights over it; NULL when unowned.
+    spawnedBy: text('spawned_by'),
     // Only liveness transitions populate this; explicit status writes clear it.
     statusBeforeLivenessLoss: text('status_before_liveness_loss'),
     // Monotonic boundary copied from the hosting node's liveness generation.

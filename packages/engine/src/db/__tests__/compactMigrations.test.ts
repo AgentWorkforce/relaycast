@@ -52,6 +52,7 @@ function snapshot(handle: SqliteDbHandle) {
       // the existing last_seen value. Exclude that additive bookkeeping field
       // so this regression continues to compare all pre-existing user data.
       // 0070 adds a nullable liveness-recovery marker without backfilling it.
+      // 0078 adds the NULL spawned_by owner.
       if (name === 'workspaces') {
         // 0073 adds the rotation grace slot and the generation fence as
         // additive columns, and 0077 drops `plan`; exclude them so this
@@ -70,6 +71,7 @@ function snapshot(handle: SqliteDbHandle) {
           status_updated_at: _statusUpdatedAt,
           status_before_liveness_loss: _livenessStatus,
           node_liveness_revision: _nodeLivenessRevision,
+          spawned_by: _spawnedBy,
           ...existing
         } = row as Record<string, unknown>;
         return JSON.stringify(existing);
