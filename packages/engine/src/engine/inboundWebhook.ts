@@ -10,6 +10,7 @@ import { buildChannelDeliveryWrite, fetchChannelDeliveryOutcomes } from './deliv
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS, type MailboxConfig } from './mailboxConfig.js';
 import type { WorkspaceDeliveryPolicy } from './workspaceDeliveryPolicy.js';
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
+import { agentTokenExpiresAt } from '../auth/agentTokenExpiry.js';
 
 type Db = ReturnType<typeof getDb>;
 const WEBHOOK_AGENT_NAME = '__relay_webhook__';
@@ -34,6 +35,7 @@ async function ensureWebhookAgent(db: Db, workspaceId: string): Promise<string> 
       name: WEBHOOK_AGENT_NAME,
       type: 'system',
       tokenHash,
+      tokenExpiresAt: agentTokenExpiresAt(),
       status: 'offline',
       persona: 'System identity for inbound webhook messages',
       metadata: { system: true, purpose: 'inbound_webhook' },

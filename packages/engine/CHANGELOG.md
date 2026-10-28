@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Patch]
+## [Unreleased - Major]
+
+### Changed
+
+- Agent tokens issued by registration, recovery, takeover, and rotation expire after 15 minutes; the engine rejects expired tokens and caps rollover grace at the previous token's expiry. Migration `0072_agent_token_expiry.sql` leaves legacy rows null until coordinated rotation.
 
 ### Fixed
 

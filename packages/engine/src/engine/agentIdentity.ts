@@ -6,6 +6,7 @@ import { codedError } from '../lib/httpError.js';
 import { runAtomicWrites } from '../ports/database.js';
 import { generateId } from './snowflake.js';
 import { AGENT_TOKEN_GRACE_MS } from './tokenRotate.js';
+import { agentTokenExpiresAt } from '../auth/agentTokenExpiry.js';
 import { RELEASED_AGENT_STATUS } from './agent.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -139,19 +140,22 @@ export async function rotateAgentIdentity(
   audit: AgentIdentityAuditContext,
   action: 'recover' | 'takeover' = 'recover',
   options: { requireAtomic?: boolean; alreadyAtomic?: boolean } = {},
-): Promise<{ agent_id: string; name: string; token: string; audit_id: string }> {
+): Promise<{ agent_id: string; name: string; token: string; token_expires_at: string; audit_id: string }> {
   const token = `at_live_${randomHex(16)}`;
   const tokenHash = await sha256Hex(token);
   const auditId = `aid_${generateId()}`;
-  const graceExpiresAtSeconds = Math.floor((Date.now() + AGENT_TOKEN_GRACE_MS) / 1000);
+  const now = new Date();
+  const expiresAt = agentTokenExpiresAt(now);
+  const graceExpiresAtSeconds = Math.floor((now.getTime() + AGENT_TOKEN_GRACE_MS) / 1000);
 
   const buildWrites = (writeDb: Db) => [
     writeDb
       .update(agents)
       .set({
         previousTokenHash: sql`${agents.tokenHash}`,
-        previousTokenExpiresAt: sql`${graceExpiresAtSeconds}`,
+        previousTokenExpiresAt: sql`min(coalesce(${agents.tokenExpiresAt}, ${graceExpiresAtSeconds}), ${graceExpiresAtSeconds})`,
         tokenHash,
+        tokenExpiresAt: expiresAt,
       })
       .where(targetPredicate(target))
       .returning({ id: agents.id }),
@@ -187,7 +191,7 @@ export async function rotateAgentIdentity(
     );
   }
 
-  return { agent_id: target.agentId, name: target.agentName, token, audit_id: auditId };
+  return { agent_id: target.agentId, name: target.agentName, token, token_expires_at: expiresAt.toISOString(), audit_id: auditId };
 }
 
 export async function takeOverAgentIdentity(

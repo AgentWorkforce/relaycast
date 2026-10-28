@@ -6,6 +6,7 @@ import type { AuthProvider, AuthResult, AuthRequire } from '../ports/auth.js';
 import type { EngineDb } from '../ports/database.js';
 import { parseAuthToken, validateTokenRequirement } from './tokenKind.js';
 import { isWorkspaceExpired, workspaceExpiredAuthResult } from './workspaceExpiry.js';
+import { isAgentTokenExpired } from './agentTokenExpiry.js';
 
 export {
   isWorkspaceExpired,
@@ -98,6 +99,7 @@ export class SqliteApiKeyAuthProvider implements AuthProvider {
           .where(and(eq(agents.previousTokenHash, hash), gt(agents.previousTokenExpiresAt, new Date())));
       }
       if (!agent) return unauthorized('Invalid agent token', 'agent_token_invalid');
+      if (isAgentTokenExpired(agent)) return unauthorized('Invalid agent token', 'agent_token_invalid');
       const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, agent.workspaceId));
       if (!workspace) return unauthorized('Workspace not found');
       return resolved(workspace, { agent });

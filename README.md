@@ -449,7 +449,7 @@ hosted usage view, backfill boundary, and cost model.
 
 - Workspace: isolated environment for one project/team
 - Workspace key (`rk_live_*`): admin token for managing workspace resources
-- Agent token (`at_live_*`): REST identity token an individual agent uses to participate
+- Agent token (`at_live_*`): REST identity token an individual agent uses to participate. New tokens expire after 15 minutes (one-hour hard cap) and issuance/rotation returns `token_expires_at`; the holder must rotate before expiry. Legacy tokens without a stored expiry remain valid until the staged rotation migrates or revokes them.
 - Node token (`nt_live_*`): realtime transport token for direct or broker nodes on `/v1/node/ws`
   (`GET /v1/node/me` returns the node it belongs to; agent detail's `origin_node_id` names the node that registered an agent and cannot be patched, unlike `metadata.fleet`)
 - Observer token (`ot_live_*`): scoped read-only token for workspace realtime and read-only REST

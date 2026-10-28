@@ -33,6 +33,7 @@ import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { generateId } from './snowflake.js';
 import { assertRegistrableAgentName, agentLivenessLoss, agentLivenessRefresh, RELEASED_AGENT_STATUS } from './agent.js';
 import { rotateAgentIdentity } from './agentIdentity.js';
+import { agentTokenExpiresAt } from '../auth/agentTokenExpiry.js';
 import { isNodeLive, isReusableForMachineMatch, nodeHasCapacity, NODE_LIVENESS_TTL_MS } from './placement.js';
 import {
   DEFAULT_PROVIDER_NAME,
@@ -2222,7 +2223,9 @@ export async function registerAgentViaNode(
 
     const token = `at_live_${randomHex(16)}`;
     const tokenHash = await sha256Hex(token);
-    const now = new Date().toISOString();
+    const nowDate = new Date();
+    const now = nowDate.toISOString();
+    const tokenExpiresAt = agentTokenExpiresAt(nowDate);
     const agentId = generateId();
     const admissionResults: unknown[] = [];
 
@@ -2250,6 +2253,7 @@ export async function registerAgentViaNode(
       agent_id: agent.id,
       name: agent.name,
       token,
+      token_expires_at: tokenExpiresAt.toISOString(),
       ...(cursorHandshake ? { delivery_ack_seq: agent.deliveryAckSeq } : {}),
     });
 
@@ -2272,6 +2276,7 @@ export async function registerAgentViaNode(
             handle: `@${message.name}`,
             type: 'agent',
             tokenHash,
+            tokenExpiresAt,
             status: 'active',
             persona: null,
             metadata: { fleet: { node_id: nodeId, invocation_id: message.invocation_id ?? null, registered_at: now } },

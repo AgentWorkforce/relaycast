@@ -64,6 +64,7 @@ export const CreateAgentResponseSchema = z.object({
   id: z.string(),
   name: z.string(),
   token: z.string(),
+  token_expires_at: z.string().datetime().optional(),
   status: AgentStatusSchema,
   created_at: z.string(),
 });

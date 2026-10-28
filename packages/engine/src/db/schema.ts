@@ -126,6 +126,9 @@ export const agents = sqliteTable(
     name: text('name').notNull(),
     type: text('type').notNull().default('agent'),
     tokenHash: text('token_hash').notNull().unique(),
+    // NULL marks a legacy credential minted before the bounded-token rollout.
+    // New issuance always sets this; rollout must retire legacy rows first.
+    tokenExpiresAt: integer('token_expires_at', { mode: 'timestamp' }),
     // Superseded credential retained during the rotation grace window. See
     // migration 0035 for the concurrency defect this closes (relay#1542).
     previousTokenHash: text('previous_token_hash'),

@@ -36,6 +36,7 @@ it('upgrades existing actions and results additively, preserving rows and every 
       '0069_nodes_online_liveness_index.sql',
       '0070_agent_liveness_status.sql',
       '0071_node_liveness_revision.sql',
+      '0072_agent_token_expiry.sql',
       '0073_workspace_key_rotation.sql',
       '0074_delivery_active_location_node_index.sql',
       '0075_message_mention_fts.sql',

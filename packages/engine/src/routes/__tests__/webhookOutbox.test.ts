@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import type { EventQueue, QueuedEvent } from '../../ports/event-queue.js';
 import type { EngineDb } from '../../ports/database.js';
-import { directDmIdempotency, messages, pendingEvents } from '../../db/schema.js';
+import { agentTokenExpiresAt } from '../../auth/agentTokenExpiry.js';
+import { agents, directDmIdempotency, messages, pendingEvents } from '../../db/schema.js';
 import { sweepPendingEvents } from '../../engine/eventQueue.js';
 import { createWorkspace, registerAgent, makeNodeStack, type TestStack } from '../../__tests__/conformance/harness.js';
 import type { KeyValueStore } from '../../ports/kv.js';
@@ -226,6 +227,9 @@ describe('engine send path (persist-first outbox)', () => {
     };
 
     vi.setSystemTime(claimCreatedAt + 23 * 60 * 60 * 1000);
+    // The idempotency claim lives for 24h. Agent tokens expire after 15 minutes,
+    // so keep this bearer valid across the simulated jump; the case is the claim TTL.
+    await stack.db.update(agents).set({ tokenExpiresAt: agentTokenExpiresAt() }).where(eq(agents.id, first.alice.agentId));
     const replay = await stack.app.request('/v1/dm', {
       method: 'POST',
       headers: {
@@ -243,6 +247,7 @@ describe('engine send path (persist-first outbox)', () => {
     expect(replayRecord.data).not.toHaveProperty('_idempotency_ttl_seconds');
 
     vi.setSystemTime(claimCreatedAt + 24 * 60 * 60 * 1000 + 1_000);
+    await stack.db.update(agents).set({ tokenExpiresAt: agentTokenExpiresAt() }).where(eq(agents.id, first.alice.agentId));
     const fresh = await stack.app.request('/v1/dm', {
       method: 'POST',
       headers: {
