@@ -10,6 +10,7 @@ import { runAtomicWrites } from '../ports/database.js';
 import type { FileStorage } from '../ports/files.js';
 import type { WorkspaceProvenanceRecord } from '../db/schema.js';
 import { resolveEffectiveMessageRetention } from './retention.js';
+import { withEngineOperation } from '../lib/engineDiagnostics.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -665,6 +666,19 @@ export async function updateWorkspace(
 }
 
 async function deleteWorkspaceBatch(
+  db: Db,
+  storage: FileStorage,
+  workspaceIds: string[],
+): Promise<string[]> {
+  if (workspaceIds.length === 0) return [];
+  return withEngineOperation(
+    'workspace.delete',
+    workspaceIds.length === 1 ? workspaceIds[0] : undefined,
+    () => deleteWorkspaceBatchUnlabeled(db, storage, workspaceIds),
+  );
+}
+
+async function deleteWorkspaceBatchUnlabeled(
   db: Db,
   storage: FileStorage,
   workspaceIds: string[],

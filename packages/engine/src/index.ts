@@ -46,6 +46,12 @@ export { observerAllowsEvent, type ObserverToken } from './engine/observerToken.
 export { SqliteApiKeyAuthProvider, hashToken } from './auth/index.js';
 export { NoopTelemetrySink } from './providers/noop-telemetry.js';
 export {
+  configureEngineDiagnostics,
+  currentEngineOperation,
+  engineOperationOf,
+  runWithEngineDiagnostics,
+} from './lib/engineDiagnostics.js';
+export {
   isValidStandardWebhookSecret,
   signStandardWebhook,
   verifyStandardWebhook,
