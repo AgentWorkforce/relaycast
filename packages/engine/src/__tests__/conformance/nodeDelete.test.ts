@@ -542,6 +542,12 @@ describe('DELETE /v1/nodes/:name', () => {
     // A live node the spawn could move to.
     const spare = await attach('node_spare', 'spare');
 
+    await db().insert(actionInvocations).values({
+      id: 'inv_sent_release', workspaceId: ws.workspaceId, actionName: 'release', invocationOrigin: 'builtin',
+      input: { name: 'someone' }, status: 'dispatched', handlerNodeId: 'node_lost', dispatchedNodeId: 'node_lost',
+      dispatchedProvider: 'default', attemptedNodeIds: ['node_lost'], dispatchAttempts: 1,
+    });
+
     // Another isolate claimed the node offline; its own settle may be resending now.
     const [row] = await db().select().from(nodes).where(eq(nodes.id, 'node_lost'));
     const claim = await claimNodeOffline(db(), ws.workspaceId, 'node_lost', {
@@ -555,6 +561,9 @@ describe('DELETE /v1/nodes/:name', () => {
     expect(spare.ofType('action.invoke')).toHaveLength(0);
     const [inv] = await db().select().from(actionInvocations).where(eq(actionInvocations.id, invocationId));
     expect(inv).toMatchObject({ status: 'pending', dispatchedNodeId: null });
+    // A sent release cannot be retried, so it stays attached and fails with the node.
+    const [release] = await db().select().from(actionInvocations).where(eq(actionInvocations.id, 'inv_sent_release'));
+    expect(release).toMatchObject({ status: 'failed', error: 'node_deleted' });
   });
 
   it('does not announce an offline transition for a node that never connected', async () => {

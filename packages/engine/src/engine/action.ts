@@ -3821,6 +3821,16 @@ export async function detachInvocationsFromLostNode(
 
   let detached = 0;
   for (const invocation of rows) {
+    // Work no retry could place stays attached, for the node's own cleanup to
+    // fail: a release is pinned to its agent's node, and an orphaned
+    // registered action is never rebound by name.
+    if (
+      isBuiltinReleaseInvocation(invocation)
+      || isDeletedRegisteredActionInvocation(invocation)
+      || isAcceptedDeletedRegisteredActionInvocation(invocation)
+    ) {
+      continue;
+    }
     const [reset] = await db
       .update(actionInvocations)
       .set({
