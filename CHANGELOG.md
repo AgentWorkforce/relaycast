@@ -29,6 +29,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [12.0.0] - 2026-10-27
 
+### Added
+
+- Hosts can observe the engine's expensive database operations and long-running cleanups, and server errors carry the workspace, caller and operation they occurred in.
+
 ### Changed
 
 - The engine has no plans, usage quotas or billing. Self-hosted workspaces are never quota-limited; every workspace has a per-minute request ceiling of 30,000 by default (`rateLimitPerMinute`). Hosting deployments add their own quotas through admission hooks, which refuse requests or message sends with the host's own error code.

@@ -26,6 +26,7 @@ import { claimSpawnNode, chooseNodeForAction, isNodeLive, releaseNodeCapacity, r
 import { DEFAULT_PROVIDER_NAME, capacityProviderName, getProvider, isProviderLive } from './nodeProvider.js';
 import { AGENT_TOKEN_HASH_PATTERN } from '@relaycast/types';
 import { createTaskState, expireTaskInvocation, expireTaskInvocations, taskExecution } from './taskInvocation.js';
+import { withEngineOperation } from '../lib/engineDiagnostics.js';
 
 type Db = ReturnType<typeof getDb>;
 type ActionRow = typeof actions.$inferSelect;
@@ -4490,6 +4491,14 @@ export async function sweepTimedOutInvocations(
   db: Db,
   registry: NodeConnectionRegistry,
   opts: SweepTimedOutInvocationsOptions | number | null = {},
+) {
+  return withEngineOperation('invocations.sweep', undefined, () => sweepTimedOutInvocationsUnlabeled(db, registry, opts));
+}
+
+async function sweepTimedOutInvocationsUnlabeled(
+  db: Db,
+  registry: NodeConnectionRegistry,
+  opts: SweepTimedOutInvocationsOptions | number | null,
 ) {
   await expireTaskInvocations(db);
   const sweepOpts = typeof opts === 'number' || opts === null ? {} : opts;
