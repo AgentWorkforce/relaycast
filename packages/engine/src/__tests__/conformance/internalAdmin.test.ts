@@ -256,6 +256,48 @@ describe('internal admin API', () => {
       expect(res.status).toBe(409);
       expect(await res.json()).toMatchObject({ error: { code: 'api_key_conflict' } });
     });
+
+    it("refuses binding a key that is live in another workspace's grace slot", async () => {
+      stack = makeNodeStack({ internalSecret: SECRET });
+      const k1 = `rk_${'live'}_cloudminted_b64url-0000000000000071`;
+      const k2 = `rk_${'live'}_cloudminted_b64url-0000000000000072`;
+      const kb = `rk_${'live'}_cloudminted_b64url-0000000000000073`;
+      const pathA = '/workspaces/cloud-ws-a/api-key';
+      const pathB = '/workspaces/cloud-ws-b/api-key';
+      expect((await internal(pathA, { method: 'POST', body: { api_key: k1, key_generation: 1 } })).status).toBe(201);
+      expect((await internal(pathA, { method: 'POST', body: { api_key: k2, key_generation: 2, grace_ms: 60_000 } })).status).toBe(200);
+      expect((await internal(pathB, { method: 'POST', body: { api_key: kb, key_generation: 1 } })).status).toBe(201);
+
+      // Upsert of a new workspace with A's grace-period key.
+      const upsert = await internal('/workspaces/cloud-ws-c/api-key', { method: 'POST', body: { api_key: k1, key_generation: 1 } });
+      expect(upsert.status).toBe(409);
+      expect(await upsert.json()).toMatchObject({ error: { code: 'api_key_conflict' } });
+      // Fenced rotation of an existing workspace onto A's grace-period key.
+      const rotate = await internal(pathB, { method: 'POST', body: { api_key: k1, key_generation: 2 } });
+      expect(rotate.status).toBe(409);
+      expect(await rotate.json()).toMatchObject({ error: { code: 'api_key_conflict' } });
+
+      // A's callers on the old key still reach A; B is untouched.
+      const meA = await readWorkspace(k1);
+      expect(meA.status).toBe(200);
+      expect(JSON.stringify(await meA.json())).toContain('cloud-ws-a');
+      expect((await readWorkspace(kb)).status).toBe(200);
+    });
+
+    it("refuses a generationless swap onto another workspace's grace-period key", async () => {
+      stack = makeNodeStack({ internalSecret: SECRET });
+      const k1 = `rk_${'live'}_cloudminted_b64url-0000000000000081`;
+      const k2 = `rk_${'live'}_cloudminted_b64url-0000000000000082`;
+      const kb = `rk_${'live'}_cloudminted_b64url-0000000000000083`;
+      await internal('/workspaces/cloud-ws-d/api-key', { method: 'POST', body: { api_key: k1, key_generation: 1 } });
+      await internal('/workspaces/cloud-ws-d/api-key', { method: 'POST', body: { api_key: k2, key_generation: 2, grace_ms: 60_000 } });
+      // Unfenced workspace E (generation 0) accepts generationless pushes.
+      expect((await internal('/workspaces/cloud-ws-e/api-key', { method: 'POST', body: { api_key: kb } })).status).toBe(201);
+      const swap = await internal('/workspaces/cloud-ws-e/api-key', { method: 'POST', body: { api_key: k1 } });
+      expect(swap.status).toBe(409);
+      expect(await swap.json()).toMatchObject({ error: { code: 'api_key_conflict' } });
+      expect((await readWorkspace(kb)).status).toBe(200);
+    });
   });
   describe('key formats', () => {
     it('accepts engine-minted hex keys and cloud-minted base64url keys', async () => {

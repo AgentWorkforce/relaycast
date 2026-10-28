@@ -1,4 +1,5 @@
-import { and, eq, lt } from 'drizzle-orm';
+import { and, eq, gt, lt, ne, notExists, or, type SQL } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/sqlite-core';
 import type { getDb } from '../db/index.js';
 import { channels, workspaces } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
@@ -106,12 +107,39 @@ async function readKeyRow(db: Db, workspaceId: string): Promise<KeyRow | undefin
   return row;
 }
 
+/**
+ * Rows of *other* workspaces that hold `apiKeyHash` as a credential that still
+ * authenticates — their current key, or a previous key inside its grace
+ * window. Authentication resolves current-slot matches before previous-slot
+ * matches, so binding a key that is live in another workspace's grace slot
+ * would silently move that workspace's callers onto this one.
+ */
+function liveElsewhereQuery(db: Db, apiKeyHash: string, workspaceId: string) {
+  const other = alias(workspaces, 'other_workspace');
+  return db
+    .select({ id: other.id })
+    .from(other)
+    .where(and(
+      ne(other.id, workspaceId),
+      or(
+        eq(other.apiKeyHash, apiKeyHash),
+        and(eq(other.previousApiKeyHash, apiKeyHash), gt(other.previousApiKeyExpiresAt, new Date())),
+      ),
+    ));
+}
+
 async function keyOwnedElsewhere(db: Db, apiKeyHash: string, workspaceId: string): Promise<boolean> {
-  const [owner] = await db
-    .select({ id: workspaces.id })
-    .from(workspaces)
-    .where(eq(workspaces.apiKeyHash, apiKeyHash));
-  return Boolean(owner && owner.id !== workspaceId);
+  const [owner] = await liveElsewhereQuery(db, apiKeyHash, workspaceId).limit(1);
+  return Boolean(owner);
+}
+
+/**
+ * The same ownership invariant as a guard on the key-changing UPDATE, so a
+ * concurrent rotation elsewhere cannot slip in between the pre-check and the
+ * write.
+ */
+function keyFreeElsewhere(db: Db, apiKeyHash: string, workspaceId: string): SQL {
+  return notExists(liveElsewhereQuery(db, apiKeyHash, workspaceId));
 }
 
 function keyConflict(): Error {
@@ -229,6 +257,7 @@ export async function pushWorkspaceKey(
           eq(workspaces.id, row.id),
           eq(workspaces.apiKeyHash, row.apiKeyHash),
           eq(workspaces.apiKeyGeneration, 0),
+          keyFreeElsewhere(db, apiKeyHash, row.id),
         ))
         .returning({ id: workspaces.id });
       if (applied.length === 0) {
@@ -256,6 +285,7 @@ export async function pushWorkspaceKey(
         eq(workspaces.id, row.id),
         eq(workspaces.apiKeyHash, row.apiKeyHash),
         lt(workspaces.apiKeyGeneration, keyGeneration),
+        keyFreeElsewhere(db, apiKeyHash, row.id),
       ))
       .returning({ id: workspaces.id });
     if (applied.length === 0) {
