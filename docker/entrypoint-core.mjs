@@ -17,13 +17,21 @@ Options:
   -h, --help         Show this help
 
 Environment:
-  RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET  Stable secret for anonymous keyed workspace retries
+  RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET(_FILE)  Stable secret for anonymous keyed workspace retries
   RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED  Set true to require bootstrap-secret proof for anonymous keyed creates
   RELAYCAST_INTERNAL_SECRET(_FILE)      Enable the /internal admin API for a trusted control plane
+                                        (at least 32 characters)
+  RELAYCAST_PUBLIC_WORKSPACE_CREATE     Set false to 404 the public POST /v1/workspaces
   RELAYCAST_ALLOW_INSECURE_BASE_URL     Set true to accept http:// (or IP-literal / single-label)
                                         base URLs whose host is loopback or private (RFC 1918,
                                         ULA, link-local, *.local, *.internal, *.lan, *.home.arpa,
-                                        single-label service names). Public hosts stay HTTPS-only.
+                                        *.svc, *.svc.cluster.local, single-label service names).
+                                        Public hosts stay HTTPS-only.
+  RELAYCAST_PRIVATE_DNS_SUFFIXES        Extra private suffixes (comma list, e.g. .svc.corp for a
+                                        custom clusterDomain); needs ALLOW_INSECURE_BASE_URL
+  RELAYCAST_INSECURE_BASE_URL_HOSTS     Exact private hosts (comma list, e.g. relaycast.relaycast
+                                        for <svc>.<ns>); needs ALLOW_INSECURE_BASE_URL
+  A directly set variable wins over its _FILE variant; an unreadable _FILE exits 64.
 `;
 
 export class BaseUrlError extends Error {
@@ -154,7 +162,81 @@ function isLoopbackHostname(hostname) {
   return ipv4 !== null && ipv4 >>> 24 === 127;
 }
 
-const PRIVATE_DNS_SUFFIXES = ['.local', '.internal', '.lan', '.home.arpa'];
+// Private-use / cluster-internal DNS suffixes. `.svc` and `.svc.cluster.local`
+// cover Kubernetes Service names (<svc>.<ns>.svc[.cluster.local]).
+const PRIVATE_DNS_SUFFIXES = [
+  '.local',
+  '.internal',
+  '.lan',
+  '.home.arpa',
+  '.svc',
+  '.svc.cluster.local',
+];
+
+// Defence in depth for the operator allowlists below: an entry whose last
+// label is a common public TLD is refused, so a typo can never declare a
+// public name private. (Cluster namespaces are rarely named after a TLD; use
+// the full `<svc>.<ns>.svc` name if yours is.)
+const PUBLIC_TLDS = new Set([
+  'com', 'net', 'org', 'io', 'dev', 'app', 'ai', 'co', 'cloud', 'xyz', 'info',
+  'biz', 'me', 'tech', 'sh', 'gg', 'edu', 'gov', 'mil', 'int', 'us', 'uk',
+  'de', 'fr', 'eu', 'ca', 'au', 'jp', 'cn', 'in', 'nl', 'se', 'ch', 'es',
+  'it', 'br', 'ru', 'tv', 'site', 'online', 'page', 'run', 'so', 'to',
+]);
+
+function hasPublicTld(host) {
+  return PUBLIC_TLDS.has(host.slice(host.lastIndexOf('.') + 1));
+}
+
+function normalizeHost(value) {
+  return value.trim().replace(/\.$/, '').toLowerCase();
+}
+
+/**
+ * Extra private DNS suffixes from RELAYCAST_PRIVATE_DNS_SUFFIXES (comma list,
+ * e.g. `.svc.corp` for a cluster with a custom clusterDomain). Each entry
+ * must be a valid DNS suffix of at least two labels not ending in a common
+ * public TLD, so a public zone can never be declared private.
+ */
+export function privateDnsSuffixesFromEnv(env = process.env) {
+  const raw = env.RELAYCAST_PRIVATE_DNS_SUFFIXES;
+  if (!raw || raw.trim() === '') return [];
+  return raw.split(',').map((entry) => entry.trim()).filter(Boolean).map((entry) => {
+    const suffix = normalizeHost(entry.startsWith('.') ? entry.slice(1) : entry);
+    if (!isValidDnsHostname(suffix) || !suffix.includes('.') || hasPublicTld(suffix)) {
+      refusal(
+        'invalid_private_dns_suffix',
+        `RELAYCAST_PRIVATE_DNS_SUFFIXES entry "${entry}" must be a private DNS suffix of at least two labels not ending in a public TLD (for example .svc.corp).`,
+      );
+    }
+    return `.${suffix}`;
+  });
+}
+
+/**
+ * Exact hosts from RELAYCAST_INSECURE_BASE_URL_HOSTS (comma list) that are
+ * treated as private, e.g. `relaycast.relaycast` for a Kubernetes
+ * `<svc>.<ns>` short name. Entries must be DNS names, not IP literals.
+ */
+export function insecureBaseUrlHostsFromEnv(env = process.env) {
+  const raw = env.RELAYCAST_INSECURE_BASE_URL_HOSTS;
+  if (!raw || raw.trim() === '') return [];
+  return raw.split(',').map((entry) => entry.trim()).filter(Boolean).map((entry) => {
+    const host = normalizeHost(entry);
+    if (
+      !isValidDnsHostname(host) ||
+      isIP(host) !== 0 ||
+      parseIPv4Like(host) !== null ||
+      hasPublicTld(host)
+    ) {
+      refusal(
+        'invalid_insecure_base_url_host',
+        `RELAYCAST_INSECURE_BASE_URL_HOSTS entry "${entry}" must be a private DNS host name (not an IP literal or a name under a public TLD).`,
+      );
+    }
+    return host;
+  });
+}
 
 function isPrivateIPv4(ipv4) {
   const a = ipv4 >>> 24;
@@ -173,7 +255,7 @@ function isPrivateIPv4(ipv4) {
  * RFC 1918 / link-local IPv4, ULA / link-local IPv6, single-label names
  * (container or Kubernetes service names) and private-use DNS suffixes.
  */
-export function isPrivateHostname(hostname) {
+export function isPrivateHostname(hostname, { extraSuffixes = [], exactHosts = [] } = {}) {
   const host = unbracket(hostname).replace(/\.$/, '').toLowerCase();
   if (isLoopbackHostname(host)) return true;
   const ipVersion = isIP(host);
@@ -190,11 +272,21 @@ export function isPrivateHostname(hostname) {
   if (ipv4 !== null) return isPrivateIPv4(ipv4);
   if (!isValidDnsHostname(host)) return false;
   if (!host.includes('.')) return true;
-  return PRIVATE_DNS_SUFFIXES.some((suffix) => host.endsWith(suffix));
+  if (exactHosts.includes(host)) return true;
+  return [...PRIVATE_DNS_SUFFIXES, ...extraSuffixes].some((suffix) => host.endsWith(suffix));
 }
 
 export function insecureBaseUrlAllowed(env = process.env) {
   return env.RELAYCAST_ALLOW_INSECURE_BASE_URL === 'true';
+}
+
+/** Base-URL policy from the environment (extras only apply with allowInsecure). */
+export function baseUrlPolicy(env = process.env) {
+  return {
+    allowInsecure: insecureBaseUrlAllowed(env),
+    extraSuffixes: privateDnsSuffixesFromEnv(env),
+    exactHosts: insecureBaseUrlHostsFromEnv(env),
+  };
 }
 
 function validatePrivateBaseUrl(url) {
@@ -216,7 +308,14 @@ function validatePrivateBaseUrl(url) {
   return url.origin;
 }
 
-export function validateBaseUrl(value, { allowInsecure = insecureBaseUrlAllowed() } = {}) {
+export function validateBaseUrl(
+  value,
+  {
+    allowInsecure = insecureBaseUrlAllowed(),
+    extraSuffixes = [],
+    exactHosts = [],
+  } = {},
+) {
   let url;
   try {
     url = new URL(value);
@@ -230,7 +329,7 @@ export function validateBaseUrl(value, { allowInsecure = insecureBaseUrlAllowed(
   // Opt-in lab/private-network mode: a host that cannot be a public internet
   // authority may use http (and IP literals / single-label names). A public
   // host is still held to every rule below.
-  if (allowInsecure && isPrivateHostname(url.hostname)) {
+  if (allowInsecure && isPrivateHostname(url.hostname, { extraSuffixes, exactHosts })) {
     return validatePrivateBaseUrl(url);
   }
 
@@ -343,9 +442,7 @@ export function validatedEngineArgs(argv, env = process.env) {
     );
   }
 
-  args[baseUrlIndex] = validateBaseUrl(args[baseUrlIndex], {
-    allowInsecure: insecureBaseUrlAllowed(env),
-  });
+  args[baseUrlIndex] = validateBaseUrl(args[baseUrlIndex], baseUrlPolicy(env));
   return args;
 }
 
@@ -401,9 +498,7 @@ function parseEngineOptions(argv, env) {
       '--base-url is required and must not be consumed as another option value.',
     );
   }
-  options.baseUrl = validateBaseUrl(options.baseUrl, {
-    allowInsecure: insecureBaseUrlAllowed(env),
-  });
+  options.baseUrl = validateBaseUrl(options.baseUrl, baseUrlPolicy(env));
   return options;
 }
 
@@ -419,25 +514,64 @@ function optionalNumber(value) {
  * for keyed anonymous creates while preserving unkeyed and authenticated-owner
  * creation.
  */
-/** `NAME` or the contents of the file named by `NAME_FILE`, trimmed; empty → undefined. */
+/** Minimum RELAYCAST_INTERNAL_SECRET length (matches the engine). */
+export const MIN_INTERNAL_SECRET_LENGTH = 32;
+
+/**
+ * `NAME`, or the contents of the file named by `NAME_FILE`, trimmed; empty →
+ * undefined. A directly set (non-empty) variable wins over its `_FILE`
+ * variant, matching RelayAuth. An unreadable `_FILE` is a configuration
+ * refusal (exit 64), never a silent fallback.
+ */
 export function secretFromEnv(env, name) {
-  const file = env[`${name}_FILE`];
-  const value = file ? readFileSync(file, 'utf8') : env[name];
-  const trimmed = value?.trim();
+  const direct = env[name]?.trim();
+  if (direct) return direct;
+  const file = env[`${name}_FILE`]?.trim();
+  if (!file) return undefined;
+  let value;
+  try {
+    value = readFileSync(file, 'utf8');
+  } catch (error) {
+    refusal(
+      'unreadable_secret_file',
+      `${name}_FILE points at an unreadable file (${error?.code ?? 'read error'}).`,
+    );
+  }
+  const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
 }
 
+/**
+ * Build engine configuration from container environment without logging
+ * secrets. An omitted or empty secret remains unset so the engine fails closed
+ * for keyed anonymous creates while preserving unkeyed and authenticated-owner
+ * creation. Throws a refusal (exit 64) for an unreadable secret file, a short
+ * internal secret, or an invalid RELAYCAST_PUBLIC_WORKSPACE_CREATE.
+ */
 export function buildEngineConfig(env, mailbox = {}) {
   const internalSecret = secretFromEnv(env, 'RELAYCAST_INTERNAL_SECRET');
+  if (internalSecret !== undefined && internalSecret.length < MIN_INTERNAL_SECRET_LENGTH) {
+    refusal(
+      'weak_internal_secret',
+      `RELAYCAST_INTERNAL_SECRET must be at least ${MIN_INTERNAL_SECRET_LENGTH} characters (openssl rand -hex 32).`,
+    );
+  }
+  const workspaceBootstrapSecret = secretFromEnv(env, 'RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET');
+  const publicCreate = env.RELAYCAST_PUBLIC_WORKSPACE_CREATE?.trim();
+  if (publicCreate && publicCreate !== 'true' && publicCreate !== 'false') {
+    refusal(
+      'invalid_public_workspace_create',
+      'RELAYCAST_PUBLIC_WORKSPACE_CREATE must be "true" or "false".',
+    );
+  }
   return {
     environment: env.RELAYCAST_ENV ?? 'production',
-    ...(env.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET
-      ? { workspaceBootstrapSecret: env.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET }
-      : {}),
+    ...(workspaceBootstrapSecret ? { workspaceBootstrapSecret } : {}),
     ...(env.RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED === 'true'
       ? { workspaceBootstrapProofRequired: true }
       : {}),
     ...(internalSecret ? { internalSecret } : {}),
+    ...(publicCreate === 'false' ? { publicWorkspaceCreate: false } : {}),
     ...(Object.keys(mailbox).length > 0 ? { mailbox } : {}),
   };
 }
@@ -538,6 +672,8 @@ export async function main(argv = process.argv.slice(2)) {
   let args;
   try {
     args = validatedEngineArgs(argv);
+    // Fail fast (exit 64) on secret/config problems before importing the engine.
+    buildEngineConfig(process.env);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     process.stderr.write(`${message}\n`);

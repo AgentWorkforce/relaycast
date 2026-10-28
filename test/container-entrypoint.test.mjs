@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import {
+  baseUrlPolicy,
   buildEngineConfig,
   installPublicAuthorityMarker,
   isHelpRequest,
@@ -365,27 +366,170 @@ test('the insecure opt-in never relaxes public hosts or origin-only rules', () =
   assert.equal(isPrivateHostname('relay.ratifyprotocol.com'), false);
 });
 
-test('forwards the internal secret from env or a mounted file', (t) => {
+const INLINE_SECRET = 'inline-secret-0123456789abcdef0123456789';
+const FILE_SECRET = 'file-secret-0123456789abcdef0123456789ab';
+
+test('reads secrets from env or a mounted file; a directly set variable wins (as in RelayAuth)', (t) => {
   assert.deepEqual(
-    buildEngineConfig({ RELAYCAST_ENV: 'production', RELAYCAST_INTERNAL_SECRET: 'inline-secret' }),
-    { environment: 'production', internalSecret: 'inline-secret' },
+    buildEngineConfig({ RELAYCAST_ENV: 'production', RELAYCAST_INTERNAL_SECRET: INLINE_SECRET }),
+    { environment: 'production', internalSecret: INLINE_SECRET },
   );
   const dir = mkdtempSync(join(tmpdir(), 'relaycast-internal-secret-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const file = join(dir, 'secret');
-  writeFileSync(file, 'file-secret\n', { mode: 0o600 });
+  writeFileSync(file, `${FILE_SECRET}\n`, { mode: 0o600 });
+  assert.deepEqual(
+    buildEngineConfig({ RELAYCAST_ENV: 'production', RELAYCAST_INTERNAL_SECRET_FILE: file }),
+    { environment: 'production', internalSecret: FILE_SECRET },
+  );
   assert.deepEqual(
     buildEngineConfig({
       RELAYCAST_ENV: 'production',
-      RELAYCAST_INTERNAL_SECRET: 'ignored-when-file-set',
+      RELAYCAST_INTERNAL_SECRET: INLINE_SECRET,
       RELAYCAST_INTERNAL_SECRET_FILE: file,
     }),
-    { environment: 'production', internalSecret: 'file-secret' },
+    { environment: 'production', internalSecret: INLINE_SECRET },
+  );
+  // A blank direct value falls through to the file.
+  assert.deepEqual(
+    buildEngineConfig({
+      RELAYCAST_ENV: 'production',
+      RELAYCAST_INTERNAL_SECRET: ' ',
+      RELAYCAST_INTERNAL_SECRET_FILE: file,
+    }),
+    { environment: 'production', internalSecret: FILE_SECRET },
+  );
+  // The bootstrap secret has the same _FILE support.
+  const bootstrapFile = join(dir, 'bootstrap');
+  writeFileSync(bootstrapFile, 'stable-bootstrap-from-file\n', { mode: 0o600 });
+  assert.deepEqual(
+    buildEngineConfig({ RELAYCAST_ENV: 'production', RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE: bootstrapFile }),
+    { environment: 'production', workspaceBootstrapSecret: 'stable-bootstrap-from-file' },
   );
   // Unset or blank leaves the admin API disabled.
   assert.deepEqual(buildEngineConfig({ RELAYCAST_ENV: 'production', RELAYCAST_INTERNAL_SECRET: '  ' }), {
     environment: 'production',
   });
+});
+
+test('refuses (exit 64) a missing secret file and a short internal secret', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'relaycast-secret-refusal-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  for (const name of ['RELAYCAST_INTERNAL_SECRET', 'RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET']) {
+    assert.throws(
+      () => buildEngineConfig({ [`${name}_FILE`]: join(dir, 'missing') }),
+      (error) => error.code === 'unreadable_secret_file' && error.message.includes(`${name}_FILE`),
+    );
+  }
+  assert.throws(
+    () => buildEngineConfig({ RELAYCAST_INTERNAL_SECRET: 'too-short-secret' }),
+    /at least 32 characters/,
+  );
+
+  const env = { ...process.env, RELAYCAST_INTERNAL_SECRET: '', RELAYCAST_INTERNAL_SECRET_FILE: join(dir, 'missing') };
+  const missing = spawnSync(process.execPath, [entrypoint, ...acceptedArgs], { encoding: 'utf8', env });
+  assert.equal(missing.status, 64, missing.stderr);
+  assert.match(missing.stderr, /RELAYCAST_INTERNAL_SECRET_FILE points at an unreadable file/);
+  const weak = spawnSync(process.execPath, [entrypoint, ...acceptedArgs], {
+    encoding: 'utf8',
+    env: { ...process.env, RELAYCAST_INTERNAL_SECRET: 'short' },
+  });
+  assert.equal(weak.status, 64, weak.stderr);
+  assert.doesNotMatch(weak.stderr + weak.stdout, /\bshort\b/);
+});
+
+test('RELAYCAST_PUBLIC_WORKSPACE_CREATE=false disables public creates; other values are refused', () => {
+  assert.deepEqual(buildEngineConfig({ RELAYCAST_ENV: 'production', RELAYCAST_PUBLIC_WORKSPACE_CREATE: 'false' }), {
+    environment: 'production',
+    publicWorkspaceCreate: false,
+  });
+  assert.deepEqual(buildEngineConfig({ RELAYCAST_ENV: 'production', RELAYCAST_PUBLIC_WORKSPACE_CREATE: 'true' }), {
+    environment: 'production',
+  });
+  assert.throws(
+    () => buildEngineConfig({ RELAYCAST_PUBLIC_WORKSPACE_CREATE: 'no' }),
+    (error) => error.code === 'invalid_public_workspace_create',
+  );
+});
+
+test('Kubernetes service names (.svc, .svc.cluster.local) are private with the insecure opt-in', () => {
+  const env = { RELAYCAST_ALLOW_INSECURE_BASE_URL: 'true' };
+  for (const url of [
+    'http://relaycast.relaycast.svc:8787',
+    'http://relaycast.relaycast.svc.cluster.local:8787',
+  ]) {
+    assert.deepEqual(validatedEngineArgs(['--base-url', url], env), ['--base-url', url], url);
+    assert.throws(() => validatedEngineArgs(['--base-url', url], {}), /must use https/, url);
+  }
+  // <svc>.<ns> without .svc is not private by default...
+  assert.throws(
+    () => validatedEngineArgs(['--base-url', 'http://relaycast.relaycast:8787'], env),
+    /must use https/,
+  );
+  // ...but can be allowlisted exactly.
+  const hostsEnv = { ...env, RELAYCAST_INSECURE_BASE_URL_HOSTS: 'relaycast.relaycast, other.ns' };
+  assert.deepEqual(
+    validatedEngineArgs(['--base-url', 'http://relaycast.relaycast:8787'], hostsEnv),
+    ['--base-url', 'http://relaycast.relaycast:8787'],
+  );
+  // Exact means exact: a different host under the same "namespace" stays refused.
+  assert.throws(
+    () => validatedEngineArgs(['--base-url', 'http://evil.relaycast:8787'], hostsEnv),
+    /must use https/,
+  );
+  // Allowlists have no effect without the opt-in.
+  assert.throws(
+    () => validatedEngineArgs(['--base-url', 'http://relaycast.relaycast:8787'], {
+      RELAYCAST_INSECURE_BASE_URL_HOSTS: 'relaycast.relaycast',
+    }),
+    /must use https/,
+  );
+});
+
+test('custom clusterDomain suffixes via RELAYCAST_PRIVATE_DNS_SUFFIXES', () => {
+  const env = {
+    RELAYCAST_ALLOW_INSECURE_BASE_URL: 'true',
+    RELAYCAST_PRIVATE_DNS_SUFFIXES: '.svc.corp, svc.k8s.lab',
+  };
+  for (const url of ['http://relaycast.ns.svc.corp:8787', 'http://relaycast.ns.svc.k8s.lab']) {
+    assert.deepEqual(validatedEngineArgs(['--base-url', url], env), ['--base-url', url], url);
+  }
+  assert.deepEqual(baseUrlPolicy(env).extraSuffixes, ['.svc.corp', '.svc.k8s.lab']);
+  // A suffix only matches on a label boundary.
+  assert.throws(
+    () => validatedEngineArgs(['--base-url', 'http://relaycast.svccorp:8787'], env),
+    /must use https/,
+  );
+});
+
+test('allowlists never accept public names, single labels, or IP literals', () => {
+  const base = { RELAYCAST_ALLOW_INSECURE_BASE_URL: 'true' };
+  for (const suffix of ['.com', 'example.com', '.co.uk', '.corp', 'bad_suffix.x']) {
+    assert.throws(
+      () => validatedEngineArgs(['--base-url', 'http://relaycast.svc:8787'], {
+        ...base,
+        RELAYCAST_PRIVATE_DNS_SUFFIXES: suffix,
+      }),
+      (error) => error.code === 'invalid_private_dns_suffix',
+      suffix,
+    );
+  }
+  for (const host of ['relay.example.com', 'relay.ratifyprotocol.com', '8.8.8.8', '0x08080808', 'bad host']) {
+    assert.throws(
+      () => validatedEngineArgs(['--base-url', 'http://relaycast.svc:8787'], {
+        ...base,
+        RELAYCAST_INSECURE_BASE_URL_HOSTS: host,
+      }),
+      (error) => error.code === 'invalid_insecure_base_url_host',
+      host,
+    );
+  }
+  // The real entrypoint maps these refusals to exit 64.
+  const result = spawnSync(process.execPath, [entrypoint, '--base-url', 'http://relaycast.svc:8787'], {
+    encoding: 'utf8',
+    env: { ...process.env, ...base, RELAYCAST_INSECURE_BASE_URL_HOSTS: 'relay.example.com' },
+  });
+  assert.equal(result.status, 64, result.stderr);
 });
 
 test('keeps plaintext private base URLs unmarked as TLS', () => {
