@@ -10,6 +10,7 @@ import {
 } from '../db/schema.js';
 import { queryInChunks } from '../lib/queryChunks.js';
 import { parseMessageMentions } from './mentions.js';
+import { reportEngineProgress, withEngineOperation } from '../lib/engineDiagnostics.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -56,6 +57,11 @@ export async function backfillMessageMentionFts(
   db: Db,
   limit = MESSAGE_MENTION_BACKFILL_BATCH,
 ): Promise<number> {
+  return withEngineOperation('backfill.mention_fts', undefined, () => backfillMessageMentionFtsUnlabeled(db, limit));
+}
+
+async function backfillMessageMentionFtsUnlabeled(db: Db, limit: number): Promise<number> {
+  const start = performance.now();
   const [saved] = await db.all<{ cursor: string }>(
     sql`SELECT cursor FROM maintenance_cursors WHERE id = ${MENTION_FTS_CURSOR}`,
   );
@@ -80,6 +86,7 @@ export async function backfillMessageMentionFts(
     : `${nextRowid}/${until}`;
   if (copied === 0 || nextRowid == null) {
     await db.run(sql`UPDATE maintenance_cursors SET cursor = ${cursor} WHERE id = ${MENTION_FTS_CURSOR}`);
+    reportEngineProgress({ operation: 'backfill.mention_fts', phase: 'completed', rows: 0, remaining: 0 });
     return 0;
   }
   // Sequential, not runAtomicWrites: on D1 that is drizzle's batch(), which
@@ -98,10 +105,22 @@ export async function backfillMessageMentionFts(
       )
   `);
   await db.run(sql`UPDATE maintenance_cursors SET cursor = ${cursor} WHERE id = ${MENTION_FTS_CURSOR}`);
+  reportEngineProgress({
+    operation: 'backfill.mention_fts',
+    phase: cursor === 'complete' ? 'completed' : 'batch',
+    rows: copied,
+    // An upper bound: the rowid span still to copy (rowids can have gaps).
+    remaining: cursor === 'complete' ? 0 : until - nextRowid,
+    durationMs: performance.now() - start,
+  });
   return copied;
 }
 
 export async function getInbox(db: Db, workspaceId: string, agentId: string) {
+  return withEngineOperation('inbox.get', workspaceId, () => getInboxUnlabeled(db, workspaceId, agentId));
+}
+
+async function getInboxUnlabeled(db: Db, workspaceId: string, agentId: string) {
   const unreadChannels = await db.all<{ channel_name: string; unread_count: number }>(sql`
     SELECT ch.name AS channel_name, count(*) AS unread_count
     FROM channel_members cm

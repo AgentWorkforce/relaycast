@@ -46,6 +46,12 @@ export { observerAllowsEvent, type ObserverToken } from './engine/observerToken.
 export { SqliteApiKeyAuthProvider, hashToken } from './auth/index.js';
 export { NoopTelemetrySink } from './providers/noop-telemetry.js';
 export {
+  configureEngineDiagnostics,
+  currentEngineOperation,
+  engineOperationOf,
+  runWithEngineDiagnostics,
+} from './lib/engineDiagnostics.js';
+export {
   isValidStandardWebhookSecret,
   signStandardWebhook,
   verifyStandardWebhook,
@@ -129,6 +135,7 @@ export type { WorkspaceRetentionSettings } from './db/schema.js';
 // is a durable post-commit outbox: hosts must drain it from the same schedule.
 export {
   reapExpiredWorkspaces,
+  reapWorkspace,
   drainFileCleanup,
   getWorkspaceExpiry,
   DEFAULT_WORKSPACE_REAP_LIMIT,

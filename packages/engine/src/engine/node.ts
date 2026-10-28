@@ -21,7 +21,8 @@ import {
   parseFleetBrokerToRelaycastMessage,
 } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
-import { actionInvocations, actions, agents, agentNodeBindings, channelMembers, channels, nodeProviders, nodes } from '../db/schema.js';
+import { actionInvocations, actions, agents, agentNodeBindings, channelMembers, channels, nodeProviders, nodes, workspaces } from '../db/schema.js';
+import { isWorkspaceExpired, WORKSPACE_EXPIRED_CODE, WORKSPACE_EXPIRED_MESSAGE } from '../auth/workspaceExpiry.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { acceptTaskInvocation, completeTaskInvocation } from './taskInvocation.js';
@@ -3491,6 +3492,32 @@ function sendControl(socket: NodeSocketLike | undefined, payload: Record<string,
 }
 
 /** Validate and serialize an authenticated node frame, replying only after its effects. */
+/**
+ * A node socket authenticates once, at upgrade. A workspace deleted (or past
+ * its deadline) afterwards keeps that socket, and a large workspace is drained
+ * in steps with its nodes last, so frames that create identity must re-check:
+ * otherwise a connected node registers agents into a workspace being deleted.
+ */
+/** Control frames still admitted after the workspace expires (see the gate below). */
+const SETTLING_CONTROL_FRAMES: ReadonlySet<string> = new Set([
+  'action.accept',
+  'action.result',
+  'delivery.ack',
+  'node.deregister',
+  'agent.deregister',
+]);
+
+async function assertWorkspaceUnexpired(db: EngineDb, workspaceId: string): Promise<void> {
+  const [row] = await db
+    .select({ expiresAt: workspaces.expiresAt })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+  if (!row || isWorkspaceExpired(row)) {
+    throw codedError(WORKSPACE_EXPIRED_MESSAGE, WORKSPACE_EXPIRED_CODE, 401);
+  }
+}
+
 export async function handleNodeControlMessage(args: HandleNodeControlMessageArgs) {
   let message: FleetBrokerToRelaycastMessage;
   try {
@@ -3531,6 +3558,12 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
   // check, the provider-row upsert, or the aggregate recompute.
   return serializeNodeOp(args.workspaceId, args.nodeId, async () => {
   try {
+    // A socket outlives its workspace's deletion, and every other frame writes
+    // durable state (a heartbeat can insert provider and action rows). Only
+    // frames that settle work already in flight or tear identity down pass.
+    if (!SETTLING_CONTROL_FRAMES.has(message.type)) {
+      await assertWorkspaceUnexpired(args.db, args.workspaceId);
+    }
     switch (message.type) {
       case 'node.register': {
         const provider = resolveProviderIdentity(message, args.connectionId);
@@ -3821,6 +3854,14 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           message.agents,
           args.completionDeps,
         );
+        // An agent the node had dropped and is routing again is a new hosting
+        // episode. Clear a presence-only disconnect so node liveness can count
+        // them without an HTTP heartbeat. An agent the snapshot already
+        // routed keeps the hold: still being listed is not recovery.
+        if (args.presence?.clearExplicitDisconnect && result.newlyRoutedAgentIds.length > 0) {
+          await Promise.all(result.newlyRoutedAgentIds.map((agentId) =>
+            args.presence!.clearExplicitDisconnect!(args.workspaceId, agentId)));
+        }
         const replySent = sendControl(args.socket, {
           v: 1,
           id: requestId(message),

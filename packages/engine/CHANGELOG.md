@@ -7,14 +7,32 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-
-## [Unreleased - Major]
+## [Unreleased - Minor]
 
 ### Added
 
+- `DELETE /v1/nodes/:name` deletes a node by id (exact id first) or name, returning `{ id, name, deleted, cascaded_actions }`. It refuses an online node (`node_online`) or one hosting actions (`node_has_actions`) unless `force=true`, and returns `node_delete_conflict` when a heartbeat or action registration lands mid-delete.
+
+### Changed
+
+- Deleting a large workspace (over 2,000 bulk rows) no longer runs as one cascading transaction. It stops authenticating at once (`workspace_expired`), and its rows are drained in bounded, paced statements (`reapWorkspace`, the expired-workspace reaper). Small workspaces keep the atomic delete. `deleteWorkspace` now returns `{ deferred }`, and the background reap after workspace creation is capped at 250 ms.
+- Inbound webhooks (`POST /v1/hooks/:webhookId`) of an expired or deleted workspace now return `404` instead of accepting messages.
+- A node socket opened before its workspace expired or was deleted can no longer write into it: every control frame except those that settle work already in flight (`action.accept`, `action.result`, `delivery.ack`) or tear identity down (`node.deregister`, `agent.deregister`) now gets a `workspace_expired` error. This costs each forwarded heartbeat one primary-key read.
+
+### Fixed
+
+- A message trigger cannot invoke builtin `release`.
+- `GET /v1/agents/presence` counts a node-hosted agent as online while its node and that agent's own provider are live, including agents that make no HTTP calls. Agents of a disconnected provider, agents a live node omits from its inventory, and agents that called `POST /v1/agents/disconnect` without deregistering stay offline.
+- A status patch broadcasts the same derived presence the response returns.
+
+## [12.0.0] - 2026-10-27
+
+### Added
+
+- Optional `EngineDeps.diagnostics` (`EngineDiagnostics`) receives operation timing (`inbox.get`, `deliveries.list`, `workspace.delete`, `invocations.sweep`, `backfill.mention_fts`) and backfill progress. Each app reports only to its own sink, and callbacks may be async. `currentEngineOperation()` lets a host's database wrapper attribute statement cost to the operation in flight; `configureEngineDiagnostics()` sets a host fallback, used by maintenance that runs outside any app and by apps built without a sink. `runWithEngineDiagnostics(sink, fn)` runs host work (a queue or cron handler) against a specific sink, as `createEngine` does per request, and `engineOperationOf(error)` returns the operation an error was thrown inside. Absent by default; no migration is needed.
+- Unhandled 5xx errors now report `workspace_id`, `agent_id`, `engine_operation` and the matched `route` template in the error log and `captureException` context.
 - `AdmissionHooks` (`EngineDeps.admission`, `createNodeRuntime({ admission })`, `startServer({ admission })`): `admit({ workspace, action })` refuses a `request` or `message` with an `AdmissionDenial` (`status`, `code`, `message`, `details`, `retryAt`); `committed(ctx)` reports each successful, non-replayed action; `rateLimitPerMinute(workspace)` overrides the per-minute ceiling. A hook that throws admits the request. A denied keyed message send still replays its stored receipt.
 - `EngineConfig.rateLimitPerMinute` (default 30,000).
-- `DELETE /v1/nodes/:name` deletes a node by id (exact id first) or name, returning `{ id, name, deleted, cascaded_actions }`. It refuses an online node (`node_online`) or one hosting actions (`node_has_actions`) unless `force=true`, and returns `node_delete_conflict` when a heartbeat or action registration lands mid-delete.
 
 ### Removed
 

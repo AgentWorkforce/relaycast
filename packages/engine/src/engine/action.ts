@@ -25,6 +25,7 @@ import { claimSpawnNode, chooseNodeForAction, isNodeLive, releaseNodeCapacity, r
 import { DEFAULT_PROVIDER_NAME, capacityProviderName, getProvider, isProviderLive } from './nodeProvider.js';
 import { AGENT_TOKEN_HASH_PATTERN } from '@relaycast/types';
 import { createTaskState, expireTaskInvocation, expireTaskInvocations, taskExecution } from './taskInvocation.js';
+import { withEngineOperation } from '../lib/engineDiagnostics.js';
 
 type Db = ReturnType<typeof getDb>;
 type ActionRow = typeof actions.$inferSelect;
@@ -1942,6 +1943,12 @@ export async function invokeAction(
     /** Resolve plain node-scoped actions too (message triggers bind by name
      * without a node); the resolved row is dispatched node-addressed. */
     includeNodeScoped?: boolean;
+    /**
+     * Builtin `release` runs only when the caller sets this. It is not an HTTP
+     * field. `POST /v1/actions/:name/invoke` is the only caller that sets it;
+     * message triggers must not.
+     */
+    authorizeBuiltinRelease?: boolean;
   } = {},
 ) {
   const action = await fetchAction(db, workspaceId, actionName, options.includeNodeScoped);
@@ -1994,7 +2001,10 @@ export async function invokeAction(
     });
   }
 
-  if (!action && actionName === 'release') {
+  // Destructive roster mutation. The input shape is not the guard: a payload
+  // that already carries `name` and `delete_agent` still does not release
+  // unless this caller set `authorizeBuiltinRelease`.
+  if (!action && actionName === 'release' && options.authorizeBuiltinRelease) {
     return dispatchRelease({
       db,
       registry: options.nodeConnections,
@@ -4126,6 +4136,14 @@ export async function sweepTimedOutInvocations(
   db: Db,
   registry: NodeConnectionRegistry,
   opts: SweepTimedOutInvocationsOptions | number | null = {},
+) {
+  return withEngineOperation('invocations.sweep', undefined, () => sweepTimedOutInvocationsUnlabeled(db, registry, opts));
+}
+
+async function sweepTimedOutInvocationsUnlabeled(
+  db: Db,
+  registry: NodeConnectionRegistry,
+  opts: SweepTimedOutInvocationsOptions | number | null,
 ) {
   await expireTaskInvocations(db);
   const sweepOpts = typeof opts === 'number' || opts === null ? {} : opts;

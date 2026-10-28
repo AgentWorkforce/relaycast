@@ -108,10 +108,20 @@ async function deleteAuthenticatedWorkspace(c: Context<AppEnv>, expectedId?: str
     if (expectedId !== undefined && expectedId !== workspace.id) {
       return workspaceNotFound(c);
     }
-    await workspaceEngine.deleteWorkspace(db, c.get('engine').files, workspace.id);
+    const { deferred } = await workspaceEngine.deleteWorkspace(db, c.get('engine').files, workspace.id);
     emitServerEvent(c, workspace.id, 'workspace.deleted', {
       deleted_via: 'api',
     });
+    if (deferred) {
+      // Too large to delete atomically: it already stops authenticating.
+      // Start removing its data now, within a bounded budget; whatever is
+      // left is drained by the reaper.
+      runInBackground(
+        c,
+        workspaceEngine.reapWorkspace(db, c.get('engine').files, workspace.id),
+        'workspace delete drain',
+      );
+    }
     return jsonNoContent(c);
   } catch (err: unknown) {
     return errorResponse(c, err);
@@ -272,9 +282,11 @@ workspaceRoutes.post('/workspaces', async (c) => {
       });
     }
     if (result.created) {
+      // Opportunistic and tightly bounded: a creation burst must not turn into
+      // a burst of tenant drains. The scheduled reaper does the bulk of it.
       runInBackground(
         c,
-        workspaceEngine.reapExpiredWorkspaces(db, c.get('engine').files),
+        workspaceEngine.reapExpiredWorkspaces(db, c.get('engine').files, { maxDurationMs: 250 }),
         'workspace expiry reap',
       );
     }
