@@ -53,6 +53,7 @@ import { serializeNodeOp } from './nodeLock.js';
 import {
   ACTION_DISPATCH_TIMEOUT_MS,
   completeNodeInvocation,
+  detachInvocationsFromLostNode,
   dispatchCapacitySpawn,
   emitFailedInvocationEffects,
   rescheduleInvocationsForLostNode,
@@ -1148,6 +1149,8 @@ export async function settleNodeOffline(
     before?: { status: string; name: string };
     deps?: InvocationCompletionDeps;
     reason?: NodeOfflineReason;
+    /** Return covered attempts to pending instead of resending them (see detachInvocationsFromLostNode). */
+    detachOnly?: boolean;
   } = {},
 ): Promise<boolean> {
   const claimRevision = opts.claimRevision;
@@ -1196,7 +1199,11 @@ export async function settleNodeOffline(
         : []),
     ));
 
-  await rescheduleInvocationsForLostNode(db, registry, workspaceId, nodeId, { claimRevision });
+  if (opts.detachOnly && claimRevision !== undefined) {
+    await detachInvocationsFromLostNode(db, workspaceId, nodeId, { claimRevision });
+  } else {
+    await rescheduleInvocationsForLostNode(db, registry, workspaceId, nodeId, { claimRevision });
+  }
 
   if (opts.deps && opts.before && opts.before.status === 'online') {
     await emitNodeStatusEffects(opts.deps, workspaceId, {
@@ -2174,10 +2181,15 @@ export async function deleteNode(
   // tail right after claiming, so only a recent claim (its time is the row's
   // heartbeat) can still be pending. Finish it here: the tail's writes are
   // scoped to the claim revision and CAS-guarded, and the emit publishes the
-  // transition only if the claimer has not.
+  // transition only if the claimer has not. It only detaches the claim's open
+  // attempts: the claimer may be resending them now, and a second sender could
+  // put one spawn on two nodes.
   const claimedAt = current.lastHeartbeatAt?.getTime();
   if (!claimedHere && claimedAt !== undefined && Date.now() - claimedAt <= NODE_LIVENESS_TTL_MS) {
-    await settleNodeOffline(db, registry, workspaceId, current.id, { claimRevision: current.livenessRevision });
+    await settleNodeOffline(db, registry, workspaceId, current.id, {
+      claimRevision: current.livenessRevision,
+      detachOnly: true,
+    });
     await emitNodeStatusEffects(deps, workspaceId, {
       status: 'offline',
       nodeId: current.id,

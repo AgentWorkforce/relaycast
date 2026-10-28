@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
+import { makeNodeStack, createWorkspace, registerAgent, FakeSocket, type TestStack } from './harness.js';
 import { actionInvocations, actions, agentNodeBindings, agents, nodes, workspaceEvents } from '../../db/schema.js';
 import { claimNodeOffline, deleteNode as deleteNodeById } from '../../engine/node.js';
 import { emitNodeStatusEffects } from '../../engine/invocationCompletion.js';
@@ -512,6 +512,49 @@ describe('DELETE /v1/nodes/:name', () => {
     expect(after.status).toBe('offline');
     const events = await db().select().from(workspaceEvents).where(eq(workspaceEvents.workspaceId, ws.workspaceId));
     expect(events.filter((event) => event.type === 'node.status.offline')).toHaveLength(1);
+  });
+
+  it('sends a pending claim\'s dispatched work back to the queue without resending it', async () => {
+    async function attach(nodeId: string, name: string) {
+      await enroll(nodeId, name);
+      const sock = new FakeSocket();
+      const handle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, nodeId, sock);
+      const provider = { name: 'default', instance_id: `${name}-i1` };
+      await handle.handleMessage(JSON.stringify({
+        v: 1, id: `reg-${name}`, type: 'node.register', name, node_id: nodeId, provider,
+        capabilities: [{ name: 'spawn:claude', kind: 'capacity' }], max_agents: 4, tags: ['test'], version: 'v1', resume_cursor: null,
+      }));
+      await handle.handleMessage(JSON.stringify({
+        v: 1, type: 'node.heartbeat', provider, load: 0, active_agents: 0, handlers_live: true,
+      }));
+      return sock;
+    }
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'spawn-caller');
+    const lost = await attach('node_lost', 'lost');
+    const invoke = await stack.app.request('/v1/nodes/lost/actions/spawn:claude/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { name: 'worker-1' } }),
+    });
+    expect(invoke.status).toBe(201);
+    const invocationId = (await invoke.json() as { data: { invocation_id: string } }).data.invocation_id;
+    expect(lost.ofType('action.invoke')).toHaveLength(1);
+    // A live node the spawn could move to.
+    const spare = await attach('node_spare', 'spare');
+
+    // Another isolate claimed the node offline; its own settle may be resending now.
+    const [row] = await db().select().from(nodes).where(eq(nodes.id, 'node_lost'));
+    const claim = await claimNodeOffline(db(), ws.workspaceId, 'node_lost', {
+      lastHeartbeatAt: row.lastHeartbeatAt, livenessRevision: row.livenessRevision,
+    });
+    expect(claim).toBeDefined();
+
+    const result = await deleteNodeById(db(), stack.runtime.deps, ws.workspaceId, 'node_lost', { force: true });
+    expect(result).toMatchObject({ ok: true, id: 'node_lost' });
+    // Only the claimer may resend; a second sender could start the spawn twice.
+    expect(spare.ofType('action.invoke')).toHaveLength(0);
+    const [inv] = await db().select().from(actionInvocations).where(eq(actionInvocations.id, invocationId));
+    expect(inv).toMatchObject({ status: 'pending', dispatchedNodeId: null });
   });
 
   it('does not announce an offline transition for a node that never connected', async () => {
