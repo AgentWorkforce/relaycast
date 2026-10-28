@@ -1,6 +1,7 @@
 import { createMiddleware } from 'hono/factory';
 import type { AppEnv } from '../env.js';
 import { jsonError } from '../lib/httpResponse.js';
+import { getRequestLogger, toErrorDetails } from '../lib/logger.js';
 import { RATE_LIMIT_WINDOW_MS, rateLimitWindow, rateLimitWindowResetAt, setRetryContract } from '../lib/throttle.js';
 import { admissionDeniedResponse, reportCommitted, resolveAdmission } from './admission.js';
 import { presenceRefresh } from './presenceRefresh.js';
@@ -105,7 +106,13 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
   if (admission?.rateLimitPerMinute) {
     try {
       globalLimit = validRatePerMinute(await admission.rateLimitPerMinute(workspace)) ?? globalLimit;
-    } catch { /* keep the configured ceiling */ }
+    } catch (error) {
+      // A failing ceiling hook keeps the configured limit. Log it: the same
+      // outage is why admit() fails open, and a silent fallback hides it.
+      getRequestLogger(c, 'admission').warn('admission rate limit hook failed; keeping configured ceiling', {
+        ...toErrorDetails(error),
+      });
+    }
   }
   const limit = routeKey ? Math.ceil(globalLimit * ROUTE_MULTIPLIERS[routeKey]) : globalLimit;
 

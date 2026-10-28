@@ -5,6 +5,7 @@ import type { AppEnv } from '../env.js';
 import type { AdmissionAction, AdmissionDenial } from '../ports/admission.js';
 import type { Workspace } from '../ports/auth.js';
 import { AdmissionDeniedError } from '../lib/admissionError.js';
+import { getRequestLogger, toErrorDetails } from '../lib/logger.js';
 import { setRetryContract } from '../lib/throttle.js';
 import { runInBackground } from '../routes/background.js';
 
@@ -21,7 +22,11 @@ export async function resolveAdmission(
   if (!admission?.admit) return null;
   try {
     return (await admission.admit({ workspace, action })) ?? null;
-  } catch {
+  } catch (error) {
+    getRequestLogger(c, 'admission').warn('admission hook failed; admitting request', {
+      action,
+      ...toErrorDetails(error),
+    });
     return null;
   }
 }

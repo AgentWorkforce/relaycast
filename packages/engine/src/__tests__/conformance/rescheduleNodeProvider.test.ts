@@ -1,7 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { makeNodeStack, createWorkspace, registerAgent, FakeSocket, type TestStack } from './harness.js';
-import { rescheduleInvocationsForLostNode } from '../../engine/action.js';
+import { rescheduleInvocationsForLostNode, rescheduleNodeInvocation } from '../../engine/action.js';
 import { actionInvocations, nodes } from '../../db/schema.js';
 
 type Cap = { name: string; kind?: string; queue?: boolean };
@@ -266,6 +266,65 @@ describe('reschedule targets the action-owning provider on the fallback node', (
       .from(nodes)
       .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_b')));
     expect(fallback.reservedAgents).toBe(0);
+  });
+
+  it('sends one frame when two shadow retries share a builtin spawn', async () => {
+    const ws = await createWorkspace(stack.app, 'resched-shadow-once');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    await enrollNode(ws.workspaceKey, 'node_a', 'alpha');
+    await enrollNode(ws.workspaceKey, 'node_b', 'beta');
+
+    await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'default', [{ name: 'spawn:claude', kind: 'capacity' }]);
+    const bBroker = await attachProvider(ws.workspaceId, 'node_b', 'beta', 'default', [{ name: 'spawn:claude', kind: 'capacity' }]);
+    const bPolicy = await attachProvider(ws.workspaceId, 'node_b', 'beta', 'policy', [{ name: 'spawn:claude', kind: 'action' }]);
+
+    const invoke = await stack.app.request('/v1/nodes/alpha/actions/spawn:claude/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { name: 'worker-once' } }),
+    });
+    expect(invoke.status).toBe(201);
+    const invocationId = (await invoke.json() as { data: { invocation_id: string } }).data.invocation_id;
+    const [invocation] = await stack.runtime.handle.db
+      .select()
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    bBroker.sock.received.length = 0;
+    bPolicy.sock.received.length = 0;
+
+    const realtime = stack.runtime.realtime;
+    const originalSend = realtime.sendToProvider.bind(realtime);
+    let releaseSend!: () => void;
+    const sendGate = new Promise<void>((resolve) => { releaseSend = resolve; });
+    let enteredSend!: () => void;
+    const sendEntered = new Promise<void>((resolve) => { enteredSend = resolve; });
+    let held = false;
+    vi.spyOn(realtime, 'sendToProvider').mockImplementation(async (...args) => {
+      if (!held) {
+        held = true;
+        enteredSend();
+        await sendGate;
+      }
+      return originalSend(...args);
+    });
+
+    const winner = rescheduleNodeInvocation(stack.runtime.handle.db, realtime, invocation!);
+    await sendEntered;
+    const loser = await rescheduleNodeInvocation(stack.runtime.handle.db, realtime, invocation!);
+    releaseSend();
+    expect(await winner).toBe(true);
+    expect(loser).toBe(false);
+    expect(bPolicy.sock.ofType('action.invoke').filter((frame) => frame.invocation_id === invocationId)).toHaveLength(1);
+    expect(bBroker.sock.ofType('action.invoke')).toHaveLength(0);
+    const [row] = await stack.runtime.handle.db
+      .select({
+        status: actionInvocations.status,
+        dispatchAttempts: actionInvocations.dispatchAttempts,
+        dispatchedNodeId: actionInvocations.dispatchedNodeId,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(row).toMatchObject({ status: 'dispatched', dispatchAttempts: 2, dispatchedNodeId: 'node_b' });
   });
 
   it('fails once all non-queued owning providers are unavailable', async () => {

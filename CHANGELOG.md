@@ -24,8 +24,11 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
+- A stale spawn retry releases its original node slot after a failed drain send.
+- Agents stay offline if they disconnect while presence cleanup is running, including after another agent heartbeats.
 - A message trigger cannot invoke builtin `release`.
-- `GET /v1/agents/presence` counts a node-hosted agent as online while its node and that agent's own provider are live, including agents that make no HTTP calls. Agents of a disconnected provider, agents a live node omits from its inventory, and agents that called `POST /v1/agents/disconnect` without deregistering stay offline.
+- Overlapping dispatch of a spawn or agent-hosted action sends one frame and keeps one capacity reservation. A timeout retry, a send that fails before the frame is accepted, a claim write that fails before the frame is sent, a drain that observed a hold a retry already released, and a restore that fails while the reservation marker is still set all stay on that one reservation.
+- `GET /v1/agents/presence` counts a node-hosted agent as online while its node and that agent's own provider are live, including agents that make no HTTP calls. Agents of a disconnected provider, agents a live node omits from its inventory, and agents that called `POST /v1/agents/disconnect` without deregistering stay offline until a heartbeat, a new inventory route, or `agent.recover`. A deleted agent or workspace drops that hold.
 - TypeScript SDK: `agent.on.*` event handlers can be registered before `connect()` instead of throwing.
 - TypeScript SDK: `agent.exited`, `node.status.online`, and `node.status.offline` have camelCase event types. `on.agentExited` is available on `AgentClient` and `RelayCast`. `on.nodeOnline` and `on.nodeOffline` are on `RelayCast` only — node liveness is a workspace-stream and webhook event, not an agent-mailbox delivery.
 - A status patch broadcasts the same derived presence the response returns.
@@ -916,7 +919,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.0.0...HEAD
+[Unreleased - Minor]: https://github.com/AgentWorkforce/relaycast/compare/v12.0.0...HEAD
 [12.0.0]: https://github.com/AgentWorkforce/relaycast/compare/v11.1.1...v12.0.0
 [11.1.1]: https://github.com/AgentWorkforce/relaycast/compare/v11.1.0...v11.1.1
 [11.1.0]: https://github.com/AgentWorkforce/relaycast/compare/v11.0.0...v11.1.0

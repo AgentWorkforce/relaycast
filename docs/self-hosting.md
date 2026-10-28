@@ -360,7 +360,7 @@ Be honest with yourself about what self-host is and isn't:
 
 | | Self-host | Hosted |
 |---|---|---|
-| Billing / usage quotas | none (per-minute rate ceiling only) | per-workspace, through admission hooks |
+| Billing / usage quotas | none by default; optional admission hooks | per-workspace, through admission hooks |
 | Multi-tenant admin / org management | — | yes |
 | Horizontal scaling / multi-region | single process | Durable Objects + edge |
 | Managed backups & SLA | you operate the SQLite file + process | managed |

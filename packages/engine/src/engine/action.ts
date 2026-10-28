@@ -21,6 +21,7 @@ import {
 } from './invocationCompletion.js';
 import type { NodeConnectionRegistry, NodeDrainOptions } from '../ports/realtime.js';
 import { runAtomic, runAtomicWrites, type AtomicWrite } from '../ports/database.js';
+import { exclusiveClaimWrite, retryAfterAtMatches, type InvocationClaimStatus } from './invocationClaim.js';
 import { claimSpawnNode, chooseNodeForAction, isNodeLive, releaseNodeCapacity, reserveNodeCapacity } from './placement.js';
 import { DEFAULT_PROVIDER_NAME, capacityProviderName, getProvider, isProviderLive } from './nodeProvider.js';
 import { AGENT_TOKEN_HASH_PATTERN } from '@relaycast/types';
@@ -32,7 +33,7 @@ type ActionRow = typeof actions.$inferSelect;
 type InvocationRow = typeof actionInvocations.$inferSelect;
 type RetryableInvocationRow = Pick<
   InvocationRow,
-  'id' | 'workspaceId' | 'actionId' | 'actionName' | 'invocationOrigin' | 'callerId' | 'input' | 'status' | 'dispatchedNodeId' | 'providerAcceptedAttempt' | 'spawnReservedAt' | 'attemptedNodeIds' | 'dispatchAttempts'
+  'id' | 'workspaceId' | 'actionId' | 'actionName' | 'invocationOrigin' | 'callerId' | 'input' | 'status' | 'dispatchedNodeId' | 'providerAcceptedAttempt' | 'spawnReservedAt' | 'attemptedNodeIds' | 'dispatchAttempts' | 'retryAfterAt'
 >;
 
 const OPEN_INVOCATION_STATUSES = ['pending', 'dispatched', 'invoked'];
@@ -62,14 +63,13 @@ export const ACTION_HANDLER_UNREACHABLE_TTL_MS = 120_000;
 export const PENDING_INVOCATION_MAX_AGE_MS = 72 * 60 * 60 * 1000;
 /**
  * Sleep between the never-dispatched sweep's candidate SELECT and its atomic
- * UPDATE. `dispatchNodeInvocation` sends the frame before recording
- * `dispatchAttempts += 1`, so a sweep landing between those two dispatcher
- * calls could otherwise mark an in-flight dispatch `never_dispatched_expired`
- * while the handler already has the frame. The atomic UPDATE re-checks
- * `dispatch_attempts = 0`, so once the dispatcher's UPDATE lands, the sweep's
- * WHERE excludes the row. This grace window (default 5s) covers the send→record
- * gap by a wide margin — the dispatcher's UPDATE is one D1 round-trip — while
- * still bounding sweep latency. Set to 0 in tests to keep them fast.
+ * UPDATE. Builtin spawn and agent-hosted sends claim before the frame, so
+ * `dispatch_attempts` is already set. Release and other unclaimed sends still
+ * record the attempt after the frame. A sweep landing in that gap could mark
+ * the row `never_dispatched_expired` while the handler already has the frame.
+ * The atomic UPDATE re-checks `dispatch_attempts = 0`, so once the attempt is
+ * recorded the row is excluded. This grace window (default 5s) covers that
+ * record gap. Set to 0 in tests to keep them fast.
  */
 export const NEVER_DISPATCHED_SWEEP_GRACE_MS = 5_000;
 const ACTION_RETRY_BACKOFF_MS = 5_000;
@@ -192,11 +192,10 @@ function nextRetryAfter(attempts: number): Date {
 }
 
 /**
- * Field set that moves an invocation into the live `dispatched` state once its
- * `action.invoke` frame has actually been delivered to the node. Shared by the
- * live dispatch path (`dispatchNodeAttempt`) and exported offline-queue drain
- * path (`drainNodeInvocations`) so the dispatch-timeout sweep — which keys off
- * `dispatchedAt` — and the reschedule path cover drained invocations too.
+ * Live `dispatched` fields (`dispatchedAt`, `retryAfterAt`). The timeout sweep
+ * keys off `dispatchedAt`. A builtin spawn or agent-hosted claim writes them
+ * before the frame; offline-queue drain writes them when a queued frame is
+ * delivered.
  */
 function dispatchedStateFields(opts: { retryAfterAt?: Date | null } = {}): {
   status: 'dispatched';
@@ -1047,6 +1046,14 @@ async function dispatchNodeProviderInvocation(args: {
   invocationOrigin: InvocationRow['invocationOrigin'];
   reservationHeld?: boolean;
   expectedNodeLivenessRevision?: number;
+  /**
+   * Claim tokens from the retry that selected this row. A later read would
+   * observe the winner's generation and send a second frame.
+   */
+  claimStatus?: InvocationClaimStatus;
+  observedRetryAfterAt?: Date | null;
+  observedDispatchAttempts?: number;
+  observedDispatchedNodeId?: string | null;
 }, options: {
   failIfUnavailable?: boolean;
 } = {}): Promise<{
@@ -1107,7 +1114,36 @@ async function dispatchNodeProviderInvocation(args: {
     }
     return { accepted, pending: true };
   }
-  return dispatchNodeInvocation({ ...args });
+  // A retry passes the generation it selected. Re-reading here would adopt a
+  // claim that won while this retry was placing, and both would send. Callers
+  // without a snapshot still read the row so a dispatched spawn does not fall
+  // back to the fresh-row defaults.
+  const suppliedClaim = args.claimStatus
+    ? {
+      claimStatus: args.claimStatus,
+      observedRetryAfterAt: args.observedRetryAfterAt ?? null,
+      observedDispatchAttempts: args.observedDispatchAttempts ?? 0,
+      observedDispatchedNodeId: args.observedDispatchedNodeId ?? null,
+    }
+    : null;
+  const [claimRow] = suppliedClaim
+    ? []
+    : await args.db
+      .select({
+        status: actionInvocations.status,
+        retryAfterAt: actionInvocations.retryAfterAt,
+        dispatchAttempts: actionInvocations.dispatchAttempts,
+        dispatchedNodeId: actionInvocations.dispatchedNodeId,
+      })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, args.workspaceId),
+        eq(actionInvocations.id, args.invocationId),
+      ));
+  return dispatchNodeInvocation({
+    ...args,
+    ...(suppliedClaim ?? (claimRow ? observedInvocationClaim(claimRow) : {})),
+  });
 }
 
 async function dispatchRelease(args: {
@@ -1814,11 +1850,12 @@ async function dispatchSpawn(args: {
   // Placement reserved capacity for an attempt that never landed. Return it
   // first, then mark the row unsent: only the mark makes it drainable, so a
   // drain never sees it while this send is in flight or still holding the
-  // reservation.
-  if (!dispatched.accepted && !placement.queued) {
+  // reservation. A thrown send has an unknown outcome, so it is not marked
+  // and only the never-dispatched sweep ends it.
+  if (!dispatched.accepted && !placement.queued && !dispatched.reservationStillHeld) {
     await releaseNodeCapacity(args.db, args.workspaceId, nodeId);
   }
-  if (!dispatched.sent) {
+  if (!dispatched.sent && !dispatched.sendOutcomeUnknown) {
     await markUnsentNativeSpawn(args.db, args.workspaceId, invocation.id, nodeId);
   }
   return spawnResult(invocation, nodeId, dispatched);
@@ -2184,6 +2221,25 @@ export async function invokeAction(
       ));
     if (settled) {
       return invocationAck(settled, {
+        actionName,
+        handlerAgentId: action.handlerAgentId,
+        handlerNodeId: handlerAgent.locationNodeId,
+      });
+    }
+  }
+
+  // The agent CAS recorded dispatch before the frame. A handler can complete
+  // that row before this response is built, and the ack returns that terminal row.
+  if (dispatched.sent && dispatched.accepted) {
+    const [current] = await db
+      .select()
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, workspaceId),
+        eq(actionInvocations.id, invocation.id),
+      ));
+    if (current && !OPEN_INVOCATION_STATUSES.some((status) => status === current.status)) {
+      return invocationAck(current, {
         actionName,
         handlerAgentId: action.handlerAgentId,
         handlerNodeId: handlerAgent.locationNodeId,
@@ -2584,6 +2640,21 @@ async function dispatchNodeAttempt(
     };
     /** Selected retry target; differs from expectedAction.id during a valid failover. */
     targetActionId?: string;
+    /**
+     * Exclusive pre-send claim. The update matches this observed status,
+     * deadline, and attempt count. `retryAfterAt` is the deadline to store,
+     * already chosen by `exclusiveClaimWrite`.
+     */
+    claim?: {
+      status: InvocationClaimStatus;
+      retryAfterAt: Date | null;
+      dispatchAttempts: number;
+      /**
+       * Hold the caller is reusing. The claim loses when a retry has already
+       * cleared this timestamp and released the slot.
+       */
+      spawnReservedAt?: Date;
+    };
     /** Reject a stale lost-node rescheduler after any newer dispatch mutation. */
     expectedNodeLivenessRevision?: number;
   },
@@ -2613,7 +2684,16 @@ async function dispatchNodeAttempt(
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
       eq(actionInvocations.id, invocationId),
-      inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      ...(opts.claim
+        ? [
+          eq(actionInvocations.status, opts.claim.status),
+          retryAfterAtMatches(opts.claim.retryAfterAt),
+          eq(actionInvocations.dispatchAttempts, opts.claim.dispatchAttempts),
+          ...(opts.claim.spawnReservedAt
+            ? [eq(actionInvocations.spawnReservedAt, opts.claim.spawnReservedAt)]
+            : []),
+        ]
+        : [inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES)]),
       ...(opts.expectedNodeLivenessRevision !== undefined
         ? [eq(actionInvocations.nodeLivenessRevision, opts.expectedNodeLivenessRevision)]
         : []),
@@ -2639,6 +2719,45 @@ async function dispatchNodeAttempt(
     ))
     .returning();
   return !!updated;
+}
+
+/**
+ * Drop a spawn claim whose frame was not accepted. The compare matches the
+ * attempt count and deadline this claim wrote, so a failed older send cannot
+ * reset a newer winner. Restore the observed attempt count, route, deadline,
+ * and reservation token so the pending row is due for another sender.
+ */
+async function restoreUnsentSpawnClaim(
+  db: Db,
+  workspaceId: string,
+  invocationId: string,
+  claim: {
+    dispatchAttempts: number;
+    retryAfterAt: Date | null;
+    restoreRetryAfterAt: Date | null;
+    restoreDispatchAttempts: number;
+    restoreDispatchedNodeId: string | null;
+    /** Original token when reusing a hold; null when the caller releases its new slot. */
+    restoreSpawnReservedAt: Date | null;
+  },
+): Promise<void> {
+  await db
+    .update(actionInvocations)
+    .set({
+      status: 'pending',
+      dispatchedAt: null,
+      dispatchedNodeId: claim.restoreDispatchedNodeId,
+      spawnReservedAt: claim.restoreSpawnReservedAt,
+      retryAfterAt: claim.restoreRetryAfterAt,
+      dispatchAttempts: claim.restoreDispatchAttempts,
+    })
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.id, invocationId),
+      inArray(actionInvocations.status, ['pending', 'dispatched']),
+      eq(actionInvocations.dispatchAttempts, claim.dispatchAttempts),
+      retryAfterAtMatches(claim.retryAfterAt),
+    ));
 }
 
 function registeredActionDispatchPredicate(args: {
@@ -2920,11 +3039,38 @@ async function dispatchNodeInvocation(args: {
   retryAfterAt?: Date | null;
   reservationHeld?: boolean;
   skipIncrementAttempts?: boolean;
+  /** Status observed on the row this call is claiming. Absent means `pending`. */
+  claimStatus?: InvocationClaimStatus;
+  /** Deadline observed on that row. Absent means unset. */
+  observedRetryAfterAt?: Date | null;
+  /** Attempt count observed on that row. Absent means zero. */
+  observedDispatchAttempts?: number;
+  /** `dispatched_node_id` observed on that row. Absent means unset. */
+  observedDispatchedNodeId?: string | null;
+  /**
+   * The caller reused a capacity hold it will not release if this send fails.
+   * Restoring the claim must restore the original `spawn_reserved_at` token.
+   */
+  preserveSpawnReservation?: boolean;
+  /**
+   * `spawn_reserved_at` observed with a reused hold. The pre-send claim
+   * matches it, so a retry that already released the slot cannot lose the
+   * race to a drain that skipped reserving another one.
+   */
+  observedSpawnReservedAt?: Date | null;
   expectedNodeLivenessRevision?: number;
 }): Promise<{
   accepted: boolean;
   pending: boolean;
   sent: boolean;
+  /** The send threw after the claim. The frame may have left; do not re-queue it. */
+  sendOutcomeUnknown?: boolean;
+  /**
+   * The claim wrote `spawnReservedAt` and restoring that claim did not commit.
+   * The slot is still counted. Callers must not release it; a later sweep
+   * releases the marker once.
+   */
+  reservationStillHeld?: boolean;
   settled?: InvocationRow;
 }> {
   const guardedReleaseHash = args.invocationOrigin === 'builtin' && isReleaseInvocation(args.action)
@@ -3014,6 +3160,17 @@ async function dispatchNodeInvocation(args: {
   if (!snapshotted) return { accepted: false, pending: false, sent: false };
   const connectedBefore = args.registry.isProviderConnected(args.workspaceId, args.nodeId, args.providerName);
   const pending = !!args.pending || !connectedBefore;
+  const claimStatus = args.claimStatus ?? 'pending';
+  const observedRetryAfterAt = args.observedRetryAfterAt ?? null;
+  const observedDispatchAttempts = args.observedDispatchAttempts ?? 0;
+  const claimWrite = exclusiveClaimWrite({
+    observedStatus: claimStatus,
+    observedRetryAfterAt,
+    observedDispatchAttempts,
+    nextStatus: pending ? 'pending' : 'dispatched',
+    nextRetryAfterAt: args.retryAfterAt ?? null,
+    incrementAttempts: !args.skipIncrementAttempts,
+  });
   const expectedActionId = args.invocationOrigin === 'registered_action'
     ? (args.expectedActionId ?? args.actionId)
     : null;
@@ -3048,62 +3205,159 @@ async function dispatchNodeInvocation(args: {
   if (registeredNodeClaim?.taskState) {
     frame.task_execution = taskExecution({ id: args.invocationId, ...registeredNodeClaim });
   }
-  const sent = args.agent && args.actionId
-    ? await (args.registry.sendAuthorizedActionToProvider?.(
+  // Native spawn has no registered handoff. Claim before the frame so a
+  // concurrent drain and sweep cannot both send. The claim matches the
+  // observed status, so a dispatched timeout retry can win, and it changes
+  // the attempt count or the deadline so a second scheduler loses. Success
+  // does not update the row again.
+  const nativeSpawnSend = isSpawnInvocation(args.action) && !args.agent && !registeredNodeClaim;
+  let nativeSpawnClaimed = false;
+  if (nativeSpawnSend) {
+    try {
+      nativeSpawnClaimed = await dispatchNodeAttempt(
+        args.db,
         args.workspaceId,
+        args.invocationId,
         args.nodeId,
-        args.providerName,
-        frame,
         {
-          kind: 'agent-action-v1',
-          invocationId: args.invocationId,
-          actionId: args.actionId,
-          handlerAgentId: args.agent.id,
-          recordAttempt: !args.skipIncrementAttempts,
-          ...(args.expectedNodeLivenessRevision !== undefined
-            ? { expectedNodeLivenessRevision: args.expectedNodeLivenessRevision }
-            : {}),
+          pending,
+          providerName: args.providerName,
+          retryAfterAt: claimWrite.retryAfterAt,
+          reservationHeld: args.reservationHeld,
+          skipIncrementAttempts: args.skipIncrementAttempts,
+          expectedNodeLivenessRevision: args.expectedNodeLivenessRevision,
+          claim: {
+            status: claimStatus,
+            retryAfterAt: observedRetryAfterAt,
+            dispatchAttempts: observedDispatchAttempts,
+            ...(args.preserveSpawnReservation && args.observedSpawnReservedAt
+              ? { spawnReservedAt: args.observedSpawnReservedAt }
+              : {}),
+          },
         },
-      ) ?? false)
-    : registeredNodeClaim
-      ? await (args.registry.sendAuthorizedActionToProvider?.(
-          args.workspaceId,
-          args.nodeId,
-          args.providerName,
-          frame,
-          {
-            kind: 'registered-node-action-v2',
-            invocationId: args.invocationId,
-            actionId: registeredNodeClaim.actionId,
-            dispatchAttempt: registeredNodeClaim.dispatchAttempts,
-            invocationActionName: registeredNodeClaim.actionName,
-            actionName: args.action,
-          },
-        ) ?? false)
-    : guardedReleaseHash || guardedReleaseAgentId
-      ? await (args.registry.sendAuthorizedActionToProvider?.(
-          args.workspaceId,
-          args.nodeId,
-          args.providerName,
-          frame,
-          {
-            kind: 'release-generation-v1',
-            invocationId: args.invocationId,
-            agentName: typeof args.input.name === 'string' ? args.input.name : '',
-            ...(guardedReleaseHash && guardedReleaseAgentId
-              ? { expectedTokenHash: guardedReleaseHash, expectedAgentId: guardedReleaseAgentId }
-              : guardedReleaseHash
-                ? { expectedTokenHash: guardedReleaseHash }
-                : { expectedAgentId: guardedReleaseAgentId! }),
-          },
-        ) ?? false)
-    : await args.registry.sendToProvider(
-        args.workspaceId,
-        args.nodeId,
-        args.providerName,
-        frame,
       );
+    } catch {
+      // The claim write did not commit: no frame left, and the row has no
+      // reservation marker for a later sweep to release. A false result lets
+      // the caller return the slot it already reserved and leave the
+      // invocation pending for another sender.
+      return { accepted: false, pending: false, sent: false };
+    }
+  }
+  if (nativeSpawnSend && !nativeSpawnClaimed) {
+    return { accepted: false, pending: false, sent: false };
+  }
+  const restoreSpawnClaim = () => restoreUnsentSpawnClaim(
+    args.db,
+    args.workspaceId,
+    args.invocationId,
+    {
+      dispatchAttempts: claimWrite.dispatchAttempts,
+      retryAfterAt: claimWrite.retryAfterAt,
+      restoreRetryAfterAt: observedRetryAfterAt,
+      restoreDispatchAttempts: observedDispatchAttempts,
+      restoreDispatchedNodeId: args.observedDispatchedNodeId ?? null,
+      restoreSpawnReservedAt: args.preserveSpawnReservation ? args.observedSpawnReservedAt ?? null : null,
+    },
+  );
+  // A failed restore leaves the marker set. Returning the slot as well lets
+  // the timeout sweep release it a second time.
+  const restoreSpawnClaimOrHold = async (): Promise<boolean> => {
+    try {
+      await restoreSpawnClaim();
+      return false;
+    } catch {
+      return true;
+    }
+  };
+  let sent = false;
+  try {
+    sent = args.agent && args.actionId
+      ? await (args.registry.sendAuthorizedActionToProvider?.(
+          args.workspaceId,
+          args.nodeId,
+          args.providerName,
+          frame,
+          {
+            kind: 'agent-action-v1',
+            invocationId: args.invocationId,
+            actionId: args.actionId,
+            handlerAgentId: args.agent.id,
+            recordAttempt: !args.skipIncrementAttempts,
+            pending,
+            retryAfterAt: claimWrite.retryAfterAt,
+            claimStatus,
+            observedRetryAfterAt,
+            observedDispatchAttempts,
+            reservationHeld: !!args.reservationHeld,
+            ...(args.expectedNodeLivenessRevision !== undefined
+              ? { expectedNodeLivenessRevision: args.expectedNodeLivenessRevision }
+              : {}),
+          },
+        ) ?? false)
+      : registeredNodeClaim
+        ? await (args.registry.sendAuthorizedActionToProvider?.(
+            args.workspaceId,
+            args.nodeId,
+            args.providerName,
+            frame,
+            {
+              kind: 'registered-node-action-v2',
+              invocationId: args.invocationId,
+              actionId: registeredNodeClaim.actionId,
+              dispatchAttempt: registeredNodeClaim.dispatchAttempts,
+              invocationActionName: registeredNodeClaim.actionName,
+              actionName: args.action,
+            },
+          ) ?? false)
+        : guardedReleaseHash || guardedReleaseAgentId
+          ? await (args.registry.sendAuthorizedActionToProvider?.(
+              args.workspaceId,
+              args.nodeId,
+              args.providerName,
+              frame,
+              {
+                kind: 'release-generation-v1',
+                invocationId: args.invocationId,
+                agentName: typeof args.input.name === 'string' ? args.input.name : '',
+                ...(guardedReleaseHash && guardedReleaseAgentId
+                  ? { expectedTokenHash: guardedReleaseHash, expectedAgentId: guardedReleaseAgentId }
+                  : guardedReleaseHash
+                    ? { expectedTokenHash: guardedReleaseHash }
+                    : { expectedAgentId: guardedReleaseAgentId! }),
+              },
+            ) ?? false)
+          : await args.registry.sendToProvider(
+              args.workspaceId,
+              args.nodeId,
+              args.providerName,
+              frame,
+            );
+  } catch (error) {
+    // A thrown send never reached the false-result path. Restore only this
+    // claim, then report a false result so the caller releases the capacity
+    // it reserved. The outcome is unknown, so callers must not queue another
+    // send. Registered-action crashes still propagate: their claim has to stay
+    // in place for the keyed replay.
+    if (nativeSpawnClaimed) {
+      const reservationStillHeld = await restoreSpawnClaimOrHold();
+      return {
+        accepted: false,
+        pending: false,
+        sent: false,
+        sendOutcomeUnknown: true,
+        ...(reservationStillHeld ? { reservationStillHeld: true } : {}),
+      };
+    }
+    throw error;
+  }
 
+  if (!sent && nativeSpawnClaimed) {
+    const reservationStillHeld = await restoreSpawnClaimOrHold();
+    if (reservationStillHeld) {
+      return { accepted: false, pending: false, sent: false, reservationStillHeld: true };
+    }
+  }
   if (!sent && (guardedReleaseHash || guardedReleaseAgentId)) {
     // An adapter compiled against the older owner-authorization contract may
     // expose the method but reject the new proof kind. Settle any still-open
@@ -3137,10 +3391,11 @@ async function dispatchNodeInvocation(args: {
     return { accepted: false, pending: false, sent: false };
   }
 
-  // Registered node-action state was committed by the pre-send handoff CAS;
-  // agent-action state was committed by the socket owner's authorization CAS.
+  // Registered node-action and native-spawn state was committed by the
+  // pre-send claim. Agent-action state was committed by the socket owner's
+  // authorization CAS, then re-read below in case the handler already finished.
   // Do not write either generation again after the frame is accepted.
-  if (registeredNodeClaim) {
+  if (registeredNodeClaim || nativeSpawnClaimed) {
     return { accepted: true, pending, sent: true };
   }
   if (args.agent && args.actionId) {
@@ -3345,6 +3600,7 @@ export async function drainNodeInvocations(
       input: actionInvocations.input,
       providerAcceptedAttempt: actionInvocations.providerAcceptedAttempt,
       dispatchAttempts: actionInvocations.dispatchAttempts,
+      retryAfterAt: actionInvocations.retryAfterAt,
       spawnReservedAt: actionInvocations.spawnReservedAt,
       dispatchedNodeId: actionInvocations.dispatchedNodeId,
       dispatchedProvider: actionInvocations.dispatchedProvider,
@@ -3484,14 +3740,22 @@ export async function drainNodeInvocations(
         retryAfterAt: new Date(Date.now() + ACTION_DISPATCH_TIMEOUT_MS),
         reservationHeld,
         skipIncrementAttempts: row.dispatchedNodeId === nodeId,
+        claimStatus: 'pending',
+        observedRetryAfterAt: row.retryAfterAt,
+        observedDispatchAttempts: row.dispatchAttempts,
+        observedDispatchedNodeId: row.dispatchedNodeId,
+        observedSpawnReservedAt: row.spawnReservedAt,
+        preserveSpawnReservation: reservationHeld && !reservedForDrain,
       });
       if (dispatched.accepted) {
         drained++;
-      } else if (reservedForDrain) {
+      } else if (reservedForDrain && !dispatched.reservationStillHeld) {
         await releaseNodeCapacity(db, workspaceId, nodeId);
         reservedForDrain = false;
       }
-      if (!dispatched.sent) await remarkUnsent();
+      // A thrown send may have delivered the frame. Leave an unsent spawn
+      // unmarked so a later drain does not send it again.
+      if (!dispatched.sent && !dispatched.sendOutcomeUnknown) await remarkUnsent();
     } catch {
       if (reservedForDrain) {
         await releaseNodeCapacity(db, workspaceId, nodeId).catch(() => {});
@@ -3504,6 +3768,26 @@ export async function drainNodeInvocations(
     }
   }
   return drained;
+}
+
+function observedInvocationClaim(invocation: {
+  status: string;
+  retryAfterAt?: Date | null;
+  dispatchAttempts?: number | null;
+  dispatchedNodeId?: string | null;
+}): {
+  claimStatus?: InvocationClaimStatus;
+  observedRetryAfterAt?: Date | null;
+  observedDispatchAttempts?: number;
+  observedDispatchedNodeId?: string | null;
+} {
+  if (invocation.status !== 'pending' && invocation.status !== 'dispatched' && invocation.status !== 'invoked') return {};
+  return {
+    claimStatus: invocation.status,
+    observedRetryAfterAt: invocation.retryAfterAt ?? null,
+    observedDispatchAttempts: invocation.dispatchAttempts ?? 0,
+    observedDispatchedNodeId: invocation.dispatchedNodeId ?? null,
+  };
 }
 
 export async function rescheduleNodeInvocation(
@@ -3535,9 +3819,41 @@ export async function rescheduleNodeInvocation(
   }
   // Only release capacity the invocation actually holds. A shadowed spawn
   // dropped its native reservation at dispatch (spawnReservedAt is null), so it
-  // must not release capacity that now belongs to another spawn.
+  // must not release capacity that now belongs to another spawn. Clear the
+  // marker once so overlapping retries release that one hold, not every hold
+  // on the node.
   if (invocation.dispatchedNodeId && isSpawnInvocation(invocation.actionName) && invocation.spawnReservedAt) {
-    await releaseNodeCapacity(db, invocation.workspaceId, invocation.dispatchedNodeId);
+    const heldAt = invocation.spawnReservedAt;
+    const nodeId = invocation.dispatchedNodeId;
+    const holdWhere = and(
+      eq(actionInvocations.workspaceId, invocation.workspaceId),
+      eq(actionInvocations.id, invocation.id),
+      eq(actionInvocations.status, invocation.status),
+      eq(actionInvocations.dispatchAttempts, invocation.dispatchAttempts ?? 0),
+      retryAfterAtMatches(invocation.retryAfterAt ?? null),
+      ...(opts.expectedNodeLivenessRevision !== undefined
+        ? [eq(actionInvocations.nodeLivenessRevision, opts.expectedNodeLivenessRevision)]
+        : []),
+    );
+    try {
+      // Clear the marker and decrement together. A transaction rolls both
+      // back when the counter update throws. A handle without one can commit
+      // the clear first; the catch puts that marker back.
+      await runAtomic(db, async (tx) => {
+        const [releasedHold] = await tx
+          .update(actionInvocations)
+          .set({ spawnReservedAt: null })
+          .where(and(holdWhere, eq(actionInvocations.spawnReservedAt, heldAt)))
+          .returning({ id: actionInvocations.id });
+        if (releasedHold) await releaseNodeCapacity(tx, invocation.workspaceId, nodeId);
+      });
+    } catch (error) {
+      await db
+        .update(actionInvocations)
+        .set({ spawnReservedAt: heldAt })
+        .where(and(holdWhere, isNull(actionInvocations.spawnReservedAt)));
+      throw error;
+    }
   }
   // A shadowed spawn stays pinned to its node: while a `spawn:<harness>` shadow
   // is registered there, native capacity for that harness is unreachable — even
@@ -3589,6 +3905,7 @@ export async function rescheduleNodeInvocation(
       invocationOrigin: invocation.invocationOrigin,
       retryAfterAt: opts.retryAfterAt ?? null,
       expectedNodeLivenessRevision: opts.expectedNodeLivenessRevision,
+      ...observedInvocationClaim(invocation),
     });
     return dispatched.accepted;
   }
@@ -3639,6 +3956,7 @@ export async function rescheduleNodeInvocation(
             queue: target.queue,
             reservationHeld: false,
             expectedNodeLivenessRevision: opts.expectedNodeLivenessRevision,
+            ...observedInvocationClaim(invocation),
           }, { failIfUnavailable: false });
           if (dispatched.providerUnavailable) {
             providerRejectedNodeIds.add(placement.node.id);
@@ -3657,6 +3975,16 @@ export async function rescheduleNodeInvocation(
           const expectedActionId = invocation.invocationOrigin === 'registered_action'
             ? invocation.actionId
             : null;
+          const queuedClaim = invocation.status === 'pending' || invocation.status === 'dispatched' || invocation.status === 'invoked'
+            ? exclusiveClaimWrite({
+              observedStatus: invocation.status,
+              observedRetryAfterAt: invocation.retryAfterAt ?? null,
+              observedDispatchAttempts: invocation.dispatchAttempts ?? 0,
+              nextStatus: 'pending',
+              nextRetryAfterAt: opts.retryAfterAt ?? null,
+              incrementAttempts: true,
+            })
+            : null;
           const accepted = await dispatchNodeAttempt(
             db,
             invocation.workspaceId,
@@ -3665,12 +3993,19 @@ export async function rescheduleNodeInvocation(
             {
               providerName,
               pending: true,
-              retryAfterAt: opts.retryAfterAt ?? null,
+              retryAfterAt: queuedClaim?.retryAfterAt ?? opts.retryAfterAt ?? null,
               reservationHeld: false,
               expectedAction: expectedActionId
                 ? { id: expectedActionId, name: actionToSend }
                 : undefined,
               targetActionId: target?.id,
+              ...(queuedClaim ? {
+                claim: {
+                  status: invocation.status as InvocationClaimStatus,
+                  retryAfterAt: invocation.retryAfterAt ?? null,
+                  dispatchAttempts: invocation.dispatchAttempts ?? 0,
+                },
+              } : {}),
               expectedNodeLivenessRevision: opts.expectedNodeLivenessRevision,
             },
           );
@@ -3684,21 +4019,40 @@ export async function rescheduleNodeInvocation(
           }
           return accepted;
         }
-        const dispatched = await dispatchNodeInvocation({
-          db,
-          registry,
-          workspaceId: invocation.workspaceId,
-          invocationId: invocation.id,
-          nodeId: placement.node.id,
-          providerName,
-          action: actionToSend,
-          actionId: target?.id ?? null,
-          expectedActionId: invocation.actionId,
-          invocationOrigin: invocation.invocationOrigin,
-          input,
-          reservationHeld,
-          expectedNodeLivenessRevision: opts.expectedNodeLivenessRevision,
-        });
+        let dispatched: { accepted: boolean; sent: boolean; reservationStillHeld?: boolean };
+        try {
+          dispatched = await dispatchNodeInvocation({
+            db,
+            registry,
+            workspaceId: invocation.workspaceId,
+            invocationId: invocation.id,
+            nodeId: placement.node.id,
+            providerName,
+            action: actionToSend,
+            actionId: target?.id ?? null,
+            expectedActionId: invocation.actionId,
+            invocationOrigin: invocation.invocationOrigin,
+            input,
+            reservationHeld,
+            retryAfterAt: opts.retryAfterAt ?? null,
+            expectedNodeLivenessRevision: opts.expectedNodeLivenessRevision,
+            ...observedInvocationClaim(invocation),
+          });
+        } catch (error) {
+          // A throw before the claim commits has no marker, so return the
+          // new slot. A restore failure returns reservationStillHeld instead
+          // of throwing, and the check below leaves that slot in place.
+          if (reservationHeld) {
+            await releaseNodeCapacity(db, invocation.workspaceId, placement.node.id);
+          }
+          throw error;
+        }
+        // claimSpawnNode incremented reservedAgents for this attempt. Release
+        // it when the pending claim loses or the send never starts. Leave it
+        // when the reservation marker is still set.
+        if (!dispatched.accepted && !dispatched.sent && reservationHeld && !dispatched.reservationStillHeld) {
+          await releaseNodeCapacity(db, invocation.workspaceId, placement.node.id);
+        }
         return dispatched.accepted;
       } catch {
         // This candidate phase is exhausted; optionally retry attempted nodes.
@@ -3730,7 +4084,9 @@ export async function rescheduleNodeInvocation(
     .where(and(
       eq(actionInvocations.workspaceId, invocation.workspaceId),
       eq(actionInvocations.id, invocation.id),
-      inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      eq(actionInvocations.status, invocation.status),
+      eq(actionInvocations.dispatchAttempts, invocation.dispatchAttempts ?? 0),
+      retryAfterAtMatches(invocation.retryAfterAt ?? null),
       ...(opts.expectedNodeLivenessRevision !== undefined
         ? [eq(actionInvocations.nodeLivenessRevision, opts.expectedNodeLivenessRevision)]
         : []),
@@ -3899,6 +4255,7 @@ export async function completeNodeInvocation(
       spawnReservedAt: actionInvocations.spawnReservedAt,
       attemptedNodeIds: actionInvocations.attemptedNodeIds,
       dispatchAttempts: actionInvocations.dispatchAttempts,
+      retryAfterAt: actionInvocations.retryAfterAt,
       createdAt: actionInvocations.createdAt,
       completedAt: actionInvocations.completedAt,
     })
@@ -4064,11 +4421,9 @@ async function failNeverDispatchedExpiredInvocations(
 
   if (rows.length === 0) return;
 
-  // Give any concurrent dispatcher's send→record window (`dispatchNodeAttempt`
-  // UPDATE, one D1 round-trip) time to close before the atomic UPDATE fires.
-  // Combined with the UPDATE's `dispatch_attempts = 0` re-check, this makes an
-  // in-flight dispatch reliably invisible to the age sweep instead of racing
-  // with it. See `NEVER_DISPATCHED_SWEEP_GRACE_MS`.
+  // Unclaimed sends still record `dispatchAttempts` after the frame. Wait out
+  // that gap, then the UPDATE's `dispatch_attempts = 0` re-check skips any row
+  // the dispatcher has claimed. See `NEVER_DISPATCHED_SWEEP_GRACE_MS`.
   if (graceMs > 0) {
     await new Promise((resolve) => setTimeout(resolve, graceMs));
   }
