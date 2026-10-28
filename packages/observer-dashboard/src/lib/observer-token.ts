@@ -16,6 +16,8 @@
  * re-minting under the engine's unique (workspace_id, name) constraint.
  */
 
+import { pickRememberedEngine } from './relay-server';
+
 /** Name prefix for tokens this dashboard mints; each mint appends a unique id. */
 const DASHBOARD_OBSERVER_TOKEN_PREFIX = 'observer-dashboard';
 
@@ -24,6 +26,7 @@ const DASHBOARD_OBSERVER_TOKEN_PREFIX = 'observer-dashboard';
  * token never expires out from under an otherwise-valid session.
  */
 const DASHBOARD_OBSERVER_TOKEN_TTL_MS = 60 * 60 * 24 * 30 * 1000;
+const OBSERVER_TOKEN_REVOKE_TIMEOUT_MS = 5_000;
 
 /**
  * Full read scope set, mirroring the engine's `OBSERVER_SCOPES`
@@ -126,9 +129,9 @@ export async function revokeObserverStreamToken(
   baseUrl: string,
   adminKey: string,
   tokenId: string
-): Promise<void> {
+): Promise<boolean> {
   try {
-    await fetch(
+    const response = await fetch(
       new URL(
         `/v1/observer-tokens/${encodeURIComponent(tokenId)}`,
         baseUrl
@@ -137,12 +140,41 @@ export async function revokeObserverStreamToken(
         method: 'DELETE',
         headers: { Authorization: `Bearer ${adminKey}` },
         cache: 'no-store',
+        signal: AbortSignal.timeout(OBSERVER_TOKEN_REVOKE_TIMEOUT_MS),
       }
     );
+    return response.ok;
   } catch (error) {
     console.error(
       '[revokeObserverStreamToken] Failed to revoke observer token:',
       error
     );
+    return false;
+  }
+}
+
+export async function revokePreviousObserverStreamToken(input: {
+  previousApiKey: string | null | undefined;
+  previousStreamToken?: string | null;
+  previousTokenId: string | null | undefined;
+  previousEngine: string | null | undefined;
+  candidates: string[];
+  nextApiKey: string | null | undefined;
+  nextTokenId: string | null;
+}): Promise<void> {
+  if (
+    !input.previousTokenId
+    || input.previousTokenId === input.nextTokenId
+    || input.previousStreamToken === input.nextApiKey
+  ) {
+    return;
+  }
+  const previousEngine = pickRememberedEngine(input.previousEngine, input.candidates);
+  if (!previousEngine) return;
+  const adminKeys = [input.previousApiKey, input.nextApiKey]
+    .filter((key): key is string => Boolean(key?.startsWith('rk_live_')))
+    .filter((key, index, keys) => keys.indexOf(key) === index);
+  for (const adminKey of adminKeys) {
+    if (await revokeObserverStreamToken(previousEngine, adminKey, input.previousTokenId)) return;
   }
 }

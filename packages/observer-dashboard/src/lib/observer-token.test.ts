@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   mintObserverStreamToken,
+  revokePreviousObserverStreamToken,
   revokeObserverStreamToken,
 } from './observer-token';
 
@@ -103,17 +104,20 @@ describe('revokeObserverStreamToken', () => {
   it('sends DELETE for the token id with the admin key', async () => {
     const fetchMock = mockFetch(new Response(null, { status: 204 }));
 
-    await revokeObserverStreamToken(
-      'https://cast.agentrelay.com',
-      'rk_live_admin',
-      'ot_1'
-    );
+    await expect(
+      revokeObserverStreamToken(
+        'https://cast.agentrelay.com',
+        'rk_live_admin',
+        'ot_1'
+      )
+    ).resolves.toBe(true);
 
     expect(fetchMock).toHaveBeenCalledWith(
       'https://cast.agentrelay.com/v1/observer-tokens/ot_1',
       expect.objectContaining({
         method: 'DELETE',
         headers: { Authorization: 'Bearer rk_live_admin' },
+        signal: expect.any(AbortSignal),
       })
     );
   });
@@ -128,6 +132,94 @@ describe('revokeObserverStreamToken', () => {
         'rk_live_admin',
         'ot_1'
       )
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(false);
+  });
+});
+
+describe('revokePreviousObserverStreamToken', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('revokes an earlier workspace session when the next login is an observer', async () => {
+    const fetchMock = mockFetch(new Response(null, { status: 204 }));
+
+    await revokePreviousObserverStreamToken({
+      previousApiKey: 'rk_live_previous',
+      previousTokenId: 'ot_previous',
+      previousEngine: 'https://cast.agentrelay.com',
+      candidates: ['https://cast.agentrelay.com'],
+      nextApiKey: 'ot_live_next',
+      nextTokenId: null,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://cast.agentrelay.com/v1/observer-tokens/ot_previous',
+      expect.objectContaining({
+        method: 'DELETE',
+        headers: { Authorization: 'Bearer rk_live_previous' },
+      }),
+    );
+  });
+
+  it('retries revocation with a newly validated rotated workspace key', async () => {
+    const fetchMock = mockFetch(
+      jsonResponse({ ok: false }, 401),
+      new Response(null, { status: 204 }),
+    );
+
+    await revokePreviousObserverStreamToken({
+      previousApiKey: 'rk_live_rotated',
+      previousTokenId: 'ot_previous',
+      previousEngine: 'https://cast.agentrelay.com',
+      candidates: ['https://cast.agentrelay.com'],
+      nextApiKey: 'rk_live_current',
+      nextTokenId: 'ot_next',
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      'https://cast.agentrelay.com/v1/observer-tokens/ot_previous',
+      expect.objectContaining({
+        method: 'DELETE',
+        headers: { Authorization: 'Bearer rk_live_current' },
+      }),
+    );
+  });
+
+  it('does not revoke the retained token or trust a forged remembered engine', async () => {
+    const fetchMock = mockFetch();
+    await revokePreviousObserverStreamToken({
+      previousApiKey: 'rk_live_previous',
+      previousTokenId: 'ot_same',
+      previousEngine: 'https://cast.agentrelay.com',
+      candidates: ['https://cast.agentrelay.com'],
+      nextApiKey: 'rk_live_previous',
+      nextTokenId: 'ot_same',
+    });
+    await revokePreviousObserverStreamToken({
+      previousApiKey: 'rk_live_previous',
+      previousTokenId: 'ot_previous',
+      previousEngine: 'https://attacker.example.com',
+      candidates: ['https://cast.agentrelay.com'],
+      nextApiKey: 'rk_live_next',
+      nextTokenId: null,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps a previously minted stream token when it becomes the next login credential', async () => {
+    const fetchMock = mockFetch();
+    await revokePreviousObserverStreamToken({
+      previousApiKey: 'rk_live_previous',
+      previousStreamToken: 'ot_live_reused',
+      previousTokenId: 'ot_reused',
+      previousEngine: 'https://cast.agentrelay.com',
+      candidates: ['https://cast.agentrelay.com'],
+      nextApiKey: 'ot_live_reused',
+      nextTokenId: null,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

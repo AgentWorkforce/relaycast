@@ -30,7 +30,7 @@ export type {
 } from './realtime.js';
 export { isProviderAgentDeliveryReady } from './realtime.js';
 export type { PresenceTracker } from './presence.js';
-export type { RateLimiter, RateLimitResult } from './rate-limit.js';
+export type { RateLimitCheck, RateLimiter, RateLimitResult } from './rate-limit.js';
 export type { FileStorage } from './files.js';
 export type { KeyValueStore } from './kv.js';
 export type { EventQueue, QueuedEvent } from './event-queue.js';

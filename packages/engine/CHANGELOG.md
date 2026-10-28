@@ -14,6 +14,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - A message trigger cannot invoke builtin `release`.
 - `GET /v1/agents/presence` counts a node-hosted agent as online while its node and that agent's own provider are live, including agents that make no HTTP calls. Agents of a disconnected provider, agents a live node omits from its inventory, and agents that called `POST /v1/agents/disconnect` without deregistering stay offline.
 - A status patch broadcasts the same derived presence the response returns.
+- `DELETE /v1/observer-tokens/:id` is idempotent for a token owned by the authenticated workspace, while missing and cross-workspace ids still return `404`.
+- Observer-authenticated reads use a bounded per-token budget within a shared workspace-observer ceiling, while workspace-admin rate-limit counters retain their existing bucket keys. `RateLimiter` gains `checkMany`, which accepts every bucket in the batch or leaves every count unchanged.
 
 ## [12.0.0] - 2026-10-27
 

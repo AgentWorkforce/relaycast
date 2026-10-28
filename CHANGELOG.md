@@ -25,6 +25,11 @@ Packages without a separate changelog are covered by the cross-package notes bel
 - TypeScript SDK: `agent.on.*` event handlers can be registered before `connect()` instead of throwing.
 - TypeScript SDK: `agent.exited`, `node.status.online`, and `node.status.offline` have camelCase event types. `on.agentExited` is available on `AgentClient` and `RelayCast`. `on.nodeOnline` and `on.nodeOffline` are on `RelayCast` only — node liveness is a workspace-stream and webhook event, not an agent-mailbox delivery.
 - A status patch broadcasts the same derived presence the response returns.
+- Connect observer messages redact both public Relay Connect invite URL forms.
+- Connect observer links accept capabilities only from URL fragments and remove rejected credentials from browser history; reopen the original link if first-open validation fails.
+- Observer links have isolated, bounded rate-limit budgets that do not consume the workspace-admin allowance or multiply the workspace observer ceiling.
+- Changing dashboard sessions cleans up the prior dashboard-minted stream token, including after a workspace-key rotation.
+- Repeating an observer-token revocation now succeeds for the owning workspace while missing and cross-workspace ids remain indistinguishable.
 
 ## [12.0.0] - 2026-10-27
 
@@ -912,7 +917,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.0.0...HEAD
+[Unreleased - Patch]: https://github.com/AgentWorkforce/relaycast/compare/v12.0.0...HEAD
 [12.0.0]: https://github.com/AgentWorkforce/relaycast/compare/v11.1.1...v12.0.0
 [11.1.1]: https://github.com/AgentWorkforce/relaycast/compare/v11.1.0...v11.1.1
 [11.1.0]: https://github.com/AgentWorkforce/relaycast/compare/v11.0.0...v11.1.0

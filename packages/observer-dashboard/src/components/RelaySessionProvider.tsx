@@ -7,12 +7,14 @@ import { login } from '../lib/auth';
 import { resetActivityIfWorkspaceChanged } from '../lib/activity-store';
 import {
   classifyConnectObserverStatus,
+  connectObserverCapability,
   connectObserverExpiryDelay,
   connectObserverIdentity,
   connectObserverRetryDelay,
   connectObserverUrlWithoutCapability,
   parseRetryAfterMs,
   shouldInitializeConnectObserver,
+  shouldScrubConnectObserverCapability,
 } from '../lib/connect-observer';
 import { ConnectObserverTemporaryState } from './ConnectObserverTemporaryState';
 
@@ -67,14 +69,24 @@ export function RelaySessionProvider({
 
   useEffect(() => {
     const observerIdParam = searchParams.get('observer_id');
+    const queryKey = searchParams.get('key');
     const fragmentKey = mode === 'connect' ? new URLSearchParams(window.location.hash.slice(1)).get('key') : null;
-    const urlKey = searchParams.get('key') ?? fragmentKey;
+    // Connect links are fragment-only. A query credential is rejected, never
+    // sent, and still scrubbed so it cannot linger in history or a referrer.
+    const acceptedKey = connectObserverCapability(mode, queryKey, fragmentKey);
     const expiresAt = searchParams.get('expires_at');
-    const resumesAbortedOpen = mode === 'connect' && !urlKey && Boolean(inFlight.current?.signal.aborted)
+    const urlHasCredential = queryKey !== null || fragmentKey !== null;
+    const resumesAbortedOpen = mode === 'connect' && !acceptedKey && !urlHasCredential && Boolean(inFlight.current?.signal.aborted)
       && connectIdentity.current === connectObserverIdentity(observerIdParam, expiresAt);
-    const keyParam = urlKey ?? (resumesAbortedOpen ? capturedCapability.current : null);
+    const keyParam = acceptedKey ?? (resumesAbortedOpen ? capturedCapability.current : null);
     const priorMode = previousMode.current;
     previousMode.current = mode;
+    if (shouldScrubConnectObserverCapability(mode, queryKey, fragmentKey)) {
+      // Scrub even when this is a same-room rerender that does not need to
+      // restart authentication. Rejected query credentials must never linger
+      // in browser history or a later referrer.
+      window.history.replaceState({}, '', connectObserverUrlWithoutCapability(window.location.href));
+    }
     if (
       mode === 'connect'
       && !shouldInitializeConnectObserver(priorMode, connectIdentity.current, observerIdParam, expiresAt, keyParam)
