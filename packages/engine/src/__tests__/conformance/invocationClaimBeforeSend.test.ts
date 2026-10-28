@@ -621,6 +621,108 @@ describe('invocation claim before send', () => {
     expect(row?.dispatchAttempts).toBe(99);
     expect(row?.retryAfterAt?.getTime()).toBe(Math.floor(newerDeadline.getTime() / 1000) * 1000);
   });
+
+  it('returns a reserved spawn slot when the pre-send claim write throws', async () => {
+    const ws = await createWorkspace(stack.app, 'spawn-claim-write-fails');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    const nodeId = 'node_spawn_claim_write';
+    const sock = await registerSpawnNode(stack, ws, nodeId, 'spawn-claim-write');
+    const db = stack.runtime.handle.db;
+    const restore = injectUpdateFailure(db, actionInvocations, 'claim write failed', { skip: 2, times: 1 });
+
+    const response = await stack.app.request('/v1/actions/spawn/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { cli: 'claude', name: 'worker-claim-write', task: 'hi' } }),
+    });
+    restore();
+
+    expect(response.status).toBe(201);
+    const body = await response.json() as { data: { invocation_id: string; status: string } };
+    expect(body.data.status).toBe('pending');
+    expect(sock.ofType('action.invoke')).toHaveLength(0);
+    const [node] = await db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, nodeId)));
+    expect(node?.reservedAgents).toBe(0);
+    const [row] = await db.select().from(actionInvocations).where(eq(actionInvocations.id, body.data.invocation_id));
+    expect(row?.status).toBe('pending');
+    expect(row?.spawnReservedAt).toBeNull();
+    expect(row?.dispatchAttempts).toBe(0);
+    expect(row?.handlerUnreachableSince).toBeInstanceOf(Date);
+
+    await drainNodeInvocations(db, stack.runtime.realtime, ws.workspaceId, nodeId);
+    expect(sock.ofType('action.invoke').filter((frame) => frame.invocation_id === body.data.invocation_id)).toHaveLength(1);
+    const [after] = await db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, nodeId)));
+    expect(after?.reservedAgents).toBe(1);
+  });
+
+  it('does not send a spawn whose hold a retry released before the drain claim', async () => {
+    const ws = await createWorkspace(stack.app, 'spawn-claim-released-hold');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    const nodeId = 'node_spawn_released_hold';
+    const sock = await registerSpawnNode(stack, ws, nodeId, 'spawn-released-hold', 1);
+    const db = stack.runtime.handle.db;
+    const invocationId = 'inv_spawn_released_hold';
+    const heldAt = new Date(Date.now() - 30_000);
+    await db.insert(actionInvocations).values({
+      id: invocationId,
+      workspaceId: ws.workspaceId,
+      actionName: 'spawn:claude',
+      invocationOrigin: 'builtin',
+      callerId: caller.agentId,
+      callerName: caller.name,
+      input: { cli: 'claude', name: 'worker-released', task: 'hi' },
+      status: 'pending',
+      handlerNodeId: nodeId,
+      dispatchedNodeId: nodeId,
+      attemptedNodeIds: [nodeId],
+      dispatchAttempts: 1,
+      retryAfterAt: new Date(Date.now() - 1_000),
+      spawnReservedAt: heldAt,
+    });
+    await db
+      .update(nodes)
+      .set({ reservedAgents: 1 })
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, nodeId)));
+
+    const realUpdate = db.update.bind(db);
+    const restore = beforeNthUpdate(db, actionInvocations, 1, async () => {
+      await realUpdate(actionInvocations)
+        .set({ spawnReservedAt: null })
+        .where(eq(actionInvocations.id, invocationId));
+      await realUpdate(nodes)
+        .set({ reservedAgents: 0 })
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, nodeId)));
+    });
+    try {
+      await drainNodeInvocations(db, stack.runtime.realtime, ws.workspaceId, nodeId);
+    } finally {
+      restore();
+    }
+
+    expect(sock.ofType('action.invoke')).toHaveLength(0);
+    const [node] = await db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, nodeId)));
+    expect(node?.reservedAgents).toBe(0);
+    const [row] = await db.select().from(actionInvocations).where(eq(actionInvocations.id, invocationId));
+    expect(row?.status).toBe('pending');
+    expect(row?.spawnReservedAt).toBeNull();
+
+    await drainNodeInvocations(db, stack.runtime.realtime, ws.workspaceId, nodeId);
+    expect(sock.ofType('action.invoke').filter((frame) => frame.invocation_id === invocationId)).toHaveLength(1);
+    const [after] = await db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, nodeId)));
+    expect(after?.reservedAgents).toBe(1);
+  });
 });
 
 async function registerSpawnNode(
@@ -660,4 +762,53 @@ async function registerSpawnNode(
   await handle.handleMessage(JSON.stringify({ v: 1, type: 'node.heartbeat', active_agents: 0, handlers_live: true }));
   await stack.settle();
   return sock;
+}
+
+/** Run `fn` when the `index`th update of `table` is executed (0-based). */
+function beforeNthUpdate(
+  db: { update: (table: unknown) => object },
+  table: unknown,
+  index: number,
+  fn: () => Promise<void>,
+): () => void {
+  const real = db.update.bind(db);
+  const state = { ran: false };
+  let built = 0;
+  db.update = (target: unknown) => {
+    const builder = real(target);
+    if (target !== table) return builder;
+    const current = built++;
+    return current === index ? runBeforeExecute(builder, state, fn) : builder;
+  };
+  return () => { db.update = real; };
+}
+
+function runBeforeExecute<T extends object>(
+  target: T,
+  state: { ran: boolean },
+  fn: () => Promise<void>,
+): T {
+  return new Proxy(target, {
+    get(obj, prop) {
+      if (prop === 'then') {
+        const originalThen = Reflect.get(obj, prop) as (
+          onFulfilled?: (value: unknown) => unknown,
+          onRejected?: (error: unknown) => unknown,
+        ) => Promise<unknown>;
+        return (onFulfilled?: (value: unknown) => unknown, onRejected?: (error: unknown) => unknown) => {
+          if (!state.ran) state.ran = true;
+          else return originalThen.call(obj, onFulfilled, onRejected);
+          return fn().then(() => originalThen.call(obj, (value) => value)).then(onFulfilled, onRejected);
+        };
+      }
+      const value = Reflect.get(obj, prop) as unknown;
+      if (typeof value === 'function') {
+        return (...args: unknown[]) => {
+          const result = (value as (...inner: unknown[]) => unknown).apply(obj, args);
+          return result && typeof result === 'object' ? runBeforeExecute(result as object, state, fn) : result;
+        };
+      }
+      return value;
+    },
+  });
 }

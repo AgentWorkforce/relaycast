@@ -3598,6 +3598,11 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           message,
           { deliveryCursorSupported: supportsProviderDeliveryReadiness(args.registry) },
         );
+        // Inventory only clears a hold for an agent it newly routes. A
+        // presence-only disconnect leaves the binding active, so the next
+        // sync would keep the hold. Recovery is the node putting that agent
+        // back, and node liveness should count them without an HTTP heartbeat.
+        await args.presence?.clearExplicitDisconnect?.(args.workspaceId, recovered.agent_id);
         const replySent = sendControl(args.socket, {
           v: 1,
           id: requestId(message),

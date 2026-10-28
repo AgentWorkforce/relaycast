@@ -402,6 +402,35 @@ describe('node-hosted presence', () => {
     expect(await stack.runtime.presence.getOnline(ws.workspaceId)).not.toContain(worker.agent_id);
   });
 
+  it('clears a presence-only disconnect when the node recovers the agent', async () => {
+    const ws = await createWorkspace(stack.app, 'node-hosted-presence-recover');
+    await enrollBroker(ws.workspaceKey, 'node_recover', 'recover-broker');
+    const broker = await attachProvider(ws.workspaceId, 'node_recover', 'recover-broker', 'broker');
+    const worker = await registerAgentViaNode(stack.runtime.deps.db, ws.workspaceId, 'node_recover', 'broker', {
+      v: 1, type: 'agent.register', name: 'worker', auto_join_general: false,
+    });
+    expect((await presenceByName(ws.workspaceKey)).get('worker')).toBe('online');
+
+    const disconnect = await stack.app.request('/v1/agents/disconnect', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${worker.token}` },
+    });
+    expect(disconnect.status).toBe(200);
+    expect((await presenceByName(ws.workspaceKey)).get('worker')).toBe('offline');
+    expect(await stack.runtime.presence.explicitlyDisconnected?.(ws.workspaceId)).toContain(worker.agent_id);
+
+    await broker.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'recover-worker',
+      type: 'agent.recover',
+      name: worker.name,
+      expected_agent_id: worker.agent_id,
+    }));
+    expect(broker.sock.ofType('reply').find((frame) => frame.id === 'recover-worker')).toMatchObject({ ok: true });
+    expect(await stack.runtime.presence.explicitlyDisconnected?.(ws.workspaceId)).not.toContain(worker.agent_id);
+    expect((await presenceByName(ws.workspaceKey)).get('worker')).toBe('online');
+  });
+
   it('counts an implicit direct node from node liveness when it has no provider row', async () => {
     const ws = await createWorkspace(stack.app, 'node-hosted-presence-direct');
     const agent = await registerAgent(stack.app, ws.workspaceKey, 'direct-worker');

@@ -336,11 +336,13 @@ and rotate through that plane, so the route answers
 
 ### Throttling
 
-Each workspace has a per-minute request ceiling (30,000 by default; set
-`rateLimitPerMinute` in the engine config). Exceeding it returns HTTP 429
+Each workspace is throttled per minute in separate route buckets. The default
+bucket limit is 30,000 (`rateLimitPerMinute` in the engine config). Routes
+without their own bucket share `global`, and some routes use a lower limit,
+so 30,000 is not a workspace-wide ceiling. Exceeding a bucket returns HTTP 429
 `rate_limit_exceeded`, which always clears inside the window: `Retry-After` is
 at most 60. Successful responses carry `X-RateLimit-Limit` and
-`X-RateLimit-Remaining`.
+`X-RateLimit-Remaining` for that bucket.
 
 The engine has no plans or usage quotas. A hosting deployment can add its own
 through admission hooks (`admission` in `createNodeRuntime`/`createEngine`

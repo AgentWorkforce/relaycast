@@ -2648,6 +2648,11 @@ async function dispatchNodeAttempt(
       status: InvocationClaimStatus;
       retryAfterAt: Date | null;
       dispatchAttempts: number;
+      /**
+       * Hold the caller is reusing. The claim loses when a retry has already
+       * cleared this timestamp and released the slot.
+       */
+      spawnReservedAt?: Date;
     };
     /** Reject a stale lost-node rescheduler after any newer dispatch mutation. */
     expectedNodeLivenessRevision?: number;
@@ -2683,6 +2688,9 @@ async function dispatchNodeAttempt(
           eq(actionInvocations.status, opts.claim.status),
           retryAfterAtMatches(opts.claim.retryAfterAt),
           eq(actionInvocations.dispatchAttempts, opts.claim.dispatchAttempts),
+          ...(opts.claim.spawnReservedAt
+            ? [eq(actionInvocations.spawnReservedAt, opts.claim.spawnReservedAt)]
+            : []),
         ]
         : [inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES)]),
       ...(opts.expectedNodeLivenessRevision !== undefined
@@ -3043,6 +3051,12 @@ async function dispatchNodeInvocation(args: {
    * Restoring the claim must leave `spawn_reserved_at` set.
    */
   preserveSpawnReservation?: boolean;
+  /**
+   * `spawn_reserved_at` observed with a reused hold. The pre-send claim
+   * matches it, so a retry that already released the slot cannot lose the
+   * race to a drain that skipped reserving another one.
+   */
+  observedSpawnReservedAt?: Date | null;
   expectedNodeLivenessRevision?: number;
 }): Promise<{
   accepted: boolean;
@@ -3190,27 +3204,39 @@ async function dispatchNodeInvocation(args: {
   // the attempt count or the deadline so a second scheduler loses. Success
   // does not update the row again.
   const nativeSpawnSend = isSpawnInvocation(args.action) && !args.agent && !registeredNodeClaim;
-  const nativeSpawnClaimed = nativeSpawnSend
-    ? await dispatchNodeAttempt(
-      args.db,
-      args.workspaceId,
-      args.invocationId,
-      args.nodeId,
-      {
-        pending,
-        providerName: args.providerName,
-        retryAfterAt: claimWrite.retryAfterAt,
-        reservationHeld: args.reservationHeld,
-        skipIncrementAttempts: args.skipIncrementAttempts,
-        expectedNodeLivenessRevision: args.expectedNodeLivenessRevision,
-        claim: {
-          status: claimStatus,
-          retryAfterAt: observedRetryAfterAt,
-          dispatchAttempts: observedDispatchAttempts,
+  let nativeSpawnClaimed = false;
+  if (nativeSpawnSend) {
+    try {
+      nativeSpawnClaimed = await dispatchNodeAttempt(
+        args.db,
+        args.workspaceId,
+        args.invocationId,
+        args.nodeId,
+        {
+          pending,
+          providerName: args.providerName,
+          retryAfterAt: claimWrite.retryAfterAt,
+          reservationHeld: args.reservationHeld,
+          skipIncrementAttempts: args.skipIncrementAttempts,
+          expectedNodeLivenessRevision: args.expectedNodeLivenessRevision,
+          claim: {
+            status: claimStatus,
+            retryAfterAt: observedRetryAfterAt,
+            dispatchAttempts: observedDispatchAttempts,
+            ...(args.preserveSpawnReservation && args.observedSpawnReservedAt
+              ? { spawnReservedAt: args.observedSpawnReservedAt }
+              : {}),
+          },
         },
-      },
-    )
-    : false;
+      );
+    } catch {
+      // The claim write did not commit: no frame left, and the row has no
+      // reservation marker for a later sweep to release. A false result lets
+      // the caller return the slot it already reserved and leave the
+      // invocation pending for another sender.
+      return { accepted: false, pending: false, sent: false };
+    }
+  }
   if (nativeSpawnSend && !nativeSpawnClaimed) {
     return { accepted: false, pending: false, sent: false };
   }
@@ -3692,6 +3718,7 @@ export async function drainNodeInvocations(
         observedRetryAfterAt: row.retryAfterAt,
         observedDispatchAttempts: row.dispatchAttempts,
         observedDispatchedNodeId: row.dispatchedNodeId,
+        observedSpawnReservedAt: row.spawnReservedAt,
         preserveSpawnReservation: reservationHeld && !reservedForDrain,
       });
       if (dispatched.accepted) {
