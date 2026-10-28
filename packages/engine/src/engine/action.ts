@@ -2724,8 +2724,8 @@ async function dispatchNodeAttempt(
 /**
  * Drop a spawn claim whose frame was not accepted. The compare matches the
  * attempt count and deadline this claim wrote, so a failed older send cannot
- * reset a newer winner. The row returns to the attempt count, route, and
- * deadline observed before the claim, pending and due for another sender.
+ * reset a newer winner. Restore the observed attempt count, route, deadline,
+ * and reservation token so the pending row is due for another sender.
  */
 async function restoreUnsentSpawnClaim(
   db: Db,
@@ -2737,8 +2737,8 @@ async function restoreUnsentSpawnClaim(
     restoreRetryAfterAt: Date | null;
     restoreDispatchAttempts: number;
     restoreDispatchedNodeId: string | null;
-    /** False when this attempt reused a hold the caller will not release. */
-    clearSpawnReservation?: boolean;
+    /** Original token when reusing a hold; null when the caller releases its new slot. */
+    restoreSpawnReservedAt: Date | null;
   },
 ): Promise<void> {
   await db
@@ -2747,7 +2747,7 @@ async function restoreUnsentSpawnClaim(
       status: 'pending',
       dispatchedAt: null,
       dispatchedNodeId: claim.restoreDispatchedNodeId,
-      ...(claim.clearSpawnReservation === false ? {} : { spawnReservedAt: null }),
+      spawnReservedAt: claim.restoreSpawnReservedAt,
       retryAfterAt: claim.restoreRetryAfterAt,
       dispatchAttempts: claim.restoreDispatchAttempts,
     })
@@ -3049,7 +3049,7 @@ async function dispatchNodeInvocation(args: {
   observedDispatchedNodeId?: string | null;
   /**
    * The caller reused a capacity hold it will not release if this send fails.
-   * Restoring the claim must leave `spawn_reserved_at` set.
+   * Restoring the claim must restore the original `spawn_reserved_at` token.
    */
   preserveSpawnReservation?: boolean;
   /**
@@ -3257,7 +3257,7 @@ async function dispatchNodeInvocation(args: {
       restoreRetryAfterAt: observedRetryAfterAt,
       restoreDispatchAttempts: observedDispatchAttempts,
       restoreDispatchedNodeId: args.observedDispatchedNodeId ?? null,
-      clearSpawnReservation: !args.preserveSpawnReservation,
+      restoreSpawnReservedAt: args.preserveSpawnReservation ? args.observedSpawnReservedAt ?? null : null,
     },
   );
   // A failed restore leaves the marker set. Returning the slot as well lets

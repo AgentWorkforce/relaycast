@@ -414,7 +414,7 @@ describe('invocation claim before send', () => {
     expect(sock.ofType('action.invoke')).toHaveLength(0);
     const [afterReject] = await db.select().from(actionInvocations).where(eq(actionInvocations.id, invocationId));
     expect(afterReject?.status).toBe('pending');
-    expect(afterReject?.spawnReservedAt).toBeInstanceOf(Date);
+    expect(afterReject?.spawnReservedAt).toEqual(new Date(Math.floor(heldAt.getTime() / 1000) * 1000));
     const [held] = await db
       .select({ reservedAgents: nodes.reservedAgents })
       .from(nodes)
@@ -429,6 +429,53 @@ describe('invocation claim before send', () => {
       .from(nodes)
       .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, nodeId)));
     expect(after?.reservedAgents).toBe(1);
+  });
+
+  it.each([true, false])('releases the original hold after a failed drain and stale retry (transactional=%s)', async (transactional) => {
+    const ws = await createWorkspace(stack.app, 'spawn-claim-failed-drain-retry');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    const nodeA = 'node_spawn_failed_drain_a';
+    const nodeB = 'node_spawn_failed_drain_b';
+    const sockA = await registerSpawnNode(stack, ws, nodeA, 'failed-drain-a');
+    const sockB = await registerSpawnNode(stack, ws, nodeB, 'failed-drain-b', 1);
+    const db = stack.runtime.handle.db;
+    if (!transactional) stripTransactionCapability(db);
+    const invocationId = 'inv_spawn_failed_drain_retry';
+    await db.insert(actionInvocations).values({
+      id: invocationId,
+      workspaceId: ws.workspaceId,
+      actionName: 'spawn:claude',
+      invocationOrigin: 'builtin',
+      callerId: caller.agentId,
+      callerName: caller.name,
+      input: { cli: 'claude', name: 'worker-failed-drain', task: 'hi' },
+      status: 'pending',
+      dispatchedNodeId: nodeA,
+      attemptedNodeIds: [nodeA],
+      dispatchAttempts: 1,
+      retryAfterAt: new Date(Date.now() - 1_000),
+      spawnReservedAt: new Date(Date.now() - 30_000),
+    });
+    // One slot belongs to this invocation; the other belongs to another spawn.
+    await db.update(nodes).set({ reservedAgents: 2 }).where(eq(nodes.id, nodeA));
+    // The retry selected its generation before the drain claimed and restored it.
+    const [observed] = await db.select().from(actionInvocations).where(eq(actionInvocations.id, invocationId));
+    vi.spyOn(stack.runtime.realtime, 'sendToProvider').mockResolvedValueOnce(false);
+    await drainNodeInvocations(db, stack.runtime.realtime, ws.workspaceId, nodeA);
+    expect(sockA.ofType('action.invoke')).toHaveLength(0);
+
+    expect(await rescheduleNodeInvocation(db, stack.runtime.realtime, observed!)).toBe(true);
+
+    expect(sockB.ofType('action.invoke').filter((frame) => frame.invocation_id === invocationId)).toHaveLength(1);
+    const reserved = await db.select({ id: nodes.id, reservedAgents: nodes.reservedAgents })
+      .from(nodes).where(eq(nodes.workspaceId, ws.workspaceId));
+    const byId = new Map(reserved.map((node) => [node.id, node.reservedAgents]));
+    expect(byId.get(nodeA)).toBe(1);
+    expect(byId.get(nodeB)).toBe(1);
+    const [row] = await db.select().from(actionInvocations).where(eq(actionInvocations.id, invocationId));
+    expect(row?.dispatchedNodeId).toBe(nodeB);
+    expect(row?.spawnReservedAt).toBeInstanceOf(Date);
+    expect(row?.dispatchAttempts).toBe(2);
   });
 
   it('retries a dispatched agent-hosted action once', async () => {

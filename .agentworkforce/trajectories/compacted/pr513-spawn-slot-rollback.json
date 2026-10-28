@@ -1,0 +1,37 @@
+{
+  "id": "compact_b0otd7ulemie",
+  "version": 1,
+  "type": "compacted",
+  "compactedAt": "2026-10-28T15:45:48.083Z",
+  "sourceTrajectories": [
+    "traj_mq1l9fztqjer"
+  ],
+  "dateRange": {
+    "start": "2026-10-28T15:43:21.842Z",
+    "end": "2026-10-28T15:45:47.652Z"
+  },
+  "summary": {
+    "totalDecisions": 1,
+    "totalEvents": 1,
+    "uniqueAgents": [
+      "default"
+    ]
+  },
+  "decisionGroups": [
+    {
+      "category": "api",
+      "decisions": [
+        {
+          "question": "Restore the original reservation timestamp when rolling back a reused spawn hold",
+          "chosen": "Restore the original reservation timestamp when rolling back a reused spawn hold",
+          "reasoning": "Rollback restores the attempt generation, so it must restore the matching reservation token too. Both transactional and non-transactional regressions reproduced an old-node slot leak before the fix.",
+          "fromTrajectory": "traj_mq1l9fztqjer"
+        }
+      ]
+    }
+  ],
+  "keyLearnings": [],
+  "keyFindings": [],
+  "filesAffected": [],
+  "commits": []
+}

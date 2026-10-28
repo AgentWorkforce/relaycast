@@ -24,6 +24,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
+- A stale spawn retry releases its original node slot after a failed drain send.
 - Agents stay offline if they disconnect while presence cleanup is running, including after another agent heartbeats.
 - A message trigger cannot invoke builtin `release`.
 - Overlapping dispatch of a spawn or agent-hosted action sends one frame and keeps one capacity reservation. A timeout retry, a send that fails before the frame is accepted, a claim write that fails before the frame is sent, a drain that observed a hold a retry already released, and a restore that fails while the reservation marker is still set all stay on that one reservation.
