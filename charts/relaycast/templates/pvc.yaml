@@ -5,14 +5,13 @@ metadata:
   name: {{ include "relaycast.claimName" . }}
   labels:
     {{- include "relaycast.labels" . | nindent 4 }}
-  {{- if or .Values.persistence.retainOnUninstall .Values.persistence.annotations }}
+  {{- $annotations := deepCopy (.Values.persistence.annotations | default dict) }}
+  {{- if .Values.persistence.retainOnUninstall }}
+  {{- $_ := set $annotations "helm.sh/resource-policy" "keep" }}
+  {{- end }}
+  {{- with $annotations }}
   annotations:
-    {{- if .Values.persistence.retainOnUninstall }}
-    helm.sh/resource-policy: keep
-    {{- end }}
-    {{- with .Values.persistence.annotations }}
     {{- toYaml . | nindent 4 }}
-    {{- end }}
   {{- end }}
 spec:
   accessModes:
