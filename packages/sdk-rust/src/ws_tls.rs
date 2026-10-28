@@ -22,8 +22,16 @@ static SHARED: SharedConfig = SharedConfig::new();
 
 /// Opens a WebSocket; `wss://` uses the shared TLS configuration.
 pub(crate) async fn connect(url: &Url) -> Result<(WsStream, Response), Box<Error>> {
+    connect_with(&SHARED, native_roots, url).await
+}
+
+async fn connect_with(
+    shared: &SharedConfig,
+    roots: impl FnOnce() -> RootCertStore + Send + 'static,
+    url: &Url,
+) -> Result<(WsStream, Response), Box<Error>> {
     let connector = if url.scheme() == "wss" {
-        let config = SHARED.config(native_roots).await.map_err(Error::Io)?;
+        let config = shared.config(roots).await.map_err(Error::Io)?;
         Some(Connector::Rustls(config))
     } else {
         None
@@ -46,7 +54,8 @@ fn native_roots() -> RootCertStore {
 
 /// One configuration, built by the first connect while concurrent ones wait
 /// for it. A platform that offers no roots fails that connect and is asked
-/// again on the next one.
+/// again on the next one. Roots are read on the blocking pool, off the
+/// runtime's workers.
 struct SharedConfig(Mutex<Option<Arc<ClientConfig>>>);
 
 impl SharedConfig {
@@ -54,12 +63,15 @@ impl SharedConfig {
         Self(Mutex::const_new(None))
     }
 
-    async fn config(&self, roots: impl FnOnce() -> RootCertStore) -> io::Result<Arc<ClientConfig>> {
+    async fn config(
+        &self,
+        roots: impl FnOnce() -> RootCertStore + Send + 'static,
+    ) -> io::Result<Arc<ClientConfig>> {
         let mut shared = self.0.lock().await;
         if let Some(config) = &*shared {
             return Ok(config.clone());
         }
-        let roots = roots();
+        let roots = tokio::task::spawn_blocking(roots).await?;
         if roots.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
@@ -82,6 +94,17 @@ mod tests {
     use rustls::pki_types::{Der, TrustAnchor};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    fn counted(
+        loads: &Arc<AtomicUsize>,
+        roots: fn() -> RootCertStore,
+    ) -> impl FnOnce() -> RootCertStore + Send + 'static {
+        let loads = loads.clone();
+        move || {
+            loads.fetch_add(1, Ordering::SeqCst);
+            roots()
+        }
+    }
+
     fn one_root() -> RootCertStore {
         RootCertStore {
             roots: vec![TrustAnchor {
@@ -103,7 +126,7 @@ mod tests {
                 tokio::spawn(async move {
                     start.wait().await;
                     shared
-                        .config(|| {
+                        .config(move || {
                             loads.fetch_add(1, Ordering::SeqCst);
                             std::thread::sleep(std::time::Duration::from_millis(20));
                             one_root()
@@ -126,18 +149,14 @@ mod tests {
     #[tokio::test]
     async fn no_roots_fail_the_connect_and_are_asked_for_again() {
         let shared = SharedConfig::new();
-        let loads = AtomicUsize::new(0);
-        let load = |roots: fn() -> RootCertStore| {
-            loads.fetch_add(1, Ordering::SeqCst);
-            roots()
-        };
+        let loads = Arc::new(AtomicUsize::new(0));
         let error = shared
-            .config(|| load(RootCertStore::empty))
+            .config(counted(&loads, RootCertStore::empty))
             .await
             .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
-        let first = shared.config(|| load(one_root)).await.unwrap();
-        let second = shared.config(|| load(one_root)).await.unwrap();
+        let first = shared.config(counted(&loads, one_root)).await.unwrap();
+        let second = shared.config(counted(&loads, one_root)).await.unwrap();
         assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(loads.load(Ordering::SeqCst), 2);
     }
@@ -152,10 +171,23 @@ mod tests {
             }
         });
 
-        let _ = connect(&url).await;
-        let first = SHARED.0.lock().await.clone().expect("platform roots");
-        let _ = connect(&url).await;
-        let second = SHARED.0.lock().await.clone().expect("platform roots");
+        let shared = SharedConfig::new();
+        let loads = Arc::new(AtomicUsize::new(0));
+        let _ = connect_with(&shared, counted(&loads, one_root), &url).await;
+        let first = shared
+            .0
+            .lock()
+            .await
+            .clone()
+            .expect("a cached configuration");
+        let _ = connect_with(&shared, counted(&loads, one_root), &url).await;
+        let second = shared
+            .0
+            .lock()
+            .await
+            .clone()
+            .expect("a cached configuration");
         assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(loads.load(Ordering::SeqCst), 1);
     }
 }
