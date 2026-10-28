@@ -21,7 +21,7 @@ pub(crate) type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 static SHARED: SharedConfig = SharedConfig::new();
 
 /// Opens a WebSocket; `wss://` uses the shared TLS configuration.
-pub(crate) async fn connect(url: &Url) -> std::result::Result<(WsStream, Response), Error> {
+pub(crate) async fn connect(url: &Url) -> Result<(WsStream, Response), Error> {
     let connector = if url.scheme() == "wss" {
         Some(Connector::Rustls(SHARED.config(native_roots).await?))
     } else {
