@@ -421,7 +421,11 @@ describe('node-hosted presence', () => {
     expect(await stack.runtime.presence.explicitlyDisconnected?.('ws_deleted')).toEqual([]);
   });
 
-  it('preserves a new disconnect while the sweep awaits its agent lookup', async () => {
+  it.each([
+    { label: 'a new disconnect during the agent lookup', replace: false, lookup: 2 },
+    { label: 'a replacement disconnect during the agent lookup', replace: true, lookup: 2 },
+    { label: 'a replacement disconnect during the workspace lookup', replace: true, lookup: 1 },
+  ])('preserves $label', async ({ replace, lookup }) => {
     const ws = await createWorkspace(stack.app, 'node-hosted-presence-sweep-race');
     await enrollBroker(ws.workspaceKey, 'node_race', 'race-broker');
     await attachProvider(ws.workspaceId, 'node_race', 'race-broker', 'broker');
@@ -433,20 +437,21 @@ describe('node-hosted presence', () => {
     });
     await stack.settle();
     await stack.runtime.presence.disconnect(ws.workspaceId, first.agent_id);
-    await stack.runtime.presence.disconnect(ws.workspaceId, 'agent_deleted');
+    if (!replace) await stack.runtime.presence.disconnect(ws.workspaceId, 'agent_deleted');
     expect((await presenceByName(ws.workspaceKey)).get('second')).toBe('online');
 
     const db = stack.runtime.deps.db;
     const select = db.select.bind(db);
     let reads = 0;
     let disconnected = false;
-    // Run the real lookup, then disconnect another live agent before its
-    // result reaches the sweep. That identity was not part of this query.
+    // Run the real lookup, then change holds before the sweep resumes. A
+    // heartbeat of the last held agent removes the original workspace set.
     const wrap = (query: object): object => new Proxy(query, {
       get(object, key) {
         const value = Reflect.get(object, key, object);
         if (key === 'then') return (resolve: (rows: unknown) => unknown, reject: (error: unknown) => unknown) =>
           Promise.resolve(object).then(async rows => {
+            if (replace) await stack.runtime.presence.heartbeat(ws.workspaceId, first.agent_id, first.name);
             await stack.runtime.presence.disconnect(ws.workspaceId, second.agent_id);
             disconnected = true;
             return rows;
@@ -456,7 +461,7 @@ describe('node-hosted presence', () => {
     });
     const hook = vi.spyOn(db, 'select').mockImplementation(((...args: Parameters<typeof select>) => {
       const query = select(...args);
-      return ++reads === 2 ? wrap(query) : query;
+      return ++reads === lookup ? wrap(query) : query;
     }) as typeof db.select);
     try {
       await stack.runtime.presence.sweep();
@@ -464,10 +469,10 @@ describe('node-hosted presence', () => {
 
     expect(disconnected).toBe(true);
     expect(await stack.runtime.presence.explicitlyDisconnected?.(ws.workspaceId))
-      .toEqual(expect.arrayContaining([first.agent_id, second.agent_id]));
+      .toEqual(replace ? [second.agent_id] : expect.arrayContaining([first.agent_id, second.agent_id]));
     expect(await stack.runtime.presence.explicitlyDisconnected?.(ws.workspaceId)).not.toContain('agent_deleted');
     const after = await presenceByName(ws.workspaceKey);
-    expect(after.get('first')).toBe('offline');
+    expect(after.get('first')).toBe(replace ? 'online' : 'offline');
     expect(after.get('second')).toBe('offline');
   });
 

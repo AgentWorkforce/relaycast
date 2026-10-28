@@ -210,12 +210,10 @@ export class InProcessPresence implements PresenceTracker {
           .from(workspaces)
           .where(eq(workspaces.id, workspaceId))
           .limit(1);
-        if (!workspace) {
-          this.disconnected.delete(workspaceId);
-          continue;
-        }
-        if (ids.size === 0) {
-          this.disconnected.delete(workspaceId);
+        if (!workspace || ids.size === 0) {
+          // A heartbeat can remove this set while the lookup is in flight;
+          // a later disconnect may already have installed its replacement.
+          if (this.disconnected.get(workspaceId) === ids) this.disconnected.delete(workspaceId);
           continue;
         }
         // Cleanup must use the same snapshot as the lookup: disconnect() can
@@ -232,7 +230,9 @@ export class InProcessPresence implements PresenceTracker {
         for (const id of queriedIds) {
           if (!live.has(id)) ids.delete(id);
         }
-        if (ids.size === 0) this.disconnected.delete(workspaceId);
+        if (ids.size === 0 && this.disconnected.get(workspaceId) === ids) {
+          this.disconnected.delete(workspaceId);
+        }
       } catch {
         // Keep the hold. A failed lookup is not evidence the identity is gone.
       }
