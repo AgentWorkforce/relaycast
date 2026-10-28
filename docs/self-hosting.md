@@ -96,12 +96,15 @@ Flags take precedence over environment variables.
 | — | `RELAYCAST_INTERNAL_SECRET` / `RELAYCAST_INTERNAL_SECRET_FILE` | unset (disabled) | Enables the [internal admin API](#internal-admin-api) for a trusted control plane. Must be at least 32 characters (startup refuses a shorter one). |
 | — | `RELAYCAST_PUBLIC_WORKSPACE_CREATE` | `true` | `false` makes the anonymous `POST /v1/workspaces` answer the generic `404 not_found`; workspaces then come only from `POST /internal/workspaces`. The Helm chart sets `false` when the internal secret is configured. |
 | — | `RELAYCAST_ALLOW_INSECURE_BASE_URL` | `false` | Container image only: accept an `http://` (or IP-literal / single-label) `--base-url` whose host is loopback or private (including `*.svc` and `*.svc.cluster.local`). Public hosts stay HTTPS-only. |
-| — | `RELAYCAST_PRIVATE_DNS_SUFFIXES` | unset | Container image only, with the insecure opt-in: extra private DNS suffixes, comma-separated (e.g. `.svc.corp` for a custom `clusterDomain`). Entries must have two or more labels; entries ending in a common public TLD (a fixed list, not the full public-suffix list) are refused, so only list zones you control. |
-| — | `RELAYCAST_INSECURE_BASE_URL_HOSTS` | unset | Container image only, with the insecure opt-in: exact hosts treated as private, comma-separated (e.g. `relaycast.relaycast` for a `<svc>.<ns>` short name). IP literals and names under a common public TLD (a fixed list) are refused; only list hosts you control. |
+| — | `RELAYCAST_PRIVATE_DNS_SUFFIXES` | unset | Container image only, with the insecure opt-in: extra private DNS suffixes, comma-separated (e.g. `.svc.corp` for a custom `clusterDomain`). Entries must have two or more labels and sit under a private zone (`.local`, `.internal`, `.lan`, `.home.arpa`, `.svc`, `.cluster.local`) or be a custom clusterDomain zone `.svc.<domain>` (whose last label is checked against a fixed list of common public TLDs). Anything else is refused. |
+| — | `RELAYCAST_INSECURE_BASE_URL_HOSTS` | unset | Container image only, with the insecure opt-in: exact hosts treated as private, comma-separated (e.g. `relaycast.relaycast` for a `<svc>.<ns>` short name). Each entry must be a two-label `<svc>.<ns>` name (last label checked against a fixed list of common public TLDs) or a host under a private zone; IP literals and longer public names (e.g. `relay.example.shop`) are refused. Only list hosts you control. |
 
 For every `*_FILE` variant, a directly set non-empty variable wins over the
 file (the same rule as RelayAuth), and a `_FILE` that cannot be read stops
-startup with exit code `64` (configuration refused).
+startup with exit code `64` (configuration refused). The internal secret is
+whitespace-trimmed from either source. The bootstrap secret is not: its exact
+bytes derive keyed-create replay keys, so a directly set value is used as is
+and a `_FILE` loses only one trailing newline.
 
 **Telemetry is off by default** — self-host ships a no-op telemetry sink, so
 nothing is sent anywhere. (There is no PostHog/analytics in self-host.)
@@ -190,7 +193,8 @@ both.
   bumps the stored fence. A key change with `key_generation` commits only if
   it beats the stored generation (`409 stale_key_generation` otherwise). Once a
   workspace carries a generation, key changes without one are
-  `409 key_generation_required`. A key already bound to another workspace is
+  `409 key_generation_required`. A key that is another workspace's current
+  key, or its previous key while that key's grace window is open, is
   `409 api_key_conflict`.
 - **Rotate** (no `api_key`, self-host extension): the engine mints the
   replacement, returns it once as `api_key`, and sets the generation to
@@ -394,6 +398,14 @@ such as `http://relaycast.relay.svc:8787` (the URL printed in the install
 notes), also set `allowInsecureBaseUrl=true`; for a custom `clusterDomain` add
 `privateDnsSuffixes`, or allowlist a `<svc>.<ns>` short name with
 `insecureBaseUrlHosts`. Probes use `GET /health`.
+
+The chart-created PVC is annotated `helm.sh/resource-policy: keep`
+(`persistence.retainOnUninstall`, default `true`), so `helm uninstall` leaves
+the database behind; reinstalling under the same release name reuses it, and
+you delete it with `kubectl delete pvc` (the install notes print the claim name) only when you
+mean to. With `retainOnUninstall=false`, uninstall deletes the claim and a
+`Delete` reclaim policy destroys the data. `persistence.existingClaim` is never
+touched by the chart.
 
 ---
 

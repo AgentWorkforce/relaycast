@@ -160,6 +160,13 @@ components:
       type: http
       scheme: bearer
       description: Per-webhook bearer token returned by `POST /webhooks` (wh_live_*)
+    internalSecret:
+      type: http
+      scheme: bearer
+      description: >-
+        Self-host control-plane secret (`RELAYCAST_INTERNAL_SECRET`, at least
+        32 characters). Only accepted on `/internal/*`; workspace keys and
+        tokens are not.
 
   responses:
     Throttled:
@@ -301,6 +308,24 @@ components:
           type: string
           format: date-time
           nullable: true
+
+    InternalWorkspaceKeyResponse:
+      type: object
+      required:
+        - workspace_id
+        - api_key_generation
+      properties:
+        workspace_id:
+          type: string
+        api_key_generation:
+          type: integer
+          minimum: 0
+          description: Stored key-generation fence after the push.
+        api_key:
+          type: string
+          description: >-
+            Present only when the engine minted the key (the request omitted
+            `api_key`); revealed exactly once.
 
     CreateWorkspaceResponse:
       type: object
@@ -1931,6 +1956,16 @@ paths:
             `workspace_create_bootstrap_secret_invalid` when a self-host has
             enabled bootstrap-proof enforcement and an anonymous keyed create
             did not supply a matching `X-Workspace-Bootstrap-Secret`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: >-
+            `not_found` — the deployment disabled public workspace creation
+            (`RELAYCAST_PUBLIC_WORKSPACE_CREATE=false`, typical when a control
+            plane provisions workspaces through `POST /internal/workspaces`).
+            The response is the same generic 404 as an absent route.
           content:
             application/json:
               schema:
@@ -6707,6 +6742,257 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  # ── Internal admin (self-host control plane) ─────────────────────────
+  /internal/capabilities:
+    servers:
+      - url: http://localhost:8787
+        description: Self-hosted engine (root, no /v1 prefix)
+    get:
+      summary: Internal admin capabilities
+      description: >-
+        Non-mutating capability advertisement for a control plane.
+        `workspace_key_push` is the hosted gateway's contract verbatim;
+        `workspace_admin` is a self-host extension. Enabled only when
+        `RELAYCAST_INTERNAL_SECRET` is set.
+      tags:
+        - Internal Admin
+      security:
+        - internalSecret: []
+      responses:
+        '200':
+          description: Capabilities
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    enum: [true]
+                  data:
+                    type: object
+                    properties:
+                      workspace_key_push:
+                        type: object
+                        properties:
+                          generation_cas:
+                            type: boolean
+                          generation_required_once_fenced:
+                            type: boolean
+                          grace_ms:
+                            type: boolean
+                          max_grace_ms:
+                            type: integer
+                            example: 3600000
+                          revocation_markers:
+                            type: boolean
+                          previous_key_slot:
+                            type: boolean
+                      workspace_admin:
+                        type: object
+                        properties:
+                          create:
+                            type: boolean
+                          server_minted_key:
+                            type: boolean
+        '401':
+          description: Missing or wrong internal secret (`unauthorized`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: >-
+            `not_found` — the admin API is disabled (no internal secret
+            configured). Indistinguishable from an absent route.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /internal/workspaces:
+    servers:
+      - url: http://localhost:8787
+        description: Self-hosted engine (root, no /v1 prefix)
+    post:
+      summary: Create workspace (control plane)
+      description: >-
+        Create a workspace and reveal its key once. Works even when public
+        workspace creation is disabled. Self-host extension; the hosted
+        control plane creates workspaces implicitly via the key-push upsert.
+      tags:
+        - Internal Admin
+      security:
+        - internalSecret: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - name
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                metadata:
+                  $ref: '#/components/schemas/WorkspaceMetadata'
+      responses:
+        '201':
+          description: Workspace created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    enum: [true]
+                  data:
+                    allOf:
+                      - $ref: '#/components/schemas/CreateWorkspaceResponse'
+                      - type: object
+                        properties:
+                          name:
+                            type: string
+                          api_key_generation:
+                            type: integer
+                            enum: [0]
+        '400':
+          description: Invalid body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or wrong internal secret (`unauthorized`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: >-
+            `not_found` — the admin API is disabled (no internal secret
+            configured). Indistinguishable from an absent route.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /internal/workspaces/{id}/api-key:
+    servers:
+      - url: http://localhost:8787
+        description: Self-hosted engine (root, no /v1 prefix)
+    post:
+      summary: Push or rotate a workspace key (control plane)
+      description: >-
+        Hosted gateway shape. With `api_key`: register (upsert) or rotate to a
+        control-plane-minted key. A missing workspace is created with
+        `id = name = :id` and a `#general` channel (`201`). Re-pushing the live
+        key is idempotent; a higher `key_generation` bumps the fence. A key
+        change carrying `key_generation` commits only if it beats the stored
+        generation; once fenced (generation > 0) key changes must carry one.
+        Without `api_key` (self-host extension) the engine mints the
+        replacement, returns it once, and fences at `key_generation` or stored
+        + 1; an unknown workspace is `404`. The superseded key keeps
+        authenticating for `grace_ms` (default 0 = revoked immediately).
+      tags:
+        - Internal Admin
+      security:
+        - internalSecret: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[A-Za-z0-9_-]{1,128}$'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                api_key:
+                  type: string
+                  pattern: '^rk_live_[A-Za-z0-9_-]{32,256}$'
+                  description: Control-plane-minted key. Omit to have the engine mint one.
+                key_generation:
+                  type: integer
+                  minimum: 1
+                  maximum: 9007199254740991
+                grace_ms:
+                  type: integer
+                  minimum: 0
+                  maximum: 3600000
+                  description: >-
+                    How long the superseded key keeps authenticating. With
+                    `api_key`, requires `key_generation`.
+                plan:
+                  type: string
+                  description: Accepted for wire compatibility and ignored.
+      responses:
+        '200':
+          description: Key pushed or rotated on an existing workspace
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    enum: [true]
+                  data:
+                    $ref: '#/components/schemas/InternalWorkspaceKeyResponse'
+        '201':
+          description: The push created the workspace
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    enum: [true]
+                  data:
+                    $ref: '#/components/schemas/InternalWorkspaceKeyResponse'
+        '400':
+          description: Invalid workspace id or body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or wrong internal secret (`unauthorized`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: >-
+            `not_found` when the admin API is disabled, or
+            `workspace_not_found` for a server-minted rotation of an unknown
+            workspace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: >-
+            `stale_key_generation` (the push does not beat the stored
+            generation), `key_generation_required` (fenced workspace, no
+            generation), `api_key_conflict` (the key is another workspace's
+            current key, or its previous key inside the grace window), or
+            `key_write_conflict` (contended; retry).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   # ── A2A ──────────────────────────────────────────────────────────────
   /.well-known/agent-card.json:
     servers:
@@ -7403,6 +7689,10 @@ tags:
     description: Relayfile inbound integration bridge
   - name: A2A
     description: Agent-to-Agent protocol gateway
+  - name: Internal Admin
+    description: >-
+      Self-host control-plane API (`/internal/*`), enabled by
+      `RELAYCAST_INTERNAL_SECRET`
   - name: Certify
     description: Agent certification and monitoring
   - name: Console
