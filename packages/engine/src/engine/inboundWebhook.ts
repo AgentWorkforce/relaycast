@@ -1,6 +1,7 @@
 import { eq, and } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { webhooks, channels, messages, agents } from '../db/schema.js';
+import { webhooks, channels, messages, agents, workspaces } from '../db/schema.js';
+import { isWorkspaceExpired } from '../auth/workspaceExpiry.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { generateId } from './snowflake.js';
@@ -210,6 +211,14 @@ export async function triggerWebhook(
     .where(and(eq(webhooks.id, webhookId), eq(webhooks.isActive, true)));
 
   if (!webhook) return null;
+  // A hook dies with its workspace's credentials: once the workspace is past
+  // its expiry (including a deleted workspace still being drained), behave as
+  // if the hook were gone rather than accept messages into it.
+  const [workspace] = await db
+    .select({ expiresAt: workspaces.expiresAt })
+    .from(workspaces)
+    .where(eq(workspaces.id, webhook.workspaceId));
+  if (!workspace || isWorkspaceExpired(workspace)) return null;
   if (webhook.tokenHash) {
     if (!token) {
       throw codedError('Webhook bearer token required', 'webhook_token_required', 401);

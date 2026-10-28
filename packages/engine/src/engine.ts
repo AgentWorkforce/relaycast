@@ -1,6 +1,6 @@
 import { safeTelemetrySink } from './ports/telemetry.js';
 import { NoopTelemetrySink } from './providers/noop-telemetry.js';
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
@@ -13,6 +13,7 @@ import { asCodedError, safeClientErrorMessage } from './lib/httpError.js';
 import { jsonError, jsonMalformedBody, jsonNotFound } from './lib/httpResponse.js';
 import { requiredOriginInfo } from './lib/origin.js';
 import { emitServerEvent } from './lib/serverTelemetry.js';
+import { engineOperationOf, runWithEngineDiagnostics } from './lib/engineDiagnostics.js';
 import { runInBackground } from './routes/background.js';
 import {
   authenticateNodeWs,
@@ -84,6 +85,9 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
 
   // Inject the runtime first so the logger and all routes can read it.
+  // Each app's requests (and the background work they start) report to this
+  // app's own diagnostics sink, or to none: never another app's.
+  app.use('*', (_c, next) => runWithEngineDiagnostics(deps.diagnostics, next));
   app.use('*', engineContext(runtime));
   // Before CORS so a preflight, which returns without calling later
   // middleware, still carries the request id. exposeHeaders lets browser
@@ -232,12 +236,17 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
   // Global error handler
   app.onError((err, c) => {
     const error = asCodedError(err);
+    // Where the failure happened, so a 5xx can be traced to a tenant, a caller
+    // and the engine operation in flight. Ids and route templates only: never a
+    // raw path, which can carry names.
+    const scope = errorScope(c, err);
     const logger = getRequestLogger(c, 'engine.on_error');
     logger.error('Unhandled request error', {
       error_code: error.code ?? 'internal_error',
       error_status: error.status ?? 500,
       path: c.req.path,
       method: c.req.method,
+      ...scope,
       ...toErrorDetails(error),
     });
 
@@ -249,6 +258,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
         status_code: status,
         error_code: error.code ?? 'internal_error',
         request_id: c.get('requestId'),
+        ...scope,
       });
     }
 
@@ -271,4 +281,19 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
   });
 
   return app;
+}
+
+function errorScope(c: Context<AppEnv>, err: unknown): Record<string, string> {
+  const scope: Record<string, string> = {};
+  const workspaceId = c.get('workspace')?.id;
+  const agentId = c.get('agent')?.id;
+  const operation = engineOperationOf(err);
+  // Hono reports the matched template (`/v1/channels/:name/messages`); `*` is
+  // a middleware match, not a route, so it is no better than nothing.
+  const route = c.req.routePath;
+  if (workspaceId) scope.workspace_id = workspaceId;
+  if (agentId) scope.agent_id = agentId;
+  if (operation) scope.engine_operation = operation;
+  if (route && !route.includes('*')) scope.route = route;
+  return scope;
 }

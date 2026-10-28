@@ -20,6 +20,7 @@ import {
   type WorkspaceDeliveryPolicy,
 } from './workspaceDeliveryPolicy.js';
 import { queryInChunks } from '../lib/queryChunks.js';
+import { withEngineOperation } from '../lib/engineDiagnostics.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -106,6 +107,15 @@ export async function listDeliveries(
   workspaceId: string,
   agentId: string,
   opts: { status?: DeliveryStatus; limit?: number } = {},
+) {
+  return withEngineOperation('deliveries.list', workspaceId, () => listDeliveriesUnlabeled(db, workspaceId, agentId, opts));
+}
+
+async function listDeliveriesUnlabeled(
+  db: Db,
+  workspaceId: string,
+  agentId: string,
+  opts: { status?: DeliveryStatus; limit?: number },
 ) {
   const limit = Math.min(Math.max(opts.limit ?? 100, 1), 200);
   const statusFilter = opts.status
