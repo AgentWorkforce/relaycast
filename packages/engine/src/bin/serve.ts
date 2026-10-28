@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { startServer } from '../entrypoints/node.js';
-import { readFileSync } from 'node:fs';
+import { ConfigError, secretFromEnv } from './secretEnv.js';
 import { engineVersion } from './version.js';
 import { MIN_INTERNAL_SECRET_LENGTH } from '../engine/internalAdmin.js';
 
@@ -64,30 +64,6 @@ function parseArgs(argv: string[], env: NodeJS.ProcessEnv): ServeArgs {
 /** Exit code for a configuration the server refuses to run with (EX_USAGE). */
 const CONFIG_EXIT_CODE = 64;
 
-class ConfigError extends Error {}
-
-/**
- * `NAME`, or the contents of the file named by `NAME_FILE`, trimmed; empty →
- * undefined. A directly set (non-empty) variable wins over its `_FILE`
- * variant, matching RelayAuth. An unreadable `_FILE` is a configuration error.
- */
-function secretFromEnv(env: NodeJS.ProcessEnv, name: string): string | undefined {
-  const direct = env[name]?.trim();
-  if (direct) return direct;
-  const file = env[`${name}_FILE`]?.trim();
-  if (!file) return undefined;
-  let value: string;
-  try {
-    value = readFileSync(file, 'utf8');
-  } catch (err) {
-    throw new ConfigError(
-      `${name}_FILE points at an unreadable file (${err instanceof Error && 'code' in err ? String(err.code) : 'read error'})`,
-    );
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2), process.env);
   if (opts.help) {
@@ -133,7 +109,11 @@ async function main(): Promise<void> {
       `RELAYCAST_INTERNAL_SECRET must be at least ${MIN_INTERNAL_SECRET_LENGTH} characters`,
     );
   }
-  const workspaceBootstrapSecret = secretFromEnv(process.env, 'RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET');
+  // Verbatim: the bootstrap secret's exact bytes derive keyed-create replay
+  // keys, so trimming would break retries of workspaces created before.
+  const workspaceBootstrapSecret = secretFromEnv(process.env, 'RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET', {
+    exact: true,
+  });
   const publicWorkspaceCreate = process.env.RELAYCAST_PUBLIC_WORKSPACE_CREATE?.trim();
   if (publicWorkspaceCreate && publicWorkspaceCreate !== 'true' && publicWorkspaceCreate !== 'false') {
     throw new ConfigError('RELAYCAST_PUBLIC_WORKSPACE_CREATE must be "true" or "false"');

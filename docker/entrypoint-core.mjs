@@ -508,23 +508,23 @@ function optionalNumber(value) {
   return Number.isFinite(number) ? number : undefined;
 }
 
-/**
- * Build engine configuration from container environment without logging
- * secrets. An omitted or empty secret remains unset so the engine fails closed
- * for keyed anonymous creates while preserving unkeyed and authenticated-owner
- * creation.
- */
 /** Minimum RELAYCAST_INTERNAL_SECRET length (matches the engine). */
 export const MIN_INTERNAL_SECRET_LENGTH = 32;
 
 /**
- * `NAME`, or the contents of the file named by `NAME_FILE`, trimmed; empty →
+ * `NAME`, or the contents of the file named by `NAME_FILE`; empty →
  * undefined. A directly set (non-empty) variable wins over its `_FILE`
  * variant, matching RelayAuth. An unreadable `_FILE` is a configuration
  * refusal (exit 64), never a silent fallback.
+ *
+ * By default both sources are whitespace-trimmed. With `exact: true` (secrets
+ * whose bytes feed a derivation, like the workspace bootstrap secret) a
+ * directly set value is used verbatim — exactly as before `_FILE` support —
+ * and a file loses only one trailing newline (`\n` or `\r\n`).
  */
-export function secretFromEnv(env, name) {
-  const direct = env[name]?.trim();
+export function secretFromEnv(env, name, { exact = false } = {}) {
+  const rawDirect = env[name];
+  const direct = exact ? rawDirect : rawDirect?.trim();
   if (direct) return direct;
   const file = env[`${name}_FILE`]?.trim();
   if (!file) return undefined;
@@ -537,8 +537,8 @@ export function secretFromEnv(env, name) {
       `${name}_FILE points at an unreadable file (${error?.code ?? 'read error'}).`,
     );
   }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
+  const cleaned = exact ? value.replace(/\r?\n$/, '') : value.trim();
+  return cleaned ? cleaned : undefined;
 }
 
 /**
@@ -556,7 +556,9 @@ export function buildEngineConfig(env, mailbox = {}) {
       `RELAYCAST_INTERNAL_SECRET must be at least ${MIN_INTERNAL_SECRET_LENGTH} characters (openssl rand -hex 32).`,
     );
   }
-  const workspaceBootstrapSecret = secretFromEnv(env, 'RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET');
+  // Verbatim: the bootstrap secret's exact bytes derive keyed-create replay
+  // keys, so trimming would break retries of workspaces created before.
+  const workspaceBootstrapSecret = secretFromEnv(env, 'RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET', { exact: true });
   const publicCreate = env.RELAYCAST_PUBLIC_WORKSPACE_CREATE?.trim();
   if (publicCreate && publicCreate !== 'true' && publicCreate !== 'false') {
     refusal(

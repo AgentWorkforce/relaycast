@@ -412,6 +412,42 @@ test('reads secrets from env or a mounted file; a directly set variable wins (as
   });
 });
 
+test('keeps a directly set bootstrap secret verbatim; a _FILE loses one trailing newline', (t) => {
+  // The bootstrap secret's exact bytes derive keyed-create replay keys, so a
+  // value with surrounding whitespace must keep deriving the same keys it did
+  // before _FILE support (when it was passed through unchanged).
+  for (const secret of ['abc ', ' stable-bootstrap', 'tab\tsecret\t']) {
+    assert.deepEqual(
+      buildEngineConfig({ RELAYCAST_ENV: 'production', RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: secret }),
+      { environment: 'production', workspaceBootstrapSecret: secret },
+      JSON.stringify(secret),
+    );
+  }
+  const dir = mkdtempSync(join(tmpdir(), 'relaycast-bootstrap-secret-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const cases = [
+    ['stable-bootstrap\n', 'stable-bootstrap'],
+    ['stable-bootstrap\r\n', 'stable-bootstrap'],
+    ['stable-bootstrap', 'stable-bootstrap'],
+    [' padded \n', ' padded '],
+  ];
+  for (const [index, [content, expected]] of cases.entries()) {
+    const file = join(dir, `bootstrap-${index}`);
+    writeFileSync(file, content, { mode: 0o600 });
+    assert.deepEqual(
+      buildEngineConfig({ RELAYCAST_ENV: 'production', RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE: file }),
+      { environment: 'production', workspaceBootstrapSecret: expected },
+      JSON.stringify(content),
+    );
+  }
+  const newlineOnly = join(dir, 'bootstrap-empty');
+  writeFileSync(newlineOnly, '\n', { mode: 0o600 });
+  assert.deepEqual(
+    buildEngineConfig({ RELAYCAST_ENV: 'production', RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE: newlineOnly }),
+    { environment: 'production' },
+  );
+});
+
 test('refuses (exit 64) a missing secret file and a short internal secret', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'relaycast-secret-refusal-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
