@@ -176,6 +176,10 @@ export async function pushWorkspaceKey(
   const apiKeyHash = await sha256Hex(apiKey);
   const { graceMs } = input;
   let keyGeneration = input.keyGeneration;
+  // A server-minted rotation without key_generation fences at stored + 1,
+  // re-derived from each fresh read so a lost race retries instead of
+  // reporting a stale generation the caller never sent.
+  const derivedGeneration = minted && input.keyGeneration === undefined;
 
   let row = await readKeyRow(db, workspaceId);
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -239,7 +243,7 @@ export async function pushWorkspaceKey(
 
     if (await keyOwnedElsewhere(db, apiKeyHash, workspaceId)) throw keyConflict();
 
-    if (minted && keyGeneration === undefined) keyGeneration = stored + 1;
+    if (derivedGeneration) keyGeneration = stored + 1;
 
     if (keyGeneration === undefined) {
       if (stored > 0) {
@@ -293,7 +297,7 @@ export async function pushWorkspaceKey(
       if (fresh && fresh.apiKeyHash === apiKeyHash) {
         return { created: false, workspaceId, apiKeyGeneration: fresh.apiKeyGeneration };
       }
-      if (fresh && keyGeneration <= fresh.apiKeyGeneration) {
+      if (fresh && !derivedGeneration && keyGeneration <= fresh.apiKeyGeneration) {
         throw staleGeneration(workspaceId, keyGeneration, fresh.apiKeyGeneration);
       }
       row = fresh;

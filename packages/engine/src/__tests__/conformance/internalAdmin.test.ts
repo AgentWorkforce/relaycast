@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startServer } from '../../entrypoints/node.js';
+import { pushWorkspaceKey } from '../../engine/internalAdmin.js';
 import { makeNodeStack, registerAgent, type TestStack } from './harness.js';
 
 /**
@@ -142,6 +143,31 @@ describe('internal admin API', () => {
       const rotated = await data<{ api_key: string }>(res);
       expect((await readWorkspace(ws.api_key)).status).toBe(200);
       expect((await readWorkspace(rotated.api_key)).status).toBe(200);
+    });
+
+    it('server-minted rotation that loses a race re-derives its generation and retries', async () => {
+      stack = makeNodeStack({ internalSecret: SECRET });
+      const ws = await createViaAdmin();
+      const realDb = stack.runtime.deps.db as Parameters<typeof pushWorkspaceKey>[0];
+      let raced = false;
+      // Simulate a concurrent rotation that commits between this call's read
+      // and its CAS write: the first UPDATE sees a changed hash at generation 1.
+      const racingDb = new Proxy(realDb, {
+        get(target, prop, receiver) {
+          if (prop === 'update' && !raced) {
+            raced = true;
+            stack.runtime.handle.sqlite
+              .prepare('UPDATE workspaces SET api_key_hash = ?, api_key_generation = 1 WHERE id = ?')
+              .run('concurrent-winner-hash', ws.workspace_id);
+          }
+          return Reflect.get(target, prop, receiver);
+        },
+      });
+      const result = await pushWorkspaceKey(racingDb, ws.workspace_id, {});
+      expect(raced).toBe(true);
+      expect(result.apiKeyGeneration).toBe(2);
+      expect(result.mintedApiKey).toMatch(/^rk_live_/);
+      expect((await readWorkspace(result.mintedApiKey!)).status).toBe(200);
     });
 
     it('server-minted rotation of an unknown workspace is 404', async () => {
