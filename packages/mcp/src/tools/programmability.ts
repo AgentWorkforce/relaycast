@@ -348,7 +348,7 @@ export function registerProgrammabilityTools(
     description: 'Add a new AI agent to the workspace to work on a task. This is a BUILT-IN system operation for creating worker agents. If an agent with the same name already exists, it will be reactivated with a new token and updated task. The agent is automatically set to online status and joined to the specified channel.',
     inputSchema: {
       name: z.string().describe('Unique name for the new agent within the workspace (e.g. "worker-1", "code-reviewer")'),
-      cli: CliTypeSchema.describe('Which AI CLI tool to use for the agent process'),
+      cli: CliTypeSchema.describe('Harness to run the agent with (e.g. "claude", "codex", "cursor"): any harness id a node advertises as spawn:<id>'),
       task: z.string().describe('The task description or instructions for the agent to work on'),
       channel: z.string().optional().describe('Channel name to automatically join the agent to (e.g. "general", "dev-team")'),
       persona: z.string().optional().describe('Free-text persona description that other agents can read to understand this agent\'s role'),

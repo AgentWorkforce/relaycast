@@ -534,7 +534,7 @@ describe('node adapter conformance', () => {
       },
     );
 
-    it.each(['unknown', 'Muse', 'DEVIN'])('the typed spawn route rejects %s', async (cli) => {
+    it.each(['Muse', 'DEVIN', 'cursor\n'])('the typed spawn route rejects malformed harness id %s', async (cli) => {
       const ws = await createWorkspace(stack.app, 'invalid-spawn-cli');
       const response = await stack.app.request('/v1/agents/spawn', {
         method: 'POST',
@@ -544,7 +544,7 @@ describe('node adapter conformance', () => {
       expect(response.status).toBe(400);
       expect(await response.json()).toMatchObject({
         ok: false,
-        error: { message: 'cli must be one of: claude, codex, gemini, aider, goose, opencode, grok, muse, devin' },
+        error: { message: 'cli must be a harness id (lowercase letters, digits and hyphens, starting with a letter or digit, at most 32 characters), such as claude, codex or cursor' },
       });
     });
 
