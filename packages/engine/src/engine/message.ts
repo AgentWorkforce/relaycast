@@ -1,3 +1,4 @@
+import { prepareAuthorityFanout } from './deliveryWrites.js';
 import { parseMessageMentions } from './mentions.js';
 import { eq, and, sql, isNull, lt, gt, inArray } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
@@ -58,6 +59,7 @@ export async function postMessage(
   // Durable writes run as one atomic unit when the adapter supports it; fanout
   // stays in routes. Delivery recipients are derived by the delivery insert
   // itself, so membership changes cannot slip in between a pre-read and commit.
+  const authorityLeases = await prepareAuthorityFanout(db, workspaceId, { channelId });
   const results = await runAtomicWrites(db, (writeDb) => {
     const writes: AtomicWrite[] = [
       writeDb
@@ -104,6 +106,7 @@ export async function postMessage(
         ttlMs: mailbox.ttlMs,
         depthCap: mailbox.depthCap,
         offlineExcludeMs: mailbox.offlineExcludeMs,
+        authorityLeases,
         mentionHandles: Array.from(mentionedHandles),
         workspacePolicy: options.workspaceDeliveryPolicy,
       }),
@@ -137,6 +140,7 @@ export async function postMessage(
     senderAgentId: agentId,
     mentionHandles: Array.from(mentionedHandles),
     offlineExcludeMs: mailbox.offlineExcludeMs,
+        authorityLeases,
   });
 
   return {

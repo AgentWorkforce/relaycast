@@ -1,3 +1,4 @@
+import { prepareAuthorityFanout } from './deliveryWrites.js';
 import { eq, and } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { webhooks, channels, messages, agents, workspaces } from '../db/schema.js';
@@ -266,6 +267,7 @@ export async function triggerWebhook(
   const workspacePolicy = typeof options.workspaceDeliveryPolicy === 'function'
     ? await options.workspaceDeliveryPolicy(webhook.workspaceId)
     : options.workspaceDeliveryPolicy;
+  const authorityLeases = await prepareAuthorityFanout(db, webhook.workspaceId, { channelId: webhook.channelId });
   const results = await runAtomicWrites(db, (writeDb) => {
     const writes: AtomicWrite[] = [
       writeDb
@@ -292,7 +294,8 @@ export async function triggerWebhook(
     writes.push(buildChannelDeliveryWrite(writeDb, {
       workspaceId: webhook.workspaceId, messageId, channelId: webhook.channelId,
       senderAgentId: postingAgentId, mode: 'immediate',
-      ttlMs: mailbox.ttlMs, depthCap: mailbox.depthCap, offlineExcludeMs: mailbox.offlineExcludeMs, rejectOnOverflow: true,
+      ttlMs: mailbox.ttlMs, depthCap: mailbox.depthCap, offlineExcludeMs: mailbox.offlineExcludeMs,
+        authorityLeases, rejectOnOverflow: true,
       workspacePolicy,
     }));
     return writes;
@@ -308,6 +311,7 @@ export async function triggerWebhook(
   const outcomes = await fetchChannelDeliveryOutcomes(db, {
     messageId, channelId: webhook.channelId, senderAgentId: postingAgentId,
     offlineExcludeMs: mailbox.offlineExcludeMs,
+        authorityLeases,
   });
   return {
     _deliveries: outcomes.deliveries,
@@ -367,6 +371,7 @@ export async function triggerIntegrationMessage(
   // delivery rows are what `routeDeliveryOutcomes` dispatches to node-connected
   // agents. A bare insert (the previous behavior) produced no deliveries, so
   // broker/node agents never received inbound integration messages.
+  const authorityLeases = await prepareAuthorityFanout(db, workspaceId, { channelId });
   const results = await runAtomicWrites(db, (writeDb) => {
     const writes: AtomicWrite[] = [
       writeDb
@@ -402,6 +407,7 @@ export async function triggerIntegrationMessage(
         ttlMs: mailbox.ttlMs,
         depthCap: mailbox.depthCap,
         offlineExcludeMs: mailbox.offlineExcludeMs,
+        authorityLeases,
         rejectOnOverflow: true,
         workspacePolicy: options.workspaceDeliveryPolicy,
       }),
@@ -421,6 +427,7 @@ export async function triggerIntegrationMessage(
     channelId,
     senderAgentId: postingAgentId,
     offlineExcludeMs: mailbox.offlineExcludeMs,
+        authorityLeases,
   });
 
   return {

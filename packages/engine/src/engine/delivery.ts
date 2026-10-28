@@ -1,3 +1,4 @@
+import { nodeLivenessAuthority } from './nodeLiveness.js';
 import { parseMessageMentions } from './mentions.js';
 import { eq, and, asc, exists, isNull, isNotNull, inArray, lt, ne, not, notInArray, lte, gt, sql, getTableColumns, type SQL } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
@@ -629,6 +630,9 @@ export async function deadLetterUnreachableDeliveryBatch(
   offlineGraceMs: number = UNREACHABLE_NODE_GRACE_MS,
   now: Date = new Date(),
 ): Promise<ExpiredDeliveryBatch> {
+  // A projection cannot atomically fence reconnect. Keep ordinary bounded TTL
+  // expiry; only an owner-fenced transition may accelerate dead-lettering.
+  if (nodeLivenessAuthority(db)) return { expiredCount: 0, notices: [] };
   const graceMs = Number.isFinite(offlineGraceMs) && offlineGraceMs > 0
     ? offlineGraceMs
     : UNREACHABLE_NODE_GRACE_MS;

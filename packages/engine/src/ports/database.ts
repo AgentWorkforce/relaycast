@@ -1,3 +1,4 @@
+import { configureNodeLiveness, nodeLivenessAuthority } from './nodeLiveness.js';
 import { WorkspaceDeliveryCapacityError } from '../engine/workspaceDeliveryPolicy.js';
 import type { BatchItem } from 'drizzle-orm/batch';
 import type { BaseSQLiteDatabase } from 'drizzle-orm/sqlite-core';
@@ -118,7 +119,10 @@ async function runSequentially(statements: readonly AtomicWrite[]): Promise<unkn
  */
 export function runAtomic<T>(db: EngineDb, fn: (tx: EngineDb) => Promise<T>): Promise<T> {
   const { withTransaction } = db as EngineDb & Partial<TransactionCapability>;
-  return withTransaction ? withTransaction(fn) : fn(db);
+  return withTransaction ? withTransaction(tx => {
+    configureNodeLiveness(tx, nodeLivenessAuthority(db));
+    return fn(tx);
+  }) : fn(db);
 }
 
 /**
@@ -157,6 +161,7 @@ async function executeAtomicWrites(
 
   if (handle.withTransaction) {
     return handle.withTransaction(async (tx) => {
+      configureNodeLiveness(tx, nodeLivenessAuthority(db));
       const statements = buildStatements(input, tx);
       return statements.length === 0 ? [] : runSequentially(statements);
     });

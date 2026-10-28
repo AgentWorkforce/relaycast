@@ -1,3 +1,4 @@
+import { prepareAuthorityFanout } from './deliveryWrites.js';
 import { eq, and, isNull } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { messages, channels, agents, dmConversations, dmParticipants, messageAttachments } from '../db/schema.js';
@@ -152,6 +153,7 @@ export async function postGroupMessage(
   // Durable writes run as one atomic unit when the adapter supports it; fanout
   // stays in routes. Delivery recipients are derived by the delivery insert
   // from current active participants.
+  const authorityLeases = await prepareAuthorityFanout(db, workspaceId, { conversationId });
   const results = await runAtomicWrites(db, (writeDb) => {
     const writes: AtomicWrite[] = [
       writeDb
@@ -197,6 +199,7 @@ export async function postGroupMessage(
         ttlMs: mailbox.ttlMs,
         depthCap: mailbox.depthCap,
         offlineExcludeMs: mailbox.offlineExcludeMs,
+        authorityLeases,
         workspacePolicy: options.workspaceDeliveryPolicy,
       }),
     );
@@ -209,6 +212,7 @@ export async function postGroupMessage(
     conversationId,
     senderAgentId: agentId,
     offlineExcludeMs: mailbox.offlineExcludeMs,
+        authorityLeases,
   });
 
   const injectionMode = data.mode ?? 'wait';

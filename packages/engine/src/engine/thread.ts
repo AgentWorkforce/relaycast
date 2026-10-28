@@ -1,3 +1,4 @@
+import { prepareAuthorityFanout } from './deliveryWrites.js';
 import { eq, and, sql, lt, gt } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { messages, channels, agents, dmConversations, nodes } from '../db/schema.js';
@@ -79,6 +80,7 @@ export async function postReply(
   // Durable writes run as one atomic unit when the adapter supports it; fanout
   // stays in routes. Delivery recipients are derived by the insert-select
   // against current channel membership.
+  const authorityLeases = await prepareAuthorityFanout(db, workspaceId, { channelId: parent.channelId, conversationId: dmConversation?.id });
   const results = await runAtomicWrites(db, (writeDb) => {
     const writes: AtomicWrite[] = [
       writeDb
@@ -118,6 +120,7 @@ export async function postReply(
           ttlMs: mailbox.ttlMs,
           depthCap: mailbox.depthCap,
           offlineExcludeMs: mailbox.offlineExcludeMs,
+        authorityLeases,
           excludeLongOffline: dmConversation.dmType !== '1:1',
           workspacePolicy: options.workspaceDeliveryPolicy,
         })
@@ -130,6 +133,7 @@ export async function postReply(
           ttlMs: mailbox.ttlMs,
           depthCap: mailbox.depthCap,
           offlineExcludeMs: mailbox.offlineExcludeMs,
+        authorityLeases,
           reason: 'thread-reply',
           mentionHandles: Array.from(mentionedHandles),
           workspacePolicy: options.workspaceDeliveryPolicy,
@@ -145,6 +149,7 @@ export async function postReply(
       conversationId: dmConversation.id,
       senderAgentId: agentId,
       offlineExcludeMs: mailbox.offlineExcludeMs,
+        authorityLeases,
       excludeLongOffline: dmConversation.dmType !== '1:1',
     })
     : await fetchChannelDeliveryOutcomes(db, {
@@ -153,6 +158,7 @@ export async function postReply(
       senderAgentId: agentId,
       mentionHandles: Array.from(mentionedHandles),
       offlineExcludeMs: mailbox.offlineExcludeMs,
+        authorityLeases,
     });
 
   return {

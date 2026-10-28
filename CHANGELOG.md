@@ -16,7 +16,10 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+- Hosts can use connection-owned presence leases instead of database heartbeat timestamps for live routing and presence decisions.
+- The TypeScript SDK avoids duplicate automatic HTTP heartbeats while recent WebSocket acknowledgements confirm agent presence, with fallback for older servers and lost acknowledgements.
 
 ## [12.1.0] - 2026-10-28
 

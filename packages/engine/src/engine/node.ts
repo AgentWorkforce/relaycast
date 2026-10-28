@@ -1,3 +1,4 @@
+import { nodeMayOwn, providerLive, filterAsync, nodeLivenessAuthority, inspectNodeLiveness, snapshotOnline } from './nodeLiveness.js';
 import { z } from 'zod';
 import { invalidateChannelCache } from './cache.js';
 import { and, asc, eq, exists, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, notExists, or, sql } from 'drizzle-orm';
@@ -340,8 +341,8 @@ function requestId(message: { id?: string }): string {
   return message.id ?? generateId();
 }
 
-function publicNode(row: NodeRow, now?: number) {
-  const live = isNodeLive(row, now);
+function publicNode(row: NodeRow, now?: number, authoritativeLive?: boolean, authorityStatus?: 'online' | 'offline' | 'unknown') {
+  const live = authoritativeLive ?? isNodeLive(row, now);
   return {
     id: row.id,
     name: row.name,
@@ -354,6 +355,7 @@ function publicNode(row: NodeRow, now?: number) {
     tags: row.tags,
     version: row.version,
     status: live ? 'online' : 'offline',
+    ...(authorityStatus ? { liveness_status: authorityStatus } : {}),
     live,
     handlers_live: live && row.handlersLive,
     load: row.loadReported ? row.load : null,
@@ -585,6 +587,8 @@ export async function createNodeToken(
       .where(and(
         eq(nodes.workspaceId, workspaceId),
         eq(nodes.id, existing.id),
+        // Accepted reconnect/register advances this revision before its lease.
+        ...(nodeLivenessAuthority(db) ? [eq(nodes.livenessRevision, existing.livenessRevision)] : []),
         ...(hasPresentedTokenProof && !authorizedDirectNode
           ? [eq(nodes.tokenHash, authorization.expectedTokenHash!)]
           : []),
@@ -728,7 +732,7 @@ export async function getBrokerNodeByMachineId(
       .from(nodes)
       .where(and(reusableWhere, eq(nodes.tokenHash, expectedTokenHash)))
       .limit(1);
-    if (provenCandidate && isReusableForMachineMatch(provenCandidate)) {
+    if (provenCandidate && await reusableMachineNode(db, provenCandidate)) {
       return provenCandidate;
     }
   }
@@ -743,7 +747,7 @@ export async function getBrokerNodeByMachineId(
   // single definition of reusability and mirrors it exactly — including
   // treating an `online` row with a future heartbeat as live. Re-checking here
   // keeps that definition authoritative rather than trusting the query alone.
-  return candidates.find((node) => isReusableForMachineMatch(node)) ?? null;
+  return (await filterAsync(candidates, node => reusableMachineNode(db, node)))[0] ?? null;
 }
 
 /**
@@ -1406,8 +1410,13 @@ export async function sweepOfflineNodes(
   registry: NodeConnectionRegistry,
   deps?: InvocationCompletionDeps,
 ): Promise<number> {
+  // Only the external socket owner can fence this transition with reconnect.
+  if (nodeLivenessAuthority(db)) return 0;
   const rows = await db.select().from(nodes).where(eq(nodes.status, 'online'));
-  const stale = rows.filter((node) => !isNodeLive(node));
+  const stale = await filterAsync(rows, async node => {
+    const authority = await inspectNodeLiveness(db, node.workspaceId, node.id);
+    return authority ? authority.status === 'offline' : !isNodeLive(node);
+  });
   let swept = 0;
   for (const node of stale) {
     const offlined = await serializeNodeOp(node.workspaceId, node.id, async () => {
@@ -1417,7 +1426,12 @@ export async function sweepOfflineNodes(
         .select()
         .from(nodes)
         .where(and(eq(nodes.workspaceId, node.workspaceId), eq(nodes.id, node.id)));
-      if (!current || current.status !== 'online' || isNodeLive(current)) return false;
+      if (!current || current.status !== 'online') return false;
+      const authority = await inspectNodeLiveness(db, current.workspaceId, current.id);
+      if (authority ? authority.status !== 'offline' : isNodeLive(current)) return false;
+      // External owners serialize offline transitions with reconnect; this
+      // generic sweep cannot hold that fence across markNodeOffline.
+      if (authority) return false;
       await markNodeOffline(db, registry, node.workspaceId, node.id, { deps, reason: 'liveness_timeout' });
       return true;
     });
@@ -1944,6 +1958,7 @@ export async function bindAgentToNode(
     // stranded on its implicit `direct-*` pseudo-node and never woken — the
     // exact shape of the broker's create-only register falling back to this
     // endpoint. `unbindAgentFromNode` already assumes this move happened.
+    let incumbentNode: NodeRow | undefined;
     if (
       agent.status === 'active'
       && agent.locationNodeId
@@ -1956,13 +1971,14 @@ export async function bindAgentToNode(
         .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, agent.locationNodeId)));
       // A dead or missing prior location is not a conflict — it is exactly what
       // a bind is for. Only a live one still owns the identity.
-      if (locatedNode && isNodeLive(locatedNode)) {
+      if (locatedNode && await nodeMayOwn(db, locatedNode)) {
         throw codedError(
           `Agent "${agentName}" is already active on another live location`,
           'agent_location_conflict',
           409,
         );
       }
+      incumbentNode = locatedNode;
     }
 
     // Provider rows persist after a disconnect so the node keeps its capability
@@ -1970,7 +1986,7 @@ export async function bindAgentToNode(
     // can actually receive a push right now — keeping or choosing an offline
     // row while a live sibling serves the node would point the agent at a
     // provider connection that does not exist.
-    const liveProviderNames = (await tx
+    const providerCandidates = await tx
       .select({
         name: nodeProviders.name,
         status: nodeProviders.status,
@@ -1978,9 +1994,8 @@ export async function bindAgentToNode(
         lastHeartbeatAt: nodeProviders.lastHeartbeatAt,
       })
       .from(nodeProviders)
-      .where(and(eq(nodeProviders.workspaceId, workspaceId), eq(nodeProviders.nodeId, node.id))))
-      .filter((provider) => isProviderLive(provider))
-      .map((row) => row.name);
+      .where(and(eq(nodeProviders.workspaceId, workspaceId), eq(nodeProviders.nodeId, node.id)));
+    const liveProviderNames = (await filterAsync(providerCandidates, provider => providerLive(db, workspaceId, node.id, provider))).map(row => row.name);
     const adoptedProviderName = adoptNodeProviderName(agent.providerName, liveProviderNames);
 
     const activeNodeIds = await activeBindingNodeIdsForAgent(tx, workspaceId, agent.id);
@@ -1999,6 +2014,9 @@ export async function bindAgentToNode(
       // charges the old node forever, because the retry that would fix either
       // reads the half-applied state as already done.
       const buildMoveWrites = (writeDb: Db): AtomicWrite[] => [
+        ...(incumbentNode && nodeLivenessAuthority(db) ? [writeDb.update(nodes).set({
+          activeAgents: sql`CASE WHEN ${nodes.livenessRevision} = ${incumbentNode.livenessRevision} THEN ${nodes.activeAgents} ELSE NULL END`,
+        }).where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, incumbentNode.id)))] : []),
         ...agentNodeBindingWrites(writeDb, workspaceId, agent, node.id, {
           sessionRef: opts.session_ref ?? null,
           priority: opts.priority ?? 0,
@@ -2692,7 +2710,9 @@ export async function reconcileInventory(
   const acceptedInventoryAgents: FleetInventoryAgent[] = [];
   const rejectedInventoryErrors: Array<ReturnType<typeof codedError>> = [];
   const legacyDefaultAdoptions = new Set<string>();
+  const incumbentRevisions = new Map<string, { id: string; revision: number }>();
   let canAdoptLegacyDefault: boolean | undefined;
+  let authorityAdoption: { brokerId: string; brokerRevision: number; defaultId?: string; defaultRevision?: number; expiresAt: number } | undefined;
   let acceptedExistingAgentCount = 0;
   for (const item of inventoryAgents) {
     const [existing] = await db
@@ -2727,8 +2747,21 @@ export async function reconcileInventory(
           ));
         const defaultProvider = providerRows.find((row) => row.name === DEFAULT_PROVIDER_NAME);
         const brokerProvider = providerRows.find((row) => row.name === 'broker');
-        canAdoptLegacyDefault = !!brokerProvider && isProviderLive(brokerProvider)
-          && (!defaultProvider || !isProviderLive(defaultProvider));
+        const authority = await inspectNodeLiveness(db, workspaceId, nodeId);
+        if (authority) {
+          const now = Date.now();
+          const brokerLease = authority.providers.find(p => p.name === 'broker' && p.live && p.handlers_live && p.expires_at > now && p.last_received_at <= now);
+          const defaultLive = authority.providers.some(p => p.name === DEFAULT_PROVIDER_NAME && p.live && p.handlers_live && p.expires_at > now && p.last_received_at <= now);
+          canAdoptLegacyDefault = authority.status === 'online' && !!brokerProvider && !!brokerLease && !defaultLive;
+          if (canAdoptLegacyDefault && brokerProvider && brokerLease) authorityAdoption = {
+            brokerId: brokerProvider.id, brokerRevision: brokerProvider.livenessRevision,
+            defaultId: defaultProvider?.id, defaultRevision: defaultProvider?.livenessRevision,
+            expiresAt: brokerLease.expires_at,
+          };
+        } else {
+          canAdoptLegacyDefault = !!brokerProvider && isProviderLive(brokerProvider)
+            && (!defaultProvider || !isProviderLive(defaultProvider));
+        }
       }
       if (legacyDefaultClaim && canAdoptLegacyDefault) {
         legacyDefaultAdoptions.add(item.name);
@@ -2748,7 +2781,8 @@ export async function reconcileInventory(
           eq(nodes.workspaceId, workspaceId),
           eq(nodes.id, existing.locationNodeId ?? ''),
         ));
-      const boundNodeLive = !!boundNode && isNodeLive(boundNode);
+      const boundNodeLive = !!boundNode && await nodeMayOwn(db, boundNode);
+      if (boundNode && boundNode.id !== nodeId && !boundNodeLive && nodeLivenessAuthority(db)) incumbentRevisions.set(item.name, { id: boundNode.id, revision: boundNode.livenessRevision });
       const conflict = existing.locationType !== 'via_node'
         || !existing.locationNodeId
         || (existing.locationNodeId !== nodeId && boundNodeLive && !isImplicitDirectLocation(existing));
@@ -2868,7 +2902,7 @@ export async function reconcileInventory(
         // compare-and-set fences broker liveness loss, a default provider
         // reconnecting, and concurrent ownership changes during the apply pass.
         const adoptionNow = Date.now();
-        const noLiveDefaultProvider = notExists(db
+        let noLiveDefaultProvider = notExists(db
           .select({ id: nodeProviders.id })
           .from(nodeProviders)
           .where(and(
@@ -2880,7 +2914,7 @@ export async function reconcileInventory(
             gte(nodeProviders.lastHeartbeatAt, new Date(adoptionNow - NODE_LIVENESS_TTL_MS)),
             lte(nodeProviders.lastHeartbeatAt, new Date(adoptionNow)),
           )));
-        const liveBrokerProvider = exists(db
+        let liveBrokerProvider = exists(db
           .select({ id: nodeProviders.id })
           .from(nodeProviders)
           .where(and(
@@ -2892,6 +2926,27 @@ export async function reconcileInventory(
             gte(nodeProviders.lastHeartbeatAt, new Date(adoptionNow - NODE_LIVENESS_TTL_MS)),
             lte(nodeProviders.lastHeartbeatAt, new Date(adoptionNow)),
           )));
+        if (authorityAdoption) {
+          // Every accepted register/reconnect advances the provider revision
+          // before renewing its owner lease. Fence those generations in the
+          // same SQL update, and reject if the observed broker lease expires.
+          const proof = authorityAdoption;
+          noLiveDefaultProvider = proof.defaultId
+            ? exists(db.select({ id: nodeProviders.id }).from(nodeProviders).where(and(
+              eq(nodeProviders.workspaceId, workspaceId), eq(nodeProviders.nodeId, nodeId),
+              eq(nodeProviders.name, DEFAULT_PROVIDER_NAME), eq(nodeProviders.id, proof.defaultId),
+              eq(nodeProviders.livenessRevision, proof.defaultRevision!),
+            )))
+            : notExists(db.select({ id: nodeProviders.id }).from(nodeProviders).where(and(
+              eq(nodeProviders.workspaceId, workspaceId), eq(nodeProviders.nodeId, nodeId), eq(nodeProviders.name, DEFAULT_PROVIDER_NAME),
+            )));
+          liveBrokerProvider = exists(db.select({ id: nodeProviders.id }).from(nodeProviders).where(and(
+            eq(nodeProviders.workspaceId, workspaceId), eq(nodeProviders.nodeId, nodeId),
+            eq(nodeProviders.name, 'broker'), eq(nodeProviders.id, proof.brokerId),
+            eq(nodeProviders.livenessRevision, proof.brokerRevision),
+            sql`unixepoch() * 1000 < ${proof.expiresAt}`,
+          )));
+        }
         const [updated] = await db
           .update(agents)
           .set({
@@ -2906,6 +2961,10 @@ export async function reconcileInventory(
           .where(and(
             eq(agents.workspaceId, workspaceId),
             eq(agents.id, existing.id),
+            ...(incumbentRevisions.has(item.name) ? [notExists(db.select({ id: nodes.id }).from(nodes).where(and(
+              eq(nodes.workspaceId, workspaceId), eq(nodes.id, incumbentRevisions.get(item.name)!.id),
+              ne(nodes.livenessRevision, incumbentRevisions.get(item.name)!.revision),
+            )))] : []),
             ...(adoptingLegacyDefault ? [
               eq(agents.providerName, DEFAULT_PROVIDER_NAME),
               eq(agents.locationType, 'via_node'),
@@ -3200,7 +3259,7 @@ export async function listNodes(
   const conditions = [eq(nodes.workspaceId, workspaceId)];
   if (filters.name) conditions.push(eq(nodes.name, filters.name));
   if (filters.capability) conditions.push(capabilityMatchCondition(filters.capability));
-  if (filters.status) conditions.push(livenessCondition(filters.status, now));
+  if (filters.status && !nodeLivenessAuthority(db)) conditions.push(livenessCondition(filters.status, now));
   // Observer authorization is a WHERE condition, evaluated in the same query
   // as every other filter and therefore before pagination/cursor computation
   // below — a hidden node is excluded from row selection entirely, so it can
@@ -3213,7 +3272,7 @@ export async function listNodes(
     // that predates the history/status selector. `name`/`capability`/`status`
     // are still evaluated in SQL instead of after a full-table fetch.
     const rows = await db.select().from(nodes).where(and(...conditions));
-    const page = rows.map((row) => publicNode(row, now.getTime()));
+    const page = await publicNodes(db, rows, now.getTime(), filters.status);
     if (!filters.observerAgentIds) return { nodes: page, nextCursor: null };
     const counts = await visibleActiveAgentCounts(db, workspaceId, rows.map((row) => row.id), filters.observerAgentIds);
     return {
@@ -3235,7 +3294,7 @@ export async function listNodes(
     .limit(limit + 1);
   const page = rows.slice(0, limit);
   const nextCursor = rows.length > limit ? page[page.length - 1].id : null;
-  const publicPage = page.map((row) => publicNode(row, now.getTime()));
+  const publicPage = await publicNodes(db, page, now.getTime(), filters.status);
   if (!filters.observerAgentIds) return { nodes: publicPage, nextCursor };
   const counts = await visibleActiveAgentCounts(db, workspaceId, page.map((row) => row.id), filters.observerAgentIds);
   return {
@@ -3246,7 +3305,7 @@ export async function listNodes(
 
 export async function getPublicNode(db: Db, workspaceId: string, name: string) {
   const node = await getNodeByName(db, workspaceId, name);
-  return node ? publicNode(node) : null;
+  return node ? (await publicNodes(db, [node], Date.now()))[0] : null;
 }
 
 /** The node's persisted `status` column, or undefined when the node is gone. */
@@ -3873,4 +3932,24 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
     });
   }
   });
+}
+
+async function publicNodes(db: Db, rows: NodeRow[], now: number, status?: 'online' | 'offline') {
+  if (!nodeLivenessAuthority(db)) return rows.map(row => publicNode(row, now));
+  const result: ReturnType<typeof publicNode>[] = [];
+  await filterAsync(rows, async row => {
+    const snapshot = await inspectNodeLiveness(db, row.workspaceId, row.id);
+    const live = !!snapshot && snapshotOnline(snapshot);
+    const item = publicNode(row, now, live, snapshot?.status ?? 'unknown');
+    if (!status || item.status === status) result.push(item);
+    return true;
+  });
+  // Concurrent probes must not scramble stable list ordering.
+  const positions = new Map(rows.map((row, index) => [row.id, index]));
+  return result.sort((a,b) => positions.get(a.id)! - positions.get(b.id)!);
+}
+
+async function reusableMachineNode(db: Db, node: NodeRow): Promise<boolean> {
+  const authority = await inspectNodeLiveness(db, node.workspaceId, node.id);
+  return authority ? authority.status === 'offline' : isReusableForMachineMatch(node);
 }
