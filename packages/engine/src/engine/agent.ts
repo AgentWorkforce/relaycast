@@ -525,7 +525,10 @@ export async function listAgents(
     created_at: a.createdAt.toISOString(),
     last_seen: a.lastSeen.toISOString(),
     metadata: a.metadata,
-  })).filter(a => !requestedStatus || requestedStatus === 'all' || a.status === requestedStatus);
+  })).filter(a => (!requestedStatus || requestedStatus === 'all' || a.status === requestedStatus)
+    && !(nodeLivenessAuthority(db) && (!requestedStatus || requestedStatus === 'all')
+      && !options.includeStale && a.status === 'offline'
+      && Date.parse(a.last_seen) < now - AGENT_ROSTER_RECENCY_MS));
 }
 
 export async function getAgentByName(db: Db, workspaceId: string, name: string) {
@@ -928,12 +931,12 @@ export async function sweepStaleAgents(db: Db, workspaceId?: string): Promise<nu
 
 async function effectiveAgentStatusWithAuthority(db: Db, agent: AgentPresenceRow & { id: string; workspaceId: string; locationType: string; locationNodeId: string | null; providerName: string; statusBeforeLivenessLoss: string | null }, now = Date.now()): Promise<string> {
   if (!nodeLivenessAuthority(db) || agent.status === RELEASED_AGENT_STATUS || agent.locationType !== 'via_node' || !agent.locationNodeId) return effectiveAgentStatus(agent, now);
-  const snapshot = await inspectNodeLiveness(db, agent.workspaceId, agent.locationNodeId);
-  if (!snapshot || snapshot.status === 'unknown') return 'offline';
   const direct = agent.locationNodeId === directNodeIdForAgent(agent.id);
+  const snapshot = await inspectNodeLiveness(db, agent.workspaceId, agent.locationNodeId);
+  if (!snapshot || snapshot.status === 'unknown') return direct ? effectiveAgentStatus(agent, now) : 'offline';
   const receivedAt = Date.now();
   const live = snapshot.status === 'online' && snapshot.providers.some(p => p.name === agent.providerName && p.live && (direct || p.handlers_live) && p.expires_at > receivedAt && p.last_received_at <= receivedAt);
-  if (!live) return 'offline';
-  const status = agent.status === 'offline' ? agent.statusBeforeLivenessLoss ?? 'active' : agent.status;
+  if (!live) return direct ? effectiveAgentStatus(agent, now) : 'offline';
+  const status = agent.status === 'offline' ? agent.statusBeforeLivenessLoss ?? 'offline' : agent.status;
   return status === 'online' ? 'active' : status;
 }

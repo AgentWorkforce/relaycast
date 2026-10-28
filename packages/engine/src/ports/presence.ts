@@ -16,6 +16,14 @@ export interface PresenceTracker {
   getOnline(workspaceId: string): Promise<string[]>;
 
   /**
+   * Independent REST/tracker heartbeats only, without node-owner probes.
+   * Authority-enabled engines use this optional narrow read to avoid probing
+   * every node twice; omission falls back to getOnline for existing adapters.
+   * A node-derived-only adapter returns an empty list here.
+   */
+  getTrackedOnline?(workspaceId: string): Promise<string[]>;
+
+  /**
    * Agents that called disconnect and have not heartbeated since.
    * Node-derived presence must not put these ids back online. A host that
    * omits this treats disconnect as tracker-only, which cannot override

@@ -3941,6 +3941,11 @@ async function publicNodes(db: Db, rows: NodeRow[], now: number, status?: 'onlin
     const snapshot = await inspectNodeLiveness(db, row.workspaceId, row.id);
     const live = !!snapshot && snapshotOnline(snapshot);
     const item = publicNode(row, now, live, snapshot?.status ?? 'unknown');
+    // Readiness is owned by the fresh lease, independently of checkpointed
+    // catalog metadata in nodes.handlers_live.
+    const receivedAt = Date.now();
+    item.handlers_live = live && !!snapshot?.providers.some(p =>
+      p.live && p.handlers_live && p.expires_at > receivedAt && p.last_received_at <= receivedAt);
     if (!status || item.status === status) result.push(item);
     return true;
   });

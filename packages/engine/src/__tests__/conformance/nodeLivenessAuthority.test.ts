@@ -1,5 +1,5 @@
 import { postMessage } from '../../engine/message.js';
-import { listAgents, sweepStaleAgents } from '../../engine/agent.js';
+import { listAgents, getAgentByName, sweepStaleAgents } from '../../engine/agent.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
 import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
@@ -118,6 +118,72 @@ describe('external receipt authority replaces checkpoint freshness', () => {
     await expect(bindAgentToNode(db, ws.workspaceId, 'target', 'moving')).rejects.toThrow();
     const [after] = await db.select().from(agents).where(eq(agents.id, agent.agentId));
     expect(after.locationNodeId).toBe(node.id);
+  });
+
+  it('retains REST-only/direct presence without letting a tracker certify the wrong broker provider', async () => {
+    const { ws, db, node } = await seed();
+    const http = await registerAgent(stack.app, ws.workspaceKey, 'http-only');
+    const broker = await registerAgent(stack.app, ws.workspaceKey, 'broker-hosted');
+    await db.update(agents).set({ locationType: 'via_node', locationNodeId: node.id, providerName: 'missing-provider' }).where(eq(agents.id, broker.agentId));
+    await db.insert(agentNodeBindings).values({ id: 'fallback-binding', workspaceId: ws.workspaceId, agentId: broker.agentId, nodeId: node.id, status: 'active' });
+    configureNodeLiveness(db, { inspect: async (_w,id) => id === node.id ? liveSnapshot() : { status: 'offline', providers: [] } });
+    const presence = { heartbeat: async () => {}, disconnect: async () => {}, getOnline: async () => [http.agentId, broker.agentId], explicitlyDisconnected: async () => [] as string[] };
+    const online = await getPresence(db, presence, ws.workspaceId);
+    expect(online.find(a => a.agent_id === http.agentId)?.status).toBe('online');
+    expect(online.find(a => a.agent_id === broker.agentId)?.status).toBe('offline');
+    presence.explicitlyDisconnected = async () => [http.agentId];
+    expect((await getPresence(db, presence, ws.workspaceId)).find(a => a.agent_id === http.agentId)?.status).toBe('offline');
+  });
+  it('preserves explicit offline work state while recovering a saved liveness-loss state', async () => {
+    const { ws, db, node } = await seed();
+    const agent = await registerAgent(stack.app, ws.workspaceKey, 'explicit-offline');
+    await db.update(agents).set({ status: 'offline', statusBeforeLivenessLoss: null, locationType: 'via_node', locationNodeId: node.id }).where(eq(agents.id, agent.agentId));
+    configureNodeLiveness(db, { inspect: async () => liveSnapshot() });
+    expect((await listAgents(db, ws.workspaceId, 'all')).find(a => a.id === agent.agentId)?.status).toBe('offline');
+    await db.update(agents).set({ statusBeforeLivenessLoss: 'blocked' }).where(eq(agents.id, agent.agentId));
+    expect((await listAgents(db, ws.workspaceId, 'all')).find(a => a.id === agent.agentId)?.status).toBe('blocked');
+  });
+  it('hides stale offline hosted rows by default but preserves quiet live rows and includeStale', async () => {
+    const { ws, db, node } = await seed();
+    const live = await registerAgent(stack.app, ws.workspaceKey, 'old-live');
+    const offline = await registerAgent(stack.app, ws.workspaceKey, 'old-offline');
+    await db.insert(nodes).values({ id: 'stale-offline', workspaceId: ws.workspaceId, name: 'stale-offline', tokenHash: 'stale-offline-hash' });
+    for (const [agent, nodeId] of [[live, node.id], [offline, 'stale-offline']] as const) {
+      await db.update(agents).set({ status: 'active', locationType: 'via_node', locationNodeId: nodeId, lastSeen: new Date(Date.now() - 8 * 86_400_000) }).where(eq(agents.id, agent.agentId));
+    }
+    configureNodeLiveness(db, { inspect: async (_w,id) => id === node.id ? liveSnapshot() : { status: 'offline', providers: [] } });
+    const defaults = await listAgents(db, ws.workspaceId);
+    expect(defaults.map(a => a.id)).toContain(live.agentId);
+    expect(defaults.map(a => a.id)).not.toContain(offline.agentId);
+    expect((await listAgents(db, ws.workspaceId, 'all', { includeStale: true })).map(a => a.id)).toContain(offline.agentId);
+  });
+  it('reports handler readiness from the current receipt lease rather than the D1 checkpoint', async () => {
+    const { ws, db, node } = await seed();
+    const snapshot = liveSnapshot();
+    configureNodeLiveness(db, { inspect: async () => snapshot });
+    expect((await listNodes(db, ws.workspaceId)).nodes[0].handlers_live).toBe(true);
+    await db.update(nodes).set({ handlersLive: true }).where(eq(nodes.id, node.id));
+    snapshot.providers[0].handlers_live = false;
+    expect((await listNodes(db, ws.workspaceId)).nodes[0].handlers_live).toBe(false);
+  });
+
+  it('keeps fresh HTTP-only direct identities active in list and detail when socket authority is unavailable', async () => {
+    const { ws, db } = await seed();
+    const agent = await registerAgent(stack.app, ws.workspaceKey, 'direct-http');
+    await db.update(agents).set({ status: 'active', locationType: 'via_node', locationNodeId: `node_direct_${agent.agentId}`, lastSeen: new Date() }).where(eq(agents.id, agent.agentId));
+    for (const status of ['offline', 'unknown'] as const) {
+      configureNodeLiveness(db, { inspect: async () => ({ status, providers: [] }) });
+      expect((await listAgents(db, ws.workspaceId, 'active')).map(a => a.id)).toContain(agent.agentId);
+      expect((await getAgentByName(db, ws.workspaceId, 'direct-http'))?.status).toBe('active');
+    }
+  });
+
+  it('uses the independent HTTP tracker hook without duplicate node-derived presence probes', async () => {
+    const { ws, db } = await seed();
+    const agent = await registerAgent(stack.app, ws.workspaceKey, 'http-hook');
+    configureNodeLiveness(db, { inspect: async () => ({ status: 'offline', providers: [] }) });
+    const presence = { heartbeat: async () => {}, disconnect: async () => {}, getOnline: async (): Promise<string[]> => { throw new Error('node-derived getOnline must not run'); }, getTrackedOnline: async () => [agent.agentId] };
+    expect((await getPresence(db, presence, ws.workspaceId)).find(a => a.agent_id === agent.agentId)?.status).toBe('online');
   });
 
 });

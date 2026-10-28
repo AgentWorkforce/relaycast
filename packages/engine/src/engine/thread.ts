@@ -80,7 +80,9 @@ export async function postReply(
   // Durable writes run as one atomic unit when the adapter supports it; fanout
   // stays in routes. Delivery recipients are derived by the insert-select
   // against current channel membership.
-  const authorityLeases = await prepareAuthorityFanout(db, workspaceId, { channelId: parent.channelId, conversationId: dmConversation?.id });
+  const authorityLeases = await prepareAuthorityFanout(db, workspaceId, dmConversation
+    ? { conversationId: dmConversation.id }
+    : { channelId: parent.channelId });
   const results = await runAtomicWrites(db, (writeDb) => {
     const writes: AtomicWrite[] = [
       writeDb

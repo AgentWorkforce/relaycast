@@ -113,19 +113,28 @@ export async function getPresence(
 ): Promise<Array<{ agent_id: string; agent_name: string; status: 'online' | 'offline' }>> {
   const [allAgents, onlineIds, nodeHosted, suppressedIds] = await Promise.all([
     db
-      .select({ id: agents.id, name: agents.name })
+      .select({ id: agents.id, name: agents.name, locationType: agents.locationType, locationNodeId: agents.locationNodeId, nodeRole: nodes.role })
       .from(agents)
+      .leftJoin(nodes, and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, agents.locationNodeId)))
       // Released rows are tombstones kept only so history stays attributable.
       // They are not roster members and must not appear as presence entries.
       .where(and(eq(agents.workspaceId, workspaceId), ne(agents.status, RELEASED_AGENT_STATUS))),
-    nodeLivenessAuthority(db) ? Promise.resolve([] as string[]) : presence.getOnline(workspaceId),
+    nodeLivenessAuthority(db) && presence.getTrackedOnline
+      ? presence.getTrackedOnline(workspaceId)
+      : presence.getOnline(workspaceId),
     nodeLivenessAuthority(db) ? authoritativePresence(db, workspaceId) : nodeHostedPresenceQuery(db, workspaceId, now),
     presence.explicitlyDisconnected?.(workspaceId) ?? Promise.resolve([]),
   ]);
 
   if (allAgents.length === 0) return [];
 
-  const onlineSet = new Set(nodeLivenessAuthority(db) ? [] : onlineIds);
+  // HTTP-only/direct clients retain the REST presence port. A broker-hosted
+  // agent must prove its own provider lease; sibling/old tracker entries do
+  // not certify that route.
+  const fallbackIds = nodeLivenessAuthority(db)
+    ? new Set(allAgents.filter(a => a.locationType !== 'via_node' || !a.locationNodeId || a.nodeRole === 'direct').map(a => a.id))
+    : undefined;
+  const onlineSet = new Set(onlineIds.filter(id => !fallbackIds || fallbackIds.has(id)));
   const suppressed = new Set(suppressedIds);
   for (const row of nodeHosted) {
     if (suppressed.has(row.agentId)) continue;
@@ -135,7 +144,7 @@ export async function getPresence(
   return allAgents.map((agent) => ({
     agent_id: agent.id,
     agent_name: agent.name,
-    status: onlineSet.has(agent.id) ? ('online' as const) : ('offline' as const),
+    status: onlineSet.has(agent.id) && !suppressed.has(agent.id) ? ('online' as const) : ('offline' as const),
   }));
 }
 

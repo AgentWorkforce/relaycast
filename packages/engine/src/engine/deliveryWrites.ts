@@ -661,7 +661,18 @@ export async function fetchDirectDeliveryOutcomes(
   };
 }
 
-export interface AuthorityRecipientLease { agentId: string; nodeId: string; providerName: string; expiresAt: number }
+/** Queue-admission evidence only; never a dispatch or online-presence proof.
+ * Unknown authority preserves the intended recipient within normal mailbox and
+ * workspace quotas, instead of treating an RPC failure as permanent exclusion.
+ */
+export interface AuthorityRecipientLease {
+  agentId: string; nodeId: string; providerName: string; expiresAt: number;
+  evidence: 'live' | 'unknown';
+}
+const UNKNOWN_AUDIENCE_VALIDITY_MS = 5_000;
+type AuthorityFanoutAudience =
+  | { channelId: string; conversationId?: never }
+  | { conversationId: string; channelId?: never };
 function authorityRecipientSql(leases: readonly AuthorityRecipientLease[]): SQL {
   if (!leases.length) return sql`0`;
   // Bind one JSON argument instead of exceeding SQLite's variable limit on
@@ -672,13 +683,11 @@ function authorityRecipientSql(leases: readonly AuthorityRecipientLease[]): SQL 
       AND json_extract(lease.value, '$.providerName') = ${agents.providerName}
       AND unixepoch() * 1000 + 999 < json_extract(lease.value, '$.expiresAt'))`;
 }
-export async function prepareAuthorityFanout(db: EngineDb, workspaceId: string, audience: { channelId?: string | null; conversationId?: string }): Promise<AuthorityRecipientLease[]> {
+export async function prepareAuthorityFanout(db: EngineDb, workspaceId: string, audience: AuthorityFanoutAudience): Promise<AuthorityRecipientLease[]> {
   if (!nodeLivenessAuthority(db)) return [];
-  const audienceSql = audience.channelId
-    ? sql`EXISTS (SELECT 1 FROM ${channelMembers} WHERE ${channelMembers.channelId} = ${audience.channelId} AND ${channelMembers.agentId} = ${agents.id})`
-    : audience.conversationId
-      ? sql`EXISTS (SELECT 1 FROM ${dmParticipants} WHERE ${dmParticipants.conversationId} = ${audience.conversationId} AND ${dmParticipants.agentId} = ${agents.id})`
-      : sql`0`;
+  const audienceSql = audience.conversationId
+    ? sql`EXISTS (SELECT 1 FROM ${dmParticipants} WHERE ${dmParticipants.conversationId} = ${audience.conversationId} AND ${dmParticipants.agentId} = ${agents.id})`
+    : sql`EXISTS (SELECT 1 FROM ${channelMembers} WHERE ${channelMembers.channelId} = ${audience.channelId} AND ${channelMembers.agentId} = ${agents.id})`;
   const rows = await db.select({ agentId: agents.id, nodeId: nodes.id, providerName: agents.providerName, role: nodes.role })
     .from(agents).innerJoin(nodes, and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, agents.locationNodeId)))
     .where(and(eq(agents.workspaceId, workspaceId), ne(agents.status, 'released'), eq(agents.locationType, 'via_node'), audienceSql));
@@ -687,10 +696,15 @@ export async function prepareAuthorityFanout(db: EngineDb, workspaceId: string, 
   const leases: AuthorityRecipientLease[] = [];
   for (const row of rows) {
     const snapshot = snapshots.get(row.nodeId);
-    if (snapshot?.status !== 'online') continue;
     const now = Date.now();
+    if (!snapshot || snapshot.status === 'unknown') {
+      leases.push({ agentId: row.agentId, nodeId: row.nodeId, providerName: row.providerName,
+        expiresAt: now + UNKNOWN_AUDIENCE_VALIDITY_MS, evidence: 'unknown' });
+      continue;
+    }
+    if (snapshot.status !== 'online') continue;
     const provider = snapshot.providers.find(p => p.name === row.providerName && p.live && p.expires_at > now && p.last_received_at <= now);
-    if (provider) leases.push({ agentId: row.agentId, nodeId: row.nodeId, providerName: row.providerName, expiresAt: provider.expires_at });
+    if (provider) leases.push({ agentId: row.agentId, nodeId: row.nodeId, providerName: row.providerName, expiresAt: provider.expires_at, evidence: 'live' });
   }
   return leases;
 }
