@@ -33,7 +33,9 @@ export function asCodedError(err: unknown): CodedError {
     carryEngineOperation(err, error);
     return error as CodedError;
   }
-  return new Error(typeof err === 'string' ? err : 'Unknown error');
+  const error = new Error(typeof err === 'string' ? err : 'Unknown error');
+  carryEngineOperation(err, error);
+  return error;
 }
 
 /** Build an `Error` carrying a stable `code` and HTTP `status` (no cast at the call site). */

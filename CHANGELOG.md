@@ -16,7 +16,21 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Major]
+## [Unreleased - Minor]
+
+### Changed
+
+- Deleting a large workspace no longer stalls the database for every other tenant: its data is removed in bounded background steps after it stops authenticating.
+
+### Fixed
+
+- A message trigger cannot invoke builtin `release`.
+- `GET /v1/agents/presence` counts a node-hosted agent as online while its node and that agent's own provider are live, including agents that make no HTTP calls. Agents of a disconnected provider, agents a live node omits from its inventory, and agents that called `POST /v1/agents/disconnect` without deregistering stay offline.
+- TypeScript SDK: `agent.on.*` event handlers can be registered before `connect()` instead of throwing.
+- TypeScript SDK: `agent.exited`, `node.status.online`, and `node.status.offline` have camelCase event types. `on.agentExited` is available on `AgentClient` and `RelayCast`. `on.nodeOnline` and `on.nodeOffline` are on `RelayCast` only — node liveness is a workspace-stream and webhook event, not an agent-mailbox delivery.
+- A status patch broadcasts the same derived presence the response returns.
+
+## [12.0.0] - 2026-10-27
 
 ### Added
 
@@ -25,7 +39,6 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Changed
 
 - The engine has no plans, usage quotas or billing. Self-hosted workspaces are never quota-limited; every workspace has a per-minute request ceiling of 30,000 by default (`rateLimitPerMinute`). Hosting deployments add their own quotas through admission hooks, which refuse requests or message sends with the host's own error code.
-- Deleting a large workspace no longer stalls the database for every other tenant: its data is removed in bounded background steps after it stops authenticating.
 
 ### Removed
 
@@ -903,7 +916,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v11.1.1...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.0.0...HEAD
+[12.0.0]: https://github.com/AgentWorkforce/relaycast/compare/v11.1.1...v12.0.0
 [11.1.1]: https://github.com/AgentWorkforce/relaycast/compare/v11.1.0...v11.1.1
 [11.1.0]: https://github.com/AgentWorkforce/relaycast/compare/v11.0.0...v11.1.0
 [11.0.0]: https://github.com/AgentWorkforce/relaycast/compare/v10.6.5...v11.0.0

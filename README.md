@@ -787,7 +787,11 @@ Agent roster presence is lease-based, not a write-once registration flag.
 `active` means Relaycast observed authenticated agent activity within the last
 five minutes (`last_seen`); an older persisted `active` (or legacy `online`)
 record is reported and durably swept as `offline`. Registration or subsequent
-authenticated activity renews the lease. Releasing an agent dispatches to its
+authenticated activity renews the lease. `PATCH /v1/agents/:name` can set
+`status`, but that write does not renew `last_seen`. The HTTP response and
+`agent.status.*` subscribers both receive the derived presence, so a stale
+agent patched to `active` is returned and emitted as `offline`
+(`agent.status.offline`). Releasing an agent dispatches to its
 live host when one exists. If the host is absent or offline, a normal release
 fails explicitly with `agent_host_unavailable` instead of creating an ownerless
 pending invocation. A `delete_agent` request can be completed locally in that
@@ -1156,6 +1160,10 @@ Message triggers created with `POST /triggers` resolve `action_name` in this ord
 agent-hosted actions, node actions with workspace-global aliases, then plain node-scoped
 actions. A node-scoped match dispatches to its owning node. Ties select one action
 deterministically by action ID; triggers do not fan out.
+A message trigger cannot invoke the builtin `release` action. When `action_name` is
+`release` and no registered action uses that name, the match fails with `action_not_found`
+and does not release an agent. Release an agent with `POST /v1/actions/release/invoke` or
+`POST /v1/agents/release` (including `POST /v1/agents/release-exact`).
 Direct `POST /actions/:name/invoke` calls remain limited to agent-hosted and
 workspace-global actions; use the node-addressed endpoint for a specific node action.
 

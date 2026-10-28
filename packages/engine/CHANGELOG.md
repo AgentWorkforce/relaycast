@@ -7,8 +7,21 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased - Minor]
 
-## [Unreleased - Major]
+### Changed
+
+- Deleting a large workspace (over 2,000 bulk rows) no longer runs as one cascading transaction. It stops authenticating at once (`workspace_expired`), and its rows are drained in bounded, paced statements (`reapWorkspace`, the expired-workspace reaper). Small workspaces keep the atomic delete. `deleteWorkspace` now returns `{ deferred }`, and the background reap after workspace creation is capped at 250 ms.
+- Inbound webhooks (`POST /v1/hooks/:webhookId`) of an expired or deleted workspace now return `404` instead of accepting messages.
+- A node socket opened before its workspace expired or was deleted can no longer write into it: every control frame except those that settle work already in flight (`action.accept`, `action.result`, `delivery.ack`) or tear identity down (`node.deregister`, `agent.deregister`) now gets a `workspace_expired` error. This costs each forwarded heartbeat one primary-key read.
+
+### Fixed
+
+- A message trigger cannot invoke builtin `release`.
+- `GET /v1/agents/presence` counts a node-hosted agent as online while its node and that agent's own provider are live, including agents that make no HTTP calls. Agents of a disconnected provider, agents a live node omits from its inventory, and agents that called `POST /v1/agents/disconnect` without deregistering stay offline.
+- A status patch broadcasts the same derived presence the response returns.
+
+## [12.0.0] - 2026-10-27
 
 ### Added
 
@@ -22,12 +35,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `EntitlementsProvider`, `PlanLimits`, `UpgradeGuidance`, `UsageMetric`, `StaticEntitlementsProvider`, `PLAN_LIMITS`, the `checkPlanLimit` / `checkMessageAllowance` middleware, and the usage-counter helpers (`usageCounterKey`, `getUsageMetric`, `lifetimeUsageCounterKey`, `getLifetimeUsageMetric`, `usagePeriod`, `usagePeriodResetAt`). The engine no longer writes `usage:*` KV counters. `KeyValueStore.increment` is removed; the port is `get`/`put`/`delete`.
 - The `workspaces.plan` column (migration `0077_drop_workspace_plan.sql`). A host that keeps tiers must copy the column into its own storage before applying it.
 - `WorkspaceDeliveryPolicyConfig.resolve` receives `{ id }`; it no longer gets `plan`.
-
-### Changed
-
-- Deleting a large workspace (over 2,000 bulk rows) no longer runs as one cascading transaction. It stops authenticating at once (`workspace_expired`), and its rows are drained in bounded, paced statements (`reapWorkspace`, the expired-workspace reaper). Small workspaces keep the atomic delete. `deleteWorkspace` now returns `{ deferred }`, and the background reap after workspace creation is capped at 250 ms.
-- Inbound webhooks (`POST /v1/hooks/:webhookId`) of an expired or deleted workspace now return `404` instead of accepting messages.
-- A node socket opened before its workspace expired or was deleted can no longer write into it: every control frame except those that settle work already in flight (`action.accept`, `action.result`, `delivery.ack`) or tear identity down (`node.deregister`, `agent.deregister`) now gets a `workspace_expired` error. This costs each forwarded heartbeat one primary-key read.
 
 ## [11.1.0] - 2026-10-27
 
