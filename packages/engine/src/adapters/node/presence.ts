@@ -218,15 +218,18 @@ export class InProcessPresence implements PresenceTracker {
           this.disconnected.delete(workspaceId);
           continue;
         }
+        // Cleanup must use the same snapshot as the lookup: disconnect() can
+        // add a new hold while the query is in flight.
+        const queriedIds = [...ids];
         const rows = await db
           .select({ id: agents.id })
           .from(agents)
           .where(and(
             eq(agents.workspaceId, workspaceId),
-            inArray(agents.id, [...ids]),
+            inArray(agents.id, queriedIds),
           ));
         const live = new Set(rows.map((row) => row.id));
-        for (const id of [...ids]) {
+        for (const id of queriedIds) {
           if (!live.has(id)) ids.delete(id);
         }
         if (ids.size === 0) this.disconnected.delete(workspaceId);

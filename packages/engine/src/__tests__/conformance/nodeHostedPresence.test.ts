@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { agentNodeBindings, agents, nodeProviders, nodes } from '../../db/schema.js';
 import { handleProviderDisconnect, registerAgentViaNode } from '../../engine/node.js';
@@ -419,6 +419,56 @@ describe('node-hosted presence', () => {
     expect(held).toContain(worker.agent_id);
     expect(held).not.toContain('agent_deleted');
     expect(await stack.runtime.presence.explicitlyDisconnected?.('ws_deleted')).toEqual([]);
+  });
+
+  it('preserves a new disconnect while the sweep awaits its agent lookup', async () => {
+    const ws = await createWorkspace(stack.app, 'node-hosted-presence-sweep-race');
+    await enrollBroker(ws.workspaceKey, 'node_race', 'race-broker');
+    await attachProvider(ws.workspaceId, 'node_race', 'race-broker', 'broker');
+    const first = await registerAgentViaNode(stack.runtime.deps.db, ws.workspaceId, 'node_race', 'broker', {
+      v: 1, type: 'agent.register', name: 'first', auto_join_general: false,
+    });
+    const second = await registerAgentViaNode(stack.runtime.deps.db, ws.workspaceId, 'node_race', 'broker', {
+      v: 1, type: 'agent.register', name: 'second', auto_join_general: false,
+    });
+    await stack.settle();
+    await stack.runtime.presence.disconnect(ws.workspaceId, first.agent_id);
+    await stack.runtime.presence.disconnect(ws.workspaceId, 'agent_deleted');
+    expect((await presenceByName(ws.workspaceKey)).get('second')).toBe('online');
+
+    const db = stack.runtime.deps.db;
+    const select = db.select.bind(db);
+    let reads = 0;
+    let disconnected = false;
+    // Run the real lookup, then disconnect another live agent before its
+    // result reaches the sweep. That identity was not part of this query.
+    const wrap = (query: object): object => new Proxy(query, {
+      get(object, key) {
+        const value = Reflect.get(object, key, object);
+        if (key === 'then') return (resolve: (rows: unknown) => unknown, reject: (error: unknown) => unknown) =>
+          Promise.resolve(object).then(async rows => {
+            await stack.runtime.presence.disconnect(ws.workspaceId, second.agent_id);
+            disconnected = true;
+            return rows;
+          }).then(resolve, reject);
+        return typeof value === 'function' ? (...args: unknown[]) => wrap(value.apply(object, args)) : value;
+      },
+    });
+    const hook = vi.spyOn(db, 'select').mockImplementation(((...args: Parameters<typeof select>) => {
+      const query = select(...args);
+      return ++reads === 2 ? wrap(query) : query;
+    }) as typeof db.select);
+    try {
+      await stack.runtime.presence.sweep();
+    } finally { hook.mockRestore(); }
+
+    expect(disconnected).toBe(true);
+    expect(await stack.runtime.presence.explicitlyDisconnected?.(ws.workspaceId))
+      .toEqual(expect.arrayContaining([first.agent_id, second.agent_id]));
+    expect(await stack.runtime.presence.explicitlyDisconnected?.(ws.workspaceId)).not.toContain('agent_deleted');
+    const after = await presenceByName(ws.workspaceKey);
+    expect(after.get('first')).toBe('offline');
+    expect(after.get('second')).toBe('offline');
   });
 
   it('clears a presence-only disconnect when the node recovers the agent', async () => {
