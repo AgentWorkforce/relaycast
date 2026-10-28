@@ -285,11 +285,15 @@ describe('node inventory presence isolation', () => {
       let changed = false;
       // Change persisted liveness after validation, immediately before the
       // ownership update is built. The real database evaluates the CAS.
+      // The fence clock is sampled before this update. A heartbeat of
+      // Date.now() here can fall after that sample and look future-dated,
+      // so the default reconnect would not count as live. One second ago is
+      // still inside the liveness window and is always at or before the sample.
       const spy = vi.spyOn(db, 'update').mockImplementation((table) => {
         if (table === agents && !changed) {
           changed = true;
           update(nodeProviders).set(change === 'default-reconnected'
-            ? { status: 'online', handlersLive: true, lastHeartbeatAt: new Date() }
+            ? { status: 'online', handlersLive: true, lastHeartbeatAt: new Date(Date.now() - 1_000) }
             : change === 'offline' ? { status: 'offline' }
             : change === 'handlers-down' ? { handlersLive: false }
             : { lastHeartbeatAt: change === 'missing-heartbeat' ? null
