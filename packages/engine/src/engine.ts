@@ -51,6 +51,7 @@ import { certifyRoutes } from './routes/certify.js';
 import { consoleRoutes } from './routes/console.js';
 import { directoryRoutes } from './routes/directory.js';
 import { routingRoutes } from './routes/routing.js';
+import { internalRoutes } from './routes/internal.js';
 
 /**
  * Build the platform-agnostic Relaycast engine as a Hono app.
@@ -102,6 +103,10 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
 
   // Health check
   app.route('/health', healthRoutes);
+
+  // Internal admin API for a trusted control plane; 404 unless
+  // config.internalSecret is set.
+  app.route('/internal', internalRoutes);
 
   // WebSocket upgrade route — delegates to the ConnectionRegistry port
   app.get('/v1/ws', async (c) => {

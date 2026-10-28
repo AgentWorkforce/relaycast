@@ -93,6 +93,8 @@ Flags take precedence over environment variables.
 | — | `RELAYCAST_MESSAGE_TTL_DAYS` | unset (keep forever) | Opt in to pruning message history after this many days. Unset, `0`, or negative keeps messages forever. Per-workspace `retention` settings override this; operational tables (deliveries, message logs) prune at 90 days regardless. |
 | — | `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` | unset (fail closed) | Stable server-only derivation secret for anonymous keyed workspace retries. Generate once with `openssl rand -hex 32` and persist it across restarts. |
 | — | `RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED` | `false` | Optional self-host policy requiring callers to prove the derivation secret. Leave unset for hosted-safe anonymous retries. |
+| — | `RELAYCAST_INTERNAL_SECRET` / `RELAYCAST_INTERNAL_SECRET_FILE` | unset (disabled) | Enables the [internal admin API](#internal-admin-api) for a trusted control plane. `_FILE` (a mounted secret file) wins over the inline value. |
+| — | `RELAYCAST_ALLOW_INSECURE_BASE_URL` | `false` | Container image only: accept an `http://` (or IP-literal / single-label) `--base-url` whose host is loopback or private. Public hosts stay HTTPS-only. |
 
 **Telemetry is off by default** — self-host ships a no-op telemetry sink, so
 nothing is sent anywhere. (There is no PostHog/analytics in self-host.)
@@ -149,6 +151,42 @@ intentional fail-closed behavior. Existing anonymous bindings also cannot be
 replayed after a secret change, because deriving a different child key would
 not be safe; rotate only after outstanding retries have drained, or accept
 that old bindings will fail closed with a conflict.
+
+### Internal admin API
+
+Setting `RELAYCAST_INTERNAL_SECRET` (or `RELAYCAST_INTERNAL_SECRET_FILE`)
+enables `/internal/*` for a trusted control plane such as a self-hosted Agent
+Relay cloud. Without it every `/internal/*` route returns the generic
+`404 not_found`. Callers send `Authorization: Bearer <secret>`; the comparison
+is constant-time and a wrong or missing secret is `401 unauthorized`. Generate
+the secret with `openssl rand -hex 32` and share it only with the control
+plane. The shapes match the hosted gateway so the same client works against
+both.
+
+| Route | Body | Success `data` |
+|---|---|---|
+| `GET /internal/capabilities` | — | `{ workspace_key_push: { generation_cas, generation_required_once_fenced, grace_ms, max_grace_ms: 3600000, revocation_markers, previous_key_slot }, workspace_admin: { create, server_minted_key } }` (all flags `true`) |
+| `POST /internal/workspaces` | `{ name, metadata? }` | `201 { workspace_id, api_key, name, created_at, expires_at: null, api_key_generation: 0 }` |
+| `POST /internal/workspaces/:id/api-key` | `{ api_key?, key_generation?, grace_ms?, plan? }` | `{ workspace_id, api_key_generation }` (`201` when the push created the workspace); plus `api_key` when the engine minted it |
+
+`POST /internal/workspaces/:id/api-key` semantics:
+
+- **Push** (`api_key` = an `rk_live_…` key the control plane minted): upserts.
+  A missing workspace is created with `id = name = :id` and a `#general`
+  channel. Re-pushing the live key is idempotent; a higher `key_generation`
+  bumps the stored fence. A key change with `key_generation` commits only if
+  it beats the stored generation (`409 stale_key_generation` otherwise). Once a
+  workspace carries a generation, key changes without one are
+  `409 key_generation_required`. A key already bound to another workspace is
+  `409 api_key_conflict`.
+- **Rotate** (no `api_key`, self-host extension): the engine mints the
+  replacement, returns it once as `api_key`, and sets the generation to
+  `key_generation` or stored + 1. Unknown workspace is `404`.
+- `grace_ms` (0–3600000, default `0`) keeps the superseded key working that
+  long; `0` revokes it immediately. On a push it requires `key_generation`.
+- `plan` is accepted for wire compatibility and ignored: the engine has no
+  plans. `revocation_markers: true` is satisfied by the SQLite previous-key
+  slot, since the engine has no auth cache to invalidate.
 
 ---
 
@@ -312,7 +350,10 @@ before sharing it.
 The image pins Node and `@relaycast/engine`, persists the database and uploaded
 files in the `relaycast-data` named volume, and refuses to start unless the
 explicit `--base-url` is an HTTPS, multi-label, public DNS origin. IP literals,
-loopback names, and the special-use `.local` namespace are rejected. See
+loopback names, and the special-use `.local` namespace are rejected unless
+`RELAYCAST_ALLOW_INSECURE_BASE_URL=true` is set, which accepts `http://` (and
+IP literals / single-label names) only for loopback and private hosts — for
+labs and in-cluster control planes; never for a public origin. See
 [`RUNBOOK.md`](../RUNBOOK.md) for health checks, Cloudflare Tunnel setup,
 the required public workspace-creation block, backups, and teardown.
 

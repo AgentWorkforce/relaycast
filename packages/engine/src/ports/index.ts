@@ -150,6 +150,12 @@ export interface EngineConfig {
    */
   workspaceBootstrapProofRequired?: boolean;
   /**
+   * Shared secret for the internal admin API (`/internal/*`) a trusted
+   * control plane uses to create workspaces and register/rotate their keys.
+   * Unset disables the surface entirely: every `/internal/*` route is 404.
+   */
+  internalSecret?: string;
+  /**
    * Per-workspace requests-per-minute ceiling. Default 30,000.
    * `AdmissionHooks.rateLimitPerMinute` overrides it per workspace.
    */

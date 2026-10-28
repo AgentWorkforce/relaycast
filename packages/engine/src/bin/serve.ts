@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { startServer } from '../entrypoints/node.js';
+import { readFileSync } from 'node:fs';
 import { engineVersion } from './version.js';
 
 const HELP = `relaycast-engine — run a self-hosted Relaycast server (Node + SQLite)
@@ -14,6 +15,10 @@ Options:
   --env <name>       Environment label (default: production)
   -v, --version      Print the engine version
   -h, --help         Show this help
+
+Environment:
+  RELAYCAST_INTERNAL_SECRET(_FILE)  Enable the /internal admin API for a trusted
+                                    control plane (Authorization: Bearer <secret>)
 
 After start, create a workspace:
   curl -XPOST http://localhost:<port>/v1/workspaces -H 'content-type: application/json' -d '{"name":"my-team"}'
@@ -47,6 +52,14 @@ function parseArgs(argv: string[], env: NodeJS.ProcessEnv): ServeArgs {
     else if (arg === '--env') out.environment = argv[++i] ?? out.environment;
   }
   return out;
+}
+
+/** Read `NAME` or the file named by `NAME_FILE` (trimmed); empty → undefined. */
+function secretFromEnv(env: NodeJS.ProcessEnv, name: string): string | undefined {
+  const file = env[`${name}_FILE`];
+  const value = file ? readFileSync(file, 'utf8') : env[name];
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 async function main(): Promise<void> {
@@ -88,6 +101,8 @@ async function main(): Promise<void> {
       ? { retention: { defaults: { messageTtlDays: messageTtlDays > 0 ? messageTtlDays : null } } }
       : undefined;
 
+  const internalSecret = secretFromEnv(process.env, 'RELAYCAST_INTERNAL_SECRET');
+
   const running = startServer({
     dbPath: opts.db,
     port: opts.port,
@@ -100,6 +115,7 @@ async function main(): Promise<void> {
       ...(process.env.RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED === 'true'
         ? { workspaceBootstrapProofRequired: true }
         : {}),
+      ...(internalSecret ? { internalSecret } : {}),
       ...(Object.keys(mailbox).length > 0 ? { mailbox } : {}),
     },
     ...(eventQueue ? { eventQueue } : {}),

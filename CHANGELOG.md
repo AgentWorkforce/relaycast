@@ -16,7 +16,13 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Engine: an opt-in internal admin API (`RELAYCAST_INTERNAL_SECRET`) lets a trusted control plane create workspaces and register or rotate their keys, with the hosted gateway's request and response shapes.
+- Container image: `RELAYCAST_ALLOW_INSECURE_BASE_URL=true` accepts `http://` base URLs on loopback and private hosts, and `RELAYCAST_INTERNAL_SECRET(_FILE)` is passed through.
+- A Helm chart (`charts/relaycast`) runs the single-process engine with a persistent volume.
 
 ## [12.1.0] - 2026-10-28
 
