@@ -13,7 +13,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - A message trigger cannot invoke builtin `release`.
 - Overlapping dispatch of a spawn or agent-hosted action sends one frame and keeps one capacity reservation. A timeout retry, a send that fails before the frame is accepted, a claim write that fails before the frame is sent, and a drain that observed a hold a retry already released all stay on that one reservation.
-- Raw JSON bodies sent to `POST /v1/hooks/:webhookId` (any object without `text`, `message`, `source`, `author` or `payload`, including `{}`) appear in the resulting channel message, capped at 16,000 characters. Their fields are rendered as text only: a third-party `session_ref` or `action_generated` no longer reaches message metadata, session validation or trigger suppression.
 - `GET /v1/agents/presence` counts a node-hosted agent as online while its node and that agent's own provider are live, including agents that make no HTTP calls. Agents of a disconnected provider, agents a live node omits from its inventory, and agents that called `POST /v1/agents/disconnect` without deregistering stay offline until a heartbeat, a new inventory route, or `agent.recover`.
 - A status patch broadcasts the same derived presence the response returns.
 
@@ -81,6 +80,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - The unreachable-node delivery sweep reads only active deliveries through the new partial index `idx_deliveries_active_location_node` (migration `0074`), not every delivery ever routed to a node.
 - Every response carries its request id in an `X-Request-Id` header (the header the Rust SDK reads), so client error reports stop showing `request_id: null`.
 - Per-node agent roster and inventory lookups are pinned to `idx_agents_location_node_fk` instead of walking every agent in the workspace.
+- Raw JSON bodies sent to `POST /v1/hooks/:webhookId` (any object without `text`, `message`, `source`, `author` or `payload`, including `{}`) appear in the resulting channel message, capped at 16,000 characters. Their fields are rendered as text only: a third-party `session_ref` or `action_generated` no longer reaches message metadata, session validation or trigger suppression.
 
 ## [10.6.3] - 2026-10-19
 

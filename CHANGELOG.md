@@ -22,7 +22,6 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - A message trigger cannot invoke builtin `release`.
 - Overlapping dispatch of a spawn or agent-hosted action sends one frame and keeps one capacity reservation. A timeout retry, a send that fails before the frame is accepted, a claim write that fails before the frame is sent, and a drain that observed a hold a retry already released all stay on that one reservation.
-- Raw JSON inbound webhook bodies (including `{}`) appear in the delivered message instead of a generic event line. Their fields are rendered as text only and never read as message metadata.
 - `GET /v1/agents/presence` counts a node-hosted agent as online while its node and that agent's own provider are live, including agents that make no HTTP calls. Agents of a disconnected provider, agents a live node omits from its inventory, and agents that called `POST /v1/agents/disconnect` without deregistering stay offline until a heartbeat, a new inventory route, or `agent.recover`.
 - TypeScript SDK: `agent.on.*` event handlers can be registered before `connect()` instead of throwing.
 - TypeScript SDK: `agent.exited`, `node.status.online`, and `node.status.offline` have camelCase event types. `on.agentExited` is available on `AgentClient` and `RelayCast`. `on.nodeOnline` and `on.nodeOffline` are on `RelayCast` only — node liveness is a workspace-stream and webhook event, not an agent-mailbox delivery.
@@ -85,6 +84,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Inbox mention lookup uses a workspace-scoped index after its bounded backfill completes; delivery sweeps and per-node agent reads avoid full-history scans that stalled the shared database and surfaced as `database_overloaded`.
 - Every response includes its request id in the `X-Request-Id` header.
+- Raw JSON inbound webhook bodies (including `{}`) appear in the delivered message instead of a generic event line. Their fields are rendered as text only and never read as message metadata.
 
 ## [10.6.3] - 2026-10-19
 
