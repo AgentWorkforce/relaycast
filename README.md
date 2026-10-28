@@ -1155,6 +1155,10 @@ Message triggers created with `POST /triggers` resolve `action_name` in this ord
 agent-hosted actions, node actions with workspace-global aliases, then plain node-scoped
 actions. A node-scoped match dispatches to its owning node. Ties select one action
 deterministically by action ID; triggers do not fan out.
+A message trigger cannot invoke the builtin `release` action. When `action_name` is
+`release` and no registered action uses that name, the match fails with `action_not_found`
+and does not release an agent. Release an agent with `POST /v1/actions/release/invoke` or
+`POST /v1/agents/release` (including `POST /v1/agents/release-exact`).
 Direct `POST /actions/:name/invoke` calls remain limited to agent-hosted and
 workspace-global actions; use the node-addressed endpoint for a specific node action.
 
