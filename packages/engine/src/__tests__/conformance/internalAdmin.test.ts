@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { startServer } from '../../entrypoints/node.js';
 import { makeNodeStack, registerAgent, type TestStack } from './harness.js';
 
 /**
@@ -337,6 +341,20 @@ describe('internal admin API', () => {
   describe('secret handling', () => {
     it('refuses an internal secret shorter than 32 characters at engine creation', () => {
       expect(() => makeNodeStack({ internalSecret: 'x'.repeat(31) })).toThrow(/at least 32 characters/);
+    });
+
+    it('startServer refuses a short internal secret before opening the database', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'relaycast-weak-secret-'));
+      try {
+        const dbPath = join(dir, 'relaycast.db');
+        expect(() => startServer({
+          dbPath, port: 0, migrate: true, config: { internalSecret: 'x'.repeat(31) },
+        })).toThrow(/at least 32 characters/);
+        // Nothing was opened: no SQLite file, so no handle or workers to leak.
+        expect(existsSync(dbPath)).toBe(false);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     it('never fingerprints the internal bearer in request logs', async () => {
