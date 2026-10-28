@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
+
+### Changed
+
+- Deleting a large workspace no longer stalls the database for every other tenant: its data is removed in bounded background steps after it stops authenticating.
 
 ### Fixed
 

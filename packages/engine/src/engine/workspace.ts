@@ -10,7 +10,13 @@ import { runAtomicWrites } from '../ports/database.js';
 import type { FileStorage } from '../ports/files.js';
 import type { WorkspaceProvenanceRecord } from '../db/schema.js';
 import { resolveEffectiveMessageRetention } from './retention.js';
-import { withEngineOperation } from '../lib/engineDiagnostics.js';
+import { reportEngineProgress, withEngineOperation } from '../lib/engineDiagnostics.js';
+import {
+  drainWorkspaceRows,
+  exceedsAtomicDeleteSize,
+  WORKSPACE_DRAIN_MAX_DURATION_MS,
+  type WorkspaceDrainOptions,
+} from './workspaceDrain.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -665,6 +671,16 @@ export async function updateWorkspace(
   return getWorkspace(db, updated.id, deploymentMessageTtlDays);
 }
 
+function requireDeletableStorage(storage: FileStorage): void {
+  if (typeof storage.deleteObjects !== 'function') {
+    throw codedError(
+      'The configured file storage cannot delete workspace objects',
+      'file_storage_delete_unsupported',
+      503,
+    );
+  }
+}
+
 async function deleteWorkspaceBatch(
   db: Db,
   storage: FileStorage,
@@ -685,13 +701,7 @@ async function deleteWorkspaceBatchUnlabeled(
 ): Promise<string[]> {
   if (workspaceIds.length === 0) return [];
 
-  if (typeof storage.deleteObjects !== 'function') {
-    throw codedError(
-      'The configured file storage cannot delete workspace objects',
-      'file_storage_delete_unsupported',
-      503,
-    );
-  }
+  requireDeletableStorage(storage);
 
   // Deleting the workspace cascades its file rows. Migration 0037's file
   // trigger writes each storage key to the durable cleanup outbox in this same
@@ -898,12 +908,85 @@ export async function drainFileCleanup(
   return (await deleteCleanupRows(db, storage, rows, now)).settled;
 }
 
+/**
+ * Delete a workspace.
+ *
+ * A workspace small enough to delete in one transaction keeps the atomic
+ * contract: everything is removed (or nothing, on failure) before this
+ * returns. A larger one would hold the shared database for the whole cascade,
+ * so it is tombstoned instead: the existing expiry deadline is pulled forward
+ * to now, which every credential path already rejects (`workspace_expired`),
+ * and its data is removed by bounded drains (`reapWorkspace`, the reaper).
+ * Returns `deferred: true` when data removal continues in the background.
+ */
 export async function deleteWorkspace(
   db: Db,
   storage: FileStorage,
   workspaceId: string,
-) {
-  await deleteWorkspaceBatch(db, storage, [workspaceId]);
+  options: { now?: Date } = {},
+): Promise<{ deferred: boolean }> {
+  requireDeletableStorage(storage);
+  if (!(await exceedsAtomicDeleteSize(db, workspaceId))) {
+    await deleteWorkspaceBatch(db, storage, [workspaceId]);
+    return { deferred: false };
+  }
+  const now = options.now ?? new Date();
+  await retryD1Write(() => runAtomicWrites(db, (writeDb) => [
+    // Pulling a deadline forward never pushes a nearer one back.
+    writeDb
+      .update(workspaces)
+      .set({ expiresAt: now })
+      .where(and(
+        eq(workspaces.id, workspaceId),
+        or(isNull(workspaces.expiresAt), gt(workspaces.expiresAt, now)),
+      )),
+    // As the atomic delete does: a keyed create replay must not hand back the
+    // key of a workspace that no longer authenticates.
+    writeDb
+      .update(workspaceCreateIdempotency)
+      .set({ status: 'terminalized', terminalizedAt: now })
+      .where(eq(workspaceCreateIdempotency.workspaceId, workspaceId)),
+  ], { requireAtomic: true }));
+  reportEngineProgress({ operation: 'workspace.delete', workspaceId, phase: 'started' });
+  return { deferred: true };
+}
+
+/**
+ * Drain one workspace within a time budget (only when it is too large to
+ * delete atomically), then delete it once its bulk rows are gone. Returns true when the workspace row was deleted. Safe to call
+ * repeatedly and concurrently with the reaper: every step is idempotent.
+ */
+export async function reapWorkspace(
+  db: Db,
+  storage: FileStorage,
+  workspaceId: string,
+  options: WorkspaceDrainOptions = {},
+): Promise<boolean> {
+  return reapClassifiedWorkspace(db, storage, workspaceId, undefined, options);
+}
+
+/** `reapWorkspace` for a caller that already probed the size (`large`), or not (`undefined`). */
+async function reapClassifiedWorkspace(
+  db: Db,
+  storage: FileStorage,
+  workspaceId: string,
+  large: boolean | undefined,
+  options: WorkspaceDrainOptions = {},
+): Promise<boolean> {
+  return withEngineOperation('workspace.delete', workspaceId, async () => {
+    // Before any row changes, as the atomic delete has always done.
+    requireDeletableStorage(storage);
+    // A small workspace keeps the atomic delete; only a large one is drained.
+    if (large ?? await exceedsAtomicDeleteSize(db, workspaceId)) {
+      const drained = await drainWorkspaceRows(db, workspaceId, options);
+      if (!drained.complete) return false;
+    }
+    const deleted = await deleteWorkspaceBatch(db, storage, [workspaceId]);
+    if (deleted.length > 0) {
+      reportEngineProgress({ operation: 'workspace.delete', workspaceId, phase: 'completed', remaining: 0 });
+    }
+    return deleted.length > 0;
+  });
 }
 
 /**
@@ -914,7 +997,10 @@ export async function deleteWorkspace(
 export async function reapExpiredWorkspaces(
   db: Db,
   storage: FileStorage,
-  options: { now?: Date; limit?: number } = {},
+  options: { now?: Date; limit?: number } & Omit<WorkspaceDrainOptions, 'deadline' | 'now'> & {
+    /** Wall clock for the drain budget (ms); `now` above is only the expiry cutoff. */
+    clock?: () => number;
+  } = {},
 ): Promise<string[]> {
   const now = options.now ?? new Date();
   // Always service prior durable cleanup work, even when no workspace reaches
@@ -934,6 +1020,34 @@ export async function reapExpiredWorkspaces(
 
   if (expired.length === 0) return [];
 
-  const ids = expired.map((workspace) => workspace.id);
-  return deleteWorkspaceBatch(db, storage, ids);
+  // One wall-clock budget across the whole batch. Small workspaces go first
+  // (one atomic delete each); the rest of the budget is split evenly across
+  // the large ones. A huge tenant therefore cannot take more than its share of
+  // the budget (at the drain's duty cycle) of database time, and every drain
+  // call it is given deletes at least one page, however short its slice.
+  const clock = options.clock ?? Date.now;
+  const deadline = clock() + (options.maxDurationMs ?? WORKSPACE_DRAIN_MAX_DURATION_MS);
+  // Classifying (and atomically deleting small ones) may use at most half the
+  // budget, so the large workspaces found always get the other half: probes
+  // alone can never consume every call while nothing is deleted.
+  const classifyUntil = clock() + (deadline - clock()) / 2;
+  const reaped: string[] = [];
+  const large: string[] = [];
+  for (const { id } of expired) {
+    if (large.length > 0 && clock() >= classifyUntil) break;
+    if (clock() >= deadline) return reaped;
+    if (await exceedsAtomicDeleteSize(db, id)) large.push(id);
+    else if (await reapClassifiedWorkspace(db, storage, id, false)) reaped.push(id);
+  }
+  for (const [index, id] of large.entries()) {
+    // One slow probe can spend the whole budget. The first large workspace
+    // still gets its drain call, which deletes at least one page however
+    // short its slice; otherwise every tick would re-probe and never drain.
+    const remaining = deadline - clock();
+    if (remaining <= 0 && index > 0) break;
+    const slice = clock() + Math.max(0, remaining) / (large.length - index);
+    const drain = { dutyCycle: options.dutyCycle, sleep: options.sleep, now: clock, deadline: slice };
+    if (await reapClassifiedWorkspace(db, storage, id, true, drain)) reaped.push(id);
+  }
+  return reaped;
 }

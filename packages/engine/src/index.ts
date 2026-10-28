@@ -135,6 +135,7 @@ export type { WorkspaceRetentionSettings } from './db/schema.js';
 // is a durable post-commit outbox: hosts must drain it from the same schedule.
 export {
   reapExpiredWorkspaces,
+  reapWorkspace,
   drainFileCleanup,
   getWorkspaceExpiry,
   DEFAULT_WORKSPACE_REAP_LIMIT,
