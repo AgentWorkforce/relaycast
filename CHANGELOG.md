@@ -18,6 +18,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
+### Added
+
+- Hosts can cap devices (nodes), agents and human members: every new registration passes through the host's admission hook with the workspace's live count, and a denial refuses it on HTTP and on the node `agent.register` frame. Re-enrolling an existing node or re-registering an existing name is never denied.
+
 ### Changed
 
 - Deleting a large workspace no longer stalls the database for every other tenant: its data is removed in bounded background steps after it stops authenticating.

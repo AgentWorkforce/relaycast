@@ -191,6 +191,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
   };
 
   realtime.setNodeCompletionDeps(deps);
+  realtime.setAdmission(options.admission);
 
   const runDeliveryMaintenance = createDeliveryMaintenanceRunner(deps);
 

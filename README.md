@@ -355,10 +355,13 @@ deps):
 
 ```ts
 const admission: AdmissionHooks = {
-  // Refuse a request or a message send; return null to admit it.
-  async admit({ workspace, action }) {
+  // Refuse a request, a message send or a new registration; return null to admit it.
+  async admit({ workspace, action, registered }) {
     if (action === 'message' && (await sentThisMonth(workspace.id)) >= 10_000) {
       return { status: 429, code: 'message_quota_exceeded', message: 'Monthly message quota reached.', retryAt: nextMonth() };
+    }
+    if (action === 'register_device' && registered! >= 5) {
+      return { status: 429, code: 'device_limit_reached', message: 'Device limit reached.', details: { max: 5, current: registered } };
     }
     return null;
   },
@@ -376,6 +379,14 @@ retrying cannot help, so fail fast rather than spending the budget on it. A
 denied message send still replays earlier sends: a retry with the same
 `Idempotency-Key` returns its stored receipt. A hook that throws admits the
 request.
+
+Registrations are admitted as `register_device` (a host-enrolled node),
+`register_agent` and `register_human`, with `registered` set to how many of that
+kind the workspace has now. Only a new registration is admitted: re-enrolling a
+node id or re-registering an agent name gets its usual rotation or conflict. An
+agent's implicit direct node is not a device, and the `node_direct_` id prefix
+is reserved for it. A denied `agent.register` node frame returns an `error`
+frame with the denial's `code` and `details`.
 
 `GET /v1/workspace` is limited in its own bucket, so the identity read used for
 credential validation and launch preflight stays reachable while the workspace's

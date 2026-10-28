@@ -25,6 +25,8 @@ import { actionInvocations, agents, agentNodeBindings, channelMembers, channels,
 import { isWorkspaceExpired, WORKSPACE_EXPIRED_CODE, WORKSPACE_EXPIRED_MESSAGE } from '../auth/workspaceExpiry.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
+import type { RegistrationAdmission } from './registrationAdmission.js';
+import { AdmissionDeniedError } from '../lib/admissionError.js';
 import { acceptTaskInvocation, completeTaskInvocation } from './taskInvocation.js';
 import { databaseConstraintKind, runAtomic, runAtomicWrites } from '../ports/database.js';
 import { retryD1Write } from '../lib/d1Retry.js';
@@ -89,6 +91,11 @@ export interface HandleNodeControlMessageArgs {
    * caller drives node control without a registry-managed socket.
    */
   connectionId?: string;
+  /**
+   * Host admission for `agent.register` (see `createRegistrationAdmission`).
+   * Absent when the host has no `admit` hook.
+   */
+  admitRegistration?: RegistrationAdmission;
   raw: string;
 }
 
@@ -102,8 +109,11 @@ function resolveProviderIdentity(
 
 type CapabilityLike = string | FleetCapability;
 
+/** Id prefix of the implicit direct node minted for every agent; reserved. */
+export const IMPLICIT_DIRECT_NODE_ID_PREFIX = 'node_direct_';
+
 export function directNodeIdForAgent(agentId: string): string {
-  return `node_direct_${agentId}`;
+  return `${IMPLICIT_DIRECT_NODE_ID_PREFIX}${agentId}`;
 }
 
 function directNodeNameForAgent(agentId: string): string {
@@ -440,6 +450,8 @@ export async function createNodeToken(
       idempotencyKeyHash: string;
       requestDigest: string;
     };
+    /** Host admission, consulted only when this enrolls a NEW device. */
+    admitRegistration?: RegistrationAdmission;
   } = {},
 ) {
   const token = authorization.rotationRecovery?.replacementToken ?? `nt_live_${randomHex(24)}`;
@@ -450,6 +462,20 @@ export async function createNodeToken(
   // dodge every name lookup (including the conflict check below).
   if (!name || name.startsWith('#')) {
     throw codedError('Node name must be non-empty and cannot begin with "#"', 'invalid_node_name', 400);
+  }
+  // `node_direct_<agent id>` is the engine-minted implicit direct node, which
+  // the device count excludes. The namespace is reserved so a host cannot
+  // enroll a node that is miscounted as implicit.
+  if (
+    data.node_id !== undefined
+    && authorization.directAgentId === undefined
+    && data.node_id.startsWith(IMPLICIT_DIRECT_NODE_ID_PREFIX)
+  ) {
+    throw codedError(
+      `Node ids beginning with "${IMPLICIT_DIRECT_NODE_ID_PREFIX}" are reserved for implicit direct nodes`,
+      'reserved_node_id',
+      400,
+    );
   }
   // Enrollment keys on node_id (the stable identity) when supplied; the name
   // lookup is only a fallback for callers without a stable id. A name held by
@@ -484,6 +510,13 @@ export async function createNodeToken(
     : (data.max_agents ?? existing?.maxAgents ?? 0);
   if (role === 'direct' && maxAgents !== 1) {
     throw codedError('Direct nodes can bind at most one agent', 'direct_node_capacity_exceeded', 400);
+  }
+  // Only a NEW device is admitted. Rotating or re-enrolling an established
+  // row never is (its role may change, but it was admitted when it was
+  // enrolled), and an agent's implicit direct node — minted on its behalf,
+  // never enrolled by a host — is its own WebSocket, not a device.
+  if (!existing && authorization.directAgentId === undefined && authorization.admitRegistration) {
+    await authorization.admitRegistration('register_device');
   }
 
   if (existing) {
@@ -2117,10 +2150,19 @@ export async function registerAgentViaNode(
   nodeId: string,
   providerName: string,
   message: FleetAgentRegisterMessage,
-  options: { deliveryCursorSupported?: boolean } = {},
+  options: { deliveryCursorSupported?: boolean; admitRegistration?: RegistrationAdmission } = {},
 ): Promise<AgentRegisterReplyData> {
   assertRegistrableAgentName(message.name);
   const wantsAutoJoin = message.auto_join_general !== false;
+  if (options.admitRegistration) {
+    // Only a NEW identity is admitted: an established name is answered by the
+    // conflict below, never by a denial.
+    const [established] = await db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, message.name)));
+    if (!established) await options.admitRegistration('register_agent');
+  }
   const registered = await runAtomic(db, async (tx) => {
     // Every awaited statement is a separate D1 round-trip — and this path runs
     // under the node-control liveness deadline whose misses surface as
@@ -3585,7 +3627,10 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           args.nodeId,
           frameProviderName,
           message,
-          { deliveryCursorSupported: supportsProviderDeliveryReadiness(args.registry) },
+          {
+            deliveryCursorSupported: supportsProviderDeliveryReadiness(args.registry),
+            admitRegistration: args.admitRegistration,
+          },
         );
         // The relay broker's node_control client awaits a `reply` frame keyed by
         // the request id (it matches `pending_agent_registrations` by `reply.id`
@@ -3800,7 +3845,8 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
     }
   } catch (err) {
     const error = err as Error & { code?: string };
-    const code = error.code ?? 'node_control_failed';
+    const denial = err instanceof AdmissionDeniedError ? err.denial : null;
+    const code = denial?.code ?? error.code ?? 'node_control_failed';
     // The rejection reaches the client only as the error frame below. Log it so
     // it is not invisible server-side: a rejected node.register/node.heartbeat
     // (e.g. node_name_conflict, a UNIQUE violation) otherwise leaves a node
@@ -3814,7 +3860,10 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
       provider: frameProviderName,
       message: error.message,
     });
+    // An admission denial carries the host's details, as on the HTTP error;
+    // the frame's own fields always win over them.
     sendControl(args.socket, {
+      ...(denial?.details ?? {}),
       v: 1,
       id: requestId(message),
       type: 'error',

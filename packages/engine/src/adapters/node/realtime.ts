@@ -27,6 +27,8 @@ import { providerAttachDecision } from '../../engine/placement.js';
 import { drainNodeInvocations } from '../../engine/action.js';
 import { observerAllowsEvent } from '../../engine/observerToken.js';
 import type { InvocationCompletionDeps } from '../../engine/invocationCompletion.js';
+import type { AdmissionHooks } from '../../ports/admission.js';
+import { createRegistrationAdmission } from '../../engine/registrationAdmission.js';
 import type { FleetRelaycastToBrokerMessage } from '@relaycast/types';
 
 /**
@@ -109,6 +111,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
   /** Serializes drains per node so concurrent triggers never overlap. */
   private readonly nodeDrainChains = new Map<string, Promise<void>>();
   private nodeCompletionDeps: InvocationCompletionDeps | undefined;
+  private admission: AdmissionHooks | undefined;
   private connectionSeq = 0;
 
   constructor(private readonly db: EngineDb) {}
@@ -122,6 +125,11 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
 
   setNodeCompletionDeps(deps: InvocationCompletionDeps): void {
     this.nodeCompletionDeps = deps;
+  }
+
+  /** Admit `agent.register` frames through the host's admission hooks. */
+  setAdmission(admission: AdmissionHooks | undefined): void {
+    this.admission = admission;
   }
 
   private nodeKey(workspaceId: string, nodeId: string): string {
@@ -866,6 +874,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
           nodeId,
           socket,
           connectionId,
+          admitRegistration: createRegistrationAdmission({ db: this.db, admission: this.admission, workspace: workspaceId }),
           raw,
         });
       },

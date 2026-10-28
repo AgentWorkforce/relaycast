@@ -1,16 +1,37 @@
 import type { Workspace } from './auth.js';
 
 /**
+ * A new registration a host can cap.
+ *
+ * - `register_device`: a host-enrolled node (`POST /v1/nodes`, any role or
+ *   transport). An agent's implicit direct node is its own WebSocket, not a
+ *   device, and is never admitted as one.
+ * - `register_agent`: a new non-human identity (`POST /v1/agents`, a new A2A
+ *   proxy, or a node's `agent.register` frame).
+ * - `register_human`: a new `type: human` identity.
+ *
+ * Re-enrolling an established node or re-registering an established name is
+ * not a new registration and is never admitted as one.
+ */
+export type RegistrationAdmissionAction = 'register_device' | 'register_agent' | 'register_human';
+
+/**
  * What an admitted request is about to do.
  *
  * - `request`: any authenticated, rate-limited request.
  * - `message`: a message send (channel post, DM, group DM, thread reply).
+ * - a {@link RegistrationAdmissionAction}: a new device or identity.
  */
-export type AdmissionAction = 'request' | 'message';
+export type AdmissionAction = 'request' | 'message' | RegistrationAdmissionAction;
 
 export interface AdmissionContext {
   workspace: Workspace;
   action: AdmissionAction;
+  /**
+   * Set for a registration action: how many of that kind the workspace has
+   * registered now, before this one. Released identities hold no slot.
+   */
+  registered?: number;
 }
 
 /**
@@ -51,8 +72,9 @@ export interface AdmissionHooks {
   admit?(ctx: AdmissionContext): Promise<AdmissionDenial | null | undefined>;
 
   /**
-   * Called after an admitted action succeeds (2xx, not an idempotent replay).
-   * The response does not wait on it.
+   * Called after an admitted `request` or `message` succeeds (2xx, not an
+   * idempotent replay). The response does not wait on it. Registrations are
+   * not reported: `registered` is a live count.
    */
   committed?(ctx: AdmissionContext): Promise<void>;
 

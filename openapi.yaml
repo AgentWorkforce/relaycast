@@ -17,8 +17,9 @@ info:
     carry `X-RateLimit-Limit`/`X-RateLimit-Remaining` for the bucket that
     served the request.
 
-    A hosting deployment may also refuse requests or message sends through its
-    own admission policy (for example a usage quota). Those errors carry the
+    A hosting deployment may also refuse requests, message sends or new
+    registrations (nodes, agents, human members) through its own admission
+    policy (for example a usage quota or a device cap). Those errors carry the
     deployment's own `code`, status and additive fields, and `Retry-After` only
     when retrying can succeed. Idempotent replays of earlier sends still
     succeed after a send is refused.
@@ -5480,6 +5481,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid enrollment, or a `node_id` beginning with `node_direct_`, which is reserved for implicit direct nodes (`reserved_node_id`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '409':
           description: Node name conflict, or an existing node requires current-token proof
           content:
