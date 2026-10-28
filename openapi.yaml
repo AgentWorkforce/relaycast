@@ -1959,6 +1959,7 @@ paths:
       description: >-
         Delete the authenticated workspace and all associated data. The bearer
         workspace key must belong to the exact id in the path.
+        Small workspaces are removed before the response. A large workspace stops authenticating immediately (`workspace_expired`) and its data is removed in bounded background steps.
       tags:
         - Workspaces
       security:
@@ -2081,7 +2082,8 @@ paths:
 
     delete:
       summary: Delete workspace
-      description: Delete the workspace and all associated data
+      description: >-
+        Delete the workspace and all associated data. Small workspaces are removed before the response. A large workspace stops authenticating immediately (`workspace_expired`) and its data is removed in bounded background steps.
       tags:
         - Workspaces
       security:

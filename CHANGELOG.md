@@ -18,6 +18,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
+### Changed
+
+- Deleting a large workspace no longer stalls the database for every other tenant: its data is removed in bounded background steps after it stops authenticating.
+
 ### Fixed
 
 - Agents stay offline if they disconnect while presence cleanup is running, including after another agent heartbeats.

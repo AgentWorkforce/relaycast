@@ -240,6 +240,11 @@ Success returns `204`. A missing or invalid key returns `401`; a valid key for a
 different workspace id returns `404`. The legacy authenticated
 `DELETE /v1/workspace` form remains available.
 
+A small workspace is removed in one transaction before the `204`. A large one
+(more than 2,000 bulk rows) stops working at once: its keys return `401
+workspace_expired` and its inbound webhooks `404`. Its data is then removed in
+bounded background steps, so `204` can precede physical removal.
+
 Relaycast relies on `ON DELETE CASCADE`. Cloudflare D1 enforces foreign keys by
 default, equivalently to SQLite `PRAGMA foreign_keys = ON`; the Node adapter
 also enables that pragma explicitly. Deleting rows reduces the row count and

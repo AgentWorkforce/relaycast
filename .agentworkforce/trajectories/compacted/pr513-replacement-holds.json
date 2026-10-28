@@ -1,0 +1,44 @@
+{
+  "id": "compact_10du32hsa3o5",
+  "version": 1,
+  "type": "compacted",
+  "compactedAt": "2026-10-28T15:10:06.583Z",
+  "sourceTrajectories": [
+    "traj_tdagxcw6ps4q"
+  ],
+  "dateRange": {
+    "start": "2026-10-28T15:07:16.891Z",
+    "end": "2026-10-28T15:10:06.144Z"
+  },
+  "summary": {
+    "totalDecisions": 1,
+    "totalEvents": 2,
+    "uniqueAgents": [
+      "default"
+    ]
+  },
+  "decisionGroups": [
+    {
+      "category": "other",
+      "decisions": [
+        {
+          "question": "Check set identity before deleting disconnect workspace entries",
+          "chosen": "Check set identity before deleting disconnect workspace entries",
+          "reasoning": "Both workspace and agent lookups can resume after heartbeat removes the captured set and a later disconnect creates a replacement; snapshot membership alone does not protect that replacement.",
+          "fromTrajectory": "traj_tdagxcw6ps4q"
+        }
+      ]
+    }
+  ],
+  "keyLearnings": [],
+  "keyFindings": [],
+  "filesAffected": [
+    "CHANGELOG.md",
+    "packages/engine/CHANGELOG.md",
+    "packages/engine/src/__tests__/conformance/nodeHostedPresence.test.ts",
+    "packages/engine/src/adapters/node/presence.ts"
+  ],
+  "commits": [
+    "67713eae"
+  ]
+}
