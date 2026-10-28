@@ -173,19 +173,41 @@ const PRIVATE_DNS_SUFFIXES = [
   '.svc.cluster.local',
 ];
 
-// Defence in depth for the operator allowlists below: an entry whose last
-// label is a common public TLD is refused, so a typo can never declare a
-// public name private. (Cluster namespaces are rarely named after a TLD; use
-// the full `<svc>.<ns>.svc` name if yours is.)
+// Private zones an operator allowlist entry may extend. A configured suffix or
+// a multi-label exact host must sit under one of these, so a public domain
+// (under any TLD, listed or not) can never be declared private.
+const PRIVATE_ZONES = ['local', 'internal', 'lan', 'home.arpa', 'svc', 'cluster.local'];
+
+function inPrivateZone(name) {
+  return PRIVATE_ZONES.some((zone) => name === zone || name.endsWith(`.${zone}`));
+}
+
+// The two shapes an allowlist entry cannot express as "under a private zone":
+// a custom Kubernetes clusterDomain (`svc.<domain>`) and a `<svc>.<ns>` short
+// name. Both end in an arbitrary label, so they keep a fixed public-TLD guard
+// against typos (not the full public-suffix list; list only names you control).
 const PUBLIC_TLDS = new Set([
   'com', 'net', 'org', 'io', 'dev', 'app', 'ai', 'co', 'cloud', 'xyz', 'info',
   'biz', 'me', 'tech', 'sh', 'gg', 'edu', 'gov', 'mil', 'int', 'us', 'uk',
   'de', 'fr', 'eu', 'ca', 'au', 'jp', 'cn', 'in', 'nl', 'se', 'ch', 'es',
   'it', 'br', 'ru', 'tv', 'site', 'online', 'page', 'run', 'so', 'to',
+  'shop', 'store', 'top', 'club', 'live', 'pro', 'link', 'click', 'blog',
+  'space', 'website', 'world', 'news', 'email', 'systems', 'network', 'host',
+  'digital', 'services', 'solutions', 'one', 'fun', 'icu', 'vip', 'work',
 ]);
 
 function hasPublicTld(host) {
   return PUBLIC_TLDS.has(host.slice(host.lastIndexOf('.') + 1));
+}
+
+/** `svc.<domain>`: a custom clusterDomain's Service zone. */
+function isCustomClusterSvcZone(suffix) {
+  return suffix.startsWith('svc.') && !hasPublicTld(suffix);
+}
+
+/** `<svc>.<ns>`: a Kubernetes Service short name (exactly two labels). */
+function isServiceShortName(host) {
+  return host.split('.').length === 2 && !hasPublicTld(host);
 }
 
 function normalizeHost(value) {
@@ -195,18 +217,24 @@ function normalizeHost(value) {
 /**
  * Extra private DNS suffixes from RELAYCAST_PRIVATE_DNS_SUFFIXES (comma list,
  * e.g. `.svc.corp` for a cluster with a custom clusterDomain). Each entry
- * must be a valid DNS suffix of at least two labels not ending in a common
- * public TLD, so a public zone can never be declared private.
+ * must be a valid DNS suffix of at least two labels that either sits under a
+ * private zone (.local, .internal, .lan, .home.arpa, .svc, .cluster.local) or
+ * is a `svc.<domain>` clusterDomain zone not ending in a common public TLD,
+ * so a public zone can never be declared private.
  */
 export function privateDnsSuffixesFromEnv(env = process.env) {
   const raw = env.RELAYCAST_PRIVATE_DNS_SUFFIXES;
   if (!raw || raw.trim() === '') return [];
   return raw.split(',').map((entry) => entry.trim()).filter(Boolean).map((entry) => {
     const suffix = normalizeHost(entry.startsWith('.') ? entry.slice(1) : entry);
-    if (!isValidDnsHostname(suffix) || !suffix.includes('.') || hasPublicTld(suffix)) {
+    if (
+      !isValidDnsHostname(suffix) ||
+      !suffix.includes('.') ||
+      !(inPrivateZone(suffix) || isCustomClusterSvcZone(suffix))
+    ) {
       refusal(
         'invalid_private_dns_suffix',
-        `RELAYCAST_PRIVATE_DNS_SUFFIXES entry "${entry}" must be a private DNS suffix of at least two labels not ending in a public TLD (for example .svc.corp).`,
+        `RELAYCAST_PRIVATE_DNS_SUFFIXES entry "${entry}" must be a private DNS suffix of at least two labels under .local, .internal, .lan, .home.arpa, .svc or .cluster.local, or a custom clusterDomain zone .svc.<domain> (for example .svc.corp).`,
       );
     }
     return `.${suffix}`;
@@ -216,7 +244,10 @@ export function privateDnsSuffixesFromEnv(env = process.env) {
 /**
  * Exact hosts from RELAYCAST_INSECURE_BASE_URL_HOSTS (comma list) that are
  * treated as private, e.g. `relaycast.relaycast` for a Kubernetes
- * `<svc>.<ns>` short name. Entries must be DNS names, not IP literals.
+ * `<svc>.<ns>` short name. Entries must be DNS names, not IP literals, and
+ * either a two-label `<svc>.<ns>` name not ending in a common public TLD or a
+ * name under a private zone. Anything longer (e.g. relay.example.shop) is
+ * refused whatever its TLD.
  */
 export function insecureBaseUrlHostsFromEnv(env = process.env) {
   const raw = env.RELAYCAST_INSECURE_BASE_URL_HOSTS;
@@ -227,11 +258,11 @@ export function insecureBaseUrlHostsFromEnv(env = process.env) {
       !isValidDnsHostname(host) ||
       isIP(host) !== 0 ||
       parseIPv4Like(host) !== null ||
-      hasPublicTld(host)
+      !(isServiceShortName(host) || inPrivateZone(host))
     ) {
       refusal(
         'invalid_insecure_base_url_host',
-        `RELAYCAST_INSECURE_BASE_URL_HOSTS entry "${entry}" must be a private DNS host name (not an IP literal or a name under a public TLD).`,
+        `RELAYCAST_INSECURE_BASE_URL_HOSTS entry "${entry}" must be a <svc>.<ns> short name or a host under a private zone (not an IP literal or a public name).`,
       );
     }
     return host;

@@ -540,7 +540,12 @@ test('custom clusterDomain suffixes via RELAYCAST_PRIVATE_DNS_SUFFIXES', () => {
 
 test('allowlists never accept public names, single labels, or IP literals', () => {
   const base = { RELAYCAST_ALLOW_INSECURE_BASE_URL: 'true' };
-  for (const suffix of ['.com', 'example.com', '.co.uk', '.corp', 'bad_suffix.x']) {
+  for (const suffix of [
+    '.com', 'example.com', '.co.uk', '.corp', 'bad_suffix.x',
+    // Public zones under TLDs missing from any fixed list are refused too:
+    // a suffix must sit under a private zone or be a .svc.<domain> zone.
+    '.example.shop', 'corp.example.museum', '.example.zone', '.svc.example.shop',
+  ]) {
     assert.throws(
       () => validatedEngineArgs(['--base-url', 'http://relaycast.svc:8787'], {
         ...base,
@@ -550,7 +555,12 @@ test('allowlists never accept public names, single labels, or IP literals', () =
       suffix,
     );
   }
-  for (const host of ['relay.example.com', 'relay.ratifyprotocol.com', '8.8.8.8', '0x08080808', 'bad host']) {
+  for (const host of [
+    'relay.example.com', 'relay.ratifyprotocol.com', '8.8.8.8', '0x08080808', 'bad host',
+    // Longer than <svc>.<ns> and not under a private zone: refused whatever the TLD.
+    'relay.example.shop', 'relay.example.museum', 'a.b.c',
+    'relay.shop',
+  ]) {
     assert.throws(
       () => validatedEngineArgs(['--base-url', 'http://relaycast.svc:8787'], {
         ...base,
@@ -566,6 +576,17 @@ test('allowlists never accept public names, single labels, or IP literals', () =
     env: { ...process.env, ...base, RELAYCAST_INSECURE_BASE_URL_HOSTS: 'relay.example.com' },
   });
   assert.equal(result.status, 64, result.stderr);
+});
+
+test('allowlists accept private-zone names and <svc>.<ns> short names', () => {
+  const env = {
+    RELAYCAST_ALLOW_INSECURE_BASE_URL: 'true',
+    RELAYCAST_PRIVATE_DNS_SUFFIXES: '.corp.internal, lab.home.arpa, .svc.k8s.lab',
+    RELAYCAST_INSECURE_BASE_URL_HOSTS: 'relaycast.relaycast, relay.ns.svc.k8s.internal, relay.lab.lan',
+  };
+  const policy = baseUrlPolicy(env);
+  assert.deepEqual(policy.extraSuffixes, ['.corp.internal', '.lab.home.arpa', '.svc.k8s.lab']);
+  assert.deepEqual(policy.exactHosts, ['relaycast.relaycast', 'relay.ns.svc.k8s.internal', 'relay.lab.lan']);
 });
 
 test('keeps plaintext private base URLs unmarked as TLS', () => {
