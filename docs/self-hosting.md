@@ -96,8 +96,8 @@ Flags take precedence over environment variables.
 | — | `RELAYCAST_INTERNAL_SECRET` / `RELAYCAST_INTERNAL_SECRET_FILE` | unset (disabled) | Enables the [internal admin API](#internal-admin-api) for a trusted control plane. Must be at least 32 characters (startup refuses a shorter one). |
 | — | `RELAYCAST_PUBLIC_WORKSPACE_CREATE` | `true` | `false` makes the anonymous `POST /v1/workspaces` answer the generic `404 not_found`; workspaces then come only from `POST /internal/workspaces`. The Helm chart sets `false` when the internal secret is configured. |
 | — | `RELAYCAST_ALLOW_INSECURE_BASE_URL` | `false` | Container image only: accept an `http://` (or IP-literal / single-label) `--base-url` whose host is loopback or private (including `*.svc` and `*.svc.cluster.local`). Public hosts stay HTTPS-only. |
-| — | `RELAYCAST_PRIVATE_DNS_SUFFIXES` | unset | Container image only, with the insecure opt-in: extra private DNS suffixes, comma-separated (e.g. `.svc.corp` for a custom `clusterDomain`). Entries must have two or more labels and must not end in a public TLD. |
-| — | `RELAYCAST_INSECURE_BASE_URL_HOSTS` | unset | Container image only, with the insecure opt-in: exact hosts treated as private, comma-separated (e.g. `relaycast.relaycast` for a `<svc>.<ns>` short name). IP literals and names under a public TLD are refused. |
+| — | `RELAYCAST_PRIVATE_DNS_SUFFIXES` | unset | Container image only, with the insecure opt-in: extra private DNS suffixes, comma-separated (e.g. `.svc.corp` for a custom `clusterDomain`). Entries must have two or more labels; entries ending in a common public TLD (a fixed list, not the full public-suffix list) are refused, so only list zones you control. |
+| — | `RELAYCAST_INSECURE_BASE_URL_HOSTS` | unset | Container image only, with the insecure opt-in: exact hosts treated as private, comma-separated (e.g. `relaycast.relaycast` for a `<svc>.<ns>` short name). IP literals and names under a common public TLD (a fixed list) are refused; only list hosts you control. |
 
 For every `*_FILE` variant, a directly set non-empty variable wins over the
 file (the same rule as RelayAuth), and a `_FILE` that cannot be read stops

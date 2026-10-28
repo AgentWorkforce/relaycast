@@ -24,7 +24,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 - Container image: `RELAYCAST_ALLOW_INSECURE_BASE_URL=true` accepts `http://` base URLs on loopback and private hosts, and `RELAYCAST_INTERNAL_SECRET(_FILE)` is passed through.
 - A Helm chart (`charts/relaycast`) runs the single-process engine with a persistent volume.
 - `RELAYCAST_PUBLIC_WORKSPACE_CREATE=false` turns the anonymous `POST /v1/workspaces` into a `404` for control-plane-managed deployments; the chart sets it when the internal secret is configured (now opt-in).
-- Container image: `*.svc` / `*.svc.cluster.local` count as private hosts, and `RELAYCAST_PRIVATE_DNS_SUFFIXES` / `RELAYCAST_INSECURE_BASE_URL_HOSTS` extend that for custom cluster domains and `<svc>.<ns>` names (public TLDs refused). `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE` is supported; a directly set variable wins over its `_FILE`, and an unreadable `_FILE` exits `64`.
+- Container image: `*.svc` / `*.svc.cluster.local` count as private hosts, and `RELAYCAST_PRIVATE_DNS_SUFFIXES` / `RELAYCAST_INSECURE_BASE_URL_HOSTS` extend that for custom cluster domains and `<svc>.<ns>` names (common public TLDs refused). `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE` is supported, and the bootstrap secret is now trimmed (a whitespace-only value counts as unset); a directly set variable wins over its `_FILE`, and an unreadable `_FILE` exits `64`.
 
 ## [12.1.0] - 2026-10-28
 
