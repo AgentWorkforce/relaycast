@@ -65,6 +65,7 @@ if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
   git -C "$ROOT" ls-files -z \
     | tar --null -C "$ROOT" --files-from=- -cf - \
     | tar -C "$BUILD_CONTEXT" -xf -
+  chmod -R go+rX "$BUILD_CONTEXT"
   docker build -q -t "$IMAGE" "$BUILD_CONTEXT" >/dev/null
 fi
 
