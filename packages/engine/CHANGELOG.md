@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- DM inbox unread counts follow `dm_participants.last_read_id` (migration `0078_dm_participant_read_cursor.sql`). `markRead` and a successful delivery acknowledgement advance that cursor in the same atomic batch as the read. A dead-lettered delivery does not. The inbox orders the cursor by snowflake length, then text. A cursor on `channel_members` does not, because a DM participant has no channel membership row.
+- A DM participant's inbox unread count drops after they mark a message read or acknowledge its delivery (migration `0078_dm_participant_read_cursor.sql`).
 
 ## [12.2.0] - 2026-10-29
 
