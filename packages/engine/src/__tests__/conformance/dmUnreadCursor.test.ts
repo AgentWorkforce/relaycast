@@ -102,6 +102,35 @@ describe('DM unread cursor', () => {
     expect(await unreadCount(bob.token, sent.conversation_id)).toBe(0);
   });
 
+  it('orders a DM cursor by snowflake length, then text', async () => {
+    const ws = await createWorkspace(stack.app, 'dm-unread-width');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+
+    const sentRes = await authed(alice.token).post('/v1/dm', { to: 'bob', text: 'current' });
+    expect(sentRes.status).toBeLessThan(300);
+    const sent = (await sentRes.json()).data as { id: string; conversation_id: string };
+    const sqlite = stack.runtime.handle.sqlite;
+    const row = sqlite.prepare(
+      'SELECT workspace_id, channel_id, agent_id FROM messages WHERE id = ?',
+    ).get(sent.id) as { workspace_id: string; channel_id: string; agent_id: string };
+    // 17 nines sort after an 18-digit id as text, and before it numerically.
+    const older = '9'.repeat(17);
+    sqlite.prepare(
+      'INSERT INTO messages (id, workspace_id, channel_id, agent_id, body) VALUES (?, ?, ?, ?, ?)',
+    ).run(older, row.workspace_id, row.channel_id, row.agent_id, 'older');
+
+    sqlite.prepare(
+      'UPDATE dm_participants SET last_read_id = ? WHERE agent_id = ? AND conversation_id = ?',
+    ).run(older, bob.agentId, sent.conversation_id);
+    expect(await unreadCount(bob.token, sent.conversation_id)).toBe(1);
+
+    sqlite.prepare(
+      'UPDATE dm_participants SET last_read_id = ? WHERE agent_id = ? AND conversation_id = ?',
+    ).run(sent.id, bob.agentId, sent.conversation_id);
+    expect(await unreadCount(bob.token, sent.conversation_id)).toBe(0);
+  });
+
   it('still clears channel unread from the channel membership cursor', async () => {
     const ws = await createWorkspace(stack.app, 'channel-unread');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');

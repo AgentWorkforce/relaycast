@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- DM inbox unread counts follow `dm_participants.last_read_id` (migration `0078_dm_participant_read_cursor.sql`). `markRead` and delivery acknowledgement advance that cursor. A cursor on `channel_members` does not, because a DM participant has no channel membership row.
+- DM inbox unread counts follow `dm_participants.last_read_id` (migration `0078_dm_participant_read_cursor.sql`). `markRead` and delivery acknowledgement advance that cursor in the same atomic batch as the read. The inbox orders the cursor by snowflake length, then text. A cursor on `channel_members` does not, because a DM participant has no channel membership row.
 
 ## [12.2.0] - 2026-10-29
 

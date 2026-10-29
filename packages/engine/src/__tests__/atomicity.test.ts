@@ -17,6 +17,7 @@ import {
   channelMembers,
   channels,
   deliveries,
+  dmParticipants,
   files,
   messageAttachments,
   messageLogs,
@@ -31,6 +32,7 @@ import { sendDm } from '../engine/dm.js';
 import { createGroupDm, postGroupMessage } from '../engine/groupDm.js';
 import { postReply } from '../engine/thread.js';
 import { markRead } from '../engine/receipt.js';
+import { ackDelivery } from '../engine/delivery.js';
 import { rotateAgentIdentity } from '../engine/agentIdentity.js';
 import {
   applyStatusEventEffect,
@@ -194,6 +196,28 @@ describe('atomic write paths', () => {
       const receipt = await markRead(db, ws.workspaceId, sent.id, bob.agentId);
       expect(receipt?.message_id).toBe(sent.id);
       expect(await db.select().from(readReceipts)).toHaveLength(1);
+    });
+
+    it('rolls back a delivery ack when the DM read cursor update fails', async () => {
+      const { ws, alice, bob, db } = await seed();
+      const sent = await sendDm(db, ws.workspaceId, alice.agentId, { to: 'bob', text: 'psst' });
+      const [delivery] = await db.select().from(deliveries).where(eq(deliveries.messageId, sent.id));
+
+      const restore = injectUpdateFailure(db, dmParticipants, 'injected dm cursor failure');
+      await expect(ackDelivery(db, ws.workspaceId, bob.agentId, delivery.id)).rejects.toThrow(
+        'injected dm cursor failure',
+      );
+      restore();
+
+      const [after] = await db.select().from(deliveries).where(eq(deliveries.id, delivery.id));
+      expect(after.status).toBe('queued');
+      const [participant] = await db.select().from(dmParticipants).where(eq(dmParticipants.agentId, bob.agentId));
+      expect(participant.lastReadId).toBeNull();
+
+      const acked = await ackDelivery(db, ws.workspaceId, bob.agentId, delivery.id);
+      expect(acked?.changed).toBe(true);
+      const [cursor] = await db.select().from(dmParticipants).where(eq(dmParticipants.agentId, bob.agentId));
+      expect(cursor.lastReadId).toBe(sent.id);
     });
 
     it('commits concurrent transactional sends without interleaving', async () => {
@@ -395,6 +419,22 @@ describe('atomic write paths', () => {
       expect(receipt?.message_id).toBe(sent.id);
       const [delivery] = await db.select().from(deliveries);
       expect(delivery.status).toBe('acked');
+    });
+
+    it('acks a DM delivery and its read cursor in one batch', async () => {
+      const { ws, alice, bob, db } = await seed();
+      const sent = await sendDm(db, ws.workspaceId, alice.agentId, { to: 'bob', text: 'psst' });
+      const [delivery] = await db.select().from(deliveries).where(eq(deliveries.messageId, sent.id));
+      const batches = attachFakeBatch(db);
+
+      const acked = await ackDelivery(db, ws.workspaceId, bob.agentId, delivery.id);
+
+      expect(acked?.changed).toBe(true);
+      expect(batches).toHaveLength(1);
+      expectStatementOn(batches[0], 'update', 'deliveries');
+      expectStatementOn(batches[0], 'update', 'dm_participants');
+      const [cursor] = await db.select().from(dmParticipants).where(eq(dmParticipants.agentId, bob.agentId));
+      expect(cursor.lastReadId).toBe(sent.id);
     });
 
     it('a failed batch applies nothing — no orphan message rows', async () => {

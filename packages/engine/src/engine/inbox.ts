@@ -272,7 +272,13 @@ async function getInboxUnlabeled(db: Db, workspaceId: string, agentId: string) {
     JOIN messages m
       ON m.channel_id = dc.channel_id
      AND m.agent_id != ${agentId}
-     AND (dp.last_read_id IS NULL OR m.id > dp.last_read_id)
+     -- Snowflake ids are unpadded decimal text. Length, then text, is
+     -- chronological; a bare text compare reverses order across a digit boundary.
+     AND (
+       dp.last_read_id IS NULL
+       OR length(m.id) > length(dp.last_read_id)
+       OR (length(m.id) = length(dp.last_read_id) AND m.id > dp.last_read_id)
+     )
     WHERE dc.workspace_id = ${workspaceId}
     GROUP BY dc.id, dc.channel_id
     HAVING count(m.id) > 0
