@@ -493,14 +493,23 @@ export async function ackDeliveriesUpToSeq(
     ))
     .orderBy(asc(deliveries.seq));
 
-  const updated = await ackRows(
-    db,
-    workspaceId,
-    agent.id,
-    rows.map((row) => ({ ...row.delivery, channelId: row.channelId })),
-    upToSeq,
-  );
-  return { agent_id: agent.id, agent_name: agent.name, up_to_seq: upToSeq, acked: updated.length };
+  const pending = rows.map((row) => ({ ...row.delivery, channelId: row.channelId }));
+  // Each row adds three cursor statements, and `up_to_seq` is caller-supplied.
+  // One batch for the whole backlog exceeds D1's bound-parameter cap and holds
+  // the write lock for every row. The cumulative cursor moves only with the
+  // last chunk, so a later chunk failing cannot skip rows still queued.
+  if (pending.length === 0) {
+    await ackRows(db, workspaceId, agent.id, [], upToSeq);
+    return { agent_id: agent.id, agent_name: agent.name, up_to_seq: upToSeq, acked: 0 };
+  }
+  let acked = 0;
+  for (let offset = 0; offset < pending.length; offset += DELIVERY_EXPIRY_BATCH_SIZE) {
+    const chunk = pending.slice(offset, offset + DELIVERY_EXPIRY_BATCH_SIZE);
+    const last = offset + chunk.length === pending.length;
+    const updated = await ackRows(db, workspaceId, agent.id, chunk, last ? upToSeq : undefined);
+    acked += updated.length;
+  }
+  return { agent_id: agent.id, agent_name: agent.name, up_to_seq: upToSeq, acked };
 }
 
 /** Mark still-queued rows delivered using bounded, explicit ID-index writes. */

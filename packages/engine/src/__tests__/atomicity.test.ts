@@ -22,6 +22,7 @@ import {
   messageAttachments,
   messageLogs,
   messages,
+  nodes,
   readReceipts,
   pendingEvents,
   sessionEvents,
@@ -32,7 +33,7 @@ import { sendDm } from '../engine/dm.js';
 import { createGroupDm, postGroupMessage } from '../engine/groupDm.js';
 import { postReply } from '../engine/thread.js';
 import { markRead } from '../engine/receipt.js';
-import { ackDelivery } from '../engine/delivery.js';
+import { ackDelivery, ackDeliveriesUpToSeq, DELIVERY_EXPIRY_BATCH_SIZE } from '../engine/delivery.js';
 import { rotateAgentIdentity } from '../engine/agentIdentity.js';
 import {
   applyStatusEventEffect,
@@ -211,6 +212,53 @@ describe('atomic write paths', () => {
       const [cursor] = await db.select().from(dmParticipants).where(eq(dmParticipants.agentId, bob.agentId));
       expect(cursor.lastReadId).toBeNull();
       expect(await db.select().from(readReceipts)).toHaveLength(0);
+    });
+
+    it('acks a cumulative backlog in chunks and moves the cursor only on the last one', async () => {
+      const { ws, alice, bob, channelId, db } = await seed();
+      await db.insert(nodes).values({
+        id: 'node_ack_chunk',
+        workspaceId: ws.workspaceId,
+        name: 'ack-chunk',
+        tokenHash: 'ack-chunk-token',
+      });
+      await db.update(agents).set({
+        locationType: 'via_node',
+        locationNodeId: 'node_ack_chunk',
+        providerName: 'default',
+      }).where(eq(agents.id, bob.agentId));
+
+      const count = DELIVERY_EXPIRY_BATCH_SIZE + 1;
+      for (let i = 0; i < count; i++) {
+        await postMessage(db, ws.workspaceId, channelId, alice.agentId, { text: `n${i}` });
+      }
+      const bobRows = await db.select().from(deliveries).where(eq(deliveries.agentId, bob.agentId));
+      expect(bobRows).toHaveLength(count);
+      const upToSeq = Math.max(...bobRows.map((row) => row.seq));
+
+      const restore = injectUpdateFailure(db, dmParticipants, 'injected chunk cursor failure', {
+        skip: DELIVERY_EXPIRY_BATCH_SIZE,
+        times: 1,
+      });
+      await expect(ackDeliveriesUpToSeq(
+        db, ws.workspaceId, 'node_ack_chunk', 'default', 'bob', upToSeq,
+      )).rejects.toThrow('injected chunk cursor failure');
+      restore();
+
+      const mid = await db.select().from(deliveries).where(eq(deliveries.agentId, bob.agentId));
+      expect(mid.filter((row) => row.status === 'acked')).toHaveLength(DELIVERY_EXPIRY_BATCH_SIZE);
+      expect(mid.filter((row) => row.status === 'queued')).toHaveLength(1);
+      const [paused] = await db.select({ seq: agents.deliveryAckSeq }).from(agents).where(eq(agents.id, bob.agentId));
+      expect(paused.seq).toBe(0);
+
+      const done = await ackDeliveriesUpToSeq(
+        db, ws.workspaceId, 'node_ack_chunk', 'default', 'bob', upToSeq,
+      );
+      expect(done?.acked).toBe(1);
+      const after = await db.select().from(deliveries).where(eq(deliveries.agentId, bob.agentId));
+      expect(after.every((row) => row.status === 'acked')).toBe(true);
+      const [finished] = await db.select({ seq: agents.deliveryAckSeq }).from(agents).where(eq(agents.id, bob.agentId));
+      expect(finished.seq).toBe(upToSeq);
     });
 
     it('rolls back a delivery ack when the DM read cursor update fails', async () => {
