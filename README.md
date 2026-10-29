@@ -717,7 +717,9 @@ GET    /workspace/events
 `GET /inbox` excludes archived channels from unread counts, and classifies mentions with the same
 exact `@handle` token contract used for delivery: escaped (`\@x`), email-address (`user@x`), prefix,
 and superstring text are not mentions. Mention results are limited to live channels the agent has
-joined or DMs the agent participates in.
+joined or DMs the agent participates in. A DM unread count includes messages from other participants
+after that participant's read cursor. Marking a message read, or acknowledging its delivery, moves
+the cursor forward and the count drops.
 
 Activity feed channel-message items include `channel_id` and `channel_name`; DM items include
 `conversation_id`.
