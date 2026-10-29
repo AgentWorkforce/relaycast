@@ -116,6 +116,15 @@ async function backfillMessageMentionFtsUnlabeled(db: Db, limit: number): Promis
   return copied;
 }
 
+/**
+ * Unread predicate for a read cursor. Snowflake ids are unpadded decimal text:
+ * length, then text, is chronological; a bare text compare reverses order
+ * across a digit boundary. Both arguments are fixed column references.
+ */
+function messageAfterCursor(id: string, cursor: string) {
+  return sql.raw(`(${cursor} IS NULL OR length(${id}) > length(${cursor}) OR (length(${id}) = length(${cursor}) AND ${id} > ${cursor}))`);
+}
+
 export async function getInbox(db: Db, workspaceId: string, agentId: string) {
   return withEngineOperation('inbox.get', workspaceId, () => getInboxUnlabeled(db, workspaceId, agentId));
 }
@@ -132,7 +141,7 @@ async function getInboxUnlabeled(db: Db, workspaceId: string, agentId: string) {
       AND ch.is_archived = false
       AND m.thread_id IS NULL
       AND m.agent_id != ${agentId}
-      AND (cm.last_read_id IS NULL OR m.id > cm.last_read_id)
+      AND ${messageAfterCursor('m.id', 'cm.last_read_id')}
     GROUP BY cm.channel_id, ch.name
     HAVING count(*) > 0
   `);
@@ -272,13 +281,7 @@ async function getInboxUnlabeled(db: Db, workspaceId: string, agentId: string) {
     JOIN messages m
       ON m.channel_id = dc.channel_id
      AND m.agent_id != ${agentId}
-     -- Snowflake ids are unpadded decimal text. Length, then text, is
-     -- chronological; a bare text compare reverses order across a digit boundary.
-     AND (
-       dp.last_read_id IS NULL
-       OR length(m.id) > length(dp.last_read_id)
-       OR (length(m.id) = length(dp.last_read_id) AND m.id > dp.last_read_id)
-     )
+     AND ${messageAfterCursor('m.id', 'dp.last_read_id')}
     WHERE dc.workspace_id = ${workspaceId}
     GROUP BY dc.id, dc.channel_id
     HAVING count(m.id) > 0

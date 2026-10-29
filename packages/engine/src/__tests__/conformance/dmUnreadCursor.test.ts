@@ -155,4 +155,31 @@ describe('DM unread cursor', () => {
     };
     expect(afterInbox.unread_channels.find((row) => row.channel_name === 'general')).toBeUndefined();
   });
+
+  it('orders a channel cursor by snowflake length, then text', async () => {
+    const ws = await createWorkspace(stack.app, 'channel-unread-width');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+
+    const post = await authed(alice.token).post('/v1/channels/general/messages', { text: 'current' });
+    expect(post.status).toBeLessThan(300);
+    const messageId = ((await post.json()) as { data: { id: string } }).data.id;
+    const channelUnread = async () => {
+      const res = await authed(bob.token).get('/v1/inbox');
+      const inbox = (await res.json()).data as {
+        unread_channels: Array<{ channel_name: string; unread_count: number }>;
+      };
+      return inbox.unread_channels.find((row) => row.channel_name === 'general')?.unread_count ?? 0;
+    };
+    const sqlite = stack.runtime.handle.sqlite;
+    const { channel_id: channelId } = sqlite.prepare(
+      'SELECT channel_id FROM messages WHERE id = ?',
+    ).get(messageId) as { channel_id: string };
+
+    // 17 nines sort after an 18-digit id as text, and before it numerically.
+    sqlite.prepare(
+      'UPDATE channel_members SET last_read_id = ? WHERE agent_id = ? AND channel_id = ?',
+    ).run('9'.repeat(17), bob.agentId, channelId);
+    expect(await channelUnread()).toBe(1);
+  });
 });

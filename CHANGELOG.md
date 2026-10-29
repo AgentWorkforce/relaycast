@@ -19,6 +19,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ## [Unreleased - Patch]
 
 - A DM participant's inbox unread count drops after they mark a message read, and stays dropped across later inbox reads.
+- Inbox channel unread counts stay correct when message ids gain a digit.
 
 ## [12.2.0] - 2026-10-29
 
