@@ -32,6 +32,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Registration admission: `AdmissionAction` gains `register_device`, `register_agent` and `register_human`, and `AdmissionContext.registered` carries how many of that kind the workspace has registered before this one. The engine admits at every path that creates a node or agent — `POST /v1/nodes` (any host-enrolled node), `POST /v1/agents` (`type: human` is `register_human`), a new `POST /v1/a2a/register` proxy and the `agent.register` node frame. A denial renders like any admission denial, and the node `error` frame carries the denial's `code` and `details`. An established node id or agent name is answered by its usual conflict or rotation, never by admission; an agent's implicit direct node is not a device, and the engine-provisioned inbound-webhook identity (`__relay_webhook__`) is not an agent. Registrations are not reported to `committed`.
 - `createRegistrationAdmission` builds the same check for a host's own node-control transport (`HandleNodeControlMessageArgs.admitRegistration`).
+- `DELETE /v1/nodes/:name` deletes a node by id (exact id first) or name, returning `{ id, name, deleted, cascaded_actions }`. It refuses an online node (`node_online`) or one hosting actions (`node_has_actions`) unless `force=true`, and returns `node_delete_conflict` when a heartbeat or action registration lands mid-delete.
 
 ### Changed
 
