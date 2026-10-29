@@ -12,7 +12,8 @@
 #      generation) and rejects malformed keys,
 #   6. checks the public POST /v1/workspaces is 404 with
 #      RELAYCAST_PUBLIC_WORKSPACE_CREATE=false,
-#   7. checks config refusals exit 64 (short secret, missing secret file,
+#   7. deletes the workspace twice and proves keys and agent tokens are revoked,
+#   8. checks config refusals exit 64 (short secret, missing secret file,
 #      public http base URL) while a *.svc base URL validates.
 # Secrets and keys are never printed. Everything is removed on exit.
 #
@@ -56,11 +57,15 @@ expect() { # expect <want> <got> <label>
 
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
   echo "building $IMAGE ..."
-  # A restrictive umask leaves context files unreadable for the image's
-  # non-root user; open the build context up for reading first.
-  chmod -R go+rX "$ROOT/packages" "$ROOT/docker" "$ROOT/package.json" \
-    "$ROOT/package-lock.json" "$ROOT/tsconfig.base.json" "$ROOT/Dockerfile"
-  docker build -q -t "$IMAGE" "$ROOT" >/dev/null
+  # Build from the current contents of tracked files only. This avoids sending
+  # ignored credentials to the daemon and never widens permissions in the
+  # developer's working tree.
+  BUILD_CONTEXT="$SECRET_DIR/build-context"
+  mkdir -p "$BUILD_CONTEXT"
+  git -C "$ROOT" ls-files -z \
+    | tar --null -C "$ROOT" --files-from=- -cf - \
+    | tar -C "$BUILD_CONTEXT" -xf -
+  docker build -q -t "$IMAGE" "$BUILD_CONTEXT" >/dev/null
 fi
 
 umask 077
@@ -93,6 +98,8 @@ expect 401 "$(status GET /internal/capabilities 'wrong-secret')" "internal API r
 expect 200 "$(status GET /internal/capabilities "$INTERNAL_SECRET")" "capabilities"
 [[ "$(jq -r '.data.workspace_key_push.generation_cas and .data.workspace_key_push.previous_key_slot and .data.workspace_key_push.grace_ms' "$BODY_FILE")" == "true" ]] \
   && pass "capabilities advertise generation_cas/previous_key_slot/grace_ms" || fail "capabilities shape"
+[[ "$(jq -r '.data.workspace_admin.create and .data.workspace_admin.delete and .data.workspace_admin.server_minted_key' "$BODY_FILE")" == "true" ]] \
+  && pass "capabilities advertise workspace create/delete/server-minted key" || fail "workspace_admin capabilities shape"
 
 # 2. Create a workspace
 expect 201 "$(status POST /internal/workspaces "$INTERNAL_SECRET" '{"name":"selfhost-smoke"}')" "create workspace"
@@ -137,7 +144,14 @@ expect 400 "$(status POST "/internal/workspaces/${WS_ID}/api-key" "$INTERNAL_SEC
 expect 404 "$(status POST /v1/workspaces '' '{"name":"anon"}')" "public POST /v1/workspaces disabled"
 [[ "$(jq -r .error.code "$BODY_FILE")" == "not_found" ]] && pass "disabled create looks like an absent route" || fail "disabled create body"
 
-# 7. Config refusals exit 64 before the engine starts
+# 7. Internal deletion is authoritative and idempotent. It revokes every
+# workspace and agent credential, and a lost-response retry remains 204.
+expect 204 "$(status DELETE "/internal/workspaces/${WS_ID}" "$INTERNAL_SECRET")" "delete workspace"
+expect 204 "$(status DELETE "/internal/workspaces/${WS_ID}" "$INTERNAL_SECRET")" "repeat deleted workspace"
+expect 401 "$(status GET /v1/workspace "$CP_KEY")" "deleted workspace key rejected"
+expect 401 "$(status GET /v1/inbox "$BOB")" "deleted workspace agent token rejected"
+
+# 8. Config refusals exit 64 before the engine starts
 refused() { # refused <label> <docker run args...>
   local label="$1"; shift
   set +e

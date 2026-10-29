@@ -46,21 +46,47 @@ export const INTERNAL_CAPABILITIES = {
 // internal-admin delete has claimed it. The trusted control plane also fences
 // its own app row before calling this endpoint; this closes the engine-local
 // request race.
-const internalDeletionFences = new WeakMap<object, Set<string>>();
+interface InternalDeletionState {
+  active: number;
+  tombstoned: boolean;
+}
 
-function deletionFences(db: Db): Set<string> {
+const internalDeletionFences = new WeakMap<object, Map<string, InternalDeletionState>>();
+
+function deletionFences(db: Db): Map<string, InternalDeletionState> {
   const key = db as object;
   const existing = internalDeletionFences.get(key);
   if (existing) return existing;
-  const created = new Set<string>();
+  const created = new Map<string, InternalDeletionState>();
   internalDeletionFences.set(key, created);
   return created;
 }
 
-export function beginInternalWorkspaceDeletion(db: Db, workspaceId: string): () => void {
+export interface InternalWorkspaceDeletionFence {
+  commit(): void;
+  release(): void;
+}
+
+export function beginInternalWorkspaceDeletion(
+  db: Db,
+  workspaceId: string,
+): InternalWorkspaceDeletionFence {
   const fences = deletionFences(db);
-  fences.add(workspaceId);
-  return () => fences.delete(workspaceId);
+  const state = fences.get(workspaceId) ?? { active: 0, tombstoned: false };
+  state.active += 1;
+  fences.set(workspaceId, state);
+  let settled = false;
+  const settle = (committed: boolean) => {
+    if (settled) return;
+    settled = true;
+    state.active -= 1;
+    if (committed) state.tombstoned = true;
+    if (state.active === 0 && !state.tombstoned) fences.delete(workspaceId);
+  };
+  return {
+    commit: () => settle(true),
+    release: () => settle(false),
+  };
 }
 
 function assertInternalWorkspaceWritable(db: Db, workspaceId: string): void {

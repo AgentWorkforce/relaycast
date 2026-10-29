@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startServer } from '../../entrypoints/node.js';
-import { pushWorkspaceKey } from '../../engine/internalAdmin.js';
+import { beginInternalWorkspaceDeletion, pushWorkspaceKey } from '../../engine/internalAdmin.js';
 import { makeNodeStack, registerAgent, type TestStack } from './harness.js';
 
 /**
@@ -145,6 +145,22 @@ describe('internal admin API', () => {
       // workspace. If deletion claimed first, the push was fenced with 410.
       expect((await readWorkspace(nextKey)).status).toBe(401);
       expect((await internal(`/workspaces/${ws.workspace_id}`, { method: 'DELETE' })).status).toBe(204);
+    });
+
+    it('keeps a successful deletion fenced when an overlapping delete fails', async () => {
+      stack = makeNodeStack({ internalSecret: SECRET });
+      const ws = await createViaAdmin('delete-overlap');
+      const first = beginInternalWorkspaceDeletion(stack.runtime.deps.db, ws.workspace_id);
+      const retry = beginInternalWorkspaceDeletion(stack.runtime.deps.db, ws.workspace_id);
+      first.commit();
+      retry.release();
+
+      const push = await internal(`/workspaces/${ws.workspace_id}/api-key`, {
+        method: 'POST',
+        body: { api_key: `rk_${'live'}_must_stay_fenced_0000000000000000`, key_generation: 1 },
+      });
+      expect(push.status).toBe(410);
+      expect(await push.json()).toMatchObject({ error: { code: 'workspace_deleted' } });
     });
 
     it('server-minted rotation kills the old key and fences the workspace', async () => {

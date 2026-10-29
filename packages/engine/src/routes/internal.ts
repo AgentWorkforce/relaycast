@@ -90,12 +90,13 @@ internalRoutes.delete('/workspaces/:id', async (c) => {
   if (!WORKSPACE_ID_PATTERN.test(workspaceId)) {
     return jsonError(c, 'invalid_request', 'Invalid workspace id', 400);
   }
-  const releaseFence = beginInternalWorkspaceDeletion(c.get('db'), workspaceId);
+  const fence = beginInternalWorkspaceDeletion(c.get('db'), workspaceId);
   try {
     await workspaceEngine.deleteWorkspace(c.get('db'), c.get('engine').files, workspaceId);
+    fence.commit();
     return c.body(null, 204);
   } catch (err: unknown) {
-    releaseFence();
+    fence.release();
     return errorResponse(c, err);
   }
 });
