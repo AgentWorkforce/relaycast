@@ -202,6 +202,9 @@ both.
   `key_generation` or stored + 1. Unknown workspace is `404`.
 - `grace_ms` (0–3600000, default `0`) keeps the superseded key working that
   long; `0` revokes it immediately. On a push it requires `key_generation`.
+- After `DELETE /internal/workspaces/:id` succeeds, key pushes for that ID are
+  `410 workspace_deleted` for the lifetime of the engine process. This closes
+  delete-vs-push races; deleted IDs are not intended for same-process reuse.
 - `plan` is accepted for wire compatibility and ignored: the engine has no
   plans. `revocation_markers: true` is satisfied by the SQLite previous-key
   slot, since the engine has no auth cache to invalidate.

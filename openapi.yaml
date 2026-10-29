@@ -6951,6 +6951,9 @@ paths:
         key is idempotent; a higher `key_generation` bumps the fence. A key
         change carrying `key_generation` commits only if it beats the stored
         generation; once fenced (generation > 0) key changes must carry one.
+        After an internal delete claims this ID, same-process pushes return
+        `410 workspace_deleted`; deleted IDs are not reusable without an
+        engine restart.
         Without `api_key` (self-host extension) the engine mints the
         replacement, returns it once, and fences at `key_generation` or stored
         + 1; an unknown workspace is `404`. The superseded key keeps
@@ -7044,6 +7047,14 @@ paths:
             generation), `api_key_conflict` (the key is another workspace's
             current key, or its previous key inside the grace window), or
             `key_write_conflict` (contended; retry).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '410':
+          description: >-
+            `workspace_deleted` when an internal deletion of this workspace
+            has claimed its same-process fence.
           content:
             application/json:
               schema:

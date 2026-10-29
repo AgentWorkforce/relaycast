@@ -1322,7 +1322,7 @@ accepted; a wrong secret is `401`).
 | `GET /internal/capabilities` | Advertises `workspace_key_push` (hosted gateway contract) and `workspace_admin` |
 | `POST /internal/workspaces` | `{ name, metadata? }` → `201` with `workspace_id`, `api_key` (shown once), `api_key_generation: 0` |
 | `DELETE /internal/workspaces/:id` | Idempotently delete by ID with the internal secret (`204`, including when already gone) |
-| `POST /internal/workspaces/:id/api-key` | Push a control-plane-minted key (`{ api_key, key_generation?, grace_ms? }`, upserts a missing workspace with `201`) or omit `api_key` to have the engine mint and return one. Generation-fenced: stale pushes are `409 stale_key_generation`, generationless key changes on a fenced workspace are `409 key_generation_required`, and a key that is live in another workspace (current, or previous within its grace window) is `409 api_key_conflict` |
+| `POST /internal/workspaces/:id/api-key` | Push a control-plane-minted key (`{ api_key, key_generation?, grace_ms? }`, upserts a missing workspace with `201`) or omit `api_key` to have the engine mint and return one. Generation-fenced: stale pushes are `409 stale_key_generation`, generationless key changes on a fenced workspace are `409 key_generation_required`, and a key that is live in another workspace (current, or previous within its grace window) is `409 api_key_conflict`. After an internal delete claims this ID, same-process pushes are `410 workspace_deleted`; deleted IDs are not reusable without restarting the engine. |
 
 Set `RELAYCAST_PUBLIC_WORKSPACE_CREATE=false` so the anonymous `POST /v1/workspaces` answers the
 generic `404` and workspaces come only from the control plane (the Helm chart does this when the

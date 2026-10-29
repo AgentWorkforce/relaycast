@@ -8,6 +8,8 @@ metadata:
   {{- $annotations := deepCopy (.Values.persistence.annotations | default dict) }}
   {{- if .Values.persistence.retainOnUninstall }}
   {{- $_ := set $annotations "helm.sh/resource-policy" "keep" }}
+  {{- else }}
+  {{- $_ := unset $annotations "helm.sh/resource-policy" }}
   {{- end }}
   {{- with $annotations }}
   annotations:
