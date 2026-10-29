@@ -6,11 +6,18 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 
 The format is based on Keep a Changelog, and this project follows Semantic Versioning.
 
-## [10.0.0] - Unreleased
+## [Unreleased - Major]
 
 ### Removed
 
 - `Workspace::plan`; servers no longer return it.
+
+### Fixed
+
+- Registration CLI hints and defaults preserve `opencode`, `grok`, `muse`, and `devin` instead of falling back to another harness.
+- WebSocket connects and reconnects share one TLS configuration per process, so `wss://` reconnects no longer reload the platform root certificates (about 120 ms of CPU per reconnect on macOS). A platform with no roots still fails that connect and is read again on the next.
+
+## [10.0.0] - 2026-10-15
 
 ### Added
 
@@ -21,51 +28,74 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - **BREAKING:** `RelayError::Api` gained the `details` field. Code that constructs the variant with a struct literal must add `details: None` (or use `RelayError::api(code, message, status)`), and patterns that destructure it without a trailing `..` must add one, e.g. `RelayError::Api { code, message, status, .. }`.
 - Workspace creation and by-name workspace lookup decode their response body with `serde_json` after reading it, so a malformed body on those two calls surfaces as `RelayError::Json` instead of `RelayError::Http`. Retry and admission behavior is unchanged.
 
-## [Unreleased - Major]
+### Fixed
 
-- Registration CLI hints and defaults preserve `opencode`, `grok`, `muse`, and `devin` instead of falling back to another harness.
+- Distinguish an explicit null acknowledgement from a missing `data` field, and preserve API errors before decoding the expected success payload.
 
-- Workspace creation accepts arbitrary JSON metadata, and updates shallow merge metadata with top-level null values deleting keys.
+## [9.0.1] - 2026-10-14
 
 ### Fixed
 
-- WebSocket connects and reconnects share one TLS configuration per process, so `wss://` reconnects no longer reload the platform root certificates (about 120 ms of CPU per reconnect on macOS). A platform with no roots still fails that connect and is read again on the next.
 - Acknowledgement responses `{ "ok": true, "data": null }` succeed for calls whose result admits null (`Value`, `()`, `Option<_>`), so `AgentClient::heartbeat()` no longer reports "Response missing data field" after the server refreshed presence. Typed payloads still reject null data.
-- Distinguish an explicit null acknowledgement from a missing `data` field, and preserve API errors before decoding the expected success payload.
-- `all_dm_conversations()` follows bounded server cursors and still returns the complete conversation vector, with a malformed-cursor progress guard.
-- Workspace reads and updates accept current engine responses that omit the private API key hash.
 
-- Anonymous keyed workspace bootstrap rejects remote HTTP and redirects, preventing its recovery capability from reaching another origin.
-- `RelayError::retry_after_ms()` exposes the authoritative server delay for exact-release overload handling.
-- Retryable HTTP failures retain the final status, API error, request metadata, and attempt count after retries are exhausted.
-- Retried 5xx responses honor a bounded `Retry-After` delay.
-- Agent registration now honors bounded server `Retry-After` cooldowns and waits for that same cooldown before retrying.
-- Workspace write-admission denials (`workspace_busy`, `workspace_admission_unavailable`) are retried on the server's own `Retry-After` pacing, including for unkeyed mutations. Admission rejects before the handler runs, so nothing was applied; previously a momentary denial was terminal and left calls such as agent/node binding permanently unapplied.
-
-### Changed
-
-- **BREAKING:** `RelayCastOptions` and `WorkspaceBootstrapOptions` struct literals must include the new `origin_client` and `origin_version` fields; prefer `RelayCastOptions::new(...)` and builders.
-
-- Automatic 5xx retries require an idempotent request or an idempotency key.
-- **BREAKING:** `RelayCast::rotate_agent_token` now requires the current agent token; use `take_over_agent` or `recover_agent` to replace an identity you cannot authenticate as.
-- **BREAKING:** `AgentRegistrationClient::register_agent_token` is create-only and returns `AgentRegistrationError::AlreadyExists` on conflicts; use a unique name or persist the token for self-rollover.
-- **BREAKING:** `RelayError::Api` gained `request_id: Option<String>` and `attempts: u32` fields (also exposed via new `RelayError::request_id()`/`RelayError::attempts()` accessors); match arms that destructure it exhaustively need a trailing `..`.
-- `NodeRosterEntry.load` is now `Option<f64>`, matching the API's explicit unreported state; direct-agent heartbeats no longer label a constant utilization as measured.
+## [9.0.0] - 2026-10-13
 
 ### Added
 
 - `AgentRegistrationClient::invalidate_cached_registration_if_token_hash()` atomically removes only the cached credential generation whose SHA-256 hash matches, preserving concurrent same-name replacement registrations.
 - `RelayCast::create_node_with_current_token` sends current-node proof for authorized rotation or modification of an established node without placing the credential in the JSON body. `create_node_with_rotation_recovery` also sends a caller-retained idempotency key for lost-response recovery, and `CreateNodeRequest` now exposes optional `machine_id`.
 - `WorkspaceBootstrapOptions::with_origin(client, version)` and `RelayCast::lookup_workspace_with_options(WorkspaceLookupOptions)` identify products on anonymous workspace creation and lookup; legacy calls retain SDK defaults.
-
 - `RelayCastOptions::with_origin(client, version)` and `AgentClient::with_options(ClientOptions)` configure product attribution, inherited by agent HTTP/WebSocket traffic and preserved across token replacement.
 
-- `RelayCast::emit_agent_event_with_idempotency_key` preserves a stable event key across retries.
+### Changed
 
-- `RelayCast::create_workspace` now requires explicit provenance, preventing CLI bootstrap workspaces from being mislabeled as SDK-created.
+- Workspace creation accepts arbitrary JSON metadata, and updates shallow merge metadata with top-level null values deleting keys.
+- **BREAKING:** `RelayCastOptions` and `WorkspaceBootstrapOptions` struct literals must include the new `origin_client` and `origin_version` fields; prefer `RelayCastOptions::new(...)` and builders.
+
+### Fixed
+
+- `all_dm_conversations()` follows bounded server cursors and still returns the complete conversation vector, with a malformed-cursor progress guard.
+- Workspace reads and updates accept current engine responses that omit the private API key hash.
+
+## [8.0.1] - 2026-09-19
+
+### Added
+
+- `RelayCast::emit_agent_event_with_idempotency_key` preserves a stable event key across retries.
 - `WorkspaceBootstrapOptions` and `RelayCast::create_workspace_with_options()` support crash-safe anonymous keyed workspace creation without a deployment-wide secret, plus opt-in self-host proof via `with_bootstrap_secret(...)`; the SDK never sends that proof to hosted Relaycast.
 - `RelayCast::release_agent_if_token_hash` performs generation-safe cleanup without changing the existing `ReleaseAgentRequest` struct.
 - `RelayCast::release_agent_exact()` performs immutable-id, idempotent agent-release reconciliation.
+
+### Fixed
+
+- Anonymous keyed workspace bootstrap rejects remote HTTP and redirects, preventing its recovery capability from reaching another origin.
+- `RelayError::retry_after_ms()` exposes the authoritative server delay for exact-release overload handling.
+- Agent registration now honors bounded server `Retry-After` cooldowns and waits for that same cooldown before retrying.
+- Workspace write-admission denials (`workspace_busy`, `workspace_admission_unavailable`) are retried on the server's own `Retry-After` pacing, including for unkeyed mutations. Admission rejects before the handler runs, so nothing was applied; previously a momentary denial was terminal and left calls such as agent/node binding permanently unapplied.
+
+## [8.0.0] - 2026-09-06
+
+### Changed
+
+- Automatic 5xx retries require an idempotent request or an idempotency key.
+- **BREAKING:** `RelayError::Api` gained `request_id: Option<String>` and `attempts: u32` fields (also exposed via new `RelayError::request_id()`/`RelayError::attempts()` accessors); match arms that destructure it exhaustively need a trailing `..`.
+
+### Fixed
+
+- Retryable HTTP failures retain the final status, API error, request metadata, and attempt count after retries are exhausted.
+- Retried 5xx responses honor a bounded `Retry-After` delay.
+
+## [7.0.0] - 2026-08-21
+
+### Added
+
+- `RelayCast::create_workspace` now requires explicit provenance, preventing CLI bootstrap workspaces from being mislabeled as SDK-created.
+
+### Changed
+
+- **BREAKING:** `RelayCast::rotate_agent_token` now requires the current agent token; use `take_over_agent` or `recover_agent` to replace an identity you cannot authenticate as.
+- **BREAKING:** `AgentRegistrationClient::register_agent_token` is create-only and returns `AgentRegistrationError::AlreadyExists` on conflicts; use a unique name or persist the token for self-rollover.
+- `NodeRosterEntry.load` is now `Option<f64>`, matching the API's explicit unreported state; direct-agent heartbeats no longer label a constant utilization as measured.
 
 ## [4.2.0] - 2026-06-24
 
