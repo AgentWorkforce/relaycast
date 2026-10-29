@@ -55,6 +55,10 @@ const NON_SDK_OPENAPI_PATHS = new Set([
   // Node-token self lookup: a service handed a node token (Cloud's node claim)
   // proves which node it is for. Agents never call it.
   '/v1/node/me',
+  // Pending-delivery proof: Cloud's owner-authority check calls it with the
+  // receiving agent's token (relayed by Agent Relay Desktop) to learn who
+  // really sent a message. Agent SDKs never need it.
+  '/v1/deliveries/by-message/{param}',
 ]);
 
 const CORE_SDK_PATHS = new Set([
