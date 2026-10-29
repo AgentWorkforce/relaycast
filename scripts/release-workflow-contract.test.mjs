@@ -1007,6 +1007,89 @@ describe("release tag reuse execution", () => {
   });
 });
 
+describe("Rust SDK changelog release", () => {
+  const rustWorkflow = readFileSync(
+    new URL("../.github/workflows/publish-rust.yml", import.meta.url),
+    "utf8",
+  );
+
+  it("cuts only the Rust changelog against sdk-rust tags", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "relaycast-cut-rust-"));
+    try {
+      const lockstep =
+        "# Changelog\n\n## [Unreleased - Patch]\n\n### Fixed\n\n- Lockstep fix.\n\n## [8.5.5] - 2026-09-08\n";
+      mkdirSync(path.join(root, "packages", "engine"), { recursive: true });
+      mkdirSync(path.join(root, "packages", "sdk-rust"));
+      writeFileSync(path.join(root, "CHANGELOG.md"), lockstep);
+      writeFileSync(path.join(root, "packages", "engine", "CHANGELOG.md"), lockstep);
+      writeFileSync(
+        path.join(root, "packages", "sdk-rust", "CHANGELOG.md"),
+        "# Changelog\n\n## [Unreleased - Major]\n\n### Removed\n\n- `Workspace::plan`.\n\n## [10.0.0] - 2026-10-15\n\n### Added\n\n- Previous.\n",
+      );
+      git(root, ["init", "-q"]);
+      git(root, ["config", "user.email", "release-test@example.com"]);
+      git(root, ["config", "user.name", "Release Test"]);
+      git(root, ["add", "."]);
+      git(root, ["commit", "-qm", "chore: base"]);
+      git(root, ["tag", "v8.5.5"]);
+      git(root, ["tag", "sdk-rust-v10.0.0"]);
+
+      const cut = (version) =>
+        spawnSync(
+          process.execPath,
+          [cutChangelog, "--package", "sdk-rust", "--version", version, "--date", "2026-10-28", "--dry-run"],
+          { cwd: root, encoding: "utf8" },
+        );
+      const patch = cut("10.0.1");
+      assert.equal(patch.status, 0, patch.stderr);
+      assert.match(patch.stdout, /pending since sdk-rust-v10\.0\.0/);
+      assert.match(patch.stderr, /marked Major but v10\.0\.1 is a Patch bump/);
+
+      const major = spawnSync(
+        process.execPath,
+        [cutChangelog, "--package", "sdk-rust", "--version", "11.0.0", "--date", "2026-10-28"],
+        { cwd: root, encoding: "utf8" },
+      );
+      assert.equal(major.status, 0, major.stderr);
+      assert.doesNotMatch(major.stderr, /bump/);
+      assert.equal(
+        readFileSync(path.join(root, "packages", "sdk-rust", "CHANGELOG.md"), "utf8"),
+        "# Changelog\n\n## [Unreleased]\n\n## [11.0.0] - 2026-10-28\n\n### Removed\n\n- `Workspace::plan`.\n\n## [10.0.0] - 2026-10-15\n\n### Added\n\n- Previous.\n",
+      );
+      assert.equal(readFileSync(path.join(root, "CHANGELOG.md"), "utf8"), lockstep);
+      assert.equal(
+        readFileSync(path.join(root, "packages", "engine", "CHANGELOG.md"), "utf8"),
+        lockstep,
+      );
+    } finally {
+      removeTemporaryDirectory(root);
+    }
+  });
+
+  it("rejects --package for a lockstep package", () => {
+    const result = spawnSync(
+      process.execPath,
+      [cutChangelog, "--package", "engine", "--version", "12.1.1", "--dry-run"],
+      { cwd: repositoryRoot, encoding: "utf8" },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /own version line/);
+  });
+
+  it("cuts the changelog before publishing and commits it with the version", () => {
+    const cutStep = rustWorkflow.indexOf(
+      'node scripts/cut-changelog.mjs --package sdk-rust --version "${{ steps.bump.outputs.new_version }}"',
+    );
+    const publishStep = rustWorkflow.indexOf("- name: Publish to crates.io");
+    assert.notEqual(cutStep, -1);
+    assert.ok(cutStep < publishStep);
+    assert.match(
+      rustWorkflow,
+      /git add packages\/sdk-rust\/Cargo\.toml packages\/sdk-rust\/CHANGELOG\.md/,
+    );
+  });
+});
+
 describe("release provenance adversarial cases", () => {
   it("rejects stale or wrong-source packages instead of accepting a version-only match", () => {
     assert.throws(

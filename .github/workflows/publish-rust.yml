@@ -48,6 +48,11 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.3"
+
       - name: Determine and set version
         id: bump
         shell: bash
@@ -165,6 +170,9 @@ jobs:
           echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
           echo "New version: $NEW_VERSION"
 
+      - name: Cut changelog
+        run: node scripts/cut-changelog.mjs --package sdk-rust --version "${{ steps.bump.outputs.new_version }}"
+
       - name: Run tests
         run: cargo test --manifest-path packages/sdk-rust/Cargo.toml
 
@@ -190,14 +198,15 @@ jobs:
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
 
-          git add packages/sdk-rust/Cargo.toml
+          git add packages/sdk-rust/Cargo.toml packages/sdk-rust/CHANGELOG.md
           if ! git diff --staged --quiet; then
             git commit -m "chore(sdk-rust): v${NEW_VERSION}"
             # main can advance during the (multi-minute) build — e.g. a
             # concurrent npm publish — so rebase onto the latest main and retry
             # to avoid non-fast-forward rejections. The release commit only
-            # touches version metadata, so it rebases cleanly onto another
-            # release's commit.
+            # touches the crate's version and changelog, which no other
+            # release writes, so it rebases cleanly onto another release's
+            # commit.
             pushed=false
             for attempt in 1 2 3 4 5; do
               git fetch origin main
