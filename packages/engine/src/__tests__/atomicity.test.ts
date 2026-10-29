@@ -261,6 +261,51 @@ describe('atomic write paths', () => {
       expect(finished.seq).toBe(upToSeq);
     });
 
+    it('keeps the DM read cursor at the last acked message when a later chunk fails', async () => {
+      const { ws, alice, bob, db } = await seed();
+      await db.insert(nodes).values({
+        id: 'node_ack_dm_chunk',
+        workspaceId: ws.workspaceId,
+        name: 'ack-dm-chunk',
+        tokenHash: 'ack-dm-chunk-token',
+      });
+      await db.update(agents).set({
+        locationType: 'via_node',
+        locationNodeId: 'node_ack_dm_chunk',
+        providerName: 'default',
+      }).where(eq(agents.id, bob.agentId));
+
+      const count = DELIVERY_EXPIRY_BATCH_SIZE + 1;
+      for (let i = 0; i < count; i++) {
+        await sendDm(db, ws.workspaceId, alice.agentId, { to: 'bob', text: `dm${i}` });
+      }
+      const bobRows = (await db.select().from(deliveries).where(eq(deliveries.agentId, bob.agentId)))
+        .sort((a, b) => a.seq - b.seq);
+      expect(bobRows).toHaveLength(count);
+      const upToSeq = bobRows[count - 1].seq;
+      const endOfChunkOne = bobRows[DELIVERY_EXPIRY_BATCH_SIZE - 1].messageId;
+      const endOfBacklog = bobRows[count - 1].messageId;
+
+      const restore = injectUpdateFailure(db, dmParticipants, 'injected dm chunk cursor failure', {
+        skip: DELIVERY_EXPIRY_BATCH_SIZE,
+        times: 1,
+      });
+      await expect(ackDeliveriesUpToSeq(
+        db, ws.workspaceId, 'node_ack_dm_chunk', 'default', 'bob', upToSeq,
+      )).rejects.toThrow('injected dm chunk cursor failure');
+      restore();
+
+      const [paused] = await db.select().from(dmParticipants).where(eq(dmParticipants.agentId, bob.agentId));
+      expect(paused.lastReadId).toBe(endOfChunkOne);
+
+      const done = await ackDeliveriesUpToSeq(
+        db, ws.workspaceId, 'node_ack_dm_chunk', 'default', 'bob', upToSeq,
+      );
+      expect(done?.acked).toBe(1);
+      const [finished] = await db.select().from(dmParticipants).where(eq(dmParticipants.agentId, bob.agentId));
+      expect(finished.lastReadId).toBe(endOfBacklog);
+    });
+
     it('rolls back a delivery ack when the DM read cursor update fails', async () => {
       const { ws, alice, bob, db } = await seed();
       const sent = await sendDm(db, ws.workspaceId, alice.agentId, { to: 'bob', text: 'psst' });
