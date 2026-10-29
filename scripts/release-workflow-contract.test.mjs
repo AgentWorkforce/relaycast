@@ -1066,6 +1066,27 @@ describe("Rust SDK changelog release", () => {
     }
   });
 
+  it("leaves Unreleased in place for a hyphenated prerelease", () => {
+    const result = spawnSync(
+      process.execPath,
+      [cutChangelog, "--package", "sdk-rust", "--version", "11.0.0-rc-1", "--dry-run"],
+      { cwd: repositoryRoot, encoding: "utf8" },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /prerelease v11\.0\.0-rc-1: leaving \[Unreleased\] in place/);
+  });
+
+  it("commits the version alone when main's Rust changelog changed during the release", () => {
+    assert.match(
+      rustWorkflow,
+      /git diff --quiet HEAD~1 origin\/main -- "\$CHANGELOG"/,
+    );
+    assert.match(rustWorkflow, /git restore --staged --worktree "\$CHANGELOG"/);
+    const fallback = rustWorkflow.indexOf('git restore --staged --worktree "$CHANGELOG"');
+    const rebase = rustWorkflow.indexOf("if ! git rebase origin/main; then");
+    assert.ok(fallback < rebase);
+  });
+
   it("rejects --package for a lockstep package", () => {
     const result = spawnSync(
       process.execPath,
