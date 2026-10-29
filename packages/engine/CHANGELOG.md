@@ -7,7 +7,12 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- A DM participant's inbox unread count drops after they mark a message read or acknowledge its delivery. Migration `0078_dm_participant_read_cursor.sql` seeds each cursor from existing read receipts.
+- Channel unread counts in the inbox no longer drop newer messages whose ids have more digits than the read cursor.
 
 ## [12.2.0] - 2026-10-29
 

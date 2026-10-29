@@ -4,7 +4,7 @@ import { eq, and, asc, exists, isNull, isNotNull, inArray, lt, ne, not, notInArr
 import type { getDb } from '../db/index.js';
 import { deliveries, messages, agents, nodes, readReceipts, channelMembers, channels, dmConversations } from '../db/schema.js';
 import type { DeliveryStatus } from '@relaycast/types';
-import { runAtomic } from '../ports/database.js';
+import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { isProviderAgentDeliveryReady } from '../ports/realtime.js';
 import { buildDeliverFrame, buildDeliverPayload, buildMessageCreatedEventData, buildThreadReplyEventData, buildDmReceivedEventData, buildGroupDmReceivedEventData } from './deliveryWire.js';
@@ -22,6 +22,7 @@ import {
 } from './workspaceDeliveryPolicy.js';
 import { queryInChunks } from '../lib/queryChunks.js';
 import { withEngineOperation } from '../lib/engineDiagnostics.js';
+import { advanceDmParticipantReadCursor } from './receipt.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -355,22 +356,51 @@ export async function deferDelivery(
   return resolveTransition(db, workspaceId, agentId, deliveryId, updated, existing.channelId);
 }
 
-async function markRowsRead(tx: Db, agentId: string, rows: DeliveryWithChannel[]) {
-  for (const row of rows) {
-    await tx
-      .insert(readReceipts)
-      .values({ messageId: row.messageId, agentId })
-      .onConflictDoNothing();
+/** The delivery row this ack is allowed to settle. A dead-lettered row is not one of them. */
+function deliveryStillAckable(workspaceId: string, deliveryId: string) {
+  return sql`EXISTS (
+    SELECT 1 FROM ${deliveries}
+    WHERE ${deliveries.id} = ${deliveryId}
+      AND ${deliveries.workspaceId} = ${workspaceId}
+      AND ${deliveries.status} NOT IN ('acked', 'dead_lettered')
+  )`;
+}
 
-    await tx
+function readCursorWrites(
+  tx: Db,
+  workspaceId: string,
+  agentId: string,
+  row: DeliveryWithChannel,
+): AtomicWrite[] {
+  // Observe the pre-ack status. These statements run before the status update;
+  // after it, the row is already `acked` and this predicate would match nothing.
+  const ackable = deliveryStillAckable(workspaceId, row.id);
+  return [
+    tx
+      .insert(readReceipts)
+      .select(
+        tx.select({
+          messageId: sql<string>`${row.messageId}`.as('message_id'),
+          agentId: sql<string>`${agentId}`.as('agent_id'),
+          readAt: sql<Date>`unixepoch()`.as('read_at'),
+        }).from(deliveries).where(and(
+          eq(deliveries.id, row.id),
+          eq(deliveries.workspaceId, workspaceId),
+          notInArray(deliveries.status, ['acked', 'dead_lettered']),
+        )),
+      )
+      .onConflictDoNothing(),
+    tx
       .update(channelMembers)
       .set({ lastReadId: row.messageId })
       .where(and(
         eq(channelMembers.channelId, row.channelId),
         eq(channelMembers.agentId, agentId),
         sql`(${channelMembers.lastReadId} IS NULL OR CAST(${channelMembers.lastReadId} AS BIGINT) < CAST(${row.messageId} AS BIGINT))`,
-      ));
-  }
+        ackable,
+      )),
+    advanceDmParticipantReadCursor(tx, agentId, row.channelId, row.messageId, ackable),
+  ];
 }
 
 async function ackRows(
@@ -385,23 +415,27 @@ async function ackRows(
   advanceCursorTo?: number,
 ): Promise<DeliveryRow[]> {
   const ids = rows.map((row) => row.id);
-  return runAtomic(db, async (tx) => {
-    await tx
-      .update(agents)
-      .set({
-        deliveryAckSeq:
-          advanceCursorTo === undefined
-            ? sql<number>`${agents.deliveryAckSeq}`
-            : sql<number>`CASE
-              WHEN ${agents.deliveryAckSeq} < ${advanceCursorTo} THEN ${advanceCursorTo}
-              ELSE ${agents.deliveryAckSeq}
-            END`,
-        lastSeen: new Date(),
-      })
-      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId)));
-
-    const updated = ids.length > 0
-      ? await tx
+  // One batch with the ack. On D1, `runAtomic` would commit the ack before the
+  // cursor write, and a retry skips an already-acked delivery.
+  const results = await runAtomicWrites(db, (tx) => {
+    const writes: AtomicWrite[] = [
+      tx
+        .update(agents)
+        .set({
+          deliveryAckSeq:
+            advanceCursorTo === undefined
+              ? sql<number>`${agents.deliveryAckSeq}`
+              : sql<number>`CASE
+                WHEN ${agents.deliveryAckSeq} < ${advanceCursorTo} THEN ${advanceCursorTo}
+                ELSE ${agents.deliveryAckSeq}
+              END`,
+          lastSeen: new Date(),
+        })
+        .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId))),
+    ];
+    for (const row of rows) writes.push(...readCursorWrites(tx, workspaceId, agentId, row));
+    if (ids.length > 0) {
+      writes.push(tx
         .update(deliveries)
         .set({
           status: TERMINAL_SUCCESS_STATUS,
@@ -415,12 +449,12 @@ async function ackRows(
           inArray(deliveries.id, ids),
           notInArray(deliveries.status, ['acked', 'dead_lettered']),
         ))
-        .returning()
-      : [];
-
-    if (rows.length > 0) await markRowsRead(tx, agentId, rows);
-    return updated;
+        .returning());
+    }
+    return writes;
   });
+  // The status update is the last statement, so its RETURNING rows are last.
+  return ids.length > 0 ? results[results.length - 1] as DeliveryRow[] : [];
 }
 
 export async function ackDeliveriesUpToSeq(
@@ -459,14 +493,23 @@ export async function ackDeliveriesUpToSeq(
     ))
     .orderBy(asc(deliveries.seq));
 
-  const updated = await ackRows(
-    db,
-    workspaceId,
-    agent.id,
-    rows.map((row) => ({ ...row.delivery, channelId: row.channelId })),
-    upToSeq,
-  );
-  return { agent_id: agent.id, agent_name: agent.name, up_to_seq: upToSeq, acked: updated.length };
+  const pending = rows.map((row) => ({ ...row.delivery, channelId: row.channelId }));
+  // Each row adds three cursor statements, and `up_to_seq` is caller-supplied.
+  // One batch for the whole backlog exceeds D1's bound-parameter cap and holds
+  // the write lock for every row. The cumulative cursor moves only with the
+  // last chunk, so a later chunk failing cannot skip rows still queued.
+  if (pending.length === 0) {
+    await ackRows(db, workspaceId, agent.id, [], upToSeq);
+    return { agent_id: agent.id, agent_name: agent.name, up_to_seq: upToSeq, acked: 0 };
+  }
+  let acked = 0;
+  for (let offset = 0; offset < pending.length; offset += DELIVERY_EXPIRY_BATCH_SIZE) {
+    const chunk = pending.slice(offset, offset + DELIVERY_EXPIRY_BATCH_SIZE);
+    const last = offset + chunk.length === pending.length;
+    const updated = await ackRows(db, workspaceId, agent.id, chunk, last ? upToSeq : undefined);
+    acked += updated.length;
+  }
+  return { agent_id: agent.id, agent_name: agent.name, up_to_seq: upToSeq, acked };
 }
 
 /** Mark still-queued rows delivered using bounded, explicit ID-index writes. */

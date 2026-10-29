@@ -900,6 +900,9 @@ export const dmParticipants = sqliteTable(
       .references(() => agents.id, { onDelete: 'cascade' }),
     joinedAt: integer('joined_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
     leftAt: integer('left_at', { mode: 'timestamp' }),
+    // Inbox unread for this participant. Channel cursors live on
+    // channel_members; a DM has no channel membership row.
+    lastReadId: text('last_read_id'),
   },
   (table) => [
     primaryKey({ columns: [table.conversationId, table.agentId] }),
