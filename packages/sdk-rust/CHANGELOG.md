@@ -29,6 +29,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
+- WebSocket connects and reconnects share one TLS configuration per process, so `wss://` reconnects no longer reload the platform root certificates (about 120 ms of CPU per reconnect on macOS). A platform with no roots still fails that connect and is read again on the next.
 - Acknowledgement responses `{ "ok": true, "data": null }` succeed for calls whose result admits null (`Value`, `()`, `Option<_>`), so `AgentClient::heartbeat()` no longer reports "Response missing data field" after the server refreshed presence. Typed payloads still reject null data.
 - Distinguish an explicit null acknowledgement from a missing `data` field, and preserve API errors before decoding the expected success payload.
 - `all_dm_conversations()` follows bounded server cursors and still returns the complete conversation vector, with a malformed-cursor progress guard.
