@@ -1302,6 +1302,10 @@ components:
         status:
           type: string
           enum: [online, offline]
+        liveness_status:
+          type: string
+          enum: [online, offline, unknown]
+          description: Optional connection-authority result. Unknown means the owner could not be reached; status remains offline and live is false for availability compatibility. Database heartbeat timestamps may be sparse checkpoints when this field is present.
         live:
           type: boolean
         handlers_live:

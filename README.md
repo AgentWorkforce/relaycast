@@ -675,6 +675,24 @@ Realtime transport:
 - Workspace keys create, rotate, list, and revoke observer tokens at `/v1/observer-tokens`; observer tokens are read-only and cannot mutate workspace state. Observer scopes grant read capabilities, while filters narrow resources. DM content requires both `dms:read` and `filters.include_dms: true`. Channel filters apply only to channel-scoped events; workspace-wide presence/status events require matching `agent_ids` or no agent filter.
 - `file.uploaded` stream events are emitted when the upload completes, before any message attachment exists, so observer filtering for that event is limited to `files:read`, `agent_ids`, `event_types`, and `created_after`. Channel and DM visibility are enforced when files are read through REST or as message attachments.
 
+Hosts may configure `EngineDeps.nodeLiveness` with an authoritative connection
+owner. Its `inspect(workspaceId, nodeId)` returns a bounded, current node/provider
+receipt-lease snapshot. Bind the same authority with `configureNodeLiveness(db,
+authority)` on database instances used outside `createEngine`, including control
+handlers and scheduled work. The owner must recheck connection generation and
+receipt expiry at final send, and serialize offline transitions with reconnect.
+Without this port, the existing database timestamp policy remains unchanged.
+In authority mode node responses add optional `liveness_status` (`online`,
+`offline`, or `unknown`); unavailable authority keeps `status: offline` and
+`live: false`, while `unknown` distinguishes failure to inspect from observed
+absence. `last_heartbeat_at` is then a checkpoint, not the lease clock.
+
+The TypeScript SDK suppresses scheduled HTTP heartbeats only while a correlated
+WebSocket acknowledgement confirms the current agent's presence. Explicit
+`heartbeat()` and online/disconnect calls retain their behavior. WebSocket
+heartbeat jitter stays below the existing 30-second maximum interval; missing
+acknowledgements restore HTTP fallback even while the socket remains open.
+
 Core endpoints (relative to `/v1`):
 
 ```text

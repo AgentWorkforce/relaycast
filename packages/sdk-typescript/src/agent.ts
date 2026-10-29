@@ -168,7 +168,7 @@ export class AgentClient {
   /** True after `connect()` has started the current transport. Reset by `disconnect()`. */
   private wsConnectStarted = false;
   private autoHeartbeatMs: number | false;
-  private autoHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private autoHeartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingHeartbeat: Promise<void> | null = null;
   private wsOptions: Omit<WsClientOptions, 'token' | 'baseUrl' | 'path' | 'nodeRegistration' | 'autoAckDeliveries'>;
   private directNodeToken: DirectNodeToken | null = null;
@@ -220,20 +220,29 @@ export class AgentClient {
   private startAutoHeartbeat(): void {
     this.stopAutoHeartbeat();
     if (this.autoHeartbeatMs === false) return;
-    this.autoHeartbeatTimer = setInterval(() => {
-      // Serialize heartbeats: skip this tick while one is still in flight so
-      // pendingHeartbeat always tracks the only outstanding request — awaiting
-      // it before disconnect then guarantees no heartbeat lands afterwards.
-      if (this.pendingHeartbeat) return;
-      this.pendingHeartbeat = this.presence.heartbeat()
-        .catch(() => {})
-        .finally(() => { this.pendingHeartbeat = null; });
-    }, this.autoHeartbeatMs);
+    const interval = this.autoHeartbeatMs;
+    const schedule = (delay: number): void => {
+      this.autoHeartbeatTimer = setTimeout(() => {
+        const remaining = this.ws?.confirmedPresenceRemainingMs() ?? 0;
+        if (remaining > 0) {
+          // Recheck at lease expiry rather than adding another whole HTTP interval.
+          schedule(Math.min(interval, remaining));
+          return;
+        }
+        if (!this.pendingHeartbeat) {
+          this.pendingHeartbeat = this.presence.heartbeat()
+            .catch(() => {})
+            .finally(() => { this.pendingHeartbeat = null; });
+        }
+        schedule(interval);
+      }, delay);
+    };
+    schedule(interval);
   }
 
   private stopAutoHeartbeat(): void {
     if (this.autoHeartbeatTimer) {
-      clearInterval(this.autoHeartbeatTimer);
+      clearTimeout(this.autoHeartbeatTimer);
       this.autoHeartbeatTimer = null;
     }
   }

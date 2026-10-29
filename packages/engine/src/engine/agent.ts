@@ -1,3 +1,4 @@
+import { nodeLivenessAuthority, inspectNodeLiveness, filterAsync } from './nodeLiveness.js';
 import { eq, and, exists, gt, lt, ne, sql, inArray, type SQL } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { agents, agentNodeBindings, agentRecoveryCredentials, channels, channelMembers, dmParticipants, actions, deliveries, nodes } from '../db/schema.js';
@@ -467,17 +468,17 @@ export async function listAgents(
   // whole seconds, which would keep a boundary row active for up to 999ms
   // after effectiveAgentStatus has marked it offline.
   const cutoff = (now - AGENT_LIVENESS_TTL_MS) / 1_000;
-  if (requestedStatus === 'active') {
+  if (requestedStatus === 'active' && !nodeLivenessAuthority(db)) {
     conditions.push(sql`${agents.status} IN ('active', 'online') AND ${agents.lastSeen} >= ${cutoff}`);
-  } else if (requestedStatus === 'offline') {
+  } else if (requestedStatus === 'offline' && !nodeLivenessAuthority(db)) {
     conditions.push(sql`(${agents.status} = 'offline' OR (
       ${agents.status} IN ('active', 'online') AND ${agents.lastSeen} < ${cutoff}
     ))`);
-  } else if (requestedStatus && requestedStatus !== 'all') {
+  } else if (requestedStatus && requestedStatus !== 'all' && !nodeLivenessAuthority(db)) {
     conditions.push(eq(agents.status, requestedStatus));
   }
   if ((!requestedStatus || requestedStatus === 'all') && !options.includeStale) {
-    conditions.push(sql`${agents.lastSeen} >= ${(now - AGENT_ROSTER_RECENCY_MS) / 1_000}`);
+    conditions.push(nodeLivenessAuthority(db) ? sql`(${agents.locationType} = 'via_node' OR ${agents.lastSeen} >= ${(now - AGENT_ROSTER_RECENCY_MS) / 1_000})` : sql`${agents.lastSeen} >= ${(now - AGENT_ROSTER_RECENCY_MS) / 1_000}`);
   }
 
   const rows = await db
@@ -487,6 +488,11 @@ export async function listAgents(
         name: agents.name,
         type: agents.type,
         status: agents.status,
+        statusBeforeLivenessLoss: agents.statusBeforeLivenessLoss,
+        locationType: agents.locationType,
+        locationNodeId: agents.locationNodeId,
+        providerName: agents.providerName,
+        workspaceId: agents.workspaceId,
         persona: agents.persona,
         capabilities: agents.capabilities,
         createdAt: agents.createdAt,
@@ -505,19 +511,24 @@ export async function listAgents(
     // they are not roster members, so `agent list` must not fill with them.
     .where(and(...conditions));
 
+  const statuses = new Map<string, string>();
+  await filterAsync(rows, async ({ agent }) => { statuses.set(agent.id, await effectiveAgentStatusWithAuthority(db, agent, now)); return true; });
   return rows.map(({ agent: a, node }) => ({
     id: a.id,
     name: a.name,
     handle: `@${a.name}`,
     address: formatAgentAddress(a.name, node),
     type: a.type,
-    status: effectiveAgentStatus(a, now),
+    status: statuses.get(a.id)!,
     persona: a.persona,
     capabilities: a.capabilities ?? null,
     created_at: a.createdAt.toISOString(),
     last_seen: a.lastSeen.toISOString(),
     metadata: a.metadata,
-  }));
+  })).filter(a => (!requestedStatus || requestedStatus === 'all' || a.status === requestedStatus)
+    && !(nodeLivenessAuthority(db) && (!requestedStatus || requestedStatus === 'all')
+      && !options.includeStale && a.status === 'offline'
+      && Date.parse(a.last_seen) < now - AGENT_ROSTER_RECENCY_MS));
 }
 
 export async function getAgentByName(db: Db, workspaceId: string, name: string) {
@@ -596,7 +607,7 @@ export async function getAgentByName(db: Db, workspaceId: string, name: string) 
     handle: agent.handle ?? `@${agent.name}`,
     address: formatAgentAddress(agent.name, node),
     type: agent.type,
-    status: effectiveAgentStatus(agent),
+    status: await effectiveAgentStatusWithAuthority(db, agent),
     persona: agent.persona,
     capabilities: agent.capabilities ?? null,
     created_at: agent.createdAt.toISOString(),
@@ -718,7 +729,7 @@ export async function updateAgentById(
     handle: `@${updated.name}`,
     address: formatAgentAddress(updated.name, node ?? null),
     type: updated.type,
-    status: effectiveAgentStatus(updated),
+    status: await effectiveAgentStatusWithAuthority(db, updated),
     persona: updated.persona,
     capabilities: updated.capabilities ?? null,
     created_at: updated.createdAt.toISOString(),
@@ -902,6 +913,9 @@ export async function sweepStaleAgents(db: Db, workspaceId?: string): Promise<nu
   const stale = and(
     sql`${agents.status} IN ('active', 'online')`,
     lt(agents.lastSeen, cutoff),
+    // Socket owners own bound-agent loss; quiet hosted children do not send
+    // individual HTTP heartbeats and must retain their work state.
+    nodeLivenessAuthority(db) ? sql`${agents.locationType} != 'via_node'` : undefined,
     ...(workspaceId ? [eq(agents.workspaceId, workspaceId)] : []),
   );
 
@@ -913,4 +927,16 @@ export async function sweepStaleAgents(db: Db, workspaceId?: string): Promise<nu
     .returning({ id: agents.id });
 
   return normalized.length + result.length;
+}
+
+async function effectiveAgentStatusWithAuthority(db: Db, agent: AgentPresenceRow & { id: string; workspaceId: string; locationType: string; locationNodeId: string | null; providerName: string; statusBeforeLivenessLoss: string | null }, now = Date.now()): Promise<string> {
+  if (!nodeLivenessAuthority(db) || agent.status === RELEASED_AGENT_STATUS || agent.locationType !== 'via_node' || !agent.locationNodeId) return effectiveAgentStatus(agent, now);
+  const direct = agent.locationNodeId === directNodeIdForAgent(agent.id);
+  const snapshot = await inspectNodeLiveness(db, agent.workspaceId, agent.locationNodeId);
+  if (!snapshot || snapshot.status === 'unknown') return direct ? effectiveAgentStatus(agent, now) : 'offline';
+  const receivedAt = Date.now();
+  const live = snapshot.status === 'online' && snapshot.providers.some(p => p.name === agent.providerName && p.live && (direct || p.handlers_live) && p.expires_at > receivedAt && p.last_received_at <= receivedAt);
+  if (!live) return direct ? effectiveAgentStatus(agent, now) : 'offline';
+  const status = agent.status === 'offline' ? agent.statusBeforeLivenessLoss ?? 'offline' : agent.status;
+  return status === 'online' ? 'active' : status;
 }

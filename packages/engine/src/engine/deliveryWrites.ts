@@ -1,3 +1,4 @@
+import { inspectNodeLiveness, filterAsync, nodeLivenessAuthority } from './nodeLiveness.js';
 import { and, eq, isNull, ne, or, sql, inArray, getTableColumns, type SQL, type SQLWrapper } from 'drizzle-orm';
 import {
   agentNodeBindings,
@@ -152,11 +153,11 @@ function belowDepthCapSql(workspaceId: string, agentId: unknown, depthCap: numbe
  * hosted agent row, so a quiet but connected agent may legitimately have an
  * old `last_seen` timestamp.
  */
-function notLongOfflineSql(offlineExcludeMs: number): SQL {
-  return sql`NOT ${longOfflineSql(offlineExcludeMs)}`;
+function notLongOfflineSql(db: EngineDb, offlineExcludeMs: number, leases: readonly AuthorityRecipientLease[] = []): SQL {
+  return sql`NOT ${longOfflineSql(db, offlineExcludeMs, leases)}`;
 }
 
-function longOfflineSql(offlineExcludeMs: number): SQL<number> {
+function longOfflineSql(db: EngineDb, offlineExcludeMs: number, leases: readonly AuthorityRecipientLease[] = []): SQL<number> {
   if (offlineExcludeMs === 0) return sql<number>`0`;
   const cutoffSeconds = Math.floor(offlineExcludeMs / 1000);
   const nodeLivenessSeconds = Math.ceil(NODE_LIVENESS_TTL_MS / 1000);
@@ -164,7 +165,8 @@ function longOfflineSql(offlineExcludeMs: number): SQL<number> {
     AND ${agents.lastSeen} < (unixepoch() - ${cutoffSeconds})
     AND NOT (
       COALESCE(${nodes.kind}, '') = 'http_push'
-      OR (
+      OR ${authorityRecipientSql(leases)}
+      OR (${nodeLivenessAuthority(db) ? 0 : 1} = 1 AND
         COALESCE(${nodes.status}, 'offline') <> 'offline'
         AND ${nodes.lastHeartbeatAt} IS NOT NULL
         AND ${nodes.lastHeartbeatAt} >= (unixepoch() - ${nodeLivenessSeconds})
@@ -222,6 +224,7 @@ export function buildChannelDeliveryWrite(
     depthCap: number;
     /** Recipients offline longer than this are excluded from the fanout. */
     offlineExcludeMs: number;
+    authorityLeases?: readonly AuthorityRecipientLease[];
     reason?: ChannelDeliveryReason;
     mentionHandles?: readonly string[];
     /** Abort the enclosing atomic write when ANY recipient has no capacity. */
@@ -302,7 +305,7 @@ export function buildChannelDeliveryWrite(
             channelMuteDeliveryFilter(mentionHandles),
             ne(channelMembers.agentId, input.senderAgentId),
             newDeliveryIdentitySql(input.messageId, channelMembers.agentId),
-            notLongOfflineSql(input.offlineExcludeMs),
+            notLongOfflineSql(db, input.offlineExcludeMs, input.authorityLeases),
             input.rejectOnOverflow ? undefined : belowDepthCapSql(input.workspaceId, channelMembers.agentId, input.depthCap),
           ),
         )),
@@ -322,6 +325,7 @@ export function buildGroupDmDeliveryWrite(
     depthCap: number;
     /** Recipients offline longer than this are excluded from the fanout. */
     offlineExcludeMs: number;
+    authorityLeases?: readonly AuthorityRecipientLease[];
     /** A 1:1 DM thread is direct traffic and must retain its explicit recipient. */
     excludeLongOffline?: boolean;
     /** Server-resolved workspace growth policy; absent => no workspace guard. */
@@ -385,7 +389,7 @@ export function buildGroupDmDeliveryWrite(
             isNull(dmParticipants.leftAt),
             ne(dmParticipants.agentId, input.senderAgentId),
             newDeliveryIdentitySql(input.messageId, dmParticipants.agentId),
-            input.excludeLongOffline === false ? undefined : notLongOfflineSql(input.offlineExcludeMs),
+            input.excludeLongOffline === false ? undefined : notLongOfflineSql(db, input.offlineExcludeMs, input.authorityLeases),
             belowDepthCapSql(input.workspaceId, dmParticipants.agentId, input.depthCap),
           ),
         )),
@@ -547,6 +551,7 @@ export async function fetchChannelDeliveryOutcomes(
     channelId: string;
     senderAgentId: string;
     offlineExcludeMs: number;
+    authorityLeases?: readonly AuthorityRecipientLease[];
     mentionHandles?: readonly string[];
   },
 ): Promise<DeliveryOutcomeRecords> {
@@ -557,7 +562,7 @@ export async function fetchChannelDeliveryOutcomes(
       .select({
         agentId: channelMembers.agentId,
         agentName: agents.name,
-        offline: longOfflineSql(input.offlineExcludeMs),
+        offline: longOfflineSql(db, input.offlineExcludeMs, input.authorityLeases),
       })
       .from(channelMembers)
       .innerJoin(agents, eq(channelMembers.agentId, agents.id))
@@ -592,6 +597,7 @@ export async function fetchGroupDeliveryOutcomes(
     conversationId: string;
     senderAgentId: string;
     offlineExcludeMs: number;
+    authorityLeases?: readonly AuthorityRecipientLease[];
     excludeLongOffline?: boolean;
   },
 ): Promise<DeliveryOutcomeRecords> {
@@ -601,7 +607,7 @@ export async function fetchGroupDeliveryOutcomes(
       .select({
         agentId: dmParticipants.agentId,
         agentName: agents.name,
-        offline: input.excludeLongOffline === false ? sql<number>`0` : longOfflineSql(input.offlineExcludeMs),
+        offline: input.excludeLongOffline === false ? sql<number>`0` : longOfflineSql(db, input.offlineExcludeMs, input.authorityLeases),
       })
       .from(dmParticipants)
       .innerJoin(agents, eq(dmParticipants.agentId, agents.id))
@@ -653,4 +659,52 @@ export async function fetchDirectDeliveryOutcomes(
     // (never excluded for being offline), so any gap here is a depth_cap miss.
     rejections: missingDeliveryRejections(intended, deliveries, input.messageId),
   };
+}
+
+/** Queue-admission evidence only; never a dispatch or online-presence proof.
+ * Unknown authority preserves the intended recipient within normal mailbox and
+ * workspace quotas, instead of treating an RPC failure as permanent exclusion.
+ */
+export interface AuthorityRecipientLease {
+  agentId: string; nodeId: string; providerName: string; expiresAt: number;
+  evidence: 'live' | 'unknown';
+}
+const UNKNOWN_AUDIENCE_VALIDITY_MS = 5_000;
+type AuthorityFanoutAudience =
+  | { channelId: string; conversationId?: never }
+  | { conversationId: string; channelId?: never };
+function authorityRecipientSql(leases: readonly AuthorityRecipientLease[]): SQL {
+  if (!leases.length) return sql`0`;
+  // Bind one JSON argument instead of exceeding SQLite's variable limit on
+  // large audiences. Membership/location checks still execute atomically.
+  return sql`EXISTS (SELECT 1 FROM json_each(${JSON.stringify(leases)}) AS lease
+    WHERE json_extract(lease.value, '$.agentId') = ${agents.id}
+      AND json_extract(lease.value, '$.nodeId') = ${agents.locationNodeId}
+      AND json_extract(lease.value, '$.providerName') = ${agents.providerName}
+      AND unixepoch() * 1000 + 999 < json_extract(lease.value, '$.expiresAt'))`;
+}
+export async function prepareAuthorityFanout(db: EngineDb, workspaceId: string, audience: AuthorityFanoutAudience): Promise<AuthorityRecipientLease[]> {
+  if (!nodeLivenessAuthority(db)) return [];
+  const audienceSql = audience.conversationId
+    ? sql`EXISTS (SELECT 1 FROM ${dmParticipants} WHERE ${dmParticipants.conversationId} = ${audience.conversationId} AND ${dmParticipants.agentId} = ${agents.id})`
+    : sql`EXISTS (SELECT 1 FROM ${channelMembers} WHERE ${channelMembers.channelId} = ${audience.channelId} AND ${channelMembers.agentId} = ${agents.id})`;
+  const rows = await db.select({ agentId: agents.id, nodeId: nodes.id, providerName: agents.providerName, role: nodes.role })
+    .from(agents).innerJoin(nodes, and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, agents.locationNodeId)))
+    .where(and(eq(agents.workspaceId, workspaceId), ne(agents.status, 'released'), eq(agents.locationType, 'via_node'), audienceSql));
+  const snapshots = new Map<string, Awaited<ReturnType<typeof inspectNodeLiveness>>>();
+  await filterAsync([...new Set(rows.map(r => r.nodeId))], async id => { snapshots.set(id, await inspectNodeLiveness(db, workspaceId, id)); return true; });
+  const leases: AuthorityRecipientLease[] = [];
+  for (const row of rows) {
+    const snapshot = snapshots.get(row.nodeId);
+    const now = Date.now();
+    if (!snapshot || snapshot.status === 'unknown') {
+      leases.push({ agentId: row.agentId, nodeId: row.nodeId, providerName: row.providerName,
+        expiresAt: now + UNKNOWN_AUDIENCE_VALIDITY_MS, evidence: 'unknown' });
+      continue;
+    }
+    if (snapshot.status !== 'online') continue;
+    const provider = snapshot.providers.find(p => p.name === row.providerName && p.live && p.expires_at > now && p.last_received_at <= now);
+    if (provider) leases.push({ agentId: row.agentId, nodeId: row.nodeId, providerName: row.providerName, expiresAt: provider.expires_at, evidence: 'live' });
+  }
+  return leases;
 }

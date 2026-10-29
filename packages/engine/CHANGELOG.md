@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Optional `EngineDeps.nodeLiveness` and `configureNodeLiveness(db, authority)` let hosts supply current node/provider receipt leases. Hosts must bound authority calls, preserve connection generations across reconstruction, recheck the lease at final send, and own offline transitions. Unconfigured self-hosted engines retain database-based liveness.
 
 ## [12.1.0] - 2026-10-28
 

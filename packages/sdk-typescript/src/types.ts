@@ -344,6 +344,8 @@ export interface NodeRosterEntry {
   tags: string[];
   version: string;
   status: 'online' | 'offline' | string;
+  /** Optional host-authority result; unknown means the owner could not be reached. */
+  livenessStatus?: 'online' | 'offline' | 'unknown';
   live: boolean;
   handlersLive: boolean;
   /** Managed-agent capacity utilization in [0,1], or null when unreported. */
