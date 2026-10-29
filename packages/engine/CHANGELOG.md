@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- DM inbox unread counts follow `dm_participants.last_read_id` (migration `0078_dm_participant_read_cursor.sql`). `markRead` and delivery acknowledgement advance that cursor. A cursor on `channel_members` does not, because a DM participant has no channel membership row.
 
 ## [12.2.0] - 2026-10-29
 

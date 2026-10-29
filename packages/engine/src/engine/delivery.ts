@@ -22,6 +22,7 @@ import {
 } from './workspaceDeliveryPolicy.js';
 import { queryInChunks } from '../lib/queryChunks.js';
 import { withEngineOperation } from '../lib/engineDiagnostics.js';
+import { advanceDmParticipantReadCursor } from './receipt.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -370,6 +371,8 @@ async function markRowsRead(tx: Db, agentId: string, rows: DeliveryWithChannel[]
         eq(channelMembers.agentId, agentId),
         sql`(${channelMembers.lastReadId} IS NULL OR CAST(${channelMembers.lastReadId} AS BIGINT) < CAST(${row.messageId} AS BIGINT))`,
       ));
+
+    await advanceDmParticipantReadCursor(tx, agentId, row.channelId, row.messageId);
   }
 }
 

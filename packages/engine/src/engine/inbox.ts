@@ -269,13 +269,10 @@ async function getInboxUnlabeled(db: Db, workspaceId: string, agentId: string) {
       ON dp.conversation_id = dc.id
      AND dp.agent_id = ${agentId}
      AND dp.left_at IS NULL
-    LEFT JOIN channel_members cm
-      ON cm.channel_id = dc.channel_id
-     AND cm.agent_id = ${agentId}
     JOIN messages m
       ON m.channel_id = dc.channel_id
      AND m.agent_id != ${agentId}
-     AND (cm.last_read_id IS NULL OR m.id > cm.last_read_id)
+     AND (dp.last_read_id IS NULL OR m.id > dp.last_read_id)
     WHERE dc.workspace_id = ${workspaceId}
     GROUP BY dc.id, dc.channel_id
     HAVING count(m.id) > 0

@@ -378,7 +378,7 @@ describe('atomic write paths', () => {
       expect(delivery.agentId).toBe(alice.agentId);
     });
 
-    it('markRead issues exactly one batch: receipt + delivery transition + lastReadId', async () => {
+    it('markRead issues exactly one batch: receipt + delivery transition + read cursors', async () => {
       const { ws, alice, bob, channelId, db } = await seed();
       const sent = await postMessage(db, ws.workspaceId, channelId, alice.agentId, { text: 'hello' });
       const batches = attachFakeBatch(db);
@@ -386,10 +386,11 @@ describe('atomic write paths', () => {
       const receipt = await markRead(db, ws.workspaceId, sent.id, bob.agentId);
 
       expect(batches).toHaveLength(1);
-      expect(batches[0]).toHaveLength(3);
+      expect(batches[0]).toHaveLength(4);
       expectStatementOn(batches[0], 'insert', 'read_receipts');
       expectStatementOn(batches[0], 'update', 'deliveries');
       expectStatementOn(batches[0], 'update', 'channel_members');
+      expectStatementOn(batches[0], 'update', 'dm_participants');
 
       expect(receipt?.message_id).toBe(sent.id);
       const [delivery] = await db.select().from(deliveries);

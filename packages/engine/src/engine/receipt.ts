@@ -14,6 +14,27 @@ import { runAtomicWrites } from '../ports/database.js';
 
 type Db = ReturnType<typeof getDb>;
 
+/** Move a DM participant's unread cursor forward. Channel messages match no row. */
+export function advanceDmParticipantReadCursor(
+  db: Pick<Db, 'update'>,
+  agentId: string,
+  channelId: string,
+  messageId: string,
+) {
+  return db
+    .update(dmParticipants)
+    .set({ lastReadId: messageId })
+    .where(and(
+      eq(dmParticipants.agentId, agentId),
+      isNull(dmParticipants.leftAt),
+      sql`${dmParticipants.conversationId} IN (
+        SELECT ${dmConversations.id} FROM ${dmConversations}
+        WHERE ${dmConversations.channelId} = ${channelId}
+      )`,
+      sql`(${dmParticipants.lastReadId} IS NULL OR CAST(${dmParticipants.lastReadId} AS BIGINT) < CAST(${messageId} AS BIGINT))`,
+    ));
+}
+
 export async function markRead(
   db: Db,
   workspaceId: string,
@@ -84,6 +105,9 @@ export async function markRead(
           sql`(${channelMembers.lastReadId} IS NULL OR CAST(${channelMembers.lastReadId} AS BIGINT) < CAST(${messageId} AS BIGINT))`,
         ),
       ),
+
+    // DM participants have no channel_members row. The inbox reads this cursor.
+    advanceDmParticipantReadCursor(writeDb, agentId, msg.channelId, messageId),
   ]);
 
   const [receipt] = await db
