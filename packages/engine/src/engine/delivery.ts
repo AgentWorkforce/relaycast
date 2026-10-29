@@ -356,11 +356,39 @@ export async function deferDelivery(
   return resolveTransition(db, workspaceId, agentId, deliveryId, updated, existing.channelId);
 }
 
-function readCursorWrites(tx: Db, agentId: string, row: DeliveryWithChannel): AtomicWrite[] {
+/** The delivery row this ack is allowed to settle. A dead-lettered row is not one of them. */
+function deliveryStillAckable(workspaceId: string, deliveryId: string) {
+  return sql`EXISTS (
+    SELECT 1 FROM ${deliveries}
+    WHERE ${deliveries.id} = ${deliveryId}
+      AND ${deliveries.workspaceId} = ${workspaceId}
+      AND ${deliveries.status} NOT IN ('acked', 'dead_lettered')
+  )`;
+}
+
+function readCursorWrites(
+  tx: Db,
+  workspaceId: string,
+  agentId: string,
+  row: DeliveryWithChannel,
+): AtomicWrite[] {
+  // Observe the pre-ack status. These statements run before the status update;
+  // after it, the row is already `acked` and this predicate would match nothing.
+  const ackable = deliveryStillAckable(workspaceId, row.id);
   return [
     tx
       .insert(readReceipts)
-      .values({ messageId: row.messageId, agentId })
+      .select(
+        tx.select({
+          messageId: sql<string>`${row.messageId}`.as('message_id'),
+          agentId: sql<string>`${agentId}`.as('agent_id'),
+          readAt: sql<Date>`unixepoch()`.as('read_at'),
+        }).from(deliveries).where(and(
+          eq(deliveries.id, row.id),
+          eq(deliveries.workspaceId, workspaceId),
+          notInArray(deliveries.status, ['acked', 'dead_lettered']),
+        )),
+      )
       .onConflictDoNothing(),
     tx
       .update(channelMembers)
@@ -369,8 +397,9 @@ function readCursorWrites(tx: Db, agentId: string, row: DeliveryWithChannel): At
         eq(channelMembers.channelId, row.channelId),
         eq(channelMembers.agentId, agentId),
         sql`(${channelMembers.lastReadId} IS NULL OR CAST(${channelMembers.lastReadId} AS BIGINT) < CAST(${row.messageId} AS BIGINT))`,
+        ackable,
       )),
-    advanceDmParticipantReadCursor(tx, agentId, row.channelId, row.messageId),
+    advanceDmParticipantReadCursor(tx, agentId, row.channelId, row.messageId, ackable),
   ];
 }
 
@@ -404,6 +433,7 @@ async function ackRows(
         })
         .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId))),
     ];
+    for (const row of rows) writes.push(...readCursorWrites(tx, workspaceId, agentId, row));
     if (ids.length > 0) {
       writes.push(tx
         .update(deliveries)
@@ -421,10 +451,10 @@ async function ackRows(
         ))
         .returning());
     }
-    for (const row of rows) writes.push(...readCursorWrites(tx, agentId, row));
     return writes;
   });
-  return ids.length > 0 ? results[1] as DeliveryRow[] : [];
+  // The status update is the last statement, so its RETURNING rows are last.
+  return ids.length > 0 ? results[results.length - 1] as DeliveryRow[] : [];
 }
 
 export async function ackDeliveriesUpToSeq(

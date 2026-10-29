@@ -1,4 +1,4 @@
-import { eq, and, sql, isNull, inArray } from 'drizzle-orm';
+import { eq, and, sql, isNull, inArray, type SQL } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import {
   readReceipts,
@@ -20,6 +20,7 @@ export function advanceDmParticipantReadCursor(
   agentId: string,
   channelId: string,
   messageId: string,
+  when?: SQL,
 ) {
   return db
     .update(dmParticipants)
@@ -32,6 +33,7 @@ export function advanceDmParticipantReadCursor(
         WHERE ${dmConversations.channelId} = ${channelId}
       )`,
       sql`(${dmParticipants.lastReadId} IS NULL OR CAST(${dmParticipants.lastReadId} AS BIGINT) < CAST(${messageId} AS BIGINT))`,
+      when,
     ));
 }
 

@@ -198,6 +198,21 @@ describe('atomic write paths', () => {
       expect(await db.select().from(readReceipts)).toHaveLength(1);
     });
 
+    it('does not advance the DM cursor when the delivery is already dead-lettered', async () => {
+      const { ws, alice, bob, db } = await seed();
+      const sent = await sendDm(db, ws.workspaceId, alice.agentId, { to: 'bob', text: 'psst' });
+      const [delivery] = await db.select().from(deliveries).where(eq(deliveries.messageId, sent.id));
+      await db.update(deliveries).set({ status: 'dead_lettered' }).where(eq(deliveries.id, delivery.id));
+
+      const acked = await ackDelivery(db, ws.workspaceId, bob.agentId, delivery.id);
+
+      expect(acked?.changed).toBe(false);
+      expect(acked?.delivery.status).toBe('dead_lettered');
+      const [cursor] = await db.select().from(dmParticipants).where(eq(dmParticipants.agentId, bob.agentId));
+      expect(cursor.lastReadId).toBeNull();
+      expect(await db.select().from(readReceipts)).toHaveLength(0);
+    });
+
     it('rolls back a delivery ack when the DM read cursor update fails', async () => {
       const { ws, alice, bob, db } = await seed();
       const sent = await sendDm(db, ws.workspaceId, alice.agentId, { to: 'bob', text: 'psst' });
