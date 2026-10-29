@@ -170,6 +170,33 @@ describe('observer tokens', () => {
     });
   });
 
+  it('accepts RFC 3339 numeric-offset observer token timestamps', async () => {
+    const ws = await createWorkspace(stack.app, 'observer-offset-timestamp-ws');
+    const future = Math.floor(Date.now() / 1000) * 1000 + 3_600_000;
+    const utc = new Date(future).toISOString();
+    const positive = new Date(future + 330 * 60_000).toISOString().replace(/Z$/, '+05:30');
+    const negative = new Date(future - 240 * 60_000).toISOString().replace(/Z$/, '-04:00');
+
+    for (const [name, expires_at] of [['positive', positive], ['negative', negative], ['utc', utc]] as const) {
+      const created = await createObserverToken(stack, ws.workspaceKey, {
+        name,
+        scopes: ['messages:read'],
+        filters: { created_after: positive },
+        expires_at,
+      });
+      expect(created.res.status).toBe(201);
+      expect(Date.parse((created.body.data as { expires_at: string }).expires_at)).toBe(future);
+    }
+
+    const pastOffset = new Date(Date.now() - 60_000).toISOString().replace(/Z$/, '+05:30');
+    const expired = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'expired-offset',
+      scopes: ['messages:read'],
+      expires_at: pastOffset,
+    });
+    expect(expired.res.status).toBe(400);
+  });
+
   it('returns a conflict for duplicate observer token names in one workspace', async () => {
     const ws = await createWorkspace(stack.app, 'observer-duplicate-name-ws');
     const created = await createObserverToken(stack, ws.workspaceKey, {
